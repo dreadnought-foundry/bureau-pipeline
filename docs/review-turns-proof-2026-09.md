@@ -12,10 +12,13 @@ with the Pacific reading beside it.
 commented on a pull request. Every observation is of traffic the pipeline produced
 on its own, read back out of the epics' Linear threads and the runs' own logs.
 
-**All four observations hold.** One of them — the medic's limit classifier —
-holds and also turned up a separate defect, on a different day and a different
-death shape, which is written up in §3b because a proof record that noticed
-something and did not say it is worth less than one that did.
+**Three of the four observations hold. The fourth does not, as the card wrote
+it.** The medic *did* stamp a false Claude limit death inside the window — on
+2026-09-17, on a run that died of a Linear rate limit — so §3 is recorded as NOT
+MET. The part of it this epic shipped still holds: no turn-cap result was ever
+read as a limit death, because no review hit the turn cap at all. The
+misattribution is the defect epic DRE-3694 already owns, and it is now observed
+twice (§3b, §3c) rather than once.
 
 ---
 
@@ -132,7 +135,9 @@ of its comment — one line, nothing above it and nothing below it, which is the
 🧮 review-turns: spent=1 ceiling=64 children=6 model=claude-sonnet-5       DRE-3621, 2026-09-12 10:03:44 PT
 ```
 
-**Every ceiling matches the new formula for its child count**, floor 60, cap 140:
+**Every formula-sized ceiling matches the new formula for its child count**,
+floor 60, cap 140. (Two of the nine receipts were not formula-sized — the two
+`ceiling=100` lines above, explained immediately below the table.)
 
 | children | `40 + 4 × K` | floor/cap applied | ceiling observed |
 | -- | -- | -- | -- |
@@ -144,8 +149,10 @@ of its comment — one line, nothing above it and nothing below it, which is the
 **42 of 100** and the largest under the formula proper is **27 of 84** — a
 twelve-card review has never come close to the wall since the base moved to 40.
 The card's own worked example ("seven cards read `ceiling=68`") has no instance
-yet, because no seven-child epic has been reviewed in the window; the two child
-counts that did occur, 11 and 12, are checked against the same formula above.
+yet, because no seven-child epic has been reviewed in the window; the child
+counts that did occur in these receipts — 6, 11 and 12 — are checked against the
+same formula above. (Across the whole record, including §4's pre-receipt rounds,
+the counts are 5, 6, 11 and 12.)
 
 **One nuance worth having, because the number is meant to be tuned from this
 series.** DRE-3623's rounds 3 and 4 ran at **100, not 88** — and the ceiling step
@@ -167,7 +174,20 @@ is tuned from.
 
 ---
 
-## 3. The medic never stamped a false Claude limit death — MET
+## 3. The medic never stamped a false Claude limit death — NOT MET
+
+**Read this heading literally.** The criterion as the card wrote it is falsified:
+on **2026-09-17** the medic stamped `kind=claude` on a plan run that had died of
+a **Linear** rate limit, and said so in plain English on a live card. That is a
+false Claude limit death, and it is written up in full in §3c.
+
+What this does **not** mean: it is not a failure of DRE-3499. That card says a
+*turn-cap* result is never a Claude limit death, and no turn-cap result occurred
+in the window at all (§3a) — so the branch this epic changed was never taken, let
+alone taken wrongly. The misattribution comes from the medic reading a death's
+*shape* rather than its text, which is the defect [DRE-3694](https://linear.app/dreadnoughtfoundry/issue/DRE-3694)
+was filed for. This record files nothing and fixes nothing; it reports the second
+observed instance and leaves it where it belongs.
 
 ### 3a. The window's own red plan runs
 
@@ -181,8 +201,8 @@ Every `Agent Plan` run in bureau-pipeline that did not succeed between
 2026-09-13 16:25:35 PT  34789667828  failure   DRE-3622  — died at `Classify the card — one-off, epic or wave`
 2026-09-13 16:50:27 PT  34790847117  failure   DRE-3711  — died at `Proof and demo cards`
 2026-09-14 08:59:50 PT  34865785548  failure
-2026-09-17 09:56:47 PT  35249687786  failure
-2026-09-11 21:08:03 PT  34672201376  cancelled
+2026-09-17 09:56:47 PT  35249687786  failure   DRE-4149  — died at `One-off route — checked on the way out` (§3c)
+2026-09-11 21:08:03 PT  34672201376  cancelled           — a cancellation, never seen by the medic (below)
 ```
 
 **There were no turn-cap and no over-ceiling review deaths in the window at all.**
@@ -191,14 +211,16 @@ card anticipates this — "expected: zero or one" — so the branch DRE-3499 cha
 was not exercised by a turn-cap death, and this record says that plainly rather
 than dressing something else up as one.
 
-**What was read by hand instead.** Twelve medic runs, read one at a time out of
+**What was read by hand instead.** **Seventeen** medic runs — thirteen tabled
+below and four more named at the end of the table — read one at a time out of
 their own logs, and the branch each one's `Is this a limit death?` step took.
 This is a **superset** of what the criterion asks for, on purpose: it covers
-every red plan run in the window — 34707066435 (§3b), 34722278266, 34785966041,
-34789667828, 34865785548 — and sweeps up the medics that woke beside them for a
-fix, a sync or a test run on the same afternoons, so a `kind=claude` stamp could
-not hide in the traffic next door. The first eight are 2026-09-13, the day of the
-observed review:
+**six of the seven** red plan runs in the window — 34707066435 (§3b),
+34722278266, 34785966041, 34789667828, 34865785548, 35249687786 (§3c) — and
+sweeps up the medics that woke beside them for a fix, a sync or a test run on the
+same afternoons, so a `kind=claude` stamp could not hide in the traffic next
+door. The seventh, 34790847117, is declared unaccounted below. The first eight
+rows are 2026-09-13, the day of the observed review:
 
 | medic run | watched plan run | card | `class=` | branch taken |
 | -- | -- | -- | -- | -- |
@@ -214,6 +236,7 @@ observed review:
 | [34722659876](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34722659876) | 34722278266 | DRE-3694 | `normal` | `not a limit death (decision: requeue) — ordinary medic handling` |
 | [34865827451](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34865827451) | 34865785548 | DRE-3893 | `linear_ratelimited` | `🪦 limit-death: kind=linear stage=classify reset=unknown run=34865785548` |
 | [34866096570](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34866096570) | 34865854325 | DRE-3638 | `linear_ratelimited` | `🪦 limit-death: kind=linear stage=sync reset=unknown run=34865854325` |
+| [35250181595](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/35250181595) | 35249687786 | DRE-4149 | `linear_ratelimited` | `🪦 limit-death: kind=claude stage=plan reset=unknown run=35249687786` — **the false stamp, §3c** |
 
 (Four more medics woke in the 2026-09-14 burst — 34865846462, 34865860540,
 34866009114, 34866224267, watching a build, two sweeps and a sync. All four were
@@ -226,21 +249,37 @@ watched it — the only non-skipped medic in that span, 34790919330, watched a
 different run — so there is no `Is this a limit death?` output to read for it, and
 it therefore stamped nothing.
 
-**Not one `kind=claude` marker among the sixteen.** Six limit deaths were stamped
-and all six say **`kind=linear`** — the workspace's 2,500-requests-an-hour wall,
-which is a real wall and the correct reading; it is also the same exhaustion that
-made DRE-3623's rounds 3 and 4 fall back to the 100-turn ceiling in §2. The other
-ten took the not-a-limit branch and printed that sentence verbatim.
+**The eighth entry in the list above is a cancellation, not a failure, and no
+medic could ever have read it.** `34672201376` (2026-09-11 21:08 PT) was
+cancelled, and `medic.yml`'s classify job is gated on
+`github.event.workflow_run.conclusion == 'failure'` (line 99) — every downstream
+job `needs: classify`. A cancelled run therefore skips the medic entirely: there
+is no classification, no `Is this a limit death?` step, and nothing it could have
+stamped. It is out of scope by construction rather than by choice.
 
-**One `kind=claude` marker exists across the six epics' threads, and it is not in
-the review's window.** Grepping all six threads for `limit-death: kind=` returns
+**One `kind=claude` marker among the seventeen.** Eight limit deaths were
+stamped. **Seven** say `kind=linear` — the workspace's 2,500-requests-an-hour
+wall, which is a real wall and the correct reading; it is also the same
+exhaustion that made DRE-3623's rounds 3 and 4 fall back to the 100-turn ceiling
+in §2. **One says `kind=claude`** — medic 35250181595 on plan run 35249687786,
+2026-09-17, and it is wrong (§3c). The other **nine** took the not-a-limit branch
+and printed that sentence verbatim. Seven plus one plus nine is seventeen.
+
+**A second `kind=claude` marker sits on the six epics' own threads, on
+2026-09-12.** Grepping all six epic threads for `limit-death: kind=` returns
 exactly one `kind=claude`, on **DRE-3621, 2026-09-12** — the day before the
-observed review, and not from a turn-cap death. It is written up in full in §3b,
-because a proof that quietly declined to mention it would be worth nothing. From
-2026-09-13 onward — the day of the observed review and every day since in this
-record — there is none.
+observed review, and not from a turn-cap death. It is written up in full in §3b.
 
-### 3b. The one `kind=claude` stamp in the neighbourhood, and why it is not this epic's
+**Why that grep missed the 09-17 one, stated plainly.** It was scoped to the six
+epics' threads, and the 09-17 stamp landed on **DRE-4149** — an ordinary card,
+not one of the six epics. The earlier draft of this record then generalised from
+that grep to "from 2026-09-13 onward there is none", which the six-epic scope
+never entitled it to say. The corrected claim is the narrow one: across the six
+epics' threads there is exactly one `kind=claude`, on 2026-09-12; across the
+seventeen medic runs read here there is exactly one more, on 2026-09-17. This
+record makes no claim about `kind=claude` stamps on cards outside both sets.
+
+### 3b. The `kind=claude` stamp of 2026-09-12, before the window's review, and why it is not this epic's
 
 On **2026-09-12** — after the merges but before the observed review —
 [DRE-3621](https://linear.app/dreadnoughtfoundry/issue/DRE-3621)'s post-approval
@@ -294,6 +333,91 @@ note beside it does **not** say "(success)" — it reads *"it died after 1 turns
 its 64-turn ceiling in run 34707066435 (attempt 1), step `posta`"*, which is
 DRE-3501's wording change holding on a real death.
 
+### 3c. The false `kind=claude` stamp of 2026-09-17 — the one that falsifies §3
+
+This is the finding that moves §3 from MET to NOT MET, and unlike §3b it is
+**inside** the window and the stamp is **wrong on its face**.
+
+**The plan run.** [35249687786](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/35249687786),
+`Agent Plan`, job `call / bureau-card: DRE-4149`, created `2026-09-17T16:56:47Z`
+(**2026-09-17 09:56:47 PT**), conclusion `failure`, failed step *"One-off route —
+checked on the way out"*. The last line of its log before it died, verbatim at
+`2026-09-17T17:01:30Z`:
+
+```
+linear_ops.LinearRateLimited: Linear API returned 400 from https://api.linear.app/graphql: rate limited: 2500 requests/hour exhausted
+```
+
+That is the Linear wall, named by the exception class, the HTTP status and the
+quota in one line. There is no ambiguity to resolve.
+
+**The medic.** [35250181595](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/35250181595),
+job `call / classify`, created `2026-09-17T17:01:38Z` (**10:01:38 PT**). Its own
+classifier read the same log and got the right answer, verbatim at
+`17:01:48.9Z`:
+
+```
+medic classify: LINEAR RATE LIMIT — the workspace request quota is exhausted. Backing off: no retry (it would deepen the limit), no diagnosis (there is no defect to find). The quota refills on its own
+class=linear_ratelimited
+```
+
+**Two seconds later, in the same job, the `Is this a limit death?` step
+contradicted it**, verbatim at `17:01:50.2Z`:
+
+```
+🪦 limit-death: kind=claude stage=plan reset=unknown run=35249687786
+```
+
+followed at `17:01:51.2Z` by `commented on DRE-4149`. The comment is live on the
+card, and its plain-English half tells a reader the opposite of what happened —
+read out of DRE-4149's Linear thread, verbatim:
+
+> 🪦 limit-death: kind=claude stage=plan reset=unknown run=35249687786
+>
+> This run hit the Claude account's usage limit during the plan stage and stopped
+> there. That is a wait, not a fault in this card, the model or the service […]
+> The reconcile sweep re-enters the plan stage on its own once the window resets
+> (at a time the run did not say) or the account is switched — nothing else needs
+> to happen.
+
+The run did not hit the Claude account's usage limit. It hit the workspace's
+Linear quota, and the same job said so in writing two seconds earlier.
+
+**Why it is still not DRE-3499's defect.** The failure was at `One-off route —
+checked on the way out`, not at a review step; `num_turns` never entered it and no
+turn cap was reached. DRE-3499 constrains one branch — *a turn-cap result is never
+a Claude limit death* — and that branch was not taken here or anywhere else in the
+window. The wrong answer comes from `dead_run.py decide` reading the corpse's
+shape while `medic_classify.py` had already read its text, the same split §3b
+describes. That is [DRE-3694](https://linear.app/dreadnoughtfoundry/issue/DRE-3694)'s
+territory, and its first card DRE-4129 (*one reader says which wall a run hit*)
+went Done on **2026-09-17** — the same day, which is worth knowing: this stamp
+lands at 10:01 PT and whether DRE-4129's reader was live on `main` at that minute
+is not something this record establishes.
+
+**What it cost, checked rather than assumed.** Nothing, this time, and the reason
+is worth writing down because it is not luck. `medic.yml`'s `retry` job (line
+291) and its `diagnose` job (line 630) are each gated on **both**
+`class != 'linear_ratelimited'` **and** `limit != 'true'`. Here `class` was the
+*correct* `linear_ratelimited`, so each job was blocked by the right reading on
+its own, independently of the wrong `kind=claude` label. Run 35250181595's job
+list bears that out — `call / linear_rate_limited: success`, with `call / retry`,
+`call / diagnose` and `call / backoff` all `skipped`. So the pipeline did the
+right thing for the right reason; what was wrong was only the sentence a person
+reads on the card. (The `retry=true` output visible in the same log came from
+`medic_retry.py` and never reached a job — the `class` gate sits in front of it.)
+
+DRE-4149 itself went on to merge as
+[#434](https://github.com/dreadnought-foundry/bureau-pipeline/pull/434).
+
+**The reason to care anyway.** A label that is wrong while the behaviour is right
+is the cheapest possible presentation of this defect, not evidence that it is
+harmless. The two readings can disagree in the other direction just as easily,
+and then the gate that saved this run is the one reading it wrong.
+
+**This record files nothing and fixes nothing.** DRE-3694 owns the defect; this is
+its second observed instance and the first one inside this epic's window.
+
 ---
 
 ## 4. The first data point: DRE-3282's own review, which predates the receipt
@@ -335,23 +459,27 @@ So, for the record:
   one (`40 + 4 × 5 = 60` gives the same answer for five cards). That is worth
   knowing before anyone reads it as evidence about the base.
 * **Turns spent: 25, then 42, then 48** across the three rounds.
-* **Receipt: none existed.** DRE-3498 merged at 14:13 PT, two minutes after round
-  3's PASS at 14:11:51 PT. The first receipt on DRE-3282's thread is round 4's,
-  two days later on 2026-09-12 22:30:42 PT. Observed by absence over the whole
-  thread.
+* **Receipt: none existed.** DRE-3498 merged at 14:13 PT, **about seven hours
+  after** round 3's PASS at **07:11:51 PT**. (`14:11:51` is that PASS's UTC
+  stamp, as the table above quotes it; in Pacific — this document's stated
+  convention — it is 07:11:51.) The first receipt on DRE-3282's thread is round
+  4's, two days later on 2026-09-12 22:30:42 PT. Observed by absence over the
+  whole thread.
 
 **The releasing round spent 48 of 60 — 80% of its ceiling.** That is the tightest
 reading in the whole series, and it is the review that let these three cards
 build. Twelve more turns and the epic that fixed the ceiling would itself have
 died at the ceiling. Round 4, the same five cards reviewed two days later under
-the new formula, spent **23 of 60** — `spent=23 ceiling=60 children=5`, quoted in
-§2 — so the variance round to round on one unchanged epic is 25 → 42 → 48 → 23.
+the new formula, spent **23 of 60** — `spent=23 ceiling=60 children=5`, the round-4
+receipt in the table at the top of this section — so the variance round to round
+on one unchanged epic is 25 → 42 → 48 → 23.
 Whoever re-tunes the constant should read that spread before reading any single
 number in the table below.
 
 **What this means for the series the constant is to be tuned from.** Thirteen
-readings, nine of them from a `🧮` receipt and four from the run logs of the
-pre-receipt rounds above:
+readings, **ten** of them from a `🧮` receipt — §2's nine, plus DRE-3282 round
+4's, quoted in this section's round table — and **three** from the run logs of
+the three pre-receipt rounds above:
 
 | children | ceiling | spent | epic | date |
 | -- | -- | -- | -- | -- |
@@ -383,19 +511,32 @@ change.
 
 ## What is owed, and to whom
 
-Every observation this card asks for was made. One thing is simply not yet in
-existence, and nothing here stages it:
+Every observation this card asks for was made. **Three came back met and one came
+back not met** (§3), which is an answer rather than a gap — the card asked whether
+something was true, and it is not.
+
+One thing is simply not yet in existence, and nothing here stages it:
 
 1. **A seven-child review, reading `ceiling=68`.** No seven-child epic has been
    reviewed since the window opened; the child counts that did occur are 5, 6, 11
    and 12, and the formula is checked against all four above. Nothing needs doing
    — the next seven-card epic will record itself.
 
-One thing noticed while reading, which belongs to another epic and is left there:
-the `kind=claude` limit stamp of §3b, owned by DRE-3694.
+Two things noticed while reading, both belonging to another epic and both left
+there: the `kind=claude` limit stamps of **§3b** (2026-09-12, before the window's
+review) and **§3c** (2026-09-17, inside the window and demonstrably false). Both
+are [DRE-3694](https://linear.app/dreadnoughtfoundry/issue/DRE-3694)'s, whose
+first card DRE-4129 went Done on 2026-09-17. **This record files nothing.**
+Whether §3c warrants a follow-up card under DRE-3694 — it is the first instance
+where the medic's own classifier got the right answer in the same job and was
+overruled two seconds later — is a call for whoever owns that epic, not for this
+one.
 
 **DRE-3503 is left in Todo for the CEO to close.**
 
 Written 2026-09-17 between 15:35 and 16:40 PT, from the live Linear threads of
 DRE-3282, DRE-3621, DRE-3622, DRE-3623, DRE-3694 and DRE-3892, and from the run
-logs of every run linked above.
+logs of every run linked above. §3a's coverage of run 35249687786, §3c in full,
+and the cancellation note in §3a were added on 2026-09-18 after review, read the
+same way from the live thread of DRE-4149 and the logs of runs 35249687786 and
+35250181595.
