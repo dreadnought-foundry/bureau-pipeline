@@ -259,14 +259,33 @@ jobs:
           # marker must not freeze the loop on a healthy PR), paginated
           # (--slurp = one array per page; a busy PR's markers fall off the
           # first page) and sha-bound (a new commit resets the count).
+          #
+          # ONE read of the thread, here, for everything below it (DRE-4157).
+          # It was four — this halt count, its receipt, the routing reads and
+          # the budget each fetched the same record — and this first one was
+          # piped straight into jq with nothing checking whether GitHub had
+          # answered. On 2026-09-17/18 the shared App installation
+          # (123249480) was throttled six times while a fix run stood here
+          # (portico #582 first, run 35252920674): `gh` printed the error page
+          # on stdout and exited 1, `--slurp` had wrapped it like a page, and
+          # jq died reading it as the record — `Cannot index string with
+          # string "user"`, exit 5 — so the run was red for a reason that had
+          # nothing to do with the branch. The read now goes through
+          # gh_read_retry.py, the sweep's DRE-4109 seam: a refusal is retried
+          # (three attempts, ~15s then ~45s, one log line each) and one that
+          # persists STOPS this step with a plain-English reason and
+          # EX_TEMPFAIL, so every later step — all gated on go=true — stays
+          # unrun. It never substitutes `[]`: an unreadable thread is
+          # UNKNOWN, and `[]` here would read as no halt, a fresh budget and
+          # no standing hold — a check that could not read reporting clean.
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$TMPD/thread.json" \
+            gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100"
           SHA8=${HEAD_SHA:0:8}
-          NOPROG=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-            | jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("pushed no new commit")) | select(.body | contains($sha8))] | length')
+          NOPROG=$(jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("pushed no new commit")) | select(.body | contains($sha8))] | length' "$TMPD/thread.json")
           if [ "${NOPROG:-0}" -ge 2 ]; then
-            HALTED=$(gh api --paginate --slurp \
-              "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-              | jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("fix-convergence-halt")) | select(.body | contains($sha8))] | length')
+            HALTED=$(jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("fix-convergence-halt")) | select(.body | contains($sha8))] | length' "$TMPD/thread.json")
             if [ "${HALTED:-0}" -eq 0 ]; then
               gh pr comment "$PR" --repo ${{ github.repository }} \
                 --body "🧯 fix-convergence-halt @$SHA8: $NOPROG fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
@@ -290,31 +309,29 @@ jobs:
           # and a DIRTY PR picked the wrong mode. Reading it once also means
           # the two indexes are indexes into the SAME list, which three
           # separate calls never guaranteed. `add // []` flattens the
-          # per-page arrays `--slurp` emits, and tolerates the `[]` blip
-          # substitute, whose `add` is null.
-          TMPD="${RUNNER_TEMP:-/tmp}"
-          gh api --paginate --slurp \
-            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-            > "$TMPD/mode-thread.json" 2>/dev/null \
-            || echo '[]' > "$TMPD/mode-thread.json"
+          # per-page arrays `--slurp` emits. DRE-4157: the one read is
+          # $TMPD/thread.json, taken above the convergence halt, and the `[]`
+          # blip substitute it used to tolerate is gone — an unreadable
+          # thread stops the step up there rather than reading here as "no
+          # verdict and no push".
           # DRE-1988: a "QA Critic" verdict only counts if the qa-bot identity
           # authored it — any commenter can plant the marker text otherwise.
           VERDICT=$(jq -r '[(add // [])[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic"))] | last | .body // empty' \
-            "$TMPD/mode-thread.json" 2>/dev/null | head -1 || true)
+            "$TMPD/thread.json" 2>/dev/null | head -1 || true)
           # A REQUEST_CHANGES verdict is only OUTSTANDING if no fix has been
           # pushed since it landed. A conflict arriving while a pushed fix
           # awaits re-review must route to conflict mode — otherwise it burns
           # review attempts on a fix the critic never saw (PR #25 hit
           # budget-exhaustion this way with a fix the critic never saw).
           LAST_VERDICT_IDX=$(jq -r '[(add // []) | to_entries[] | select(.value.user.login == "agent-bureau-qa-bot[bot]") | select(.value.body | contains("QA Critic"))] | last | .key // -1' \
-            "$TMPD/mode-thread.json")
+            "$TMPD/thread.json")
           # DRE-1995: the push marker (and the two attempt counters below) are
           # posted by THIS workflow as agent-bureau-bot[bot] — the worker
           # identity, not qa-bot, which is why DRE-1988's gating didn't cover
           # them. Filter the read-back to that author, or any commenter can
           # plant the marker to flip fix-vs-conflict routing.
           LAST_PUSH_IDX=$(jq -r '[(add // []) | to_entries[] | select(.value.user.login == "agent-bureau-bot[bot]") | select(.value.body | contains("pushed — CI and critic review re-running"))] | last | .key // -1' \
-            "$TMPD/mode-thread.json")
+            "$TMPD/thread.json")
           MODE=fix
           if [ "$MSTATE" = "DIRTY" ]; then
             case "$VERDICT" in
@@ -338,11 +355,8 @@ jobs:
           # newer than a standing answer, and the sweep stood down forever
           # (PR #199, 2026-08-29 — answer 15:27, hand dispatch 15:29, sweep
           # stands down 15:33).
-          # TMPD is set once, above the mode reads (DRE-4139).
-          gh api --paginate --slurp \
-            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-            > "$TMPD/fix-budget-thread.json" 2>/dev/null \
-            || echo '[]' > "$TMPD/fix-budget-thread.json"
+          # It reads $TMPD/thread.json, the one record this step fetched
+          # (DRE-4139 asked for one read; DRE-4157 made it one).
           # A hand dispatch is a workflow_dispatch a PERSON started. The
           # reconcile sweep and merge-gate dispatch with the workflow's
           # github.token, which initiates as `github-actions` (DRE-2053; the
@@ -365,7 +379,7 @@ jobs:
             esac
           fi
           python3 .bureau-pipeline/scripts/fix_budget.py decide \
-            --comments-file "$TMPD/fix-budget-thread.json" \
+            --comments-file "$TMPD/thread.json" \
             --worker-login "$WORKER_LOGIN" --mode "$MODE" \
             --hand-dispatch "$HAND" --pr "$PR" \
             --env-out "$TMPD/fix-budget.env" \
@@ -629,9 +643,17 @@ jobs:
           # duplicate note is noise, a missing one is the stall.
           SHA8=${HEAD_SHA:0:8}
           HOLD_KEY="unfixable-check-hold @$SHA8"
-          HELD=$(gh api --paginate --slurp \
+          # Through the DRE-4109 retry seam (DRE-4157): piped straight into
+          # jq, a throttled answer was read as the record and killed this
+          # step. The rule above stands — an unreadable receipt is ABSENT —
+          # so a refusal that outlives the retry substitutes `[]`, and the
+          # filter reads `[]` as zero (`add // []`: `add[]` on `[]` is
+          # `null[]`, a jq death of its own).
+          python3 .bureau-pipeline/scripts/gh_read_retry.py --out /tmp/unfixable-hold-thread.json \
+            gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-            | jq --arg key "$HOLD_KEY" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains($key))] | length')
+            || echo '[]' > /tmp/unfixable-hold-thread.json
+          HELD=$(jq --arg key "$HOLD_KEY" '[(add // [])[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains($key))] | length' /tmp/unfixable-hold-thread.json)
           if [ "${HELD:-0}" -eq 0 ]; then
             printf '%s\n\n%s\n' "$(cat /tmp/unfixable-comment.md)" "$HOLD_KEY" \
               > /tmp/unfixable-comment-final.md
@@ -733,9 +755,17 @@ jobs:
           # noticed it first.
           SHA8=${HEAD_SHA:0:8}
           NOTICE_KEY="inherited-failure @$SHA8"
-          POSTED=$(gh api --paginate --slurp \
+          # Through the DRE-4109 retry seam (DRE-4157), for the reason the
+          # unfixable-check receipt gives: a throttled answer piped into jq
+          # killed the step. Unreadable still counts as ABSENT — a duplicate
+          # notice is noise, a missing one is the stall — so a refusal that
+          # outlives the retry substitutes `[]`, which `add // []` reads as
+          # zero.
+          python3 .bureau-pipeline/scripts/gh_read_retry.py --out /tmp/inherited-notice-thread.json \
+            gh api --paginate --slurp \
             "repos/$REPO/issues/$PR/comments?per_page=100" \
-            | jq --arg key "$NOTICE_KEY" '[add[] | select(.body | contains($key))] | length')
+            || echo '[]' > /tmp/inherited-notice-thread.json
+          POSTED=$(jq --arg key "$NOTICE_KEY" '[(add // [])[] | select(.body | contains($key))] | length' /tmp/inherited-notice-thread.json)
           if [ "${POSTED:-0}" -eq 0 ]; then
             printf '%s\n\n%s\n' "$(cat /tmp/inherited-comment.md)" "$NOTICE_KEY" \
               > /tmp/inherited-comment-final.md
@@ -979,10 +1009,17 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          LAST=$(gh api --paginate \
-            "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments?per_page=100" \
-            --jq '.[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic")) | (.body | @base64)' \
-            | tail -1)
+          # DRE-4157: to a FILE through the retry seam, then jq on the file.
+          # This was `gh api … --jq … | tail -1`: on a throttled answer gh
+          # printed the error page to stdout, `tail -1` took its last line as
+          # the "verdict" and base64 -d choked on it — or LAST came back
+          # empty, which starts the agent with NO spec, as if this were a
+          # conflict round. There is no honest substitute for the spec, so a
+          # refusal that persists stops the job here, with the reason logged.
+          python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$RUNNER_TEMP/verdict-thread.json" \
+            gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments?per_page=100"
+          LAST=$(jq -r '[(add // [])[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic"))] | last | .body // empty | @base64' "$RUNNER_TEMP/verdict-thread.json")
           if [ -n "$LAST" ]; then
             printf '%s' "$LAST" | base64 -d > .bureau-pipeline/critic-verdict.md
             echo "fetched qa-bot verdict ($(wc -l < .bureau-pipeline/critic-verdict.md) lines)"

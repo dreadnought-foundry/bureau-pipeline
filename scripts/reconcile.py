@@ -138,6 +138,7 @@ import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
+import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -714,8 +715,13 @@ PROSE_DEFECT_RED_MINUTES = 120
 #: empty will NOT clear in that minute — that run still raises, still exits 1
 #: and still files, which is exactly the "only tell me if it persists" the CEO
 #: asked for (signed console answer, 2026-09-16).
-GH_READ_ATTEMPTS = 3
-GH_READ_BACKOFF_SECONDS = (15, 45)
+#:
+#: The numbers, the classifier and the loop live in scripts/gh_read_retry.py
+#: since DRE-4157 — agent-fix.yml's comment reads needed the same retry, and
+#: a second copy of it in bash is the drift the two-copies rule is about. The
+#: names below are kept so nothing that reads the sweep's numbers moves.
+GH_READ_ATTEMPTS = gh_read_retry.ATTEMPTS
+GH_READ_BACKOFF_SECONDS = gh_read_retry.BACKOFF_SECONDS
 
 #: And how many retries the WHOLE sweep may spend. Per-read the budget above is
 #: the card's; this is the bound `standards/vendor-boundaries.md` Q5 requires of
@@ -742,19 +748,9 @@ _gh_read_retries_spent = 0
 #: — `API rate limit exceeded`, `secondary rate limit`, an HTTP 429. The OTHER
 #: 403, `Resource not accessible by integration`, is a permission failure that
 #: no amount of waiting repairs; retrying it would only deepen the quota burn
-#: DRE-1921 was filed for. The 429 alternative is anchored to an `http`/`status`
-#: word so a bare 429 inside an installation id or a PR number cannot match.
-_RATE_LIMIT_REFUSAL = re.compile(
-    r"api rate limit exceeded"
-    r"|secondary rate limit"
-    r"|(?:http|status)\D{0,6}\b429\b",
-    re.I,
-)
-
-
-def _is_rate_limit_refusal(stderr: str) -> bool:
-    """True iff `gh`'s stderr is GitHub declining THIS request for quota."""
-    return bool(_RATE_LIMIT_REFUSAL.search(stderr))
+#: DRE-1921 was filed for. Defined once, in gh_read_retry (DRE-4157).
+_RATE_LIMIT_REFUSAL = gh_read_retry.RATE_LIMIT_REFUSAL
+_is_rate_limit_refusal = gh_read_retry.is_rate_limit_refusal
 
 
 def gh_read(*args: str) -> str:
@@ -788,17 +784,16 @@ def gh_read(*args: str) -> str:
     per sweep. The second bound is there because a refusal is rarely alone —
     `pr_for` runs once per card, so an empty bucket refuses every read of the
     sweep, and unbounded waiting would run the job into its own timeout.
+
+    The loop itself is gh_read_retry.read (DRE-4157) — the same one
+    agent-fix.yml's comment reads run through. What is the SWEEP's here is
+    the per-process budget, supplied as the callback the loop asks before
+    each wait, and the ReconcileReadError the ledgers are built on.
     """
-    global _gh_read_retries_spent
-    for attempt in range(1, GH_READ_ATTEMPTS + 1):
-        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-            ["gh", *args], capture_output=True, text=True, check=False
-        )
-        if p.returncode == 0:
-            return p.stdout.strip()
-        stderr = p.stderr.strip()
-        retryable = attempt < GH_READ_ATTEMPTS and _is_rate_limit_refusal(stderr)
-        if retryable and _gh_read_retries_spent >= GH_READ_RETRY_BUDGET:
+
+    def spend_one_retry() -> bool:
+        global _gh_read_retries_spent
+        if _gh_read_retries_spent >= GH_READ_RETRY_BUDGET:
             # Say it once per read, so nobody reads the missing retry line as
             # the retry having silently stopped working.
             print(
@@ -806,25 +801,17 @@ def gh_read(*args: str) -> str:
                 f"is spent — `gh {' '.join(args)}` was refused for rate limit "
                 "and is NOT being retried; the bucket is empty, not blipping"
             )
-            retryable = False
-        if not retryable:
-            raise ReconcileReadError(
-                f"gh {' '.join(args)} failed rc={p.returncode}: {stderr[:400]}"
-            )
+            return False
         _gh_read_retries_spent += 1
-        wait = GH_READ_BACKOFF_SECONDS[attempt - 1]
+        return True
+
+    try:
         # ONE line per retry, to the run log, naming the command and where we
         # are in the budget — this is the whole of the visibility the CEO asked
-        # for in place of a card.
-        print(
-            f"gh-read: GitHub refused `gh {' '.join(args)}` for rate limit on "
-            f"attempt {attempt} of {GH_READ_ATTEMPTS} — retrying in {wait}s: "
-            f"{stderr[:200]}"
-        )
-        time.sleep(wait)
-    # Unreachable: the final attempt either returns or raises above. Kept so
-    # the function has no implicit `return None` for a caller to act on.
-    raise ReconcileReadError(f"gh {' '.join(args)} failed: retries exhausted")
+        # for in place of a card. `print` is the run log here.
+        return gh_read_retry.read(args, may_retry=spend_one_retry, log=print)
+    except gh_read_retry.GhReadError as e:
+        raise ReconcileReadError(str(e)) from e
 
 
 def gh_dispatch(*args: str) -> None:
@@ -7846,8 +7833,10 @@ def _run_card_done(scope: SweepScope) -> None:
 # board that has stopped being reconciled must never go quiet — but distinct
 # from the generic 1 every real failure exits, so the condition is readable
 # from the exit status alone. 75 is EX_TEMPFAIL: "the failure is temporary,
-# try again later", which is exactly what a quota exhaustion is.
-RATE_LIMITED_EXIT = 75
+# try again later", which is exactly what a quota exhaustion is. The number
+# is gh_read_retry's (DRE-4157): a workflow step that cannot read GitHub for
+# quota stops with the same code, so the two are one reading.
+RATE_LIMITED_EXIT = gh_read_retry.RATE_LIMITED_EXIT
 
 
 def run(argv: list[str]) -> None:
