@@ -111,6 +111,29 @@ the first note is the honest one rather than an escalation and a retraction;
 the residual window is the comment write itself. The "re-assert every time"
 rule stands for the case it was written for: a card still in the segment.
 
+## "Already escalated" means on THIS attempt (DRE-4223)
+
+The note is posted once and the move re-asserted every time, so a retry
+converges. "Once" used to be read over the whole comment window, and on
+2026-09-18 09:24 PT that moved DRE-2428 Planning → Green Light with nothing
+posted: its first escalation (20:42 PT the night before) had carried a reason,
+the CEO answered it, the card went back to Planning, a limit death left it
+standing, and when the stall watchdog fired again `escalate()` found the old
+receipt, printed `already escalated`, skipped the note and ran the move. The
+CEO's decision queue held a card with nothing to answer.
+
+Every planning attempt opens with a boundary the card carries — plan.yml
+posts `plan_critic.cycle_marker` as its own comment the moment a card is
+routed to plan, first attempt and every re-plan alike — so the receipt count
+is scoped to the comments AFTER the newest boundary (`_this_attempt`), read
+through `plan_critic.CYCLE_PREFIX` and never a copied string. A card with no
+boundary keeps the once-per-card reading. The scope is the thread's ORDER,
+which is how `plan_critic.current_cycle` and `linear_ops.count_comments(since=)`
+already read it: a receipt whose time cannot be read is still somewhere in
+the thread, and "treat it as this attempt's" would be the silent move again.
+The two rules resolve one way only — when they disagree, a duplicate question
+is the cheap failure and a card in the queue with nothing to answer is not.
+
 CLI:
 
     python3 scripts/planning_escalation.py check
@@ -135,6 +158,7 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402
 import lane_contract  # noqa: E402
+import plan_critic  # noqa: E402 — the attempt boundary is its record (DRE-4223)
 import planning_route  # noqa: E402
 import planning_shape  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -219,7 +243,7 @@ TRANSPORT_CAP = 1
 # The record a card gets when the escalation reaches it too late (DRE-3654): it
 # had already left the segment, or already carries a verdict, so nothing was
 # parked. THE STRING MATTERS: counting is substring-based, so this must not
-# contain ESCALATION_TAG (the card's next real escalation would read it as
+# contain ESCALATION_TAG (the attempt's next real escalation would read it as
 # already posted and park silently) or TRANSPORT_TAG (it would spend that
 # budget), and neither may contain it. `tests/test_planning_escalation.py` pins
 # all three directions.
@@ -568,6 +592,35 @@ def _body(record) -> str:
     return record or ""
 
 
+def _this_attempt(records) -> list:
+    """The comments that belong to the card's CURRENT planning attempt.
+
+    Everything after the newest fresh-attempt boundary — the `plan-cycle:`
+    record plan.yml posts as its own comment when a card is routed to plan,
+    recognised through `plan_critic.CYCLE_PREFIX`. A thread with no boundary
+    is one attempt: a card that has never been re-planned keeps the reading it
+    always had.
+
+    The scope is POSITIONAL, the same reading `plan_critic.current_cycle` and
+    `linear_ops.count_comments(since=)` make: both readers that hand comments
+    here (`linear_ops.window_nodes`, `comment_timeline`) order them oldest →
+    newest, so the newest boundary's index is the attempt's start and nothing
+    has to parse a clock. That is deliberate (DRE-4223): the only thing this
+    scope licenses is SKIPPING the question before a move, and a receipt whose
+    time cannot be read, treated as this attempt's, is a card moved with
+    nothing to answer — the exact failure the scope exists to end. A prefix
+    test rather than `plan_critic`'s sole-record shape, because the failure a
+    forged boundary can buy here is one duplicate question, never a silent
+    move, and a reading that follows the constant is what the tests pin.
+    """
+    records = list(records or ())
+    start = 0
+    for i, record in enumerate(records):
+        if _body(record).startswith(plan_critic.CYCLE_PREFIX):
+            start = i + 1
+    return records[start:]
+
+
 def _stale(record, attempt_since: str | None) -> bool:
     """Was this comment posted BEFORE the current planning attempt began?
 
@@ -715,10 +768,13 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     For a card still ours the rule is unchanged: the note lands BEFORE the
     move, always — moving the card without the question is a silent park, and
     the CEO sees something appear in their queue with nothing to answer.
-    Posted at most once per card, keyed on the tag — a retried run must
-    converge rather than turn one decision into a thread — and the move is
-    re-asserted every time, because the crash this guards against is the one
-    between the two writes.
+    Posted at most once per PLANNING ATTEMPT, keyed on the tag and scoped to
+    the comments after the card's newest fresh-attempt boundary
+    (`_this_attempt`, DRE-4223) — a retried run must converge rather than turn
+    one decision into a thread, and a card re-planned after the CEO answered
+    must be asked again rather than parked silently on the answered receipt —
+    and the move is re-asserted every time, because the crash this guards
+    against is the one between the two writes.
     """
     lane = destination()
     handed = comments is not None
@@ -741,7 +797,14 @@ def escalate(linear_ops, identifier: str, reason: str | None,
                   file=sys.stderr)
             return 0
 
-    already = _count(ESCALATION_TAG, "escalations")
+    # The escalation count is scoped to THIS attempt (DRE-4223), and it is
+    # read off `bodies` on both paths: handed, that is the window the sweep
+    # read; otherwise it is `comment_timeline`, the same window
+    # `count_comments` would read, already in hand — so the CLI callers get the
+    # same scope rather than an unscoped count through a second reader.
+    already = sum(
+        1 for record in _this_attempt(bodies) if ESCALATION_TAG in _body(record)
+    )
     posted = False
     if elsewhere is not None:
         recorded = _count(STOOD_DOWN_TAG, "stand-downs")
