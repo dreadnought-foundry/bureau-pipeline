@@ -32,6 +32,17 @@ by DRE-3098): mint as its own step immediately before the consumer, because a
 self-plan.yml is a thin stub over this same reusable workflow, so the rule
 holds for it by construction; the last class checks it stays that way.
 
+WHICH App a re-mint mints from changed with DRE-4282. The job now selects a
+dispatch-pool slot up front (`probe_2/3/4` → `dispatch_pool.py select` → the
+`reader` mint, verify.yml's shape), and every re-mint is the READER mint again
+— the same per-slot map, the same fallback to the original pair — so the
+twelve planner/critic runs read GitHub through the slot with the most headroom
+rather than through slot 1 by habit. The identity rule is unchanged in
+substance: a re-mint that drifted to a different map would change who the
+critics act as. The pool steps themselves (the probes, which are gated and
+`continue-on-error` by design, and the reader) are not re-mints and are pinned
+by tests/test_readers_on_the_pool.py.
+
 Run: python3 -m pytest tests/test_plan_token_remint.py -v
 """
 
@@ -51,6 +62,10 @@ MINT_ACTION = "actions/create-github-app-token"
 MODEL_ACTION = "anthropics/claude-code-action"
 PLANNER = "Plan epic"
 START_MINT_ID = "app"
+# The pool-selected mint every re-mint repeats (DRE-4282), and the pool's own
+# steps, which are mints but not re-mints.
+READER_MINT_ID = "reader"
+POOL_STEP_IDS = {READER_MINT_ID, "probe_2", "probe_3", "probe_4"}
 
 
 def _steps() -> list[dict]:
@@ -139,24 +154,38 @@ class NoTokenOutlivesAModelRun(unittest.TestCase):
         self.assertLess(mint, prea)
 
 
-class EveryReMintIsTheStartMintAgain(unittest.TestCase):
-    """Same App, same pinned action, same inputs — a re-mint that drifted to a
-    different identity would change who the critics act as."""
+class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
+    """Same pool map, same pinned action, same inputs — a re-mint that drifted
+    to a different map would change who the critics act as (DRE-4282: the
+    reader mint, selected from the pool, is the identity every model step
+    reads GitHub as; before it, the start-of-job mint was)."""
 
     def _re_mints(self) -> list[tuple[int, dict]]:
         return [
             (i, s) for i, s in enumerate(_steps())
-            if _action(s) == MINT_ACTION and s.get("id") != START_MINT_ID
+            if _action(s) == MINT_ACTION
+            and s.get("id") != START_MINT_ID
+            and s.get("id") not in POOL_STEP_IDS
         ]
 
     def test_there_are_re_mints(self):
         self.assertTrue(self._re_mints())
 
-    def test_same_pin_and_same_inputs_as_the_start_mint(self):
-        start = _steps()[_index_of_id(START_MINT_ID)]
+    def test_same_pin_and_same_inputs_as_the_reader_mint(self):
+        reader = _steps()[_index_of_id(READER_MINT_ID)]
+        self.assertIn("steps.pool.outputs.n", str((reader.get("with") or {}).get("app-id")))
         for i, step in self._re_mints():
-            self.assertEqual(step.get("uses"), start.get("uses"), _label(i, step))
-            self.assertEqual(step.get("with"), start.get("with"), _label(i, step))
+            self.assertEqual(step.get("uses"), reader.get("uses"), _label(i, step))
+            self.assertEqual(step.get("with"), reader.get("with"), _label(i, step))
+
+    def test_the_reader_is_selected_before_any_model_step(self):
+        # The pool is chosen once, up front; a re-mint after a model step
+        # re-uses that choice (steps.pool.outputs.n) and never re-selects.
+        reader = _index_of_id(READER_MINT_ID)
+        first_model = min(
+            i for i, s in enumerate(_steps()) if _action(s) == MODEL_ACTION
+        )
+        self.assertLess(reader, first_model)
 
     def test_each_is_gated_and_fails_loudly(self):
         # Gated: an unconditioned mint runs on every route. Not

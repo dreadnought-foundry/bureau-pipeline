@@ -369,15 +369,20 @@ class VerifyRetryChangesTheTurnBudgetTest(unittest.TestCase):
 
 
 class QaReviewKeepsItsOwnQuotaBucketTest(unittest.TestCase):
-    """DRE-1921, re-pinned. qa-review.yml mints its agent token from the
-    qa-bot App, whose installation has its OWN 5,000 req/hr bucket. That is
-    why every QA Review run on agent-bureau PR #2045 succeeded while Verify
-    died on installation 123249480.
+    """DRE-1921, re-pinned — and widened by DRE-4282. qa-review.yml mints its
+    boot token from the qa-bot App, whose installation has its OWN 5,000
+    req/hr bucket. That is why every QA Review run on agent-bureau PR #2045
+    succeeded while Verify died on installation 123249480.
 
-    Pooling this workflow would be a regression, not a fix: it would move
-    the critic off a healthy dedicated bucket onto the contended one. This
-    test exists so the next person reading 'the pool is wired into only a
-    few workflows' does not 'finish the job' here.
+    Until DRE-4282 this class also pinned that qa-review must NOT join the
+    pool: the fear was that pooling would move the critic OFF a healthy
+    dedicated bucket and ONTO the contended one. The pool does the opposite
+    when the qa bucket is its slot 1: the selector reads every bucket's
+    headroom and takes the largest, so the critic leaves its own bucket only
+    for one with MORE room, and with no pool secrets it renders exactly the
+    single-App shape this class always pinned. On 2026-09-18 at 15:29 PT the
+    spares had 2, 5 and 4 requests spent against slot 1's 974 — capacity that
+    every heavy reader now draws on (tests/test_readers_on_the_pool.py).
     """
 
     def test_critic_token_is_minted_from_the_qa_app(self):
@@ -387,11 +392,11 @@ class QaReviewKeepsItsOwnQuotaBucketTest(unittest.TestCase):
         )
         self.assertIn(
             "BUREAU_QA_APP_ID", (app.get("with") or {}).get("app-id", ""),
-            "qa-review's agent token must stay on the qa-bot App's separate "
-            "quota bucket (DRE-1921)",
+            "qa-review's boot token must stay on the qa-bot App's separate "
+            "quota bucket (DRE-1921) — it is the pool's slot 1 here",
         )
 
-    def test_both_critic_runs_use_the_qa_bucket_token(self):
+    def test_both_critic_runs_use_the_pool_selected_reader_token(self):
         agent_steps = [
             s for s in steps("qa-review.yml", "review")
             if "claude-code-action" in (s.get("uses") or "")
@@ -400,17 +405,27 @@ class QaReviewKeepsItsOwnQuotaBucketTest(unittest.TestCase):
         for s in agent_steps:
             self.assertEqual(
                 (s.get("with") or {}).get("github_token"),
-                "${{ steps.app.outputs.token }}",
+                "${{ steps.reader.outputs.token }}",
+                "the critic's reads ride the slot with the most headroom "
+                "(DRE-4282); the qa bucket is that slot's fallback",
             )
 
-    def test_qa_review_declares_no_dispatch_pool_secrets(self):
+    def test_qa_reviews_pool_falls_back_to_the_qa_app(self):
+        # The pool secrets are declared OPTIONAL and the reader mint's chain
+        # ends at the qa-bot pair — a repo without the pairs is DRE-1921
+        # exactly as it was.
         declared = workflow_call_secrets("qa-review.yml")
         for n in POOL_SLOTS:
-            self.assertNotIn(
-                f"BUREAU_APP_ID_{n}", declared,
-                "qa-review.yml must not join the dispatch pool — it has its "
-                "own bucket (DRE-1921)",
-            )
+            self.assertIn(f"BUREAU_APP_ID_{n}", declared)
+            self.assertFalse((declared[f"BUREAU_APP_ID_{n}"] or {}).get("required", False))
+        _, reader = step_index(
+            "qa-review.yml", "review",
+            lambda s: s.get("id") == "reader", "id: reader",
+        )
+        self.assertRegex(
+            (reader.get("with") or {}).get("app-id", ""),
+            r"\|\|\s*secrets\.BUREAU_QA_APP_ID\s*}}\s*$",
+        )
 
 
 if __name__ == "__main__":
