@@ -613,6 +613,13 @@ class GateScenarioTest(unittest.TestCase):
         (td / ".bureau-pipeline" / "scripts" / "unfixable_checks.py").write_text(
             (SCRIPTS / "unfixable_checks.py").read_text()
         )
+        # DRE-4157: the receipt read goes through the retry seam, so the
+        # step's checkout carries it too. Without it the wrapper cannot
+        # launch, the `[]` substitute stands in, and every run posts the
+        # hold again — the duplicate this harness's second-run case forbids.
+        (td / ".bureau-pipeline" / "scripts" / "gh_read_retry.py").write_text(
+            (SCRIPTS / "gh_read_retry.py").read_text()
+        )
         linear_log = td / "linear.jsonl"
         (td / ".bureau-pipeline" / "scripts" / "linear_ops.py").write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\n"
