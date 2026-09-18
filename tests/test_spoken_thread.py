@@ -20,9 +20,13 @@ is checked:
     receipt, exactly as before. Claiming to be the CEO's answer changes nothing.
   * **a person, in Linear** — somebody else's own Linear user: not the
     pipeline, and not verified as the CEO.
-  * **REFUSED** — a comment carrying an answer receipt that does not verify.
-    Its text is withheld from the agent, and the refusal is recorded (the step
-    log, and a line in the agent's context saying why).
+  * **REFUSED** — a comment carrying an answer receipt that was checked and
+    does not verify. Its text is withheld from the agent, and the refusal is
+    recorded (the step log, and a line in the agent's context saying why).
+  * **UNCHECKED** — a comment whose receipt could not be CHECKED at all,
+    because the console's key could not be read (DRE-4153). Withheld the same
+    way and never counted as his voice, but it is not a refusal:
+    `tests/test_unchecked_console_answer.py` owns that split.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_spoken_thread.py -v
 """
@@ -187,13 +191,18 @@ def test_the_same_answer_posted_twice_is_honoured_once():
     assert "already" in voices[1].why
 
 
-def test_an_unreadable_key_refuses_every_answer_and_says_why(monkeypatch):
+def test_an_unreadable_key_leaves_every_answer_unchecked_and_says_why(monkeypatch):
+    """An unreadable key is "could not be checked", not "does not verify"
+    (DRE-4153): the check never ran, so nothing is known about the signature
+    either way, and calling that a refusal reads a real answer as a forgery.
+    Either way it is not counted as the CEO's voice and its text is withheld."""
     def down():
         raise console_receipt.KeyUnavailable("connection refused")
     monkeypatch.setattr(spoken_thread, "_VERIFIER",
                         console_receipt.Verifier(key_loader=down))
     [voice] = read([node(V.ANSWER_COMMENT)])
-    assert voice.kind == spoken_thread.REFUSED
+    assert voice.kind == spoken_thread.UNCHECKED
+    assert voice.body is None
     assert "connection refused" in voice.why
 
 

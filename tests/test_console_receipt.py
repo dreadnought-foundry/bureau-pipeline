@@ -260,6 +260,10 @@ def test_a_wrong_answer_from_the_endpoint_is_a_named_refusal(monkeypatch, payloa
 
 
 def test_a_non_200_answer_is_a_named_refusal(monkeypatch):
+    # A 503 is a gateway that was not there for one request, so the bounded
+    # retry (DRE-4153) asks again — the backoff is swallowed here, and
+    # tests/test_unchecked_console_answer.py owns what the retry must do.
+    monkeypatch.setattr(console_receipt.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(console_receipt, "urlopen", _serving(GOOD_KEY, status=503))
     with pytest.raises(console_receipt.KeyUnavailable) as err:
         console_receipt.fetch_key()
