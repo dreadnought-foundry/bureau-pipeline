@@ -260,24 +260,13 @@ jobs:
           # (--slurp = one array per page; a busy PR's markers fall off the
           # first page) and sha-bound (a new commit resets the count).
           #
-          # ONE read of the thread, here, for everything below it (DRE-4157).
-          # It was four — this halt count, its receipt, the routing reads and
-          # the budget each fetched the same record — and this first one was
-          # piped straight into jq with nothing checking whether GitHub had
-          # answered. On 2026-09-17/18 the shared App installation
-          # (123249480) was throttled six times while a fix run stood here
-          # (portico #582 first, run 35252920674): `gh` printed the error page
-          # on stdout and exited 1, `--slurp` had wrapped it like a page, and
-          # jq died reading it as the record — `Cannot index string with
-          # string "user"`, exit 5 — so the run was red for a reason that had
-          # nothing to do with the branch. The read now goes through
-          # gh_read_retry.py, the sweep's DRE-4109 seam: a refusal is retried
-          # (three attempts, ~15s then ~45s, one log line each) and one that
-          # persists STOPS this step with a plain-English reason and
-          # EX_TEMPFAIL, so every later step — all gated on go=true — stays
-          # unrun. It never substitutes `[]`: an unreadable thread is
-          # UNKNOWN, and `[]` here would read as no halt, a fresh budget and
-          # no standing hold — a check that could not read reporting clean.
+          # ONE read of the thread for everything below (DRE-4157; it was
+          # four, the first piped straight into jq — a throttled `gh` put the
+          # error page on stdout and jq died on it, portico #582). Through
+          # gh_read_retry.py, the sweep's DRE-4109 seam: a refusal is retried,
+          # one that persists STOPS this step with the reason (no go=true, so
+          # nothing below runs). Never `[]`: unreadable is UNKNOWN, and `[]`
+          # reads as no halt, a fresh budget and no standing hold.
           TMPD="${RUNNER_TEMP:-/tmp}"
           python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$TMPD/thread.json" \
             gh api --paginate --slurp \
@@ -310,10 +299,7 @@ jobs:
           # the two indexes are indexes into the SAME list, which three
           # separate calls never guaranteed. `add // []` flattens the
           # per-page arrays `--slurp` emits. DRE-4157: the one read is
-          # $TMPD/thread.json, taken above the convergence halt, and the `[]`
-          # blip substitute it used to tolerate is gone — an unreadable
-          # thread stops the step up there rather than reading here as "no
-          # verdict and no push".
+          # $TMPD/thread.json, above the convergence halt; no `[]` substitute.
           # DRE-1988: a "QA Critic" verdict only counts if the qa-bot identity
           # authored it — any commenter can plant the marker text otherwise.
           VERDICT=$(jq -r '[(add // [])[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic"))] | last | .body // empty' \
