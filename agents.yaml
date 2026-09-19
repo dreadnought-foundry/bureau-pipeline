@@ -221,7 +221,8 @@ agents:
     maxTurns: 150
     maxBudget: 9
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/agent-fix.yml
@@ -266,7 +267,11 @@ agents:
     # and a live key would let it fetch card prose around that stage. The
     # reason is written out in tests/test_agent_linear_key.py, and the roster
     # check requires this omission to appear there rather than be a blank.
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]
+    # The pool ids reach this step through qa-review.yml's job-level env
+    # mirror (DRE-4282: the critic's reads ride the dispatch pool) — ids only,
+    # never a key, exactly as they reach the engineer and the verifier.
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     # DRE-3084. The brief carries ONLY what the per-PR prompt cannot: the
     # standing facts about the critic's own position (a fixture carrying a
@@ -346,7 +351,8 @@ agents:
     maxTurns: 140
     maxBudget: 8
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
     # document portal from a SEPARATE job in plan.yml, so the portal checkout
     # never enters the planner's workspace and stays out of its reach.
@@ -392,7 +398,8 @@ agents:
     maxTurns: 60
     maxBudget: 3
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/plan.yml
@@ -415,7 +422,8 @@ agents:
     maxTurns: 60
     maxBudget: 3
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/plan.yml

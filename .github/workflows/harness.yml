@@ -11,6 +11,14 @@
 # hardcoded login) and doubles as a pre-flight proof the qa App really is
 # installed on the sandbox before we spend scenario minutes waiting.
 #
+# A THIRD token, the READER, comes from the dispatch pool (DRE-4282): the
+# driver polls the sandbox for as long as a review takes, every poll is
+# billed to the identity that asks, and on 2026-09-17 that emptied the
+# worker installation's hour for every job in the fleet (DRE-4132). The
+# worker client's GETs now go out as whichever pool App has the most
+# headroom; its writes, and the clone/push credential, stay the worker's —
+# WHICH identity ACTS is the thing under test, and a read is not an action.
+#
 # NOTE (scope of pipeline_ref): the input pins the DRIVER code under test.
 # The sandbox's stubs consume the reusable workflows at the ref THEY pin —
 # main, the canary channel — and GitHub resolves that ref at dispatch. So a
@@ -186,6 +194,14 @@ jobs:
     # release gate loses the evidence a clean FAIL would have left it.
     # Pinned to the driver's own budgets by tests/test_harness_wiring.py.
     timeout-minutes: 180
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
       # The ref under test: pipeline_ref on a by-hand dispatch (defaulted to
       # main). On a push the inputs context is EMPTY and the tail runs.
@@ -354,6 +370,91 @@ jobs:
           owner: dreadnought-foundry
           repositories: bureau-harness
 
+      # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
+      # verify.yml's shape, copied, sandbox-scoped like the two mints above:
+      # mint a probe token per CONFIGURED pool app (absent secrets skip the
+      # step and shrink the pool; continue-on-error so a pool app that is not
+      # installed on the sandbox can never fail a proving run), let
+      # dispatch_pool.py read each bucket's quota-exempt /rate_limit and pick
+      # the app with the MOST remaining, then mint the driver's READ token from
+      # it. The worker token above is slot 1's probe — /rate_limit is per
+      # installation, so the token's repo scope does not matter. The selector
+      # is the checkout's own copy (it has been in the tree since 2026-07-10,
+      # long before the isolation contract the guard above requires); it only
+      # ever sees app ids and probe tokens, never keys, and the mint below maps
+      # the chosen slot to its secret pair explicitly and falls through to the
+      # worker pair, so a run without the pool secrets is a single-app pool
+      # reading exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: env.BUREAU_APP_ID_2 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: env.BUREAU_APP_ID_3 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: env.BUREAU_APP_ID_4 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+
+      - name: Select dispatch-pool app
+        id: pool
+        env:
+          BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.worker.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key on read failure: this run, so a re-run
+          # picks the same slot instead of scattering across buckets.
+          BUREAU_POOL_KEY: harness:${{ github.run_id }}
+        run: |
+          python3 scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # Read token: minted from the SELECTED pool app, sandbox-scoped.
+      # Explicit per-N map (Actions can't index secrets dynamically); each
+      # clause yields '' when not selected, so the chain always falls through
+      # to the worker pair. The same map is handed to the driver below as the
+      # reader's re-mint credentials.
+      - name: Mint pool reader token (sandbox-scoped)
+        id: reader
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+
       # The console's own state lists (DRE-2726). Best-effort BY DESIGN: this
       # is a different repository and a different installation, and a mint that
       # cannot happen must not turn every proving run red on a clause the wave
@@ -402,6 +503,24 @@ jobs:
           HARNESS_WORKER_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           HARNESS_QA_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
           HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+          # The pool READER (DRE-4282): every GET the worker client would send
+          # goes out as this identity; writes and the clone/push credential
+          # stay the worker's. Its re-mint credentials are the SAME per-slot
+          # map the reader mint used, so a run past the hour re-mints the App
+          # it selected and never drifts back to slot 1. The slot is named in
+          # the run's `github-spend:` line.
+          HARNESS_READER_TOKEN: ${{ steps.reader.outputs.token }}
+          HARNESS_READER_APP_ID: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          HARNESS_READER_APP_PRIVATE_KEY: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          HARNESS_POOL_SLOT: ${{ steps.pool.outputs.n }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           # The commit this run PROVES — the same sha the stamp below binds,
           # resolved from the actual checkout (DRE-3486). The

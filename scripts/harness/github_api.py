@@ -66,7 +66,16 @@ class GitHubError(RuntimeError):
 class GitHub:
     """One authenticated identity against api.github.com. The harness
     mints one client per actor (worker bot, …) — WHICH identity performs
-    an action is the thing under test, so it is explicit, never ambient."""
+    an action is the thing under test, so it is explicit, never ambient.
+
+    A READ is not an action anyone attributes — no scenario asserts who
+    asked — so a client may be given a `reader` (DRE-4282): another client,
+    minted from the dispatch-pool App with the most headroom, that every
+    `GET` this client would have sent goes out as instead. Writes stay this
+    client's, and so does `current_token()`, the credential the agent
+    scenarios clone and push with. The reader keeps the ETag memory and the
+    spend ledger for the reads it makes, so `github-spend:` still says whose
+    hour each request cost."""
 
     def __init__(
         self,
@@ -76,9 +85,12 @@ class GitHub:
         token_supplier=None,
         clock=time.monotonic,
         conditional: bool = True,
+        reader: "GitHub | None" = None,
     ):
         self._token = token
         self._api = api_url.rstrip("/")
+        # The client whose identity GETs go out as; None = this one.
+        self._reader = reader
         # opener(urllib.request.Request) -> (status, bytes, headers);
         # injectable so the retry/error logic is unit-testable without a
         # network. The older (status, bytes) pair is still accepted.
@@ -147,7 +159,12 @@ class GitHub:
         parsed JSON (None for empty responses). With a token_supplier the
         token is refreshed before it ages past TOKEN_REFRESH_SECONDS, and
         once reactively when GitHub answers 401 anyway (the mint-time race
-        no fixed margin can close)."""
+        no fixed margin can close).
+
+        A GET goes out as the `reader` when one was given (DRE-4282) — its
+        token, its re-mint, its ledger."""
+        if method == "GET" and self._reader is not None:
+            return self._reader.request(method, path, body)
         if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
             self._remint()
         try:
@@ -159,7 +176,10 @@ class GitHub:
 
     def request_bytes(self, method: str, path: str) -> bytes:
         """One REST call whose body is NOT json — the Actions log archive is a
-        zip (DRE-3076). Same auth, retry and re-mint path as `request`."""
+        zip (DRE-3076). Same auth, retry and re-mint path as `request`, and
+        the same reader for a GET."""
+        if method == "GET" and self._reader is not None:
+            return self._reader.request_bytes(method, path)
         if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
             self._remint()
         try:

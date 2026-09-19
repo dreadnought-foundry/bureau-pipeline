@@ -627,11 +627,32 @@ one unwatched surface (accepted: it never mutates state beyond comments).
 
 ## Pool dispatch — scripts/dispatch_pool.py
 
+**Who consults it (DRE-4282).** `agent-task.yml` (DRE-2013), `verify.yml`
+(DRE-2429) and `red-main-repair.yml` mint their WORKER token through the pool.
+Since DRE-4282 the heavy READERS do too, each in verify.yml's shape (guarded
+probe mints → `dispatch_pool.py select` → a `reader` mint that maps the slot and
+falls back to the workflow's own original pair): `qa-review.yml` (the critic's
+PR reads; slot 1 there is the qa-bot App, so DRE-1921's
+bucket stays the fallback), `reconcile.yml` (`GH_READ_TOKEN`, swapped in by
+`reconcile.gh_read`), `agent-fix.yml` (the thread and verdict fetches),
+`plan.yml` (every planner and critic run's token, through DRE-3940's re-mints)
+and `harness.yml` (the driver's reader client). What did NOT move, per
+workflow: the PR-authoring checkout, push and fix in agent-fix; the receipts
+reconcile posts and counts by the worker's login; the verdict comment
+merge-gate attributes to the qa-bot; **qa-review's review check run**, which
+stays on the dispatch App for the reason in Q3 below; the harness's acting
+identities (the worker authors, the qa-bot merges). `medic.yml` is deliberately not a
+consumer: its reads ride `github.token` because the App lacks `actions:read`
+(DRE-1346), a bucket the pool cannot improve on. All pinned by
+`tests/test_readers_on_the_pool.py`.
+
 **Q1 — actor.** The selected slot's App token authors the PR, so the PR author
 is `agent-bureau-bot` or `-2/-3/-4` — every allowlist that admits the worker
 must admit the whole pool, enforced live by `test_worker_pool_allowed_bots.py`
 (the DRE-2020 lockout, mechanically pinned). There is no generated single
-source of truth for the rosters; the test IS the sync mechanism.
+source of truth for the rosters; the test IS the sync mechanism. A READ
+carries no actor anyone checks, which is what lets the readers above spread
+across the pool without touching any allowlist.
 
 **Q2 — secrets.** The selector sees app ids and short-lived probe tokens only,
 never private keys (those stay in the workflow's per-slot mint clauses).
@@ -641,9 +662,29 @@ Missing slots shrink the pool gracefully.
 `resources.core.remaining` via the quota-exempt `/rate_limit` probe — the
 2026-06-28 shared-bucket exhaustion is the incident this design answers.
 
+On RETRY and RE-RUN the slot is re-selected from live headroom, so two runs
+over the same object routinely act as different Apps. That is harmless for a
+read and harmless for a write nobody attributes — and it is why the review
+check run is NOT pooled. `publish_review_check.py` writes ONE check per head
+and UPDATES it in place; GitHub scopes `PATCH /repos/{owner}/{repo}/check-runs/
+{id}` to the App that created that check run and refuses any other with `403
+Resource not accessible by integration`. Re-review over one head is a designed
+path here (`reconcile.recover_crashed_reviews`, a medic rerun, a manual
+`workflow_dispatch`), so a pooled writer would fail exactly when it is needed:
+the head would keep its stale red check while a fresh verdict said otherwise —
+the DRE-2291 failure that script exists to prevent — and the crashed-review
+backstop would escalate a reviewer outage that never happened. The mint stays
+on the dispatch App, at one API write per review. (DRE-4282 critic round 1.)
+
 **Q4 — command limitations.** Actions cannot index secrets dynamically →
 explicit per-N mint clauses; ties break by `sha256(card-id)` so re-runs pick
-the same slot deterministically (never `hash()`/randomness).
+the same slot deterministically (never `hash()`/randomness). The check-run
+lookup `publish_review_check.py` makes (`GET /repos/{repo}/commits/{sha}/
+check-runs?check_name=…&filter=latest`) takes no `app_id` filter, so it cannot
+be scoped to an acting App — a second reason the writer is one App: with one
+writer there can only ever be one `QA critic review` check at a head, which is
+what `reconcile`'s name-suffix classifier (`_review_checks_at_head`,
+`fix_approved_but_red`) assumes.
 
 **Q5 — crash mid-flow.** Any selector exception routes to slot 1 with
 `reason=selector-error`, exit 0 — selection can never block a build and leaves
