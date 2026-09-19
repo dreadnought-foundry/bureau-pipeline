@@ -14,11 +14,25 @@
 # re-files the next major down (the DRE-2064 walk-down, ~19 PRs) and
 # `@dependabot ignore` refuses grouped PRs outright (DRE-2062).
 #
+# HOLDING a deliberate vendor pin (DRE-4336 — same playbook, second section):
+# when a dependency is pinned BELOW its newest release on purpose, a rule
+# naming it with NO `update-types` stops Dependabot proposing it at all —
+# minors and patches included, which is the point, because the bump being
+# refused is one. It goes in the same PR as the pin, or as soon as the first
+# sweep proposes past it, and it leaves in the PR that lifts the pin. Without
+# it the held dependency rides every weekly grouped PR, the pin's guard tests
+# go red by design, nothing in the fleet fixes a `dependabot/*` branch, and
+# the safe bumps grouped beside it never land (live: PR #452, 2026-09-19).
+# tests/test_dependabot_config.py::HeldVendorPinTest keeps every such rule to
+# the dependencies it declares, and fails when a hold outlives its pin.
+#
 # STABLE-ONLY DEFAULTS (documented on purpose — we rely on them):
 #   • Dependabot only proposes STABLE releases; pre-releases (alpha/beta/rc)
 #     are ignored unless a dependency is already pinned to one. That is the
 #     default — no versioning-strategy config needed. `ignore` stanzas in
-#     this file serve ONE purpose only: rejecting majors (DRE-2118, above).
+#     this file serve TWO purposes and no third: rejecting majors (DRE-2118)
+#     and holding a deliberate vendor pin (DRE-4336) — both above. Neither
+#     is a way to filter pre-releases.
 #   • The pip manifest is requirements-dev.txt (exact pins), which tests.yml
 #     installs from — so every bump is exercised by the full suite before
 #     the gate ever sees green.
@@ -57,7 +71,10 @@ updates:
   # Every third-party action here is pinned to a 40-char commit sha with its
   # version in a trailing comment (DRE-3418, guarded by
   # scripts/check_action_pins.py). Dependabot reads that comment to know which
-  # release the sha is, and rewrites both when it proposes the next one — so a
+  # release the sha is, and rewrites both when it proposes the next one (the
+  # comment only when nothing follows the version: #452 moved 22 shas under a
+  # `# v1.0.217 — pinned DRE-3416: …` comment and left every comment naming the
+  # old release, which the checker does not catch — carded as DRE-4337) — so a
   # vendor release arrives as a PR the critic reviews and the harness proves,
   # never as a tag moving underneath us (DRE-3416: `claude-code-action@v1`
   # moved to v1.0.218 and killed every Claude-running job in the fleet for 72
@@ -83,3 +100,10 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # HELD at v1.0.217 (sha 9c5ddab2…) by DRE-3416 — REMOVE THIS STANZA IN
+      # THE DRE-3417 UPGRADE, in the same PR that moves the pin. No
+      # `update-types` on purpose: that ignores every update of this one
+      # action, and the bump it refuses (v1.0.217 -> v1.0.226, PR #452) is a
+      # patch. The pin itself is guarded by tests/test_check_action_pins.py;
+      # this only stops the weekly sweep proposing past it (DRE-4336).
+      - dependency-name: "anthropics/claude-code-action"
