@@ -365,7 +365,7 @@ jobs:
       # was the runtime itself. `role-to-assume`, `role-session-name` and
       # `aws-region` are unchanged inputs at v6.2.4.
       - name: Assume the caller's release identity
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.RELEASE_ROLE_ARN }}
           role-session-name: release-train-${{ matrix.surface }}

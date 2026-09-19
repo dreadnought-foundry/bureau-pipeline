@@ -471,7 +471,7 @@ jobs:
         id: claude
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
+        uses: anthropics/claude-code-action@7b0b255830a1fab6e602658672acad11c12d841d # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
@@ -653,7 +653,7 @@ jobs:
         id: claude_retry1
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry1.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
+        uses: anthropics/claude-code-action@7b0b255830a1fab6e602658672acad11c12d841d # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:
@@ -835,7 +835,7 @@ jobs:
         id: claude_retry2
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry2.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
+        uses: anthropics/claude-code-action@7b0b255830a1fab6e602658672acad11c12d841d # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:
