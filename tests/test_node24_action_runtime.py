@@ -17,11 +17,20 @@ repos/aws-actions/configure-aws-credentials/contents/action.yml?ref=<tag>`:
     v5.0.0  runs.using: node20
     v5.1.1  runs.using: node20
     v6.0.0  runs.using: node24   <- the FIRST node24 release
-    v6.2.4  runs.using: node24   <- the newest release (published 2026-08-31)
+    v6.2.4  runs.using: node24   <- the newest release then (published 2026-08-31)
 
 v6.0.0's own release notes name the runtime as its breaking change: "Update
 action to use node24 _Note this requires GitHub action runner version v2.327.1
-or later_". So `NODE24_FLOOR` is v6.0.0 and the tree carries v6.2.4.
+or later_". So `NODE24_FLOOR` is v6.0.0 and the tree carried v6.2.4.
+
+Re-read on 2026-09-19 for DRE-4336, which moved the pin by hand after the
+Dependabot PR carrying it (#452) was refused for its OTHER half:
+
+    v6.3.0  runs.using: node24   <- the newest release (published 2026-09-15)
+
+v6.3.0's release notes carry one entry, `add translate-env-variables option
+(#1961)` — additive, and the release train passes none of it. The tree carries
+v6.3.0.
 
 The floor is asserted as well as the exact pin on purpose: a later Dependabot
 patch inside v6 is a bump these tests should welcome, while a revert to any
@@ -51,9 +60,11 @@ ACTION = "aws-actions/configure-aws-credentials"
 NODE24_FLOOR = (6, 0, 0)
 
 # What the tree carries today: the newest release, resolved with
-# `gh api repos/aws-actions/configure-aws-credentials/git/ref/tags/v6.2.4`.
-PINNED_SHA = "cbe3b392738ccf3f987d68400dafcf4b0624a56c"
-PINNED_VERSION = "v6.2.4"
+# `gh api repos/aws-actions/configure-aws-credentials/git/ref/tags/v6.3.0`
+# (a lightweight tag — the ref's object IS the commit). A snapshot by design:
+# a Dependabot bump of this action moves these two lines in the same PR.
+PINNED_SHA = "e1253824e5c10ff9df46874f81ed3ec929e19cfd"
+PINNED_VERSION = "v6.3.0"
 
 # The node20 pin this card replaces. Named so a revert is caught by the string
 # and not only by the arithmetic.
