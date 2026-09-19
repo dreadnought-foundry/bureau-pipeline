@@ -75,7 +75,7 @@ jobs:
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts
-      # below (a handful of requests) and as slot 1's /rate_limit probe;
+      # below (a handful of requests) and as slot 1's pool probe;
       # everything quota-heavy after pool selection uses the worker token.
       - name: Mint bot token
         id: app
@@ -117,10 +117,12 @@ jobs:
       # 2026-06-28 incident exhausted a single bucket twice). Mint a probe
       # token per CONFIGURED pool app — absent secrets skip the step and just
       # shrink the pool; continue-on-error so a broken pool app can never
-      # fail a build — then let dispatch_pool.py read each bucket's
-      # /rate_limit (the endpoint is quota-exempt) and pick the app with the
-      # most remaining core quota (deterministic hash fallback on read
-      # failure). The selector only ever sees app ids + probe tokens, NEVER
+      # fail a build — then let dispatch_pool.py probe each bucket with ONE
+      # real, counted call and rank on the x-ratelimit-remaining header it
+      # answers (DRE-4290: the meter the runner is charged against; healthy
+      # buckets share the load by hash, a drained one is steered away from,
+      # a refused one is out for the run, and a read failure falls back to
+      # the hash). The selector only ever sees app ids + probe tokens, NEVER
       # private keys, and only outputs WHICH slot to use; the worker mint
       # below maps that slot to its secret pair explicitly (Actions can't
       # index secrets dynamically). Slot 1 is the original app and its probe

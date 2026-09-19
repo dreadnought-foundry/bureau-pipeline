@@ -144,7 +144,7 @@ jobs:
       # Boot token: the ORIGINAL app (pool slot 1). It stays the identity
       # this loop WRITES as — the branch checkout the agent pushes through,
       # the attempt markers and receipts fix_budget.py counts by this App's
-      # login, the fix agent's own token — and it is slot 1's /rate_limit
+      # login, the fix agent's own token — and it is slot 1's pool
       # probe. The reads move to the selected pool app below (DRE-4282).
       - name: Mint bot token
         id: app
@@ -170,9 +170,9 @@ jobs:
       # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
       # verify.yml's shape, copied: mint a probe token per CONFIGURED pool app
       # (absent secrets skip the step and shrink the pool; continue-on-error so
-      # a broken pool app can never fail a fix), let dispatch_pool.py read each
-      # bucket's quota-exempt /rate_limit and pick the app with the MOST
-      # remaining, then mint this run's READ token from that app. Selection
+      # a broken pool app can never fail a fix), let dispatch_pool.py probe
+      # each bucket with one real call and rank on the x-ratelimit-remaining
+      # header (DRE-4290), then mint this run's READ token from that app. Selection
       # sits before the first thread fetch on purpose — that fetch is one of
       # the reads that emptied installation 123249480 on 2026-09-17
       # (DRE-4132), and it must not spend from the bucket it is about to leave.

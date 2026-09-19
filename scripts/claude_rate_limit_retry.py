@@ -79,7 +79,7 @@ Interface
       report must judge the run by. A consumer left reading attempt 1 would
       report a dead agent for a build the retry finished.
 
-Test hooks (the same shape as dispatch_pool.py's `BUREAU_FAKE_RATE_LIMITS`):
+Test hooks (the same shape as dispatch_pool.py's `BUREAU_FAKE_POOL_PROBES`):
 `BUREAU_FAKE_BOT_LOOKUP` — JSON `{"status": 403, "body": "..."}` — replaces the
 live user lookup, and `BUREAU_FAKE_RATE_LIMIT_RESET` — seconds — replaces the
 live `/rate_limit` read.

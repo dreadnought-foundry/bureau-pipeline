@@ -375,10 +375,13 @@ jobs:
       # mint a probe token per CONFIGURED pool app (absent secrets skip the
       # step and shrink the pool; continue-on-error so a pool app that is not
       # installed on the sandbox can never fail a proving run), let
-      # dispatch_pool.py read each bucket's quota-exempt /rate_limit and pick
-      # the app with the MOST remaining, then mint the driver's READ token from
-      # it. The worker token above is slot 1's probe — /rate_limit is per
-      # installation, so the token's repo scope does not matter. The selector
+      # dispatch_pool.py probe each bucket with ONE real, counted call and rank
+      # on the x-ratelimit-remaining header it answers (DRE-4290 — the meter
+      # the runner is charged against; the free endpoint reports another), then
+      # mint the driver's READ token from the slot it picks. The worker token
+      # above is slot 1's probe. Every token in this block is scoped to the
+      # sandbox, so the probe must call THAT repo, not the one this workflow
+      # runs in: BUREAU_POOL_PROBE_REPO names it. The selector
       # is the checkout's own copy (it has been in the tree since 2026-07-10,
       # long before the isolation contract the guard above requires); it only
       # ever sees app ids and probe tokens, never keys, and the mint below maps
@@ -430,6 +433,9 @@ jobs:
           # Deterministic fallback key on read failure: this run, so a re-run
           # picks the same slot instead of scattering across buckets.
           BUREAU_POOL_KEY: harness:${{ github.run_id }}
+          # The repo the probe calls — the sandbox every token above is
+          # scoped to, not GITHUB_REPOSITORY (bureau-pipeline, a 404 to them).
+          BUREAU_POOL_PROBE_REPO: dreadnought-foundry/bureau-harness
         run: |
           python3 scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
 

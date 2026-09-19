@@ -62,8 +62,10 @@ duplicate-dispatch guard (see `dedupe_dispatch.py` section) plus the stub's
 reuse the run id and never self-block.
 
 **Q4 — command limitations.** The pool token mint has an explicit clause per
-slot because Actions cannot index secrets dynamically; the `/rate_limit` probe
-is quota-exempt. Both are encoded in `dispatch_pool.py` comments and its tests.
+slot because Actions cannot index secrets dynamically; the pool probe is one
+real, counted call per candidate (DRE-4290 — the free endpoint reports a meter
+the runners are not charged against). Both are encoded in `dispatch_pool.py`
+comments and its tests.
 
 **Q5 — crash mid-flow.** The `🧠 model-attempt:` heartbeat carries the run URL,
 so reconcile checks GitHub's real run status before declaring death (DRE-2032).
@@ -658,9 +660,13 @@ across the pool without touching any allowlist.
 never private keys (those stay in the workflow's per-slot mint clauses).
 Missing slots shrink the pool gracefully.
 
-**Q3 — vendor behavior.** Quota-aware: picks the slot with max
-`resources.core.remaining` via the quota-exempt `/rate_limit` probe — the
-2026-06-28 shared-bucket exhaustion is the incident this design answers.
+**Q3 — vendor behavior.** Quota-aware: probes every slot with one real call
+and ranks on the `x-ratelimit-remaining` response header — the meter the
+runner is charged against (DRE-4290; the free endpoint's body is a different
+counter, and ranking on it sent every run to slot 1). Healthy slots share the
+load by hash; a drained one is steered away from; a refused one is out for the
+run. The 2026-06-28 shared-bucket exhaustion is the incident this design
+answers.
 
 On RETRY and RE-RUN the slot is re-selected from live headroom, so two runs
 over the same object routinely act as different Apps. That is harmless for a

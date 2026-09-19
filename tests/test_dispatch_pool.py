@@ -20,6 +20,13 @@ Card acceptance criteria exercised here (each test cites its row):
     material)"
 
 All readings are injected — no real network in tests.
+
+DRE-4290 changed what a reading IS (the `x-ratelimit-remaining` header off one
+real call, not `/rate_limit`'s body) and how a partial failure is resolved
+(the readable candidates are RANKED, never hashed blind — hashing {5,000, 100}
+picks the drained slot half the time). The fake hook here is the header-shaped
+one; the degradation rows — no pool secrets, slot 1, no request — are exactly
+DRE-2013's. tests/test_dispatch_pool_real_meter.py holds the new rules.
 """
 
 import json
@@ -98,22 +105,21 @@ class ChooseTest(unittest.TestCase):
         }
         self.assertEqual(picks, {1, 2}, "hash must spread over the TIED slots only")
 
-    def test_partial_read_failure_hashes_across_readable_pool(self):
-        # Card: 'on read failure for some ... candidates, deterministic
-        # fallback by hashing a provided key ... across the READABLE pool'.
+    def test_partial_read_failure_ranks_the_readable_pool(self):
+        # Card: 'on read failure for some ... candidates ... across the
+        # READABLE pool' — an unreadable slot is never picked blind. Since
+        # DRE-4290 the readable ones are RANKED on their real readings rather
+        # than hashed: 100 remaining must lose to 5,000 every time.
         readings = {1: 5000, 2: None, 3: 100}
-        slot, reason = dispatch_pool.choose(readings, key="DRE-2013")
-        self.assertEqual(reason, "hash-readable")
-        self.assertIn(slot, (1, 3), "unreadable slot 2 must never be picked")
-        self.assertEqual(slot, dispatch_pool.hash_pick("DRE-2013", [1, 3]))
-        # Deterministic: repeat calls agree.
-        self.assertEqual(slot, dispatch_pool.choose(readings, key="DRE-2013")[0])
+        for key in ("DRE-2013", "DRE-4290", "review:447"):
+            slot, reason = dispatch_pool.choose(readings, key=key)
+            self.assertEqual((slot, reason), (1, "max-remaining"), key)
 
     def test_all_read_failures_hash_across_all_configured(self):
         # Card: '... else across all configured'.
         readings = {1: None, 2: None, 3: None}
         slot, reason = dispatch_pool.choose(readings, key="DRE-2013")
-        self.assertEqual(reason, "hash-all")
+        self.assertEqual(reason, "fallback")
         self.assertEqual(slot, dispatch_pool.hash_pick("DRE-2013", [1, 2, 3]))
         picks = {
             dispatch_pool.choose(readings, key=f"DRE-{i}")[0] for i in range(50)
@@ -132,8 +138,8 @@ class SingleAppPoolTest(unittest.TestCase):
     line'."""
 
     def test_single_app_pool_short_circuits_without_any_reads(self):
-        def boom(_token):  # pragma: no cover - fails the test if reached
-            raise AssertionError("single-app pool must not read /rate_limit")
+        def boom(*_a):  # pragma: no cover - fails the test if reached
+            raise AssertionError("single-app pool must not probe anything")
 
         slot, reason = dispatch_pool.select(
             env={"BUREAU_APP_ID": "111", "BUREAU_APP_ID_2": ""}, reader=boom
@@ -169,8 +175,14 @@ class CliOutputContractTest(unittest.TestCase):
         "BUREAU_APP_PRIVATE_KEY": "PRIVATE-KEY-MATERIAL",
         "BUREAU_APP_PRIVATE_KEY_2": "PRIVATE-KEY-MATERIAL-2",
         "BUREAU_POOL_KEY": "DRE-2013",
-        # Injected readings so the CLI is exercised end-to-end w/o network.
-        "BUREAU_FAKE_RATE_LIMITS": json.dumps({"1": 10, "2": 4999, "3": 20}),
+        "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
+        # Injected readings (header-shaped, DRE-4290) so the CLI is exercised
+        # end-to-end w/o network.
+        "BUREAU_FAKE_POOL_PROBES": json.dumps({
+            "1": {"status": 200, "x-ratelimit-remaining": "10"},
+            "2": {"status": 200, "x-ratelimit-remaining": "4999"},
+            "3": {"status": 200, "x-ratelimit-remaining": "20"},
+        }),
     }
 
     def test_cli_selects_max_via_injected_readings(self):
@@ -192,7 +204,7 @@ class CliOutputContractTest(unittest.TestCase):
 
     def test_cli_all_reads_failed_hash_fallback(self):
         env = dict(self.ENV)
-        env["BUREAU_FAKE_RATE_LIMITS"] = json.dumps(
+        env["BUREAU_FAKE_POOL_PROBES"] = json.dumps(
             {"1": None, "2": None, "3": None}
         )
         result = run_cli(env)
@@ -201,16 +213,18 @@ class CliOutputContractTest(unittest.TestCase):
         self.assertIn(f"n={expected}", result.stdout.splitlines())
 
 
-class RateLimitParseTest(unittest.TestCase):
-    def test_parse_remaining_reads_core_remaining(self):
-        body = json.dumps(
-            {"resources": {"core": {"limit": 5000, "remaining": 4321}}}
+class ProbeHeaderParseTest(unittest.TestCase):
+    def test_parse_probe_reads_the_remaining_header(self):
+        reading = dispatch_pool.parse_probe(
+            200, {"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "4321"}
         )
-        self.assertEqual(dispatch_pool.parse_remaining(body), 4321)
+        self.assertEqual(reading.remaining, 4321)
 
-    def test_parse_remaining_garbage_is_unreadable(self):
-        self.assertIsNone(dispatch_pool.parse_remaining("not json"))
-        self.assertIsNone(dispatch_pool.parse_remaining(json.dumps({"x": 1})))
+    def test_parse_probe_garbage_is_unreadable(self):
+        self.assertIsNone(dispatch_pool.parse_probe(200, {}).remaining)
+        self.assertIsNone(
+            dispatch_pool.parse_probe(200, {"X-RateLimit-Remaining": "n/a"}).remaining
+        )
 
 
 if __name__ == "__main__":

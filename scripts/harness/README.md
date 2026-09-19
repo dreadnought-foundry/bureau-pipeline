@@ -146,8 +146,10 @@ numbers here are an illustration, not a measurement):
 The polling above is READS, and a read is not an action anyone attributes — no
 scenario asserts who asked. So `harness.yml` selects a dispatch-pool App the
 way `verify.yml` does (`scripts/dispatch_pool.py`: probe every configured
-slot's `/rate_limit`, take the most headroom, mint from that App's key,
-sandbox-scoped) and hands the driver `HARNESS_READER_TOKEN`. The worker client
+slot with one real call on the sandbox — `BUREAU_POOL_PROBE_REPO`, since every
+pool token here is sandbox-scoped — rank on the `x-ratelimit-remaining` header
+(DRE-4290), mint from the chosen App's key, sandbox-scoped) and hands the
+driver `HARNESS_READER_TOKEN`. The worker client
 is built with that client as its `reader`, and every `GET` it would have sent
 goes out as the reader instead — its own hour, its own ETag memory, its own
 `github-spend:` line naming the slot. Writes stay the worker's, and so does

@@ -181,7 +181,7 @@ jobs:
       # Boot token: the ORIGINAL app (pool slot 1). It stays the token the
       # sweep WRITES with — the receipts reconcile.py counts by
       # WORKER_BOT_LOGIN, the merge-sweep commits — and it is slot 1's
-      # /rate_limit probe; the reads move to the selected pool app below.
+      # pool probe; the reads move to the selected pool app below.
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -200,9 +200,9 @@ jobs:
       # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
       # verify.yml's shape, copied: mint a probe token per CONFIGURED pool app
       # (absent secrets skip the step and shrink the pool; continue-on-error so
-      # a broken pool app can never fail a sweep), let dispatch_pool.py read
-      # each bucket's quota-exempt /rate_limit and pick the app with the MOST
-      # remaining, then mint the sweep's READ token from that app. The selector
+      # a broken pool app can never fail a sweep), let dispatch_pool.py probe
+      # each bucket with one real call and rank on the x-ratelimit-remaining
+      # header (DRE-4290), then mint the sweep's READ token from that app. The selector
       # only ever sees app ids and probe tokens, never keys; the mint below
       # maps the chosen slot to its secret pair explicitly and falls through to
       # the original app, so a repo without the new secrets is a single-app

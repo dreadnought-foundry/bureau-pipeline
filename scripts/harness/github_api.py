@@ -70,7 +70,7 @@ class GitHub:
 
     A READ is not an action anyone attributes — no scenario asserts who
     asked — so a client may be given a `reader` (DRE-4282): another client,
-    minted from the dispatch-pool App with the most headroom, that every
+    minted from a dispatch-pool App with headroom, that every
     `GET` this client would have sent goes out as instead. Writes stay this
     client's, and so does `current_token()`, the credential the agent
     scenarios clone and push with. The reader keeps the ETag memory and the
