@@ -1432,6 +1432,44 @@ jobs:
                comment that carries your words is the one written from those
                paths.
 
+      # THE FIX RUN'S OWN USAGE READING (DRE-4338) — the same two steps
+      # agent-task.yml carries after its agent step, for the same reason: the
+      # `rate_limit_event` this run emitted is in the execution file the
+      # Report below already reads, and it dies with the runner.
+      # usage_reading.py keeps that ONE message type (never the transcript)
+      # as the Record's `body_raw`; the upload keeps it 90 days for backfill.
+      #
+      # Gated like the Report, so a dispatch that could not act uploads
+      # nothing. `always()` + `continue-on-error`: a reading not taken is a
+      # log line, never a red fix run. Every `${{ }}` in env:, none in the
+      # script (tests/test_workflow_expression_budget.py).
+      - name: Keep the fix run's Claude usage reading
+        id: usage
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          CARD: ${{ steps.pr.outputs.card }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/usage_reading.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/claude-usage-reading.json" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the usage reading
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true' && steps.usage.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: claude-usage-reading-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.usage.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
+
       # ---- RE-MINT BEFORE THE REPORT (DRE-4320) ----
       # The token minted at the top of this job is dead by now if the run
       # passed an hour: GitHub gives an App installation token exactly 60

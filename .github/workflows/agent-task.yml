@@ -971,6 +971,55 @@ jobs:
             --attempt "${ATTEMPT_3_OUTCOME}=${ATTEMPT_3_FILE}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # THE RUN'S OWN USAGE READING (DRE-4338). Every Claude run emits a
+      # `rate_limit_event` carrying the subscription windows it drew on, and
+      # the vendor action writes it — with every other message of the run —
+      # into the execution file the steps above already read, on a disk that
+      # is destroyed with the runner. usage_reading.py keeps that ONE message
+      # type (never the transcript: several repos are public) as a small JSON
+      # document shaped as the Record's `body_raw`, and the step after it
+      # uploads the file. No contract change, no secret, nothing to deploy.
+      # The Record's ingestion, its source and event names and the account
+      # attribution are the Record card's, and can BACKFILL from these.
+      #
+      # `always()` + `continue-on-error`: a reading not taken is a log line,
+      # never a red build. Gated exactly like the result gate below, so a
+      # bounced or duplicate card that never reached a model uploads nothing.
+      # Every `${{ }}` is in env:, never in the script — the expression
+      # ceiling (tests/test_workflow_expression_budget.py). The file is the
+      # resolved LAST attempt's, the same one the gate reads.
+      - name: Keep the run's Claude usage reading
+        id: usage
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          # Which credential the run billed — `subscription` or not. Not a
+          # secret; the one fact that says whether this is a subscription
+          # reading at all. The account itself stays unattributed.
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/usage_reading.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/claude-usage-reading.json" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      # Named per attempt, or upload-artifact v4 refuses a re-run's upload as
+      # a duplicate. 90 days: the window the Record can backfill from.
+      - name: Upload the usage reading
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.usage.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: claude-usage-reading-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.usage.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
+
       # ---- RE-MINT BEFORE THE PUSH (DRE-3043) ----
       # The token minted at the top of this job is dead by now if the run
       # passed an hour: GitHub gives an App installation token exactly 60
