@@ -61,6 +61,9 @@ MODEL = "anthropics/claude-code-action"
 POOL_SLOTS = [2, 3, 4]
 READER = "${{ steps.reader.outputs.token }}"
 APP = "${{ steps.app.outputs.token }}"
+#: agent-fix's Report: the boot App again, minted fresh after the model step
+#: (DRE-4320), falling back to the boot token itself.
+REPORT_REMINT = "${{ steps.reporttoken.outputs.token || steps.app.outputs.token }}"
 
 #: Every workflow that joins the pool with this card, and the contract each one
 #: signs: which job, which secret pair is its slot 1 (the boot mint's App, the
@@ -128,7 +131,14 @@ CONSUMERS = {
             "Announce fix attempt": ("env", "GH_TOKEN", APP),
             "Receipt the operator-decision restart": ("env", "GH_TOKEN", APP),
             "Fix": ("with", "github_token", APP),
-            "Report": ("env", "GH_TOKEN", APP),
+            # Same App, freshly minted (DRE-4320): the model step above it is
+            # the one step here whose duration is not bounded in seconds, and
+            # a token older than an hour is dead. The re-mint takes the boot
+            # App's own pair — never the pool slot — so the login
+            # fix_budget.py counts by is unchanged, and it falls back to the
+            # boot token when the mint produced none. Its inputs are pinned
+            # against `Mint bot token`'s in tests/test_agent_fix_token_remint.py.
+            "Report": ("env", "GH_TOKEN", REPORT_REMINT),
         },
     },
     "plan.yml": {
