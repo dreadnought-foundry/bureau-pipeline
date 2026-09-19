@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->
 
-Generated **2026-09-18T04:48:07Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
+Generated **2026-09-19T04:47:31Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
 
 Every card here did not fit one run: it died at the turn cap, it was split, or a build run handed it back as an epic. The point of writing it down is DRE-3022's: the planner has been sizing cards against nothing.
 
@@ -53,10 +53,10 @@ A month is **complete** when the window covers all of it and it ended before thi
 
 | Month | Planner-created children | Split | Died at the turn cap | Complete |
 | --- | --- | --- | --- | --- |
-| 2026-06 | 140 | 0 | 0 | no — a partial count |
+| 2026-06 | 129 | 0 | 0 | no — a partial count |
 | 2026-07 | 228 | 0 | 0 | yes |
 | 2026-08 | 307 | 6 | 17 | yes |
-| 2026-09 | 697 | 5 | 16 | no — a partial count |
+| 2026-09 | 750 | 5 | 16 | no — a partial count |
 
 ## The tells, in hindsight
 
