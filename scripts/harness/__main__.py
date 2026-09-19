@@ -13,10 +13,12 @@ Env (harness.yml sets all of these):
                         Absent: those reads fall back to the worker token
                         and a permission refusal surfaces loudly.
   HARNESS_WORKER_LOGIN  informational — the authoring identity
-  HARNESS_READER_TOKEN  optional — the dispatch-pool App with the most
-                        headroom, sandbox-scoped (DRE-4282: harness.yml
-                        probes every configured slot with dispatch_pool.py
-                        and mints from the one it picks). Every GET the
+  HARNESS_READER_TOKEN  optional — a dispatch-pool App with headroom,
+                        sandbox-scoped (DRE-4282: harness.yml probes every
+                        configured slot with dispatch_pool.py — one real call
+                        each on the sandbox, ranked on the response's
+                        x-ratelimit-remaining header since DRE-4290 — and
+                        mints from the one it picks). Every GET the
                         worker client would send goes out as this identity
                         instead; writes, and the clone/push credential, stay
                         the worker's. Absent: reads ride the worker on pool

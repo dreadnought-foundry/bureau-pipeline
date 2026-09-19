@@ -146,7 +146,8 @@ CONSUMERS = {
         "job": "harness",
         "original": ("BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY"),
         # Slot 1's probe is the sandbox-scoped worker token the job already
-        # mints; /rate_limit is per installation, so the scope does not matter.
+        # mints; the probe calls the sandbox too (BUREAU_POOL_PROBE_REPO,
+        # DRE-4290, pinned in test_dispatch_pool_real_meter.py).
         "boot": "${{ steps.worker.outputs.token }}",
         "pipeline_checkout": False,
         "readers": {"Run harness scenarios": ("env", "HARNESS_READER_TOKEN")},

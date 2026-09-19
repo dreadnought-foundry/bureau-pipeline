@@ -118,7 +118,7 @@ jobs:
     steps:
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts,
       # the PR resolve and the scope gate (a handful of requests) and as
-      # slot 1's /rate_limit probe; the VERIFIER itself — the quota-heavy
+      # slot 1's pool probe; the VERIFIER itself — the quota-heavy
       # part — runs on the selected worker token minted further down.
       - name: Mint bot token
         id: app
@@ -243,9 +243,9 @@ jobs:
       # four independent 5,000 req/hr REST quota buckets. Mint a probe token
       # per CONFIGURED pool app — absent secrets skip the step and just
       # shrink the pool; continue-on-error so a broken pool app can never
-      # fail a verify — then let dispatch_pool.py read each bucket's
-      # /rate_limit (that endpoint is quota-exempt, so probing costs nothing)
-      # and pick the app with the MOST remaining core quota. That is the
+      # fail a verify — then let dispatch_pool.py probe each bucket with ONE
+      # real, counted call and rank on the x-ratelimit-remaining header it
+      # answers (DRE-4290: the meter the runner is charged against). That is the
       # whole fix for the PR #2045 class: the selector walks away from a
       # drained bucket on its own, without anyone having to notice.
       #

@@ -851,7 +851,7 @@ def gh_read(*args: str) -> str:
     each wait, and the ReconcileReadError the ledgers are built on.
 
     WHOSE hour the read spends (DRE-4282): `GH_READ_TOKEN`, when reconcile.yml
-    sets it, is the token of the dispatch-pool App with the most headroom
+    sets it, is the token of a dispatch-pool App with headroom
     (`dispatch_pool.py select`, the verify.yml shape), and every read through
     this seam goes out as that App — `pr_for` once per card, the unlanded
     watchdog's branch listing, the reads that emptied installation 123249480

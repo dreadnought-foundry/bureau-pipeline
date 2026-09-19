@@ -59,7 +59,7 @@ on:
         required: false
       # Dispatch-pool workers (DRE-2013) — same optional set as agent-task:
       # repair traffic must never starve card dispatch, so the repair mint
-      # rides the pool's max-remaining selection (guardrail 4).
+      # rides the pool's headroom-ranked selection (guardrail 4).
       BUREAU_APP_ID_2:
         required: false
       BUREAU_APP_PRIVATE_KEY_2:
@@ -219,8 +219,9 @@ jobs:
 
       # ---- Dispatch-pool worker selection (guardrail 4, DRE-2013) ----
       # Repair must never starve card dispatch: mint the worker token from
-      # the pool app with the most remaining quota, keyed repair:<sha> so
-      # reruns of the same repair pick deterministically on read failure.
+      # the pool app the selector picks on the x-ratelimit-remaining header
+      # of one real call (DRE-4290), keyed repair:<sha> so reruns of the same
+      # repair pick deterministically within the spread and on read failure.
       - name: Mint pool probe token (2)
         id: probe_2
         if: steps.decide.outputs.go == 'true' && env.BUREAU_APP_ID_2 != ''

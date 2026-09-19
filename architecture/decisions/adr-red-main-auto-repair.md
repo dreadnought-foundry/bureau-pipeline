@@ -175,9 +175,9 @@ installation buckets the 2026-06-28 incident exhausted):
 
 - **Mint through the dispatch pool.** The repair worker token is selected by
   `scripts/dispatch_pool.py` (DRE-2013) with pool key `repair:<failing-sha>`
-  — the selector's max-remaining pick steers repair onto the bucket with the
-  most headroom, away from whichever bucket card dispatch is currently
-  draining.
+  — the selector ranks on the meter the runner is actually charged against
+  (DRE-4290) and steers repair onto a bucket with headroom, away from
+  whichever bucket card dispatch is currently draining.
 - **Bounded by construction.** Guardrails 2 and 3 cap total repair traffic
   at one in-flight repair per repo with ≤2 attempts per failure — repair
   cannot generate the unbounded call volume that starvation requires. If

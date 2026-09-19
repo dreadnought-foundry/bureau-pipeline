@@ -158,7 +158,7 @@ jobs:
       # bucket the relay's repository_dispatch already consumes (DRE-1921).
       # Kept as id `app`: it is the token the VERDICT is posted with (the
       # qa-bot authorship merge-gate checks), the review decision's token, and
-      # — since DRE-4282 — the pool's slot 1 and its /rate_limit probe. The
+      # — since DRE-4282 — the pool's slot 1 and its pool probe. The
       # heavy reads after the decision run on the selected pool app below.
       - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
@@ -308,9 +308,9 @@ jobs:
       # critic its own bucket and that bucket stays the fallback; the pool
       # adds three more. Mint a probe token per CONFIGURED pool app (absent
       # secrets skip the step and shrink the pool; continue-on-error so a
-      # broken pool app can never fail a review), let dispatch_pool.py read
-      # each bucket's quota-exempt /rate_limit and pick the app with the MOST
-      # remaining, then mint the review's READ token from it. Gated on the
+      # broken pool app can never fail a review), let dispatch_pool.py probe
+      # each bucket with one real call and rank on the x-ratelimit-remaining
+      # header (DRE-4290), then mint the review's READ token from it. Gated on the
       # review decision, like verify's scope gate: a skipped review must not
       # spend three mints on a pool it will never use. The selector only ever
       # sees app ids and probe tokens, never keys; the mint below maps the

@@ -78,7 +78,7 @@ Environment:
     BUREAU_CONSOLE_TOKEN       a token that can read the console repository.
     BUREAU_CONSOLE_ACTS_FILE   a local console file, read instead of the
                                network — the test hook (dispatch_pool.py's
-                               BUREAU_FAKE_RATE_LIMITS pattern), and the way
+                               BUREAU_FAKE_POOL_PROBES pattern), and the way
                                the guard is exercisable end-to-end offline.
 
 Deliberately NOT `GH_TOKEN`: the token this repo's CI already holds is scoped
