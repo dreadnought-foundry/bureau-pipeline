@@ -1693,7 +1693,14 @@ jobs:
       # usage_reading.py keeps that ONE message type (never the transcript)
       # as the Record's `body_raw`; the upload keeps it 90 days for backfill.
       # Both attempts write the same path, so the file here is the LAST
-      # attempt's — the retry's output when it ran, attempt 1's otherwise.
+      # attempt's — the retry's output when it ran, attempt 1's otherwise,
+      # pinned by tests/test_usage_reading.py's `WIRED` (DRE-4108).
+      #
+      # PUBLISHED ON PURPOSE, same as agent-task.yml: on a public repo the
+      # artifact is readable by anyone for 90 days, and utilization / resets /
+      # status / overage flags are the same class of fact execution_result.py
+      # already prints to these logs. The event's UNKNOWN fields are not —
+      # usage_reading.py's `raw` block is an allowlist.
       #
       # Gated on the review decision and the size gate, or a chrome-only PR
       # the critic was never asked to read would upload "not reported" for a

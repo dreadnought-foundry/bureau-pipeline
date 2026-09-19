@@ -33,6 +33,24 @@ key is not one. tests/test_usage_reading.py plants a sentinel in every other
 message and asserts it never reaches the written file, stdout or the step
 summary — the same discipline execution_result.py holds the gates to.
 
+WHAT IT PUBLISHES, AND THAT THIS IS ON PURPOSE. The artifact is world-readable
+for its 90 days wherever the repo is public — and this repo is, and dispatches
+these workflows against itself (DRE-1929 self-hosting). What lands there is the
+run's window utilization and reset times, the status and the overage flags, and
+`auth_mode`. That publication is deliberate, and it is the same class of fact
+this pipeline already publishes to the same public logs: execution_result.py
+prints the run's `total_cost_usd`, `num_turns` and `duration_ms` on every clean
+run (DRE-2465). None of it names an account, a credential, a person or a
+balance — `account.attributed` is always false — and a reader learns how busy
+the operator's Claude pool was, which the cost line already tells them.
+What is NOT deliberate is a field nobody has read yet, so the `raw` block is an
+ALLOWLIST (`_EVENT_KEYS` below), never a passthrough: a field a future SDK adds
+inside the event is dropped, and only its NAME travels, under
+`raw.fields_dropped`. That is also this change's answer to
+standards/vendor-boundaries.md Q3 — when the vendor changes the event shape,
+the artifact keeps what it knows, says what it dropped, and publishes nothing
+new until a person has read the declaration and added it here.
+
 THE SHAPE IS THE RECORD'S `body_raw`, NOT ITS ENVELOPE. The Record
 (agent-bureau `config/record-contract.json`) wraps each delivery in an envelope
 whose `received_at`, `relay_version` and `tenant_id` are facts about the
@@ -96,6 +114,28 @@ REASON_NO_EVENT = "no rate_limit_event in this run"
 #: cannot import that one; `delivery_id` is built to fit it and the test pins
 #: that it does.
 _SEGMENT = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+#: WHAT THE RAW BLOCK KEEPS, and only that. The uploaded artifact is readable
+#: by anyone for 90 days on a public repo, so `raw` is an ALLOWLIST, not a
+#: passthrough: a field some future SDK adds inside `rate_limit_event` is
+#: DROPPED until a person has read the vendor's declaration of it and put it
+#: here. Same discipline as execution_result.py's `_DIAGNOSTIC_FIELDS`, which
+#: holds the public job log to a whitelist for the same reason. The fields
+#: below are those `@anthropic-ai/claude-agent-sdk` 0.3.263 declares for
+#: `SDKRateLimitInfo` plus the `unifiedWindows` map 2.1.278 emits.
+_EVENT_KEYS = ("type", "uuid", "session_id", "rate_limit_info")
+_INFO_KEYS = ("status", "rateLimitType", "utilization", "resetsAt",
+              "overageStatus", "overageDisabledReason", "isUsingOverage",
+              "overageResetsAt", "unifiedWindows")
+_WINDOW_KEYS = ("status", "rateLimitType", "utilization", "resetsAt")
+
+#: A dropped field's NAME travels under `raw.fields_dropped` — never its value —
+#: so the first run after a vendor shape change says so instead of silently
+#: keeping less (standards/vendor-boundaries.md Q3). A key is vendor-controlled
+#: text like any other, so only a plain identifier is quoted back; anything else
+#: is reported as `(unnamed)`, and the list is capped.
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+DROPPED_NAME_CAP = 25
 
 #: A card id read out of the branch the fleet's gates already match on
 #: (`agent/DRE-<n>-<slug>`). Only that prefix: `fix/*`, `repair/*` and
@@ -210,9 +250,12 @@ def card_from_ref(ref: object) -> str | None:
 
 def delivery_id(run: dict, read_at_epoch_ms: int) -> str:
     """`gha-<run_id>-<attempt>-<read_at_epoch_ms>`: run id + attempt + read
-    time, so two readings are two deliveries and the same reading is the same
-    one. `unknown` stands in outside Actions so the id still fits the segment
-    rule; it never stands in for a real run."""
+    time, so two readings are two deliveries — a re-run, and a second emit in
+    the same job, each get their own id. It is a function of its arguments and
+    nothing else; in production `read_at` is the wall clock, so the id repeats
+    only if the same reading is passed in again. `unknown` stands in outside
+    Actions so the id still fits the segment rule; it never stands in for a
+    real run."""
     run_id = run.get("id") or "unknown"
     attempt = run.get("attempt") or "unknown"
     value = f"gha-{run_id}-{attempt}-{read_at_epoch_ms}"
@@ -251,6 +294,58 @@ def _windows(info: dict) -> list[dict]:
     return rows
 
 
+def _allowlisted(events: list[dict]) -> tuple[list[dict], list[str]]:
+    """`(events, dropped)` — each event cut down to the fields above, plus the
+    sorted NAMES of everything cut. Key order is preserved, so an event of the
+    shape this module has read a declaration for comes through unchanged.
+
+    Window names are NOT filtered: they are the reading's own labels and travel
+    in `windows[].window` already. What is filtered here is the unknown.
+    """
+    def named(prefix: str, key: object) -> str:
+        return f"{prefix}.{key}" if _PLAIN_NAME.fullmatch(str(key)) else f"{prefix}.(unnamed)"
+
+    kept: list[dict] = []
+    dropped: set[str] = set()
+    for event in events:
+        row: dict = {}
+        for key, value in event.items():
+            if key not in _EVENT_KEYS:
+                dropped.add(named("event", key))
+                continue
+            if key != "rate_limit_info":
+                row[key] = value
+                continue
+            if not isinstance(value, dict):   # not the object the SDK declares
+                dropped.add("event.rate_limit_info")
+                continue
+            info: dict = {}
+            for info_key, info_value in value.items():
+                if info_key not in _INFO_KEYS:
+                    dropped.add(named("rate_limit_info", info_key))
+                    continue
+                if info_key != "unifiedWindows":
+                    info[info_key] = info_value
+                    continue
+                if not isinstance(info_value, dict):
+                    dropped.add("rate_limit_info.unifiedWindows")
+                    continue
+                windows: dict = {}
+                for window_name, window in info_value.items():
+                    if not isinstance(window, dict):
+                        dropped.add("rate_limit_info.unifiedWindows.*")
+                        continue
+                    windows[window_name] = {
+                        k: v for k, v in window.items() if k in _WINDOW_KEYS}
+                    for k in window:
+                        if k not in _WINDOW_KEYS:
+                            dropped.add(named("rate_limit_info.unifiedWindows.*", k))
+                info[info_key] = windows
+            row[key] = info
+        kept.append(row)
+    return kept, sorted(dropped)[:DROPPED_NAME_CAP]
+
+
 def reading(events: list[dict], *, run: dict, repo: str | None,
             read_at: datetime, card: str | None = None,
             reason: str | None = None) -> dict:
@@ -271,6 +366,7 @@ def reading(events: list[dict], *, run: dict, repo: str | None,
         reason = REASON_NO_EVENT
     last = events[-1].get("rate_limit_info") if reported else None
     info = last if isinstance(last, dict) else {}
+    raw_events, fields_dropped = _allowlisted(events)
     return {
         "schema": SCHEMA,
         "delivery_id": delivery_id(run, epoch_ms),
@@ -298,10 +394,13 @@ def reading(events: list[dict], *, run: dict, repo: str | None,
             "resets_at": info.get("overageResetsAt"),
             "resets_at_iso": _iso_utc(info.get("overageResetsAt")),
         },
-        # Every rate_limit_event as the action wrote it — key order preserved,
-        # no field dropped. Not "as the CLI sent it": the action already
-        # parsed and re-serialised the stream once (execution-file.ts).
-        "raw": {"rate_limit_events": events},
+        # Every rate_limit_event as the action wrote it, cut to the fields
+        # this module has read a vendor declaration for (_EVENT_KEYS et al) —
+        # key order preserved, the declared shape unchanged, and the names of
+        # anything dropped beside it so vendor drift is visible. Not "as the
+        # CLI sent it": the action already parsed and re-serialised the stream
+        # once (execution-file.ts).
+        "raw": {"rate_limit_events": raw_events, "fields_dropped": fields_dropped},
         "record": {
             "role": "body_raw",
             "fact_key_parts": ["run.id", "run.attempt", "read_at_epoch_ms"],
@@ -409,6 +508,17 @@ def main(argv: list[str] | None = None) -> int:
         return emit(args)
     except Exception as exc:  # never a red build: a reading not taken is a log line
         print(f"usage reading: skipped ({type(exc).__name__}: {exc})")
+        # ...and say so where a human looks, not only in the log. The step runs
+        # `continue-on-error: true`, so a systematically broken emitter would
+        # otherwise render as SILENCE in the job summary — indistinguishable
+        # from a run that never took a reading (standards/console-honesty.md
+        # rule 2). The exception's own message stays in the log: it can quote
+        # a path this module was reading.
+        try:
+            _append(args.step_summary, f"Claude usage: reading could not be taken "
+                                       f"({type(exc).__name__})")
+        except OSError:  # the summary file itself is what broke — the log has it
+            pass
         return 0
 
 

@@ -982,12 +982,23 @@ jobs:
       # The Record's ingestion, its source and event names and the account
       # attribution are the Record card's, and can BACKFILL from these.
       #
+      # PUBLISHED ON PURPOSE: on a public repo this artifact is readable by
+      # anyone for its 90 days. What it carries — window utilization, reset
+      # times, status, overage flags, auth_mode — is the same class of fact
+      # execution_result.py already prints to these public logs (total_cost_usd,
+      # num_turns), names no account or credential, and is published
+      # deliberately. The event's unknown fields are NOT: usage_reading.py's
+      # `raw` block is an allowlist, so a field a future SDK adds is dropped
+      # and only its name is reported.
+      #
       # `always()` + `continue-on-error`: a reading not taken is a log line,
       # never a red build. Gated exactly like the result gate below, so a
       # bounced or duplicate card that never reached a model uploads nothing.
       # Every `${{ }}` is in env:, never in the script — the expression
       # ceiling (tests/test_workflow_expression_budget.py). The file is the
-      # resolved LAST attempt's, the same one the gate reads.
+      # resolved LAST attempt's, the same one the gate reads — pinned by
+      # tests/test_usage_reading.py's `WIRED`, because it is the one input
+      # that decides which run the reading describes (DRE-4108).
       - name: Keep the run's Claude usage reading
         id: usage
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -1008,8 +1019,9 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --step-summary "$GITHUB_STEP_SUMMARY"
 
-      # Named per attempt, or upload-artifact v4 refuses a re-run's upload as
-      # a duplicate. 90 days: the window the Record can backfill from.
+      # Named per attempt, or upload-artifact refuses a re-run's upload as a
+      # duplicate name (plan.yml's Q4 note says the same of its own upload).
+      # 90 days: the window the Record can backfill from.
       - name: Upload the usage reading
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.usage.outputs.path != ''
         continue-on-error: true

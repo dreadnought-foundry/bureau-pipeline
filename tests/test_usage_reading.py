@@ -92,6 +92,29 @@ FLAT_EVENT = {
     "session_id": "sess-abc",
 }
 
+# The same event after a future SDK grew fields no version this repo has read
+# declares. The artifact lands in a PUBLIC repo, so the known fields must come
+# through and the unknown ones must not — only their NAMES, so the drift is
+# visible the first time it happens (standards/vendor-boundaries.md Q3).
+VENDOR_DRIFT_EVENT = {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+        "status": "allowed",
+        "rateLimitType": "five_hour",
+        "utilization": 0.42,
+        "resetsAt": 1789866000,
+        "accountEmail": SENTINEL,
+        "organizationName": SENTINEL,
+        "unifiedWindows": {
+            "five_hour": {"utilization": 0.42, "resetsAt": 1789866000,
+                          "billingAccountId": SENTINEL},
+        },
+    },
+    "uuid": "2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c",
+    "session_id": "sess-abc",
+    "transcriptPath": f"/home/runner/{SENTINEL}",
+}
+
 RUN_ENV = {
     "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
     "GITHUB_RUN_ID": "35413054438",
@@ -180,12 +203,14 @@ class UnifiedWindows(unittest.TestCase):
         self.assertEqual(self.reading["overage"]["disabled_reason"], "overage_not_provisioned")
         self.assertIs(self.reading["overage"]["is_using_overage"], False)
 
-    def test_the_raw_event_is_kept_whole(self):
+    def test_the_raw_event_keeps_every_field_this_module_knows(self):
         raw = self.reading["raw"]["rate_limit_events"]
         self.assertEqual(raw, [UNIFIED_EVENT])
-        # key order preserved, nothing dropped — uuid and session_id ride along
+        # key order preserved, nothing known dropped — uuid and session_id
+        # ride along, and an event of the declared shape loses nothing
         self.assertEqual(list(raw[0]), list(UNIFIED_EVENT))
         self.assertEqual(raw[0]["uuid"], UNIFIED_EVENT["uuid"])
+        self.assertEqual(self.reading["raw"]["fields_dropped"], [])
 
 
 class FlatSingleWindow(unittest.TestCase):
@@ -312,6 +337,80 @@ def _emit(exec_file, out, tmp, card=None, env=RUN_ENV):
     return proc
 
 
+class TheRawBlockIsAnAllowlistNotAPassthrough(unittest.TestCase):
+    """The uploaded artifact is world-readable for 90 days on a public repo
+    (DRE-1929 self-hosting), so `raw` keeps the fields this module has read a
+    vendor declaration for and drops the rest — the same whitelist discipline
+    execution_result.py holds the public job log to. A field the vendor adds
+    next must not reach the artifact just because it appeared."""
+
+    def setUp(self):
+        self.reading = _reading([VENDOR_DRIFT_EVENT])
+
+    def test_a_field_the_vendor_adds_later_never_reaches_the_document(self):
+        self.assertNotIn(SENTINEL, json.dumps(self.reading))
+        self.assertNotIn(SENTINEL, ur.summary_line(self.reading))
+
+    def test_the_fields_it_knows_still_come_through_whole(self):
+        raw = self.reading["raw"]["rate_limit_events"][0]
+        self.assertEqual(raw["type"], "rate_limit_event")
+        self.assertEqual(raw["uuid"], VENDOR_DRIFT_EVENT["uuid"])
+        self.assertEqual(raw["session_id"], "sess-abc")
+        info = raw["rate_limit_info"]
+        self.assertEqual(info["status"], "allowed")
+        self.assertEqual(info["rateLimitType"], "five_hour")
+        self.assertEqual(info["utilization"], 0.42)
+        self.assertEqual(info["resetsAt"], 1789866000)
+        self.assertEqual(info["unifiedWindows"]["five_hour"],
+                         {"utilization": 0.42, "resetsAt": 1789866000})
+        # and the reading itself is unaffected by the drift
+        self.assertTrue(self.reading["reported"])
+        self.assertEqual(self.reading["windows"][0]["utilization"], 0.42)
+
+    def test_the_names_of_the_dropped_fields_are_reported_never_their_values(self):
+        dropped = self.reading["raw"]["fields_dropped"]
+        self.assertEqual(dropped, [
+            "event.transcriptPath",
+            "rate_limit_info.accountEmail",
+            "rate_limit_info.organizationName",
+            "rate_limit_info.unifiedWindows.*.billingAccountId",
+        ])
+        self.assertNotIn(SENTINEL, json.dumps(dropped))
+
+    def test_a_field_name_that_is_not_a_plain_identifier_is_not_quoted_back(self):
+        event = {"type": "rate_limit_event",
+                 "rate_limit_info": {"status": "allowed", f"x {SENTINEL} y": 1}}
+        reading = _reading([event])
+        self.assertNotIn(SENTINEL, json.dumps(reading))
+        self.assertIn("rate_limit_info.(unnamed)", reading["raw"]["fields_dropped"])
+
+    def test_a_rate_limit_info_that_is_not_an_object_is_dropped_whole(self):
+        event = {"type": "rate_limit_event", "rate_limit_info": f"oops {SENTINEL}"}
+        reading = _reading([event])
+        self.assertNotIn(SENTINEL, json.dumps(reading))
+        self.assertEqual(reading["raw"]["rate_limit_events"],
+                         [{"type": "rate_limit_event"}])
+        self.assertIn("event.rate_limit_info", reading["raw"]["fields_dropped"])
+        # still a reading: the event was there, it just said nothing readable
+        self.assertTrue(reading["reported"])
+        self.assertEqual(reading["windows"], [])
+
+    def test_a_window_that_is_not_an_object_is_dropped_whole(self):
+        event = {"type": "rate_limit_event",
+                 "rate_limit_info": {"status": "allowed",
+                                     "unifiedWindows": {"five_hour": f"{SENTINEL}"}}}
+        reading = _reading([event])
+        self.assertNotIn(SENTINEL, json.dumps(reading))
+        self.assertIn("rate_limit_info.unifiedWindows.*", reading["raw"]["fields_dropped"])
+
+    def test_the_dropped_list_is_bounded(self):
+        info = {"status": "allowed"}
+        info.update({f"field{n}": SENTINEL for n in range(200)})
+        reading = _reading([{"type": "rate_limit_event", "rate_limit_info": info}])
+        self.assertNotIn(SENTINEL, json.dumps(reading))
+        self.assertLessEqual(len(reading["raw"]["fields_dropped"]), ur.DROPPED_NAME_CAP)
+
+
 class TheSentinelNeverLeaves(unittest.TestCase):
     def test_nothing_from_the_transcript_reaches_file_stdout_or_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,6 +428,36 @@ class TheSentinelNeverLeaves(unittest.TestCase):
         self.assertTrue(json.loads(written)["reported"])
         self.assertIn("path=", proc.gh_out)
         self.assertIn("reported=true", proc.gh_out)
+
+    def test_nor_an_unknown_field_inside_the_rate_limit_event_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exec_file = _write(tmp, _transcript(VENDOR_DRIFT_EVENT))
+            out = os.path.join(tmp, "reading.json")
+            proc = _emit(exec_file, out, tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(out) as f:
+                written = f.read()
+        self.assertNotIn(SENTINEL, written)
+        self.assertNotIn(SENTINEL, proc.stdout)
+        self.assertNotIn(SENTINEL, proc.stderr)
+        self.assertNotIn(SENTINEL, proc.summary)
+        self.assertTrue(json.loads(written)["reported"])
+        self.assertIn("accountEmail", written)   # the NAME, so drift is visible
+
+
+class AReadingThatCouldNotBeTakenSaysSo(unittest.TestCase):
+    def test_a_crash_inside_emit_is_written_where_humans_look(self):
+        # `continue-on-error: true` means a systematically broken emitter is
+        # invisible unless it says so on the one human-facing surface this
+        # change adds — silence is the failure mode console-honesty rule 2
+        # asks us not to ship. Exit stays 0: never a red build.
+        with tempfile.TemporaryDirectory() as tmp:
+            exec_file = _write(tmp, _transcript(UNIFIED_EVENT))
+            proc = _emit(exec_file, "/dev/null/reading.json", tmp)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("usage reading: skipped", proc.stdout)
+        self.assertRegex(proc.summary, r"Claude usage: reading could not be taken \(\w+\)")
+        self.assertNotIn(SENTINEL, proc.summary)
 
 
 # --------------------------------------------------------------------------- #
@@ -442,15 +571,23 @@ class SummaryLine(unittest.TestCase):
 CLAUDE_ACTION = "anthropics/claude-code-action@"
 UPLOAD = re.compile(r"^actions/upload-artifact@([0-9a-f]{40})\b")
 
-# Each per-card workflow, its job, and the gate its emit step must carry so a
-# run that never reached a model uploads nothing.
+# Each per-card workflow, its job, the gate its emit step must carry so a run
+# that never reached a model uploads nothing, and the execution file that step
+# must read — the RESOLVED last attempt's, never attempt 1's. That last one is
+# the only input that decides WHICH run the reading describes (DRE-4108 is the
+# regression it exists to prevent), so it is pinned here rather than asserted
+# in a workflow comment nothing executes.
 WIRED = {
     "agent-task.yml": ("execute", ("steps.gate.outputs.bounced != 'true'",
-                                   "steps.dedupe.outputs.skip != 'true'")),
+                                   "steps.dedupe.outputs.skip != 'true'"),
+                       "steps.claude_result.outputs.execution_file"),
     "qa-review.yml": ("review", ("steps.decide.outputs.review == 'true'",
-                                 "steps.size.outputs.strategy != 'oversized'")),
+                                 "steps.size.outputs.strategy != 'oversized'"),
+                      "steps.critic_retry.outputs.execution_file || "
+                      "steps.critic.outputs.execution_file"),
     "agent-fix.yml": ("fix", ("steps.pr.outputs.go == 'true'",
-                              "steps.unfixable.outputs.escalate != 'true'")),
+                              "steps.unfixable.outputs.escalate != 'true'"),
+                      "steps.claude.outputs.execution_file"),
 }
 
 
@@ -461,7 +598,7 @@ def _job_steps(name, job):
 
 class Wiring(unittest.TestCase):
     def _emit_and_upload(self, name):
-        job, _ = WIRED[name]
+        job = WIRED[name][0]
         steps = _job_steps(name, job)
         emit = [i for i, s in enumerate(steps)
                 if "usage_reading.py emit" in (s.get("run") or "")]
@@ -477,8 +614,20 @@ class Wiring(unittest.TestCase):
                               if str(s.get("uses", "")).startswith(CLAUDE_ACTION))
             self.assertGreater(i, last_claude, name)
 
+    def test_the_emit_step_reads_the_resolved_last_attempts_execution_file(self):
+        # The step that decides which run the reading describes. Every one of
+        # these workflows runs its agent twice on a retry, both attempts write
+        # the same default path, and only the resolved output names the file
+        # the result gate itself read — point this at attempt 1 and every
+        # saved reading silently describes the wrong run (DRE-4108).
+        for name in WIRED:
+            steps, i = self._emit_and_upload(name)
+            expression = WIRED[name][2]
+            self.assertEqual(steps[i].get("env", {}).get("CLAUDE_EXECUTION_FILE"),
+                             "${{ " + expression + " }}", name)
+
     def test_the_emit_step_never_fails_the_job_and_runs_on_every_outcome(self):
-        for name, (_, gate) in WIRED.items():
+        for name, (_, gate, _expression) in WIRED.items():
             steps, i = self._emit_and_upload(name)
             step = steps[i]
             self.assertIs(step.get("continue-on-error"), True, name)

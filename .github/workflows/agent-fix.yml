@@ -1438,6 +1438,14 @@ jobs:
       # Report below already reads, and it dies with the runner.
       # usage_reading.py keeps that ONE message type (never the transcript)
       # as the Record's `body_raw`; the upload keeps it 90 days for backfill.
+      # The file is this job's single Claude step's own output, pinned by
+      # tests/test_usage_reading.py's `WIRED` (DRE-4108).
+      #
+      # PUBLISHED ON PURPOSE, same as agent-task.yml: on a public repo the
+      # artifact is readable by anyone for 90 days, and utilization / resets /
+      # status / overage flags are the same class of fact execution_result.py
+      # already prints to these logs. The event's UNKNOWN fields are not —
+      # usage_reading.py's `raw` block is an allowlist.
       #
       # Gated like the Report, so a dispatch that could not act uploads
       # nothing. `always()` + `continue-on-error`: a reading not taken is a
