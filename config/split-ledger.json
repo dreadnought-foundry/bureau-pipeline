@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-18T04:48:07Z",
+  "generated_at": "2026-09-19T04:47:31Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -1364,7 +1364,7 @@
   "monthly": [
     {
       "month": "2026-06",
-      "planner_children": 140,
+      "planner_children": 129,
       "split": 0,
       "died": 0,
       "complete": false
@@ -1385,7 +1385,7 @@
     },
     {
       "month": "2026-09",
-      "planner_children": 697,
+      "planner_children": 750,
       "split": 5,
       "died": 16,
       "complete": false
