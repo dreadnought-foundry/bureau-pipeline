@@ -16,13 +16,16 @@ Who consults it
   * ``verify.yml`` — the verifier's token (DRE-2429).
   * ``red-main-repair.yml`` — the repair worker, keyed ``repair:<sha>``.
   * Since DRE-4282, every heavy READER: ``qa-review.yml`` (the critic's PR
-    reads and its check-run write; slot 1 there is the qa-bot App, DRE-1921's
-    bucket), ``reconcile.yml`` (``GH_READ_TOKEN`` for the sweep's reads),
+    reads; slot 1 there is the qa-bot App, DRE-1921's bucket. Its check-run
+    write does NOT ride the pool — publish_review_check.py updates that check
+    in place and GitHub lets only the App that CREATED a check run update it,
+    so a re-review on another slot would be refused), ``reconcile.yml``
+    (``GH_READ_TOKEN`` for the sweep's reads),
     ``agent-fix.yml`` (the thread and verdict fetches), ``plan.yml`` (every
     planner and critic run's token) and ``harness.yml`` (the driver's
     reader). In each the identity-sensitive writes — the PR push, the
-    worker-attributed comments, the verdict comment, the merge — keep the
-    App they used before; only reads and unattributed writes moved.
+    worker-attributed comments, the verdict comment, the review check run,
+    the merge — keep the App they used before; only the READS moved.
   * NOT ``medic.yml``: its reads ride ``github.token`` because the App has no
     ``actions:read`` (DRE-1346), a bucket this pool cannot improve on.
 

@@ -303,7 +303,14 @@ def main(argv=None) -> int:
         else gh
     )
     if not qa_token:
-        print("note: HARNESS_QA_TOKEN unset — check-runs reads use the worker token")
+        # The fallback is the worker CLIENT, and since DRE-4282 that client
+        # delegates its GETs to the reader — so with a reader present these
+        # reads go out as the pool App, not as the worker. harness.yml always
+        # mints the qa token, so this is the local/degraded path only; name
+        # the identity anyway, because github_api.GitHub's rule is that WHICH
+        # identity acts is explicit and never inferred from the client.
+        rider = "the reader (pool slot)" if gh_reader else "the worker token"
+        print(f"note: HARNESS_QA_TOKEN unset — check-runs reads use {rider}")
     # Third client, for the lane contract's console-parity clause (DRE-2726).
     # The console lives in another repository and needs its own installation
     # token; harness.yml mints it best-effort, because a console the harness

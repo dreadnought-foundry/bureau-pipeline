@@ -174,6 +174,27 @@ class DriverBuildsTheReaderTest(unittest.TestCase):
         self.assertNotIn("github-spend: reader", out)
         self.assertIn("reads ride the worker identity (pool slot 1)", out)
 
+    def test_the_qa_note_names_the_identity_its_reads_actually_ride(self):
+        # Critic finding on DRE-4282, round 1 (non-blocking 2). With
+        # HARNESS_QA_TOKEN unset the qa client IS the worker client, and the
+        # worker client now delegates its GETs to the reader — so those
+        # check-runs reads go out as the pool App, not as the worker. The
+        # note has to say which, because github_api.GitHub's rule is that
+        # WHICH identity acts is explicit.
+        degraded = {k: v for k, v in BASE_ENV.items() if k != "HARNESS_QA_TOKEN"}
+        code, out = _drive(
+            {**degraded, "HARNESS_READER_TOKEN": "ghs-reader", "HARNESS_POOL_SLOT": "3"},
+            RecordingOpener("x"),
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("HARNESS_QA_TOKEN unset — check-runs reads use the reader", out)
+        # And with no reader either, the old sentence is still the true one.
+        code, plain = _drive(degraded, RecordingOpener("x"))
+        self.assertEqual(code, 0, plain)
+        self.assertIn(
+            "HARNESS_QA_TOKEN unset — check-runs reads use the worker token", plain
+        )
+
     def test_the_reader_reminits_from_the_selected_apps_key(self):
         minted = []
 

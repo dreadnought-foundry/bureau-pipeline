@@ -180,6 +180,20 @@ jobs:
       # mint below maps the chosen slot to its secret pair explicitly and falls
       # through to the original app, so a repo without the new secrets is a
       # single-app pool behaving exactly as before.
+      #
+      # DELIBERATELY UNGATED, unlike qa-review's and plan's pool blocks. Those
+      # two gate every probe on the step that decides whether the run does any
+      # work ("a skipped review must not spend three mints on a pool it will
+      # never use"), and this block carries no such gate ON PURPOSE. The
+      # decision here is "Decide a comment-triggered start" below, and it
+      # cannot come first: its paginated thread fetch IS one of the reads this
+      # card moves off slot 1 (DRE-4132), and the job gate admits any User
+      # comment on any PR, so that fetch is this loop's most frequent read by
+      # far. Gating the pool on the decision would hand it straight back to
+      # the bucket the card exists to spare. The price is three probe mints
+      # and one reader mint on a run that then skips — paid knowingly, to keep
+      # that fetch on the pool. Pinned by test_readers_on_the_pool.py so the
+      # missing gate reads as a decision, not an oversight.
       - name: Mint pool probe token (2)
         id: probe_2
         if: env.BUREAU_APP_ID_2 != ''

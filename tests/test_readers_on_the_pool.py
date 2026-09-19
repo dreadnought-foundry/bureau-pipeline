@@ -467,6 +467,21 @@ class ReadsMoveWritesStayTest(unittest.TestCase):
                 token_of(step, "env", "GH_TOKEN"), "${{ steps.checks_app.outputs.token }}"
             )
 
+    def test_no_document_still_calls_the_check_run_write_pooled(self):
+        # standards/engineering.md: a change that contradicts a document
+        # updates that document in the SAME PR. Both of these named
+        # qa-review's check-run write as having moved to the pool, which the
+        # test above makes false — and the vendor-boundary audit owes the
+        # refusal it turns on (Q3), not just the conclusion.
+        pool_doc = (ROOT / "scripts" / "dispatch_pool.py").read_text(encoding="utf-8")
+        audit = (ROOT / "docs" / "vendor-boundary-audit-2026-07.md").read_text(
+            encoding="utf-8"
+        )
+        for label, text in (("dispatch_pool.py", pool_doc), ("the audit", audit)):
+            with self.subTest(doc=label):
+                self.assertNotIn("and its check-run write", text)
+        self.assertIn("403", audit, "the audit must name what GitHub answers")
+
     def test_plans_model_steps_all_read_a_pool_selected_token(self):
         # plan.yml re-mints before every model step (DRE-3940). Each of those
         # re-mints must be the READER mint again — same pool map, same
@@ -593,6 +608,48 @@ class ReconcileReadTokenTest(unittest.TestCase):
         # steps do not select a slot and must keep passing
         # check_reconcile_env.py. Absent, the sweep reads on GH_TOKEN as today.
         self.assertNotIn("GH_READ_TOKEN", self.reconcile.REQUIRED_ENV)
+
+
+class FixPoolIsUngatedOnPurposeTest(unittest.TestCase):
+    """agent-fix selects the pool with no skip gate, and says why.
+
+    qa-review and plan gate every probe on the step that decides whether the
+    run does any work, so a skipped run spends no mints. agent-fix cannot:
+    the step that decides — `Decide a comment-triggered start` — is itself a
+    pool READER, and its paginated thread fetch is one of the DRE-4132 reads
+    this card moves off slot 1. Pinned here so the missing gate reads as a
+    decision rather than a copy that dropped a line (MedicIsNotAConsumerTest's
+    rule, applied to a gate).
+    """
+
+    def test_the_decision_step_reads_through_the_pool_so_it_cannot_gate_it(self):
+        reader_i, _ = reader_mint("agent-fix.yml")
+        dec_i, decision = named("agent-fix.yml", "Decide a comment-triggered start")
+        self.assertGreater(dec_i, reader_i, "the decision runs AFTER the reader mint")
+        self.assertEqual(token_of(decision, "env", "GH_TOKEN"), READER)
+
+    def test_the_pool_block_carries_no_decision_gate_and_says_so(self):
+        for n in POOL_SLOTS:
+            _, probe = by_id("agent-fix.yml", f"probe_{n}")
+            self.assertNotIn("steps.decision", str(probe.get("if")))
+        for step_id in ("pool", "reader"):
+            with self.subTest(step=step_id):
+                _, step = by_id("agent-fix.yml", step_id)
+                self.assertIsNone(step.get("if"))
+        text = (WORKFLOWS / "agent-fix.yml").read_text(encoding="utf-8")
+        self.assertIn("DELIBERATELY UNGATED", text)
+
+    def test_the_siblings_that_can_gate_still_do(self):
+        # The contrast is the whole point: if these ever lost their gates the
+        # comment above would be describing a rule nobody follows.
+        for name, gate in (
+            ("qa-review.yml", "steps.decide.outputs.review"),
+            ("plan.yml", "steps.gate.outputs.bounced"),
+        ):
+            with self.subTest(workflow=name):
+                for step_id in ("probe_2", "probe_3", "probe_4", "pool", "reader"):
+                    _, step = by_id(name, step_id)
+                    self.assertIn(gate, str(step.get("if")), step_id)
 
 
 class MedicIsNotAConsumerTest(unittest.TestCase):
