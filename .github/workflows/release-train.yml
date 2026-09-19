@@ -359,13 +359,16 @@ jobs:
       # annotated EVERY release-train run with the Node 20 deprecation notice.
       # v6.0.0 is the first release whose manifest declares node24 (its release
       # notes call the runtime its breaking change, and it needs runner
-      # v2.327.1+, which the hosted runners are long past); v6.2.4 is the
-      # newest. The two majors crossed change nothing we pass — v5.0.0's break
-      # was invalid BOOLEAN input handling and this step passes none, and v6's
-      # was the runtime itself. `role-to-assume`, `role-session-name` and
-      # `aws-region` are unchanged inputs at v6.2.4.
+      # v2.327.1+, which the hosted runners are long past); v6.3.0 is the
+      # newest (DRE-4336, moved by hand from v6.2.4 after Dependabot's grouped
+      # PR #452 was refused for its other half). The two majors crossed change
+      # nothing we pass — v5.0.0's break was invalid BOOLEAN input handling and
+      # this step passes none, and v6's was the runtime itself. v6.3.0 adds one
+      # optional input, `translate-env-variables`, which this step does not
+      # pass. `role-to-assume`, `role-session-name` and `aws-region` are
+      # unchanged inputs at v6.3.0.
       - name: Assume the caller's release identity
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.RELEASE_ROLE_ARN }}
           role-session-name: release-train-${{ matrix.surface }}

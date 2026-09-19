@@ -29,7 +29,9 @@ it gets pasted. The shape is load-bearing:
 - **`update-types` must be exactly `["version-update:semver-major"]`** — it
   rejects ALL future majors for that dependency while minors and patches keep
   flowing through the grouped auto-merge lane. Omit it and Dependabot stops
-  proposing those too.
+  proposing those too — which is wrong for rejecting a major, and is exactly
+  the rule that holds a deliberate pin (the section below). Those are the two
+  shapes an ignore rule takes here, and there is no third.
 
 Ship the stanza as a normal PR through the normal rail;
 `tests/test_dependabot_config.py` pins the shape.
@@ -64,8 +66,59 @@ where the next operator can see and reverse it.
 Delete the dependency's ignore block in a normal PR. Dependabot proposes the
 current major again on the next weekly run.
 
+## Holding a dependency at a deliberate pin (DRE-4336)
+
+A different problem with the same cure. Sometimes a dependency is pinned
+**below its newest release on purpose** — a vendor release broke us, and the
+upgrade is its own card with its own proof. Dependabot does not know that. It
+proposes the newer release inside the weekly grouped minor/patch PR, the pin's
+guard tests go red by design, the critic answers REQUEST_CHANGES, and nothing
+in the fleet fixes a `dependabot/*` branch. The PR can neither merge nor go
+away; a plain close re-files it next week; and every safe bump grouped beside
+the held one is stuck with it.
+
+Live incident: bureau-pipeline #452, 2026-09-19. The sweep proposed
+`anthropics/claude-code-action` v1.0.217 → v1.0.226 — past the DRE-3416 pin —
+grouped with a safe `aws-actions/configure-aws-credentials` minor.
+
+The hold is an ignore rule naming the dependency with **no `update-types`**:
+
+```yaml
+    ignore:
+      - dependency-name: "<the held dependency>"
+```
+
+- **No `update-types`, on purpose.** The bump being refused is usually a patch
+  or a minor, so a majors-only rule would not stop it. Without the key
+  Dependabot ignores every version update of that one dependency. (Security
+  updates are a separate repo-level setting and are not affected.)
+- **`dependency-name` is still required**, and names exactly one dependency —
+  never a pattern.
+- **Comment the rule** with the card that placed the pin and the card that
+  lifts it, and **declare it** in `HELD_PINS` in
+  `tests/test_dependabot_config.py`. That test refuses an undeclared rule of
+  this shape, requires the rule while the tree still sits at the held sha, and
+  fails once the pin has moved and the rule is still there — so a hold cannot
+  outlive its reason.
+- **It leaves in the PR that lifts the pin.** The upgrade card moves the pin by
+  hand, deletes the rule and its `HELD_PINS` row, and Dependabot resumes
+  proposing that dependency on the next weekly run.
+
+The order is the same as for a major: the rule merges **first**, then the
+stuck Dependabot PR gets a plain GitHub close. Where the grouped PR carried a
+safe bump as well, land that bump by hand in the same PR as the rule, so it
+does not wait a week to be proposed again.
+
+## Currently held pins
+
+| Dependency | Ecosystem | Held at | Placed by | Lifted by | Rule added |
+| -- | -- | -- | -- | -- | -- |
+| `anthropics/claude-code-action` | github-actions | v1.0.217 (`9c5ddab2e6d17b83ea679153b31f1d5f023cf636`) | DRE-3416 — v1.0.218's installer left no launcher and every Claude-running job in the fleet died for 72 minutes | DRE-3417 | DRE-4336, after PR #452 |
+
 ## Currently rejected majors
 
-None yet — the config carries only the commented template. This section is
-the ledger: when a stanza lands, list the dependency and the one-line reason
-here in the same PR.
+No per-dependency rejection yet — the config carries the commented template,
+and the `github-actions` entry ignores majors for every dependency (`"*"`, the
+DRE-2064 house shape), so a major there lands only by a deliberate card. This
+section is the ledger: when a per-dependency stanza lands, list the dependency
+and the one-line reason here in the same PR.
