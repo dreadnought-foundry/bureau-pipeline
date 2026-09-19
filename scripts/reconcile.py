@@ -734,11 +734,19 @@ _stale_defects: list[str] = []
 _degraded: list[str] = []
 
 
-def _degrade(step: str, what: str, err: object) -> None:
+def _degrade(step: str, what: str, err: object,
+             then: str = "reporting nothing this sweep") -> None:
     """Record that `step` could not read `what`, handled it by reporting
     nothing this sweep, and carried on — one ledger entry, one run-log line.
-    Stdout, not stderr: it is a reading the sweep did not get, not an error."""
-    entry = f"{step}: {what} unreadable — reporting nothing this sweep: {err}"
+    Stdout, not stderr: it is a reading the sweep did not get, not an error.
+
+    `then` is what the step did about it, in the step's own words. The default
+    is the watchdog's (DRE-4214) — a report this sweep simply does not make. A
+    step whose whole answer is to make the same attempt on the next pass says
+    THAT instead (DRE-4278): "reporting nothing" and "retried next sweep" are
+    different facts to whoever reads the line, and only one of them tells the
+    reader nobody owes the pull request an action."""
+    entry = f"{step}: {what} unreadable — {then}: {err}"
     _degraded.append(entry)
     print(f"DEGRADED: {entry}")
 
@@ -3959,7 +3967,13 @@ def refresh_stale_merge_refs() -> None:
     DIRTY PRs belong to `unstick_conflicts` — `update-branch` cannot resolve a
     conflict (DRE-2416) — drafts and non-`agent/` branches are not ours, and a
     human-parked card is nobody's to touch (DRE-2024). An unreadable read is
-    UNEVALUATED, recorded and skipped, never guessed at (DRE-2034).
+    UNEVALUATED, recorded and skipped, never guessed at (DRE-2034) — and
+    WHICH ledger it is recorded on is decided by the fault, the same way
+    `card_branches` decides it (DRE-4278/DRE-4214). A rate-limit refusal that
+    outlasted the retry is degraded: this check only ever adds a refresh, so a
+    pull request it could not read this sweep is simply read again on the next
+    one, and the run stays green. Every other reason — a permission 403, a
+    404, a malformed payload — stays a read failure and takes the sweep red.
     """
     if STALE_MERGE_REFRESH_CAP <= 0:
         print(
@@ -4033,6 +4047,22 @@ def refresh_stale_merge_refs() -> None:
                 )
                 continue
             eligible.append((pr, decision))
+        except ReconcileRateLimited as e:
+            # The ONE fault the read seam classifies and handles (DRE-4278,
+            # the DRE-4214 pattern the branch listing above already follows).
+            # This check only ever ADDS a refresh, and it runs every ~15
+            # minutes: a pull request it could not evaluate is evaluated again
+            # on the next pass, by which time GitHub's hourly bucket has
+            # refilled. So the reading the sweep did not get is worth a line
+            # and nothing more — on 2026-09-19 it was worth two red runs and
+            # two medic diagnoses instead, over `compare/main...62aeca1a` on
+            # PR #445, while every other phase of both sweeps finished
+            # normally. Nothing is written here for the same reason nothing is
+            # written below: the check never reached a decision.
+            _degrade(
+                "stale-merge-ref", f"PR #{number}", e,
+                then="skipping this check; the next sweep retries it",
+            )
         except (ReconcileReadError, ValueError) as e:
             # Unreadable is never "nothing to do" (DRE-2034): recorded so the
             # sweep exits red, skipped so nothing is acted on.
