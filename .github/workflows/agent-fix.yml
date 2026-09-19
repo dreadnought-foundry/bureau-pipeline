@@ -1432,10 +1432,52 @@ jobs:
                comment that carries your words is the one written from those
                paths.
 
+      # ---- RE-MINT BEFORE THE REPORT (DRE-4320) ----
+      # The token minted at the top of this job is dead by now if the run
+      # passed an hour: GitHub gives an App installation token exactly 60
+      # minutes, and the `Fix` step above is the only step here whose duration
+      # is not bounded in seconds (the job's ceiling is 120). On 2026-09-19
+      # portico run 35439204813 minted at 04:26:45 PT and reported at
+      # 05:28:33 PT — 61m48s — and `gh api graphql` answered `HTTP 401: Bad
+      # credentials`. The fix agent had read the review and refuted a finding;
+      # the answer was never posted. The run's automatic retry did the same.
+      #
+      # Third workflow to hit this wall and the third copy of the same remedy:
+      # agent-task.yml's `Mint fresh push token` (DRE-3043, sharpened by
+      # DRE-3098) and plan.yml's per-round re-mints (DRE-3940). Mint as its
+      # own step immediately before the consumer — an installation token
+      # cannot be refreshed, and a `run:` step cannot mint one because
+      # `create-github-app-token` is an action.
+      #
+      # The BOOT App's pair, not the pool reader's (DRE-4282): the comments
+      # below are worker-attributed — fix_budget.py counts attempt markers by
+      # this App's login, and tests/test_readers_on_the_pool.py pins `Report`
+      # as identity-sensitive for exactly that reason — so the fresh token
+      # comes from the same App id and private key `Mint bot token` uses and
+      # WHO posts the report does not change.
+      #
+      # continue-on-error + the `||` fallback below: a mint that fails must
+      # leave the run exactly as it was. `if:` mirrors the Report's own gate,
+      # `always()` included, so it runs on every route the Report runs on —
+      # a failed `Fix` above all, where the report is the only thing that says
+      # so.
+      - name: Mint fresh report token
+        id: reporttoken
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: Report
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true' && always()
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The fresh mint above, falling through to the job-start token when
+          # that mint produced none (a skipped or failed step's output is '',
+          # which is falsy) — the run then behaves exactly as it did before
+          # DRE-4320 rather than reporting with nothing at all.
+          GH_TOKEN: ${{ steps.reporttoken.outputs.token || steps.app.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ steps.pr.outputs.card }}
           PRE_SHA: ${{ steps.pr.outputs.head_sha }}
