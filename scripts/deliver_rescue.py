@@ -63,6 +63,7 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import push_rescue  # noqa: E402  — one definition of the git credential re-point
+import secret_shapes  # noqa: E402  — one declaration of what a credential looks like
 
 # The three tags this module writes, and the two the sweep reads back. Strings,
 # not an enum: they cross into Linear comment bodies and into a shell.
@@ -92,7 +93,9 @@ _MARKER_RE = re.compile(
 #: quoted onto a card. git does not echo the `http.extraheader` value, so this
 #: has nothing to catch today — which is exactly when to put it in, because the
 #: comment is public and the message it quotes is not ours to predict.
-_TOKEN_RE = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b")
+#: The pattern itself lives in `secret_shapes` (DRE-4268), shared with the
+#: agent-log scrub, so a token shape is never known to one and not the other.
+_TOKEN_RE = secret_shapes.SHAPES["github-token"]
 
 #: How much of git's refusal reaches the card. One line, and short enough that
 #: the receipt stays readable — the log has the rest.
