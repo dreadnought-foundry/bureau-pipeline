@@ -881,14 +881,19 @@ jobs:
         if: steps.shape.outputs.route == 'one-off'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # The SANITIZED body, through env and never on argv — it is the
-          # card's own text (`Sanitize untrusted epic text`, DRE-1996).
-          CARD_DESCRIPTION: ${{ steps.card.outputs.description }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           BODY="${{ runner.temp }}/one-off-card-body.md"
           THREAD="${{ runner.temp }}/one-off-turns-thread.json"
-          printf '%s' "$CARD_DESCRIPTION" > "$BODY"
+          # The card's body straight into a FILE, the way the visual-QA stage
+          # reads one (qa-review.yml, verify.yml). NOT the sanitized step
+          # output: that one exists to be interpolated into a PROMPT and may
+          # appear only inside the sentinel fence
+          # (tests/test_untrusted_content_wiring.py), and nothing here goes
+          # near a prompt — the text is counted by a regex and thrown away, so
+          # an empty read costs the card the floor and nothing else.
+          python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD" \
+            > "$BODY" || : > "$BODY"
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
             --with-authors > "$THREAD" || echo "[]" > "$THREAD"
           python3 .bureau-pipeline/scripts/plan_critic.py one-off-turns \

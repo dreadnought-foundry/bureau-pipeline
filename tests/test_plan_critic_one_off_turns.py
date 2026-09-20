@@ -459,12 +459,18 @@ class TheRailCarriesTheCeiling(unittest.TestCase):
         self.assertLess(self._index("One-off critic — turn ceiling"),
                         self._index("Pre-approval critic — the one-off exit"))
 
-    def test_the_ceiling_step_is_handed_the_card_text_through_env(self):
-        """The card body is untrusted text (DRE-1996) — it travels by env and
-        never on argv."""
+    def test_the_ceiling_step_reads_the_card_into_a_file_and_no_prompt(self):
+        """The card body is untrusted text. It reaches this step as a FILE —
+        `linear_ops.py description`, the way the visual-QA stage reads one —
+        and never as the SANITIZED step output, which exists to be
+        interpolated into a prompt and may appear only inside the sentinel
+        fence (tests/test_untrusted_content_wiring.py)."""
         step = self._step_named("One-off critic — turn ceiling")
-        self.assertIn("steps.card.outputs.description",
-                      json.dumps(step.get("env") or {}))
+        run = str(step.get("run"))
+        self.assertIn("linear_ops.py description", run)
+        self.assertIn("--description-file", run)
+        self.assertNotIn("steps.card.outputs.description",
+                         run + json.dumps(step.get("env") or {}))
 
     def test_the_fallback_ceiling_is_the_modules_default(self):
         run = str(self._step_named("One-off critic — turn ceiling").get("run"))
