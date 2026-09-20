@@ -51,12 +51,22 @@ AWS CLI is pointed at it with `AWS_WEB_IDENTITY_TOKEN_FILE`, so the CLI performs
 `AssumeRoleWithWebIdentity` itself. A token passed as an argument would reach
 the process table, which any process on a shared self-hosted runner can read —
 the same reasoning that keeps the scrub's secrets on stdin. The CLI's whole
-environment is an ALLOWLIST (`AWS_ENV_KEEP`), so nothing a previous job on a
-shared runner left behind — a stale key, a profile, and above all an
-`AWS_ENDPOINT_URL` that would redirect both the assume and the put — can reach
-it. `tests/test_agent_log_upload.py` pins each of those four claims against the
+environment is an ALLOWLIST (`AWS_ENV_KEEP`) and its `HOME` is a scratch
+directory this run creates and deletes, with both config paths at `/dev/null`,
+so neither an `AWS_ENDPOINT_URL` export nor a `[default] endpoint_url` in
+`~/.aws/config` — the two spellings of the same redirect, and each one sends
+the JWT and the transcript to whatever host it names — survives into it.
+`tests/test_agent_log_upload.py` pins every one of those claims against the
 real process, because a claim in a docstring that no test reads is a claim that
 stops being true quietly.
+
+WHAT IS STILL TRUE AND NOT CLOSED HERE: the agent's own shell runs in the same
+job, which holds `id-token: write`, and the upload role's trust carries no
+per-job claim to condition on — so a model could mint the token itself and
+write this run's key first. The genuine upload then gets a 412, which is why
+`put_object` treats EVERY refusal as loud. Closing it properly needs either a
+per-job OIDC claim or a separate upload job, and the transcript only exists on
+the model job's runner. Recorded on DRE-4269 and on the epic DRE-4267.
 
 WHAT THE SIZE CAP ACTUALLY BINDS. `MAX_UPLOAD_BYTES` is checked on the gzipped
 object, but the scrub refuses any input over its own 64 MiB cap first and gzip
@@ -123,8 +133,20 @@ MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 #: step still printed `agent log kept:`. An allowlist excludes the next
 #: `AWS_*`-shaped knob the vendor adds by construction; a denylist has to be
 #: remembered. Everything the role needs, this script sets itself below.
+#: `HOME` is NOT on it (DRE-4269 review round 2). Round 1 closed the
+#: environment form of the endpoint redirect and left the FILE form wide open:
+#: the CLI reads `$HOME/.aws/config`, and AWS CLI v2 honours `endpoint_url`
+#: there as the same global override. Reproduced end to end with the real CLI —
+#: a `[default] endpoint_url` left behind by an earlier job received the
+#: `AssumeRoleWithWebIdentity` carrying the run's JWT *and* the gzipped
+#: transcript, while the step printed `agent log kept:` and exited 0. So
+#: `put_object` hands the CLI a scratch `HOME` under `$RUNNER_TEMP`, removed
+#: afterwards, and points both config paths at `/dev/null`. The scratch home
+#: also keeps the CLI's assumed-role credential cache
+#: (`$HOME/.aws/cli/cache/*.json`) off a shared mini's real home, where every
+#: job is the same unix user.
 AWS_ENV_KEEP = (
-    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP",
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP",
     # Transport, not credentials — a runner behind a proxy cannot reach S3
     # without them, and none is `AWS_*`-shaped, so keeping them does not weaken
     # the rule above.
@@ -237,11 +259,24 @@ def run_scrub(log: Path, out_dir: Path, secrets: str, scrub: Path) -> Path:
 
 
 def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
-               token_file: Path, region: str, session: str) -> None:
+               token_file: Path, region: str, session: str,
+               scratch_home: Path) -> None:
     """ONE single-part put, write-once. The CLI does the web-identity assume
-    itself from the token file, so no credential is ever an argument."""
+    itself from the token file, so no credential is ever an argument.
+
+    `scratch_home` is an empty directory this run owns. It is the CLI's whole
+    `HOME`, and both config paths are `/dev/null`, so neither a `[default]
+    endpoint_url` nor a profile left on a shared runner can redirect the assume
+    or the put (see `AWS_ENV_KEEP`).
+    """
+    scratch_home.mkdir(parents=True, exist_ok=True)
     env = {name: os.environ[name] for name in AWS_ENV_KEEP if name in os.environ}
     env.update({
+        "HOME": str(scratch_home),
+        # Belt and braces beside the scratch HOME: these are the two paths the
+        # CLI would otherwise resolve under it, and /dev/null reads as empty.
+        "AWS_CONFIG_FILE": os.devnull,
+        "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
         "AWS_ROLE_ARN": role,
         "AWS_WEB_IDENTITY_TOKEN_FILE": str(token_file),
         "AWS_ROLE_SESSION_NAME": session[:64],
@@ -269,12 +304,17 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
                 f"which IS the write-once guarantee this upload rests on. "
                 f"Install AWS CLI v{MIN_AWS_CLI} or newer and re-run "
                 f"(`aws --version`); nothing was uploaded.", loud=True)
+        # EVERY refused put is loud, including `PreconditionFailed` (DRE-4269
+        # review round 2). A 412 was quiet here on the reasoning that it is the
+        # write-once rule catching a replay — but the key carries the run id,
+        # the ATTEMPT and the job, so a re-run writes a new key and a replay
+        # cannot collide. Within one attempt exactly one writer produces this
+        # key legitimately, so a 412 means SOMETHING ELSE WROTE IT: the one
+        # case worth an alarm was the one case that had none.
         raise Gap(
             f"the store refused the put of {key}: "
             f"{detail[-1] if detail else f'exit {result.returncode}'}",
-            # A key that already exists is the write-once rule working, not a
-            # fault: a replayed job attempt has nothing new to record.
-            loud="PreconditionFailed" not in (result.stderr or ""))
+            loud=True)
     print(f"agent log kept: s3://{bucket}/{key} ({body.stat().st_size} bytes gzipped)")
 
 
@@ -349,6 +389,7 @@ def upload(args, secrets: str) -> None:
             f"is not uploaded", loud=True)
 
     token_file = runner_temp / "agent-log-oidc.jwt"
+    scratch_home = runner_temp / "agent-log-home"
     try:
         # Created 0600 by the open itself, never written and then chmod'ed: on
         # a shared self-hosted runner the gap between the two is long enough to
@@ -364,12 +405,17 @@ def upload(args, secrets: str) -> None:
             role=role_arn(slug, os.environ.get("BUREAU_AGENT_LOG_ACCOUNT") or ACCOUNT),
             token_file=token_file,
             region=os.environ.get("BUREAU_AGENT_LOG_REGION") or REGION,
-            session=f"agent-log-{job}-{run_id}")
+            session=f"agent-log-{job}-{run_id}",
+            scratch_home=scratch_home)
     finally:
         try:
             token_file.unlink()
         except OSError:
             pass
+        # The scratch HOME holds the CLI's assumed-role credential cache. On a
+        # shared mini every job is the same unix user, so it goes with the
+        # token rather than waiting for the runner to be wiped.
+        shutil.rmtree(scratch_home, ignore_errors=True)
 
 
 def main(argv=None, stdin=None) -> int:

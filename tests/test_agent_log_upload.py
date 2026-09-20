@@ -301,6 +301,9 @@ class UploaderBehaviourTest(unittest.TestCase):
             "#!/bin/sh\n"
             f'printf "ARGS: %s\\n" "$*" >> "{self.aws_env}"\n'
             f'env | grep -E "^AWS_" | sort >> "{self.aws_env}"\n'
+            f'printf "HOME: %s\\n" "$HOME" >> "{self.aws_env}"\n'
+            f'printf "HOMECONFIG: %s\\n" '
+            f'"$(cat "$HOME/.aws/config" 2>/dev/null)" >> "{self.aws_env}"\n'
             f'printf "TOKENMODE: %s\\n" '
             f'"$(python3 -c \'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))\' '
             f'"$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)" >> "{self.aws_env}"\n'
@@ -435,13 +438,56 @@ class UploaderBehaviourTest(unittest.TestCase):
             "AWS_CA_BUNDLE": "/tmp/somebody/ca.pem",
             "AWS_CONTAINER_CREDENTIALS_FULL_URI": "http://169.254.170.2/x",
         }
+        # The two the script sets itself, deliberately, to close the file
+        # channel — their NAME is expected, their planted VALUE never is.
+        overridden = {"AWS_CONFIG_FILE": os.devnull,
+                      "AWS_SHARED_CREDENTIALS_FILE": os.devnull}
+
         result = self._run(env=self._env(**leftovers))
         self.assertEqual(result.returncode, 0, result.stderr)
         recorded = self._recorded()
         for name, value in leftovers.items():
-            self.assertNotIn(f"{name}=", recorded,
-                             f"{name} survived into the CLI's environment")
-            self.assertNotIn(value, recorded)
+            self.assertNotIn(value, recorded,
+                             f"{name}'s value survived into the CLI")
+            if name in overridden:
+                self.assertIn(f"{name}={overridden[name]}", recorded)
+            else:
+                self.assertNotIn(f"{name}=", recorded,
+                                 f"{name} survived into the CLI's environment")
+
+    def test_a_leftover_aws_config_in_home_cannot_redirect_the_upload(self):
+        """The FILE spelling of the same redirect (review round 2). AWS CLI v2
+        honours `[default] endpoint_url` in `$HOME/.aws/config` as a global
+        service-endpoint override, so a `[default]` section an earlier job — or
+        an operator's `aws configure` — left on a shared mini sends the JWT and
+        the transcript to whatever host it names. Reproduced end to end with
+        the real CLI before this guard existed."""
+        planted = self.tmp / "planted-home"
+        (planted / ".aws").mkdir(parents=True)
+        (planted / ".aws" / "config").write_text(
+            "[default]\nendpoint_url = http://127.0.0.1:1/\n")
+        (planted / ".aws" / "credentials").write_text(
+            "[default]\naws_access_key_id = AKIALEFTOVERKEY12345\n")
+
+        result = self._run(env=self._env(HOME=str(planted)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = self._recorded()
+        self.assertNotIn(str(planted), recorded,
+                         "the CLI was handed the shared HOME after all")
+        self.assertNotIn("endpoint_url", recorded,
+                         "the planted config reached the CLI")
+        self.assertIn("HOMECONFIG: \n", recorded + "\n",
+                      "the CLI's HOME resolved to a config it could read")
+        for name in ("AWS_CONFIG_FILE=/dev/null",
+                     "AWS_SHARED_CREDENTIALS_FILE=/dev/null"):
+            self.assertIn(name, recorded)
+
+    def test_the_scratch_home_does_not_outlive_the_upload(self):
+        """It holds the CLI's assumed-role credential cache, and on a shared
+        mini every job is the same unix user."""
+        self._run()
+        runner_temp = Path(self._env()["RUNNER_TEMP"])
+        self.assertFalse((runner_temp / "agent-log-home").exists())
 
     def test_the_token_file_is_private_and_is_removed_afterwards(self):
         self._run()
@@ -492,10 +538,24 @@ class UploaderBehaviourTest(unittest.TestCase):
         self.assertEqual(self._calls(), [])
 
     def test_a_refused_put_is_a_recorded_gap(self):
-        self._write_aws(exit_code=1, stderr="PreconditionFailed")
+        self._write_aws(exit_code=1, stderr="An error occurred (AccessDenied)")
         result = self._run()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self._calls()), 1)
+
+    def test_a_key_that_already_exists_is_loud(self):
+        """A 412 is NOT a routine replay. The key carries the run id, the
+        attempt and the job, so a re-run writes a new key and cannot collide —
+        which means something else wrote this run's key. That is the one case
+        worth an alarm, and it was the one case that had none (review round
+        2)."""
+        self._write_aws(
+            exit_code=1,
+            stderr="An error occurred (PreconditionFailed) when calling PutObject")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("::warning title=Agent working log not kept::",
+                      result.stdout)
 
     def test_empty_secrets_on_stdin_uploads_nothing(self):
         """The scrub refuses empty stdin rather than reading it as "no
