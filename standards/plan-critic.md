@@ -217,6 +217,31 @@ answering a question; the expensive one is a build nobody asked for.
 **The reason lands on the card either way** — pass or send-back — so the
 planner scorer can grade critic against classifier against outcome.
 
+**Its ceiling is sized from the CARD, and a read that runs out of turns says
+so** (DRE-4381). This read ran at a hardcoded twenty turns from the day it was
+added. On 2026-09-20 it hit that wall twice on DRE-4378 — 21 turns and $0.69
+the second time — wrote no verdict either time, and the card parked in Green
+Light under the sentence *"the reader did not answer at all, so nothing has
+checked this card"*. The reader was working and was cut off, and the CEO's
+answer sent the card straight back into the same wall, because a turn ceiling
+is deterministic. So:
+
+* the ceiling is `plan_critic.one_off_turns`: `30 + 6 × the paths on the card's
+  **Files:** line`, floor 36, cap 90 — a five-file card gets 60. Cards written
+  to the standard DRE-4359 asks for give this critic MORE to read, not less;
+* a read cut off at its ceiling is told as what it was — it ran out of turns,
+  how many it had, and that this is not a judgement on the card — while a
+  reader that was NEVER REACHED keeps the no-answer words, unchanged. The two
+  are different facts with different next actions, and `hit_the_turn_cap` is
+  the one predicate that tells them apart, here as on the epic route;
+* the death leaves a tombstone on the card, the same one line in the same
+  grammar the post-approval review writes on an epic, under `stage=one-off` —
+  and the next read of that card takes the next ceiling up, `ceil(ceiling ×
+  1.5)` capped at 135, **once**. The re-read is the CEO's answer coming back
+  round through Planning, and an answer must not be spent on a repeat of the
+  same death. A second death does not raise it again: two reads that could not
+  finish is a card for a person, not a third ceiling.
+
 **The one-off route is bounded too, and its loop runs through the CEO.** One
 call per classification, and nothing limited the classifications: the card
 parks, the CEO answers it and moves it back to Planning, and that is a fresh

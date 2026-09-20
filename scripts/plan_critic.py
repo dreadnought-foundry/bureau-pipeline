@@ -112,6 +112,7 @@ CLI:
                                      cannot be re-raised as a gap.
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
+         [--execution-file F] [--ceiling M]
                                      comment thread (JSON array) on stdin,
                                      from `dump-comments --with-authors`.
                                      The note and the record are TWO comments.
@@ -121,6 +122,17 @@ CLI:
                                      below the bound, and at it the request to
                                      REWRITE the card, naming every finding the
                                      card has collected (DRE-4058).
+                                     `--execution-file`/`--ceiling` tell the
+                                     one-off stage what the read ENDED AS, so a
+                                     run cut off at its turn ceiling says that
+                                     rather than "the reader did not answer"
+                                     (DRE-4381); it also publishes `ran_out`.
+  one-off-turns [--description-file F] [--github-output F]
+                                     `max_turns=<int>` for the one-off read:
+                                     sized from the card's `**Files:**` line,
+                                     and raised ONCE after a turn-ceiling death
+                                     recorded on the card's own thread (JSON
+                                     array on stdin). Never exits non-zero.
   sight --this <EPIC>                epics in flight (JSON array) on stdin
   cycle-start --epic <EPIC> [--record]
                                      the note that opens a planning attempt,
@@ -141,6 +153,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -343,6 +356,168 @@ def post_review_turns(children) -> int:
         return POST_REVIEW_TURNS_DEFAULT
     sized = POST_REVIEW_TURNS_BASE + POST_REVIEW_TURNS_PER_CARD * n
     return max(POST_REVIEW_TURNS_FLOOR, min(POST_REVIEW_TURNS_CAP, sized))
+
+
+# --- The ONE-OFF critic's ceiling, sized from the card (DRE-4381) ------------
+#
+# The same shape as the arithmetic above, one route down, and for the same
+# reason: a literal ceiling on a reader whose work is not a fixed size converts
+# successes into failures, deterministically.
+#
+# What it cost. The one-off critic ran at `--max-turns 20` from the day it was
+# added. On 2026-09-20 it ran out of turns TWICE on DRE-4378 — 21 turns and
+# $0.69 the second time (Agent Plan run 35523230304: `error_max_turns`,
+# "Reached maximum number of turns (20)") — wrote no verdict either time, and
+# the card parked in the CEO's Green Light queue saying "the reader did not
+# answer at all, so nothing has checked this card". The reader was working and
+# was cut off, the CEO's answer sent the card straight back into the same wall,
+# and this is the one workflow DRE-4359 (the epic about runs that run out of
+# turns) does not touch.
+#
+# The numbers, and why:
+#
+#   * BASE 30 — the fixed reading every one-off does before it reaches the card
+#     at all: the assembled context, the GENERATED charter, the shape stamp and
+#     its one sentence, the card's own comment thread, its result file, and the
+#     web tools every agent now holds (DRE-2785 — the same grant that took the
+#     post critic's base from 120 to 140). The one measurement there is says the
+#     fixed part alone passes 20.
+#   * PER FILE 6 — cards written to DRE-4359's standard carry a `**Files:**`
+#     line and a reading guide with line anchors, which give this critic MORE to
+#     check, not less. Each named path is a search, a read, and usually a second
+#     read around the anchor.
+#   * FLOOR 36 — a card naming no files still clears the ceiling DRE-4378 died
+#     at, by a margin rather than by one turn.
+#   * CAP 90 — above this a bigger number moves the wall without improving the
+#     read (DRE-2924), and this critic reads ONE card where the post critic
+#     reads a whole plan at 140.
+#
+# So a card naming five files gets 60, which is the number the card asked to be
+# at least 40.
+ONE_OFF_TURNS_BASE = 30      # context, charter, shape stamp, thread, result, + the web
+ONE_OFF_TURNS_PER_FILE = 6   # a search, a read, and a read around the anchor
+#: The smallest budget a one-off read gets, whatever the card names.
+ONE_OFF_TURNS_FLOOR = 36
+#: Above this a bigger number only moves the wall (DRE-2924).
+ONE_OFF_TURNS_CAP = 90
+#: What an UNREADABLE card gets — the five-file number, never the floor. A card
+#: body that could not be read is unknown, not empty (standards/console-honesty
+#: rule 2). Derived, never a second constant: it is `one_off_turns(5)` and the
+#: tests pin the equality.
+ONE_OFF_TURNS_DEFAULT = 60
+
+#: The headroom a re-read gets after a turn-ceiling death, and the ceiling that
+#: headroom stops at — `review_rerun.retry_ceiling`'s shape on the other route.
+#: A read that ran out of turns needs a BIGGER ceiling or the re-read hits the
+#: same wall, and only so much bigger.
+ONE_OFF_RETRY_MULTIPLIER = 1.5
+ONE_OFF_TURNS_RETRY_CAP = 135
+
+#: The card's `**Files:**` line — the standard's own spelling, and the plainer
+#: ones a card actually gets written with (`Files:`, a list item, `__Files:__`).
+_FILES_LINE = re.compile(
+    r"^[ \t]*(?:[-+][ \t]+)?(?:\*\*|__)?Files:(?:\*\*|__)?[ \t]*(?P<paths>\S.*)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+#: What counts as a PATH on that line: something with a directory separator, or
+#: a bare filename with an extension. Deliberately narrow — the line routinely
+#: ends in a parenthetical ("(or the existing test file for …)") and prose is
+#: not a file.
+_FILES_PATH = re.compile(
+    r"[\w.@+-]*(?:/[\w.@+-]+)+|[\w-]+\.[A-Za-z][A-Za-z0-9]{0,7}")
+
+
+def files_named(description) -> int:
+    """How many distinct paths the card's `**Files:**` line names.
+
+    Zero is a real answer — a card with no such line names no files and gets
+    the floor. Never raises: this sizes a ceiling the workflow interpolates
+    into the action's arguments.
+    """
+    seen: list[str] = []
+    for line in _FILES_LINE.finditer(str(description or "")):
+        for token in _FILES_PATH.findall(line.group("paths")):
+            path = token.strip(".,;:)(").strip()
+            if path and path not in seen:
+                seen.append(path)
+    return len(seen)
+
+
+def one_off_turns(files) -> int:
+    """`--max-turns` for the one-off critic reading a card that names `files`
+    paths. Never raises, for `post_review_turns`' reason: the workflow
+    interpolates this, and a bare `--max-turns` is a run that never starts."""
+    try:
+        n = int(files)
+    except (TypeError, ValueError):
+        return ONE_OFF_TURNS_DEFAULT
+    if n < 0:
+        return ONE_OFF_TURNS_DEFAULT
+    sized = ONE_OFF_TURNS_BASE + ONE_OFF_TURNS_PER_FILE * n
+    return max(ONE_OFF_TURNS_FLOOR, min(ONE_OFF_TURNS_CAP, sized))
+
+
+def one_off_retry_ceiling(ceiling) -> int:
+    """The ceiling a re-read gets, from the one it ran out of turns at.
+
+    Rounds UP so a ceiling never shrinks on the re-read, and an UNKNOWN ceiling
+    is sized from `ONE_OFF_TURNS_DEFAULT` rather than from zero.
+    """
+    try:
+        base = int(ceiling)
+    except (TypeError, ValueError):
+        base = ONE_OFF_TURNS_DEFAULT
+    if base <= 0:
+        base = ONE_OFF_TURNS_DEFAULT
+    return min(ONE_OFF_TURNS_RETRY_CAP,
+               math.ceil(base * ONE_OFF_RETRY_MULTIPLIER))
+
+
+def one_off_turn_cap_deaths(bodies: list) -> list[dict]:
+    """Every one-off read on this card that ended AT its ceiling, oldest first.
+
+    The credential is `parse_deaths`': the pipeline wrote the comment, and the
+    comment says nothing but the record. Anyone with comment access on the card
+    can post the line, and a raised ceiling is spend.
+
+    The whole of the CARD's history, not one planning attempt's — the loop this
+    bounds runs through the CEO (DRE-4058), and no `plan-cycle:` boundary is
+    ever posted on this route.
+    """
+    return [row for row in parse_deaths(bodies)
+            if row["stage"] == STAGE_ONE_OFF and hit_the_turn_cap(row)]
+
+
+def one_off_ceiling(files, bodies: list) -> tuple[int, str]:
+    """`(max_turns, why)` for the one-off read about to run.
+
+    Sized from the card when nothing on it has run out of turns. After a
+    turn-ceiling death it takes the NEXT CEILING UP — once. The re-read is the
+    CEO's answer coming back round through Planning, and an answer spent on a
+    repeat of the same death buys nothing: a turn ceiling is deterministic.
+
+    The second death does not raise it again. One raise is the bound, the same
+    way the second dead review parks an epic rather than trying a third
+    ceiling (`review_rerun.MAX_DEATHS`) — and the raise already granted is
+    kept, never handed back.
+    """
+    sized = one_off_turns(files)
+    deaths = one_off_turn_cap_deaths(bodies)
+    if not deaths:
+        try:
+            how_many = str(int(files))
+        except (TypeError, ValueError):
+            how_many = "an unknown number of"
+        return sized, f"sized from {how_many} file(s) named on the card: {sized}"
+    died_at = deaths[-1]["ceiling"]
+    at = died_at if died_at is not None else "an unknown ceiling"
+    if len(deaths) == 1:
+        turns = one_off_retry_ceiling(died_at)
+        return turns, f"re-read after running out of turns at {at}: {turns}"
+    turns = max(sized, died_at or 0)
+    return turns, (f"{len(deaths)} reads have run out of turns (the last at "
+                   f"{at}) — the one raise is spent: {turns}")
 
 
 # Handed to BOTH critics (DRE-3243) and to neither's substitute: the one-off
@@ -2059,8 +2234,78 @@ NO_CRITIC_NOTE = (
 )
 
 
+# --- ...and the OTHER no-result, which is not the same fact (DRE-4381) -------
+#
+# A read that ran out of turns and a read that never happened both leave an
+# empty result file, and until this card both were told as "the reader did not
+# answer at all, so nothing has checked this card". For a turn-ceiling death
+# that sentence is simply untrue — the reader was working and was cut off — and
+# the untruth is the expensive half: it asks the CEO about a card nothing has
+# found anything wrong with, and his answer sends it back into the same wall.
+#
+# So the turn cap gets its own two sentences, and the never-reached case keeps
+# its own word for word. Which one is said is decided ONCE, by the predicate
+# below, and both the note on the card and the question the CEO reads ask it —
+# the `one_off_rewrite_request` pattern, so the words and the action can never
+# disagree.
+
+
+def _ran_out_of_turns(result: str, reason: str, ran_out) -> bool:
+    """Did this read end AT its ceiling with nothing decided?
+
+    `ran_out` is the run's own row (`_execution_row`) or None, and whether that
+    row IS the turn cap is `hit_the_turn_cap`'s question — never a second copy
+    of `turns >= ceiling` here. A critic that WROTE a verdict decided, whatever
+    the action reported afterwards (DRE-3501's run finished at turn 51 of a
+    48-turn ceiling with its answer already in the file) — so a decided round
+    is never retold as a death.
+    """
+    if not ran_out or not hit_the_turn_cap(ran_out):
+        return False
+    if result == PASS or (result == SEND_BACK and one_line(reason)):
+        return False
+    return True
+
+
+def one_off_ran_out_note(ran_out) -> str:
+    """What the CARD says when the read was cut off at its ceiling: what
+    happened, how many turns it had, and that this is not a judgement."""
+    ceiling = (ran_out or {}).get("ceiling")
+    had = (f"it had {ceiling} turns" if isinstance(ceiling, int)
+           else "it had all the turns this run gives it")
+    return (f"the critic ran out of turns before it wrote a verdict — {had} "
+            "and was still working when they ended. That is this run's budget, "
+            "not a judgement on this card")
+
+
+def one_off_ran_out_request(ran_out) -> str:
+    """What the CEO is handed when the read ran out of turns.
+
+    `standards/comms.md`: what happened first, the fact in its own block, and
+    exactly one ask as the closing line. It says plainly that nothing was found
+    wrong — the old words claimed the opposite by implication, and DRE-4378 was
+    parked under them twice.
+    """
+    ceiling = (ran_out or {}).get("ceiling")
+    had = (f"{ceiling} of them on this read"
+           if isinstance(ceiling, int) else "a fixed number of them")
+    return "\n\n".join([
+        "This card was about to go to the build queue, and the reader that "
+        "checks work of this size ran out of room before it could say anything "
+        "about it.",
+        "What happened: the reader gets a fixed number of steps to read a card "
+        f"— {had} — and it used every one of them while it was still working. "
+        "It never wrote down a verdict, so this is not a judgement on the card "
+        "and nothing has been found wrong with it.",
+        "If it is read again it gets more room, once, so the same thing does "
+        "not simply happen twice.",
+        "Which gets to my question: do you want it read again with more room, "
+        "or taken out of the queue for now?",
+    ])
+
+
 def one_off_decide(result: str, reason: str = "",
-                   prior_send_backs: int = 0) -> tuple[str, str]:
+                   prior_send_backs: int = 0, ran_out=None) -> tuple[str, str]:
     """`(action, note)` for a one-off exit — `proceed` moves it, `escalate` asks
     the CEO a question, `rewrite` tells him the card itself has to change.
 
@@ -2077,6 +2322,11 @@ def one_off_decide(result: str, reason: str = "",
     (`send_backs(current_cycle(thread), STAGE_ONE_OFF)`), so the number the
     bound reads is the number the run posted. It defaults to zero, which is the
     first round and the behaviour every caller had before DRE-4058.
+
+    `ran_out` is the run's own death row when the read was cut off at its turn
+    ceiling (DRE-4381), and it changes ONE thing: what the no-result says. The
+    action is the same escalate it always was, and it still spends nothing —
+    a read that was cut off decided nothing either.
     """
     if result == PASS:
         return PROCEED, (
@@ -2092,6 +2342,8 @@ def one_off_decide(result: str, reason: str = "",
             "every finding raised so far is listed below so one rewrite can "
             "answer all of them."
         )
+    if _ran_out_of_turns(result, reason, ran_out):
+        return ESCALATE, one_off_ran_out_note(ran_out)
     return ESCALATE, NO_CRITIC_NOTE
 
 
@@ -2174,7 +2426,8 @@ def one_off_rewrite_request(prior_send_backs: int, findings) -> str:
 
 
 def one_off_escalation(result: str, reason: str = "",
-                       prior_send_backs: int = 0, findings=()) -> str:
+                       prior_send_backs: int = 0, findings=(),
+                       ran_out=None) -> str:
     """The plain-English question the CEO is handed when a one-off does not pass.
 
     `standards/comms.md`: purpose first, the finding in its own block, and one
@@ -2192,11 +2445,18 @@ def one_off_escalation(result: str, reason: str = "",
     every finding raised so far (`every_finding_so_far`) and is read only on
     that branch — below the bound the card is still one question with one
     finding, which is what the CEO has always been handed.
+
+    AND WHEN THE READ RAN OUT OF TURNS it is a different text again (DRE-4381),
+    decided by the same predicate the note on the card is decided by. The words
+    below are written for a reader that did not answer; said over a reader that
+    was cut off mid-sentence they claim a judgement nobody made.
     """
     import planning_escalation  # late: it reads planning_route, which reads us
 
-    if one_off_decide(result, reason, prior_send_backs)[0] == REWRITE:
+    if one_off_decide(result, reason, prior_send_backs, ran_out)[0] == REWRITE:
         return one_off_rewrite_request(prior_send_backs, findings)
+    if _ran_out_of_turns(result, reason, ran_out):
+        return one_off_ran_out_request(ran_out)
 
     stated = one_line(reason)
     if result == SEND_BACK and stated and not planning_escalation.jargon(stated):
@@ -2829,6 +3089,33 @@ def _cmd_mechanical(args) -> int:
     return 0
 
 
+def _execution_row(execution_file: str | None, ceiling) -> dict | None:
+    """The run's own numbers as a row `hit_the_turn_cap` reads — or None when
+    there is nothing to read (DRE-4381).
+
+    Read through the one loader every result gate uses
+    (`execution_result.load_execution` + `spend_scalars`), never a second
+    parser. A missing or unreadable file is None, which is the read that was
+    never reached: unknown is not a turn cap. Whether the row IS one is asked
+    of `hit_the_turn_cap`, once, by `_ran_out_of_turns`.
+    """
+    if not execution_file:
+        return None
+    execution = execution_result.load_execution(execution_file)
+    if not isinstance(execution, dict):
+        return None
+    scalars = execution_result.spend_scalars(execution)
+    try:
+        at = int(str(ceiling).strip())
+    except (TypeError, ValueError):
+        at = None
+    return {
+        "subtype": execution.get("subtype"),
+        "turns": scalars.get("num_turns"),
+        "ceiling": at,
+    }
+
+
 def _cmd_decide(args) -> int:
     thread = _stdin_json([])
     result_text = _read(args.result_file)
@@ -2852,6 +3139,13 @@ def _cmd_decide(args) -> int:
         still_open = still_open_findings(result_text,
                                          prior_findings(cycle, args.stage), items)
     open_count = None if still_open is None else len(still_open)
+    # Did the read END AT ITS CEILING (DRE-4381)? Asked of the action's own
+    # execution file, through the one loader every result gate uses, and only
+    # on the route that has an answer for it. `None` on every other route and
+    # whenever there is no file to read — which is precisely the read that was
+    # never reached, and keeps that case's own words.
+    ran_out = (_execution_row(args.execution_file, args.ceiling)
+               if args.stage == STAGE_ONE_OFF else None)
     if args.stage == STAGE_ONE_OFF:
         # The bound on THIS route is the card's whole send-back history: the
         # loop runs through the CEO, so `prior` is the number of times he has
@@ -2862,7 +3156,7 @@ def _cmd_decide(args) -> int:
         # `items` is this round's ranked list; every finding the CARD has
         # collected is that plus the spine of the markers, and the rewrite
         # request is the only text that needs the whole of it.
-        action, note = one_off_decide(result, reason, prior)
+        action, note = one_off_decide(result, reason, prior, ran_out)
         if action == REWRITE:
             items = every_finding_so_far(
                 send_back_findings(cycle, args.stage), items)
@@ -2896,6 +3190,15 @@ def _cmd_decide(args) -> int:
                   else "; ".join(still_open) or "none")),
         ("open_count", "" if open_count is None else str(open_count)),
     ])
+    # The one-off route's death signal (DRE-4381): the step that records the
+    # tombstone is gated on it, and the tombstone is what gives the NEXT read
+    # a higher ceiling. Written only where it has a meaning — the epic route
+    # records its deaths through its own tombstone step.
+    if args.stage == STAGE_ONE_OFF:
+        _write_outputs(args.github_output, [
+            ("ran_out", "true" if _ran_out_of_turns(result, reason, ran_out)
+                        else "false"),
+        ])
     # The note, wider: the park comment is built from it and it names every
     # finding still open (DRE-4115). Still ONE line.
     _write_outputs(args.github_output, [("note", note)], limit=2000)
@@ -2996,7 +3299,8 @@ def _cmd_decide(args) -> int:
     if (args.escalation_file and args.stage == STAGE_ONE_OFF
             and action in (ESCALATE, REWRITE)):
         with open(args.escalation_file, "w", encoding="utf-8") as f:
-            f.write(one_off_escalation(result, reason, prior, items) + "\n")
+            f.write(one_off_escalation(result, reason, prior, items,
+                                       ran_out) + "\n")
     print(body)
     print()
     print(record)
@@ -3061,6 +3365,19 @@ def _cmd_post_turns(args) -> int:
     return 0
 
 
+def _cmd_one_off_turns(args) -> int:
+    """The one-off read's ceiling as a step output, sized from the card and
+    raised once after a turn-ceiling death (DRE-4381). Always 0, for
+    `post-turns`' reason: a sizing that failed must degrade to the default,
+    never wedge the read — and the workflow carries a static fallback on top
+    of this."""
+    turns, why = one_off_ceiling(files_named(_read(args.description_file)),
+                                 _stdin_json([]))
+    _write_outputs(args.github_output, [("max_turns", str(turns))])
+    print(f"one-off critic ceiling: {why}")
+    return 0
+
+
 def _cmd_review_turns(args) -> int:
     """The receipt for one post-approval review — what it SPENT against what
     it was given (DRE-3498). Reads the run's execution file through the one
@@ -3082,7 +3399,15 @@ def _cmd_died(args) -> int:
     death through the one loader both result gates use
     (`execution_result.load_execution`) — never a second parser — and prints
     only numbers and the action's own subtype enum from it. Always 0: this
-    step is the record of a failure, not a second one."""
+    step is the record of a failure, not a second one.
+
+    `--record-only` asks for the RECORD and nothing else (DRE-4381). The note
+    is the post-approval review's — it names that review, the children waiting
+    in Backlog and the round bound — and on the one-off route every one of
+    those sentences would be false. That route says what happened in the
+    decision's own words, one comment earlier, so the death owes only its
+    numbers here: a second telling of one death is how two comments come to
+    describe it differently."""
     execution = execution_result.load_execution(args.execution_file) \
         if args.execution_file else None
     scalars = execution_result.spend_scalars(execution)
@@ -3090,15 +3415,16 @@ def _cmd_died(args) -> int:
     record = death_marker(args.stage, args.run, args.attempt, args.step,
                           subtype, scalars.get("num_turns"), args.ceiling)
     row = parse_deaths([record])[0]
-    note = death_note(args.epic, row)
-    if args.note_file:
+    note = "" if args.record_only else death_note(args.epic, row)
+    if args.note_file and note:
         with open(args.note_file, "w", encoding="utf-8") as f:
             f.write(note + "\n")
     if args.record_file:
         with open(args.record_file, "w", encoding="utf-8") as f:
             f.write(record + "\n")
-    print(note)
-    print()
+    if note:
+        print(note)
+        print()
     print(record)
     return 0
 
@@ -3152,6 +3478,15 @@ def main(argv: list[str]) -> int:
     # The one-off route's CEO-facing reason, written only when the card does not
     # pass — `planning_escalation.py escalate --reason-file` reads it.
     d.add_argument("--escalation-file", default=None)
+    # What the run ended AS, for the one-off route's turn-cap wording
+    # (DRE-4381). Both optional and both read only on that stage: a decision
+    # handed neither reads as the reader-never-answered case, which is what
+    # every caller got before this card. Strings on purpose, exactly as
+    # `review-turns --ceiling` is — the workflow hands over whatever the
+    # ceiling step printed, and an unreadable value must read as unknown
+    # rather than fail the argument parse.
+    d.add_argument("--execution-file", default=None)
+    d.add_argument("--ceiling", default="")
     d.set_defaults(fn=_cmd_decide)
 
     v = sub.add_parser("read-result",
@@ -3192,6 +3527,15 @@ def main(argv: list[str]) -> int:
     t.add_argument("--github-output", default=None)
     t.set_defaults(fn=_cmd_post_turns)
 
+    o = sub.add_parser(
+        "one-off-turns",
+        help="the one-off critic's turn ceiling, sized from the card's Files line; thread on stdin")
+    # The card's SANITIZED body, by file rather than on argv: it is untrusted
+    # text (DRE-1996) and the workflow hands it over through env.
+    o.add_argument("--description-file", default=None)
+    o.add_argument("--github-output", default=None)
+    o.set_defaults(fn=_cmd_one_off_turns)
+
     w = sub.add_parser("review-turns",
                        help="what one post-approval review spent, as one line")
     w.add_argument("--execution-file", default=None)
@@ -3215,6 +3559,8 @@ def main(argv: list[str]) -> int:
     g.add_argument("--note-file", default=None)
     # The record, for its OWN comment — same reason as `decide --record-file`.
     g.add_argument("--record-file", default=None)
+    # The numbers alone, for a route whose note is not this one (DRE-4381).
+    g.add_argument("--record-only", action="store_true")
     g.set_defaults(fn=_cmd_died)
 
     args = ap.parse_args(argv)

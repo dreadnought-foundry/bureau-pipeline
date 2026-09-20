@@ -450,19 +450,28 @@ class TheBoundIsWired(unittest.TestCase):
         for step in retries:
             turns.remove(int(re.search(r"--max-turns\s+(\d+)",
                                        step["with"]["claude_args"]).group(1)))
-        # The post-approval review's ceiling is an EXPRESSION since DRE-3241
-        # (sized per plan), so the literal scan above cannot see it; its worst
-        # case is the cap, added by name so the arithmetic keeps counting it.
-        # Since DRE-3289 that worst case is the RETRY cap, not the first-run
-        # one: a review that died is re-run in a job of its own at
-        # `retry_ceiling` turns, and the arithmetic has to cover the longest
-        # run this workflow can start.
+        # TWO of the agent steps carry an EXPRESSION rather than a literal, so
+        # the literal scan above cannot see either; each one's worst case is
+        # added by name so the arithmetic keeps counting it.
+        #
+        #   * the post-approval review, sized per plan since DRE-3241 — and
+        #     since DRE-3289 its worst case is the RETRY cap, not the first-run
+        #     one: a review that died is re-run in a job of its own at
+        #     `retry_ceiling` turns, and the arithmetic has to cover the
+        #     longest run this workflow can start.
+        #   * the one-off read, sized per card since DRE-4381, whose worst case
+        #     is likewise its retry cap — the re-read after a turn-ceiling
+        #     death.
+        #
+        # A THIRD expression would drop out of this arithmetic, which is what
+        # the count below refuses.
+        expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP)
         self.assertEqual(
-            len(turns), len(agent_steps()) - len(retries) - 1,
-            "every agent step but the post-approval review carries a literal "
-            "ceiling; a second expression would drop out of this arithmetic",
+            len(turns), len(agent_steps()) - len(retries) - len(expressions),
+            "every agent step but the two sized reads carries a literal "
+            "ceiling; a third expression would drop out of this arithmetic",
         )
-        turns.append(rr.POST_REVIEW_RETRY_CAP)
+        turns.extend(expressions)
         # 7 s/turn is the upper end measured on completed portico runs, plus
         # ~8 minutes of token minting, checkouts, context assembly and Linear
         # calls that the turn arithmetic does not model.
@@ -576,15 +585,32 @@ class ThePreApprovalCriticReadsTheOneOffExit(unittest.TestCase):
 
     def test_the_call_is_bounded(self):
         """`Cost stays bounded. One call per one-off classification.` One agent
-        step on the route, and a turn budget the roster already carries."""
+        step on the route, and a ceiling with a cap on it.
+
+        The ceiling stopped being a literal in DRE-4381 — a fixed 20 killed two
+        reads of DRE-4378 and told the CEO nothing had checked the card — so
+        what "bounded" means here is the module's cap, not a number typed on
+        the step. The step is still exactly one call.
+        """
         on_route = [s for s in agent_steps()
                     if "one-off" in str(s.get("if") or "")]
         self.assertEqual(1, len(on_route),
                          "a one-off run must ask for exactly one critic call")
         args = str((on_route[0].get("with") or {}).get("claude_args") or "")
-        turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", args)]
-        self.assertEqual(1, len(turns))
-        self.assertLessEqual(turns[0], 40)
+        self.assertEqual(1, args.count("--max-turns"))
+        self.assertEqual([], re.findall(r"--max-turns\s+(\d+)", args),
+                         "the one-off ceiling is sized, never a literal")
+        self.assertIn("steps.ooturns.outputs.max_turns", args)
+        # ...and what that step can hand it is capped, whatever the card names
+        # and however many reads have already run out of turns.
+        for files in (0, 3, 5, 40, 1000):
+            for deaths in ([], [48], [48, 72]):
+                thread = [{"body": pc.death_marker(
+                    pc.STAGE_ONE_OFF, str(i), 1, "oocritic",
+                    pc.TURN_CAP_SUBTYPE, c, c), "authored_by_pipeline": True}
+                    for i, c in enumerate(deaths)]
+                self.assertLessEqual(pc.one_off_ceiling(files, thread)[0],
+                                     pc.ONE_OFF_TURNS_RETRY_CAP)
 
 
 class TheRoster(unittest.TestCase):

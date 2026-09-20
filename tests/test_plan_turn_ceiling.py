@@ -26,7 +26,9 @@ WHAT THIS FILE PINS
    sibling ceiling that moves with it fails here rather than shipping
    unnoticed. It worked: DRE-2785 raised three of these numbers with the
    web-tool grant and had to come here and say which, which is the whole
-   point of the table.
+   point of the table. It worked again for DRE-4381, which took the one-off
+   read's ceiling OUT of the table — it is sized per card now, like the
+   post-approval review's — and had to say so here.
 
 3. A planner run that finishes UNDER the ceiling is still a success —
    `subtype: success, is_error: false` records no death of any kind. The
@@ -70,15 +72,15 @@ EPIC_STEP = "claude"
 EPIC_CEILING = 140
 
 # Every agent step plan.yml can run, and the ceiling each one carries.
-# `posta` is deliberately absent: its ceiling has been an EXPRESSION since
-# DRE-3241 (sized per plan) and is asserted separately below.
+# `posta` and `oocritic` are deliberately absent: both ceilings are
+# EXPRESSIONS — `posta` sized per plan since DRE-3241, `oocritic` sized per
+# card since DRE-4381 — and both are asserted separately below.
 #
 # This table is the "everything else is unchanged" assertion for DRE-3450.
 # Adding a step, or moving one of these numbers, is meant to fail here — which
 # is what it did for DRE-2785, and the two ceilings that moved with the web
 # grant are marked. Everything unmarked still carries DRE-3450's number.
 CEILINGS = {
-    "oocritic": 20,      # Pre-approval critic — the one-off exit
     EPIC_STEP: EPIC_CEILING,  # Plan epic
     "prea": 60,          # First critic — round 1        (40 → 60, DRE-2785)
     "replan": 60,        # Re-plan after send-back
@@ -93,9 +95,15 @@ CEILINGS = {
     "wave_retry": 80,
 }
 
-# The one step whose ceiling is chosen at run time rather than written here.
-SIZED_STEP = "posta"
-SIZED_EXPRESSION = "steps.postturns.outputs.max_turns"
+# The steps whose ceiling is chosen at RUN TIME rather than written here, and
+# the step output each one reads it from. `posta` is sized from the plan it has
+# to read (DRE-3241); `oocritic` is sized from the card it has to read
+# (DRE-4381 — a fixed 20 killed two reads of DRE-4378 and told the CEO nothing
+# had checked the card).
+SIZED = {
+    "posta": "steps.postturns.outputs.max_turns",
+    "oocritic": "steps.ooturns.outputs.max_turns",
+}
 
 _TURNS_RE = re.compile(r"--max-turns\s+(\S+)")
 
@@ -182,26 +190,27 @@ class TestEveryOtherPlannerCeilingIsUnchanged:
         """A ceiling added without a line here would be 'unchanged' by
         default, which is exactly what this table exists to prevent."""
         found = set(_agent_steps())
-        assert found == set(CEILINGS) | {SIZED_STEP}, (
+        assert found == set(CEILINGS) | set(SIZED), (
             f"plan.yml's agent steps are {sorted(found)}; this test knows "
-            f"{sorted(set(CEILINGS) | {SIZED_STEP})}. Add the new step and "
+            f"{sorted(set(CEILINGS) | set(SIZED))}. Add the new step and "
             f"the ceiling it should carry"
         )
 
-    def test_the_post_approval_review_is_still_sized_at_run_time(self):
-        """DRE-3241 made this one an expression on purpose — it is sized
-        from the plan it has to read. It must not become a literal here."""
-        raw = _turns_arg(SIZED_STEP)
+    @pytest.mark.parametrize("step_id", sorted(SIZED))
+    def test_the_sized_reads_are_still_sized_at_run_time(self, step_id):
+        """Both of these are expressions on purpose — each is sized from the
+        thing it has to read. Neither may become a literal here."""
+        raw = _turns_arg(step_id)
         args = str(
-            (_agent_steps()[SIZED_STEP].get("with") or {}).get("claude_args")
+            (_agent_steps()[step_id].get("with") or {}).get("claude_args")
         )
         assert not raw.isdigit(), (
-            f"plan.yml:{SIZED_STEP} now carries a literal ceiling {raw!r}; "
-            f"its budget is chosen per plan (DRE-3241)"
+            f"plan.yml:{step_id} now carries a literal ceiling {raw!r}; "
+            f"its budget is chosen at run time"
         )
-        assert SIZED_EXPRESSION in args, (
-            f"plan.yml:{SIZED_STEP} no longer reads its ceiling from "
-            f"{SIZED_EXPRESSION}: {args!r}"
+        assert SIZED[step_id] in args, (
+            f"plan.yml:{step_id} no longer reads its ceiling from "
+            f"{SIZED[step_id]}: {args!r}"
         )
 
 

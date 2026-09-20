@@ -1618,6 +1618,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-ran-out-record.txt\")\"",
+      "step": "One-off critic — the read that ran out of turns",
+      "kind": "not-an-act",
+      "means": "The tombstone for a one-off read cut off at its turn ceiling (DRE-4381), posted alone because it is only a credential while nothing else shares its comment. It is what gives the next read of this card a higher ceiling, once.",
+      "why": "A RECORD in its own grammar, the same shape and the same 'alone' rule as the post-approval review's tombstone above: `plan_critic.parse_deaths` reads it only when the pipeline wrote it and the comment says nothing else. A second grammar in the same comment is exactly what that rule forbids, and the act-shaped half of this death is the decision note posted just before it, which says in words what this says in numbers."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🛑 The post-approval review found a gap",
       "step": "Second critic sent the plan back",
       "kind": "undeclared-act",
