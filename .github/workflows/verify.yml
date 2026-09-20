@@ -145,6 +145,15 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
+          # Say the card in the LOG too, plan.yml's line exactly (DRE-4407).
+          # A workflow_dispatch verify is recorded by GitHub on the DEFAULT
+          # branch, not on the pull request's, so `medic_retry.card_for_run`
+          # resolves nothing from the branch and this line is the only place
+          # the card is left. The ECHOED line only — the job-name form would
+          # rename this job's check run, and check-run names are load-bearing
+          # for the merge gate, the reconcile sweep and branch protection.
+          # Silent when the head ref names no card: absent stays absent.
+          if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
           # DRE-1990: capture the head commit the Verifier is about to run.
           # The verdict embeds it (`VERDICT: <X> @<sha>`) so merge-gate can
           # refuse to apply a PASS to any commit pushed after the verify.

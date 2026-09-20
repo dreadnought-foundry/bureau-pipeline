@@ -289,6 +289,12 @@ jobs:
           # pull requests for ten hours (DRE-2426).
           case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/split-ledger|bot/model-drift) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          # The card in the log, for a run GitHub records on main (DRE-4407 —
+          # the why is in qa-review.yml; this block is expression-budget
+          # tight). The ECHOED line only: this job's name IS a check-run name
+          # the reconcile sweep and branch protection read. A card-less branch
+          # prints nothing, as the CARD lookup below already tolerates.
+          if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
 
           # The conflict record (DRE-2416): GitHub's own mergeability
           # answer for this PR, read ONCE and handed to the decision script

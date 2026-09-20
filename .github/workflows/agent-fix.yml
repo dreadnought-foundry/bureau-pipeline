@@ -369,6 +369,9 @@ jobs:
           case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
           [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          # The card in the log, for a run GitHub records on main (DRE-4407 —
+          # the why is in qa-review.yml; this block is expression-budget tight).
+          if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
 
           # Convergence halt (DRE-2024). Repeated fix runs that ended with
           # the no-progress marker on THIS exact head sha mean the loop is
