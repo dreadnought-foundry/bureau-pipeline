@@ -227,10 +227,12 @@ def test_a_multi_line_secret_printed_from_inside_a_json_file_is_removed(tmp_path
     assert "line-two-Wd4Rt6Yp" not in (out / "log.json").read_text()
 
 
-def test_a_pem_block_is_removed_raw_and_json_escaped(tmp_path):
+@pytest.mark.parametrize("indent", ["", "  ", "\t"], ids=["col0", "two-spaces", "tab"])
+def test_a_pem_block_is_removed_raw_and_json_escaped(tmp_path, indent):
     body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7fabricated"
     dashes, kind = "-" * 5, " ".join(["RSA", "PRIVATE", "KEY"])
-    pem = f"{dashes}BEGIN {kind}{dashes}\n{body}\n{body}\n{dashes}END {kind}{dashes}"
+    pem = "\n".join(indent + line for line in (
+        f"{dashes}BEGIN {kind}{dashes}", body, body, f"{dashes}END {kind}{dashes}"))
     done, out = run(tmp_path, {"step.log": f"cat key:\n{pem}\n".encode(),
                                "log.json": transcript(f"the key: {pem}")}, secrets={})
     assert done.returncode == 0, done.stderr
@@ -415,32 +417,80 @@ _PROSE = ["truncated output follows", "Ran pytest and 412 tests passed",
           "run complete"]
 
 
-def _pem(*lines: str, end: bool = True) -> str:
+def _pem(*lines: str, end: bool = True, indent: str = "") -> str:
+    """A fabricated key, every line behind `indent` — a key read out of a YAML
+    block scalar or pretty-printed JSON is indented, and every PEM fixture here
+    was column-zero until the third review found the body of an indented key
+    surviving whole."""
     dashes, kind = "-" * 5, " ".join(["RSA", "PRIVATE", "KEY"])
     body = [f"{dashes}BEGIN {kind}{dashes}", *lines]
-    return "\n".join(body + ([f"{dashes}END {kind}{dashes}"] if end else []))
+    return "\n".join(indent + line if line else line
+                     for line in body + ([f"{dashes}END {kind}{dashes}"] if end else []))
 
 
-def test_a_clipped_key_does_not_take_the_prose_after_it(tmp_path):
+#: The indents every PEM case runs at. Column zero was the only one tested once.
+INDENTS = pytest.mark.parametrize("indent", ["", "  ", "\t"], ids=["col0", "two-spaces", "tab"])
+
+
+@INDENTS
+def test_a_clipped_key_does_not_take_the_prose_after_it(tmp_path, indent):
     """The reproduction from the second review, verbatim in shape: prose holding
     NO character outside letters, digits and spaces. A body class that admitted
     whitespace ate all five lines and the run reported one clean redaction. The
-    earlier fixture only passed because its first trailing character was `[`."""
+    earlier fixture only passed because its first trailing character was `[`.
+    The prose is indented with the key, so the indent cannot carry the run on."""
     assert all(ch.isalnum() or ch == " " for line in _PROSE for ch in line)
-    clipped = _pem(_KEY_LINE, end=False)
-    raw = "step 4 dumping the deploy key\n" + clipped + "\n" + "\n".join(_PROSE) + "\n"
+    clipped = _pem(_KEY_LINE, end=False, indent=indent)
+    prose = "\n".join(indent + line for line in _PROSE)
+    raw = "step 4 dumping the deploy key\n" + clipped + "\n" + prose + "\n"
     done, out = run(tmp_path, {"step.log": raw.encode(),
-                               "log.json": transcript("the key: " + clipped + "\n" + "\n".join(_PROSE),
+                               "log.json": transcript("the key: " + clipped + "\n" + prose,
                                                       "a later turn")}, secrets={})
     assert done.returncode == 0, done.stderr
     step, log = (out / "step.log").read_text(), (out / "log.json").read_text()
     assert _KEY_LINE not in step and _KEY_LINE not in log
-    assert step == ("step 4 dumping the deploy key\n«redacted-shape:pem-private-key»\n"
-                    + "\n".join(_PROSE) + "\n")
+    assert step == (f"step 4 dumping the deploy key\n{indent}«redacted-shape:pem-private-key»\n"
+                    + prose + "\n")
     turns = json.loads(log)
     for line in _PROSE:
         assert line in turns[0]["message"]["content"][0]["text"]
     assert turns[1]["message"]["content"][0]["text"] == "a later turn"
+
+
+def test_a_key_read_out_of_a_yaml_file_loses_its_body_not_just_its_first_line(tmp_path):
+    """The third review's reproduction. This is the key pass 2 exists for — one
+    nobody handed the job — and it arrives indented. Anchored to the line break,
+    the pattern redacted the BEGIN line, left the body, and counted it removed."""
+    raw = "$ cat infra/app-key.yaml\nprivateKey: |\n" + _pem(_KEY_LINE, _KEY_LINE, indent="  ") + "\ndone\n"
+    done, out = run(tmp_path, {"step.log": raw.encode(), "log.json": transcript(raw)}, secrets={})
+    assert done.returncode == 0, done.stderr
+    assert (out / "step.log").read_text() == (
+        "$ cat infra/app-key.yaml\nprivateKey: |\n  «redacted-shape:pem-private-key»\ndone\n")
+    log = (out / "log.json").read_text()
+    assert _KEY_LINE not in log and "PRIVATE KEY" not in log
+    assert json.loads(log)[0]["message"]["content"][0]["text"].endswith("\ndone\n")
+
+
+def test_prose_shaped_like_a_header_under_a_clipped_begin_line_survives(tmp_path):
+    """An encrypted key's headers are `Name: value` — and so is most of a log.
+    The header clause names the RFC 1421 headers; `Word: text` is not one."""
+    raw = (_pem(end=False) + "\nError: output truncated by the runner\n"
+           "Result: all 412 tests passed\nnext line\n")
+    done, out = run(tmp_path, {"step.log": raw.encode()}, secrets={})
+    assert done.returncode == 0, done.stderr
+    assert (out / "step.log").read_text() == (
+        "«redacted-shape:pem-private-key»\nError: output truncated by the runner\n"
+        "Result: all 412 tests passed\nnext line\n")
+
+
+def test_a_token_followed_by_an_underscore_is_still_removed(tmp_path):
+    """`_` is a word character, so a pattern closing on `\\b` found no boundary
+    after `ghp_…_` and missed the token whole."""
+    planted = _SHAPED["github-token"]
+    done, out = run(tmp_path, {"step.log": f"TOKEN_{planted}_SUFFIX and {planted}_".encode()},
+                    secrets={})
+    assert done.returncode == 0, done.stderr
+    assert planted not in (out / "step.log").read_text()
 
 
 def test_an_unterminated_key_does_not_swallow_the_log_up_to_a_later_keys_end(tmp_path):
@@ -454,15 +504,16 @@ def test_an_unterminated_key_does_not_swallow_the_log_up_to_a_later_keys_end(tmp
                                   "«redacted-shape:pem-private-key»", "after"])
 
 
-def test_an_encrypted_key_loses_its_headers_and_body_too(tmp_path):
+@INDENTS
+def test_an_encrypted_key_loses_its_headers_and_body_too(tmp_path, indent):
     """RFC 1421 framing: header lines and a blank line sit between BEGIN and the
     body. A line-by-line pattern that did not know them would redact the BEGIN
     line and leave the whole body behind it."""
     raw = _pem("Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123456789ABCDEF0123456789ABCDEF",
-               "", _KEY_LINE, _KEY_LINE, "Aw==") + "\nnext line\n"
+               "", _KEY_LINE, _KEY_LINE, "Aw==", indent=indent) + "\nnext line\n"
     done, out = run(tmp_path, {"step.log": raw.encode(), "log.json": transcript(raw)}, secrets={})
     assert done.returncode == 0, done.stderr
-    assert (out / "step.log").read_text() == "«redacted-shape:pem-private-key»\nnext line\n"
+    assert (out / "step.log").read_text() == f"{indent}«redacted-shape:pem-private-key»\nnext line\n"
     assert _KEY_LINE not in (out / "log.json").read_text()
     assert "DEK-Info" not in (out / "log.json").read_text()
 
