@@ -149,7 +149,21 @@ jobs:
     # post-approval retry cap of 180, at 7 s/turn plus ~8 minutes of non-turn
     # work — 85 minutes. 90 keeps a margin over that and stays under the
     # 120-minute Planning stall window.
-    timeout-minutes: 90
+    #
+    # 105, raised from 90 with DRE-4381, which stops the one-off read's ceiling
+    # being a literal 20 and sizes it from the card (cap 90, retry cap 135).
+    # The wiring test now adds that retry cap by name, exactly as it adds the
+    # post-approval review's, so the sum it checks grows by 115 turns — ~13.4
+    # minutes at 7 s/turn, which 90 no longer covers. The same reasoning as
+    # DRE-3450's raise: at the old clock the bigger ceiling would convert a
+    # turn death into a JOB TIMEOUT, which is strictly worse — a timeout leaves
+    # no result record for anything downstream to classify. And the same
+    # conservatism as DRE-3041's: the one-off read and the post-approval review
+    # are on mutually exclusive routes and can never both run in one job, but
+    # the pin sums every budget in the file rather than reasoning about
+    # branches. 105 is still inside the 120-minute Planning stall window, which
+    # the same test checks.
+    timeout-minutes: 105
     # Whose Linear hour the planner spends (DRE-3321) — see reconcile.yml's
     # sweep for the why. Job level, beside the job that reads
     # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
@@ -816,6 +830,76 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of one-off-critic context"
 
+      # THE CEILING, SIZED FROM THE CARD (DRE-4381) — the post-approval
+      # critic's shape (`Second critic — turn ceiling`), read off THIS route's
+      # own history.
+      #
+      # This step ran at a hardcoded ceiling of twenty turns from the day the
+      # route was added — written on the step, where nothing could size it, and
+      # the source-shape test in tests/test_plan_critic_one_off_turns.py now
+      # refuses that literal anywhere in this file.
+      # On 2026-09-20 it ran out of turns twice on one card, DRE-4378 —
+      # 21 turns and $0.69 the second time (run 35523230304: `error_max_turns`,
+      # "Reached maximum number of turns (20)") — wrote no verdict either time,
+      # and the card parked in the CEO's Green Light queue saying "the reader
+      # did not answer at all, so nothing has checked this card". The reader
+      # was working and was cut off. He answered, the card came back, and the
+      # same thing happened again, because nothing about a re-run changed the
+      # ceiling and a turn ceiling is DETERMINISTIC. It is DRE-4359's failure
+      # in the one workflow that epic does not touch.
+      #
+      # `plan_critic.py one-off-turns` sizes it: a base for the fixed reading
+      # every one-off does — the assembled context, the generated charter, the
+      # shape stamp, the card's thread, its own result file, and the web tools
+      # every agent now holds — plus an allowance per path on the card's
+      # `**Files:**` line, floored and capped. The allowance is the point:
+      # cards written to DRE-4359's standard (a files line, a reading guide
+      # with line anchors) give this critic MORE to check, not less. The
+      # numbers and their measurements live in one place, `plan_critic.py`'s
+      # `ONE_OFF_TURNS_*` block; a five-file card gets 60.
+      #
+      # ...AND IT RAISES ONCE AFTER A TURN-CEILING DEATH. The card's own thread
+      # is read for the tombstone the decision step below records, and a read
+      # that follows one takes the next ceiling up instead of the number it
+      # just died at — once, so a CEO's answer is never spent on a repeat of
+      # the same death and a second raise is never spent on a card two reads
+      # could not finish.
+      #
+      # The `||` fallback is load-bearing, exactly as on the post route:
+      # claude_args interpolates max_turns, so an unwritten output would hand
+      # the action a bare `--max-turns`. The script never exits non-zero; this
+      # is the belt to that pair of braces, and its number is the module's own
+      # unknown-card default.
+      #
+      # Q1/Q2 (standards/vendor-boundaries.md): same identity and same secret
+      # store as every other Linear read in this job — `LINEAR_API_KEY`, the
+      # pipeline's own key. Q3: an unreadable thread is an empty one and the
+      # card is simply sized fresh. Q5: every failure here degrades to a
+      # number, never to a read that does not start.
+      - name: One-off critic — turn ceiling
+        id: ooturns
+        if: steps.shape.outputs.route == 'one-off'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The SANITIZED body, through env and never on argv — it is the
+          # card's own text (`Sanitize untrusted epic text`, DRE-1996).
+          CARD_DESCRIPTION: ${{ steps.card.outputs.description }}
+        run: |
+          CARD="${{ github.event.client_payload.identifier }}"
+          BODY="${{ runner.temp }}/one-off-card-body.md"
+          THREAD="${{ runner.temp }}/one-off-turns-thread.json"
+          printf '%s' "$CARD_DESCRIPTION" > "$BODY"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+            --with-authors > "$THREAD" || echo "[]" > "$THREAD"
+          python3 .bureau-pipeline/scripts/plan_critic.py one-off-turns \
+            --description-file "$BODY" \
+            --github-output "$GITHUB_OUTPUT" \
+            < "$THREAD" \
+          || {
+            echo "::warning::could not size the one-off read — falling back to the five-file ceiling"
+            echo "max_turns=60" >> "$GITHUB_OUTPUT"
+          }
+
       # Claude Code, installed ONCE and proved, before the model step below
       # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
       # launcher, and every Claude-running job in the fleet died minutes later
@@ -861,7 +945,7 @@ jobs:
           github_token: ${{ steps.reader.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 20
+            --max-turns ${{ steps.ooturns.outputs.max_turns }}
             --model ${{ steps.oomodel.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
@@ -920,6 +1004,17 @@ jobs:
             build — above all a card that is really a decision. You are not the
             code review and you are not sizing the work.
 
+      # ...and WHICH no-result it was (DRE-4381). A read cut off at its ceiling
+      # and a read that never happened both leave an empty result file, and
+      # until this card both were told as "the reader did not answer at all, so
+      # nothing has checked this card". For a turn-ceiling death that sentence
+      # is untrue, and the untruth is what cost DRE-4378 two CEO round trips.
+      #
+      # So the decision is handed what the run ENDED AS: the action's own
+      # execution file and the ceiling it was given. The file is passed ONLY
+      # when the critic step actually ran — a skipped step is the read that was
+      # never reached, and handing it the fallback path would read another
+      # step's leavings as this one's death.
       - name: One-off critic — decision
         id: oneoff
         # `!cancelled()`: the model selection or the critic may have died, and
@@ -930,6 +1025,16 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
+          # The same file and the same fallback the post route's tombstone
+          # reads, for an action version that moved its output — and empty
+          # when the read never ran at all.
+          EXEC_FILE=""
+          case "${{ steps.oocritic.outcome }}" in
+            success|failure)
+              EXEC_FILE="${{ steps.oocritic.outputs.execution_file }}"
+              [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+              ;;
+          esac
           # --with-authors: the round record this writes is a credential, and a
           # decider fed an anonymous thread believes every commenter equally.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
@@ -942,6 +1047,8 @@ jobs:
             --note-file "${{ runner.temp }}/one-off-note.md" \
             --record-file "${{ runner.temp }}/one-off-record.txt" \
             --escalation-file "${{ runner.temp }}/one-off-escalation.txt" \
+            --execution-file "$EXEC_FILE" \
+            --ceiling "${{ steps.ooturns.outputs.max_turns }}" \
             < "${{ runner.temp }}/one-off-thread.json"
           # The note the person reads, then the round record ALONE in its own
           # comment — the record is only a credential while nothing else can be
@@ -950,6 +1057,47 @@ jobs:
             "$(cat "${{ runner.temp }}/one-off-note.md")"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
             "$(cat "${{ runner.temp }}/one-off-record.txt")"
+
+      # THE TOMBSTONE, and it is what makes the raise above possible (DRE-4381).
+      # The re-read is not a step in this job — it is the CEO answering and the
+      # card coming back round through Planning as a NEW run — so the only
+      # thing that can carry "this card's last read ran out of turns" across
+      # that gap is the card itself. One line, alone in its comment,
+      # pipeline-authored: `plan_critic.parse_deaths`' credential, the same
+      # record the post-approval review writes on an epic, under this route's
+      # own stage.
+      #
+      # Posted AFTER the decision above, so the note a person reads comes
+      # first and the record cannot be the only thing on the card if the run
+      # dies between them. `--record-only`: the note `died` writes is the
+      # post-approval review's — it names that review, the children waiting in
+      # Backlog and the round bound, and on this route every one of those
+      # sentences is false. The decision already said in words what this says
+      # in numbers, and a second telling of one death is how two comments come
+      # to describe it differently.
+      - name: One-off critic — the read that ran out of turns
+        if: ${{ !cancelled() && steps.shape.outputs.route == 'one-off' && steps.oneoff.outputs.ran_out == 'true' }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          CARD="${{ github.event.client_payload.identifier }}"
+          EXEC_FILE="${{ steps.oocritic.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          python3 .bureau-pipeline/scripts/plan_critic.py died \
+            --stage one-off \
+            --epic "$CARD" \
+            --run "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --step oocritic \
+            --ceiling "${{ steps.ooturns.outputs.max_turns }}" \
+            --execution-file "$EXEC_FILE" \
+            --record-only \
+            --record-file "${{ runner.temp }}/one-off-ran-out-record.txt"
+          # ALONE in its own comment: a record is only a credential while
+          # nothing else can be written in the same comment beside it
+          # (`plan_critic._sole_record`).
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+            "$(cat "${{ runner.temp }}/one-off-ran-out-record.txt")"
 
       # The FAIL exit, and it is DRE-2848's rather than a second one: the same
       # seam the classifier's refusal uses, so the card parks in the lane a plan
