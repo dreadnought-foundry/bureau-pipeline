@@ -319,7 +319,19 @@ _WATCHDOG_OWNERS = {
 #: print "WIP at cap — none promoted" for ever, so a person's queue starved the
 #: fleet's. It is in this set rather than spelling the label a second time,
 #: because a second spelling is exactly what this guard exists to catch.
-_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"counts_against_wip"}
+#: The move DRE-4356 added, and the sixth reader. It is the other direction
+#: again — like `_flag_hand_built_idle` it fires ONLY on hand-built work — and
+#: it is keyed on a PULL REQUEST, which is why it is named here rather than
+#: waved through: the rule above is that a PR-keyed path stays label-blind,
+#: because reading the label there would widen the suppression into a second
+#: hold. This one reads the label to do the opposite of suppressing. A
+#: hand-built card is the only card no run is coming to move into the review
+#: lane, so it is the only card this path has anything to do; on a card without
+#: the label the fleet's own run already made the move, and moving it again
+#: would be the pipeline racing itself.
+_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {
+    "counts_against_wip", "move_hand_built_to_review",
+}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
