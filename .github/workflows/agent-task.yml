@@ -1089,6 +1089,38 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The engineer's
+      # transcript, scrubbed and put straight into our own store over OIDC —
+      # never an Actions artifact and never echoed, because several of the
+      # repos these runs happen in are public. The execution file is the
+      # resolved attempt's, exactly as the receipt above reads it.
+      #
+      # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
+      # every path of its own: the runs worth keeping are the ones that died,
+      # and keeping a log must never change this job's conclusion. Anything
+      # that stops it — a refused scrub, no OIDC token (portico forbids
+      # `id-token: write` by policy), no AWS CLI (the self-hosted minis may
+      # not have one), a log over the single-part cap — is recorded as a GAP
+      # on the run instead.
+      #
+      # The job's secrets arrive on STDIN, so the scrub can redact each one by
+      # value; never as an argument, which would reach the process table. The
+      # calling stub grants `id-token: write` (DRE-4348); this file declares no
+      # `permissions:` block, because a called job asking for more than its
+      # caller granted fails the whole run at startup. Every `${{ }}` is in
+      # env:, never in the script.
+      - name: Keep the run's working log
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          printf '%s' "$SECRETS_JSON" \
+            | python3 .bureau-pipeline/scripts/upload_agent_log.py \
+                --log-file "$EXEC_FILE" || true
+
       # ---- RE-MINT BEFORE THE PUSH (DRE-3043) ----
       # The token minted at the top of this job is dead by now if the run
       # passed an hour: GitHub gives an App installation token exactly 60
