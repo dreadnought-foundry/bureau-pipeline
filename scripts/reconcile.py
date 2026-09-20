@@ -182,6 +182,12 @@ import prose_blockers  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
+# DRE-4411: ONE source for "what does a Red-Main Repair card look like, and
+# when is its repair over by other means?" — the title anchor the loop files
+# its cards under, how the workflow and the failing commit read back off one,
+# and the whole four-way decision. This file is the wrapper: it supplies the
+# board snapshot and the `gh` reads and makes the two writes.
+import repair_card  # noqa: E402
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
@@ -7544,6 +7550,150 @@ def recover_limit_deaths() -> None:
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
 
 
+#: What this step does about a read it could not make, in its own words — the
+#: `then` half of every `_degrade` line below (DRE-4278: "reporting nothing"
+#: and "re-read next sweep" are different facts to whoever reads the line).
+_SETTLE_DEGRADE_THEN = "the card is left exactly as it is and re-read next sweep"
+
+
+class _RepairSettleOps:
+    """The two seams `repair_card.settle` reads, wired to this sweep's own.
+
+    Every read here is one this pass has already paid for, or pays for once.
+    `active_cards()` is the ONE board read (DRE-2929) and costs nothing extra.
+    The two GitHub reads are LAZY and memoised on this object, so a sweep whose
+    repo has no open repair card — almost every sweep — pays for neither: one
+    pull-request listing however many cards are settled, and one run listing
+    per DISTINCT workflow named on one.
+
+    The pull-request listing is its own, not `_open_pr_listing()`'s thirty
+    (DRE-3435). Thirty is the right window for re-dispatching crashed reviews
+    and the wrong one here: a repair pull request that fell off the end of it
+    would read as "no repair in flight", and this step would cancel the card
+    of a repair that is about to merge — precisely the one thing rule 1 exists
+    to prevent.
+
+    Unreadable answers come back as **None**, never `[]`, so `settle` can tell
+    "GitHub said no runs" from "GitHub would not answer" (the DRE-2034
+    discipline). A failed read is DEGRADED rather than red: the step handles it
+    by settling nothing for that card and re-reading next sweep, which is the
+    whole of what an UNKNOWN owes, and six red sweeps an hour over a bucket
+    that refills on its own said nothing a `DEGRADED:` line does not
+    (DRE-4214).
+    """
+
+    def __init__(self) -> None:
+        self._refs: list | None = None
+        self._refs_read = False
+        self._runs: dict = {}
+
+    def repair_cards(self) -> list:
+        """This sweep's repair cards, normalised — discovered by the title
+        anchor `repair_card` itself defines, never by a list kept here."""
+        return [
+            {
+                "identifier": card["identifier"],
+                "title": card.get("title") or "",
+                "description": card.get("description") or "",
+                "state": (card.get("state") or {}).get("name") or "",
+                "repo": card_repo(card),
+                "comments": card_comment_bodies(card),
+            }
+            for card in active_cards(SWEPT_LANES)
+            if repair_card.is_repair_card(card.get("title") or "")
+        ]
+
+    def open_pull_head_refs(self):
+        """Every OPEN pull request's head ref, read once per pass, or None.
+
+        `gh_read`, loudly, and None on any failure — the DRE-2034 rule, and the
+        one that matters most on this path: a listing fabricated as empty says
+        "no repair is in flight" about a repo where one is.
+        """
+        if self._refs_read:
+            return self._refs
+        self._refs_read = True
+        try:
+            raw = gh_read(
+                "pr", "list", "--repo", REPO, "--state", "open",
+                "--limit", "100", "--json", "headRefName",
+            )
+            listing = json.loads(raw or "[]")
+        except Exception as e:  # noqa: BLE001 — an unreadable answer is UNKNOWN
+            _degrade("repair settle", "the open pull requests", e,
+                     then=_SETTLE_DEGRADE_THEN)
+            return None
+        if not isinstance(listing, list):
+            return None
+        self._refs = [pr.get("headRefName") or "" for pr in listing
+                      if isinstance(pr, dict)]
+        return self._refs
+
+    def workflow_runs(self, workflow_name: str):
+        """The named workflow's newest runs on the default branch, or None.
+
+        `workflow_name` is the DISPLAY name off the card's own title, which is
+        what `gh run list --workflow` resolves against as readily as a filename
+        — the card carries no filename to give it. Memoised per name: two cards
+        naming the same workflow are one read.
+        """
+        if not workflow_name:
+            return None
+        if workflow_name in self._runs:
+            return self._runs[workflow_name]
+        args = ("run", "list", "--repo", REPO, "--workflow", workflow_name,
+                "--branch", default_branch(), "--limit", "20",
+                "--json", "status,conclusion,headSha,url")
+        out, detail = _actions_read(args)
+        runs = None
+        if detail is not None or out is None:
+            _degrade("repair settle", f"the runs of {workflow_name!r}",
+                     detail or "the Actions read answered nothing",
+                     then=_SETTLE_DEGRADE_THEN)
+        else:
+            try:
+                parsed = json.loads(out or "[]")
+            except ValueError:
+                _degrade("repair settle", f"the runs of {workflow_name!r}",
+                         f"unparseable listing: {out[:200]!r}",
+                         then=_SETTLE_DEGRADE_THEN)
+                parsed = None
+            runs = parsed if isinstance(parsed, list) else None
+        # A FAILED read is memoised here, unlike everywhere else in this file:
+        # the memo is one PASS long, every card naming this workflow would get
+        # the same refusal, and repeating it would buy a second identical
+        # `DEGRADED:` line and nothing else.
+        self._runs[workflow_name] = runs
+        return runs
+
+    def cancel(self, identifier: str) -> None:
+        linear_ops.cmd_state(identifier, "Canceled")
+
+    # Named for the seam it IS (see repair_card._SettleOps.cmd_comment): the
+    # completeness guard reads a `cmd_comment` as a pass-through and judges its
+    # caller, which is where the body is composed.
+    def cmd_comment(self, identifier: str, body: str) -> None:
+        linear_ops.cmd_comment(identifier, body)
+
+
+def settle_repair_cards() -> None:
+    """DRE-4411: a repair card whose repair is over by other means closes
+    itself, instead of sitting In Progress until a person cancels it.
+
+    One call, once per pass, beside the other backstops. The decision — and
+    every string it writes — lives in `repair_card.settle`; this is the wiring.
+    A Linear quota exhaustion is the run's own exit code and is never one
+    card's problem (DRE-2923), so it passes straight through.
+    """
+    report = repair_card.settle(
+        repo_slug=REPO_SLUG, ops=_RepairSettleOps(),
+        fatal=(linear_ops.LinearRateLimited,),
+    )
+    for failure in report.failures:
+        _write_failures.append(failure)
+        print(f"ERROR: {failure}", file=sys.stderr)
+
+
 class MergeScope(NamedTuple):
     """What the merge that triggered this pass can have changed (DRE-3236)."""
 
@@ -7845,6 +7995,13 @@ def main(
             # card when the reviewer is down everywhere at once.
             report_fleet_reviewer_outage,
             check_dependabot_capacity,
+            # DRE-4411, beside the dependabot card seam because they close a
+            # card the same way — off what actually happened to the work,
+            # rather than off a merge that is never coming. A repair card
+            # whose main went green on its own, or by somebody else's merge,
+            # is Canceled here instead of by a person: nine of the last
+            # seventeen were cancelled by hand.
+            settle_repair_cards,
         ):
             try:
                 with _phase(_phase_name(backstop)):

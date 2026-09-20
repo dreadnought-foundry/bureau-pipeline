@@ -149,7 +149,7 @@ class FakeGitHubAndLinear:
             raise self.cancel_error
         self.canceled.append(identifier)
 
-    def comment(self, identifier, body):
+    def cmd_comment(self, identifier, body):
         self.comments.append((identifier, body))
 
 
@@ -537,6 +537,202 @@ class TheSweepCallsItOncePerPassTest(unittest.TestCase):
         # finding its own cards. The sweep asks repair_card, never a literal.
         self.assertIn("repair_card.is_repair_card", self.source)
         self.assertNotIn("Red main repaired", self.source)
+
+
+class TheSweepEndToEndTest(unittest.TestCase):
+    """The scenario the unit tests above cannot reach: the sweep's OWN board
+    snapshot, its own `gh` reads and its own Linear writes, wired together.
+
+    Unit-green is not live-working — this feature touches Linear, GitHub and
+    the sweep, and every one of the seams below is a place the wiring can be
+    right in isolation and wrong joined up.
+    """
+
+    def setUp(self):
+        import reconcile
+
+        self.reconcile = reconcile
+        self.slug = reconcile.REPO_SLUG
+
+    def _board(self, *, state="In Progress"):
+        """One repair card in the shape `active_cards()` really answers in."""
+        return [{
+            "identifier": FLAKE["card"],
+            "title": repair_card.card_title(FLAKE["workflow"], FLAKE["sha"]),
+            "description": repair_card.card_body(
+                workflow_name=FLAKE["workflow"], run_url=RUN_URL,
+                head_sha=FLAKE["sha"], repo_slug=self.slug, attempt=1),
+            "state": {"name": state},
+            "labels": {"nodes": [{"name": f"repo:{self.slug}"}]},
+            "comments": {"nodes": []},
+        }, {
+            "identifier": "DRE-9999",
+            "title": "bureau-pipeline: some other card entirely",
+            "description": f"**Repo:** {self.slug}\n",
+            "state": {"name": state},
+            "labels": {"nodes": [{"name": f"repo:{self.slug}"}]},
+            "comments": {"nodes": []},
+        }]
+
+    def _run(self, *, runs_json, refs_json, board=None):
+        """Drive `reconcile.settle_repair_cards()` with GitHub stubbed."""
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        calls = {"state": [], "comment": []}
+        with patch.object(rc, "active_cards", lambda *a, **k: board or self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: (runs_json, None)), \
+             patch.object(rc, "gh_read", lambda *a: refs_json), \
+             patch.object(rc.linear_ops, "cmd_state",
+                          lambda i, s, *f: calls["state"].append((i, s))), \
+             patch.object(rc.linear_ops, "cmd_comment",
+                          lambda i, b, *f: calls["comment"].append((i, b))):
+            before_writes = list(rc._write_failures)
+            rc._write_failures.clear()
+            try:
+                rc.settle_repair_cards()
+                failures = list(rc._write_failures)
+            finally:
+                rc._write_failures[:] = before_writes
+        return calls, failures
+
+    def test_a_green_main_cancels_the_card_through_the_sweep(self):
+        calls, failures = self._run(
+            runs_json=f'[{{"status":"completed","conclusion":"success",'
+                      f'"headSha":"{FLAKE["sha"]}","url":"{RUN_URL}"}}]',
+            refs_json="[]",
+        )
+        self.assertEqual(calls["state"], [(FLAKE["card"], "Canceled")])
+        self.assertEqual(len(calls["comment"]), 1)
+        self.assertIn(RUN_URL, calls["comment"][0][1])
+        self.assertEqual(failures, [])
+
+    def test_an_open_repair_pull_request_stops_the_sweep_cancelling(self):
+        ref = red_main_repair.repair_branch(
+            FLAKE["sha"], 1, card=FLAKE["card"])
+        calls, _ = self._run(
+            runs_json=f'[{{"status":"completed","conclusion":"success",'
+                      f'"headSha":"{FLAKE["sha"]}","url":"{RUN_URL}"}}]',
+            refs_json=f'[{{"headRefName":"{ref}"}}]',
+        )
+        self.assertEqual(calls["state"], [])
+        self.assertEqual(calls["comment"], [])
+
+    def test_a_refused_pull_request_listing_never_cancels(self):
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        runs = (f'[{{"status":"completed","conclusion":"success",'
+                f'"headSha":"{FLAKE["sha"]}","url":"{RUN_URL}"}}]')
+
+        def refused(*a):
+            raise rc.ReconcileRateLimited("HTTP 403: API rate limit exceeded")
+
+        calls = {"state": [], "comment": []}
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: (runs, None)), \
+             patch.object(rc, "gh_read", refused), \
+             patch.object(rc.linear_ops, "cmd_state",
+                          lambda i, s, *f: calls["state"].append((i, s))), \
+             patch.object(rc.linear_ops, "cmd_comment",
+                          lambda i, b, *f: calls["comment"].append((i, b))):
+            before = list(rc._degraded)
+            rc._degraded.clear()
+            try:
+                rc.settle_repair_cards()
+                degraded = list(rc._degraded)
+            finally:
+                rc._degraded[:] = before
+        self.assertEqual(calls["state"], [], "a failed read must never cancel")
+        self.assertTrue(degraded, "the sweep must say what it could not read")
+
+    def test_an_unreadable_run_listing_never_cancels(self):
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        calls = {"state": []}
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read",
+                          lambda args: (None, "rc=1: HTTP 403")), \
+             patch.object(rc, "gh_read", lambda *a: "[]"), \
+             patch.object(rc.linear_ops, "cmd_state",
+                          lambda i, s, *f: calls["state"].append((i, s))), \
+             patch.object(rc.linear_ops, "cmd_comment", lambda i, b, *f: None):
+            before = list(rc._degraded)
+            rc._degraded.clear()
+            try:
+                rc.settle_repair_cards()
+                degraded = list(rc._degraded)
+            finally:
+                rc._degraded[:] = before
+        self.assertEqual(calls["state"], [])
+        self.assertTrue(any("repair settle" in line for line in degraded))
+
+    def test_a_refused_cancel_lands_on_the_sweeps_own_failure_rail(self):
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        runs = (f'[{{"status":"completed","conclusion":"success",'
+                f'"headSha":"{FLAKE["sha"]}","url":"{RUN_URL}"}}]')
+
+        def refuses(identifier, state, *flags):
+            raise rc.linear_ops.LinearError("Linear says 500")
+
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: (runs, None)), \
+             patch.object(rc, "gh_read", lambda *a: "[]"), \
+             patch.object(rc.linear_ops, "cmd_state", refuses), \
+             patch.object(rc.linear_ops, "cmd_comment", lambda i, b, *f: None):
+            before = list(rc._write_failures)
+            rc._write_failures.clear()
+            try:
+                rc.settle_repair_cards()
+                failures = list(rc._write_failures)
+            finally:
+                rc._write_failures[:] = before
+        self.assertTrue(failures)
+        self.assertIn(FLAKE["card"], failures[0])
+
+    def test_a_linear_quota_exhaustion_is_the_runs_own_exit_code(self):
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        runs = (f'[{{"status":"completed","conclusion":"success",'
+                f'"headSha":"{FLAKE["sha"]}","url":"{RUN_URL}"}}]')
+
+        def refuses(identifier, state, *flags):
+            raise rc.linear_ops.LinearRateLimited("quota exhausted")
+
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: (runs, None)), \
+             patch.object(rc, "gh_read", lambda *a: "[]"), \
+             patch.object(rc.linear_ops, "cmd_state", refuses), \
+             patch.object(rc.linear_ops, "cmd_comment", lambda i, b, *f: None):
+            with self.assertRaises(rc.linear_ops.LinearRateLimited):
+                rc.settle_repair_cards()
+
+    def test_the_pull_request_listing_is_not_the_thirty_row_one(self):
+        # A repair pull request that fell off the crashed-review region's
+        # 30-row window would read as "no repair in flight" and this step
+        # would cancel a card whose repair is about to merge.
+        from unittest.mock import patch
+
+        rc = self.reconcile
+        seen: list = []
+        with patch.object(rc, "active_cards", lambda *a, **k: self._board()), \
+             patch.object(rc, "default_branch", lambda: "main"), \
+             patch.object(rc, "_actions_read", lambda args: ("[]", None)), \
+             patch.object(rc, "gh_read", lambda *a: (seen.append(a), "[]")[1]), \
+             patch.object(rc.linear_ops, "cmd_state", lambda i, s, *f: None), \
+             patch.object(rc.linear_ops, "cmd_comment", lambda i, b, *f: None):
+            rc.settle_repair_cards()
+        self.assertTrue(seen, "the step must read the open pull requests")
+        self.assertIn("100", seen[0])
 
 
 if __name__ == "__main__":
