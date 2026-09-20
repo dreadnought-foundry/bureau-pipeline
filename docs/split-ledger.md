@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->
 
-Generated **2026-09-19T04:47:31Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
+Generated **2026-09-20T04:47:11Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
 
 Every card here did not fit one run: it died at the turn cap, it was split, or a build run handed it back as an epic. The point of writing it down is DRE-3022's: the planner has been sizing cards against nothing.
 
@@ -13,18 +13,18 @@ Every card here did not fit one run: it died at the turn cap, it was split, or a
 
 ## The rates
 
-41 card(s) in the ledger, 33 of which died at the turn cap at least once. They cost **$1223.23** in dead runs.
+43 card(s) in the ledger, 33 of which died at the turn cap at least once. They cost **$1223.23** in dead runs.
 
-28 card(s) declared no footprint at all. They are counted apart from every band below, never into one — an unread card in a denominator is a rate nobody can check.
+29 card(s) declared no footprint at all. They are counted apart from every band below, never into one — an unread card in a denominator is a rate nobody can check.
 
 | Declared footprint | Cards | Died | Rate |
 | --- | --- | --- | --- |
-| more than 1 file | 12 | 9 | 75% |
-| more than 2 files | 9 | 6 | 67% |
-| more than 3 files | 7 | 5 | 71% |
-| more than 4 files | 6 | 4 | 67% |
-| more than 5 files | 5 | 3 | 60% |
-| more than 6 files | 4 | 2 | 50% |
+| more than 1 file | 13 | 9 | 69% |
+| more than 2 files | 10 | 6 | 60% |
+| more than 3 files | 8 | 5 | 62% |
+| more than 4 files | 7 | 4 | 57% |
+| more than 5 files | 6 | 3 | 50% |
+| more than 6 files | 5 | 2 | 40% |
 | more than 7 files | 2 | 1 | 50% |
 | more than 8 files | 2 | 1 | 50% |
 | more than 9 files | 2 | 1 | 50% |
@@ -32,12 +32,12 @@ Every card here did not fit one run: it died at the turn cap, it was split, or a
 | more than 11 files | 1 | 0 | 0% |
 | more than 12 files | 1 | 0 | 0% |
 
-- cards declaring more than 1 file died 9 of 12 times
-- cards declaring more than 2 files died 6 of 9 times
-- cards declaring more than 3 files died 5 of 7 times
-- cards declaring more than 4 files died 4 of 6 times
-- cards declaring more than 5 files died 3 of 5 times
-- cards declaring more than 6 files died 2 of 4 times
+- cards declaring more than 1 file died 9 of 13 times
+- cards declaring more than 2 files died 6 of 10 times
+- cards declaring more than 3 files died 5 of 8 times
+- cards declaring more than 4 files died 4 of 7 times
+- cards declaring more than 5 files died 3 of 6 times
+- cards declaring more than 6 files died 2 of 5 times
 - cards declaring more than 7 files died 1 of 2 times
 - cards declaring more than 8 files died 1 of 2 times
 - cards declaring more than 9 files died 1 of 2 times
@@ -53,10 +53,10 @@ A month is **complete** when the window covers all of it and it ended before thi
 
 | Month | Planner-created children | Split | Died at the turn cap | Complete |
 | --- | --- | --- | --- | --- |
-| 2026-06 | 129 | 0 | 0 | no — a partial count |
+| 2026-06 | 125 | 0 | 0 | no — a partial count |
 | 2026-07 | 228 | 0 | 0 | yes |
 | 2026-08 | 307 | 6 | 17 | yes |
-| 2026-09 | 750 | 5 | 16 | no — a partial count |
+| 2026-09 | 772 | 6 | 16 | no — a partial count |
 
 ## The tells, in hindsight
 
@@ -65,9 +65,9 @@ DRE-2893's four tells, read back over each card's own body by `split_ledger.tell
 | Tell | What it asks | Cards | Died |
 | --- | --- | --- | --- |
 | `contracts-between-pieces` | Does one deliverable read what another writes? The strongest tell — if B reads what A writes it is not one card. | 6 | 3 |
-| `two-languages-or-tiers` | Does the declared footprint span two languages or two tiers? Bounded is not the same as small. | 15 | 11 |
-| `unenumerated-count` | Does a criterion count something the body never enumerates? DRE-2837 said "the nine derivations" and the nine were named nowhere. | 6 | 4 |
-| `unbounded-quantifier` | Does the card quantify without a bound — "every surface", "all call sites"? DRE-2838's was 57 mount sites. | 14 | 11 |
+| `two-languages-or-tiers` | Does the declared footprint span two languages or two tiers? Bounded is not the same as small. | 16 | 11 |
+| `unenumerated-count` | Does a criterion count something the body never enumerates? DRE-2837 said "the nine derivations" and the nine were named nowhere. | 7 | 4 |
+| `unbounded-quantifier` | Does the card quantify without a bound — "every surface", "all call sites"? DRE-2838's was 57 mount sites. | 15 | 11 |
 
 ## The rows
 
@@ -114,6 +114,8 @@ DRE-2893's four tells, read back over each card's own body by `split_ledger.tell
 | [DRE-3232](https://linear.app/dreadnoughtfoundry/issue/DRE-3232/compliance-answers-outside-the-frozen-definition-are-kept-flagged-and) | 2026-09-05T23:47:56Z | `UNKNOWN` | engineer | 11 files | `UNKNOWN` | 0 | 1 | $17.76 | — | `turn-cap-death` |
 | [DRE-3275](https://linear.app/dreadnoughtfoundry/issue/DRE-3275/bureau-pipeline-declare-the-proof-waiting-act-in-the-registry-and-add) | 2026-09-07T00:14:30Z | S | devops | 5 files | `UNKNOWN` | 0 | 1 | $13.60 | `unbounded-quantifier` | `turn-cap-death` |
 | [DRE-3306](https://linear.app/dreadnoughtfoundry/issue/DRE-3306/one-river-atomic-rebuild-tier-4-the-templates-and-the-showroom-hand) | 2026-09-08T00:41:56Z | L | frontend | 13 files | `UNKNOWN` | 0 | 0 | $0.00 | `two-languages-or-tiers` | `handed-back` |
+| [DRE-4297](https://linear.app/dreadnoughtfoundry/issue/DRE-4297/the-record-contract-declares-the-heartbeat-its-event-name-and-delivery) | 2026-09-19T05:55:12Z | `UNKNOWN` | engineer | 7 files | `UNKNOWN` | 1 | 0 | $0.00 | — | `split` |
+| [DRE-4322](https://linear.app/dreadnoughtfoundry/issue/DRE-4322/bureau-pipeline-a-repo-with-no-fix-agent-and-a-held-pull-request-is) | 2026-09-19T17:11:26Z | `UNKNOWN` | engineer | `UNKNOWN` | `UNKNOWN` | 0 | 0 | $0.00 | `two-languages-or-tiers`, `unenumerated-count`, `unbounded-quantifier` | `handed-back` |
 
 ## The footprints
 
@@ -324,6 +326,16 @@ What each card SAID it would touch, against what its pieces actually touched. Th
 - declared: `console/web/src/components/oneriver/`, `console/web/src/components/oneriver/atomic.guard.test.ts`, `console/web/src/components/alerts/AlertTable.tsx`, `console/web/tailwind.config.ts`, `console/web/src/theme/stage.token.test.ts`, `console/web/src/pages/Gallery.tsx`, `gallery/OneRiverSpecimens.tsx`, `console/web/src/dev/`, `console/web/src/lib/graphqlClient.ts`, `console/design/atomic/`, `templates.html`, `index.html`, `coverage.md`
 - pieces touched: `UNKNOWN`
 
+### DRE-4297
+
+- declared: `config/record-contract.json`, `scripts/sync_repo_mirrors.py`, `cloud/relay-gh/record_contract.py`, `console/backend/record_contract.py`, `cloud/record-jobs/record_contract.py`, `infra/lambda/record-heartbeat/record_contract.py`, `console/backend/tests/test_record_contract.py`
+- pieces touched: `UNKNOWN`
+
+### DRE-4322
+
+- declared: `UNKNOWN`
+- pieces touched: `UNKNOWN`
+
 ## What could not be read
 
 Named rather than counted, because the absence of evidence is not evidence that a card was well sized.
@@ -359,3 +371,5 @@ Named rather than counted, because the absence of evidence is not evidence that 
 - **DRE-3022** — DRE-3078: no merged pull request this run could read
 - **DRE-3037** — the card declares no `Files:` line, so it made no footprint claim to compare against
 - **DRE-3213** — DRE-3238: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
+- **DRE-4297** — DRE-4298: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
+- **DRE-4322** — the card declares no `Files:` line, so it made no footprint claim to compare against
