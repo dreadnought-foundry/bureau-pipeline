@@ -1094,6 +1094,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "🧹 {_HAND_BUILT_REVIEW_NOTE}. Pull request #",
+      "kind": "undeclared-act",
+      "means": "A hand-built card with an open pull request on its own branch is moved into the review lane, once, and told which pull request moved it.",
+      "why": "Act-shaped, and the registry has no row for it (DRE-4356). Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber and a cadence — and the console is the registry's consumer: `tests/test_pipeline_acts_consumers.py` reads agent-bureau's own ACTS and fails when this repo declares an act the console cannot read, so a new row here is a change in TWO repositories. This card owns one file in this one. Named here so the debt is countable rather than invisible, and it already carries its own idempotency key: `_HAND_BUILT_REVIEW_NOTE` is read back off the card's own thread before the move, which is what keeps it to one move and one line per card."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "PR was already merged — moved to Done",
       "kind": "undeclared-act",
       "means": "The sweep closes a card whose PR is already merged.",
