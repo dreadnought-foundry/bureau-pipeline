@@ -173,6 +173,21 @@ jobs:
     secrets: inherit
 ```
 
+`id-token: write` is in this template and in the `agent-fix` one below for the
+same reason `actions: write` is: the agent's scrubbed log uploads on a
+short-lived AWS login (DRE-4269), and a reusable workflow can hold no more
+permission than the stub that calls it. It degrades rather than breaks — a stub
+without it mints no token, the upload records a gap, and the run itself is
+unaffected — so an un-updated fleet stub loses its logs and nothing else.
+
+**portico is the deliberate exception, on both stubs.** Its
+`.github/scripts/assert-credential-free.sh` forbids `id-token: write` outright
+("OIDC token minting; only needed to authenticate to a cloud"), which is that
+repo's standing position that its CI holds no cloud credentials at all. That is
+an open question with the CEO — raised when DRE-4353 rolled this grant across
+the fleet, settled separately — and until it is settled portico keeps both maps
+minus `id-token: write` and takes the recorded gap.
+
 Inside a called workflow, `github.event`, `github.event_name`, and
 `github.repository` are the CALLER's, so all payload references and job-level
 `if:` filters live here and keep working. `vars.CLAUDE_AUTH_MODE` also
@@ -247,7 +262,9 @@ Permissions live in the stub too, so this one is likewise not fixable from
 here. Every `agent-fix` stub in the fleet needs:
 
 ```yaml
+# .github/workflows/agent-fix.yml in the product repo — its whole permissions: map
 permissions:
+  id-token: write           # the agent's scrubbed log uploads on a short-lived AWS login — DRE-4269
   contents: write
   pull-requests: write
   actions: write

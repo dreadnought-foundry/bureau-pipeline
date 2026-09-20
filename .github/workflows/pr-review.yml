@@ -31,7 +31,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  id-token: write # DRE-4269: the agent's scrubbed log uploads on a short-lived AWS login; a reusable workflow can hold no more than its stub grants
+  # DRE-4269: the agent's scrubbed log uploads on a short-lived AWS login,
+  # and a reusable workflow can hold no more permission than the stub that
+  # calls it — so the grant has to live here.
+  id-token: write
   contents: read
   pull-requests: write
   # DRE-1927: the repair-PR review context fetches the ORIGINAL failing
