@@ -169,6 +169,64 @@ def test_a_token_shaped_string_nobody_supplied_is_removed(tmp_path, planted):
     assert "«redacted-shape:" in scrubbed
 
 
+_SHAPED = {
+    "github-token": "".join(["gh", "p_", _FILLER[:36]]),
+    "anthropic-key": "".join(["sk", "-ant-", "oat01-", _FILLER[:48]]),
+    "aws-access-key-id": "".join(["AK", "IA", "IOSFODNN7", "EXAMPLE"]),
+    "linear-key": "".join(["lin", "_api_", _FILLER[:40]]),
+    "slack-token": "".join(["xo", "xb-", "1234567890-", _FILLER[:24]]),
+    "jwt": ".".join(["ey" + "J" + _FILLER[:20], "ey" + "J" + _FILLER[:30], _FILLER[:43]]),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPED))
+@pytest.mark.parametrize("depth", [1, 2], ids=["json-escaped", "escaped-twice"])
+def test_a_token_at_the_start_of_a_line_inside_the_transcript_is_removed(tmp_path, shape, depth):
+    """The position a tool actually prints a credential — alone on its own line —
+    and inside the transcript that line break is the two characters `\\n`. `n` is
+    a word character, so a pattern opening with `\\b` does not match there: the
+    same token was caught raw and MISSED in the transcript until `_LEAD`.
+    Escaped twice is the same token printed from inside a JSON file."""
+    planted = _SHAPED[shape]
+    text = f"export TOKEN=\n{planted}\tnext\r\n{planted}"
+    for _ in range(depth - 1):
+        text = json.dumps(text)
+    done, out = run(tmp_path, {"log.json": transcript(text)}, secrets={})
+    assert done.returncode == 0, done.stderr
+    scrubbed = (out / "log.json").read_text()
+    assert planted not in scrubbed
+    assert scrubbed.count(f"«redacted-shape:{shape}»") == 2
+    json.loads(scrubbed)
+
+
+def test_every_shape_has_a_line_start_case():
+    """A shape added without one is a shape nobody checked at the position that
+    matters. The PEM pattern is line-oriented and has its own tests below."""
+    assert sorted(_SHAPED) == sorted(set(secret_shapes.SHAPES) - {"pem-private-key"})
+
+
+def test_a_key_printed_from_inside_a_json_file_is_removed(tmp_path):
+    """`cat app-key.json`: the key's newlines are escaped once by the file and
+    again by the transcript, so they reach the scrub as `\\\\n`."""
+    inner = json.dumps({"private_key": _pem(_KEY_LINE, _KEY_LINE, "Aw=="), "app_id": 3350400})
+    done, out = run(tmp_path, {"log.json": transcript(f"$ cat app-key.json\n{inner}\ndone")},
+                    secrets={})
+    assert done.returncode == 0, done.stderr
+    scrubbed = (out / "log.json").read_text()
+    assert _KEY_LINE not in scrubbed and "Aw==" not in scrubbed
+    text = json.loads(scrubbed)[0]["message"]["content"][0]["text"]
+    assert text.endswith("\ndone") and "3350400" in text
+
+
+def test_a_multi_line_secret_printed_from_inside_a_json_file_is_removed(tmp_path):
+    secret = "line-one-7Hq2mZx9\nline-two-Wd4Rt6Yp\nline-three-1Ns8Bv3C"
+    inner = json.dumps({"MULTILINE": secret})
+    done, out = run(tmp_path, {"log.json": transcript(f"$ cat env.json\n{inner}")},
+                    secrets={"MULTILINE": secret})
+    assert done.returncode == 0, done.stderr
+    assert "line-two-Wd4Rt6Yp" not in (out / "log.json").read_text()
+
+
 def test_a_pem_block_is_removed_raw_and_json_escaped(tmp_path):
     body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7fabricated"
     dashes, kind = "-" * 5, " ".join(["RSA", "PRIVATE", "KEY"])
@@ -349,6 +407,102 @@ def test_a_pem_key_whose_end_line_was_clipped_is_still_removed(tmp_path):
     assert "then more log" in (out / "step.log").read_text()
     assert "a later turn" in (out / "log.json").read_text()
     json.loads((out / "log.json").read_text())
+
+
+_KEY_LINE = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7fabricated"
+_PROSE = ["truncated output follows", "Ran pytest and 412 tests passed",
+          "the deploy finished and the build id was 99182", "uploading artifacts now",
+          "run complete"]
+
+
+def _pem(*lines: str, end: bool = True) -> str:
+    dashes, kind = "-" * 5, " ".join(["RSA", "PRIVATE", "KEY"])
+    body = [f"{dashes}BEGIN {kind}{dashes}", *lines]
+    return "\n".join(body + ([f"{dashes}END {kind}{dashes}"] if end else []))
+
+
+def test_a_clipped_key_does_not_take_the_prose_after_it(tmp_path):
+    """The reproduction from the second review, verbatim in shape: prose holding
+    NO character outside letters, digits and spaces. A body class that admitted
+    whitespace ate all five lines and the run reported one clean redaction. The
+    earlier fixture only passed because its first trailing character was `[`."""
+    assert all(ch.isalnum() or ch == " " for line in _PROSE for ch in line)
+    clipped = _pem(_KEY_LINE, end=False)
+    raw = "step 4 dumping the deploy key\n" + clipped + "\n" + "\n".join(_PROSE) + "\n"
+    done, out = run(tmp_path, {"step.log": raw.encode(),
+                               "log.json": transcript("the key: " + clipped + "\n" + "\n".join(_PROSE),
+                                                      "a later turn")}, secrets={})
+    assert done.returncode == 0, done.stderr
+    step, log = (out / "step.log").read_text(), (out / "log.json").read_text()
+    assert _KEY_LINE not in step and _KEY_LINE not in log
+    assert step == ("step 4 dumping the deploy key\n«redacted-shape:pem-private-key»\n"
+                    + "\n".join(_PROSE) + "\n")
+    turns = json.loads(log)
+    for line in _PROSE:
+        assert line in turns[0]["message"]["content"][0]["text"]
+    assert turns[1]["message"]["content"][0]["text"] == "a later turn"
+
+
+def test_an_unterminated_key_does_not_swallow_the_log_up_to_a_later_keys_end(tmp_path):
+    """`BEGIN.*?END` under DOTALL runs from the FIRST key's BEGIN to the SECOND
+    key's END and takes the whole log between them with it."""
+    raw = "\n".join([_pem(_KEY_LINE, end=False), *_PROSE, _pem(_KEY_LINE, _KEY_LINE, "Aw=="), "after"])
+    done, out = run(tmp_path, {"step.log": raw.encode()}, secrets={})
+    assert done.returncode == 0, done.stderr
+    scrubbed = (out / "step.log").read_text()
+    assert scrubbed == "\n".join(["«redacted-shape:pem-private-key»", *_PROSE,
+                                  "«redacted-shape:pem-private-key»", "after"])
+
+
+def test_an_encrypted_key_loses_its_headers_and_body_too(tmp_path):
+    """RFC 1421 framing: header lines and a blank line sit between BEGIN and the
+    body. A line-by-line pattern that did not know them would redact the BEGIN
+    line and leave the whole body behind it."""
+    raw = _pem("Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123456789ABCDEF0123456789ABCDEF",
+               "", _KEY_LINE, _KEY_LINE, "Aw==") + "\nnext line\n"
+    done, out = run(tmp_path, {"step.log": raw.encode(), "log.json": transcript(raw)}, secrets={})
+    assert done.returncode == 0, done.stderr
+    assert (out / "step.log").read_text() == "«redacted-shape:pem-private-key»\nnext line\n"
+    assert _KEY_LINE not in (out / "log.json").read_text()
+    assert "DEK-Info" not in (out / "log.json").read_text()
+
+
+def test_a_key_line_with_text_appended_still_loses_its_key_material(tmp_path):
+    raw = _pem(_KEY_LINE, _KEY_LINE + " ...[clipped]", end=False)
+    done, out = run(tmp_path, {"step.log": raw.encode()}, secrets={})
+    assert done.returncode == 0, done.stderr
+    assert (out / "step.log").read_text() == "«redacted-shape:pem-private-key» ...[clipped]"
+
+
+# --- absent is not none -----------------------------------------------------------
+
+
+def _run_with_stdin(tmp_path, stdin: str):
+    src = tmp_path / "in"
+    src.mkdir()
+    password = "-".join(["Hunter2", "correct", "horse", "battery"])
+    (src / "step.log").write_text(f"db url postgresql://bureau:{password}@db.internal:5432/bureau")
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--out-dir", str(tmp_path / "out"), str(src / "step.log")],
+        input=stdin, capture_output=True, text=True, check=False)
+
+
+@pytest.mark.parametrize("stdin", ["", "\n", "   "], ids=["empty", "newline", "spaces"])
+def test_empty_stdin_is_refused_not_read_as_no_secrets(tmp_path, stdin):
+    """What an unset `$SECRETS_JSON` in the calling step looks like. Read as `{}`
+    it skips pass 1, exits 0, and a prefix-less credential — this database
+    password matches no shape — goes to storage untouched (second review)."""
+    done = _run_with_stdin(tmp_path, stdin)
+    assert done.returncode == scrub_agent_log.REFUSED
+    assert "stdin was empty" in done.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_explicit_empty_object_still_means_no_secrets(tmp_path):
+    """The distinction pinned from the other side: `{}` is a statement, and runs."""
+    done = _run_with_stdin(tmp_path, "{}")
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "out" / "step.log").exists()
 
 
 # --- the minimum-length rule ------------------------------------------------------
