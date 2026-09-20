@@ -282,6 +282,272 @@ class TheBound(unittest.TestCase):
         self.assertEqual(pc.send_backs(bodies, pc.STAGE_POST), 0)
 
 
+class AnAnsweredRoundStopsCountingAgainstTheNext(unittest.TestCase):
+    """DRE-4115. After approval, every send-back is followed by a re-plan, so
+    the round after it is reading a DIFFERENT plan. "Two failed rounds" has to
+    mean two rounds whose findings still stand — not two send-backs of any
+    plan that ever carried this epic's name. The critic is shown the previous
+    round's findings and says which of them the revision left open; the bound
+    reads that line; the marker records it so the sweep's gate agrees."""
+
+    EPIC = "DRE-3778"
+    ROUND_ONE = ["no card manufactures the operator step",
+                 "DRE-9001 carries no acceptance criteria"]
+
+    def _note(self, items):
+        """The CEO-facing half of a round — the shape `_cmd_decide` posts, a
+        numbered list under the findings heading."""
+        return "\n\n".join(["🛑 **Second critic** — round 1: sent back",
+                            f"Reason: {items[0]}",
+                            pc.findings_section(items),
+                            "send-back rate: first round"])
+
+    def _thread(self, *rounds):
+        """`rounds` are `(items, still_open)` pairs, oldest first, each posted
+        as the run posts them: the note, then the record alone."""
+        out = [pc.cycle_marker(self.EPIC)]
+        for n, (items, open_count) in enumerate(rounds, 1):
+            out.append(self._note(items))
+            out.append(pc.marker(pc.STAGE_POST, n, pc.SEND_BACK, items[0],
+                                 open_count=open_count))
+        return out
+
+    # --- what the critic is shown ------------------------------------------
+
+    def test_the_previous_rounds_findings_are_read_back_out_of_the_thread(self):
+        """Marker reason first, then the note's numbered list — one reader, so
+        what the critic is shown is what the round actually said."""
+        thread = self._thread((self.ROUND_ONE, None))
+        self.assertEqual(pc.prior_findings(thread, pc.STAGE_POST), self.ROUND_ONE)
+
+    def test_only_the_last_send_back_round_is_the_previous_round(self):
+        thread = self._thread((self.ROUND_ONE, None),
+                              (["DRE-9002 assumes a route nothing adds"], 0))
+        self.assertEqual(pc.prior_findings(thread, pc.STAGE_POST),
+                         ["DRE-9002 assumes a route nothing adds"])
+
+    def test_a_single_finding_round_has_no_list_and_still_reads_back(self):
+        thread = self._thread((["no card manufactures the operator step"], None))
+        self.assertEqual(pc.prior_findings(thread, pc.STAGE_POST),
+                         ["no card manufactures the operator step"])
+
+    def test_no_previous_round_means_nothing_to_show(self):
+        self.assertEqual(pc.prior_findings([pc.cycle_marker(self.EPIC)], pc.STAGE_POST), [])
+        self.assertEqual(pc.prior_findings([], pc.STAGE_POST), [])
+
+    def test_a_stray_comment_cannot_plant_a_previous_round(self):
+        """The same credential as every other reader: a round somebody else
+        posted, or a note quoting a marker, shows the critic nothing."""
+        thread = [{"body": b, "authored_by_pipeline": False}
+                  for b in self._thread((self.ROUND_ONE, None))]
+        self.assertEqual(pc.prior_findings(thread, pc.STAGE_POST), [])
+
+    def test_the_charter_carries_the_previous_round_and_asks_for_the_line(self):
+        block = pc.prior_round_block(self.ROUND_ONE)
+        self.assertIn("1. no card manufactures the operator step", block)
+        self.assertIn("2. DRE-9001 carries no acceptance criteria", block)
+        self.assertIn(pc.STILL_OPEN_PREFIX, block)
+        self.assertIn("still-open: none", block)
+        self.assertIn(block.strip(), pc.charter(pc.STAGE_POST, prior=block))
+        self.assertEqual(pc.prior_round_block([]), "")
+        self.assertNotIn("still-open", pc.charter(pc.STAGE_POST))
+
+    def test_the_block_says_how_old_the_previous_round_is(self):
+        """The cheap half of the card's staleness line: the previous round's
+        record carries its clock, so the critic is told the plan is older
+        than the estate it is reading it against."""
+        block = pc.prior_round_block(self.ROUND_ONE, ran_at="2026-09-15T17:43:00.000Z")
+        self.assertIn("2026-09-15 10:43 PT", block)
+        self.assertIn("since", block.lower())
+
+    # --- what the critic says ----------------------------------------------
+
+    def test_the_still_open_line_names_the_prior_findings_by_number(self):
+        text = "PLAN-CRITIC: SEND_BACK — a new gap\n\nstill-open: 2\n"
+        self.assertEqual(pc.still_open_findings(text, self.ROUND_ONE, ["a new gap"]),
+                         ["DRE-9001 carries no acceptance criteria"])
+        text = "PLAN-CRITIC: SEND_BACK — a new gap\nstill-open: 1, 2\n"
+        self.assertEqual(pc.still_open_findings(text, self.ROUND_ONE, ["a new gap"]),
+                         self.ROUND_ONE)
+
+    def test_none_means_the_revision_answered_everything(self):
+        text = "PLAN-CRITIC: SEND_BACK — a new gap\nstill-open: none\n"
+        self.assertEqual(pc.still_open_findings(text, self.ROUND_ONE, ["a new gap"]), [])
+
+    def test_a_number_that_names_no_prior_finding_is_ignored(self):
+        text = "PLAN-CRITIC: SEND_BACK — a new gap\nstill-open: 7\n"
+        self.assertEqual(pc.still_open_findings(text, self.ROUND_ONE, ["a new gap"]), [])
+
+    def test_without_the_line_a_finding_repeated_verbatim_is_still_open(self):
+        """A critic that wrote no line but raised the same sentence again has
+        answered the question anyway."""
+        text = "PLAN-CRITIC: SEND_BACK — no card manufactures the operator step\n"
+        self.assertEqual(
+            pc.still_open_findings(text, self.ROUND_ONE,
+                                   ["no card manufactures the operator step"]),
+            ["no card manufactures the operator step"])
+        text = "PLAN-CRITIC: SEND_BACK — something else entirely\n"
+        self.assertEqual(pc.still_open_findings(text, self.ROUND_ONE,
+                                                ["something else entirely"]), [])
+
+    # --- the bound ----------------------------------------------------------
+
+    def test_round_one_never_reaches_the_bound(self):
+        self.assertFalse(pc.post_bound_spent(0, None))
+        self.assertFalse(pc.post_bound_spent(0, 0))
+        self.assertFalse(pc.post_bound_spent(0, 3))
+
+    def test_a_round_with_a_prior_finding_still_open_is_the_bound(self):
+        self.assertTrue(pc.post_bound_spent(1, 1))
+        self.assertTrue(pc.post_bound_spent(1, 2))
+
+    def test_a_round_whose_revision_answered_everything_is_not(self):
+        self.assertFalse(pc.post_bound_spent(1, 0))
+
+    def test_no_reading_at_all_is_todays_arithmetic(self):
+        """A marker written before this existed, or a caller with nothing to
+        say about the previous round: unknown is not "answered", so the count
+        is what it always was. The live epics escape it through the fresh
+        attempt a human's re-run opens, never by a refund nobody read."""
+        self.assertTrue(pc.post_bound_spent(1, None))
+        self.assertEqual(pc.post_bound_spent(1, None), pc._bound_spent(1))
+
+    def test_max_rounds_answered_revisions_is_still_the_bound(self):
+        """Nothing circles forever. Two revisions that each answered
+        everything and still produced new findings — a plan that is not
+        converging — park on the third send-back."""
+        self.assertTrue(pc.post_bound_spent(pc.MAX_ROUNDS, 0))
+        self.assertTrue(pc.post_bound_spent(pc.MAX_ROUNDS + 3, 0))
+
+    def test_decide_holds_an_answered_round_without_parking(self):
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=1,
+                                 reason="a new gap", stage=pc.STAGE_POST,
+                                 still_open=[])
+        self.assertEqual(action, "hold")
+        self.assertNotIn("the bound", note.lower())
+        self.assertNotIn("needs-human", note)
+        self.assertIn("answered", note.lower())
+        self.assertFalse(pc.at_bound(action, 1, pc.SEND_BACK, still_open=[]))
+
+    def test_decide_parks_an_open_finding_and_names_it(self):
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=1,
+                                 reason="DRE-9002 still names nobody",
+                                 stage=pc.STAGE_POST,
+                                 still_open=["no card manufactures the operator step"])
+        self.assertEqual(action, "hold")
+        self.assertIn("the bound", note.lower())
+        self.assertIn("needs-human", note)
+        self.assertIn("still open", note.lower())
+        self.assertIn("no card manufactures the operator step", note)
+        self.assertTrue(pc.at_bound(action, 1, pc.SEND_BACK,
+                                    still_open=["no card manufactures the operator step"]))
+
+    def test_decide_parks_the_third_new_finding_and_says_why(self):
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=2,
+                                 reason="DRE-9002 assumes a route nothing adds",
+                                 stage=pc.STAGE_POST, still_open=[])
+        self.assertEqual(action, "hold")
+        self.assertIn("the bound", note.lower())
+        self.assertIn("needs-human", note)
+        self.assertIn("new gaps", note.lower())
+        self.assertIn("DRE-9002 assumes a route nothing adds", note)
+
+    def test_decide_with_no_reading_parks_as_it_always_did(self):
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=1,
+                                 reason="still nobody", stage=pc.STAGE_POST)
+        self.assertEqual(action, "hold")
+        self.assertIn("two failed rounds", note.lower())
+        self.assertIn("needs-human", note)
+
+    def test_the_pre_stage_is_untouched(self):
+        """Its two rounds run inside one job and the plan reaches the CEO
+        regardless; there is no re-plan between them to answer anything."""
+        action, _ = pc.decide(pc.SEND_BACK, prior_send_backs=1, reason="x",
+                              stage=pc.STAGE_PRE, still_open=[])
+        self.assertEqual(action, "proceed")
+
+    # --- the record ---------------------------------------------------------
+
+    def test_the_marker_records_how_many_prior_findings_stayed_open(self):
+        line = pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "a new gap", open_count=0)
+        self.assertIn(" open=0 ", line)
+        row = pc.parse_markers([line])[0]
+        self.assertEqual((row["round"], row["open"], row["reason"]), (2, 0, "a new gap"))
+        self.assertEqual(pc.parse_markers([pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "x",
+                                                     open_count=3)])[0]["open"], 3)
+
+    def test_a_marker_without_the_field_reads_as_unknown(self):
+        """Every marker written before DRE-4115, and every pre-stage one."""
+        row = pc.parse_markers([pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "x")])[0]
+        self.assertIsNone(row["open"])
+        self.assertNotIn("open=", pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "x"))
+
+    def test_the_gate_agrees_with_decide_about_an_answered_round(self):
+        """The one property DRE-3059 is about: whatever `decide` says on a
+        round, the sweep's gate says too — the epic is HELD (the children
+        stay in Backlog until the revision is reviewed) but it is not the
+        bound, and the refusal does not tell the CEO it was parked."""
+        thread = self._thread((self.ROUND_ONE, None), (["a new gap"], 0))
+        self.assertFalse(pc.post_bound_reached(thread, self.EPIC))
+        state, detail = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertNotIn("the bound", detail.lower())
+        self.assertIn("a new gap", detail)
+
+    def test_the_gate_agrees_about_an_open_finding(self):
+        thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
+        self.assertTrue(pc.post_bound_reached(thread, self.EPIC))
+        state, detail = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("the bound", detail.lower())
+        self.assertIn("needs-human", detail)
+        self.assertIn("still open", detail.lower())
+
+    def test_the_gate_agrees_about_the_cap(self):
+        thread = self._thread((self.ROUND_ONE, None), (["gap two"], 0), (["gap three"], 0))
+        self.assertTrue(pc.post_bound_reached(thread, self.EPIC))
+        state, detail = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("the bound", detail.lower())
+        self.assertIn("new gaps", detail.lower())
+
+    def test_old_markers_read_as_the_bound_they_were(self):
+        """DRE-3778's thread as it stands: six send-backs, none carrying the
+        field. Still parked — until a person's re-run opens a fresh attempt."""
+        thread = self._thread(*[([f"gap {n}"], None) for n in range(6)])
+        self.assertTrue(pc.post_bound_reached(thread, self.EPIC))
+        state, _ = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertFalse(pc.post_bound_reached(thread + [pc.cycle_marker(self.EPIC)],
+                                               self.EPIC))
+
+    def test_a_pass_or_no_round_is_never_at_the_bound(self):
+        thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
+        thread.append(pc.marker(pc.STAGE_POST, 3, pc.PASS))
+        self.assertFalse(pc.post_bound_reached(thread, self.EPIC))
+        self.assertFalse(pc.post_bound_reached([pc.cycle_marker(self.EPIC)], self.EPIC))
+
+    # --- the fresh attempt a person's re-run opens ---------------------------
+
+    def test_a_person_re_running_a_parked_review_opens_a_fresh_attempt(self):
+        thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
+        for reason in ("re-run", "", None):
+            self.assertTrue(pc.opens_fresh_attempt(thread, self.EPIC, reason), reason)
+
+    def test_the_pipelines_own_reasons_never_open_one(self):
+        thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
+        for reason in (rr.REASON_RE_REVIEW, rr.REASON_REVIEW_RETRY):
+            self.assertFalse(pc.opens_fresh_attempt(thread, self.EPIC, reason), reason)
+
+    def test_a_review_that_is_not_parked_keeps_its_attempt(self):
+        """A person re-running a review the bound has not reached — DRE-4112's
+        recovery from a killed dispatch — is asking for round 2, and round 2
+        is judged on whether the revision answered round 1."""
+        thread = self._thread((self.ROUND_ONE, None))
+        self.assertFalse(pc.opens_fresh_attempt(thread, self.EPIC, "re-run"))
+        self.assertFalse(pc.opens_fresh_attempt([], self.EPIC, ""))
+
+
 class TheBoundIsPerPlanningAttempt(unittest.TestCase):
     """The budget belongs to ONE planning cycle, not to the epic's lifetime.
 
