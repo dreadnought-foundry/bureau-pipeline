@@ -22,6 +22,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_death_receipt_wiring.py 
 
 from __future__ import annotations
 
+import functools
 import shutil
 import sys
 from pathlib import Path
@@ -37,9 +38,14 @@ sys.path.insert(0, str(SCRIPTS))
 import check_death_receipts as guard  # noqa: E402
 
 
+@functools.lru_cache(maxsize=1)
 def _discovered():
-    """(filename, job) for every model-running reusable workflow, live."""
-    return [(mj.filename, mj.job) for mj in guard.model_jobs(WORKFLOWS)]
+    """(filename, job) for every model-running reusable workflow, live.
+
+    Cached: the whole tree is ~17,500 lines of YAML and this is read once per
+    parametrized rule at collection time as well as inside the tests.
+    """
+    return tuple((mj.filename, mj.job) for mj in guard.model_jobs(WORKFLOWS))
 
 
 def _crudely_discovered():
@@ -101,7 +107,7 @@ class TestDiscovery:
             "    steps:\n"
             "      - run: echo no model here\n"
         )
-        assert guard.model_jobs(tmp_path) == []
+        assert list(guard.model_jobs(tmp_path)) == []
 
     def test_a_workflow_that_cannot_be_called_is_not_in_the_population(self, tmp_path):
         # A model step inside a workflow nothing calls is not fleet work; the
@@ -115,7 +121,7 @@ class TestDiscovery:
             "    steps:\n"
             f"      - uses: {guard.MODEL_ACTION}@" + "a" * 40 + "\n"
         )
-        assert guard.model_jobs(tmp_path) == []
+        assert list(guard.model_jobs(tmp_path)) == []
 
 
 # --------------------------------------------------------------------------
@@ -145,11 +151,17 @@ class TestLive:
 # --------------------------------------------------------------------------
 
 def _mutated_dir(tmp_path, filename, mutate):
-    """A copy of the live workflows with one file's YAML rewritten."""
+    """One live workflow, its YAML rewritten, alone in a directory.
+
+    One file rather than a copy of the tree: `check_dir` is per-file, the
+    whole tree is ~17,500 lines of YAML, and these mutations run once per
+    discovered workflow per rule. `test_the_unmutated_copy_still_passes`
+    keeps the whole-tree control.
+    """
     workdir = tmp_path / "workflows"
-    shutil.copytree(WORKFLOWS, workdir)
+    workdir.mkdir(parents=True)
     path = workdir / filename
-    doc = yaml.safe_load(path.read_text())
+    doc = yaml.safe_load((WORKFLOWS / filename).read_text())
     mutate(doc)
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
     return workdir

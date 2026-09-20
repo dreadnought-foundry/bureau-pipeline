@@ -78,7 +78,7 @@ USAGE_WALL = {
     "num_turns": 1,
     "total_cost_usd": 0,
     "api_error_status": 429,
-    "result": "You've hit your usage limit · resets 8:30pm (UTC)",
+    "result": "You've hit your limit · resets 8:30pm (UTC)",
 }
 
 # A clean run. Nothing died; the receipt still gets written, because a corpus
@@ -154,7 +154,10 @@ class TestClassification:
         doc = _receipt(USAGE_WALL, job_status="failure", step_outcome="failure")
         assert doc["cause"] == death_receipt.CAUSE_API
         assert doc["wall"]["cause"] == death_cause.CAPPED
-        assert "usage limit" in doc["quote"]
+        assert "hit your limit" in doc["quote"]
+        # capped states its own reset; throttled would say "clears in minutes"
+        # about a window that resets tonight (death_cause's ordering note).
+        assert doc["wall"]["resets_at"]
         assert len(doc["quote"]) <= execution_result._VALUE_CAP
 
     def test_a_clean_run_writes_a_receipt_that_says_nothing_died(self):
@@ -189,6 +192,22 @@ class TestSetupDeath:
         doc = _receipt(None, job_status="failure", step_outcome="")
         assert doc["cause"] == death_receipt.CAUSE_SETUP
         assert doc["phase"] == death_receipt.PHASE_SETUP
+
+    def test_a_model_step_that_ran_is_a_model_death_even_with_no_record(self):
+        # The groomer's judged read and the planner's classifier call a model
+        # through planning_classify and write no execution record at all.
+        # Without GitHub's own outcome for the step, every one of their deaths
+        # would be filed as a setup death that wasted nothing.
+        doc = _receipt(None, job_status="failure", step_outcome="failure")
+        assert doc["model_started"] is True
+        assert doc["phase"] == death_receipt.PHASE_MODEL
+        assert doc["cause"] == death_receipt.CAUSE_UNKNOWN
+
+    def test_skipped_still_beats_a_step_outcome_that_ran(self):
+        # `skipped` is GitHub saying the step never ran and nothing overrides
+        # it — the order check_agent_result.agent_started already sets.
+        doc = _receipt(None, job_status="failure", step_outcome="skipped")
+        assert doc["model_started"] is False
 
     def test_a_setup_death_never_reports_model_spend(self):
         doc = _receipt(None, job_status="failure", step_outcome="skipped")

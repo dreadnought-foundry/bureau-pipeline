@@ -383,6 +383,39 @@ the branch existed, and the loop says so in a comment on the PR and in the
 fixing agent's own context. It never holds the PR — it is information, not a
 gate — and a base it cannot read reports *unevaluated*, never a pass.
 
+## Every workflow that runs a model writes a death-cause receipt (DRE-4340)
+
+On 2026-09-19 the fleet's failures were counted for the first time — 1,310 out
+of 62,451 runs over 22 days — and **69 of them, $97 of model work, could not be
+attributed to any cause at all**, because the workflow they died in wrote
+nothing down. The same blind spot is why "a subscription ran out" was believed
+to be the main failure for weeks when it is the sixth cause (49 runs, $20) and
+the turn cap is the first ($1,559).
+
+`scripts/death_receipt.py` is the one writer. It classifies nothing new: the
+death class comes from `check_agent_result` (`turn_exhaustion` / `api_death` /
+`credential_expiry` / `none`), WHICH WALL from `death_cause` (`throttled` /
+`capped` / `revoked`), the spend from `execution_result`, and the run identity
+and delivery key from `usage_reading`, so a run's death and its usage reading
+key the same way. It adds three names nothing else had: `setup` (the run died
+before the model started, so it wasted no model work — DRE-2931), `cancelled`
+(not a death at all — DRE-2074), and `unknown`, which is always written WITH
+the reason it could not be classified. Never blank, never a guess. The step
+runs `always()` + `continue-on-error`, so it never changes the job's own
+conclusion; the receipt is uploaded as a 90-day run artifact.
+
+**The durable half is the guard, not the wiring.** A list of the workflows that
+run a model drifts the moment somebody adds the next one, so
+`scripts/check_death_receipts.py` (a Pipeline Tests step) DISCOVERS the
+population from the workflow files — a reusable workflow with a step that uses
+`anthropics/claude-code-action` or is handed a model credential — and fails the
+build when one of them writes no receipt, writes two, writes one before the
+last model step, gates it on success, lets it fail the job, interpolates
+`${{ }}` into its `run:` body, or does not upload it. Same shape as the watcher
+coverage above, for the same reason.
+`tests/test_death_receipt_wiring.py` proves it bites by REMOVING a receipt step
+from every discovered workflow in turn, rather than by asserting that it would.
+
 ## One WIP cap per repo (DRE-2529)
 
 A repo has ONE work-in-progress cap, and **three** workflows promote Backlog

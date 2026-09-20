@@ -3537,6 +3537,62 @@ jobs:
             "${{ github.event.client_payload.identifier }}" \
             "🌊 The wave plan is written and checked against the standard, and it names the epics it commits to, in order. Nothing is approved yet — each epic comes back with its own plan when its turn comes. Read the wave plan from the run: $RUN_URL"
 
+      # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
+      # failures over 22 days — $97 of model work — could not be attributed to
+      # any cause, because the workflow they died in wrote nothing down. The
+      # `Record is_error death` step above answers a different question — it
+      # arms the medic's model swing on one class — and it writes to a Linear
+      # card, which a planner run without an epic does not have.
+      # death_receipt.py writes the one receipt every model-running workflow
+      # writes, from the classifiers this pipeline already owns;
+      # `scripts/check_death_receipts.py` discovers them and fails the build
+      # when one is missing.
+      #
+      # LAST STEP IN THE JOB, so it is after every one of this job's model
+      # steps whichever route ran. `always()` + `continue-on-error`: the
+      # receipt is for the runs that DIED and must never change this job's own
+      # conclusion.
+      #
+      # DID A MODEL RUN AT ALL — asked of the whole set, not of one step. This
+      # job has four mutually exclusive routes (one-off, epic, wave, and the
+      # classifier that chooses between them) and only one route's model steps
+      # ever execute; a step that never ran reports `skipped`, so any model
+      # step reporting anything else means the model was reached. Without it a
+      # death inside the classifier — which calls a model through
+      # `planning_classify` and writes no execution record — would be filed as
+      # a death before the model started, and counted as wasting nothing
+      # (DRE-2931). Every `${{ }}` is in env:, never in the script.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.plan_done.outputs.execution_file || steps.claude.outputs.execution_file }}
+          MODEL_RAN: ${{ steps.classify.outcome != 'skipped' || steps.oocritic.outcome != 'skipped' || steps.claude.outcome != 'skipped' || steps.claude_retry.outcome != 'skipped' || steps.prea.outcome != 'skipped' || steps.replan.outcome != 'skipped' || steps.replan_retry.outcome != 'skipped' || steps.preb.outcome != 'skipped' || steps.posta.outcome != 'skipped' || steps.postreplan.outcome != 'skipped' || steps.postreplan_retry.outcome != 'skipped' || steps.wave.outcome != 'skipped' || steps.wave_retry.outcome != 'skipped' }}
+          JOB_STATUS: ${{ job.status }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --model-ran "$MODEL_RAN" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
+
   # The plan artifact's build output and its publication (DRE-2720).
   #
   # A SEPARATE job on purpose. The card's cheap route is that the planner

@@ -325,3 +325,47 @@ jobs:
           if outcome == "failed":
               print(f"::warning::{summary}")
           PY
+
+      # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
+      # failures over 22 days — $97 of model work — could not be attributed to
+      # any cause, because the workflow they died in wrote nothing down. The
+      # trial runs a model, so it dies of exactly the causes every other model
+      # job does, and the score above answers a different question (did the
+      # candidate model pass) in a shape only this workflow reads.
+      # death_receipt.py writes the one receipt every model-running workflow
+      # writes; `scripts/check_death_receipts.py` discovers them and fails the
+      # build when one is missing.
+      #
+      # `always()` + `continue-on-error`: the receipt is for the runs that
+      # DIED and must never change this job's own conclusion — the caller acts
+      # on `steps.verify.outputs.outcome`, not on this step. No card: a trial
+      # is dispatched for a MODEL, not for a card. Every `${{ }}` is in env:,
+      # never in the script.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          MODEL_STEP_OUTCOME: ${{ steps.claude.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --step-outcome "$MODEL_STEP_OUTCOME" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
