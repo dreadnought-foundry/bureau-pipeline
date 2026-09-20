@@ -1289,9 +1289,19 @@ jobs:
           # sends the medic to re-run a run that finished the card and whose
           # patch is already an artifact. The Report step answers it; this gate's
           # only job is not to call it a death.
+          #
+          # --handback-file (DRE-4376): the agent's THIRD deliberate exit —
+          # it found an epic inside a one-off card and handed it back to
+          # Planning, opening no PR. The Report step below already reads this
+          # exact path, comments the pieces and moves the card; the gate never
+          # knew the exit existed, so on 2026-09-19 (run 35466962427, DRE-4322)
+          # a correct hand-back ended the run RED, woke the medic and put a
+          # "pipeline failure" diagnosis in the CEO's queue for 20 hours. Same
+          # path in both steps, pinned by tests/test_check_agent_result_handback.py.
           python3 .bureau-pipeline/scripts/check_agent_result.py \
             "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt \
-            --escalation-file /tmp/agent-escalation.txt --ignore-is-error \
+            --escalation-file /tmp/agent-escalation.txt \
+            --handback-file /tmp/agent-handback.txt --ignore-is-error \
             --claude-outcome "$CLAUDE_OUTCOME" \
             --work-on-runner "${{ steps.rescue.outputs.local_work }}"
 
