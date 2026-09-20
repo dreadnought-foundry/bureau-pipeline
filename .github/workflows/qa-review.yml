@@ -1782,6 +1782,42 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The critic's
+      # transcript, scrubbed and put straight into our own store over OIDC —
+      # never an Actions artifact and never echoed, because several of the
+      # repos these runs happen in are public. The execution file is the last
+      # attempt's, exactly as the receipt above reads it.
+      #
+      # `$PIPELINE_DIR`, not `.bureau-pipeline`: DRE-3226 moved this job's
+      # pipeline checkout out of the pull request's working tree, and only
+      # `.github/actions` was put back.
+      #
+      # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
+      # every path of its own: the runs worth keeping are the ones that died,
+      # and keeping a log must never change this job's conclusion. Anything
+      # that stops it — a refused scrub, no OIDC token (portico forbids
+      # `id-token: write` by policy), no AWS CLI (the self-hosted minis may
+      # not have one), a log over the single-part cap — is recorded as a GAP
+      # on the run instead.
+      #
+      # The job's secrets arrive on STDIN, so the scrub can redact each one by
+      # value; never as an argument, which would reach the process table. The
+      # calling stub grants `id-token: write` (DRE-4353); this file declares no
+      # `permissions:` block, because a called job asking for more than its
+      # caller granted fails the whole run at startup. Every `${{ }}` is in
+      # env:, never in the script.
+      - name: Keep the run's working log
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.critic_retry.outputs.execution_file || steps.critic.outputs.execution_file }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          printf '%s' "$SECRETS_JSON" \
+            | python3 "$PIPELINE_DIR"/scripts/upload_agent_log.py \
+                --log-file "$EXEC_FILE" || true
+
       - name: Post verdict or neutral status
         id: post
         # not on cancellation: a superseded run must not post a fail-closed

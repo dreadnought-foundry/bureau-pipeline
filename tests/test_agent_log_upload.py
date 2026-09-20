@@ -1,0 +1,569 @@
+"""Every agent workflow uploads its scrubbed working log (DRE-4269, epic DRE-4267).
+
+The epic keeps every agent run's transcript for six months in our own storage,
+and the runs that matter most are the ones that DIED — turn cap, 429, timeout.
+So the step that does it runs `always()`, and it can never be allowed to fail
+the agent's own run: a log-keeping step that turns a healthy build red is a step
+someone deletes.
+
+WHAT THIS FILE PINS, and why each half is here:
+
+  * THE POPULATION IS DERIVED, never remembered. `check_death_receipts.model_jobs`
+    already answers "which reusable workflow jobs run a model" from the files
+    themselves (DRE-4340), so this guard asks it rather than keeping a second
+    list that drifts. Every job it finds must be classified — either it uploads
+    its working log, or it is named here with the reason it does not. Add a
+    seventh agent workflow and this test fails until someone decides which.
+  * THE SHAPE of the step, on each of the six: `always()`, `continue-on-error`,
+    after the last model step, no `${{ }}` in the body (the 21,000-character
+    expression ceiling, DRE-3484).
+  * THE BEHAVIOUR of `scripts/upload_agent_log.py`, executed for real against
+    stub `aws` and a stub OIDC endpoint: no upload without a successful scrub,
+    one single-part `put-object` carrying `If-None-Match`, the key under the
+    store's own prefix, nothing of the log on stdout or stderr, and exit 0 on
+    every gap — no OIDC token (portico), no AWS CLI (the self-hosted minis), a
+    log over the cap.
+
+ON `id-token: write`, WHICH THIS FILE DELIBERATELY DOES NOT ASSERT INSIDE THE
+REUSABLE WORKFLOWS. A called job that asks for more permission than its caller
+granted fails the WHOLE run at startup — release-train.yml says so in its own
+header comment, and it is why that workflow declares no job-level `permissions:`
+block either. portico forbids `id-token: write` outright
+(`.github/scripts/assert-credential-free.sh`), so a `permissions:` block here
+would not give the upload a token: it would take portico's agent runs away
+entirely. The grant belongs in the CALLING STUB (DRE-4348 scaffold + agent-bureau,
+DRE-4349..4353 per repo), and the reusable inherits it. What is asserted here is
+the half that lives in this repo: no uploading job declares a `permissions:`
+block, and the uploader ASKS the runner for a token with the `sts.amazonaws.com`
+audience and records a gap when there is none.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import os
+import subprocess
+import sys
+import threading
+import unittest
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+
+import yaml
+
+REPO = Path(__file__).resolve().parents[1]
+SCRIPTS = REPO / "scripts"
+WORKFLOWS = REPO / ".github" / "workflows"
+UPLOADER = SCRIPTS / "upload_agent_log.py"
+
+sys.path.insert(0, str(SCRIPTS))
+import check_death_receipts as receipts  # noqa: E402
+
+#: The six reusable workflow jobs that run an agent for a card and so keep a
+#: working log. The same six as `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
+#: agent-bureau's `infra/lib/agent-log-stack.ts` — the upload roles trust
+#: exactly these `job_workflow_ref`s (DRE-4343), so a workflow added here and
+#: not there is refused at AssumeRoleWithWebIdentity and shows up only as gaps.
+UPLOADS = {
+    ("agent-task.yml", "execute"),
+    ("agent-fix.yml", "fix"),
+    ("qa-review.yml", "review"),
+    ("verify.yml", "verify"),
+    ("plan.yml", "plan"),
+    ("medic.yml", "diagnose"),
+}
+
+#: Jobs that run a model and deliberately keep no working log, each with the
+#: reason. Kept as data so the discovery above can be exhaustive.
+NOT_UPLOADING = {
+    # The epic names the six agent runs (engineer, fix, critic, verifier,
+    # planner, medic). These two also run the vendor action and are left out on
+    # purpose — the agent-log roles do not trust them, and nobody has reviewed
+    # them for holding one (agent-log-stack.ts, DRE-4343).
+    ("red-main-repair.yml", "repair"),
+    ("model-trial.yml", "trial"),
+    # The groomer's judged read is a model call through `planning_classify`,
+    # not an agent run: there is no transcript, which is why its own death
+    # receipt records `unknown` with the reason (groomer.yml).
+    ("groomer.yml", "groom"),
+    # NOTE on red-main-repair: it IS a real agent run against a card, so
+    # "nobody has reviewed it" is a deferral, not a decision. The epic
+    # DRE-4267 owns that decision; a comment on the epic records it, so it is
+    # not a deferral with no owner (standards/design-parity.md's ledger rule).
+}
+
+#: What the step's `run:` body must call. Matched on the call, not on a step
+#: name — names are prose, this is the contract.
+UPLOAD_CALL = "upload_agent_log.py"
+
+RUN_ID = "987654321"
+RUN_ATTEMPT = "2"
+JOB = "execute"
+SLUG = "atlas"
+REPOSITORY = "EveryBite/atlas"
+
+
+def _model_jobs():
+    return receipts.model_jobs(WORKFLOWS)
+
+
+def _uploading_jobs():
+    return [mj for mj in _model_jobs() if (mj.filename, mj.job) in UPLOADS]
+
+
+def _upload_steps(mj):
+    return [s for s in mj.steps if UPLOAD_CALL in str(s.get("run") or "")]
+
+
+class DiscoveryTest(unittest.TestCase):
+    def test_every_job_that_runs_a_model_is_classified(self):
+        """A seventh agent workflow must not slip in unlogged and unnoticed."""
+        found = {(mj.filename, mj.job) for mj in _model_jobs()}
+        self.assertEqual(
+            found, UPLOADS | NOT_UPLOADING,
+            "the set of jobs that run a model has changed. Every one either "
+            "uploads its working log (UPLOADS, and agent-bureau's "
+            "BUREAU_PIPELINE_AGENT_WORKFLOWS must trust it) or is named in "
+            "NOT_UPLOADING with the reason it does not.",
+        )
+
+    def test_the_discovery_is_not_vacuous(self):
+        self.assertEqual(len(_uploading_jobs()), len(UPLOADS))
+
+
+class StepShapeTest(unittest.TestCase):
+    def test_every_uploading_job_has_exactly_one_upload_step(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                steps = _upload_steps(mj)
+                self.assertEqual(
+                    len(steps), 1,
+                    f"{mj.filename} [{mj.job}] must carry exactly one step "
+                    f"running `{UPLOAD_CALL}`; found {len(steps)}",
+                )
+
+    def test_the_step_runs_however_the_run_ended(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                step = _upload_steps(mj)[0]
+                self.assertIn(
+                    "always()", str(step.get("if") or ""),
+                    f"{mj.filename} [{mj.job}]: the upload step needs "
+                    f"`always()` — the killed runs are the ones worth keeping",
+                )
+
+    def test_the_step_can_never_fail_the_agents_own_run(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                step = _upload_steps(mj)[0]
+                self.assertIs(
+                    step.get("continue-on-error"), True,
+                    f"{mj.filename} [{mj.job}]: the upload step is missing "
+                    f"`continue-on-error: true` — keeping a log must never "
+                    f"change the job's own conclusion",
+                )
+
+    def test_the_step_comes_after_the_last_model_step(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                index = [i for i, s in enumerate(mj.steps)
+                         if UPLOAD_CALL in str(s.get("run") or "")][0]
+                self.assertGreater(
+                    index, mj.last_model_step,
+                    f"{mj.filename} [{mj.job}]: the upload runs before the "
+                    f"last model step, so it would keep a transcript the run "
+                    f"had not finished writing",
+                )
+
+    def test_the_step_interpolates_nothing_inside_its_run_body(self):
+        """DRE-3484: a `run:` holding `${{ }}` compiles to one expression with
+        a 21,000-character ceiling, and GitHub refuses the file at DISPATCH."""
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                step = _upload_steps(mj)[0]
+                self.assertNotIn("${{", str(step.get("run") or ""))
+
+    def test_the_step_is_handed_the_jobs_execution_file(self):
+        for mj in _uploading_jobs():
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                env = _upload_steps(mj)[0].get("env") or {}
+                self.assertIn(
+                    "CLAUDE_EXECUTION_FILE", env,
+                    f"{mj.filename} [{mj.job}]: the upload step must be handed "
+                    f"the same execution file its death-cause receipt reads",
+                )
+
+    def test_no_uploading_job_declares_a_permissions_block(self):
+        """A called job asking for more than its caller granted fails the whole
+        run at startup (release-train.yml). The stub grants `id-token: write`
+        (DRE-4348/4353); the reusable inherits it and must not re-declare it."""
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            doc = yaml.safe_load(path.read_text())
+            for name, job in (doc.get("jobs") or {}).items():
+                if (path.name, str(name)) not in UPLOADS:
+                    continue
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertIsNone(
+                        job.get("permissions"),
+                        f"{path.name} [{name}] declares a job-level "
+                        f"`permissions:` block — a called job may never ask "
+                        f"for more than its caller granted, and portico grants "
+                        f"no `id-token: write` at all",
+                    )
+
+
+class NeverAnArtifactTest(unittest.TestCase):
+    def test_no_workflow_uploads_the_working_log_as_an_actions_artifact(self):
+        """Several consumer repos are public. The log goes to our own store or
+        nowhere — never to an artifact anyone with repo read can download."""
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            doc = yaml.safe_load(path.read_text())
+            for name, job in (doc.get("jobs") or {}).items():
+                if not isinstance(job, dict):
+                    continue
+                for step in job.get("steps") or []:
+                    if not isinstance(step, dict):
+                        continue
+                    if not str(step.get("uses") or "").startswith(
+                            "actions/upload-artifact"):
+                        continue
+                    with_ = step.get("with") or {}
+                    self.assertNotIn(
+                        "agent-log", str(with_.get("path") or ""),
+                        f"{path.name} [{name}]: an artifact upload names the "
+                        f"agent-log directory — the working log must never "
+                        f"leave the runner as an Actions artifact",
+                    )
+
+
+class _TokenHandler(BaseHTTPRequestHandler):
+    """The runner's OIDC endpoint, as `ACTIONS_ID_TOKEN_REQUEST_URL` serves it."""
+
+    token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJyZXBvIn0.c2lnbmF0dXJl"
+    seen: list = []
+
+    def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler's spelling)
+        query = parse_qs(urlparse(self.path).query)
+        _TokenHandler.seen.append(
+            {"audience": (query.get("audience") or [""])[0],
+             "authorization": self.headers.get("Authorization", "")})
+        body = json.dumps({"value": self.token, "count": 1}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):  # keep the test output clean
+        pass
+
+
+class UploaderBehaviourTest(unittest.TestCase):
+    """The script, EXECUTED — against a stub `aws` and a real HTTP endpoint.
+
+    Nothing here greps the source: "no upload without a successful scrub" means
+    the stub `aws` really recorded no invocation.
+    """
+
+    SECRET = "ghp_" + "A" * 36
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="dre4269-"))
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.aws_calls = self.tmp / "aws-calls.txt"
+        self.aws_env = self.tmp / "aws-env.txt"
+        self._write_aws(exit_code=0)
+
+        self.log = self.tmp / "claude-execution-output.json"
+        self.log.write_text(json.dumps(
+            [{"type": "system", "token": self.SECRET, "text": "PLANTED-LOG-BODY"}]))
+
+        _TokenHandler.seen = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _TokenHandler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.token_url = f"http://127.0.0.1:{self.server.server_port}/token?api-version=2.0"
+
+    def _write_aws(self, exit_code=0, stderr=""):
+        """The stub records its argv AND the `AWS_*` environment it was handed
+        AND the mode of the token file it was pointed at — the three things the
+        credential claims are about, none of which a shape test can see."""
+        script = self.bin / "aws"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'printf "ARGS: %s\\n" "$*" >> "{self.aws_env}"\n'
+            f'env | grep -E "^AWS_" | sort >> "{self.aws_env}"\n'
+            f'printf "HOME: %s\\n" "$HOME" >> "{self.aws_env}"\n'
+            f'printf "HOMECONFIG: %s\\n" '
+            f'"$(cat "$HOME/.aws/config" 2>/dev/null)" >> "{self.aws_env}"\n'
+            f'printf "TOKENMODE: %s\\n" '
+            f'"$(python3 -c \'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))\' '
+            f'"$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)" >> "{self.aws_env}"\n'
+            f'printf "TOKENBODY: %s\\n" '
+            f'"$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)" >> "{self.aws_env}"\n'
+            f'printf "%s\\n" "$*" >> "{self.aws_calls}"\n'
+            + (f'echo "{stderr}" >&2\n' if stderr else "")
+            + f"exit {exit_code}\n"
+        )
+        script.chmod(0o755)
+
+    def _recorded(self):
+        return self.aws_env.read_text() if self.aws_env.exists() else ""
+
+    def _env(self, **overrides):
+        env = {
+            "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
+            "HOME": str(self.tmp),
+            "RUNNER_TEMP": str(self.tmp / "runner-temp"),
+            "GITHUB_REPOSITORY": REPOSITORY,
+            "GITHUB_RUN_ID": RUN_ID,
+            "GITHUB_RUN_ATTEMPT": RUN_ATTEMPT,
+            "GITHUB_JOB": JOB,
+            "GITHUB_WORKFLOW": "Agent Task",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": self.token_url,
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
+        }
+        env.update({k: v for k, v in overrides.items() if v is not None})
+        for key, value in overrides.items():
+            if value is None:
+                env.pop(key, None)
+        Path(env["RUNNER_TEMP"]).mkdir(parents=True, exist_ok=True)
+        return env
+
+    def _run(self, log=None, secrets=None, env=None):
+        return subprocess.run(
+            [sys.executable, str(UPLOADER), "--log-file",
+             str(self.log if log is None else log)],
+            input=json.dumps({"BUREAU_TOKEN": self.SECRET})
+            if secrets is None else secrets,
+            capture_output=True, text=True, env=env or self._env(),
+        )
+
+    def _calls(self):
+        if not self.aws_calls.exists():
+            return []
+        return [line for line in self.aws_calls.read_text().splitlines() if line]
+
+    # ---- the gate the whole card rests on -------------------------------
+
+    def test_a_refused_scrub_uploads_nothing(self):
+        """`scrub_agent_log.py` refuses a file it cannot read as UTF-8 and
+        writes nothing. Nothing may be uploaded on that path."""
+        self.log.write_bytes(b"\xff\xfe not utf-8 \x00")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [],
+                         "the AWS CLI was invoked after a refused scrub")
+        self.assertIn("gap", (result.stdout + result.stderr).lower())
+
+    def test_a_scrubbed_log_is_uploaded_once_with_if_none_match(self):
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self._calls()
+        self.assertEqual(len(calls), 1, f"expected one AWS call, got {calls}")
+        self.assertIn("s3api put-object", calls[0])
+        self.assertIn("--if-none-match", calls[0])
+        self.assertNotIn("create-multipart-upload", calls[0])
+
+    def test_the_key_sits_under_the_stores_own_prefix(self):
+        self._run()
+        call = self._calls()[0]
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        expected = (f"agent-logs/{SLUG}/{today}/"
+                    f"{RUN_ID}-{RUN_ATTEMPT}-{JOB}.json.gz")
+        self.assertIn(expected, call)
+        self.assertIn(f"agent-logs/{SLUG}/", call,
+                      "a role scoped to agent-logs/<slug>/ must be able to "
+                      "write this key")
+
+    def test_the_uploaded_body_is_gzip_and_carries_no_secret(self):
+        self._run()
+        call = self._calls()[0]
+        body = [tok for tok in call.split() if tok.endswith(".json.gz")]
+        body = [Path(tok) for tok in body if Path(tok).exists()]
+        self.assertTrue(body, f"no readable --body path in: {call}")
+        text = gzip.decompress(body[0].read_bytes()).decode()
+        self.assertIn("PLANTED-LOG-BODY", text)
+        self.assertNotIn(self.SECRET, text)
+
+    def test_the_log_never_reaches_stdout_or_stderr(self):
+        result = self._run()
+        self.assertNotIn("PLANTED-LOG-BODY", result.stdout)
+        self.assertNotIn("PLANTED-LOG-BODY", result.stderr)
+        self.assertNotIn(self.SECRET, result.stdout)
+        self.assertNotIn(self.SECRET, result.stderr)
+
+    def test_the_token_is_asked_for_with_the_sts_audience(self):
+        self._run()
+        self.assertTrue(_TokenHandler.seen, "no OIDC token was requested")
+        self.assertEqual(_TokenHandler.seen[0]["audience"], "sts.amazonaws.com")
+
+    # ---- the credential claims, pinned against the real process ---------
+    # Every one of these was true when the module docstring first said so and
+    # none of them was asserted, which is how the AWS_ENDPOINT_URL hole below
+    # got in (DRE-4269 review round 1). A claim no test reads stops being true
+    # quietly.
+
+    def test_the_oidc_token_never_reaches_the_aws_command_line(self):
+        """The process table on a shared self-hosted runner is readable by
+        anything on it. The token travels as a file, or not at all."""
+        self._run()
+        self.assertNotIn(_TokenHandler.token, self._calls()[0])
+        self.assertIn(f"TOKENBODY: {_TokenHandler.token}", self._recorded(),
+                      "the CLI was not pointed at a file holding the token")
+
+    def test_nothing_ambient_reaches_the_cli_environment(self):
+        """Leftovers from an earlier job on the same runner. `AWS_ENDPOINT_URL`
+        is the damaging one: a global service-endpoint override redirects BOTH
+        the assume that carries the JWT and the put that carries the
+        transcript, and the step still exits 0 saying the log was kept."""
+        leftovers = {
+            "AWS_ACCESS_KEY_ID": "AKIALEFTOVERKEY12345",
+            "AWS_SECRET_ACCESS_KEY": "leftover-secret-value",
+            "AWS_SESSION_TOKEN": "leftover-session",
+            "AWS_PROFILE": "someone-else",
+            "AWS_ENDPOINT_URL": "https://elsewhere.example",
+            "AWS_ENDPOINT_URL_S3": "https://elsewhere.example",
+            "AWS_ENDPOINT_URL_STS": "https://elsewhere.example",
+            "AWS_SHARED_CREDENTIALS_FILE": "/tmp/somebody/creds",
+            "AWS_CONFIG_FILE": "/tmp/somebody/config",
+            "AWS_CA_BUNDLE": "/tmp/somebody/ca.pem",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI": "http://169.254.170.2/x",
+        }
+        # The two the script sets itself, deliberately, to close the file
+        # channel — their NAME is expected, their planted VALUE never is.
+        overridden = {"AWS_CONFIG_FILE": os.devnull,
+                      "AWS_SHARED_CREDENTIALS_FILE": os.devnull}
+
+        result = self._run(env=self._env(**leftovers))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = self._recorded()
+        for name, value in leftovers.items():
+            self.assertNotIn(value, recorded,
+                             f"{name}'s value survived into the CLI")
+            if name in overridden:
+                self.assertIn(f"{name}={overridden[name]}", recorded)
+            else:
+                self.assertNotIn(f"{name}=", recorded,
+                                 f"{name} survived into the CLI's environment")
+
+    def test_a_leftover_aws_config_in_home_cannot_redirect_the_upload(self):
+        """The FILE spelling of the same redirect (review round 2). AWS CLI v2
+        honours `[default] endpoint_url` in `$HOME/.aws/config` as a global
+        service-endpoint override, so a `[default]` section an earlier job — or
+        an operator's `aws configure` — left on a shared mini sends the JWT and
+        the transcript to whatever host it names. Reproduced end to end with
+        the real CLI before this guard existed."""
+        planted = self.tmp / "planted-home"
+        (planted / ".aws").mkdir(parents=True)
+        (planted / ".aws" / "config").write_text(
+            "[default]\nendpoint_url = http://127.0.0.1:1/\n")
+        (planted / ".aws" / "credentials").write_text(
+            "[default]\naws_access_key_id = AKIALEFTOVERKEY12345\n")
+
+        result = self._run(env=self._env(HOME=str(planted)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = self._recorded()
+        self.assertNotIn(str(planted), recorded,
+                         "the CLI was handed the shared HOME after all")
+        self.assertNotIn("endpoint_url", recorded,
+                         "the planted config reached the CLI")
+        self.assertIn("HOMECONFIG: \n", recorded + "\n",
+                      "the CLI's HOME resolved to a config it could read")
+        for name in ("AWS_CONFIG_FILE=/dev/null",
+                     "AWS_SHARED_CREDENTIALS_FILE=/dev/null"):
+            self.assertIn(name, recorded)
+
+    def test_the_scratch_home_does_not_outlive_the_upload(self):
+        """It holds the CLI's assumed-role credential cache, and on a shared
+        mini every job is the same unix user."""
+        self._run()
+        runner_temp = Path(self._env()["RUNNER_TEMP"])
+        self.assertFalse((runner_temp / "agent-log-home").exists())
+
+    def test_the_token_file_is_private_and_is_removed_afterwards(self):
+        self._run()
+        self.assertIn("TOKENMODE: 0o600", self._recorded(),
+                      "the token file was readable by more than this process")
+        left = list((Path(self._env()["RUNNER_TEMP"])).glob("*.jwt"))
+        self.assertEqual(left, [], f"the token outlived the upload: {left}")
+
+    def test_an_aws_cli_too_old_for_if_none_match_names_the_version(self):
+        """`--if-none-match` IS the write-once guarantee. An older CLI reports
+        it as an unknown option, which reads like a typo in this script."""
+        self._write_aws(exit_code=252, stderr="Unknown options: --if-none-match")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2.17.34", result.stdout + result.stderr)
+
+    # ---- every gap is recorded, and none of them fails the run ----------
+
+    def test_no_oidc_token_is_a_recorded_gap(self):
+        """portico forbids `id-token: write`. That is a gap, not an error."""
+        result = self._run(env=self._env(ACTIONS_ID_TOKEN_REQUEST_URL=None))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+    def test_no_aws_cli_is_a_recorded_gap(self):
+        """The self-hosted Mac minis may not have it."""
+        empty = self.tmp / "empty-bin"
+        empty.mkdir()
+        result = self._run(env=self._env(PATH=str(empty)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+    def test_a_log_over_the_cap_is_a_recorded_gap(self):
+        """One single-part put_object or nothing: the store's write-once deny
+        has no exemption for multipart."""
+        result = self._run(env=self._env(BUREAU_AGENT_LOG_MAX_BYTES="16"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+    def test_a_missing_log_file_is_a_recorded_gap(self):
+        result = self._run(log=self.tmp / "nothing-here.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+    def test_a_repo_the_map_does_not_know_is_a_recorded_gap(self):
+        result = self._run(env=self._env(GITHUB_REPOSITORY="someone/else"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+    def test_a_refused_put_is_a_recorded_gap(self):
+        self._write_aws(exit_code=1, stderr="An error occurred (AccessDenied)")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self._calls()), 1)
+
+    def test_a_key_that_already_exists_is_loud(self):
+        """A 412 is NOT a routine replay. The key carries the run id, the
+        attempt and the job, so a re-run writes a new key and cannot collide —
+        which means something else wrote this run's key. That is the one case
+        worth an alarm, and it was the one case that had none (review round
+        2)."""
+        self._write_aws(
+            exit_code=1,
+            stderr="An error occurred (PreconditionFailed) when calling PutObject")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("::warning title=Agent working log not kept::",
+                      result.stdout)
+
+    def test_empty_secrets_on_stdin_uploads_nothing(self):
+        """The scrub refuses empty stdin rather than reading it as "no
+        secrets" — an unset `$SECRETS_JSON` looks exactly like that."""
+        result = self._run(secrets="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
