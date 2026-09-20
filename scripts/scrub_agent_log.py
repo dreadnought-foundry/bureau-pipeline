@@ -25,7 +25,8 @@ NOT appear:
     contains the raw value, so the raw replacement covers it);
   * JSON-escaped — the transcript is JSON, so a value holding a newline, a
     quote or a backslash appears there in its escaped spelling;
-  * URL-encoded (`quote` and `quote_plus`);
+  * URL-encoded (`quote` and `quote_plus`, each with upper- AND lower-case
+    percent escapes — `%2F` and `%2f`);
   * base64, standard and URL-safe, **at all three byte alignments**. `git`
     sends `base64("x-access-token:" + TOKEN)`, which contains no substring equal
     to `base64(TOKEN)` unless the prefix length happens to be a multiple of
@@ -33,6 +34,10 @@ NOT appear:
     bytes are computed and replaced, so the value cannot be recovered from what
     remains whatever preceded or followed it.
 Longest form first, so one value that contains another is not half-replaced.
+NOT covered, deliberately: hex and other ad-hoc encodings of a value. No tool in
+the pipeline prints a credential that way, every added form is another
+replacement pass over a large file, and pass 2 remains underneath. Considered
+and left out (DRE-4268 review), not overlooked.
 
 THE MINIMUM-LENGTH RULE. A by-value replacement needs `MIN_VALUE_LENGTH` (8)
 characters. A variable set to `true`, or a secret that is the word `main`, would
@@ -65,6 +70,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 import urllib.parse
 from pathlib import Path
@@ -109,13 +115,24 @@ def _base64_cores(value: bytes) -> set[str]:
     return cores
 
 
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
+_SECRET_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _lower_percent_escapes(quoted: str) -> str:
+    """`%2F` → `%2f`, leaving every other character of the value alone."""
+    return _PERCENT_ESCAPE.sub(lambda m: m.group(0).lower(), quoted)
+
+
 def forms(value: str) -> list[str]:
     """Every spelling of `value` a log can carry, longest first."""
     found = {value}
     for ensure_ascii in (True, False):
         found.add(json.dumps(value, ensure_ascii=ensure_ascii)[1:-1])
-    found.add(urllib.parse.quote(value, safe=""))
-    found.add(urllib.parse.quote_plus(value))
+    for quoted in (urllib.parse.quote(value, safe=""), urllib.parse.quote_plus(value)):
+        # `quote` writes `%2F`; plenty of tools write `%2f`. Both spellings.
+        found.add(quoted)
+        found.add(_lower_percent_escapes(quoted))
     found |= _base64_cores(value.encode())
     return sorted((f for f in found if f), key=len, reverse=True)
 
@@ -128,6 +145,11 @@ def read_secrets(stream) -> dict[str, str]:
     if not isinstance(parsed, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()):
         raise Refused("stdin is not a JSON object of string values")
+    # The NAME is the one piece of caller-supplied text that reaches the output
+    # (inside the marker). A quote or a newline in it would break the JSON of a
+    # scrubbed transcript, so a name is an identifier or the run is refused.
+    if not all(_SECRET_NAME.fullmatch(name) for name in parsed):
+        raise Refused("a secret NAME on stdin is not an identifier ([A-Za-z0-9_]+)")
     return parsed
 
 
@@ -139,7 +161,15 @@ def read_file(path: Path, max_bytes: int) -> str:
     if size > max_bytes:
         raise Refused(f"{path.name}: {size} bytes is over the {max_bytes}-byte cap")
     try:
-        return path.read_bytes().decode("utf-8")
+        raw = path.read_bytes()
+    except OSError as unreadable:
+        # It stats but will not open: a directory, or — the real case on a
+        # self-hosted runner — a log a container wrote as another uid. Still a
+        # refusal, by name and reason, never a traceback carrying the full path.
+        raise Refused(
+            f"{path.name}: cannot be read ({type(unreadable).__name__})") from unreadable
+    try:
+        return raw.decode("utf-8")
     except UnicodeDecodeError as bad:
         raise Refused(f"{path.name}: is not valid UTF-8, so it cannot be scanned") from bad
 

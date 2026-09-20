@@ -51,4 +51,13 @@ SHAPES: dict[str, re.Pattern[str]] = {
     "pem-private-key": re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL),
+    # The same key with its END line missing — the common case, because a tool's
+    # output is clipped long before a log is. Runs after the framed pattern (dict
+    # order), so it only ever sees a BEGIN that pattern could not close. It takes
+    # the BEGIN line and the run of key material after it — base64, whitespace,
+    # and the two-character `\n` / `\r` a JSON transcript spells newlines with —
+    # and stops at the first character a key body cannot contain, so it removes
+    # the key without eating the rest of the log.
+    "pem-private-key-unterminated": re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[A-Za-z0-9+/=\s]|\\[nr])*"),
 }
