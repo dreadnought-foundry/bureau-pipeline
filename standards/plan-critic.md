@@ -267,7 +267,8 @@ re-plan was told to fix exactly that line. Reporting, not reading, was the
 defect.
 
 The bound is unchanged and does not need to change: with every finding named,
-two rounds is enough.
+two rounds is enough — provided the second round is counted against the plan
+it actually read. What it COUNTS is the next section's business (DRE-4115).
 
 ## Both plan loops are bounded
 
@@ -290,10 +291,23 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
   * **Same cards** — no lane move at all. The run asks for the review ITSELF
     (`repository_dispatch`, ACTIVATE route, `reason: re-review`) and says so on
     the epic: the finding, what the re-plan changed in plain English, and that
-    the review is re-running as round N+1 of 2. Nothing is the CEO's to decide,
+    the review is re-running as round N+1. Nothing is the CEO's to decide,
     so nothing is asked of him. Until this the workflow moved the epic to Green
     Light and asked him to approve a plan whose cards he had already read —
     DRE-3164 collected five approvals that way.
+
+    **That round is shown what the round before it found, and says which of
+    those the revision left open** (DRE-4115). Its charter carries the previous
+    round's findings, numbered, and the critic writes one line in its result
+    file — `still-open: none`, or `still-open: 1, 3` — beside the verdict. A
+    finding the revision answered is not a finding this round; a gap that is
+    NEW is, and the critic names it as one. The record carries the reading
+    (`open=<n>` on the round marker), so the sweep's gate reads the round the
+    way the decision did. The charter also says when the previous round ran:
+    the plan is older than the estate it is being read against, and a change
+    that landed after the plan was written is a note for the planner, not a
+    strike against it — four of DRE-4025's five round-2 findings were estate
+    changes that happened during a 33-hour stall.
   * **A card added or removed** (or a re-plan that did not finish) — Green
     Light, with the added/removed cards named by identifier. That shape is one
     he has not seen, and the ask is the single move that is left: Approve from
@@ -302,18 +316,42 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
     what wants reading, and asking for the review without that read is the
     thing this branch exists to avoid.
   * **Two failed rounds** — the plan **parks** in Green Light with
-    `needs-human` and both findings quoted, whatever the card set did. It is
-    never activated as it stands: "proceed" on this side means agents build it,
-    and a plan the critic held twice is exactly the specification that would
-    make them build the wrong thing. Green Light with the hold label is a
-    watched queue, not the unread lane the 27-day failure lived in — and the
-    sweep's own gate (`plan_critic.post_release`) reads the bound the same way,
-    so no cron sweep promotes the children of a parked epic either. To ask for
-    the review again after settling it: clear `needs-human`, then post a
-    comment on the epic that says exactly `▶️ re-run the review` — or, since a
-    parked epic sits in Green Light, approve it (the console's Approve, or a
-    move to **In Progress**). That sentence is `plan_critic.REAPPROVE_HOW`,
-    and the notice says it in those words.
+    `needs-human` and the findings still open named, whatever the card set
+    did. It is never activated as it stands: "proceed" on this side means
+    agents build it, and a plan the critic held twice is exactly the
+    specification that would make them build the wrong thing. Green Light
+    with the hold label is a watched queue, not the unread lane the 27-day
+    failure lived in — and the sweep's own gate (`plan_critic.post_release`)
+    reads the bound the same way, so no cron sweep promotes the children of a
+    parked epic either. To ask for the review again after settling it: clear
+    `needs-human`, then post a comment on the epic that says exactly
+    `▶️ re-run the review` — or, since a parked epic sits in Green Light,
+    approve it (the console's Approve, or a move to **In Progress**). That
+    sentence is `plan_critic.REAPPROVE_HOW`, and the notice says it in those
+    words — and either act **opens a fresh planning attempt** (below), so the
+    review it starts judges the settled plan on its own rounds rather than
+    re-parking it on the rounds just counted.
+
+    **"Two failed rounds" means two rounds whose findings still stand**
+    (DRE-4115). Every send-back after approval is followed by a re-plan, so
+    the round after it reads a different plan; counted as bare send-backs,
+    the budget was spent by rounds the revision had already answered. Read
+    off the critic's `still-open:` line, the bound is one of two things:
+
+    * a second send-back with a finding of the round before **still open** —
+      sent back twice and still not fixed. The park note names those
+      findings, not a count.
+    * a plan that keeps producing **new** findings after `MAX_ROUNDS`
+      revisions that each answered everything the critic named — a plan that
+      is not converging. It parks with the newest findings; a person reads
+      it rather than the pipeline paying for a fourth review.
+
+    A second send-back whose revision answered every earlier finding is
+    neither: the revised plan gets its own round, is revised again for what
+    was found now, and the review re-runs itself. A round record with no
+    reading — every marker written before this existed — is read as the count
+    it always was; unknown is not "answered". Before this, DRE-3778 was
+    approved five times in one day and parked five times on "round 6 of 2".
 
 **The relay has two triggers, and every notice that asks for a re-run names
 both** (DRE-3292). One is the move **INTO In Progress** — the approval itself,
@@ -434,6 +472,20 @@ the PIPELINE wrote, naming THIS epic. Without it a re-planned epic inherits a
 budget it already spent, so its first send-back reads as the bound and the plan
 reaches the CEO with no revision round at all — indistinguishable, from the
 outside, from a normal pass.
+
+**A person re-running a parked review opens an attempt too** (DRE-4115). The
+park asked a person to settle the plan; clearing `needs-human` and posting the
+act (the relay dispatches `reason: re-run`), or approving the epic back out of
+Green Light (no `reason` at all), is that person saying it is settled. The
+ACTIVATE route then writes the same two comments the plan route writes, and
+the review that follows judges the settled plan on its own rounds. Only a
+person's ask at the bound does this: the pipeline's own `re-review` and
+`review-retry` never open one — a boundary there would refund the budget on
+every round so nothing ever parked, and would cut the tombstone the retry
+ceiling is sized from out of the attempt — and a person re-running a review
+the bound has not reached is asking for round 2, which is judged on whether
+the revision answered round 1. Every reset costs a human act at a park, which
+is what keeps the loop finite.
 
 **A round record is a comment the pipeline wrote that says nothing else.** Two
 conditions, and both are needed.

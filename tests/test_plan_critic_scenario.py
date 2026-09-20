@@ -531,7 +531,8 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(payload["identifier"], EPIC)
 
         notice = self._thread()[-1]
-        self.assertIn("round 2 of 2", notice)
+        self.assertIn("round 2", notice)
+        self.assertNotIn("of 2", notice, "round N of 2 is the contradiction DRE-4115 cites")
         self.assertIn("names who runs the migration", notice)
         self.assertIn("no card manufactures the operator step", notice)
         self.assertNotIn(pc.REAPPROVE_HOW, notice)
@@ -619,10 +620,12 @@ class CriticWalk(unittest.TestCase):
         """The bound is read FIRST. Two real send-backs park for a person
         whatever the re-plan did to the cards — "the bound still parks" is out
         of this card's scope and must stay true."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         self.assertEqual(self._outputs()["bound"], "true")
         cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
         self.assertEqual(cards["changed"], "false")
@@ -1146,24 +1149,29 @@ class CriticWalk(unittest.TestCase):
         """DRE-3088: the bound after approval PARKS. The old rail activated the
         epic here — "two failed rounds and the work proceeds regardless" — and
         built a plan the critic had held twice."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        # ...and held twice ON THE SAME GAP (DRE-4115): round 2 says round 1's
+        # finding is still open.
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         out = self._outputs()
         self.assertEqual(out["action"], "hold")
         self.assertEqual(out["bound"], "true")
         self.assertIn("still no card", self._note())
         self.assertIn("two failed rounds", self._note().lower())
         self._shell("second critic sent the plan back", BOUND="true",
-                    FINDING=out["reason"], REPLAN_OUTCOME="success")
+                    FINDING=out["reason"], NOTE=out["note"], REPLAN_OUTCOME="success")
         log = self._log()
         self.assertIn("state Green Light", log)
         self.assertIn("add-label needs-human", log)
         self.assertNotIn("promote", log)
         self.assertNotIn("state In Progress", log)
         receipt = self._thread()[-1]
-        self.assertIn("Held twice", receipt)
+        self.assertIn("Parked for you", receipt)
+        self.assertIn("no card manufactures the operator step", receipt)
         self.assertNotIn("Todo", receipt)
         # ...and the sweep's gate reads the same thread the same way.
         state, _ = pc.post_release(self._thread(), EPIC)
@@ -1289,10 +1297,14 @@ class CriticWalk(unittest.TestCase):
         to hand a spent plan a fresh budget, so it could circle for as long as
         anyone kept posting one — the stuck-in-a-lane failure the bound exists
         to stop."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        # Round 2 finds round 1's gap still open (DRE-4115: that, not the
+        # count alone, is what reaches the bound).
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         # The bound is reached: after approval that is a park, not a release
         # (DRE-3088), and `bound=true` is the signal the park step reads.
         self.assertEqual(self._outputs()["bound"], "true")
@@ -1347,10 +1359,12 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("operator step", log)
 
     def test_a_planner_write_up_quoting_the_boundary_refunds_nothing(self):
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         self.assertEqual(self._outputs()["bound"], "true")
 
         self._pipeline_comment(self._planner_write_up(pc.cycle_marker(EPIC)))

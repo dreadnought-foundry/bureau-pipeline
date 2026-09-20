@@ -2092,7 +2092,8 @@ class TheOneOffCriticIsTheExistingCritic(unittest.TestCase):
         record = pc.marker(pc.STAGE_ONE_OFF, 1, pc.PASS)
         self.assertTrue(record.startswith(pc.MARKER_PREFIX))
         self.assertEqual([{"stage": pc.STAGE_ONE_OFF, "round": 1,
-                           "result": pc.PASS, "collisions": 0, "reason": ""}],
+                           "result": pc.PASS, "collisions": 0, "open": None,
+                           "reason": ""}],
                          pc.parse_markers([record]))
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             self.assertNotIn(forbidden, pc.charter(pc.STAGE_ONE_OFF))

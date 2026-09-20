@@ -606,11 +606,34 @@ jobs:
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
+          # Why this run was asked for (DRE-4115): empty on the CEO's own
+          # approval move, `re-run` on the act a person posts, `re-review` and
+          # `review-retry` when the pipeline asked for its own run. Through
+          # env, never interpolated — the value is a payload field.
+          REASON: ${{ github.event.client_payload.reason }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           FROM="${{ github.event.client_payload.trigger_state }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
           echo "kids=$KIDS" >> "$GITHUB_OUTPUT"
+          # DRE-2721: open a planning CYCLE. Both critics count their failed
+          # rounds from this line, so a RE-plan gets its own revision round
+          # instead of inheriting a budget the previous attempt already
+          # spent — which would push the new plan to the CEO on its first
+          # send-back, looking exactly like a normal pass. This is the one
+          # step that knows an attempt is starting, so it is where the
+          # boundary belongs.
+          #
+          # TWO comments: the note the CEO reads, then the boundary line
+          # ALONE. A record that shares a comment with prose is a record any
+          # pipeline-authored prose can forge — the planner's own plan
+          # write-up included.
+          open_attempt() {
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC")"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
+          }
           if [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
             # DRE-2721: the activate route now only ROUTES. The state change,
             # the announcement and the promotion moved to "Activate the
@@ -618,25 +641,28 @@ jobs:
             # CEO's approval and the children reaching agents — and after
             # promotion a gap is no longer free to fix.
             echo "mode=activate" >> "$GITHUB_OUTPUT"
+            # DRE-4115: a PERSON re-running a review the bound has parked has
+            # settled what the park asked about, so the review that follows
+            # opens a fresh attempt and judges the settled plan on its own
+            # rounds. Until this, only the plan route wrote a boundary, and
+            # DRE-3778 was approved five times and parked five times on
+            # "round 6 of 2". `activate-cycle` says `open` ONLY for a human
+            # ask (the act, or the approval move) at the bound — never for
+            # the pipeline's own `re-review` / `review-retry`, which would
+            # refund the budget on every round and cut the tombstone the
+            # retry ceiling reads out of the cycle. Read WITH AUTHORS: the
+            # bound it reads is this gate's credential.
+            THREAD="${{ runner.temp }}/plan-critic-thread.json"
+            python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+              --with-authors > "$THREAD" || echo "[]" > "$THREAD"
+            if [ "$(python3 .bureau-pipeline/scripts/plan_critic.py activate-cycle \
+                     --epic "$EPIC" --reason "$REASON" < "$THREAD")" = "open" ]; then
+              open_attempt
+            fi
           else
             echo "mode=plan" >> "$GITHUB_OUTPUT"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
-            # DRE-2721: open a planning CYCLE. Both critics count their failed
-            # rounds from this line, so a RE-plan gets its own revision round
-            # instead of inheriting a budget the previous attempt already
-            # spent — which would push the new plan to the CEO on its first
-            # send-back, looking exactly like a normal pass. This is the one
-            # step that knows an attempt is starting, so it is where the
-            # boundary belongs.
-            #
-            # TWO comments: the note the CEO reads, then the boundary line
-            # ALONE. A record that shares a comment with prose is a record any
-            # pipeline-authored prose can forge — the planner's own plan
-            # write-up included.
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC")"
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
+            open_attempt
           fi
 
       # The WAVE route. A wave cannot be green-lit as one plan — what a CEO
@@ -2361,6 +2387,34 @@ jobs:
             echo "max_turns=100" >> "$GITHUB_OUTPUT"
           }
 
+      # The previous round's findings, for the critic's charter (DRE-4115). A
+      # post round that follows a re-plan is reading a DIFFERENT plan from the
+      # round before it, and the bound below now turns on the critic's own
+      # reading of which of those findings the revision left open — so the
+      # critic is SHOWN them, numbered, and told to write `still-open:`. A
+      # first round gets an empty file and a charter that says nothing about
+      # one. Read WITH AUTHORS, and off the current planning attempt: the
+      # findings are read back out of the pipeline's own round records.
+      #
+      # `continue-on-error` and a script that never exits non-zero: a block
+      # that could not be built shows the critic nothing, and the decision's
+      # fallback reading (a finding raised again verbatim is still open)
+      # still bounds the round.
+      - name: Second critic — the previous round
+        if: steps.route.outputs.mode == 'activate'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          THREAD="${{ runner.temp }}/plan-critic-thread.json"
+          PRIOR="${{ runner.temp }}/plan-critic-prior.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD" || echo "[]" > "$THREAD"
+          python3 .bureau-pipeline/scripts/plan_critic.py prior-round \
+            --stage post --epic "$EPIC" --out "$PRIOR" < "$THREAD" \
+          || : > "$PRIOR"
+
       # Fresh App token for the post-approval review (DRE-3940). On the activate
       # route no model runs before it, but the planner and both first-critic
       # rounds sit above it in the file, and the rule is positional. The rule
@@ -2430,9 +2484,12 @@ jobs:
             Given this is now the specification, what is missing?
 
             Your full charter is GENERATED and includes your exact cross-epic
-            scope. Read it before anything else:
+            scope and, when a previous round of this review sent the plan
+            back, that round's findings with the line you owe about them.
+            Read it before anything else:
               python3 .bureau-pipeline/scripts/plan_critic.py charter post \
-                --sight-file "${{ runner.temp }}/plan-critic-sight.md"
+                --sight-file "${{ runner.temp }}/plan-critic-sight.md" \
+                --prior-file "${{ runner.temp }}/plan-critic-prior.md"
 
             The approved plan — read the APPROVED TEXT, not a summary of it:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
@@ -2476,6 +2533,14 @@ jobs:
             and name each one in the body. That count is recorded separately
             from collisions found later, and the two together are the tripwire
             for whether collision detection needs its own pass.
+
+            If your charter shows a PREVIOUS ROUND's findings, add a line
+              still-open: <the numbers that still stand, or none>
+            saying which of THOSE the revision left open. That line is what
+            decides whether a second send-back parks the plan for a person
+            (a finding still open) or the revised plan gets its own round
+            (every one answered). A finding the revision answered is not a
+            finding this round.
 
             Sending a plan back should be RARE, and how often you do it is the
             honest measure of how good the first critic is — so make the reason
@@ -3041,13 +3106,21 @@ jobs:
       # Held — and the three things that can be true of a held plan, in this
       # order (DRE-3291). The children never promote in any of them.
       #
-      #   THE BOUND (`bound=true`: two failed rounds since approval) — parks
-      #     with `needs-human` in Green Light, exactly as before. It is never
-      #     activated as it stands: on this side of the CEO "proceed" means
-      #     agents build it, and a plan the critic held twice is the
-      #     specification that makes them build the wrong thing. The sweep's
-      #     gate (`plan_critic.post_release`) reads the bound the same way, so
-      #     no cron sweep promotes the children either (DRE-3088).
+      #   THE BOUND (`bound=true`) — parks with `needs-human` in Green Light,
+      #     exactly as before. It is never activated as it stands: on this
+      #     side of the CEO "proceed" means agents build it, and a plan the
+      #     critic held twice is the specification that makes them build the
+      #     wrong thing. The sweep's gate (`plan_critic.post_release`) reads
+      #     the bound the same way, so no cron sweep promotes the children
+      #     either (DRE-3088). WHAT THE BOUND COUNTS (DRE-4115): two rounds
+      #     whose findings still stand — the critic says which of the round
+      #     before's findings the revision left open, and a round that
+      #     answered every one is not counted against the next; a plan that
+      #     keeps growing NEW findings still parks after two answered
+      #     revisions. The note is `decide`'s own sentence (`NOTE`), which
+      #     names the findings still open rather than a count, and the act it
+      #     asks for opens a FRESH attempt (the route step) — so it never
+      #     sends an operator into the act that re-parks the epic.
       #   THE CARD SET CHANGED (or the re-plan did not finish) — Green Light,
       #     as before, because the re-plan added or removed cards and that is a
       #     shape the CEO has not read. The notice names them by identifier and
@@ -3080,6 +3153,11 @@ jobs:
           GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
           BOUND: ${{ steps.post1.outputs.bound }}
           FINDING: ${{ steps.post1.outputs.reason }}
+          # The decision's own sentence about the round (DRE-4115): at the
+          # bound it names the findings still open after the revision, or
+          # says the plan keeps growing new ones. Through env, never
+          # interpolated — it carries text an agent wrote.
+          NOTE: ${{ steps.post1.outputs.note }}
           ROUND: ${{ steps.post1.outputs.round }}
           REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
           SET_CHANGED: ${{ steps.cardset.outputs.changed }}
@@ -3096,11 +3174,14 @@ jobs:
             CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
           fi
           if [ "$BOUND" = "true" ]; then
-            # THE BOUND: two REAL send-backs since approval still park.
+            # THE BOUND: two REAL send-backs since approval, the second on a
+            # finding the revision left open — or a plan that keeps growing
+            # new ones — still park (DRE-4115).
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human, then post a comment on the epic that says exactly ▶️ re-run the review — the console's Approve does this for an epic already In Progress — or, for an epic sitting in Green Light, approve it (the console's Approve, or a move to In Progress) — or route it through Planning for a fresh plan."
+              "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it. ${NOTE} ${CHANGED} When it is settled, clear needs-human, then post a comment on the epic that says exactly ▶️ re-run the review — the console's Approve does this for an epic already In Progress — or, for an epic sitting in Green Light, approve it (the console's Approve, or a move to In Progress). Either one opens a fresh planning attempt with its own rounds: the review judges the settled plan on what it finds then, never on the rounds counted here. Or route it through Planning for a fresh plan."
           elif [ "$SET_CHANGED" != "false" ] || [ "$REPLAN_OUTCOME" != "success" ]; then
             # THE CARD SET CHANGED: cards you have not read, or a re-plan that
             # never finished. Either way the plan is yours to look at.
@@ -3124,7 +3205,7 @@ jobs:
                  --repo "$GITHUB_REPOSITORY" \
                  --reason re-review; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards you approved, none added and none removed. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} of 2 — nothing here is yours to decide. If it sends the plan back a second time the epic parks in Green Light with needs-human for you."
+                "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards you approved, none added and none removed. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps after two revisions, the epic parks in Green Light with needs-human for you."
             else
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
                 "🚨 The revised plan's review could NOT be started — the dispatch did not go through, so nothing is running and nothing is building. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
