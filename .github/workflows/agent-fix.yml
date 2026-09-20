@@ -1493,9 +1493,15 @@ jobs:
       # denominator the count needs. `steps.claude.outcome` is GitHub's own
       # word on whether the agent step ran at all — `skipped` is a setup death
       # (DRE-2931). Every `${{ }}` is in env:, never in the script.
+      #
+      # The ONE conjunct beyond `always()` is the unfixable-check escalation:
+      # every step after that gate stands down, because the loop must not
+      # "attempt and block" — no model runs, so there is no death to attribute.
+      # Same guard the usage reading above carries, for the same reason
+      # (tests/test_unfixable_check_escalation.py).
       - name: Keep the run's death-cause receipt
         id: death
-        if: always()
+        if: always() && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
@@ -1515,7 +1521,7 @@ jobs:
             --step-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the death-cause receipt
-        if: always() && steps.death.outputs.path != ''
+        if: always() && steps.unfixable.outputs.escalate != 'true' && steps.death.outputs.path != ''
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
