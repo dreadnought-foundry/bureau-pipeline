@@ -16,7 +16,9 @@ INPUT
   * on STDIN, a JSON object `{"NAME": "value", …}` of every secret the job was
     given. Never as arguments or a flag — arguments reach the process table,
     which any process on a shared self-hosted runner can read. There is
-    deliberately no option that accepts a value.
+    deliberately no option that accepts a value. A job that holds no secrets
+    says so with `{}`; EMPTY stdin is refused, because that is what an unset
+    variable in the calling step looks like and it must not read as "none".
 
 PASS 1 — BY VALUE. Every supplied value is replaced with `«redacted:NAME»`, in
 each form a tool can print it, because the raw value is often the form that does
@@ -24,7 +26,8 @@ NOT appear:
   * raw, and inside a URL's userinfo (`https://x-access-token:VALUE@github…`
     contains the raw value, so the raw replacement covers it);
   * JSON-escaped — the transcript is JSON, so a value holding a newline, a
-    quote or a backslash appears there in its escaped spelling;
+    quote or a backslash appears there in its escaped spelling — and escaped
+    TWICE, which is how it arrives when a tool prints a JSON file holding it;
   * URL-encoded (`quote` and `quote_plus`, each with upper- AND lower-case
     percent escapes — `%2F` and `%2f`);
   * base64, standard and URL-safe, **at all three byte alignments**. `git`
@@ -34,10 +37,12 @@ NOT appear:
     bytes are computed and replaced, so the value cannot be recovered from what
     remains whatever preceded or followed it.
 Longest form first, so one value that contains another is not half-replaced.
-NOT covered, deliberately: hex and other ad-hoc encodings of a value. No tool in
-the pipeline prints a credential that way, every added form is another
-replacement pass over a large file, and pass 2 remains underneath. Considered
-and left out (DRE-4268 review), not overlooked.
+NOT covered, deliberately: hex and other ad-hoc encodings of a value, and a
+base64 rendering that a tool has WRAPPED across lines (the line break falls
+inside the form, so no form matches — and `verify` checks the same forms, so it
+would not notice either). No tool in the pipeline prints a credential either
+way, every added form is another replacement pass over a large file, and pass 2
+remains underneath. Considered and left out (DRE-4268 review), not overlooked.
 
 THE MINIMUM-LENGTH RULE. A by-value replacement needs `MIN_VALUE_LENGTH` (8)
 characters. A variable set to `true`, or a secret that is the word `main`, would
@@ -128,7 +133,11 @@ def forms(value: str) -> list[str]:
     """Every spelling of `value` a log can carry, longest first."""
     found = {value}
     for ensure_ascii in (True, False):
-        found.add(json.dumps(value, ensure_ascii=ensure_ascii)[1:-1])
+        once = json.dumps(value, ensure_ascii=ensure_ascii)[1:-1]
+        found.add(once)
+        # Escaped TWICE: a value printed from inside a JSON file (`cat env.json`)
+        # is a JSON string inside the transcript's JSON string.
+        found.add(json.dumps(once, ensure_ascii=ensure_ascii)[1:-1])
     for quoted in (urllib.parse.quote(value, safe=""), urllib.parse.quote_plus(value)):
         # `quote` writes `%2F`; plenty of tools write `%2f`. Both spellings.
         found.add(quoted)
@@ -138,8 +147,15 @@ def forms(value: str) -> list[str]:
 
 
 def read_secrets(stream) -> dict[str, str]:
+    raw = stream.read()
+    if not raw.strip():
+        # An unset `$SECRETS_JSON` arrives as EMPTY stdin. Reading that as "this
+        # job holds no secrets" skips pass 1 entirely and exits 0 with every
+        # prefix-less credential — a database password, a webhook HMAC — still in
+        # the log. Absent is not the same as none: the caller says `{}`.
+        raise Refused("stdin was empty — pass {} explicitly if the job has no secrets")
     try:
-        parsed = json.loads(stream.read() or "{}")
+        parsed = json.loads(raw)
     except ValueError as bad:
         raise Refused("stdin is not JSON — expected an object of NAME: value") from bad
     if not isinstance(parsed, dict) or not all(
