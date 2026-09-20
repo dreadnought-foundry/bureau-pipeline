@@ -43,20 +43,39 @@ _LEAD = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))"
 #: (`cat app-key.json`) arrives escaped twice.
 _NL = r"(?:\r?\n|(?:\\+r)?\\+n|\\+r)"
 
+#: Indentation a tool put in front of a key's lines (YAML block scalar,
+#: pretty-printed JSON, an indented tool output). The key body itself holds no
+#: whitespace, so this cannot let the run cross into prose. A tab inside a JSON
+#: transcript is the two characters `\t` (any number of backslashes, as `_NL`),
+#: so that spelling is an indent too — the tab case of the PEM tests is what
+#: found a tab-indented key surviving in the transcript and not in the raw log.
+_IND = r"(?:[ \t]|\\+t)*"
+
+#: Where a token ENDS: not followed by a letter or digit. Not `\b` — `_` is a
+#: word character, so a token immediately followed by `_` had no boundary to
+#: find and was missed whole.
+_TAIL = r"(?![A-Za-z0-9])"
+
+#: The RFC 1421 header names an encrypted PEM carries between BEGIN and its
+#: body. NAMED, not `Word: text` — that shape is most log lines, and a clipped
+#: BEGIN followed by `Error: output truncated` would lose them as "headers".
+_PEM_HEADER = (r"(?:Proc-Type|DEK-Info|Content-Domain|Originator-[A-Za-z-]+"
+               r"|Recipient-[A-Za-z-]+|Key-Info|MIC-Info|Issuer-Certificate|Crl)")
+
 #: name → compiled pattern. The name is what the scrub's summary counts under
 #: and what the redaction marker carries, so it is part of the output contract.
 SHAPES: dict[str, re.Pattern[str]] = {
     # GitHub: classic/OAuth/user/server/refresh tokens and fine-grained PATs. The
     # token grammar `deliver_rescue.py` has always used, behind `_LEAD`.
     "github-token": re.compile(
-        _LEAD + r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+        _LEAD + r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})" + _TAIL),
     # Anthropic: API keys (`sk-ant-api03-…`) and OAuth tokens (`sk-ant-oat01-…`,
     # `sk-ant-ort01-…`).
     "anthropic-key": re.compile(_LEAD + r"sk-ant-[A-Za-z0-9]{3,8}-[A-Za-z0-9_-]{20,}"),
     # AWS access key ids, long-lived and temporary.
-    "aws-access-key-id": re.compile(_LEAD + r"(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "aws-access-key-id": re.compile(_LEAD + r"(?:AKIA|ASIA)[0-9A-Z]{16}" + _TAIL),
     # Linear personal API keys.
-    "linear-key": re.compile(_LEAD + r"lin_api_[A-Za-z0-9]{20,}\b"),
+    "linear-key": re.compile(_LEAD + r"lin_api_[A-Za-z0-9]{20,}" + _TAIL),
     # Slack tokens.
     "slack-token": re.compile(_LEAD + r"xox[abeprs]-[A-Za-z0-9-]{10,}"),
     # A JSON Web Token: three base64url parts, the first two each opening with
@@ -83,14 +102,24 @@ SHAPES: dict[str, re.Pattern[str]] = {
     #     `…[truncated]` appended still loses its key material;
     #   and, only when an END line follows, the short last body line and the END
     #     line itself.
-    # What this gives up: a final body line shorter than 16 characters survives
-    # when the END line was clipped (under 12 bytes of a 1,200-byte key), and an
-    # unbroken 16+ character alphanumeric line sitting directly under a clipped
-    # key is taken as key material, which it cannot be told apart from.
+    # Every line may be INDENTED (`_IND`): a key read out of a YAML block scalar
+    # or pretty-printed JSON is — and that is the key pass 2 exists for, the one
+    # nobody handed the job. Anchoring each clause to the line break itself
+    # redacted the BEGIN line of such a key, left the body, and reported one
+    # clean redaction (DRE-4268 review, round 3).
+    #
+    # What this gives up, each considered and left: a final body line shorter
+    # than 16 characters survives when the END line was clipped (under 12 bytes
+    # of a 1,200-byte key); an unbroken 16+ character alphanumeric line sitting
+    # directly under a clipped key is taken as key material, which it cannot be
+    # told apart from; and a key whose every line carries a NON-whitespace
+    # prefix (`2026-09-20T10:00:01Z -----BEGIN …`, a timestamping logger) loses
+    # only its BEGIN line — closing that needs a back-referenced per-line
+    # prefix, which timestamps that differ line to line defeat anyway.
     "pem-private-key": re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
-        rf"(?:{_NL}[A-Za-z][A-Za-z0-9-]*: [^\r\n\\\"]*)*"
-        rf"(?:{_NL}(?={_NL}))?"
-        rf"(?:{_NL}[A-Za-z0-9+/=]{{16,}})*"
-        rf"(?:(?:{_NL}[A-Za-z0-9+/=]{{1,15}})?{_NL}-----END [A-Z ]*PRIVATE KEY-----)?"),
+        rf"(?:{_NL}{_IND}{_PEM_HEADER}: [^\r\n\\\"]*)*"
+        rf"(?:{_NL}{_IND}(?={_NL}))?"
+        rf"(?:{_NL}{_IND}[A-Za-z0-9+/=]{{16,}})*"
+        rf"(?:(?:{_NL}{_IND}[A-Za-z0-9+/=]{{1,15}})?{_NL}{_IND}-----END [A-Z ]*PRIVATE KEY-----)?"),
 }
