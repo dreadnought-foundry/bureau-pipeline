@@ -26,8 +26,22 @@ than the day somebody remembers this file.
 The card line is not read off the YAML alone: for every discovered workflow the
 card-naming fragment of the printing step is EXECUTED, under the workflow's own
 shell flags, with `gh pr view` shimmed to answer a head ref — and its stdout is
-re-rendered the way `gh run view --log` renders it and handed to the real
+re-rendered the way `gh run view` renders it and handed to the real
 `medic_retry.card_for_run`. What the medic parses is what the workflow prints.
+
+THE STEP THAT PRINTS THE LINE SUCCEEDS, and medic.yml reads the failed log
+(`gh run view --log-failed`) — so whether the line reaches the medic at all is
+a vendor question (vendor-boundaries Q4), and it is answered by measurement,
+not by assumption. Read on this repo's run 35394117825 (a `workflow_dispatch`
+QA Review, `head_branch: main`, conclusion `failure`) on 2026-09-20:
+`--log-failed` returned 3,190 lines — the WHOLE job log, every successful step
+included — under one synthetic step label, because gh cannot attach a reusable
+workflow's log files to its steps:
+
+    call / review	UNKNOWN STEP	2026-09-18T20:56:19.9506706Z workflow_dispatch — reviewing on request
+
+That is the shape these tests render, and it is why the echoed line alone is
+enough here where plan.yml also needed its job name.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_dispatched_run_names_its_card.py -v
 """
@@ -195,16 +209,27 @@ def run_card_fragment(name: str, head_ref: str) -> str:
         return proc.stdout
 
 
-def as_run_log(name: str, stdout: str) -> str:
-    """Re-render a step's stdout the way `gh run view --log` renders it.
+# The two step labels gh renders for one of these jobs. `UNKNOWN STEP` is what
+# run 35394117825 actually carried — gh could not attach the reusable
+# workflow's log files to its steps, so `--log-failed` emitted the whole job
+# log under one synthetic step, which is precisely why a line printed by a
+# SUCCEEDING step reaches the medic. The attributed name is the other half of
+# the vendor's behaviour and must parse identically.
+STEP_LABELS = ("UNKNOWN STEP", None)
+
+
+def as_run_log(name: str, stdout: str, step_label: str | None = "UNKNOWN STEP") -> str:
+    """Re-render a step's stdout the way `gh run view` renders it.
 
     One line per log line: the job name (a reusable workflow's job is reported
-    under `<caller job> / <called job>`), the step name, the timestamp, then
+    under `<caller job> / <called job>`), the step label, the timestamp, then
     the text — the exact three-field shape `medic_retry._LOG_CARD` matches in.
+    `step_label=None` uses the step's own name, gh's other rendering.
     """
     job_id, step = printing_step(name)
+    label = step_label or step["name"]
     return "".join(
-        f"call / {job_id}\t{step['name']}\t2026-09-20T09:14:0{i % 10}.1234567Z {line}\n"
+        f"call / {job_id}\t{label}\t2026-09-20T09:14:0{i % 10}.1234567Z {line}\n"
         for i, line in enumerate(stdout.splitlines())
     )
 
@@ -271,21 +296,44 @@ class TheMedicReadsWhatTheWorkflowPrintsTest(unittest.TestCase):
 
     def test_a_dispatched_run_on_a_card_branch_resolves_its_card(self):
         for name in discovered():
-            with self.subTest(workflow=name):
-                log = as_run_log(name, run_card_fragment(name, CARD_REF))
-                self.assertIn("bureau-card: DRE-1234", log)
-                self.assertEqual(
-                    CARD, medic_retry.card_for_run("main", log),
-                    f"{name} prints a line the medic cannot parse:\n{log}",
-                )
+            stdout = run_card_fragment(name, CARD_REF)
+            for label in STEP_LABELS:
+                with self.subTest(workflow=name, step=label):
+                    log = as_run_log(name, stdout, label)
+                    self.assertIn("bureau-card: DRE-1234", log)
+                    self.assertEqual(
+                        CARD, medic_retry.card_for_run("main", log),
+                        f"{name} prints a line the medic cannot parse:\n{log}",
+                    )
 
     def test_a_head_ref_that_names_no_card_prints_no_line(self):
         """Absent stays absent — never a guessed card."""
         for name in discovered():
+            stdout = run_card_fragment(name, CARDLESS_REF)
+            for label in STEP_LABELS:
+                with self.subTest(workflow=name, step=label):
+                    log = as_run_log(name, stdout, label)
+                    self.assertNotIn("bureau-card:", log)
+                    self.assertIsNone(medic_retry.card_for_run("main", log))
+
+    def test_the_runners_own_echo_of_the_script_names_no_card(self):
+        """Actions prints every `run:` line back, in cyan, before executing it
+        — and that copy carries `$CARD` unexpanded. `_LOG_CARD` refuses it
+        twice over (an escape code before the words, and no `DRE-n` in it), so
+        a run whose head ref names no card cannot be resolved off its own
+        source. The shape is run 35394117825's, line 248."""
+        for name in discovered():
             with self.subTest(workflow=name):
-                log = as_run_log(name, run_card_fragment(name, CARDLESS_REF))
-                self.assertNotIn("bureau-card:", log)
-                self.assertIsNone(medic_retry.card_for_run("main", log))
+                _, step = printing_step(name)
+                self.assertIsNotNone(step, f"{name} prints no card line")
+                source = next(
+                    line for line in step["run"].splitlines() if "bureau-card:" in line
+                )
+                echoed = (
+                    f"call / x\tUNKNOWN STEP\t2026-09-20T09:14:00.1234567Z "
+                    f"\x1b[36;1m{source.strip()}\x1b[0m\n"
+                )
+                self.assertIsNone(medic_retry.card_for_run("main", echoed))
 
 
 if __name__ == "__main__":

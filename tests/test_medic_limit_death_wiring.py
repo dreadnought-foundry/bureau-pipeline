@@ -485,11 +485,15 @@ class CardResolutionTest(unittest.TestCase):
         """DRE-4407: a re-dispatched review is recorded on the DEFAULT branch,
         so the branch half answers nothing and the line qa-review.yml echoes
         once it knows the pull request's head ref is the whole resolution.
-        Shaped exactly as `gh run view --log` renders that echo."""
+
+        Shaped as `gh run view --log-failed` really renders it for one of
+        these jobs: read on run 35394117825 (a workflow_dispatch QA Review on
+        `main`, conclusion failure), gh could not attach the reusable
+        workflow's log files to its steps and emitted the whole job log —
+        every successful step included — under one `UNKNOWN STEP` label."""
         log = (
-            "call / review\tResolve PR\t2026-09-20T09:14:02.1234567Z number=4407\n"
-            "call / review\tResolve PR\t2026-09-20T09:14:02.7654321Z bureau-card: DRE-1234\n"
-            "call / review\tRun critic\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
+            "call / review\tUNKNOWN STEP\t2026-09-20T09:14:02.1234567Z bureau-card: DRE-1234\n"
+            "call / review\tUNKNOWN STEP\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
         )
         self.assertEqual("DRE-1234", medic_retry.card_for_run("main", log))
 
@@ -497,8 +501,9 @@ class CardResolutionTest(unittest.TestCase):
         """A pull request whose head ref carries no card prints no line, and
         absent stays absent — the medic must never resolve a guessed card."""
         log = (
-            "call / review\tResolve PR\t2026-09-20T09:14:02.1234567Z number=4407\n"
-            "call / review\tRun critic\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
+            "call / review\tUNKNOWN STEP\t2026-09-20T09:14:02.1234567Z "
+            '\x1b[36;1mif [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi\x1b[0m\n'
+            "call / review\tUNKNOWN STEP\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
         )
         self.assertIsNone(medic_retry.card_for_run("main", log))
 

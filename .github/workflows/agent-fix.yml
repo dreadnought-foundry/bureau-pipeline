@@ -369,16 +369,8 @@ jobs:
           case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
           [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-          # Say the card in the LOG, plan.yml's line exactly (DRE-4407). A fix
-          # started off a verdict comment, or dispatched by merge-gate's
-          # conflict repair, is recorded by GitHub on the DEFAULT branch — not
-          # on the pull request's — so `medic_retry.card_for_run` got nothing
-          # from the branch and, until this line, nothing from the log either.
-          # The ECHOED line only: the job name here is read back by
-          # scripts/fix_concurrency.py and is a check-run name besides, so it
-          # is not the place for this. Read off the head ref above, never
-          # typed; a repair/* branch names no card and prints no line, which is
-          # the same silence every card comment below is already guarded on.
+          # The card in the log, for a run GitHub records on main (DRE-4407 —
+          # the why is in qa-review.yml; this block is expression-budget tight).
           if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
 
           # Convergence halt (DRE-2024). Repeated fix runs that ended with
