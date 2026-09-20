@@ -458,7 +458,10 @@ class AbsentFixAgentHarness(unittest.TestCase):
 
         `workflows` is a list of filenames (a listing that READ), or None for
         a listing that could not be read, or [] for one that came back empty.
-        Returns (dispatches, notes, log, contents reads, new write failures).
+        Returns (dispatches, notes, log, contents reads, new failures) —
+        `failures` being BOTH rails, because the sweep's exit code is
+        `_write_failures or _read_failures or _stale_defects`, so "records no
+        failure and exits 0" is one assertion over both.
         """
         dispatches: list[tuple] = []
         notes: list[tuple] = []
@@ -503,7 +506,8 @@ class AbsentFixAgentHarness(unittest.TestCase):
                                       return_value=False), \
                     mock.patch.object(reconcile, "linear_ops", mock.MagicMock()):
                 log = _capture(route)
-            failures = reconcile._write_failures[len(marks[1]):]
+            failures = (reconcile._read_failures[len(marks[0]):]
+                        + reconcile._write_failures[len(marks[1]):])
         finally:
             del reconcile._read_failures[len(marks[0]):]
             del reconcile._write_failures[len(marks[1]):]
@@ -629,6 +633,8 @@ class AbsentFixAgentAtEverySiteTest(AbsentFixAgentHarness):
                 )
                 self.assertEqual(dispatches, [], f"{label} ran the fix agent")
                 self.assertEqual(again, [], f"{label} said it twice: {again}")
+                # Both rails: `main()` exits 1 on either, so an empty pair IS
+                # "records no failure and exits 0".
                 self.assertEqual(failures, [], f"{label} went red: {failures}")
 
     def test_a_new_head_is_told_again(self):
