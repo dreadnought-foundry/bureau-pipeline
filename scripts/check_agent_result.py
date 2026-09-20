@@ -9,16 +9,31 @@ conclusion until a staleness sweep noticed.
 Called from agent-task.yml after the agent step:
 
     python3 check_agent_result.py <execution-json-path> <branch> <pr-url> \
-        <blocker-file> [--escalation-file <path>]
+        <blocker-file> [--escalation-file <path>] [--handback-file <path>]
 
 Exit 1 (fail the job, loudly) when:
   - the execution result has is_error == true, OR
   - there is no agent branch, no PR, no blocker note, and no escalation note
     (silent death).
-Exit 0 otherwise. An honest blocker note OR an honest escalation note (the
-agent intentionally stopped to ask the CEO a decision — DRE-1655) is
+Exit 0 otherwise, naming the outcome it saw. An honest blocker note OR an
+honest escalation note (the agent intentionally stopped to ask the CEO a
+decision — DRE-1655) OR an honest hand-back note (DRE-4376, below) is
 working-as-designed; absence of the result file alone is not failure (action
 versions move it) when the run left real evidence (branch, PR, or note).
+
+DRE-4376 — THE HAND-BACK IS THE FIFTH OUTCOME. A build agent that finds an
+epic inside a one-off card hands it back to Planning: it writes the pieces it
+found to `/tmp/agent-handback.txt`, opens no PR and pushes nothing
+(`briefs/engineer.md` and the three other dispatched briefs; the "Report
+result to Linear" step comments the list and moves the card). This gate knew
+four outcomes and none of them was that, so on 2026-09-19 a correct hand-back
+on DRE-4322 (run 35466962427) read here as "no agent branch, no PR, no blocker
+note, and no escalation note", failed the run, woke the medic, and put a
+"pipeline failure" diagnosis in the CEO's Green Light queue for 20 hours. A
+non-empty note with no branch and no PR is green. Empty or whitespace is NOT
+an outcome — the same rule the other two notes follow. A note ALONGSIDE a pull
+request is a contradiction and fails: the agent either handed the card back or
+shipped it, and the gate must not guess which.
 
 Whenever the result says is_error, the gate also prints WHY, from the
 execution file's own result record (DRE-2435, see execution_result.py) — a
@@ -135,6 +150,28 @@ DEATH_CREDENTIAL_EXPIRY = "credential_expiry"
 # still fail to deliver, which is exactly the DRE-3165 shape.
 DELIVERY_FAILED = "failed"
 DELIVERY_OK = "delivered"
+
+# What the gate SAW, in its own words (DRE-4376). The green line used to say
+# only "ok", which is why nobody could tell from a run's log whether the gate
+# had understood the exit the agent took — the hand-back it had never been
+# taught read identically to a run that simply had a branch.
+OUTCOME_PR = "a pull request"
+OUTCOME_HANDBACK = "a hand-back note (the card goes back to Planning)"
+OUTCOME_ESCALATION = "an escalation note"
+OUTCOME_BLOCKER = "a blocker note"
+OUTCOME_BRANCH = "an agent branch"
+OUTCOME_WORK_ON_RUNNER = "committed work on the runner"
+# Green with nothing to show for it: the cancelled/skipped waiver (DRE-2074,
+# DRE-2931), where no evidence is expected because the agent never finished or
+# never ran.
+OUTCOME_NONE = "no outcome (the agent step was cancelled or never ran)"
+
+# Both are true and they cannot both be true (DRE-4376). Kept as a constant so
+# the sentence a run fails with is one string, not a formatted guess.
+HANDBACK_CONTRADICTION = (
+    "a hand-back note AND a pull request — the agent both handed this card "
+    "back to Planning and shipped it; the gate will not pick one"
+)
 
 # claude-code-action's own names for hitting the turn ceiling. `subtype` is the
 # canonical one; `terminal_reason`/`stop_reason` and the human sentence in
@@ -422,6 +459,55 @@ def turn_exhaustion_facts(execution: dict | None) -> str:
     return f"{head} after {' and '.join(spent)}" if spent else head
 
 
+def has_handback_note(path: str) -> bool:
+    """True when a hand-back note with actual words in it is on disk (DRE-4376).
+
+    Stricter than the byte-count test the blocker and escalation notes get, and
+    deliberately so: this note is a LIST OF PIECES a planner reads, so a file
+    of three spaces is not one. The rule it shares with them is the one that
+    matters — an empty note is not an outcome, and a run that left one is still
+    a silent death.
+    """
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return bool(fh.read().strip())
+    except OSError:
+        return False
+
+
+def outcome_seen(
+    *,
+    branch_exists: bool = False,
+    pr_exists: bool = False,
+    blocker_note: bool = False,
+    escalation_note: bool = False,
+    handback_note: bool = False,
+    work_on_runner: bool = False,
+) -> str:
+    """What this run left behind, named — the green line's second half.
+
+    Read in the "Report result to Linear" step's OWN order (agent-task.yml): a
+    merged/open PR first, then the hand-back, then the escalation, then the
+    blocker. So the name the gate prints is the branch the Report step will
+    take, rather than a second opinion about the same facts.
+    """
+    if pr_exists:
+        return OUTCOME_PR
+    if handback_note:
+        return OUTCOME_HANDBACK
+    if escalation_note:
+        return OUTCOME_ESCALATION
+    if blocker_note:
+        return OUTCOME_BLOCKER
+    if branch_exists:
+        return OUTCOME_BRANCH
+    if work_on_runner:
+        return OUTCOME_WORK_ON_RUNNER
+    return OUTCOME_NONE
+
+
 def failure_reason(
     execution: dict | None,
     *,
@@ -429,6 +515,7 @@ def failure_reason(
     pr_exists: bool = False,
     blocker_note: bool = False,
     escalation_note: bool = False,
+    handback_note: bool = False,
     ignore_is_error: bool = False,
     claude_outcome: str = "",
     work_on_runner: bool = False,
@@ -454,9 +541,25 @@ def failure_reason(
     DRE-1921 loop). Both waive ONLY the silent-death reason: an is_error record
     is affirmative evidence of a model death and still fails without the ignore
     flag. The reconcile sweep owns the requeue off the run's real conclusion.
+
+    `handback_note` (DRE-4376): the agent handed the card back to Planning,
+    the fifth honest outcome. Like the two notes above it waives the
+    silent-death reason and nothing else — but unlike them it can CONTRADICT
+    the run's other evidence, because a hand-back is the agent saying it did
+    not ship. A note alongside a pull request fails, loudly, rather than the
+    gate choosing which half of that to believe. Callers pass the note's
+    presence as `has_handback_note()` reads it: whitespace is not a list of
+    pieces.
     """
     if not ignore_is_error and is_error_death(execution):
         return "execution result has is_error=true"
+    # DRE-4376: affirmative evidence of two mutually exclusive outcomes, so it
+    # is read with the is_error death rather than after the waivers below. A
+    # hand-back means the agent opened no PR; a PR means it shipped. Reporting
+    # this loudly is the point — silently preferring either one would send a
+    # shipped card back to Planning or bury a hand-back the planner needs.
+    if handback_note and pr_exists:
+        return HANDBACK_CONTRADICTION
     if claude_outcome in ("cancelled", "skipped"):
         return None
     if (
@@ -464,6 +567,11 @@ def failure_reason(
         and not pr_exists
         and not blocker_note
         and not escalation_note
+        # DRE-4376: the fifth outcome. A hand-back to Planning leaves no
+        # branch and no PR BY DESIGN — the agent found an epic inside a
+        # one-off and stopped rather than sprawl — so without this the gate
+        # reads the exit its own briefs define as a silent death.
+        and not handback_note
         # DRE-3262: committed work on the runner IS evidence, and it is the one
         # kind this gate could not see. A refused rescue push leaves no branch
         # and no PR BY DEFINITION — that is what "refused" means — so the
@@ -554,6 +662,14 @@ def main(argv: list[str]) -> int:
         i = argv.index("--escalation-file")
         escalation_file = (argv[i + 1] if i + 1 < len(argv) else "")
         del argv[i : i + 2]
+    # Optional --handback-file <path> (DRE-4376): the agent found an epic
+    # inside a one-off card and handed it back to Planning. The fifth honest
+    # outcome — a designed exit that opens no PR, not a silent death.
+    handback_file = ""
+    if "--handback-file" in argv:
+        i = argv.index("--handback-file")
+        handback_file = (argv[i + 1] if i + 1 < len(argv) else "")
+        del argv[i : i + 2]
     # Optional --claude-outcome <outcome> (DRE-2074): the agent step's Actions
     # outcome. "cancelled" = the run was killed externally mid-build, not a
     # silent death — the gate stays green and reconcile owns the follow-up.
@@ -583,20 +699,24 @@ def main(argv: list[str]) -> int:
     # "1 turn, $0" alone reads identically for an expired token, an
     # overloaded API, a refusal and a bad model id.
     print_failure_detail(execution, "agent result gate")
-    reason = failure_reason(
-        execution,
+    facts = dict(
         branch_exists=bool(branch.strip()),
         pr_exists=bool(pr_url.strip()) and pr_url.strip() != "null",
         blocker_note=bool(blocker_file) and os.path.isfile(blocker_file),
         escalation_note=_has_note(escalation_file),
+        handback_note=has_handback_note(handback_file),
+        work_on_runner=work_on_runner,
+    )
+    reason = failure_reason(
+        execution,
         ignore_is_error=ignore_is_error,
         claude_outcome=claude_outcome,
-        work_on_runner=work_on_runner,
+        **facts,
     )
     if reason:
         print(f"agent result gate: FAIL — {reason}")
         return 1
-    print("agent result gate: ok")
+    print(f"agent result gate: ok — {outcome_seen(**facts)}")
     return 0
 
 

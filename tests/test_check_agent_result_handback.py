@@ -208,11 +208,18 @@ class CliHandbackTest(unittest.TestCase):
 
 
 def _step_block(workflow_text, name):
-    """The YAML lines of one named workflow step, up to the next step."""
+    """The RUNNABLE lines of one named workflow step, up to the next step.
+
+    Comment-only lines are dropped: both steps explain themselves at length,
+    and a path named in prose is not a path either step reads.
+    """
     start = workflow_text.index(f"- name: {name}")
     rest = workflow_text[start + 1:]
     m = re.search(r"^ {6}- name: ", rest, re.MULTILINE)
-    return rest[: m.start()] if m else rest
+    block = rest[: m.start()] if m else rest
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 class WorkflowWiringTest(unittest.TestCase):
