@@ -176,11 +176,14 @@ class EveryModelStepMintsFromTheSelectedPoolApp(unittest.TestCase):
     """The rule, over the three workflows at once."""
 
     def test_each_workflow_actually_runs_a_model(self):
-        # The rule below is vacuous if extraction finds nothing: agent-task
-        # runs the build agent and two retries, qa-review the critic and its
-        # retry, agent-fix the fixing agent.
+        # The rule below is vacuous if extraction finds nothing — a renamed
+        # job or a renamed vendor action would make it pass by finding no
+        # model steps at all. Counted rather than pinned: today it is three in
+        # agent-task (the build agent and its two retries), two in qa-review
+        # (the critic and its retry) and one in agent-fix, and a workflow that
+        # grows another is covered by the same assertions without editing this.
         found = {name: len(model_steps(name)) for name in MODEL_WORKFLOWS}
-        self.assertEqual(found, {"agent-task.yml": 3, "qa-review.yml": 2, "agent-fix.yml": 1})
+        self.assertTrue(all(n >= 1 for n in found.values()), found)
 
     def test_no_model_step_is_handed_a_token_from_outside_the_pool(self):
         # THE regression pin. On the tree before this card, agent-fix.yml's
