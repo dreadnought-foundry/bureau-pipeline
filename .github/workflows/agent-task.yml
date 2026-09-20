@@ -1032,6 +1032,63 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). On 2026-09-19 the fleet's
+      # failures were counted for the first time — 1,310 of 62,451 runs over 22
+      # days — and 69 of them, $97 of model work, could not be attributed to
+      # any cause at all, because the workflow they died in wrote nothing down.
+      # death_receipt.py reads the classifiers this pipeline already owns
+      # (check_agent_result for the death class, death_cause for WHICH wall)
+      # and writes one small JSON document; the step after it uploads the file.
+      # `scripts/check_death_receipts.py` DISCOVERS every reusable workflow
+      # that runs a model and fails the build when one of them does not call
+      # it, so the next workflow added to the fleet cannot be added blind.
+      #
+      # `always()` + `continue-on-error`, and NO gate beyond that: the receipt
+      # must be written for the runs that DIED, which is the whole point, and
+      # it must never change this job's own conclusion in either direction. A
+      # bounced or duplicate card simply records `none`, which is the honest
+      # answer and the denominator the count needs.
+      #
+      # BOTH inputs are the RESOLVED attempt's, never attempt 1's (DRE-4108):
+      # a consumer reading `steps.claude.*` judges the whole run by the first
+      # try and would report a dead agent for a build the retry finished.
+      # `claude_result` is the resolver every other consumer already reads, and
+      # its `outcome` is what says whether the agent step ran at all — `skipped`
+      # is a setup death (DRE-2931). Every `${{ }}` is in env:, never in the
+      # script.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          MODEL_STEP_OUTCOME: ${{ steps.claude_result.outputs.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --step-outcome "$MODEL_STEP_OUTCOME" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      # Named per attempt, or upload-artifact refuses a re-run's upload as a
+      # duplicate name. 90 days: the window the Record can backfill from.
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
+
       # ---- RE-MINT BEFORE THE PUSH (DRE-3043) ----
       # The token minted at the top of this job is dead by now if the run
       # passed an hour: GitHub gives an App installation token exactly 60

@@ -134,6 +134,12 @@ jobs:
           path: .bureau-pipeline
 
       - name: Groom
+        # Identified for the death-cause receipt at the foot of this job
+        # (DRE-4340): GitHub's own outcome for this step is what says whether
+        # the judged read ran at all, because the read goes through
+        # `planning_classify` and writes no execution record for a classifier
+        # to load.
+        id: groom
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The judged read's credential (DRE-3153), gated on `CLAUDE_AUTH_MODE`
@@ -249,3 +255,51 @@ jobs:
             judgement-answer.txt
           if-no-files-found: ignore
           retention-days: 30
+
+      # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
+      # failures over 22 days — $97 of model work — could not be attributed to
+      # any cause, because the workflow they died in wrote nothing down. This
+      # was one of them: the judged read is a model call, so this job can die
+      # of a model cause, and until now nothing here said so.
+      # `scripts/check_death_receipts.py` discovers every reusable workflow
+      # that runs a model and fails the build when one writes no receipt.
+      #
+      # NO EXECUTION RECORD HERE, deliberately. The judged read goes through
+      # `planning_classify`, not the vendor action, so there is no
+      # `claude-execution-output.json` for the classifier to read — which is
+      # precisely why `--step-outcome` is threaded: GitHub's own word on the
+      # Groom step is what separates a model death from a death before the
+      # model started (DRE-2931). The receipt records `unknown` WITH the
+      # reason rather than guessing a cause off a record that does not exist.
+      #
+      # `always()` + `continue-on-error`: the receipt must be written for the
+      # runs that died and must never change this job's own conclusion. Every
+      # `${{ }}` is in env:, never in the script.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          MODEL_STEP_OUTCOME: ${{ steps.groom.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CARD: ${{ inputs.card }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file /home/runner/work/_temp/claude-execution-output.json \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --step-outcome "$MODEL_STEP_OUTCOME" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90

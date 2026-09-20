@@ -104,6 +104,16 @@ jobs:
       # build rather than adding a silent failure surface.
       - name: Red-main watcher coverage check
         run: python3 scripts/check_workflow_watchers.py
+      # Death-cause receipts (DRE-4340): on 2026-09-19 the fleet's failures
+      # were counted for the first time and 69 of 1,310 — $97 of model work —
+      # could not be attributed to any cause at all, because the workflow they
+      # died in wrote nothing down. The population that owes a receipt is
+      # DISCOVERED from the workflow files, exactly as the watcher coverage
+      # above is, so the next workflow added to the fleet cannot be added
+      # blind: a model step with no receipt fails this build instead of
+      # becoming the next audit's unattributable run.
+      - name: Every model-running workflow writes a death-cause receipt
+        run: python3 scripts/check_death_receipts.py
       # Inline agent prompts (DRE-2727): `briefs/` and `standards/` are the
       # obvious surface for "what the agents are told" and they miss the
       # prompts written in prose inside these workflow files. medic.yml told

@@ -385,6 +385,10 @@ jobs:
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
       - name: Repair agent
+        # Identified for the death-cause receipt at the foot of this
+        # job (DRE-4340) — the execution file it writes, and GitHub's
+        # own outcome for the step, are what the receipt reads.
+        id: claude
         if: steps.decide.outputs.go == 'true'
         uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
@@ -547,3 +551,53 @@ jobs:
             echo "::error::repair agent produced neither a PR nor an escalation — failing for medic visibility"
             exit 1
           fi
+
+      # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
+      # failures over 22 days — $97 of model work — could not be attributed to
+      # any cause, because the workflow they died in wrote nothing down. The
+      # repair agent runs a model, so it dies of exactly the causes every
+      # other model job does. death_receipt.py reads the classifiers this
+      # pipeline already owns (check_agent_result for the death class,
+      # death_cause for WHICH wall) and writes one small JSON document the
+      # step below uploads; `scripts/check_death_receipts.py` discovers every
+      # reusable workflow that runs a model and fails the build when one
+      # writes no receipt.
+      #
+      # LAST STEP IN THE JOB, after the Report's loud failure on purpose: a
+      # repair that produced neither a PR nor an escalation is exactly the
+      # death this receipt exists to name, and a receipt taken before it would
+      # record a job that had not failed yet. `always()` +
+      # `continue-on-error`: it must never change this job's own conclusion —
+      # the red above is the medic's signal and stays. A debounced or
+      # budget-exhausted run records `none`, which is the denominator the
+      # count needs. Every `${{ }}` is in env:, never in the script.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          MODEL_STEP_OUTCOME: ${{ steps.claude.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CARD: ${{ steps.card.outputs.card }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-/home/runner/work/_temp/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --step-outcome "$MODEL_STEP_OUTCOME" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-${{ github.job }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
