@@ -63,6 +63,7 @@ AGENT_TASK = WORKFLOWS / "agent-task.yml"
 DELIVER = WORKFLOWS / "deliver-rescue.yml"
 DELIVER_STUB = WORKFLOWS / "self-deliver-rescue.yml"
 TASK_STUB = WORKFLOWS / "self-agent-task.yml"
+FIX_STUB = WORKFLOWS / "self-agent-fix.yml"
 MEDIC_STUB = WORKFLOWS / "self-medic.yml"
 README = ROOT / "README.md"
 
@@ -661,6 +662,10 @@ class TheFleetFacingInstructions(unittest.TestCase):
         for stub, marker in (
             (TASK_STUB, "agent-task.yml"),
             (DELIVER_STUB, "deliver-rescue.yml"),
+            # DRE-4353: the agent-fix block is a bare `permissions:` map rather
+            # than a whole stub, and being unpinned is precisely how it came to
+            # understate this repo's own by a key.
+            (FIX_STUB, "agent-fix.yml"),
         ):
             mine = self.permissions(yaml.safe_load(stub.read_text()))
             theirs = self.permissions(readme_stub(marker))
