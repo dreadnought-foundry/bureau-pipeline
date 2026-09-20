@@ -481,6 +481,27 @@ class CardResolutionTest(unittest.TestCase):
         echoed_script = "call / plan\tUNKNOWN STEP\t2026-09-05T20:40:01Z \x1b[36;1mecho \"bureau-card: DRE-9\"\x1b[0m\n"
         self.assertIsNone(medic_retry.card_for_run("main", echoed_script))
 
+    def test_a_dispatched_review_names_its_card_in_its_log(self):
+        """DRE-4407: a re-dispatched review is recorded on the DEFAULT branch,
+        so the branch half answers nothing and the line qa-review.yml echoes
+        once it knows the pull request's head ref is the whole resolution.
+        Shaped exactly as `gh run view --log` renders that echo."""
+        log = (
+            "call / review\tResolve PR\t2026-09-20T09:14:02.1234567Z number=4407\n"
+            "call / review\tResolve PR\t2026-09-20T09:14:02.7654321Z bureau-card: DRE-1234\n"
+            "call / review\tRun critic\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
+        )
+        self.assertEqual("DRE-1234", medic_retry.card_for_run("main", log))
+
+    def test_a_dispatched_review_on_a_card_less_head_ref_names_nothing(self):
+        """A pull request whose head ref carries no card prints no line, and
+        absent stays absent — the medic must never resolve a guessed card."""
+        log = (
+            "call / review\tResolve PR\t2026-09-20T09:14:02.1234567Z number=4407\n"
+            "call / review\tRun critic\t2026-09-20T09:19:41.0000000Z ::error::The runner has crashed\n"
+        )
+        self.assertIsNone(medic_retry.card_for_run("main", log))
+
     def test_nothing_names_nothing(self):
         self.assertIsNone(medic_retry.card_for_run("main", ""))
         self.assertIsNone(medic_retry.card_for_run("chore/deps", "no card here"))
