@@ -89,6 +89,10 @@ NOT_UPLOADING = {
     # not an agent run: there is no transcript, which is why its own death
     # receipt records `unknown` with the reason (groomer.yml).
     ("groomer.yml", "groom"),
+    # NOTE on red-main-repair: it IS a real agent run against a card, so
+    # "nobody has reviewed it" is a deferral, not a decision. The epic
+    # DRE-4267 owns that decision; a comment on the epic records it, so it is
+    # not a deferral with no owner (standards/design-parity.md's ledger rule).
 }
 
 #: What the step's `run:` body must call. Matched on the call, not on a step
@@ -275,6 +279,7 @@ class UploaderBehaviourTest(unittest.TestCase):
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
         self.aws_calls = self.tmp / "aws-calls.txt"
+        self.aws_env = self.tmp / "aws-env.txt"
         self._write_aws(exit_code=0)
 
         self.log = self.tmp / "claude-execution-output.json"
@@ -288,14 +293,27 @@ class UploaderBehaviourTest(unittest.TestCase):
         self.token_url = f"http://127.0.0.1:{self.server.server_port}/token?api-version=2.0"
 
     def _write_aws(self, exit_code=0, stderr=""):
+        """The stub records its argv AND the `AWS_*` environment it was handed
+        AND the mode of the token file it was pointed at — the three things the
+        credential claims are about, none of which a shape test can see."""
         script = self.bin / "aws"
         script.write_text(
             "#!/bin/sh\n"
+            f'printf "ARGS: %s\\n" "$*" >> "{self.aws_env}"\n'
+            f'env | grep -E "^AWS_" | sort >> "{self.aws_env}"\n'
+            f'printf "TOKENMODE: %s\\n" '
+            f'"$(python3 -c \'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))\' '
+            f'"$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)" >> "{self.aws_env}"\n'
+            f'printf "TOKENBODY: %s\\n" '
+            f'"$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)" >> "{self.aws_env}"\n'
             f'printf "%s\\n" "$*" >> "{self.aws_calls}"\n'
             + (f'echo "{stderr}" >&2\n' if stderr else "")
             + f"exit {exit_code}\n"
         )
         script.chmod(0o755)
+
+    def _recorded(self):
+        return self.aws_env.read_text() if self.aws_env.exists() else ""
 
     def _env(self, **overrides):
         env = {
@@ -384,6 +402,61 @@ class UploaderBehaviourTest(unittest.TestCase):
         self._run()
         self.assertTrue(_TokenHandler.seen, "no OIDC token was requested")
         self.assertEqual(_TokenHandler.seen[0]["audience"], "sts.amazonaws.com")
+
+    # ---- the credential claims, pinned against the real process ---------
+    # Every one of these was true when the module docstring first said so and
+    # none of them was asserted, which is how the AWS_ENDPOINT_URL hole below
+    # got in (DRE-4269 review round 1). A claim no test reads stops being true
+    # quietly.
+
+    def test_the_oidc_token_never_reaches_the_aws_command_line(self):
+        """The process table on a shared self-hosted runner is readable by
+        anything on it. The token travels as a file, or not at all."""
+        self._run()
+        self.assertNotIn(_TokenHandler.token, self._calls()[0])
+        self.assertIn(f"TOKENBODY: {_TokenHandler.token}", self._recorded(),
+                      "the CLI was not pointed at a file holding the token")
+
+    def test_nothing_ambient_reaches_the_cli_environment(self):
+        """Leftovers from an earlier job on the same runner. `AWS_ENDPOINT_URL`
+        is the damaging one: a global service-endpoint override redirects BOTH
+        the assume that carries the JWT and the put that carries the
+        transcript, and the step still exits 0 saying the log was kept."""
+        leftovers = {
+            "AWS_ACCESS_KEY_ID": "AKIALEFTOVERKEY12345",
+            "AWS_SECRET_ACCESS_KEY": "leftover-secret-value",
+            "AWS_SESSION_TOKEN": "leftover-session",
+            "AWS_PROFILE": "someone-else",
+            "AWS_ENDPOINT_URL": "https://elsewhere.example",
+            "AWS_ENDPOINT_URL_S3": "https://elsewhere.example",
+            "AWS_ENDPOINT_URL_STS": "https://elsewhere.example",
+            "AWS_SHARED_CREDENTIALS_FILE": "/tmp/somebody/creds",
+            "AWS_CONFIG_FILE": "/tmp/somebody/config",
+            "AWS_CA_BUNDLE": "/tmp/somebody/ca.pem",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI": "http://169.254.170.2/x",
+        }
+        result = self._run(env=self._env(**leftovers))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        recorded = self._recorded()
+        for name, value in leftovers.items():
+            self.assertNotIn(f"{name}=", recorded,
+                             f"{name} survived into the CLI's environment")
+            self.assertNotIn(value, recorded)
+
+    def test_the_token_file_is_private_and_is_removed_afterwards(self):
+        self._run()
+        self.assertIn("TOKENMODE: 0o600", self._recorded(),
+                      "the token file was readable by more than this process")
+        left = list((Path(self._env()["RUNNER_TEMP"])).glob("*.jwt"))
+        self.assertEqual(left, [], f"the token outlived the upload: {left}")
+
+    def test_an_aws_cli_too_old_for_if_none_match_names_the_version(self):
+        """`--if-none-match` IS the write-once guarantee. An older CLI reports
+        it as an unknown option, which reads like a typo in this script."""
+        self._write_aws(exit_code=252, stderr="Unknown options: --if-none-match")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2.17.34", result.stdout + result.stderr)
 
     # ---- every gap is recorded, and none of them fails the run ----------
 

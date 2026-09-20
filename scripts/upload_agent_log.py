@@ -50,9 +50,22 @@ mints the OIDC token; it is written to a 0600 file under `$RUNNER_TEMP` and the
 AWS CLI is pointed at it with `AWS_WEB_IDENTITY_TOKEN_FILE`, so the CLI performs
 `AssumeRoleWithWebIdentity` itself. A token passed as an argument would reach
 the process table, which any process on a shared self-hosted runner can read —
-the same reasoning that keeps the scrub's secrets on stdin. Any ambient AWS
-credentials are removed from the CLI's environment, so a runner with leftover
-keys cannot preempt the repo's own role.
+the same reasoning that keeps the scrub's secrets on stdin. The CLI's whole
+environment is an ALLOWLIST (`AWS_ENV_KEEP`), so nothing a previous job on a
+shared runner left behind — a stale key, a profile, and above all an
+`AWS_ENDPOINT_URL` that would redirect both the assume and the put — can reach
+it. `tests/test_agent_log_upload.py` pins each of those four claims against the
+real process, because a claim in a docstring that no test reads is a claim that
+stops being true quietly.
+
+WHAT THE SIZE CAP ACTUALLY BINDS. `MAX_UPLOAD_BYTES` is checked on the gzipped
+object, but the scrub refuses any input over its own 64 MiB cap first and gzip
+only shrinks — so in production the binding limit is **64 MiB of RAW
+transcript**, and the gzipped cap is the belt behind it. 64 MiB is above the
+worst case the scrub's own docstring records ("a transcript is a few MB; a
+turn-capped one with large tool outputs is tens"), and raising it raises the
+runner's peak memory, because the scrub reads the whole file and passes over it
+once per secret form. Deliberate, not incidental.
 
 Exit 0, always.
 """
@@ -101,13 +114,31 @@ AUDIENCE = "sts.amazonaws.com"
 #: bounds both ends, and it is far below S3's 5 GiB single-PUT limit.
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
-#: Ambient credentials are removed before the CLI runs: the repo's own role, or
-#: nothing.
-AMBIENT_AWS = (
-    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-    "AWS_SECURITY_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
-    "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_SESSION_NAME",
+#: The CLI's environment is built as an ALLOWLIST, not by subtracting known-bad
+#: names from `os.environ` (DRE-4269 review round 1). Subtraction was short: it
+#: removed the key/profile variables and left `AWS_ENDPOINT_URL`, which is a
+#: GLOBAL service-endpoint override — one leftover export on a shared
+#: self-hosted mini redirected both the `AssumeRoleWithWebIdentity` that carries
+#: the run's OIDC JWT and the `PutObject` that carries the transcript, and the
+#: step still printed `agent log kept:`. An allowlist excludes the next
+#: `AWS_*`-shaped knob the vendor adds by construction; a denylist has to be
+#: remembered. Everything the role needs, this script sets itself below.
+AWS_ENV_KEEP = (
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP",
+    # Transport, not credentials — a runner behind a proxy cannot reach S3
+    # without them, and none is `AWS_*`-shaped, so keeping them does not weaken
+    # the rule above.
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
 )
+
+#: The first AWS CLI v2 release whose `s3api put-object` accepts
+#: `--if-none-match` (changelog 2.17.34: "Add support for conditional writes for
+#: PutObject and CompleteMultipartUpload APIs"). That flag IS the write-once
+#: guarantee this design rests on, so an older CLI must fail LEGIBLY — see
+#: `put_object`, which names this version rather than passing the vendor's
+#: "Unknown options" through.
+MIN_AWS_CLI = "2.17.34"
 
 
 def role_arn(slug: str, account: str = ACCOUNT) -> str:
@@ -209,7 +240,7 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
                token_file: Path, region: str, session: str) -> None:
     """ONE single-part put, write-once. The CLI does the web-identity assume
     itself from the token file, so no credential is ever an argument."""
-    env = {k: v for k, v in os.environ.items() if k not in AMBIENT_AWS}
+    env = {name: os.environ[name] for name in AWS_ENV_KEEP if name in os.environ}
     env.update({
         "AWS_ROLE_ARN": role,
         "AWS_WEB_IDENTITY_TOKEN_FILE": str(token_file),
@@ -228,6 +259,16 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
         capture_output=True, text=True, env=env)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
+        # A CLI too old for `--if-none-match` reports it as an unknown option,
+        # which reads like a typo in this script rather than what it is. Name
+        # the remedy, or the operator debugs the wrong thing (DRE-3416's
+        # lesson, one vendor over).
+        if "nknown option" in (result.stderr or ""):
+            raise Gap(
+                f"this runner's AWS CLI does not accept `--if-none-match`, "
+                f"which IS the write-once guarantee this upload rests on. "
+                f"Install AWS CLI v{MIN_AWS_CLI} or newer and re-run "
+                f"(`aws --version`); nothing was uploaded.", loud=True)
         raise Gap(
             f"the store refused the put of {key}: "
             f"{detail[-1] if detail else f'exit {result.returncode}'}",
