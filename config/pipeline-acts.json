@@ -1721,10 +1721,10 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "🛑 Held twice since approval",
+      "anchor": "🛑 Parked for you with needs-human",
       "step": "Second critic sent the plan back",
       "kind": "undeclared-act",
-      "means": "The second critic sent an approved plan back twice — the bound — so the epic is parked in Green Light with needs-human and both findings, and nothing builds it as it stands (DRE-3088).",
+      "means": "The second critic sent an approved plan back twice on findings the revision left open, or the plan kept growing new ones after two answered revisions — the bound — so the epic is parked in Green Light with needs-human and the findings still open named, and nothing builds it as it stands (DRE-3088; what the bound counts since DRE-4115).",
       "why": "Act-shaped, and the registry has no row for it: it is the post-approval bound's new outcome (a park, where the DRE-2721 rail activated the epic). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the park ships first as an undeclared act and the row follows with its console half. It carries its own idempotency in the needs-human label the sweep already honours."
     },
     {

@@ -42,7 +42,18 @@ Three rules baked in, each one bought:
     how 17 cards sat in a lane for 27 days. The budget is per planning ATTEMPT,
     counted from the `plan-cycle:` boundary the plan route writes — a
     re-planned epic gets its revision round back, because the plan the earlier
-    rounds argued about no longer exists. ON THE ONE-OFF ROUTE the same count
+    rounds argued about no longer exists. AFTER APPROVAL the same reasoning
+    holds INSIDE an attempt (DRE-4115): every send-back is followed by a
+    re-plan, so the round after it reads a different plan, and "two failed
+    rounds" means two rounds whose findings STILL STAND — the critic is shown
+    the previous round's findings, says which the revision left open
+    (`still-open:`), and a round that answered everything is not counted
+    against the next. A plan that keeps producing NEW findings still parks
+    after MAX_ROUNDS answered revisions, and a PERSON re-running a parked
+    review opens a fresh attempt (`opens_fresh_attempt`) — every reset costs
+    a human act, so nothing circles forever. Before this, DRE-3778 was
+    approved five times and parked five times on "round 6 of 2".
+    ON THE ONE-OFF ROUTE the same count
     holds over the card's whole history (DRE-4058): its loop runs through the
     CEO — park, answer, back to Planning, a fresh single call — so the bound is
     spent in his queue rather than in one job, and at it the card is asked for a
@@ -71,7 +82,21 @@ Three rules baked in, each one bought:
     line inside it matching a marker spent a round nobody ran.
 
 CLI:
-  charter <stage> [--sight-file F]   the stage's prompt block
+  charter <stage> [--sight-file F] [--prior-file F]
+                                     the stage's prompt block; `--prior-file`
+                                     is the previous round's findings block
+                                     (`prior-round`), post stage only
+  prior-round --stage S [--epic E]   the previous send-back round's findings
+                                     as the block the charter carries, or
+                                     nothing when this is the first round;
+                                     comment thread on stdin (DRE-4115)
+  activate-cycle --epic E [--reason R]
+                                     `open` when this ACTIVATE run should open
+                                     a fresh planning attempt — a PERSON
+                                     re-running a review the bound parked —
+                                     else `keep`; thread on stdin. Never exits
+                                     non-zero: an unreadable thread keeps the
+                                     attempt, the direction that parks
   mechanical [--plan-comment-file F] [--surfaces-dir D] [--note-file F]
                                      cards on stdin (`children-json`); the note
                                      is the list posted to the epic BEFORE the
@@ -416,7 +441,7 @@ WHEN YOU FIND COLLISIONS, write `collisions: <n>` on its own line in your
 result file, naming each one in your reason. That count is recorded separately
 from collisions found later, and the gap between the two is the tripwire for
 whether this check needs its own pass.
-{sight}"""
+{prior}{sight}"""
 
 _ONE_OFF_CHARTER = """\
 YOU ARE THE PRE-APPROVAL CRITIC, and the card in front of you is not a plan.
@@ -506,12 +531,19 @@ def agent(stage: str) -> str:
     return STAGES[stage]["agent"]
 
 
-def charter(stage: str, sight: str = "") -> str:
+def charter(stage: str, sight: str = "", prior: str = "") -> str:
     """The stage's prompt block, as the workflow interpolates it.
 
     `sight` is the cross-epic scope block and reaches the POST stage only: the
     other two charters state they have no cross-epic sight, and handing one to
     them would be the same critic twice.
+
+    `prior` is the previous round's findings block (`prior_round_block`,
+    DRE-4115) and reaches the POST stage only, for the same reason the bound
+    it feeds is the post stage's: a re-plan sits between two post rounds, and
+    the round after it is asked which of the earlier findings the revision
+    left open. Empty on a first round, and the charter then says nothing
+    about it.
 
     `child_state` is passed to every stage and referenced by the two that read
     CHILDREN. `str.format` ignores a keyword no template names, so the one-off
@@ -524,6 +556,7 @@ def charter(stage: str, sight: str = "") -> str:
     return spec["template"].format(
         question=spec["question"],
         child_state=_CHILD_STATE_BLOCK,
+        prior=("\n" + prior.rstrip("\n") + "\n") if prior.strip() else "",
         sight=("\n" + sight.rstrip("\n") + "\n") if sight.strip() else "",
     )
 
@@ -734,6 +767,10 @@ _MARKER = re.compile(
     # the reader cannot parse is a round the record does not hold (DRE-3041).
     rf"^{re.escape(MARKER_PREFIX)}\s+stage=(?P<stage>[\w-]+)\s+round=(?P<round>\d+)\s+"
     r"result=(?P<result>[A-Z_]+)\s+collisions=(?P<collisions>\d+)"
+    # `open=<n>` — how many of the PREVIOUS round's findings this round found
+    # still open (DRE-4115). Optional: every marker written before it existed,
+    # and every pre-stage one, has no reading, and `parse_markers` says None.
+    r"(?:\s+open=(?P<open>\d+))?"
     r"(?:\s+—\s+(?P<reason>.*))?$",
     re.MULTILINE,
 )
@@ -751,10 +788,19 @@ _LATE_COLLISION = re.compile(
 
 
 def marker(stage: str, round_n: int, result: str, reason: str = "",
-           collisions: int = 0) -> str:
-    """The machine-parseable record of one critic round."""
+           collisions: int = 0, open_count: int | None = None) -> str:
+    """The machine-parseable record of one critic round.
+
+    `open_count` is how many of the previous round's findings this round found
+    still open (DRE-4115) — written only when the decision had a reading, so
+    the sweep's gate (`post_release`) can ask the same question `decide`
+    answered off the same record, and a marker with no field is honestly
+    UNKNOWN rather than silently "answered".
+    """
     line = (f"{MARKER_PREFIX} stage={stage} round={int(round_n)} "
             f"result={result} collisions={int(collisions)}")
+    if open_count is not None:
+        line += f" open={int(open_count)}"
     reason = one_line(reason)
     return line + (f" — {reason}" if reason else "")
 
@@ -1057,6 +1103,8 @@ def parse_markers(bodies: list) -> list[dict]:
             "round": int(m.group("round")),
             "result": m.group("result"),
             "collisions": int(m.group("collisions")),
+            # None, not 0: a marker with no field recorded no reading.
+            "open": int(m.group("open")) if m.group("open") is not None else None,
             "reason": (m.group("reason") or "").strip(),
         })
     return rows
@@ -1096,7 +1144,8 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
         write-up, anything an agent wrote after reading untrusted epic text —
         opens nothing.
       * The pipeline's. Only the run that decides an epic is being planned
-        writes one, so only its own comments are read (`trusted_bodies`).
+        writes one, so only its own comments are read (`_entry_trusted`, the
+        same predicate `trusted_bodies` applies).
       * About THIS epic, when the caller says which one. The standard's worked
         example names a real epic verbatim, so a boundary is scoped to the epic
         being decided rather than to any epic named anywhere in the thread.
@@ -1110,18 +1159,37 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
     lives entirely in these persisted markers — which is exactly what a forged
     boundary defeated.
     """
-    bodies = trusted_bodies(bodies)
+    return [_entry_body(entry) for entry in current_cycle_entries(bodies, epic)]
+
+
+def current_cycle_entries(entries, epic: str | None = None) -> list:
+    """`current_cycle`, keeping each comment's RECORD instead of just its text.
+
+    Same credential, same boundary, same scope — this is the one reader that
+    needs more of a comment than what it says. `prior_round` reads the round's
+    `created_at` off the record so the charter can tell the next critic when
+    that round ran, and a reader that flattens the thread to bodies before
+    scoping it drops the stamp on the way past. That is exactly what shipped:
+    `_cmd_prior_round` scoped through the bodies reader, so `ran_at` was always
+    None and the staleness sentence was never emitted in production
+    (found in review, DRE-4115).
+
+    A caller that only wants the text keeps calling `current_cycle`, which is
+    now this function plus `_entry_body` — one boundary reader, so the two can
+    never disagree about which attempt a comment belongs to.
+    """
+    kept = [entry for entry in (entries or []) if _entry_trusted(entry)]
     start = 0
-    for i, body in enumerate(bodies):
+    for i, entry in enumerate(kept):
         # A body that is exactly a boundary cannot also be exactly a marker, so
         # the old "a marker never opens a cycle" guard is now structural.
-        m = _sole_record(_CYCLE, body)
+        m = _sole_record(_CYCLE, _entry_body(entry))
         if not m:
             continue
         if epic and m.group("epic") != epic:
             continue
         start = i + 1
-    return bodies[start:]
+    return kept[start:]
 
 
 def send_backs(bodies: list, stage: str) -> int:
@@ -1155,6 +1223,178 @@ def send_back_findings(bodies: list, stage: str) -> list[str]:
     """
     return [r["reason"] for r in parse_markers(bodies)
             if r["stage"] == stage and r["result"] == SEND_BACK and r["reason"]]
+
+
+# --- The answered round (DRE-4115) ------------------------------------------
+#
+# After approval every send-back is followed by a re-plan (plan.yml: "Re-plan
+# after the second critic sent it back", on every hold), so the round after it
+# is reading a DIFFERENT plan. `send_backs` counts markers, and a marker does
+# not know whether the plan it argued about still exists. On DRE-4025 round 1's
+# four findings were answered in four minutes; round 2, a day and a half later,
+# found five things that had changed in the estate meanwhile, and the count —
+# "round 2 of 2" beside a footer reading "1/1 rounds" — parked the epic. On
+# DRE-3778 the same arithmetic parked five approvals in a row at "round 6 of 2".
+#
+# So the round after a re-plan is SHOWN what the previous round found, and says
+# which of those the revision left open. That line is what the bound reads: a
+# finding still open after a repair is "sent back twice and still not fixed";
+# a round whose findings were all answered is round 1 of the revision's own
+# life. And because the critic's reading is the input, the critic is told the
+# previous round's clock too — the plan is older than the estate it is being
+# read against, and a change that landed since is a note, not a strike.
+
+#: The line the critic writes: `still-open: none`, or `still-open: 1, 3` — the
+#: numbers of the previous round's findings, as the charter numbered them.
+STILL_OPEN_PREFIX = "still-open:"
+STILL_OPEN_NONE = "none"
+
+_STILL_OPEN_LINE = re.compile(
+    rf"^\s*{re.escape(STILL_OPEN_PREFIX)}\s*(?P<items>.*?)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _entry_body(entry) -> str:
+    return (entry.get("body") or "") if isinstance(entry, dict) else (entry or "")
+
+
+def _entry_trusted(entry) -> bool:
+    return bool(entry.get("authored_by_pipeline")) if isinstance(entry, dict) else True
+
+
+def prior_round(entries, stage: str) -> dict | None:
+    """The LAST send-back round at `stage` in the bodies you hand it — its
+    findings, worst first, and the clock its record was posted at.
+
+    Read through the same credential as every other reader (`trusted_bodies`
+    + `_sole_record`): the round is a marker the pipeline wrote alone in its
+    comment, and its findings are that marker's reason — the worst gap, the
+    only one the record carries — plus the numbered list in the NOTE the run
+    posted immediately before it (`_cmd_decide` posts the note, then the
+    record, as two consecutive comments). The note is prose and records
+    nothing; here it is read only for the list under the round's own marker,
+    and only when the pipeline wrote it.
+
+    `None` when the stage has no send-back in these bodies — a first round
+    is shown nothing.
+    """
+    previous = None
+    found = None
+    for entry in entries or []:
+        if not _entry_trusted(entry):
+            previous = None
+            continue
+        body = _entry_body(entry)
+        m = _sole_record(_MARKER, body)
+        if m and m.group("stage") == stage and m.group("result") == SEND_BACK:
+            reason = one_line(m.group("reason") or "")
+            listed = (further_findings(previous)
+                      if previous and FINDINGS_HEADING in previous else [])
+            items = ([reason] if reason else []) + [f for f in listed if f != reason]
+            found = {
+                "findings": items,
+                "ran_at": (entry.get("created_at") if isinstance(entry, dict)
+                           else None) or None,
+            }
+        previous = body
+    return found
+
+
+def prior_findings(entries, stage: str) -> list[str]:
+    """Every finding the previous send-back round at `stage` reported, worst
+    first — what the critic is shown, numbered, and what `still-open:`'s
+    numbers index."""
+    found = prior_round(entries, stage)
+    return list(found["findings"]) if found else []
+
+
+def _pt_clock(iso: str | None) -> str | None:
+    """`2026-09-15 10:43 PT` from a Linear timestamp, or None. Pacific because
+    a person reads the charter's sentence about it, and every clock a person
+    reads is Pacific (CLAUDE.md); UTC stays inside the record."""
+    if not iso:
+        return None
+    try:
+        when = _ts(iso)
+    except ValueError:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        local = when.astimezone(ZoneInfo("America/Los_Angeles"))
+    except Exception:  # noqa: BLE001 — no tz database: say so rather than lie
+        return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return local.strftime("%Y-%m-%d %H:%M PT")
+
+
+def prior_round_block(findings: list[str], ran_at: str | None = None) -> str:
+    """The charter block for a round that follows a re-plan: the previous
+    round's findings, numbered, and the instruction to say which still stand.
+    Empty when there is no previous round, so a first round's charter says
+    nothing about one."""
+    if not findings:
+        return ""
+    clock = _pt_clock(ran_at)
+    when = (f"That round ran at {clock}; the estate you are reading the plan "
+            "against may have moved since, and a change that landed AFTER the "
+            "plan was written is a note for the planner, not a strike against "
+            "it.\n" if clock else "")
+    return (
+        "THE PREVIOUS ROUND OF THIS REVIEW SENT THE PLAN BACK, and the plan has "
+        "been revised since to answer it. What that round found, ranked:\n"
+        f"{findings_block(findings)}\n"
+        f"{when}"
+        "For EACH of those, decide whether the plan in front of you now answers "
+        "it — then write, on its own line in your result file, exactly one of:\n"
+        f"  {STILL_OPEN_PREFIX} {STILL_OPEN_NONE}        the revision answered "
+        "every one of them\n"
+        f"  {STILL_OPEN_PREFIX} 1, 3        the numbers above that still stand\n"
+        "A finding the revision answered is NOT a finding this round — do not "
+        "raise it again in other words. A gap that is NEW, in the revision or "
+        "in the estate, is a finding, and you name it as one. The bound reads "
+        "this line: a plan sent back again with a finding still open parks for "
+        "a person; a plan whose revision settled everything is judged on what "
+        "you find now."
+    )
+
+
+def still_open_declared(text: str) -> list | None:
+    """What the critic wrote after `still-open:` — a list of 1-based numbers,
+    `[]` for `none`, `["all"]` for the word, or None when it wrote no line.
+    The LAST such line wins, the way `collisions:` is read."""
+    hits = _STILL_OPEN_LINE.findall(text or "")
+    if not hits:
+        return None
+    raw = hits[-1].strip().lower().rstrip(".")
+    if not raw or raw == STILL_OPEN_NONE:
+        return []
+    if raw == "all":
+        return ["all"]
+    return [int(n) for n in re.findall(r"\d+", raw)]
+
+
+def still_open_findings(text: str, prior: list[str], this_round: list[str]) -> list[str]:
+    """Which of the PREVIOUS round's findings this round says still stand.
+
+    The critic's own line when it wrote one; a number naming no prior finding
+    is ignored. Without the line, the one reading the text supports on its own
+    is repetition: a prior finding raised again VERBATIM is still open, and
+    anything else reads as answered — the direction that buys the revision its
+    round, bounded by `post_bound_spent`'s cap so a critic that never writes
+    the line still cannot circle a plan forever.
+    """
+    prior = list(prior or [])
+    declared = still_open_declared(text)
+    if declared is not None:
+        if declared == ["all"]:
+            return prior
+        out: list[str] = []
+        for n in declared:
+            if 1 <= n <= len(prior) and prior[n - 1] not in out:
+                out.append(prior[n - 1])
+        return out
+    repeated = {one_line(f) for f in (this_round or [])}
+    return [f for f in prior if f in repeated]
 
 
 def rate(bodies: list, stage: str) -> dict:
@@ -1404,15 +1644,91 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
             "the second critic produced no result — a crash is not a rejection"
         )
     failed = [r for r in rows if r["result"] not in (PASS, NO_RESULT)]
-    if len(failed) >= MAX_ROUNDS:
+    # The bound, read off the same record `decide` wrote (DRE-4115): the
+    # newest failed round's `open=` field says how many of the round before
+    # it the revision left open. No field is no reading — the arithmetic
+    # every marker before the field was parked under.
+    prior, open_count = len(failed) - 1, last["open"]
+    if post_bound_spent(prior, open_count):
         reasons = "; ".join(r["reason"] or "none given" for r in failed)
+        if open_count is None:
+            return POST_HELD, (
+                f"{_count_word(len(failed))} failed rounds at the second critic — "
+                "the bound, so the plan is parked for the CEO with needs-human "
+                "rather than built as it stands. The critic's stated reasons, "
+                "unresolved: " + reasons
+            )
+        if open_count > 0:
+            return POST_HELD, (
+                f"{_count_word(len(failed))} failed rounds at the second critic "
+                "and the revision did not settle it — the bound, so the plan is "
+                "parked for the CEO with needs-human rather than built as it "
+                f"stands. Still open after the revision: {open_count} of the "
+                "previous round's findings. The critic's stated reasons: "
+                + reasons
+            )
         return POST_HELD, (
             f"{_count_word(len(failed))} failed rounds at the second critic — "
-            "the bound, so the plan is parked for the CEO with needs-human "
-            "rather than built as it stands. The critic's stated reasons, "
-            "unresolved: " + reasons
+            f"the bound. The plan has been revised {_count_word(prior)} times "
+            "since it was approved, each time answering everything the critic "
+            "named, and the review still finds new gaps, so it is parked for "
+            "the CEO with needs-human rather than circling. The critic's "
+            "stated reasons: " + reasons
+        )
+    if open_count == 0 and prior >= 1:
+        return POST_HELD, (
+            f"{last['reason']} — the revision answered every finding of the "
+            "round before, so this is the revised plan's own first finding "
+            "and the review re-runs on the next revision"
         )
     return POST_HELD, last["reason"]
+
+
+def post_bound_reached(bodies: list, epic: str | None = None) -> bool:
+    """Is this planning attempt's post-approval budget SPENT — the state the
+    workflow parked the epic in with `needs-human`? Read off the record the
+    way `post_release` reads it, so the route step and the sweep's gate can
+    never disagree about whether an epic is parked."""
+    cycle = current_cycle(bodies, epic)
+    rows = [r for r in parse_markers(cycle) if r["stage"] == STAGE_POST]
+    if not rows or rows[-1]["result"] in (PASS, NO_RESULT):
+        return False
+    failed = [r for r in rows if r["result"] not in (PASS, NO_RESULT)]
+    return post_bound_spent(len(failed) - 1, rows[-1]["open"])
+
+
+def opens_fresh_attempt(bodies: list, epic: str | None, reason: str | None) -> bool:
+    """Should this ACTIVATE-route run open a new planning cycle (DRE-4115)?
+
+    Yes when a PERSON is re-running a review the bound has parked: the park
+    asked a person to settle the plan, and clearing `needs-human` then posting
+    the act (`reason: re-run`) or approving the epic back out of Green Light
+    (no `reason` at all) is that person saying it is settled. The review that
+    follows judges the settled plan on its own rounds rather than inheriting
+    the ones it has already answered — before this, DRE-3778 was approved five
+    times and came back at "round 5 of 2", then 6.
+
+    ONLY for those two human asks — an ALLOWLIST, not a denylist of the
+    pipeline's reasons. The pipeline's own asks today are `re-review` (the
+    same-cards re-run after a re-plan) and `review-retry` (a dead review's
+    retry); a boundary on either would refund the budget on every round, so
+    nothing would ever park, and would cut the tombstone the retry ceiling is
+    sized from out of the cycle. A dispatcher added later with a reason of
+    its own must not inherit a refund nobody decided on, so any reason that
+    is not one of the two a person produces keeps the attempt. The
+    answered/open reading (`post_bound_spent`) is what judges the pipeline's
+    own re-review.
+
+    And never when the bound has NOT been reached: a person re-running round 2
+    (DRE-4112's recovery from a killed dispatch) is asking for round 2, and
+    round 2 is judged on whether the revision answered round 1. Every reset
+    costs a human act at a park, which is what keeps the loop finite.
+    """
+    import review_rerun  # deferred: it imports this module
+
+    if (reason or "").strip() not in ("", review_rerun.REASON_RERUN_ACT):
+        return False
+    return post_bound_reached(bodies, epic)
 
 
 def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
@@ -1539,8 +1855,40 @@ def _bound_spent(prior_send_backs: int) -> bool:
     return int(prior_send_backs) + 1 >= MAX_ROUNDS
 
 
+def post_bound_spent(prior_send_backs: int, open_count: int | None) -> bool:
+    """Does THIS post-approval send-back spend the budget (DRE-4115)?
+
+    `open_count` is how many of the PREVIOUS round's findings this round found
+    still open — the critic's `still-open:` line, or the marker's `open=`
+    field when the sweep reads the same round back. Three readings:
+
+      * `None` — no reading. A marker written before the field existed, or a
+        caller with nothing to say about the previous round. Unknown is not
+        "answered" (standards/console-honesty.md rule 2), so this is the
+        arithmetic every round was parked under before: `_bound_spent`.
+      * a finding still open — "sent back twice and still not fixed". The
+        bound, on the second send-back, exactly as before.
+      * every finding answered — the revision is judged on its own rounds. It
+        is NOT the bound at round 2; it IS the bound once MAX_ROUNDS revisions
+        have each answered everything and the review still finds new gaps,
+        because a plan that keeps growing findings is not converging and a
+        person should read it rather than the pipeline paying for a fourth
+        review. Nothing circles forever.
+
+    Round 1 never spends anything, whatever the reading says: there was no
+    previous round to leave open.
+    """
+    prior = int(prior_send_backs)
+    if prior < 1:
+        return False
+    if open_count is None:
+        return _bound_spent(prior)
+    return int(open_count) > 0 or prior >= MAX_ROUNDS
+
+
 def decide(result: str, prior_send_backs: int, reason: str = "",
-           stage: str = STAGE_PRE) -> tuple[str, str]:
+           stage: str = STAGE_PRE,
+           still_open: list[str] | None = None) -> tuple[str, str]:
     """`(action, note)` — `hold` stops the plan here, `proceed` moves it on.
 
     The bound: the FIRST send-back holds; the second means two failed rounds.
@@ -1557,6 +1905,13 @@ def decide(result: str, prior_send_backs: int, reason: str = "",
         `needs-human` and both findings (the watched queue — not the unread
         lane the 27-day failure lived in).
 
+    ...and on the POST stage "held twice" means held twice ON THE SAME
+    FINDINGS (DRE-4115). `still_open` is which of the previous round's
+    findings this round found still open — `[]` when the revision answered
+    every one, `None` when the caller has no reading (then the count decides,
+    as it always did). See `post_bound_spent` for the three readings and the
+    cap that keeps a plan from circling forever.
+
     Nothing circles a third time on either side.
     """
     if result == PASS:
@@ -1569,16 +1924,10 @@ def decide(result: str, prior_send_backs: int, reason: str = "",
             "plan proceeds and this round is not counted against the bound"
         )
     failed = prior_send_backs + 1
+    if stage == STAGE_POST:
+        return _decide_post(prior_send_backs, reason, still_open)
     if not _bound_spent(prior_send_backs):
         return "hold", f"sent back — round {failed} of {MAX_ROUNDS}"
-    if stage == STAGE_POST:
-        note = (
-            f"{_count_word(failed)} failed rounds at this critic — the bound. "
-            "This plan has been sent back twice since it was approved, so it "
-            "parks for you with `needs-human` instead of being built as it "
-            "stands. The critic's stated reason, unresolved: "
-        ) + one_line(reason)
-        return "hold", note
     note = (
         f"{_count_word(failed)} failed rounds at this critic — the bound, so the "
         "plan proceeds to the CEO regardless rather than circling. "
@@ -1587,12 +1936,60 @@ def decide(result: str, prior_send_backs: int, reason: str = "",
     return "proceed", note
 
 
-def at_bound(action: str, prior_send_backs: int, result: str) -> bool:
+def _decide_post(prior: int, reason: str,
+                 still_open: list[str] | None) -> tuple[str, str]:
+    """The post stage's half of `decide`, for a real send-back."""
+    failed = prior + 1
+    open_count = None if still_open is None else len(still_open)
+    if not post_bound_spent(prior, open_count):
+        if prior < 1:
+            return "hold", f"sent back — round {failed} of {MAX_ROUNDS}"
+        return "hold", (
+            f"sent back — round {failed} on this planning attempt, but the "
+            "revision answered every finding of the round before, so this "
+            "round is judged on its own: the plan is revised again for what "
+            "was found now, and the review re-runs. One more send-back that "
+            "the revision does not settle parks the plan for you"
+        )
+    if open_count is None:
+        note = (
+            f"{_count_word(failed)} failed rounds at this critic — the bound. "
+            "This plan has been sent back twice since it was approved, so it "
+            "parks for you with `needs-human` instead of being built as it "
+            "stands. The critic's stated reason, unresolved: "
+        ) + one_line(reason)
+        return "hold", note
+    if open_count > 0:
+        listed = "; ".join(f"{i}. {f}" for i, f in enumerate(still_open, 1))
+        note = (
+            f"{_count_word(failed)} failed rounds at this critic and the "
+            "revision did not settle it — the bound. Still open after the "
+            f"revision: {listed}. The plan parks for you with `needs-human` "
+            "instead of being built as it stands. The critic's newest "
+            "finding: "
+        ) + one_line(reason)
+        return "hold", note
+    note = (
+        f"{_count_word(failed)} failed rounds at this critic — the bound. The "
+        f"plan has been revised {_count_word(prior)} times since it was "
+        "approved, each time answering everything the critic named, and the "
+        "review still finds new gaps — it is not converging, so it parks for "
+        "you with `needs-human` rather than circling. The critic's newest "
+        "finding, unresolved: "
+    ) + one_line(reason)
+    return "hold", note
+
+
+def at_bound(action: str, prior_send_backs: int, result: str,
+             still_open: list[str] | None = None) -> bool:
     """Did THIS decision spend the last round of the budget? True only for a
-    real send-back that holds at MAX_ROUNDS — the post stage's park signal.
-    A crash or a pass never reaches the bound, whatever the count says."""
+    real send-back that holds at the bound — the post stage's park signal.
+    A crash or a pass never reaches the bound, whatever the count says.
+    `still_open` is the post stage's reading (DRE-4115); with none given the
+    answer is the count's, exactly as before."""
+    open_count = None if still_open is None else len(still_open)
     return (action == "hold" and result == SEND_BACK
-            and _bound_spent(prior_send_backs))
+            and post_bound_spent(prior_send_backs, open_count))
 
 
 # --- The one-off exit (DRE-3041) --------------------------------------------
@@ -2318,13 +2715,20 @@ def _read(path: str | None) -> str:
         return ""
 
 
-def _write_outputs(path: str | None, pairs: list[tuple[str, str]]) -> None:
+def _write_outputs(path: str | None, pairs: list[tuple[str, str]],
+                   limit: int = 300) -> None:
+    """One line per key. `limit` is `one_line`'s: the collapse to ONE line is
+    the safety property (a note an agent wrote must never smuggle a second
+    output key); the length is only a courtesy to whoever reads the log, and
+    the decision's `note` — which since DRE-4115 names every finding still
+    open — is written with a wider one so the park comment built from it is
+    not cut mid-list."""
     if not path:
         return
     try:
         with open(path, "a", encoding="utf-8") as f:
             for key, value in pairs:
-                f.write(f"{key}={one_line(value)}\n")
+                f.write(f"{key}={one_line(value, limit)}\n")
     except OSError as exc:
         print(f"plan critic: could not write step outputs: {exc}")
 
@@ -2356,8 +2760,46 @@ def _write_block_output(path: str | None, name: str, value: str) -> None:
         print(f"plan critic: could not write the findings block: {exc}")
 
 
+def _cmd_prior_round(args) -> int:
+    """The previous round's findings block for the critic's charter, or
+    nothing on a first round (DRE-4115). Always 0: a block that could not be
+    built is an empty block — the critic then runs as a first round would,
+    and the decision's fallback reading still bounds it."""
+    try:
+        thread = _stdin_json([])
+        # The ENTRIES, not the bodies: the round's clock lives on the record
+        # and the block's `when` sentence is built from it (DRE-4115).
+        found = prior_round(current_cycle_entries(thread, args.epic), args.stage)
+        block = (prior_round_block(found["findings"], found.get("ran_at"))
+                 if found else "")
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        print(f"plan critic: could not read the previous round ({exc}) — "
+              "showing the critic nothing", file=sys.stderr)
+        block = ""
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(block + ("\n" if block else ""))
+    print(block, end="\n" if block else "")
+    return 0
+
+
+def _cmd_activate_cycle(args) -> int:
+    """`open` or `keep`, for the route step's ACTIVATE branch (DRE-4115).
+    Always 0, and an unreadable thread is `keep`: the direction that keeps a
+    parked epic parked rather than refunding a budget nobody read."""
+    try:
+        answer = opens_fresh_attempt(_stdin_json([]), args.epic, args.reason)
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        print(f"plan critic: could not read the thread ({exc}) — keeping the "
+              "current attempt", file=sys.stderr)
+        answer = False
+    print("open" if answer else "keep")
+    return 0
+
+
 def _cmd_charter(args) -> int:
-    print(charter(args.stage, sight=_read(args.sight_file)), end="")
+    print(charter(args.stage, sight=_read(args.sight_file),
+                  prior=_read(args.prior_file)), end="")
     return 0
 
 
@@ -2400,6 +2842,16 @@ def _cmd_decide(args) -> int:
     # never used, and say "round 3 of 2" while doing it.
     cycle = current_cycle(thread, args.epic)
     prior = send_backs(cycle, args.stage)
+    # The post stage's reading of the round before (DRE-4115): which of its
+    # findings the revision left open, off the critic's `still-open:` line
+    # against the list it was shown — the same list `prior-round` printed
+    # into its charter, read back out of the same thread. None on a first
+    # round: nothing came before, so there is nothing to have answered.
+    still_open: list[str] | None = None
+    if args.stage == STAGE_POST and prior:
+        still_open = still_open_findings(result_text,
+                                         prior_findings(cycle, args.stage), items)
+    open_count = None if still_open is None else len(still_open)
     if args.stage == STAGE_ONE_OFF:
         # The bound on THIS route is the card's whole send-back history: the
         # loop runs through the CEO, so `prior` is the number of times he has
@@ -2415,7 +2867,8 @@ def _cmd_decide(args) -> int:
             items = every_finding_so_far(
                 send_back_findings(cycle, args.stage), items)
     else:
-        action, note = decide(result, prior, reason, stage=args.stage)
+        action, note = decide(result, prior, reason, stage=args.stage,
+                              still_open=still_open)
     stats = rate(cycle, args.stage)
     # The round NUMBER counts every round this stage has run, including ones it
     # passed or crashed on; the BOUND counts only the failed ones. Two different
@@ -2426,18 +2879,26 @@ def _cmd_decide(args) -> int:
     # CEO to approve the same plan a third time. A one-off REWRITE is the same
     # fact on the other route and says so here rather than leaving the run
     # claiming `bound=false` beside a note that says "the bound" (DRE-4058).
-    bound = action == REWRITE or at_bound(action, prior, result)
+    bound = action == REWRITE or at_bound(action, prior, result, still_open)
 
     _write_outputs(args.github_output, [
         ("action", action),
         ("result", result),
         ("reason", reason),
         ("round", str(round_n)),
-        ("note", note),
         ("collisions", str(collisions)),
         ("bound", "true" if bound else "false"),
         ("findings_count", str(len(items))),
+        # The previous round's findings this round found still open, for the
+        # park note (DRE-4115) — "none" when the revision answered every one,
+        # and "unread" on a round that had no previous round to read.
+        ("open", ("unread" if still_open is None
+                  else "; ".join(still_open) or "none")),
+        ("open_count", "" if open_count is None else str(open_count)),
     ])
+    # The note, wider: the park comment is built from it and it names every
+    # finding still open (DRE-4115). Still ONE line.
+    _write_outputs(args.github_output, [("note", note)], limit=2000)
     # The list itself, for the re-plan's prompt — the ONE multi-line output.
     _write_block_output(args.github_output, "findings", findings_block(items))
 
@@ -2492,6 +2953,13 @@ def _cmd_decide(args) -> int:
             else "This card is not going to the build queue — it is with a "
                  "person, in the decision queue, with the reason above."
         )
+    elif args.stage == STAGE_POST:
+        # No "of MAX_ROUNDS" here (DRE-4115): the post stage's rounds run one
+        # per job across re-plans, and "round 6 of 2" beside "5/5 rounds" was
+        # the contradiction the live epics printed. The note says what the
+        # round means; the number says which round it is.
+        headline = f"{icon} **{title}** — round {round_n}: {note}"
+        closing = rate_text
     else:
         headline = f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}"
         closing = rate_text
@@ -2508,7 +2976,10 @@ def _cmd_decide(args) -> int:
         *( [section] if section else [] ),
         closing,
     ])
-    record = marker(args.stage, round_n, result, reason, collisions)
+    # The post record carries the reading (DRE-4115) so the sweep's gate reads
+    # the round the way this step decided it; the other stages have none.
+    record = marker(args.stage, round_n, result, reason, collisions,
+                    open_count=open_count if args.stage == STAGE_POST else None)
     if args.note_file:
         with open(args.note_file, "w", encoding="utf-8") as f:
             f.write(body + "\n")
@@ -2639,7 +3110,24 @@ def main(argv: list[str]) -> int:
     c = sub.add_parser("charter", help="print a stage's prompt block")
     c.add_argument("stage", choices=sorted(STAGES))
     c.add_argument("--sight-file", default=None)
+    # The previous round's findings block (`prior-round`), post stage only.
+    c.add_argument("--prior-file", default=None)
     c.set_defaults(fn=_cmd_charter)
+
+    q = sub.add_parser("prior-round",
+                       help="the previous send-back round's findings block; thread on stdin")
+    q.add_argument("--stage", required=True, choices=sorted(STAGES))
+    q.add_argument("--epic", default=None)
+    q.add_argument("--out", default=None, help="write the block here too")
+    q.set_defaults(fn=_cmd_prior_round)
+
+    a = sub.add_parser("activate-cycle",
+                       help="open or keep the planning attempt on an ACTIVATE run; thread on stdin")
+    a.add_argument("--epic", required=True)
+    # Why the run was asked for — the payload's `reason`, empty on the CEO's
+    # own approval move.
+    a.add_argument("--reason", default="")
+    a.set_defaults(fn=_cmd_activate_cycle)
 
     m = sub.add_parser("mechanical", help="structural findings; cards on stdin")
     m.add_argument("--plan-comment-file", default=None)

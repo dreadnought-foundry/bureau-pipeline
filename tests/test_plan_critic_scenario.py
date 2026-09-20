@@ -72,6 +72,11 @@ SEAM_FIXTURE = os.path.join(ROOT, "tests", "fixtures",
 EPIC = "DRE-2721"
 OTHER_EPIC = "DRE-2700"
 
+# Linear's own stamp on every comment the stub records, and the one the
+# previous round's charter clock is read off (DRE-4115). Passed to the stub
+# through the environment so the walk and the thread it reads agree on it.
+STUB_NOW = "2026-09-15T17:43:00.000Z"
+
 # The epics in flight the sight step reads. DRE-2700 is the collision partner:
 # it is mid-build on the same file the plan under review hands to a new card.
 EPICS_IN_FLIGHT = [
@@ -97,6 +102,10 @@ LINEAR_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 
 EPIC = "DRE-2721"
+# Linear's own stamp on a comment, which `dump-comments --with-authors` carries
+# (DRE-3754) and the previous round's charter clock is read off (DRE-4115). One
+# fixed value: what these walks check is that it ARRIVES, not what it says.
+STUB_NOW = os.environ.get("STUB_NOW") or "2026-09-15T17:43:00.000Z"
 
 
 def thread():
@@ -135,7 +144,8 @@ def main():
         else:
             print(json.dumps([r["body"] for r in records]))
     elif cmd == "comment":
-        records = thread() + [{"body": args[1], "authored_by_pipeline": True}]
+        records = thread() + [{"body": args[1], "authored_by_pipeline": True,
+                               "created_at": STUB_NOW}]
         with open(os.environ["STUB_THREAD"], "w") as f:
             json.dump(records, f)
         log("comment " + args[1].replace("\\n", " | "))
@@ -279,6 +289,7 @@ class CriticWalk(unittest.TestCase):
             STUB_THREAD=self.thread_path,
             STUB_LOG=self.log_path,
             STUB_EPICS=json.dumps(EPICS_IN_FLIGHT),
+            STUB_NOW=STUB_NOW,
             GITHUB_OUTPUT=self.gho,
             GITHUB_REPOSITORY="dreadnought-foundry/bureau-pipeline",
             MAX_WIP="8",
@@ -531,7 +542,8 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(payload["identifier"], EPIC)
 
         notice = self._thread()[-1]
-        self.assertIn("round 2 of 2", notice)
+        self.assertIn("round 2", notice)
+        self.assertNotIn("of 2", notice, "round N of 2 is the contradiction DRE-4115 cites")
         self.assertIn("names who runs the migration", notice)
         self.assertIn("no card manufactures the operator step", notice)
         self.assertNotIn(pc.REAPPROVE_HOW, notice)
@@ -619,10 +631,12 @@ class CriticWalk(unittest.TestCase):
         """The bound is read FIRST. Two real send-backs park for a person
         whatever the re-plan did to the cards — "the bound still parks" is out
         of this card's scope and must stay true."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         self.assertEqual(self._outputs()["bound"], "true")
         cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
         self.assertEqual(cards["changed"], "false")
@@ -632,6 +646,240 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("add-label needs-human", log)
         self.assertEqual(self._dispatches(), [],
                          "the bound bought a third review")
+
+    # --- DRE-4115: an answered round stops counting against the next --------
+    #
+    # The defect, live on DRE-3778 and DRE-4198 (2026-09-19): the post-approval
+    # bound counted SEND_BACK markers since a `plan-cycle:` boundary that only
+    # the PLAN route ever wrote, and never asked whether the re-plan between two
+    # rounds had answered the first one. Once a plan had been sent back twice
+    # in its life, every later approval parked it on arithmetic alone — "round
+    # 6 of 2" — with the park note telling the operator to take the very act
+    # that re-parks it.
+
+    def _critic_says(self, reason: str, further: list[str] = (),
+                     still_open: str | None = None):
+        """A post-stage SEND_BACK carrying every finding of the round and,
+        when the critic was shown a previous round, its reading of which of
+        THOSE the revision left open — `still-open: none` or the numbers."""
+        extra = "\n".join(f"{i}. {f}" for i, f in enumerate(further, 2))
+        if still_open is not None:
+            extra += f"\n\nstill-open: {still_open}\n"
+        self._critic_writes("post", pc.SEND_BACK, reason, extra)
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold")
+        return out
+
+    def _re_review(self, out: dict) -> dict:
+        """The same-cards branch after a hold: the re-plan kept the card set,
+        the run asks for the review itself. Returns the decision outputs."""
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self.assertEqual(cards["changed"], "false")
+        self._summary("Rewrote the cards the critic named.")
+        self._sent_back(cards, FINDING=out["reason"], BOUND=out["bound"],
+                        NOTE=out["note"])
+        return out
+
+    def test_a_revision_that_answered_every_finding_is_not_parked_on_arithmetic(self):
+        """THE REGRESSION (DRE-4115 AC4). Round 1 sends the plan back with two
+        findings; the re-plan answers both; round 2 finds one NEW gap and says
+        so. That is one open finding on a revised plan — round 1 of the
+        revision's own life, not "two failed rounds" — so the epic is NOT
+        parked: the plan is revised again and the review re-runs itself, and
+        no human is asked to approve a plan whose cards they already read."""
+        first = self._critic_says("DRE-9002 migrates a table but no card manufactures the operator step",
+                                  ["DRE-9001 carries no acceptance criteria"])
+        self.assertEqual(first["bound"], "false")
+        self._re_review(first)
+        self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
+                         ["re-review"])
+
+        # Round 2, on the revised plan: a NEW finding, and every finding of
+        # round 1 answered.
+        second = self._critic_says("DRE-9001 references a config key nothing creates",
+                                   still_open="none")
+        self.assertEqual(second["bound"], "false",
+                         "an answered round was counted against the next one")
+        self.assertNotIn("the bound", second["note"].lower())
+        self.assertIn("answered", second["note"].lower())
+        self.assertNotIn("of 2", self._note(),
+                         "round N of 2 is the contradiction the card cites")
+
+        self._re_review(second)
+        log = self._log()
+        self.assertNotIn("add-label needs-human", log, "parked on arithmetic alone")
+        self.assertNotIn("state Green Light", log)
+        self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
+                         ["re-review", "re-review"],
+                         "the revised plan gets its own review")
+        # ...and the sweep's gate holds the children exactly as before — a
+        # send-back the revision has not yet been reviewed for is not a release.
+        state, _ = pc.post_release(self._thread(), EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+
+    def test_a_revision_that_left_a_finding_open_parks_and_names_it(self):
+        """DRE-4115 AC2, the other half: sent back twice and STILL not fixed
+        is the bound, and the park note says WHICH findings remain open rather
+        than reporting a count."""
+        first = self._critic_says("no card manufactures the operator step",
+                                  ["DRE-9001 carries no acceptance criteria"])
+        self._re_review(first)
+        second = self._critic_says("DRE-9002 still names nobody to run the migration",
+                                   still_open="1")
+        self.assertEqual(second["bound"], "true")
+        self.assertIn("no card manufactures the operator step", second["open"])
+        self.assertNotIn("carries no acceptance criteria", second["open"])
+        self.assertIn("still open", second["note"].lower())
+        self.assertIn("no card manufactures the operator step", second["note"])
+
+        self._re_review(second)
+        log = self._log()
+        self.assertIn("state Green Light", log)
+        self.assertIn("add-label needs-human", log)
+        self.assertEqual(len(self._dispatches()), 1, "the bound bought a third review")
+        receipt = self._thread()[-1]
+        self.assertIn("no card manufactures the operator step", receipt)
+        self.assertIn("still open", receipt.lower())
+        self.assertIn(pc.REAPPROVE_HOW, receipt)
+        # The act the note names buys a real budget, and the note says so.
+        self.assertIn("fresh planning attempt", receipt)
+        self.assertNotIn("Todo", receipt)
+        state, detail = pc.post_release(self._thread(), EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("needs-human", detail)
+        self.assertIn("no card manufactures the operator step", detail)
+
+    def test_a_plan_that_keeps_growing_new_gaps_still_reaches_a_person(self):
+        """The gate is not weakened. A plan revised MAX_ROUNDS times, each
+        revision answering everything the critic named, that STILL comes back
+        with new findings is not converging — a person reads it rather than
+        the pipeline paying for a fourth review. Two answered rounds is the
+        budget; the third send-back parks whatever it found."""
+        first = self._critic_says("no card manufactures the operator step")
+        self._re_review(first)
+        second = self._critic_says("DRE-9001 references a config key nothing creates",
+                                   still_open="none")
+        self.assertEqual(second["bound"], "false")
+        self._re_review(second)
+        third = self._critic_says("DRE-9002 assumes a route DRE-9001 does not add",
+                                  still_open="none")
+        self.assertEqual(third["bound"], "true", "a plan can circle forever")
+        self.assertIn("new gaps", third["note"].lower())
+        self.assertIn("DRE-9002 assumes a route", third["note"])
+        self._re_review(third)
+        log = self._log()
+        self.assertIn("add-label needs-human", log)
+        self.assertEqual(len(self._dispatches()), 2)
+        state, detail = pc.post_release(self._thread(), EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("needs-human", detail)
+
+    def test_a_human_re_run_at_the_bound_opens_a_fresh_planning_attempt(self):
+        """DRE-4115 AC1, the half that is safe: an operator who clears
+        needs-human and re-runs the review — the act, or the approval move
+        from Green Light — has settled the plan the park asked about, so the
+        review that follows judges the settled plan on its own rounds. Every
+        reset costs a person's act, so the loop still ends. On today's code
+        the ACTIVATE route wrote no boundary, so DRE-3778 came back at round
+        5, then 6, after five approvals."""
+        first = self._critic_says("no card manufactures the operator step")
+        self._re_review(first)
+        second = self._critic_says("DRE-9002 still names nobody to run the migration",
+                                   still_open="1")
+        self.assertEqual(second["bound"], "true")
+        self._re_review(second)
+        self.assertIn("add-label needs-human", self._log())
+        self.assertTrue(pc.post_bound_reached(self._thread(), EPIC))
+
+        # The operator clears needs-human and posts the act; the relay
+        # dispatches the ACTIVATE route with `reason: re-run`.
+        self._shell("Route — plan or activate",
+                    subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+                    REASON="re-run")
+        self.assertEqual(self._outputs()["mode"], "activate")
+        self.assertNotIn("state Planning", self._log(), "the cards were not re-planned")
+        self.assertEqual(self._record(), pc.cycle_marker(EPIC),
+                         "the human re-run opened no fresh attempt")
+        self.assertFalse(pc.post_bound_reached(self._thread(), EPIC))
+
+        # Round 1 of the fresh attempt: a send-back holds for a revision and
+        # says round 1, not round 3 — and a PASS activates.
+        third = self._critic_says("DRE-9001 references a config key nothing creates")
+        self.assertEqual((third["round"], third["bound"]), ("1", "false"))
+        self.assertIn("round 1", self._note())
+
+    def test_the_ceo_approving_a_parked_epic_opens_a_fresh_attempt_too(self):
+        """The other trigger the relay has: the approval move INTO In Progress,
+        which carries no `reason` at all. Same act by a person, same fresh
+        attempt."""
+        first = self._critic_says("no card manufactures the operator step")
+        self._re_review(first)
+        second = self._critic_says("DRE-9002 still names nobody to run the migration",
+                                   still_open="1")
+        self._re_review(second)
+        self._shell("Route — plan or activate",
+                    subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+                    REASON="")
+        self.assertEqual(self._record(), pc.cycle_marker(EPIC))
+
+    def test_the_pipelines_own_re_review_opens_no_attempt(self):
+        """The pipeline asking for its OWN re-review, or retrying a dead
+        review, is not a person settling anything — a boundary there would
+        let a plan circle forever, and would hide the tombstone the retry
+        ceiling is sized from. Round 1's send-back stands, the re-review is
+        round 2, and the answered/open reading is what decides it."""
+        first = self._critic_says("no card manufactures the operator step")
+        self._re_review(first)
+        before = self._thread()
+        for reason in ("re-review", "review-retry"):
+            self._shell("Route — plan or activate",
+                        subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+                        REASON=reason)
+            self.assertEqual(self._outputs()["mode"], "activate")
+            self.assertEqual(self._thread(), before, f"{reason} wrote a boundary")
+
+    def test_a_first_approval_opens_no_attempt_either(self):
+        """An approval with no post round behind it has nothing to reset: the
+        plan route's boundary is the attempt, and a second one would cut the
+        first critic's rounds out of the rate the console reads."""
+        self._shell("Route — plan or activate",
+                    subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+                    REASON="")
+        self.assertEqual(self._outputs()["mode"], "activate")
+        self.assertEqual(self._thread(), [])
+
+    def test_the_second_critic_is_shown_the_previous_rounds_findings(self):
+        """The reading the bound now turns on is the critic's, so the critic
+        has to be SHOWN what the previous round found — numbered, so
+        `still-open: 1, 3` means something — and told to write the line. A
+        first round is shown nothing and asked for nothing."""
+        self._shell("second critic — the previous round")
+        prior = open(os.path.join(self.tmp, "plan-critic-prior.md")).read()
+        self.assertEqual(prior.strip(), "")
+
+        first = self._critic_says("no card manufactures the operator step",
+                                  ["DRE-9001 carries no acceptance criteria"])
+        self._re_review(first)
+        self._shell("second critic — the previous round")
+        prior = open(os.path.join(self.tmp, "plan-critic-prior.md")).read()
+        self.assertIn("1. no card manufactures the operator step", prior)
+        self.assertIn("2. DRE-9001 carries no acceptance criteria", prior)
+        self.assertIn("still-open:", prior)
+        # ...and it says WHEN that round ran, off the record's own stamp. The
+        # other half of the reading: a plan is older than the estate it is read
+        # against, and a change that landed since is a note for the planner
+        # rather than a strike. Asserted here, on the file the step actually
+        # writes, because the block's own unit test is handed the clock
+        # directly and cannot see a caller that never supplies one.
+        self.assertIn("That round ran at", prior)
+        self.assertIn(pc._pt_clock(STUB_NOW), prior)
+        # ...and it reaches the charter the critic reads first.
+        charter = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), "charter", "post",
+             "--prior-file", os.path.join(self.tmp, "plan-critic-prior.md")],
+            capture_output=True, text=True, check=True).stdout
+        self.assertIn("1. no card manufactures the operator step", charter)
 
     def test_the_dre_3257_walk_reaches_activation_with_no_human_move(self):
         """The shape DRE-3257 actually had, walked end to end: approval →
@@ -920,24 +1168,29 @@ class CriticWalk(unittest.TestCase):
         """DRE-3088: the bound after approval PARKS. The old rail activated the
         epic here — "two failed rounds and the work proceeds regardless" — and
         built a plan the critic had held twice."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        # ...and held twice ON THE SAME GAP (DRE-4115): round 2 says round 1's
+        # finding is still open.
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         out = self._outputs()
         self.assertEqual(out["action"], "hold")
         self.assertEqual(out["bound"], "true")
         self.assertIn("still no card", self._note())
         self.assertIn("two failed rounds", self._note().lower())
         self._shell("second critic sent the plan back", BOUND="true",
-                    FINDING=out["reason"], REPLAN_OUTCOME="success")
+                    FINDING=out["reason"], NOTE=out["note"], REPLAN_OUTCOME="success")
         log = self._log()
         self.assertIn("state Green Light", log)
         self.assertIn("add-label needs-human", log)
         self.assertNotIn("promote", log)
         self.assertNotIn("state In Progress", log)
         receipt = self._thread()[-1]
-        self.assertIn("Held twice", receipt)
+        self.assertIn("Parked for you", receipt)
+        self.assertIn("no card manufactures the operator step", receipt)
         self.assertNotIn("Todo", receipt)
         # ...and the sweep's gate reads the same thread the same way.
         state, _ = pc.post_release(self._thread(), EPIC)
@@ -1063,10 +1316,14 @@ class CriticWalk(unittest.TestCase):
         to hand a spent plan a fresh budget, so it could circle for as long as
         anyone kept posting one — the stuck-in-a-lane failure the bound exists
         to stop."""
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        # Round 2 finds round 1's gap still open (DRE-4115: that, not the
+        # count alone, is what reaches the bound).
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         # The bound is reached: after approval that is a park, not a release
         # (DRE-3088), and `bound=true` is the signal the park step reads.
         self.assertEqual(self._outputs()["bound"], "true")
@@ -1121,10 +1378,12 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("operator step", log)
 
     def test_a_planner_write_up_quoting_the_boundary_refunds_nothing(self):
-        for reason in ("no card manufactures the operator step",
-                       "still no card manufactures the operator step"):
-            self._critic_writes("post", pc.SEND_BACK, reason)
-            self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
         self.assertEqual(self._outputs()["bound"], "true")
 
         self._pipeline_comment(self._planner_write_up(pc.cycle_marker(EPIC)))

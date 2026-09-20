@@ -42,24 +42,57 @@ because it has already been spent.
 | Question | Is this fit to take the CEO's time? | Given this is now the specification, what is missing? |
 | Cross-epic scope | This epic only | This epic plus every epic in Green Light / Todo / In Progress, named one by one |
 | A send-back means | One revision round with the planner | One re-plan with the planner, then the route branches on whether it changed the card SET: same cards, the run re-reviews itself with no lane move; a card added or removed, the epic returns to Green Light naming it. Nothing promotes either way (DRE-3088, DRE-3291) |
-| At the bound (two failed rounds) | The plan proceeds to the CEO regardless, reason attached | The epic PARKS in Green Light with `needs-human` and both findings, whatever the card set did; it is never activated as it stands (DRE-3088) |
+| At the bound (two failed rounds) | The plan proceeds to the CEO regardless, reason attached | The epic PARKS in Green Light with `needs-human` and the findings still open, whatever the card set did; it is never activated as it stands (DRE-3088). On this side a "failed round" is one whose findings the revision did not answer (DRE-4115) |
 
 **Both loops are bounded at two failed rounds, and what the bound does depends
 on which side of the CEO the critic sits (amended by DRE-3088, 2026-09-04).**
 Before approval, the second failed round sends the plan to the CEO regardless,
 with the critic's stated reason attached — "proceed" there costs a person a
 read. After approval, "proceed" means agents build it, so the second failed
-round **parks** the epic in Green Light with `needs-human` and both findings,
-and the sweep's own gate (`plan_critic.post_release`) reads the bound the same
-way, so no cron sweep promotes the children either. Every post-approval
-send-back first gets one re-plan with the critic's findings — ALL of them, the
-whole ranked list it reported that round (DRE-3251) — so the CEO is never
-asked to re-approve the plan he already read; on DRE-3060 (2026-09-04) the
-original rule sent the identical plan back three times and then activated it.
-Nothing circles a third time on either side — an unbounded loop is how 17
-cards sat in a lane for 27 days, and Green Light with the hold label is a
-watched queue, not that lane. A round the critic passed is not a failure and
+round **parks** the epic in Green Light with `needs-human` and the findings
+still open, and the sweep's own gate (`plan_critic.post_release`) reads the
+bound the same way, so no cron sweep promotes the children either. Every
+post-approval send-back first gets one re-plan with the critic's findings —
+ALL of them, the whole ranked list it reported that round (DRE-3251) — so the
+CEO is never asked to re-approve the plan he already read; on DRE-3060
+(2026-09-04) the original rule sent the identical plan back three times and
+then activated it. Neither side circles without a bound — an unbounded loop is
+how 17 cards sat in a lane for 27 days, and Green Light with the hold label is
+a watched queue, not that lane. A round the critic passed is not a failure and
 a round it crashed on was never a decision, so neither spends the budget.
+
+**What "two failed rounds" COUNTS on the post side, and what resets it
+(amended by DRE-4115, 2026-09-20).** Every post-approval send-back is followed
+by a re-plan, so the round after one is reading a DIFFERENT plan — and counted
+as bare send-back markers, the budget was spent by rounds whose findings the
+revision had already answered. DRE-3778 was approved five times in one day and
+parked five times at "round 6 of 2", and the park note asked for the very act
+that re-parked it. So the round after a re-plan is **shown what the round
+before it found**, numbered and with the clock that round ran at, and writes
+`still-open: none` or `still-open: 1, 3` beside its verdict; the round record
+carries that reading (`open=<n>`), so `post_release` reads the round the way
+the decision did. The bound is then one of two things: a second send-back with
+a finding of the round before **still open** — sent back twice and still not
+fixed — or a plan that keeps producing NEW findings after `MAX_ROUNDS`
+revisions that each answered everything, which is a plan that is not
+converging. A second send-back whose revision answered every earlier finding
+is neither: the revised plan gets its own round. So on the post side a plan
+CAN take a third round; what is bounded is how many revisions may answer
+everything and still leave new gaps. A record with no reading — every marker
+written before this existed — is read as the count it always was, because
+unknown is not "answered".
+
+**And the park is no longer terminal by arithmetic.** The notice already asked
+a person to settle the plan and then ask for the review again; that act — the
+`▶️ re-run the review` comment the relay dispatches as `reason: re-run`, or
+approving the epic back out of Green Light with no reason at all — now opens a
+fresh planning attempt as well (`plan_critic.py activate-cycle`), so the review
+it starts judges the settled plan on its own rounds. Only a person's ask at the
+bound does: the pipeline's own `re-review` and `review-retry` never open one,
+because a boundary there would refund the budget on every round and nothing
+would ever park. Every reset costs a human act at a park, which is what keeps
+the loop finite. The rule in full, with the worked shapes, is
+`standards/plan-critic.md`.
 
 **What that re-plan costs the CEO turns on whether it changed the card SET
 (amended by DRE-3291, 2026-09-07).** The card set is the only part of a revised
@@ -77,7 +110,8 @@ plans whose cards had not changed (DRE-3164).
 
 **The bound is scoped to one planning attempt.** An epic sent back to Triage is
 re-planned from scratch, and the new plan gets its own rounds; the plan route
-posts a `plan-cycle:` boundary when an attempt starts and each critic counts
+posts a `plan-cycle:` boundary when an attempt starts — as does the activate
+route, on the person's ask at a park (DRE-4115, above) — and each critic counts
 from the last one. Counting over the epic's lifetime instead would push a
 re-planned epic to the CEO on its first send-back with no revision round — and
 nothing about the note would say so, which makes it a silent failure of the
