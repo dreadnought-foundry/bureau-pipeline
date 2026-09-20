@@ -394,6 +394,22 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
+          # Say the card in the LOG too, plan.yml's line exactly (DRE-4407).
+          # A workflow_dispatch re-review is recorded by GitHub on the
+          # DEFAULT branch, not on the pull request's, so the medic's card
+          # resolution (`medic_retry.card_for_run`) got nothing from the
+          # branch and — until this line — nothing from the log either. On
+          # the 2026-09-08 incident's second and third crashes, both on
+          # re-dispatched run 34287604200, it found no card at all: no
+          # evidence note, no hold of its own, and no way to ask the card
+          # whether a retry was allowed. The ECHOED line only; plan.yml's
+          # other half, the job NAME, would rename this job's check run, and
+          # check-run names are load-bearing for the merge gate, the
+          # reconcile sweep and branch protection. Read off the head ref
+          # above the way linear-sync reads it, never typed — and silent
+          # when the head ref names no card, because absent must stay absent
+          # rather than become a guess.
+          if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
           # DRE-1990: capture the head commit the critic is about to review.
           # The verdict comment embeds it (`VERDICT: <X> @<sha>`) so
           # merge-gate can refuse to apply the verdict to any LATER commit.
