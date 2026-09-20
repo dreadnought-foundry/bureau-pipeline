@@ -1014,6 +1014,37 @@ def _note_actions_read_failure(args: tuple[str, ...], detail: str) -> None:
 #: the DEFAULT BRANCH when no ref is given — the same branch `gh run list
 #: --workflow` resolves a workflow name against, which is the question here.
 _WORKFLOWS_DIR = ".github/workflows"
+#: This sweep's `.github/workflows` listing, memoised (DRE-4378). It used to be
+#: read once per FAILING workflow per sweep; a repo with no fix agent 404s the
+#: Actions read at every one of the five dispatch sites plus the busy-guard, so
+#: the same listing was fetched six times to answer one question. `None` is
+#: "not read yet", and a FAILED read is never memoised — `_open_pr_listing`'s
+#: rule, for its reason: caching the failure would turn one transient 403 into
+#: a silent answer for every later reader in the pass. Cleared by
+#: `reset_sweep_cards()`.
+_workflows_listing: set | None = None
+
+
+def _workflows_on_default_branch() -> set | None:
+    """The filenames in REPO's `.github/workflows`, or None if unreadable.
+
+    One read per sweep, shared by every caller of
+    `workflow_on_default_branch()` below — see `_workflows_listing`.
+    """
+    global _workflows_listing
+    if _workflows_listing is not None:
+        return _workflows_listing
+    raw = gh("api", f"repos/{REPO}/contents/{_WORKFLOWS_DIR}")
+    try:
+        entries = json.loads(raw) if raw else None
+    except ValueError:
+        entries = None
+    if not isinstance(entries, list) or not entries:
+        return None  # unreadable/empty — never provable absence, never memoised
+    _workflows_listing = {
+        e.get("name") for e in entries if isinstance(e, dict)
+    }
+    return _workflows_listing
 
 
 def workflow_on_default_branch(workflow: str) -> bool | None:
@@ -1034,24 +1065,20 @@ def workflow_on_default_branch(workflow: str) -> bool | None:
     directory, so `[]` from a real repo is a failure wearing a success's
     clothes, not evidence.
 
-    Called ONLY when an Actions read has already failed, so a healthy sweep
-    costs no extra API call and the probe runs at most once per failing
-    workflow per sweep.
+    Called when an Actions read has already failed, and (DRE-4378) by
+    `fix_agent_absent()` before a dispatch. That second caller is the one new
+    cost: a sweep that reaches a dispatch pays ONE contents read, where it
+    used to pay none. One per sweep, not one per pull request and not one per
+    site — the listing is memoised for the pass (`_workflows_listing`) and
+    every caller answers out of it, so a repo with no fix stub, which 404s the
+    Actions read at all five dispatch sites, still reads the listing once.
 
     Silent gh() by design — this helper HAS its own fallback (None), and it
     reads the contents API, not the Actions API the AST guard in
     test_reconcile_actions_reads_403.py polices.
     """
-    raw = gh("api", f"repos/{REPO}/contents/{_WORKFLOWS_DIR}")
-    try:
-        entries = json.loads(raw) if raw else None
-    except ValueError:
-        entries = None
-    if not isinstance(entries, list) or not entries:
-        return None  # unreadable/empty — never provable absence
-    return workflow in {
-        e.get("name") for e in entries if isinstance(e, dict)
-    }
+    listing = _workflows_on_default_branch()
+    return None if listing is None else workflow in listing
 
 
 def _actions_runs_busy(workflow: str) -> bool:
@@ -1078,10 +1105,25 @@ def _actions_runs_busy(workflow: str) -> bool:
     hide a real permission failure, which is the same mistake pointing the
     other way.
 
-    Deliberately NOT extended to the dispatch sites: if such a repo ever does
-    produce a wedged PR, `gh workflow run` on the missing stub still fails
-    LOUDLY. A repo with no fix agent and a stuck pull request is a real problem
-    and must not be swallowed by this quieting.
+    The five dispatch sites now draw the same distinction (DRE-4378). This
+    docstring used to say they deliberately did not, because "a repo with no
+    fix agent and a stuck pull request is a real problem and must not be
+    swallowed by this quieting". Right about the problem, wrong about the
+    channel: bureau-harness #2255 held one blocking review in the sandbox that
+    has no agent-fix stub by design, `redispatch_standing_verdicts` answered it
+    with `gh workflow run agent-fix.yml`, GitHub answered `HTTP 404: workflow
+    agent-fix.yml not found on the default branch`, and the receipt that
+    disarms that route is posted only after a SUCCESSFUL dispatch — so nothing
+    stood it down. About 75 consecutive failed sweeps and 75 CEO emails over
+    18 hours on 2026-09-18/19, beside the 61 failed runs over 18h37m this
+    guard's own quieting ended. Loud every fifteen minutes with no message a
+    person can act on is the same noise arriving by the write path.
+
+    So a provable absence now posts the `fix-agent-absent` hold on the pull
+    request once per head and stays green (`fix_agent_absent_hold`), and the
+    problem reaches a person instead of the CEO's inbox. An absence that CANNOT
+    be proved is unchanged at every site: the dispatch is attempted, and its
+    failure is still LOUD.
     """
     args = ("run", "list", "--repo", REPO, "--workflow", workflow,
             "--limit", "10", "--json", "status")
@@ -1150,6 +1192,77 @@ def fix_workflow() -> str:
     idle.
     """
     return "self-agent-fix.yml" if REPO_SLUG == "bureau-pipeline" else "agent-fix.yml"
+
+
+#: The hold a pull request gets when this repo has no fix agent to hand it to
+#: (DRE-4378). An idempotency key like every other tag in this file: the notice
+#: carries it beside the head sha, and `_worker_receipt_count` counts the pair.
+FIX_AGENT_ABSENT_TAG = "fix-agent-absent"
+
+
+def fix_agent_absent() -> bool:
+    """Does this repo PROVABLY have no fix agent? Asked once per sweep.
+
+    True ONLY when the repo's `.github/workflows` listing was read, parsed, and
+    does not contain `fix_workflow()`. An unreadable, empty or unparseable
+    listing proves nothing and answers False, so the caller dispatches and
+    fails loudly exactly as it does today — the DRE-2525 line, in the one place
+    the five dispatch sites now share.
+
+    The listing itself is memoised for the pass (`_workflows_listing`), so a
+    sweep over a repo with no stub pays one contents read for all five sites
+    and the busy-guard, not one per pull request.
+    """
+    return workflow_on_default_branch(fix_workflow()) is False
+
+
+def fix_agent_absent_hold(pr: dict) -> bool:
+    """True when `pr` must NOT be dispatched because this repo has no fix agent.
+
+    The one guard the five dispatch sites — the conflict sweep,
+    `fix_approved_but_red`, `retry_dead_fix_runs`,
+    `redispatch_standing_verdicts` and the answered-blocker restart — ask
+    immediately before `gh workflow run`. Two lines at each site, one reading
+    here: the sixth site somebody adds inherits it by asking the same question.
+
+    On a provable absence: nothing is dispatched, nothing is recorded as a
+    write failure, and the pull request gets the `fix-agent-absent` hold ONCE
+    per (pull request, head sha) — the notice carries the tag and the sha, and
+    `_worker_receipt_count` suppresses the repeat, so the fifteen-minute sweep
+    says it one time and a new commit says it again. That receipt is the whole
+    point: a sweep made silently green by a log line would hand this case to
+    nobody (`verdict-left-behind` covers a verdict on an OLDER commit, which is
+    a different fault).
+    """
+    if not fix_agent_absent():
+        return False
+    number = pr.get("number")
+    sha = pr.get("headRefOid") or ""
+    print(
+        f"{FIX_AGENT_ABSENT_TAG}: {REPO} has no {fix_workflow()} on its "
+        f"default branch, so PR #{number} cannot be handed to a fix agent — "
+        "not dispatching, and not recording a write failure (DRE-4378)"
+    )
+    if not sha:
+        # No head to bind the notice to, so no way to say it once. Say nothing
+        # rather than say it every fifteen minutes — the failure this fixes.
+        print(
+            f"{FIX_AGENT_ABSENT_TAG}: PR #{number} came back with no head sha, "
+            "so this sweep cannot say the hold once — leaving it to the next"
+        )
+        return True
+    if _worker_receipt_count(pr, FIX_AGENT_ABSENT_TAG):
+        return True  # this head has been reported already — idempotent forever
+    _post_pr_note(number, pipeline_act.receipt("repo-has-no-fix-agent", (
+        f"🛑 {FIX_AGENT_ABSENT_TAG} PR #{number} @{sha}: this repository has "
+        f"no fix agent, so nothing automatic is coming for this pull request. "
+        f"The reconcile sweep hands a held pull request to the fix agent, and "
+        f"{REPO} carries no {fix_workflow()} on its default branch to hand it "
+        "to — by design, not by accident. Nothing is broken and nothing is "
+        "retrying: this pull request needs a person to take it from here. "
+        "Said once per commit; a new commit says it again."
+    )))
+    return True
 
 
 def gate_workflow() -> str:
@@ -1353,11 +1466,13 @@ _epic_record_gaps: dict[str, str] = {}
 
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
-    in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435) and its
-    epic records (DRE-3642). Called once at the top of main()."""
-    global _swept_cards, _pr_listing
+    in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
+    records (DRE-3642) and its workflows listing (DRE-4378). Called once at the
+    top of main()."""
+    global _swept_cards, _pr_listing, _workflows_listing
     _swept_cards = None
     _pr_listing = None
+    _workflows_listing = None
     _epic_records.clear()
     _epic_record_gaps.clear()
     linear_ops.reset_pass_cache()
@@ -3852,6 +3967,8 @@ def _dispatch_conflict_fix(pr: dict, lane: FixLane) -> None:
     if reason:
         print(reason)
         return
+    if fix_agent_absent_hold(pr):
+        return  # no fix agent in this repo — a person is told once (DRE-4378)
     print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
     gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                 "-f", f"pr_number={pr['number']}")
@@ -3899,7 +4016,10 @@ def unstick_conflicts() -> None:
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-        "--json", "number,headRefName,mergeStateStatus",
+        # headRefOid + comments since DRE-4378: the no-fix-agent hold is said
+        # once per (pull request, head sha) and counted off this same thread,
+        # the way every other receipt in this sweep is.
+        "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
     pending = []  # agent PRs whose mergeable GitHub hasn't computed yet
     for pr in prs:
@@ -3923,7 +4043,7 @@ def unstick_conflicts() -> None:
         for pr in pending:
             fresh = json.loads(gh(
                 "pr", "view", str(pr["number"]), "--repo", REPO,
-                "--json", "number,headRefName,mergeStateStatus",
+                "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
             ) or "{}")
             status = fresh.get("mergeStateStatus")
             if status == "DIRTY":
@@ -5115,6 +5235,8 @@ def fix_approved_but_red() -> None:
             continue
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
+        if fix_agent_absent_hold(pr):
+            return  # no fix agent in this repo — a person is told once (DRE-4378)
         print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
@@ -5164,7 +5286,9 @@ def retry_dead_fix_runs() -> None:
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-        "--json", "number,headRefName,mergeStateStatus,comments",
+        # headRefOid since DRE-4378: the no-fix-agent hold binds the head it
+        # was said about, so a new commit is told again and this one is not.
+        "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
@@ -5178,6 +5302,8 @@ def retry_dead_fix_runs() -> None:
             continue
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
+        if fix_agent_absent_hold(pr):
+            return  # no fix agent in this repo — a person is told once (DRE-4378)
         why = (
             "ran out of turns"
             if fix_dead_run.TURN_CAP_TAG in worker[-1]
@@ -5282,6 +5408,8 @@ def redispatch_standing_verdicts() -> None:
             continue  # no attempt left to spend; the hold path owns it
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
+        if fix_agent_absent_hold(pr):
+            return  # no fix agent in this repo — a person is told once (DRE-4378)
         age = int(age_minutes(when))
         print(
             f"evicted-verdict: PR #{pr['number']} has a standing "
@@ -5463,7 +5591,9 @@ def restart_answered_blockers() -> None:
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-        "--json", "number,headRefName,mergeStateStatus,comments",
+        # headRefOid since DRE-4378: the no-fix-agent hold binds the head it
+        # was said about, so a new commit is told again and this one is not.
+        "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
     for pr in prs:
         if not card_branch(pr["headRefName"]):
@@ -5501,6 +5631,8 @@ def restart_answered_blockers() -> None:
                 "resolved first; the pipeline does that on its own."
             ))
             continue
+        if fix_agent_absent_hold(pr):
+            return  # no fix agent in this repo — a person is told once (DRE-4378)
         print(
             f"answered blocker: PR #{pr['number']} has an operator decision "
             "newer than the verdict it answers — restarting the fix loop"

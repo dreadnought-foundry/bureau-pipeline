@@ -342,5 +342,481 @@ class WiringTest(unittest.TestCase):
         self.assertIn("20", src)
 
 
+
+# ==========================================================================
+# DRE-4378 — a repo with NO fix agent: the person is told ONCE, and the
+# sweep stays green, at all FIVE places that start the fix agent.
+# ==========================================================================
+#
+# bureau-harness #2255 (2026-09-18/19): one held pull request in a sandbox
+# that deliberately has no `agent-fix.yml`. `redispatch_standing_verdicts`
+# found the standing REQUEST_CHANGES, ran `gh workflow run agent-fix.yml`,
+# GitHub answered `HTTP 404: workflow agent-fix.yml not found on the default
+# branch`, `gh_dispatch` raised, the sweep recorded a write failure and
+# exited 1 — and the receipt that disarms the route is posted only AFTER a
+# successful dispatch, so nothing ever stood it down. About 75 consecutive
+# failed runs and 75 CEO emails over 18 hours, for one pull request.
+#
+# DRE-2525 taught the busy-guard that an absent workflow is not an unreadable
+# one and left the DISPATCH sites loud on purpose. That was right about the
+# problem and wrong about the channel: loud every fifteen minutes with no
+# message a person can act on is the same noise arriving by the write path.
+#
+# What is pinned below, for every one of the five sites and through ONE
+# shared helper rather than five copies of one rule:
+#
+#   * a PROVABLE absence dispatches nothing, tells a person once through the
+#     declared `fix-agent-absent` act, and records no write failure;
+#   * a second sweep over the same pull request posts nothing and stays green;
+#   * an absence that CANNOT be proved (the listing read fails, or comes back
+#     empty) behaves exactly as it does today — the dispatch is attempted and
+#     a failure is loud;
+#   * the workflows listing is read at most once per sweep.
+
+import fix_dead_run  # noqa: E402
+
+#: The stubs a healthy consumer repo carries, and the harness's set — the
+#: same shape `gh api repos/<repo>/contents/.github/workflows` answers.
+WORKFLOWS_WITH_FIX = ["agent-task.yml", "agent-fix.yml", "qa-review.yml"]
+WORKFLOWS_WITHOUT_FIX = ["agent-task.yml", "qa-review.yml"]
+
+ABSENT_PR = 2255
+ABSENT_SHA = "b" * 40
+ABSENT_BRANCH = "agent/DRE-4378-harness"
+
+QA_REST = f"{QA_BOT}[bot]"
+BLOCKER_REST = (
+    "🛑 Fix attempt 3 blocked: the critic wants B, the card says A — this "
+    "needs the operator's call."
+)
+DECISION_REST = (
+    "**Operator decision — the blocker is answered. Re-arm the fix loop.**"
+)
+
+
+def _rest_comment(login: str, body: str) -> dict:
+    """A comment in the REST shape `_pr_thread` returns and fix_context reads."""
+    return {
+        "user": {"login": login, "type": "Bot" if login.endswith("[bot]") else "User"},
+        "body": body,
+        "created_at": "2026-09-18T00:00:00Z",
+    }
+
+
+def _absent_pr(comments, sha=ABSENT_SHA, **extra) -> dict:
+    """The harness pull request, in the GraphQL shape every site lists."""
+    payload = {
+        "number": ABSENT_PR,
+        "headRefName": ABSENT_BRANCH,
+        "headRefOid": sha,
+        "mergeStateStatus": "BLOCKED",
+        "comments": list(comments),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _standing_comments(sha=ABSENT_SHA):
+    """A standing REQUEST_CHANGES on the current head, 42 minutes old."""
+    return [comment(QA_BOT, verdict_body(sha), 42)]
+
+
+def _approved_comments(sha=ABSENT_SHA):
+    return [comment(QA_BOT, verdict_body(sha, token="APPROVE"), 42)]
+
+
+def _dead_fix_comments():
+    return [comment(WORKER_BOT, f"⚡ {fix_dead_run.OUTAGE_TAG}: the fix run died", 42)]
+
+
+#: The five sites, each with the pull-request state that makes IT dispatch.
+#: One table, five rows — the card's "parametrised, not five copies of one
+#: test", and the reason the guard is one helper rather than five.
+SITES = (
+    ("unstick_conflicts", "unstick_conflicts",
+     lambda sha=ABSENT_SHA: _absent_pr([], sha, mergeStateStatus="DIRTY"), []),
+    ("fix_approved_but_red", "fix_approved_but_red",
+     lambda sha=ABSENT_SHA: _absent_pr(_approved_comments(sha), sha), []),
+    ("retry_dead_fix_runs", "retry_dead_fix_runs",
+     lambda sha=ABSENT_SHA: _absent_pr(_dead_fix_comments(), sha), []),
+    ("redispatch_standing_verdicts", "redispatch_standing_verdicts",
+     lambda sha=ABSENT_SHA: _absent_pr(_standing_comments(sha), sha),
+     [rest(WORKER_BOT, "🔧 Fix attempt 1 pushed — CI re-running.")]),
+    ("restart_answered_blockers", "restart_answered_blockers",
+     lambda sha=ABSENT_SHA: _absent_pr(
+         [comment(WORKER_BOT, BLOCKER_REST, 90)], sha),
+     [_rest_comment(reconcile.WORKER_REST_LOGIN, BLOCKER_REST),
+      _rest_comment("sid-ceo", DECISION_REST)]),
+)
+
+
+class AbsentFixAgentHarness(unittest.TestCase):
+    """One driver for all five sites: same GitHub, same switch, same asserts."""
+
+    def drive(self, route, prs, thread, *, workflows, dispatch=None):
+        """Run `route` against a repo whose workflows listing is `workflows`.
+
+        `workflows` is a list of filenames (a listing that READ), or None for
+        a listing that could not be read, or [] for one that came back empty.
+        Returns (dispatches, notes, log, contents reads, new failures) —
+        `failures` being BOTH rails, because the sweep's exit code is
+        `_write_failures or _read_failures or _stale_defects`, so "records no
+        failure and exits 0" is one assertion over both.
+        """
+        dispatches: list[tuple] = []
+        notes: list[tuple] = []
+        contents: list[tuple] = []
+
+        def gh(*args):
+            joined = " ".join(args)
+            if args[0] == "api" and "/contents/" in joined:
+                contents.append(args)
+                if workflows is None:
+                    return ""
+                return json.dumps(
+                    [{"name": n, "type": "file"} for n in workflows])
+            if args[:2] == ("run", "list"):
+                return "[]"
+            if args[:2] == ("pr", "list"):
+                return json.dumps(prs)
+            if args[0] == "api" and "/check-runs" in joined:
+                return "2"
+            if args[0] == "api" and "/git/commits/" in joined:
+                return json.dumps({"committer": {"date": "2026-01-01T00:00:00Z"}})
+            if args[0] == "api" and "/comments" in joined:
+                return json.dumps(thread)
+            return ""
+
+        def dispatcher(*a):
+            dispatches.append(a)
+            if dispatch is not None:
+                dispatch(*a)
+
+        marks = list(reconcile._read_failures), list(reconcile._write_failures)
+        reconcile.reset_sweep_cards()
+        try:
+            with mock.patch.dict(os.environ, {"GH_DISPATCH_TOKEN": ""}), \
+                    mock.patch.object(reconcile, "gh", side_effect=gh), \
+                    mock.patch.object(reconcile, "gh_dispatch",
+                                      side_effect=dispatcher), \
+                    mock.patch.object(reconcile, "_post_pr_note",
+                                      side_effect=lambda n, b:
+                                      notes.append((n, b)) or True), \
+                    mock.patch.object(reconcile, "card_parked_for_human",
+                                      return_value=False), \
+                    mock.patch.object(reconcile, "linear_ops", mock.MagicMock()):
+                log = _capture(route)
+            failures = (reconcile._read_failures[len(marks[0]):]
+                        + reconcile._write_failures[len(marks[1]):])
+        finally:
+            del reconcile._read_failures[len(marks[0]):]
+            del reconcile._write_failures[len(marks[1]):]
+            reconcile.reset_sweep_cards()
+        return dispatches, notes, log, contents, list(failures)
+
+
+class FixAgentAbsentHelperTest(AbsentFixAgentHarness):
+    """The helper itself — one question, asked once per sweep."""
+
+    def _ask(self, workflows, asks=1, also=()):
+        reads: list[tuple] = []
+
+        def gh(*args):
+            reads.append(args)
+            if workflows is None:
+                return ""
+            return json.dumps([{"name": n, "type": "file"} for n in workflows])
+
+        reconcile.reset_sweep_cards()
+        try:
+            with mock.patch.object(reconcile, "gh", side_effect=gh):
+                answers = [reconcile.fix_agent_absent() for _ in range(asks)]
+                extra = [reconcile.workflow_on_default_branch(w) for w in also]
+        finally:
+            reconcile.reset_sweep_cards()
+        return answers, extra, reads
+
+    def test_a_listing_without_the_fix_stub_proves_the_absence(self):
+        answers, _, _ = self._ask(WORKFLOWS_WITHOUT_FIX)
+        self.assertEqual(answers, [True])
+
+    def test_a_listing_with_the_fix_stub_proves_nothing_is_absent(self):
+        answers, _, _ = self._ask(WORKFLOWS_WITH_FIX)
+        self.assertEqual(answers, [False])
+
+    def test_an_unreadable_listing_never_proves_an_absence(self):
+        # DRE-2525's discipline, unchanged: unreadable proves NOTHING, so the
+        # dispatch goes ahead and its failure is loud.
+        self.assertEqual(self._ask(None)[0], [False])
+
+    def test_an_empty_listing_never_proves_an_absence(self):
+        # git cannot store an empty directory, so `[]` from a real repo is a
+        # failure wearing a success's clothes.
+        self.assertEqual(self._ask([])[0], [False])
+
+    def test_the_workflows_listing_is_read_once_per_sweep(self):
+        _, _, reads = self._ask(WORKFLOWS_WITHOUT_FIX, asks=4)
+        self.assertEqual(len(reads), 1, f"the listing was read {len(reads)} times")
+
+    def test_the_busy_guard_probe_shares_the_sweep_memo(self):
+        # The absent repo 404s the Actions read at every site, so the busy
+        # guard probes the same listing. One sweep, one read, both readers.
+        _, extra, reads = self._ask(WORKFLOWS_WITHOUT_FIX, asks=2,
+                                    also=("qa-review.yml", "agent-fix.yml"))
+        self.assertEqual(extra, [True, False])
+        self.assertEqual(len(reads), 1, f"the listing was read {len(reads)} times")
+
+    def test_a_failed_read_is_never_memoised(self):
+        # `_open_pr_listing`'s rule: caching None would turn one transient 403
+        # into a silent skip for every later reader in the sweep.
+        _, _, reads = self._ask(None, asks=3)
+        self.assertEqual(len(reads), 3)
+
+
+class AbsentFixAgentAtEverySiteTest(AbsentFixAgentHarness):
+    """The card's three behaviours, pinned at each of the five sites."""
+
+    def test_a_provable_absence_dispatches_nothing_and_tells_a_person_once(self):
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                dispatches, notes, log, _, failures = self.drive(
+                    getattr(reconcile, route), [payload()], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                self.assertEqual(dispatches, [], f"{label} ran the fix agent")
+                self.assertEqual(len(notes), 1, f"{label} notes: {notes}")
+                self.assertEqual(notes[0][0], ABSENT_PR)
+                self.assertEqual(failures, [],
+                                 f"{label} took the sweep red: {failures}")
+                self.assertIn(reconcile.FIX_AGENT_ABSENT_TAG, log)
+
+    def test_the_notice_is_the_declared_act_in_plain_english(self):
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                _, notes, _, _, _ = self.drive(
+                    getattr(reconcile, route), [payload()], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                body = notes[0][1]
+                fields = pipeline_act.read_trailer(body)
+                self.assertIsNotNone(fields, f"{label} receipt has no trailer")
+                self.assertEqual(fields["kind"], "hold")
+                self.assertEqual(
+                    pipeline_act.record(fields["act"])["tag"],
+                    reconcile.FIX_AGENT_ABSENT_TAG,
+                )
+                self.assertEqual(
+                    pipeline_act.record(fields["act"])["next_actor"], "operator")
+                # Plain English a person can act on — and never a verdict
+                # marker of its own (standards/untrusted-content.md).
+                self.assertIn("no fix agent", body)
+                self.assertIn("needs a person", body)
+                self.assertNotIn("VERDICT:", body)
+                # The idempotency key: the tag AND the head it was said about.
+                self.assertIn(reconcile.FIX_AGENT_ABSENT_TAG, body)
+                self.assertIn(ABSENT_SHA, body)
+
+    def test_a_second_sweep_posts_nothing_and_stays_green(self):
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                _, notes, _, _, _ = self.drive(
+                    getattr(reconcile, route), [payload()], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                told = payload()
+                told["comments"] = list(told["comments"]) + [
+                    comment(WORKER_BOT, notes[0][1], 0)
+                ]
+                dispatches, again, _, _, failures = self.drive(
+                    getattr(reconcile, route), [told], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                self.assertEqual(dispatches, [], f"{label} ran the fix agent")
+                self.assertEqual(again, [], f"{label} said it twice: {again}")
+                # Both rails: `main()` exits 1 on either, so an empty pair IS
+                # "records no failure and exits 0".
+                self.assertEqual(failures, [], f"{label} went red: {failures}")
+
+    def test_a_new_head_is_told_again(self):
+        # Per (pull request, head sha), like every other receipt this sweep
+        # counts: a fresh commit is a fresh hold, not a suppressed one.
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                _, notes, _, _, _ = self.drive(
+                    getattr(reconcile, route), [payload()], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                # The old hold sits BEHIND the new head's own trigger — a
+                # fresh commit brings a fresh verdict or a fresh death
+                # marker, and the route reads the newest worker-bot comment.
+                moved = payload("c" * 40)
+                moved["comments"] = [
+                    comment(WORKER_BOT, notes[0][1], 120)
+                ] + list(moved["comments"])
+                _, again, _, _, _ = self.drive(
+                    getattr(reconcile, route), [moved], thread,
+                    workflows=WORKFLOWS_WITHOUT_FIX,
+                )
+                self.assertEqual(len(again), 1, f"{label} stayed silent on a new head")
+
+    def test_an_unprovable_absence_still_dispatches_at_every_site(self):
+        # The non-vacuous twin, and the DRE-2525 line that must not move: an
+        # unreadable or empty listing proves nothing, so behaviour is today's.
+        for label, route, payload, thread in SITES:
+            for listing, why in ((None, "unreadable"), ([], "empty")):
+                with self.subTest(site=label, listing=why):
+                    dispatches, notes, _, _, _ = self.drive(
+                        getattr(reconcile, route), [payload()], thread,
+                        workflows=listing,
+                    )
+                    self.assertEqual(len(dispatches), 1,
+                                     f"{label} stopped dispatching on an "
+                                     f"{why} listing")
+                    self.assertIn(reconcile.fix_workflow(), dispatches[0])
+                    self.assertEqual(
+                        [n for n in notes
+                         if reconcile.FIX_AGENT_ABSENT_TAG in n[1]], [],
+                        f"{label} claimed an absence it cannot prove")
+
+    def test_a_present_fix_agent_still_dispatches_at_every_site(self):
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                dispatches, _, _, _, _ = self.drive(
+                    getattr(reconcile, route), [payload()], thread,
+                    workflows=WORKFLOWS_WITH_FIX,
+                )
+                self.assertEqual(len(dispatches), 1,
+                                 f"{label} did not dispatch a present fix agent")
+
+    def test_an_unprovable_absence_keeps_the_dispatch_failure_loud(self):
+        # The 404 the harness really got. Nothing here swallows it: the route
+        # lets ReconcileWriteError out, main() records it, the sweep exits 1.
+        def boom(*a):
+            raise reconcile.ReconcileWriteError(
+                "gh workflow run agent-fix.yml failed rc=1: HTTP 404: workflow "
+                "agent-fix.yml not found on the default branch")
+
+        for label, route, payload, thread in SITES:
+            with self.subTest(site=label):
+                with self.assertRaises(reconcile.ReconcileWriteError):
+                    self.drive(getattr(reconcile, route), [payload()], thread,
+                               workflows=None, dispatch=boom)
+
+
+class AbsentFixAgentSweepCostTest(AbsentFixAgentHarness):
+    """One sweep, five sites, ONE read of the workflows listing."""
+
+    def test_five_sites_in_one_sweep_read_the_listing_once(self):
+        contents: list[tuple] = []
+        prs = [payload() for _, _, payload, _ in SITES]
+        # One pull request per site, each with the number its row expects to
+        # find; the sites filter the listing themselves.
+        for index, pr in enumerate(prs):
+            pr["number"] = ABSENT_PR + index
+            pr["headRefName"] = f"agent/DRE-437{index}-harness"
+        thread = [_rest_comment(reconcile.WORKER_REST_LOGIN, BLOCKER_REST),
+                  _rest_comment("sid-ceo", DECISION_REST)]
+
+        def gh(*args):
+            joined = " ".join(args)
+            if args[0] == "api" and "/contents/" in joined:
+                contents.append(args)
+                return json.dumps([{"name": n, "type": "file"}
+                                   for n in WORKFLOWS_WITHOUT_FIX])
+            if args[:2] == ("run", "list"):
+                return "[]"
+            if args[:2] == ("pr", "list"):
+                return json.dumps(prs)
+            if args[0] == "api" and "/check-runs" in joined:
+                return "2"
+            if args[0] == "api" and "/git/commits/" in joined:
+                return json.dumps({"committer": {"date": "2026-01-01T00:00:00Z"}})
+            if args[0] == "api" and "/comments" in joined:
+                return json.dumps(thread)
+            return ""
+
+        marks = list(reconcile._read_failures), list(reconcile._write_failures)
+        reconcile.reset_sweep_cards()
+        try:
+            with mock.patch.dict(os.environ, {"GH_DISPATCH_TOKEN": ""}), \
+                    mock.patch.object(reconcile, "gh", side_effect=gh), \
+                    mock.patch.object(reconcile, "gh_dispatch"), \
+                    mock.patch.object(reconcile, "_post_pr_note",
+                                      return_value=True), \
+                    mock.patch.object(reconcile, "card_parked_for_human",
+                                      return_value=False), \
+                    mock.patch.object(reconcile, "linear_ops", mock.MagicMock()):
+                for _, route, _, _ in SITES:
+                    _capture(getattr(reconcile, route))
+        finally:
+            del reconcile._read_failures[len(marks[0]):]
+            del reconcile._write_failures[len(marks[1]):]
+            reconcile.reset_sweep_cards()
+        self.assertEqual(len(contents), 1,
+                         f"the workflows listing was read {len(contents)} "
+                         "times in one sweep")
+
+
+class AbsentFixAgentWiringTest(unittest.TestCase):
+    """ONE helper, called at all five sites — not five copies of one rule."""
+
+    SRC = (ROOT / "scripts" / "reconcile.py").read_text()
+
+    SITE_FUNCTIONS = (
+        "_dispatch_conflict_fix",      # unstick_conflicts' per-PR dispatch
+        "fix_approved_but_red",
+        "retry_dead_fix_runs",
+        "redispatch_standing_verdicts",
+        "restart_answered_blockers",
+    )
+
+    def test_every_dispatch_site_asks_the_shared_helper(self):
+        for name in self.SITE_FUNCTIONS:
+            with self.subTest(site=name):
+                src = inspect.getsource(getattr(reconcile, name))
+                self.assertTrue(
+                    "fix_agent_absent_hold" in src,
+                    f"{name} dispatches the fix agent without asking whether "
+                    "this repo has one",
+                )
+
+    def test_no_site_carries_its_own_copy_of_the_rule(self):
+        # The card's one deliverable: the absence is decided in one place, so
+        # fixing it at a fifth site is two lines and not a fifth reading.
+        for name in self.SITE_FUNCTIONS:
+            with self.subTest(site=name):
+                src = inspect.getsource(getattr(reconcile, name))
+                self.assertFalse(
+                    "workflow_on_default_branch" in src,
+                    f"{name} re-derives the absence instead of asking the helper",
+                )
+
+    def test_the_busy_guard_docstring_says_what_is_now_true(self):
+        doc = reconcile._actions_runs_busy.__doc__ or ""
+        self.assertNotIn("Deliberately NOT extended to the dispatch sites", doc)
+        self.assertIn("DRE-4378", doc)
+        # DRE-2525's numbers stay beside the new incident's.
+        for number in ("61", "18h37m", "DRE-2525", "75"):
+            self.assertIn(number, doc,
+                          f"the docstring no longer names {number}")
+
+    def test_the_act_is_declared_with_the_contract_the_console_holds(self):
+        row = next(a for a in pipeline_act.rows()
+                   if a["tag"] == reconcile.FIX_AGENT_ABSENT_TAG)
+        self.assertEqual(row["kind"], "hold")
+        self.assertEqual(row["next_actor"], "operator")
+        self.assertIsNone(row["cadence_s"], "a hold waits on a person, not a clock")
+
+    def test_the_operator_page_names_the_no_fix_agent_answer(self):
+        # A change that contradicts a document updates it in the SAME PR.
+        page = (ROOT / "docs" / "held-pr-recovery.md").read_text()
+        # assertTrue, not assertIn: a failing assertIn on a whole page dumps
+        # it into the report (the house note in test_fix_concurrency_eviction).
+        self.assertTrue(
+            reconcile.FIX_AGENT_ABSENT_TAG in page,
+            "docs/held-pr-recovery.md never names the no-fix-agent answer",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

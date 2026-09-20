@@ -204,6 +204,9 @@ def _drive_unlanded_no_branch(mp):
 
 def _restart_driver(mp, merge_state: str):
     mp.setattr(reconcile, "_actions_runs_busy", lambda _w: False)
+    # This repo has its fix stub: the no-fix-agent hold (DRE-4378) is a
+    # different act with a driver of its own, below.
+    mp.setattr(reconcile, "fix_agent_absent", lambda: False)
     mp.setattr(reconcile, "gh", lambda *_a: json.dumps([{
         "number": 7,
         "headRefName": "agent/DRE-1-slug",
@@ -232,6 +235,24 @@ def _drive_restart_conflicted(mp):
 @site("fix-loop-restarted/dispatched", "fix-loop-restarted")
 def _drive_restart_dispatched(mp):
     _restart_driver(mp, "CLEAN")
+
+
+@site("repo-has-no-fix-agent", "repo-has-no-fix-agent")
+def _drive_fix_agent_absent(mp):
+    # The incident's own repo, pinned: this body names the repo and the stub
+    # it lacks, so it would otherwise read differently under every REPO the
+    # suite is run with.
+    mp.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-harness")
+    mp.setattr(reconcile, "REPO_SLUG", "bureau-harness")
+    # The real absence decision, off a real listing: this repo's workflows
+    # directory is read, parsed, and does not carry the fix stub (DRE-4378).
+    mp.setattr(reconcile, "gh", lambda *_a: json.dumps(
+        [{"name": "agent-task.yml", "type": "file"},
+         {"name": "qa-review.yml", "type": "file"}]))
+    _pr_recorder(mp)
+    reconcile.fix_agent_absent_hold(
+        {"number": 7, "headRefOid": "d34db33fcafe1234", "comments": []}
+    )
 
 
 @site("dependabot-review-forced", "dependabot-review-forced")
