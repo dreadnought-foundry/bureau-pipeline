@@ -15,6 +15,10 @@ Who consults it
   * ``agent-task.yml`` — the engineer's worker token (DRE-2013, the first).
   * ``verify.yml`` — the verifier's token (DRE-2429).
   * ``red-main-repair.yml`` — the repair worker, keyed ``repair:<sha>``.
+  * ``agent-fix.yml`` — the fixing agent's own token (DRE-4412), minted from
+    the same selection as its reader below. DRE-4282 moved that workflow's
+    reads and left its one write-capable model step on slot 1, where two
+    portico fix runs died on 2026-09-20 in claude-code-action's prepare step.
   * Since DRE-4282, every heavy READER: ``qa-review.yml`` (the critic's PR
     reads; slot 1 there is the qa-bot App, DRE-1921's bucket. Its check-run
     write does NOT ride the pool — publish_review_check.py updates that check
@@ -25,7 +29,8 @@ Who consults it
     planner and critic run's token) and ``harness.yml`` (the driver's
     reader). In each the identity-sensitive writes — the PR push, the
     worker-attributed comments, the verdict comment, the review check run,
-    the merge — keep the App they used before; only the READS moved.
+    the merge — keep the App they used before; only the READS moved (and,
+    in agent-fix, its model step, by the DRE-4412 bullet above).
   * NOT ``medic.yml``: its reads ride ``github.token`` because the App has no
     ``actions:read`` (DRE-1346), a bucket this pool cannot improve on.
 

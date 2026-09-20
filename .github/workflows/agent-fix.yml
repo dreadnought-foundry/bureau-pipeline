@@ -254,6 +254,59 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # Worker token: the SAME selection, minted again for the one step that
+      # runs the model (DRE-4412). DRE-4282 put this loop's reads on the pool
+      # and left its one expensive, write-capable step on slot 1 — the fix
+      # workflow was moved onto the pool half way, and on 2026-09-20 two
+      # portico fix runs (#620/DRE-4394 and #623/DRE-4410, run 35535838508)
+      # died inside claude-code-action's PREPARE step, before any model turn:
+      #
+      #   API rate limit exceeded for installation ID 123249480
+      #
+      # — bot 1's installation, whatever room the other three had. The step
+      # never asked the pool. agent-task.yml's `Mint worker token (selected
+      # pool app)` is the house pattern and this is it, byte for byte: the
+      # explicit per-slot map (Actions cannot index secrets dynamically), each
+      # clause yielding '' when not selected, and the fall-through to the
+      # original pair — so a selection that failed or chose slot 1 renders
+      # exactly today's inputs and the run behaves exactly as it does now.
+      #
+      # A SECOND mint of the SAME selection rather than a reuse of `reader`:
+      # same App, same bucket, one extra mint, and the name says which of the
+      # two jobs a token is for — agent-task.yml's split, where `worker` is
+      # the write-capable credential and the reads are their own thing.
+      # qa-review.yml reuses its reader because the critic only reads; this
+      # agent edits a PR body and runs `gh` for itself.
+      #
+      # This step is NOT identity-sensitive the way the ones around it are.
+      # The branch push rides `Checkout PR branch`'s persisted boot credential
+      # and the attempt markers fix_budget.py counts by login are still
+      # written by `Announce fix attempt` on the boot token, so neither the
+      # author of the fix commit nor the login the budget counts changes here
+      # — only the bucket the agent's own GitHub calls are charged to. And a
+      # pooled bot already writes to pull requests every day: agent-task.yml's
+      # worker authors branches and comments as agent-bureau-bot-2/-3/-4, so a
+      # fix pushed on a pool member's credential is not a new kind of actor
+      # anywhere in the fleet. WHO MAY SET OFF a fix run is a different
+      # question with its own lock, untouched here: `allowed_bots` below and
+      # the job-level comment-author gate (DRE-1988).
+      # Pinned by tests/test_fix_worker_on_the_pool.py, over all three
+      # model-running workflows at once.
+      - name: Mint worker token (selected pool app)
+        id: worker
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # DRE-3451: the expensive half of the comment gate. The job `if` above
       # admitted a User comment on a pull request; this decides whether that
       # comment is an OPERATOR DECISION the loop may act on, and it decides it
@@ -1239,7 +1292,12 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          # DRE-4412: the SELECTED pool app, not slot 1 by habit. This is the
+          # credential claude-code-action's prepare step authenticates with
+          # and the GH_TOKEN the agent itself runs `gh` on — the one expensive
+          # write-capable identity in the job, and the one the pool was never
+          # asked about. `Mint worker token (selected pool app)` above.
+          github_token: ${{ steps.worker.outputs.token }}
           # DRE-1988: two bot actors, no wildcard. agent-bureau-qa-bot is the
           # verdict author (comment-triggered runs). github-actions is the
           # actor of BOTH machine workflow_dispatch legs — merge-gate's

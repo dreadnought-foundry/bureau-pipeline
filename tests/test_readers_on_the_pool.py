@@ -130,7 +130,16 @@ CONSUMERS = {
             # by WORKER_LOGIN, so the author must be the App that login names.
             "Announce fix attempt": ("env", "GH_TOKEN", APP),
             "Receipt the operator-decision restart": ("env", "GH_TOKEN", APP),
-            "Fix": ("with", "github_token", APP),
+            # `Fix` was here and is not any more (DRE-4412). It was never
+            # identity-sensitive: the fix commit is pushed with `Checkout PR
+            # branch`'s persisted credential above, and the markers
+            # fix_budget.py counts by login are written by `Announce fix
+            # attempt`. This input is only the bucket the agent's own GitHub
+            # calls are charged to, and on 2026-09-20 it was bot 1's spent
+            # hour that killed two portico fix runs before any model turn.
+            # It now reads the pool's own worker mint, pinned — with
+            # agent-task.yml's and qa-review.yml's model steps, under one rule
+            # — by tests/test_fix_worker_on_the_pool.py.
             # Same App, freshly minted (DRE-4320): the model step above it is
             # the one step here whose duration is not bounded in seconds, and
             # a token older than an hour is dead. The re-mint takes the boot
