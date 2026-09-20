@@ -200,7 +200,21 @@ def _linear(fake: FakeLinear):
 def _sweep_mocks(extra=()):
     """Every seam a full sweep touches that would reach GitHub. The Linear
     reads under test stay REAL — both watchdogs, the Intake gate, the promotion
-    gate and the epic close — or this measures nothing."""
+    gate and the epic close — or this measures nothing.
+
+    Four of these read the BOARD as well as GitHub — `recover_limit_deaths`,
+    `card_dependabot_prs`, `report_fleet_reviewer_outage` and, since DRE-4411,
+    `settle_repair_cards` — and every one of them runs in `main()`'s backstop
+    loop, ahead of the explicit `board_read` phase. They are stood down here for
+    both reasons at once: unstubbed they would shell out to `gh`, and left real
+    the FIRST of them to reach `active_cards()` pays for the pass's one shared
+    board read (DRE-2929) — which is the whole cost
+    `test_the_board_read_is_its_own_phase` below stands the rest of the pass
+    down to observe. Live, that payer is `recover_limit_deaths`: it is the
+    earliest of the four and the only one that reads the board unconditionally.
+    So a new backstop calling `active_cards()` belongs in this tuple, and
+    leaving one out moves the snapshot's cost onto that backstop's name in THIS
+    fixture, where everything ahead of it is a stub — never in a live sweep."""
     names = (
         "drain_retiring_lanes", "unstick_conflicts", "refresh_stale_merge_refs",
         "retrigger_dead_heads", "flag_no_checks_prs", "flag_unowned_prs",
@@ -209,6 +223,7 @@ def _sweep_mocks(extra=()):
         "restart_answered_blockers", "review_dependabot_prs",
         "card_dependabot_prs", "recover_crashed_reviews",
         "report_fleet_reviewer_outage", "check_dependabot_capacity",
+        "settle_repair_cards",
         "report_break_glass", "report_fix_concurrency",
         "report_evicted_fix_runs", "report_epic_growth",
     ) + tuple(extra)
