@@ -530,13 +530,21 @@ class AnAnsweredRoundStopsCountingAgainstTheNext(unittest.TestCase):
     # --- the fresh attempt a person's re-run opens ---------------------------
 
     def test_a_person_re_running_a_parked_review_opens_a_fresh_attempt(self):
+        """The two asks a person makes: the act (`reason: re-run`, the relay's
+        spelling is `review_rerun.REASON_RERUN_ACT`) and the approval move
+        from Green Light, which carries no reason at all."""
         thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
-        for reason in ("re-run", "", None):
+        self.assertEqual(rr.REASON_RERUN_ACT, "re-run")
+        for reason in (rr.REASON_RERUN_ACT, "", None, "  "):
             self.assertTrue(pc.opens_fresh_attempt(thread, self.EPIC, reason), reason)
 
-    def test_the_pipelines_own_reasons_never_open_one(self):
+    def test_only_a_persons_ask_opens_one(self):
+        """An allowlist, not a denylist: the pipeline's own two reasons keep
+        the attempt, and so does any reason a dispatcher added later might
+        carry — a refund on a machine's act is the loop this card closes."""
         thread = self._thread((self.ROUND_ONE, None), (["still nobody"], 1))
-        for reason in (rr.REASON_RE_REVIEW, rr.REASON_REVIEW_RETRY):
+        for reason in (rr.REASON_RE_REVIEW, rr.REASON_REVIEW_RETRY,
+                       "reconcile", "nudge", "re-review-again"):
             self.assertFalse(pc.opens_fresh_attempt(thread, self.EPIC, reason), reason)
 
     def test_a_review_that_is_not_parked_keeps_its_attempt(self):

@@ -1688,12 +1688,16 @@ def opens_fresh_attempt(bodies: list, epic: str | None, reason: str | None) -> b
     the ones it has already answered — before this, DRE-3778 was approved five
     times and came back at "round 5 of 2", then 6.
 
-    NEVER for the pipeline's own asks — `re-review` (the same-cards re-run
-    after a re-plan) and `review-retry` (a dead review's retry). A boundary
-    there would refund the budget on every round, so nothing would ever park;
-    and it would cut the tombstone the retry ceiling is sized from out of the
-    cycle. The answered/open reading (`post_bound_spent`) is what judges the
-    pipeline's own re-review.
+    ONLY for those two human asks — an ALLOWLIST, not a denylist of the
+    pipeline's reasons. The pipeline's own asks today are `re-review` (the
+    same-cards re-run after a re-plan) and `review-retry` (a dead review's
+    retry); a boundary on either would refund the budget on every round, so
+    nothing would ever park, and would cut the tombstone the retry ceiling is
+    sized from out of the cycle. A dispatcher added later with a reason of
+    its own must not inherit a refund nobody decided on, so any reason that
+    is not one of the two a person produces keeps the attempt. The
+    answered/open reading (`post_bound_spent`) is what judges the pipeline's
+    own re-review.
 
     And never when the bound has NOT been reached: a person re-running round 2
     (DRE-4112's recovery from a killed dispatch) is asking for round 2, and
@@ -1702,8 +1706,7 @@ def opens_fresh_attempt(bodies: list, epic: str | None, reason: str | None) -> b
     """
     import review_rerun  # deferred: it imports this module
 
-    if (reason or "").strip() in (review_rerun.REASON_RE_REVIEW,
-                                  review_rerun.REASON_REVIEW_RETRY):
+    if (reason or "").strip() not in ("", review_rerun.REASON_RERUN_ACT):
         return False
     return post_bound_reached(bodies, epic)
 
