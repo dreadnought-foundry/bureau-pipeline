@@ -163,6 +163,7 @@ concurrency:
   group: agent-${{ github.event.client_payload.identifier }}
   cancel-in-progress: false
 permissions:
+  id-token: write           # the agent's scrubbed log uploads on a short-lived AWS login — DRE-4269
   contents: write
   pull-requests: write
   actions: write            # dispatches deliver-rescue — see DRE-3262 below

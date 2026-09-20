@@ -46,6 +46,7 @@ on:
     types: [completed]
 
 permissions:
+  id-token: write # DRE-4269: the agent's scrubbed log uploads on a short-lived AWS login; a reusable workflow can hold no more than its stub grants
   actions: write
   contents: read
 
