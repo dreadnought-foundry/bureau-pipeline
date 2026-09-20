@@ -1144,7 +1144,8 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
         write-up, anything an agent wrote after reading untrusted epic text —
         opens nothing.
       * The pipeline's. Only the run that decides an epic is being planned
-        writes one, so only its own comments are read (`trusted_bodies`).
+        writes one, so only its own comments are read (`_entry_trusted`, the
+        same predicate `trusted_bodies` applies).
       * About THIS epic, when the caller says which one. The standard's worked
         example names a real epic verbatim, so a boundary is scoped to the epic
         being decided rather than to any epic named anywhere in the thread.
@@ -1158,18 +1159,37 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
     lives entirely in these persisted markers — which is exactly what a forged
     boundary defeated.
     """
-    bodies = trusted_bodies(bodies)
+    return [_entry_body(entry) for entry in current_cycle_entries(bodies, epic)]
+
+
+def current_cycle_entries(entries, epic: str | None = None) -> list:
+    """`current_cycle`, keeping each comment's RECORD instead of just its text.
+
+    Same credential, same boundary, same scope — this is the one reader that
+    needs more of a comment than what it says. `prior_round` reads the round's
+    `created_at` off the record so the charter can tell the next critic when
+    that round ran, and a reader that flattens the thread to bodies before
+    scoping it drops the stamp on the way past. That is exactly what shipped:
+    `_cmd_prior_round` scoped through the bodies reader, so `ran_at` was always
+    None and the staleness sentence was never emitted in production
+    (found in review, DRE-4115).
+
+    A caller that only wants the text keeps calling `current_cycle`, which is
+    now this function plus `_entry_body` — one boundary reader, so the two can
+    never disagree about which attempt a comment belongs to.
+    """
+    kept = [entry for entry in (entries or []) if _entry_trusted(entry)]
     start = 0
-    for i, body in enumerate(bodies):
+    for i, entry in enumerate(kept):
         # A body that is exactly a boundary cannot also be exactly a marker, so
         # the old "a marker never opens a cycle" guard is now structural.
-        m = _sole_record(_CYCLE, body)
+        m = _sole_record(_CYCLE, _entry_body(entry))
         if not m:
             continue
         if epic and m.group("epic") != epic:
             continue
         start = i + 1
-    return bodies[start:]
+    return kept[start:]
 
 
 def send_backs(bodies: list, stage: str) -> int:
@@ -2747,7 +2767,9 @@ def _cmd_prior_round(args) -> int:
     and the decision's fallback reading still bounds it."""
     try:
         thread = _stdin_json([])
-        found = prior_round(current_cycle(thread, args.epic), args.stage)
+        # The ENTRIES, not the bodies: the round's clock lives on the record
+        # and the block's `when` sentence is built from it (DRE-4115).
+        found = prior_round(current_cycle_entries(thread, args.epic), args.stage)
         block = (prior_round_block(found["findings"], found.get("ran_at"))
                  if found else "")
     except Exception as exc:  # noqa: BLE001 — see the docstring

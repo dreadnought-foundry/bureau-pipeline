@@ -72,6 +72,11 @@ SEAM_FIXTURE = os.path.join(ROOT, "tests", "fixtures",
 EPIC = "DRE-2721"
 OTHER_EPIC = "DRE-2700"
 
+# Linear's own stamp on every comment the stub records, and the one the
+# previous round's charter clock is read off (DRE-4115). Passed to the stub
+# through the environment so the walk and the thread it reads agree on it.
+STUB_NOW = "2026-09-15T17:43:00.000Z"
+
 # The epics in flight the sight step reads. DRE-2700 is the collision partner:
 # it is mid-build on the same file the plan under review hands to a new card.
 EPICS_IN_FLIGHT = [
@@ -97,6 +102,10 @@ LINEAR_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 
 EPIC = "DRE-2721"
+# Linear's own stamp on a comment, which `dump-comments --with-authors` carries
+# (DRE-3754) and the previous round's charter clock is read off (DRE-4115). One
+# fixed value: what these walks check is that it ARRIVES, not what it says.
+STUB_NOW = os.environ.get("STUB_NOW") or "2026-09-15T17:43:00.000Z"
 
 
 def thread():
@@ -135,7 +144,8 @@ def main():
         else:
             print(json.dumps([r["body"] for r in records]))
     elif cmd == "comment":
-        records = thread() + [{"body": args[1], "authored_by_pipeline": True}]
+        records = thread() + [{"body": args[1], "authored_by_pipeline": True,
+                               "created_at": STUB_NOW}]
         with open(os.environ["STUB_THREAD"], "w") as f:
             json.dump(records, f)
         log("comment " + args[1].replace("\\n", " | "))
@@ -279,6 +289,7 @@ class CriticWalk(unittest.TestCase):
             STUB_THREAD=self.thread_path,
             STUB_LOG=self.log_path,
             STUB_EPICS=json.dumps(EPICS_IN_FLIGHT),
+            STUB_NOW=STUB_NOW,
             GITHUB_OUTPUT=self.gho,
             GITHUB_REPOSITORY="dreadnought-foundry/bureau-pipeline",
             MAX_WIP="8",
@@ -855,6 +866,14 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("1. no card manufactures the operator step", prior)
         self.assertIn("2. DRE-9001 carries no acceptance criteria", prior)
         self.assertIn("still-open:", prior)
+        # ...and it says WHEN that round ran, off the record's own stamp. The
+        # other half of the reading: a plan is older than the estate it is read
+        # against, and a change that landed since is a note for the planner
+        # rather than a strike. Asserted here, on the file the step actually
+        # writes, because the block's own unit test is handed the clock
+        # directly and cannot see a caller that never supplies one.
+        self.assertIn("That round ran at", prior)
+        self.assertIn(pc._pt_clock(STUB_NOW), prior)
         # ...and it reaches the charter the critic reads first.
         charter = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), "charter", "post",

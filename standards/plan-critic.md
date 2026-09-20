@@ -273,7 +273,9 @@ it actually read. What it COUNTS is the next section's business (DRE-4115).
 ## Both plan loops are bounded
 
 **Two failed rounds at either critic and the loop ends**, with the critic's
-stated reason attached. Nothing circles a third time. An unbounded loop is how
+stated reason attached. Nothing circles a third time on a finding that still
+stands — after approval a revision that answered everything buys its own round
+instead, and that is capped too (DRE-4115, below). An unbounded loop is how
 17 cards sat in a lane for 27 days.
 
 What "ends" means depends on which side of the CEO the critic sits (DRE-3088):

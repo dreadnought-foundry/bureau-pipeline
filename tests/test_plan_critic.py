@@ -360,6 +360,42 @@ class AnAnsweredRoundStopsCountingAgainstTheNext(unittest.TestCase):
         self.assertIn("2026-09-15 10:43 PT", block)
         self.assertIn("since", block.lower())
 
+    def test_the_clock_survives_the_read_that_scopes_the_attempt(self):
+        """The wiring the sentence above depends on, and the half that was
+        dead: the clock lives on the comment RECORD, and `prior-round` scopes
+        the thread to the current attempt BEFORE it reads the round. Scoping
+        through the bodies reader flattened every record to its text first, so
+        `ran_at` was always None and the sentence was never emitted in
+        production (found in review, DRE-4115).
+
+        The reading is done twice here — once against the attempt the boundary
+        opens, once against a stray comment — because the entries reader has to
+        carry the same credential and the same boundary as the bodies one, not
+        just the timestamp."""
+        stamp = "2026-09-15T17:43:00.000Z"
+        thread = [{"body": b, "authored_by_pipeline": True, "created_at": stamp}
+                  for b in self._thread((self.ROUND_ONE, None))]
+        found = pc.prior_round(pc.current_cycle_entries(thread, self.EPIC),
+                               pc.STAGE_POST)
+        self.assertEqual(found["ran_at"], stamp)
+        self.assertIn("2026-09-15 10:43 PT",
+                      pc.prior_round_block(found["findings"], found.get("ran_at")))
+
+        # Same credential: a round somebody else posted is not a round.
+        stray = [dict(r, authored_by_pipeline=False) for r in thread]
+        self.assertIsNone(pc.prior_round(pc.current_cycle_entries(stray, self.EPIC),
+                                         pc.STAGE_POST))
+        # Same boundary: a round before the last one belongs to a spent attempt.
+        fresh = thread + [{"body": pc.cycle_marker(self.EPIC),
+                           "authored_by_pipeline": True, "created_at": stamp}]
+        self.assertIsNone(pc.prior_round(pc.current_cycle_entries(fresh, self.EPIC),
+                                         pc.STAGE_POST))
+        # And the bodies reader every other caller uses is unchanged: the same
+        # comments, from the same boundary, as their text.
+        self.assertEqual(pc.current_cycle(thread, self.EPIC),
+                         [r["body"] for r in thread[1:]])
+        self.assertEqual(pc.current_cycle(fresh, self.EPIC), [])
+
     # --- what the critic says ----------------------------------------------
 
     def test_the_still_open_line_names_the_prior_findings_by_number(self):
