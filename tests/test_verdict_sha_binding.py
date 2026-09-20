@@ -621,7 +621,10 @@ class ApprovedButRedAuthorshipTest(unittest.TestCase):
 
     def run_sweep(self, pr):
         """Run the LIVE fix_approved_but_red with gh mocked: no fix run
-        busy, one open PR, 1 failed check, head commit an hour old."""
+        busy, one open PR, 1 failed check, head commit an hour old, and a
+        repo that HAS its fix stub (DRE-4378 — the sweep asks the contents
+        API once before it dispatches, and a repo with no stub is held
+        instead)."""
 
         def fake_gh(*args):
             if args[:2] == ("run", "list"):
@@ -632,6 +635,9 @@ class ApprovedButRedAuthorshipTest(unittest.TestCase):
                 return "1"
             if args[0] == "api" and "/git/commits/" in args[1]:
                 return json.dumps({"committer": {"date": self.OLD_DATE}})
+            if args[0] == "api" and args[1].endswith("/contents/.github/workflows"):
+                return json.dumps(
+                    [{"name": reconcile.fix_workflow(), "type": "file"}])
             raise AssertionError(f"unexpected gh call: {args}")
 
         with (

@@ -141,6 +141,38 @@ than the verdict, so the same verdict is never dispatched twice. The fix budget
 is read through `scripts/fix_budget.py` — the same reading the fix job's own
 gate makes — so the sweep can never start a run that will refuse to work.
 
+## …and the repo that has no fix agent at all (DRE-4378)
+
+All four routes above, plus the conflict sweep, end in `gh workflow run` on
+this repo's fix stub. Some repos do not have one — `bureau-harness` is the
+sandbox, and a fix agent loose on its pull requests is exactly what it must not
+have. Before any of the five dispatches, the sweep asks one question once per
+pass: **does this repo's `.github/workflows` listing, read and parsed, contain
+the fix stub?**
+
+If it provably does not, nothing is dispatched, nothing is recorded as a
+failure, and the pull request gets one comment tagged `fix-agent-absent`
+saying in plain English that this repo has no fix agent and the pull request
+needs a person. Said **once per commit**: a new commit says it again, and the
+fifteen-minute sweep never repeats itself.
+
+If the absence cannot be PROVED — the listing read failed, or came back empty —
+behaviour is unchanged: the dispatch is attempted and its failure is loud. An
+unreadable listing is not an absent workflow (DRE-2525), and collapsing the two
+would hide a real permission failure.
+
+**Why the notice and not just a quiet log line.** bureau-harness #2255 held one
+blocking review for 18 hours on 2026-09-18/19. Every sweep dispatched, GitHub
+answered `HTTP 404: workflow agent-fix.yml not found on the default branch`,
+the sweep exited 1 — about 75 failed runs and 75 emails to the CEO, none of
+them addressed to anyone who could act. Making that silently green would have
+handed the pull request to nobody instead: `verdict-left-behind` covers a
+verdict on an OLDER commit, which is a different fault.
+
+| You see | What it means |
+| -- | -- |
+| 🛑 `fix-agent-absent` on a pull request | This repo has no fix agent. Nothing is retrying. The pull request needs you. |
+
 ## Quick reference
 
 | You see | Do |

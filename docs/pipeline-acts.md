@@ -194,6 +194,45 @@ the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
 FILING fleet-wide, and deliberately leaves appends and closes running, so an
 outage card that is already open is never orphaned by the switch.
 
+## The row that stops a WRITE from shouting — `🛑 fix-agent-absent` (DRE-4378)
+
+| Field | Value |
+| -- | -- |
+| tag | `fix-agent-absent` |
+| act name | `repo-has-no-fix-agent` |
+| kind · state · next actor | `hold` · `unchanged` · `operator` |
+| discharges | nothing — a hold starts an obligation, it does not end one |
+| emitted by | `scripts/reconcile.py`, `fix_agent_absent_hold()` |
+
+DRE-2525 taught the sweep's busy-guard that a workflow ABSENT from a repo is
+not an unreadable one, and deliberately left the five places that START the fix
+agent loud: "a repo with no fix agent and a stuck pull request is a real
+problem and must not be swallowed by this quieting." Right about the problem,
+wrong about the channel. bureau-harness #2255 held one blocking review in the
+sandbox that has no `agent-fix.yml` by design; every fifteen-minute sweep ran
+`gh workflow run agent-fix.yml`, GitHub answered `HTTP 404`, the sweep recorded
+a write failure and exited 1 — about 75 consecutive failed runs and 75 emails
+to the CEO over 18 hours on 2026-09-18/19, for one pull request, and none of
+them addressed to anyone who could act.
+
+**The act is what makes the sweep green without making it silent.** A log line
+alone would hand this case to nobody: `verdict-left-behind` covers a verdict
+bound to an OLDER commit, which is a different fault. So the pull request gets
+this hold, in plain English, once per (pull request, head sha) — the body
+carries the tag beside the head sha and `reconcile._worker_receipt_count`
+counts the pair, the same idempotency every other reconcile receipt uses.
+
+**`state` is `unchanged`, like `verdict-left-behind` and unlike
+`proof-observation-pending`.** Nothing is labelled, nothing is moved: the hold
+lives entirely in the receipt, and the pull request stays exactly where it was.
+
+**It fires only on a PROVED absence.** The repo's `.github/workflows` listing
+has to have been read and parsed and not contain the fix stub. An unreadable or
+empty listing proves nothing, so the dispatch is attempted and its failure is
+still loud — the DRE-2525 line, unmoved. The listing is read at most once per
+sweep (`reconcile._workflows_listing`), shared by all five dispatch sites and
+the busy-guard.
+
 ## Why this exists
 
 The console has always checked this. Its

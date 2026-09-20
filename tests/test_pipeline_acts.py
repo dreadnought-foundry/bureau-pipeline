@@ -94,14 +94,16 @@ class TestEveryActHasARow:
         assert list(names) == declared
 
     def test_every_reconcile_tag_constant_has_a_row(self):
-        """The nine constants scattered through reconcile.py, declared once.
+        """The ten constants scattered through reconcile.py, declared once.
 
         Ten until DRE-4141 removed the Intake age-out and `INTAKE_AGED_TAG`
         with it — the sweep no longer performs that act, so it no longer
-        announces one."""
+        announces one — and ten again since DRE-4378 added
+        `FIX_AGENT_ABSENT_TAG`, the hold a pull request gets in a repo that
+        has no fix agent to dispatch."""
         emitted = {tag for _, tag in _TAG_CONSTANT.findall(RECONCILE.read_text("utf-8"))}
-        assert len(emitted) == 9, (
-            "reconcile.py should still define nine tag constants; if that "
+        assert len(emitted) == 10, (
+            "reconcile.py should still define ten tag constants; if that "
             "changed, the registry changes with it"
         )
         declared = {pipeline_act.tag(name) for name in pipeline_act.acts()}
@@ -124,6 +126,7 @@ class TestEveryActHasARow:
             "crashed-review-redispatch",
             "reviewer-down",
             "stale-verdict-watchdog",
+            "fix-agent-absent",
         ],
     )
     def test_each_existing_idempotency_key_is_adopted_not_replaced(self, tag):

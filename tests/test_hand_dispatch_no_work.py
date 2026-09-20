@@ -118,6 +118,11 @@ def sweep(thread, number=199, branch="agent/DRE-2721-two-critics"):
             return "[]"
         if args[:2] == ("pr", "list"):
             return json.dumps(prs)
+        if args[0] == "api" and args[-1].endswith("/contents/.github/workflows"):
+            # This repo HAS its fix stub. Since DRE-4378 the sweep asks once
+            # per pass before dispatching; a repo whose listing provably lacks
+            # it is held for a person instead.
+            return json.dumps([{"name": reconcile.fix_workflow(), "type": "file"}])
         if args[0] == "api":
             return json.dumps(thread)
         return ""

@@ -403,12 +403,12 @@ def _rest_comment(login: str, body: str) -> dict:
     }
 
 
-def _absent_pr(comments, **extra) -> dict:
+def _absent_pr(comments, sha=ABSENT_SHA, **extra) -> dict:
     """The harness pull request, in the GraphQL shape every site lists."""
     payload = {
         "number": ABSENT_PR,
         "headRefName": ABSENT_BRANCH,
-        "headRefOid": ABSENT_SHA,
+        "headRefOid": sha,
         "mergeStateStatus": "BLOCKED",
         "comments": list(comments),
     }
@@ -416,13 +416,13 @@ def _absent_pr(comments, **extra) -> dict:
     return payload
 
 
-def _standing_comments():
+def _standing_comments(sha=ABSENT_SHA):
     """A standing REQUEST_CHANGES on the current head, 42 minutes old."""
-    return [comment(QA_BOT, verdict_body(ABSENT_SHA), 42)]
+    return [comment(QA_BOT, verdict_body(sha), 42)]
 
 
-def _approved_comments():
-    return [comment(QA_BOT, verdict_body(ABSENT_SHA, token="APPROVE"), 42)]
+def _approved_comments(sha=ABSENT_SHA):
+    return [comment(QA_BOT, verdict_body(sha, token="APPROVE"), 42)]
 
 
 def _dead_fix_comments():
@@ -434,16 +434,17 @@ def _dead_fix_comments():
 #: test", and the reason the guard is one helper rather than five.
 SITES = (
     ("unstick_conflicts", "unstick_conflicts",
-     lambda: _absent_pr([], mergeStateStatus="DIRTY"), []),
+     lambda sha=ABSENT_SHA: _absent_pr([], sha, mergeStateStatus="DIRTY"), []),
     ("fix_approved_but_red", "fix_approved_but_red",
-     lambda: _absent_pr(_approved_comments()), []),
+     lambda sha=ABSENT_SHA: _absent_pr(_approved_comments(sha), sha), []),
     ("retry_dead_fix_runs", "retry_dead_fix_runs",
-     lambda: _absent_pr(_dead_fix_comments()), []),
+     lambda sha=ABSENT_SHA: _absent_pr(_dead_fix_comments(), sha), []),
     ("redispatch_standing_verdicts", "redispatch_standing_verdicts",
-     lambda: _absent_pr(_standing_comments()),
+     lambda sha=ABSENT_SHA: _absent_pr(_standing_comments(sha), sha),
      [rest(WORKER_BOT, "🔧 Fix attempt 1 pushed — CI re-running.")]),
     ("restart_answered_blockers", "restart_answered_blockers",
-     lambda: _absent_pr([]),
+     lambda sha=ABSENT_SHA: _absent_pr(
+         [comment(WORKER_BOT, BLOCKER_REST, 90)], sha),
      [_rest_comment(reconcile.WORKER_REST_LOGIN, BLOCKER_REST),
       _rest_comment("sid-ceo", DECISION_REST)]),
 )
@@ -639,11 +640,13 @@ class AbsentFixAgentAtEverySiteTest(AbsentFixAgentHarness):
                     getattr(reconcile, route), [payload()], thread,
                     workflows=WORKFLOWS_WITHOUT_FIX,
                 )
-                moved = payload()
-                moved["headRefOid"] = "c" * 40
-                moved["comments"] = list(moved["comments"]) + [
-                    comment(WORKER_BOT, notes[0][1], 0)
-                ]
+                # The old hold sits BEHIND the new head's own trigger — a
+                # fresh commit brings a fresh verdict or a fresh death
+                # marker, and the route reads the newest worker-bot comment.
+                moved = payload("c" * 40)
+                moved["comments"] = [
+                    comment(WORKER_BOT, notes[0][1], 120)
+                ] + list(moved["comments"])
                 _, again, _, _, _ = self.drive(
                     getattr(reconcile, route), [moved], thread,
                     workflows=WORKFLOWS_WITHOUT_FIX,
@@ -801,7 +804,12 @@ class AbsentFixAgentWiringTest(unittest.TestCase):
     def test_the_operator_page_names_the_no_fix_agent_answer(self):
         # A change that contradicts a document updates it in the SAME PR.
         page = (ROOT / "docs" / "held-pr-recovery.md").read_text()
-        self.assertIn(reconcile.FIX_AGENT_ABSENT_TAG, page)
+        # assertTrue, not assertIn: a failing assertIn on a whole page dumps
+        # it into the report (the house note in test_fix_concurrency_eviction).
+        self.assertTrue(
+            reconcile.FIX_AGENT_ABSENT_TAG in page,
+            "docs/held-pr-recovery.md never names the no-fix-agent answer",
+        )
 
 
 if __name__ == "__main__":

@@ -63,6 +63,22 @@ def rest(login, body):
     }
 
 
+#: What `gh api repos/<repo>/contents/.github/workflows` answers for a repo
+#: that HAS its fix stub. Since DRE-4378 the sweep asks this once per pass
+#: before it dispatches: a repo whose listing provably lacks the stub is held
+#: for a person instead, and a listing that cannot be read proves nothing and
+#: dispatches exactly as before.
+def _workflows_listing():
+    return json.dumps([
+        {"name": n, "type": "file"}
+        for n in ("agent-task.yml", reconcile.fix_workflow(), "qa-review.yml")
+    ])
+
+
+def _is_workflows_listing(args):
+    return args[0] == "api" and args[-1].endswith("/contents/.github/workflows")
+
+
 def _pr(number=7, branch="agent/DRE-2409-x", mstate="BLOCKED"):
     return {"number": number, "headRefName": branch, "mergeStateStatus": mstate}
 
@@ -77,6 +93,8 @@ def sweep(prs, comments, busy="[]", parked=True):
             return busy
         if args[:2] == ("pr", "list"):
             return json.dumps(prs)
+        if _is_workflows_listing(args):
+            return _workflows_listing()
         if args[0] == "api":
             m = re.search(r"issues/(\d+)/comments", " ".join(args))
             return json.dumps(comments.get(int(m.group(1)), [])) if m else "[]"
@@ -138,6 +156,8 @@ class AnsweredBlockerRestartsTest(unittest.TestCase):
                 return "[]"
             if args[:2] == ("pr", "list"):
                 return json.dumps(prs)
+            if _is_workflows_listing(args):
+                return _workflows_listing()
             if args[0] == "api":
                 return json.dumps(comments[7])
             return ""
@@ -279,6 +299,9 @@ class PreFilterTest(unittest.TestCase):
     decision-shaped in it must not pay it."""
 
     def api_calls(self, pr):
+        """The PER-PR thread fetches only. The sweep's once-per-pass reads —
+        DRE-4378's workflows listing — are not a per-PR cost and are served
+        without being counted here."""
         seen = []
 
         def gh(*args):
@@ -286,6 +309,8 @@ class PreFilterTest(unittest.TestCase):
                 return "[]"
             if args[:2] == ("pr", "list"):
                 return json.dumps([pr])
+            if _is_workflows_listing(args):
+                return _workflows_listing()
             if args[0] == "api":
                 seen.append(args)
                 return json.dumps([rest(WORKER, BLOCKER), rest(HUMAN, DECISION)])

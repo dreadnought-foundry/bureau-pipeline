@@ -226,6 +226,12 @@ DRIVER = textwrap.dedent(f"""\
     def fake_gh(*args):
         if args[:2] == ("pr", "list"):
             return open(os.environ["PR_FIXTURE"], encoding="utf-8").read()
+        if args[0] == "api" and args[-1].endswith("/contents/.github/workflows"):
+            # This repo HAS its fix stub. DRE-4378: the sweep reads the
+            # workflows listing once per pass before it dispatches, and a
+            # repo whose listing provably lacks the stub is held, not
+            # dispatched.
+            return json.dumps([{{"name": reconcile.fix_workflow(), "type": "file"}}])
         raise AssertionError("unexpected gh read: %r" % (args,))
 
     def record(*args):

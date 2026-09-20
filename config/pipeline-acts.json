@@ -376,6 +376,24 @@
       }
     },
     {
+      "name": "repo-has-no-fix-agent",
+      "tag": "fix-agent-absent",
+      "adopted": true,
+      "kind": "hold",
+      "means": "The pull request is held and this repository provably has no fix agent stub on its default branch, so nothing automatic is coming for it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: there is no fix workflow to come back, so scripts/reconcile.py expects nothing to speak and declares no bound on the operator.",
+      "why": "DRE-2525 taught the busy-guard that an absent workflow is not an unreadable one and deliberately left the five dispatch sites loud. Loud turned out to be the CEO's inbox: bureau-harness #2255 held one blocking review in the sandbox that has no agent-fix stub by design, every 15-minute sweep answered it with `gh workflow run agent-fix.yml`, GitHub answered HTTP 404, the sweep recorded a write failure and exited 1 — about 75 consecutive failed runs and 75 emails over 18 hours on 2026-09-18/19 for one pull request. The receipt that disarms the route is posted only after a SUCCESSFUL dispatch, so nothing ever stood it down. A hold and not a refusal: the pull request needs a person, and nothing else is coming. Said once per (pull request, head sha); a new commit says it again. Distinct from verdict-left-behind, which is a verdict bound to an OLDER commit in a repo that does have a fix agent.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "so nothing automatic is coming for this pull request"
+      }
+    },
+    {
       "name": "conflict-agent-dispatched",
       "tag": "conflict-resolution-dispatch",
       "adopted": false,

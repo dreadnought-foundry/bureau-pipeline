@@ -55,10 +55,14 @@ _WORKFLOW = os.path.join(
 
 
 def _pr(number, status="DIRTY", branch=None):
+    # headRefOid + comments ride along since DRE-4378: the sweep's listing
+    # selects them so the no-fix-agent hold can be said once per head.
     return {
         "number": number,
         "headRefName": branch or f"agent/DRE-2908-pr-{number}",
+        "headRefOid": f"{number:040x}",
         "mergeStateStatus": status,
+        "comments": [],
     }
 
 
@@ -202,12 +206,23 @@ class UnreadableStillBusyTest(unittest.TestCase):
 class AbsentStubIsNotUnreadableTest(unittest.TestCase):
     """DRE-2525 survives the rewrite: a repo with no agent-fix stub has an
     EMPTY lane, not an unreadable one — 61 consecutive red sweeps in 18h37m
-    came from conflating the two."""
+    came from conflating the two.
 
-    def test_absent_workflow_leaves_the_lane_empty_and_dispatches(self):
+    What DRE-4378 changed is the line AFTER that. This sweep used to dispatch
+    into the missing stub anyway, on purpose, so the problem stayed loud —
+    and the loudness landed as `HTTP 404` on the write path every fifteen
+    minutes forever: bureau-harness #2255 cost ~75 red runs and 75 emails to
+    the CEO in 18 hours for one pull request. A provable absence now holds the
+    pull request for a person once, and the sweep stays green. An absence that
+    cannot be PROVED is unchanged — it still dispatches, and still fails loud.
+    """
+
+    def _sweep_absent(self, absence):
+        """Run the conflict sweep with `workflow_on_default_branch` answering
+        `absence`; return (dispatches, PR notes, new read failures)."""
         from types import SimpleNamespace
 
-        calls = []
+        calls, notes = [], []
         before = list(reconcile._read_failures)
 
         def fake_run(argv, **kwargs):
@@ -227,16 +242,43 @@ class AbsentStubIsNotUnreadableTest(unittest.TestCase):
             ), mock.patch.object(
                 reconcile.subprocess, "run", side_effect=fake_run
             ), mock.patch.object(
-                reconcile, "workflow_on_default_branch", return_value=False
+                reconcile, "workflow_on_default_branch", return_value=absence
+            ), mock.patch.object(
+                reconcile, "gh_dispatch", side_effect=lambda *a: calls.append(
+                    ["gh", "workflow", "run", *a])
+            ), mock.patch.object(
+                reconcile, "_post_pr_note",
+                side_effect=lambda n, b: notes.append((n, b)) or True
             ), mock.patch.object(
                 reconcile, "card_parked_for_human", return_value=False
             ), contextlib.redirect_stdout(io.StringIO()):
                 reconcile.unstick_conflicts()
             dispatched = [c for c in calls if c[1:3] == ["workflow", "run"]]
-            self.assertEqual(len(dispatched), 1)
-            self.assertEqual(reconcile._read_failures[len(before):], [])
+            return dispatched, notes, reconcile._read_failures[len(before):]
         finally:
             del reconcile._read_failures[len(before):]
+
+    def test_absent_workflow_leaves_the_lane_empty_and_holds_for_a_person(self):
+        dispatched, notes, failures = self._sweep_absent(False)
+        self.assertEqual(dispatched, [], "the sweep dispatched into a stub "
+                                         "this repo provably does not have")
+        self.assertEqual(failures, [], "an absent stub is not a read failure")
+        self.assertEqual(len(notes), 1, f"expected one hold, got {notes}")
+        self.assertIn(reconcile.FIX_AGENT_ABSENT_TAG, notes[0][1])
+
+    def test_an_unprovable_absence_is_unchanged_and_stays_loud(self):
+        # The non-vacuous twin, and the DRE-2525 line that must not move. At
+        # THIS site an unprovable absence means the fix lane itself could not
+        # be read, so the sweep does what it has always done: record the
+        # failure, go red, and defer every pull request. It claims no absence.
+        before = list(reconcile._read_failures)
+        try:
+            dispatched, notes, failures = self._sweep_absent(None)
+        finally:
+            del reconcile._read_failures[len(before):]
+        self.assertEqual(dispatched, [])
+        self.assertEqual(notes, [], "the sweep claimed an absence it cannot prove")
+        self.assertTrue(failures, "an unreadable lane must still take the sweep red")
 
 
 class UnattributedRunsAreCappedTest(unittest.TestCase):
