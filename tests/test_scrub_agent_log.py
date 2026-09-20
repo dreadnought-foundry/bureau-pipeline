@@ -237,6 +237,120 @@ def test_secrets_that_are_not_a_json_object_of_strings_are_refused(tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+def test_a_file_that_stats_but_cannot_be_read_is_a_clean_refusal(tmp_path):
+    """The real case on a self-hosted runner is a log a container wrote as another
+    uid; a directory with a log's name reaches the same branch without needing
+    root to build. A refusal by name and reason — exit 2, never a traceback that
+    prints the full path (DRE-4268 review, blocking 3)."""
+    src = tmp_path / "in"
+    (src / "dir.log").mkdir(parents=True)
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), "--out-dir", str(tmp_path / "out"), str(src / "dir.log")],
+        input="{}", capture_output=True, text=True, check=False)
+    assert done.returncode == scrub_agent_log.REFUSED
+    assert "Traceback" not in done.stderr
+    assert "dir.log: cannot be read" in done.stderr
+    assert str(src) not in done.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_two_inputs_with_one_basename_are_refused_not_overwritten(tmp_path):
+    """`--out-dir` is keyed on the basename alone, so without the guard the second
+    `claude-execution-output.json` silently overwrites the first and one of two
+    records is lost with exit 0 (DRE-4268 review, blocking 2)."""
+    for sub in ("a", "b"):
+        (tmp_path / sub).mkdir()
+        (tmp_path / sub / "log.json").write_text(f"from {sub}")
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), "--out-dir", str(tmp_path / "out"),
+         str(tmp_path / "a" / "log.json"), str(tmp_path / "b" / "log.json")],
+        input="{}", capture_output=True, text=True, check=False)
+    assert done.returncode == scrub_agent_log.REFUSED
+    assert "share a basename" in done.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_secret_name_that_is_not_an_identifier_is_refused(tmp_path):
+    """The name is the one piece of caller text that reaches the output, inside
+    the marker; a quote or newline in it would break a scrubbed transcript's JSON."""
+    done, out = run(tmp_path, {"a.log": b"x"}, secrets={'BAD"NAME\n': "a-long-enough-value"})
+    assert done.returncode == scrub_agent_log.REFUSED
+    assert not out.exists()
+
+
+# --- the last check: verify() ------------------------------------------------------
+#
+# Defensive code nothing can reach today — every marker opens with `«`, so a
+# replacement cannot splice a new match — which is exactly why it is tested
+# directly: its regression would otherwise be invisible until a credential sat
+# in storage (DRE-4268 review, blocking 1).
+
+
+def test_verify_refuses_a_surviving_value_in_any_form():
+    plan = [("BUREAU_APP_TOKEN", scrub_agent_log.forms(APP_TOKEN))]
+    for leftover in (APP_TOKEN, base64.b64encode(f"x:{APP_TOKEN}".encode()).decode()):
+        with pytest.raises(scrub_agent_log.Refused) as refused:
+            scrub_agent_log.verify("log.json", f"leftover {leftover} here", plan)
+        assert "BUREAU_APP_TOKEN" in str(refused.value)
+        assert APP_TOKEN[:8] not in str(refused.value)
+    scrub_agent_log.verify("log.json", "nothing to see", plan)  # and passes clean text
+
+
+def test_verify_refuses_a_surviving_shape():
+    planted = "".join(["gh", "p_", _FILLER[:36]])
+    with pytest.raises(scrub_agent_log.Refused) as refused:
+        scrub_agent_log.verify("step.log", f"token {planted}", [])
+    assert "github-token" in str(refused.value)
+    assert planted[:10] not in str(refused.value)
+
+
+def test_a_scrub_that_missed_is_refused_and_nothing_is_written(tmp_path, monkeypatch):
+    """The contract DRE-4269's upload step depends on — no successful scrub, no
+    upload — pinned end to end: with the scrub reduced to a pass-through, `main`
+    must still exit REFUSED and leave the out dir unwritten."""
+    import io
+
+    src = tmp_path / "log.json"
+    src.write_bytes(transcript(f"export TOKEN={APP_TOKEN}"))
+    out = tmp_path / "out"
+    monkeypatch.setattr(scrub_agent_log, "scrub", lambda text, *args, **kwargs: text)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SECRETS)))
+    assert scrub_agent_log.main(["--out-dir", str(out), str(src)]) == scrub_agent_log.REFUSED
+    assert not out.exists()
+
+
+# --- forms found in review -----------------------------------------------------------
+
+
+def test_a_lower_case_percent_encoded_value_is_removed(tmp_path):
+    """`quote` writes `%2F`; plenty of tools write `%2f`."""
+    secret = "p@ss/w0rd+with&chars=9Zq"
+    lowered = scrub_agent_log._lower_percent_escapes(urllib.parse.quote(secret, safe=""))
+    assert "%2f" in lowered and "9Zq" in lowered  # escapes lowered, the value's own case kept
+    done, out = run(tmp_path, {"step.log": f"GET /cb?key={lowered}".encode()},
+                    secrets={"CALLBACK_KEY": secret})
+    assert done.returncode == 0, done.stderr
+    assert lowered not in (out / "step.log").read_text()
+
+
+def test_a_pem_key_whose_end_line_was_clipped_is_still_removed(tmp_path):
+    """A tool's output is clipped long before a log is, and the END line goes
+    first. The key body must not survive for want of its framing — and the rest
+    of the log must."""
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7fabricated"
+    dashes, kind = "-" * 5, " ".join(["RSA", "PRIVATE", "KEY"])
+    clipped = f"{dashes}BEGIN {kind}{dashes}\n{body}\n{body}"
+    done, out = run(tmp_path, {"step.log": f"cat key:\n{clipped}\n[output truncated] then more log".encode(),
+                               "log.json": transcript(f"the key: {clipped}", "a later turn")},
+                    secrets={})
+    assert done.returncode == 0, done.stderr
+    for name in ("step.log", "log.json"):
+        assert body not in (out / name).read_text(), name
+    assert "then more log" in (out / "step.log").read_text()
+    assert "a later turn" in (out / "log.json").read_text()
+    json.loads((out / "log.json").read_text())
+
+
 # --- the minimum-length rule ------------------------------------------------------
 
 
