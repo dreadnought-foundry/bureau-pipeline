@@ -1219,6 +1219,34 @@ SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
 )
 
+# The lanes `move_hand_built_to_review` reads a hand-built card OUT of
+# (DRE-4356): every flow lane strictly upstream of the review lane that the
+# sweep already reads. Derived from the contract's own order — the file lists
+# the flow in flow order, so "upstream of In Review" is a slice of it, never a
+# list written down here that a lane rename would leave pointing at nothing.
+#
+# Intersected with SWEPT_LANES, and that is the whole cost control. The board
+# snapshot this pass looks a card up in is the one the sweep already paid for,
+# so the move costs no Linear read at all; the two upstream lanes outside the
+# union — Backlog and Green Light — are left alone rather than bought, and
+# both are lanes a card sits in ON PURPOSE (a PARKED verdict, a question
+# waiting on the CEO). Taking a card out of the CEO's own queue because a
+# branch exists is not this card's business.
+_FLOW = lane_contract.flow_lanes()
+HAND_BUILT_REVIEW_LANES = tuple(
+    name for name in _FLOW[: _FLOW.index(REVIEW_LANE)] if name in SWEPT_LANES
+)
+
+# The receipt that says this move happened, and the idempotency key that keeps
+# it to one. Keyed on the CARD rather than on the pull request: agent-bureau's
+# `lane_guard` returns an unpoliced card to Intake when it carries no routing
+# verdict, and a hand-built card filed straight into Intake has none — so if
+# the guard ever undoes this move, the sweep must say nothing rather than
+# re-post every fifteen minutes. One move, one line, per card, for ever.
+_HAND_BUILT_REVIEW_NOTE = (
+    f"hand-built work with an open pull request — moved to {REVIEW_LANE}"
+)
+
 
 def drain_retiring_lanes() -> None:
     """Move every card out of a lane the contract is retiring (DRE-2726).
@@ -4886,6 +4914,169 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
             print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
 
 
+#: The label that says the PLANNER owns a card. Read here, and nowhere else in
+#: this file, for one narrow purpose: refusing to move a card DRE-4356 names as
+#: an epic tell. `card_is_epic` deliberately does not read it (DRE-3044 — every
+#: one-off the relay dispatches to plan.yml wears it, and reading it as
+#: epic-ness left DRE-3018 and DRE-3020 in Backlog for ever), and that rule is
+#: about PROMOTION, where the label stopped work being built at all. Here the
+#: only consequence of refusing is that a card stays exactly where a person put
+#: it — the direction that fails closed — and the card asks for it by name.
+PLANNER_LABEL = "agent:planner"
+
+
+def _planner_owned(card: dict) -> bool:
+    """True if the card wears PLANNER_LABEL. Case-folded like `held()`."""
+    return any(
+        (lbl.get("name") or "").lower() == PLANNER_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def _advance_to_review(identifier: str) -> bool:
+    """Move `identifier` into the review lane, and say whether it LANDED there.
+
+    `cmd_advance` is the guarded write (DRE-2316): it re-reads the card and
+    declines unless it is still in one of the from-lanes, so a card that went
+    Done, Canceled or Duplicate between the board read and this write is not
+    dragged back into review. The read-back is what makes the receipt follow
+    the REAL outcome (DRE-1254) — a line saying "moved to In Review" on a card
+    that did not move is the false-receipt class, and one extra Linear read
+    per card MOVED (never per card read) is what it costs to not write one.
+    """
+    linear_ops.cmd_advance(
+        identifier, REVIEW_LANE, ",".join(HAND_BUILT_REVIEW_LANES)
+    )
+    return card_state(identifier) == REVIEW_LANE
+
+
+def move_hand_built_to_review() -> None:
+    """A hand-built card with an open pull request belongs in review (DRE-4356).
+
+    THE GAP. A fleet-built card is put in the review lane by the run that opens
+    its pull request. A hand-built card has no run, so the lane it was filed in
+    is the lane it keeps until `linear-sync` reads its branch name off the
+    merge event and writes Done. On 2026-09-20 the CEO opened the console and
+    saw four cards — DRE-4348, DRE-4349, DRE-4350, DRE-4352 — each with an open
+    pull request at CI or the merge gate, all reading "in Intake". Whether the
+    board tells the truth about hand-built work depended on every session
+    remembering to move its own card.
+
+    Neither existing path reaches it. `main()`'s nudge loop already carries
+    "open PR → In Review" and is label-blind, but it walks only the lanes it
+    sweeps and has no open-PR branch for Todo at all; the stranded watchdog is
+    silenced on this label by design. So this starts from the OTHER end: the
+    open-pull-request listing the sweep already keeps (`_open_pr_listing`),
+    and the card is looked up in the board snapshot it already read. Widening
+    `SWEPT_LANES` to include Intake would have been the other route and is the
+    wrong one — it would put every Intake card through every nudge in the
+    sweep, for one question that only a pull request can answer.
+
+    The evidence is the pull request, which is exactly what the lane contract
+    asks of In Review. Open, not a draft (a draft is not being checked by
+    anybody, so marking it ready is what moves the card), on a branch that
+    names a card, on a card that carries `hand-built` and is not an epic.
+
+    Every failure is fail-closed and says UNKNOWN (DRE-2034): an unreadable
+    listing, an unreadable board and an unreadable comment thread each move
+    nothing and post nothing, and the run exits red so the medic sees it. An
+    unreadable answer is never "no pull request".
+    """
+    prs = _open_pr_listing()
+    if prs is None:
+        # _open_pr_listing already recorded the failure and reddened the run.
+        print(
+            "hand-built → review: the open pull request listing is UNKNOWN — "
+            "nothing moved, nothing posted"
+        )
+        return
+    try:
+        board = {
+            card["identifier"]: card
+            for card in active_cards(HAND_BUILT_REVIEW_LANES)
+        }
+    except Exception as e:  # noqa: BLE001 — a board we cannot read is UNKNOWN
+        _read_failures.append(f"hand-built → review: board read failed: {e}")
+        print(
+            f"ERROR: hand-built → review: the board is UNKNOWN ({e}) — nothing "
+            "moved, nothing posted",
+            file=sys.stderr,
+        )
+        return
+    for pr in prs:
+        ref = pr.get("headRefName") or ""
+        if pr.get("isDraft"):
+            continue  # not being checked by anything yet — no evidence
+        if not fix_eligible(ref):
+            continue  # `agent/` and `repair/` are the card-carrying prefixes
+        identifier = branch_card(ref)
+        if not identifier:
+            continue  # `repair/<sha>` and friends name no card
+        card = board.get(identifier)
+        if card is None:
+            continue  # already in review or past it, or in a lane this pass leaves alone
+        if not hand_built(card):
+            continue  # the fleet's own run owns that move
+        if card_is_epic(card) or _planner_owned(card):
+            continue  # an epic's lane is its plan's, whatever its branch is named
+        try:
+            said = linear_ops.comment_bodies(identifier)
+        except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            _read_failures.append(
+                f"hand-built → review: {identifier} comments unreadable: {e}"
+            )
+            print(
+                f"ERROR: hand-built → review: whether {identifier} was already "
+                f"moved is UNKNOWN ({e}) — nothing moved, nothing posted",
+                file=sys.stderr,
+            )
+            continue
+        if any(_HAND_BUILT_REVIEW_NOTE in body for body in said):
+            continue  # said once, and once is the point
+        lane = card["state"]["name"]
+        try:
+            landed = _advance_to_review(identifier)
+        except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            _write_failures.append(f"hand-built → review on {identifier}: {e}")
+            print(
+                f"ERROR: hand-built → review: {identifier} could not be moved: {e}",
+                file=sys.stderr,
+            )
+            continue
+        if not landed:
+            print(
+                f"hand-built → review: {identifier} is not in {REVIEW_LANE} after "
+                "the guarded write — it left the lane while this sweep ran; "
+                "nothing posted"
+            )
+            continue
+        url = f"https://github.com/{REPO}/pull/{pr['number']}"
+        linear_ops.cmd_comment(identifier, (
+            f"🧹 {_HAND_BUILT_REVIEW_NOTE}. Pull request #{pr['number']} is open "
+            f"on `{ref}` ({url}), so this card has moved from {lane} to "
+            f"{REVIEW_LANE}.\n\n"
+            f"Why it had not moved by itself: this card is labelled "
+            f"'{HAND_BUILT_LABEL}', so no pipeline run was ever coming to move "
+            f"it, and the board only changed when somebody remembered to change "
+            f"it. An open pull request is the evidence {REVIEW_LANE} asks for — "
+            f"the same evidence the lane contract already demands of every other "
+            f"card in it — so the board now says what is actually happening.\n\n"
+            f"Nothing else about this card changes: the pull request goes through "
+            f"the same checks and the same critic verdict, and the merge is what "
+            f"closes the card.\n\n"
+            f"_Posted once per card._"
+        ))
+        # The snapshot is the sweep's own picture of the board, and the board
+        # just changed. Without this the nudge loop a few lines later would
+        # still see this card in its old lane and re-do the transition with a
+        # second receipt of its own (DRE-2929 — one read, so one truth).
+        card["state"]["name"] = REVIEW_LANE
+        print(
+            f"hand-built → review: {identifier} moved {lane} → {REVIEW_LANE} on "
+            f"open PR #{pr['number']} ({ref})"
+        )
+
+
 def fix_approved_but_red() -> None:
     """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
     no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
@@ -7620,6 +7811,16 @@ def main(
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
+    # BEFORE the nudge loop, and that order is load-bearing (DRE-4356): this
+    # pass moves a hand-built card into the review lane off its open pull
+    # request, and updates the snapshot when it does — so the loop below reads
+    # the card in the lane it is now really in and shepherds it as a card in
+    # review, instead of re-making the transition with a receipt of its own.
+    # Full sweeps only: `--promote-only`, `--close-only` and `--conflicts-only`
+    # have all returned above, which is what keeps a board-wide pass off the
+    # merge path that runs on every merge in the fleet.
+    with _phase("hand_built_to_review"):
+        move_hand_built_to_review()
     # The nudge loop (DRE-3639): one phase, because a sweep's per-card
     # work is one question — what is stuck and what does it need — and a
     # line per card is a log nobody greps.
