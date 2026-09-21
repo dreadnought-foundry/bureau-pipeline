@@ -248,6 +248,17 @@ jobs:
           # so the serialization and the evaluation can never be about
           # different PRs (DRE-2508, DRE-4279).
           PR: ${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}
+          # Through env, the remedy tests/test_workflow_expression_budget.py
+          # names: a `run:` block carrying one `${{ }}` is compiled into a
+          # single format() expression with a 21,000-character ceiling, and
+          # this is one of the fleet's longest. DRE-4486 needed room for its
+          # lane read, so every `${{ github.repository }}` and every
+          # `${{ github.token }}` in the script below moved up here and the
+          # block came out SHORTER than it went in. The one substitution
+          # left in the script is QA_LOGIN's app-slug derivation, which
+          # tests/test_merge_gate_wiring.py pins there on purpose.
+          REPO_FULL: ${{ github.repository }}
+          WORKFLOW_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -331,7 +342,7 @@ jobs:
           # REST check-runs API, NOT `gh pr checks` — the GraphQL rollup needs
           # actions:read the qa-bot App deliberately doesn't have.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
-          gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" > /tmp/check-runs.json
+          gh api "repos/$REPO_FULL/commits/$SHA/check-runs" > /tmp/check-runs.json
           # DRE-2340: the CONTENT-binding record — GitHub's own three-dot
           # compare of the PR's base against its current head, passed WHOLE
           # (never trimmed to `{status}`). Its `files[]` is the PR's own
@@ -345,7 +356,7 @@ jobs:
           # only the behind/ahead note now (DRE-2416) and gates nothing, so
           # a blip no longer strands a green, approved PR.
           BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
-          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/compare.json 2>/dev/null \
+          gh api "repos/$REPO_FULL/compare/$BASE...$SHA" > /tmp/compare.json 2>/dev/null \
             || echo '{}' > /tmp/compare.json
           # A transient comments-API failure must read as "no verdicts yet"
           # (the gate waits, fail-closed) — the same tolerance the inline
@@ -369,7 +380,7 @@ jobs:
           # below fires — a short read must read as "no verdicts yet", never
           # as a partial record missing a verdict the PR already has.
           gh api --paginate --slurp \
-            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            "repos/$REPO_FULL/issues/$PR/comments?per_page=100" \
             > /tmp/comments.json 2>/dev/null \
             || echo '[]' > /tmp/comments.json
           # DRE-1994: the review-run exclusion is by VERIFIED ORIGIN, not
@@ -382,7 +393,7 @@ jobs:
           # workflow's own token (the calling stub grants actions perms). A
           # blip here must fail CLOSED: empty record → no exclusions → the
           # gate waits; it never merges past an unverifiable check.
-          GH_TOKEN="${{ github.token }}" gh api "repos/${{ github.repository }}/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
+          GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
             || echo '{"workflow_runs":[]}' > /tmp/workflow-runs.json
           # The trusted verdict author is derived from the same App key this
           # gate merges with (app-slug of the minted token), so an App rename
@@ -397,9 +408,21 @@ jobs:
           # machine-readable update-type trailer (the semver signal). A blip
           # must fail CLOSED: empty record → the script waits; it never
           # judges the semver level on unverifiable data.
-          AUTHOR=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .user.login)
-          gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
+          AUTHOR=$(gh api "repos/$REPO_FULL/pulls/$PR" --jq .user.login)
+          gh api "repos/$REPO_FULL/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
             || echo '[]' > /tmp/pr-commits.json
+          # DRE-4486: the FIX-LANE record — which pull requests have an Agent
+          # Fix run queued or running. The gate asked every question about
+          # this head and never whether a fix run was still working on it, so
+          # four times a fix finished after the merge and pushed onto a branch
+          # that had already merged. Condition F in merge_gate.py is the rule;
+          # architecture/decisions/adr-stranded-fix-after-merge.md is the why.
+          # The workflow's own token, for the actions:read the qa-bot App
+          # deliberately lacks. Never fails this step: an unreadable read is
+          # written INTO the record and condition F waits on it, because a
+          # blip reading as "no fix run running" is precisely this failure.
+          GH_TOKEN="$WORKFLOW_TOKEN" python3 .bureau-pipeline/scripts/stranded_fix.py lane \
+            --repo "$REPO_FULL" --out /tmp/fix-lane.json
 
           python3 .bureau-pipeline/scripts/merge_gate.py \
             --head-sha "$SHA" \
@@ -414,6 +437,8 @@ jobs:
             --head-branch "$BRANCH" \
             --pr-author "$AUTHOR" \
             --pr-commits-file /tmp/pr-commits.json \
+            --fix-lane-file /tmp/fix-lane.json \
+            --pr-number "$PR" \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
@@ -463,7 +488,7 @@ jobs:
               "Reviewed at $CARRIED; current head $SHA. This branch's own changes are byte-identical to what was reviewed: the head moved only because $BASE was merged in, and that merge touched nothing this pull request changes." \
               "Any change to this pull request's own diff changes the fingerprint above and the verdict dies (DRE-2340). CI still re-runs on the merged result." \
               > /tmp/carry-note.md
-            gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            gh api "repos/$REPO_FULL/issues/$PR/comments" \
               -F body=@/tmp/carry-note.md >/dev/null || true
           fi
 
@@ -488,13 +513,13 @@ jobs:
             # self-agent-fix.yml. Same resolution reconcile.fix_workflow()
             # makes for the sweep's dispatches.
             FIX_WF=agent-fix.yml
-            [ "${{ github.repository }}" = "dreadnought-foundry/bureau-pipeline" ] && FIX_WF=self-agent-fix.yml
+            [ "$REPO_FULL" = "dreadnought-foundry/bureau-pipeline" ] && FIX_WF=self-agent-fix.yml
             # qa-bot token lacks Actions perms (deliberate); use the workflow's
             # own GITHUB_TOKEN — workflow_dispatch is exempt from the
             # no-cascade rule, so the dispatched run still fires.
-            GH_TOKEN="${{ github.token }}" gh workflow run "$FIX_WF" \
-              --repo "${{ github.repository }}" \
-              --ref "$(gh api repos/${{ github.repository }} --jq .default_branch)" \
+            GH_TOKEN="$WORKFLOW_TOKEN" gh workflow run "$FIX_WF" \
+              --repo "$REPO_FULL" \
+              --ref "$(gh api repos/$REPO_FULL --jq .default_branch)" \
               -f pr_number="$PR" || true
             exit 0
           fi
@@ -520,7 +545,7 @@ jobs:
             HUMAN_MARK="Merge gate: waiting for human merge"
             printf '⏸️ %s — %s\n' "$HUMAN_MARK" "$REASON" > /tmp/human-note.md
             python3 .bureau-pipeline/scripts/gate_note.py \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO_FULL" \
               --pr "$PR" \
               --author "$QA_LOGIN" \
               --marker "$HUMAN_MARK" \

@@ -29,18 +29,24 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import merge_gate  # noqa: E402
 
 
-def evaluate_step_run():
-    """The `Evaluate and merge` step's run block, from the parsed YAML."""
+def evaluate_step():
+    """The `Evaluate and merge` step, from the parsed YAML."""
     doc = yaml.safe_load(WORKFLOW.read_text())
     steps = doc["jobs"]["evaluate"]["steps"]
-    runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
-    assert len(runs) == 1, "expected exactly one 'Evaluate and merge' step"
-    return runs[0]
+    found = [s for s in steps if s.get("name") == "Evaluate and merge"]
+    assert len(found) == 1, "expected exactly one 'Evaluate and merge' step"
+    return found[0]
+
+
+def evaluate_step_run():
+    """The `Evaluate and merge` step's run block, from the parsed YAML."""
+    return evaluate_step()["run"]
 
 
 class ScriptInvocationTest(unittest.TestCase):
     def setUp(self):
-        self.run_block = evaluate_step_run()
+        self.step = evaluate_step()
+        self.run_block = self.step["run"]
 
     def test_workflow_calls_the_extracted_script(self):
         self.assertIn(
@@ -103,12 +109,28 @@ class ScriptInvocationTest(unittest.TestCase):
     def test_origin_listing_uses_the_workflows_own_token(self):
         """The runs listing needs actions:read, which the qa-bot App
         deliberately lacks — that ONE read must use the workflow's own
-        token, not GH_TOKEN (the qa-bot token)."""
+        token, not GH_TOKEN (the qa-bot token).
+
+        Since DRE-4486 the token reaches the script through the step's
+        `env:` (the expression-budget remedy), so the assertion is made in
+        two halves: the line spends WORKFLOW_TOKEN, and WORKFLOW_TOKEN is
+        `github.token`. Asserting only the first would pass against an env
+        that bound it to the qa-bot's token."""
         line = next(
             ln for ln in self.run_block.splitlines()
             if "actions/runs?head_sha=$SHA" in ln
         )
-        self.assertIn('GH_TOKEN="${{ github.token }}"', line)
+        self.assertIn('GH_TOKEN="$WORKFLOW_TOKEN"', line)
+        self.assertEqual(self.step["env"]["WORKFLOW_TOKEN"], "${{ github.token }}")
+
+    def test_the_fix_lane_read_uses_the_workflows_own_token_too(self):
+        """DRE-4486's lane listing is the same API and the same permission —
+        a qa-bot token 403s on it and the gate would then wait forever."""
+        line = next(
+            ln for ln in self.run_block.splitlines()
+            if "stranded_fix.py lane" in ln
+        )
+        self.assertIn('GH_TOKEN="$WORKFLOW_TOKEN"', line)
 
     def test_review_workflow_allowlist_is_passed_explicitly(self):
         """The exclusion allowlist is PATHS of pipeline-owned review stubs —

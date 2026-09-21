@@ -96,6 +96,10 @@ PAYLOAD = {
     "github.repository": "dreadnought-foundry/bureau-pipeline",
     "github.event_name": "workflow_dispatch",
     "github.triggering_actor": "github-actions[bot]",
+    # DRE-4486 moved merge-gate.yml's repository and token
+    # substitutions into the step `env:` this harness renders, so the
+    # workflow's own token is now a value it has to model.
+    "github.token": "workflow-token",
 }
 
 # `gh pr view` and nothing else: answers the requested `--json` fields about a

@@ -513,10 +513,14 @@ class TheCardTheReportFiles(unittest.TestCase):
 
 class ReconcileSweepsForIt(unittest.TestCase):
     def test_the_sweep_is_registered_as_a_backstop(self):
+        """Defined is not enough — an unregistered sweep never runs, which is
+        the silence this whole card is about."""
         source = RECONCILE.read_text()
         self.assertIn("def flag_stranded_fixes(", source)
-        backstops = source.split("for backstop in (", 1)[1].split("):", 1)[0]
-        self.assertIn("flag_stranded_fixes", backstops)
+        # The backstop tuple is the one `flag_unlanded_work` is registered in.
+        tail = source.split("            flag_unlanded_work,\n", 1)[1]
+        registered = tail.split("            fix_approved_but_red,", 1)[0]
+        self.assertIn("            flag_stranded_fixes,\n", registered)
 
     def test_the_sweep_files_the_card_through_the_one_composer(self):
         source = RECONCILE.read_text()
