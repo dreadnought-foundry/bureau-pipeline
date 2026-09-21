@@ -42,14 +42,20 @@ withheld (the pre-DRE-4486 caller) and asserts today's gate merges.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+os.environ.setdefault("LINEAR_API_KEY", "test-key")
+os.environ.setdefault("REPO", "dreadnought-foundry/portico")
+os.environ.setdefault("REPO_SLUG", "portico")
+os.environ.setdefault("GH_TOKEN", "x")
 
 import merge_gate  # noqa: E402
 import stranded_fix as sf  # noqa: E402
@@ -509,6 +515,73 @@ class TheCardTheReportFiles(unittest.TestCase):
         self.assertEqual(
             sf.slug_for_repo("dreadnought-foundry/bureau-pipeline"), "bureau-pipeline")
         self.assertIsNone(sf.slug_for_repo("someone/else"))
+
+
+class TheSweepReportsItOnce(unittest.TestCase):
+    """AC3 run rather than asserted: the sweep files ONE card for a stranded
+    branch, and the second sweep — fifteen minutes later, same finding —
+    files nothing."""
+
+    BRANCH = "agent/DRE-4183-auth-gate-veil"
+
+    def sweep(self, *, existing=None, parked=False, branch_exists=True,
+              commit_date=PUSHED_AT):
+        import reconcile
+
+        pr = {"number": 611, "headRefName": self.BRANCH, "baseRefName": "main",
+              "mergedAt": MERGED_AT,
+              "url": "https://github.com/dreadnought-foundry/portico/pull/611"}
+        compare = json.dumps({
+            "ahead_by": 1,
+            "commits": [commit("9f1b7542" + "0" * 32, commit_date)],
+        })
+        filed = []
+        parked_comment = (
+            ["🧭 routing-verdict: PARKED — deliberately not built"]
+            if parked else []
+        )
+        with mock.patch.multiple(
+            reconcile,
+            REPO="dreadnought-foundry/portico",
+            merged_prs=mock.MagicMock(return_value=[pr]),
+            card_branches=mock.MagicMock(return_value=(
+                [{"name": self.BRANCH, "sha": "a" * 40}] if branch_exists else [])),
+            gh=mock.MagicMock(return_value=compare),
+        ), mock.patch.object(
+            reconcile.linear_ops, "find_open", return_value=existing,
+        ), mock.patch.object(
+            reconcile.linear_ops, "comment_bodies", return_value=parked_comment,
+        ), mock.patch.object(
+            reconcile.linear_ops, "cmd_oneoff",
+            side_effect=lambda title, path, *a: filed.append(
+                (title, Path(path).read_text(), a)),
+        ):
+            reconcile.flag_stranded_fixes()
+        return filed
+
+    def test_a_stranded_fix_files_one_card_naming_the_commits(self):
+        filed = self.sweep()
+        self.assertEqual(len(filed), 1)
+        title, body, flags = filed[0]
+        self.assertIn(self.BRANCH, title)
+        self.assertIn("9f1b7542", body)
+        self.assertIn("repo:portico", flags)
+        self.assertIn("agent:engineer", flags)
+
+    def test_the_next_sweep_files_nothing(self):
+        """`once` is the criterion. The idempotency key is the card title,
+        which is keyed on the branch — so a SECOND branch that strands the
+        same way still speaks."""
+        self.assertEqual(self.sweep(existing="DRE-9999"), [])
+
+    def test_a_deleted_branch_is_the_healthy_outcome(self):
+        self.assertEqual(self.sweep(branch_exists=False), [])
+
+    def test_a_branch_whose_commits_predate_the_merge_is_not_reported(self):
+        self.assertEqual(self.sweep(commit_date="2026-08-11T08:00:00Z"), [])
+
+    def test_a_parked_card_is_never_reported(self):
+        self.assertEqual(self.sweep(parked=True), [])
 
 
 class ReconcileSweepsForIt(unittest.TestCase):
