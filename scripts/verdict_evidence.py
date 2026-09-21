@@ -688,8 +688,9 @@ def hold_message(found: list[Defect], verdict_text: str | None = None) -> str:
     notice = (
         "🔎 QA Critic produced a verdict that asserts a result it did not "
         "show — re-review needed, this is not a code rejection.\n\n"
-        "The review blocked this pull request on a claim about what a "
-        "command or a job actually did, and did not include the run itself. "
+        "The review blocked this pull request on a factual claim about a "
+        "run — what a command did, what a job ran, or that no job runs it "
+        "— and did not include the evidence that settles it. "
         "Two pull requests were blocked overnight on claims of exactly this "
         "shape that did not reproduce, so the pipeline no longer posts one "
         "as a rejection (DRE-3005). Nothing here says the change is wrong: "
