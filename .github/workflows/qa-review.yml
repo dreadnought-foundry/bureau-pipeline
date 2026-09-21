@@ -1217,6 +1217,14 @@ jobs:
               so the base branch's jobs apply even when the branch's own
               workflow file predates them; reading the branch's config is
               not evidence about what ran.
+            * A COVERAGE GAP CITES THE SEARCH (DRE-4433). Saying NO job
+              runs something is the opposite claim and has no job id to
+              cite — the evidence is a search over the workflow set. Paste
+              it (`grep -rn '<what>' .github/workflows`, a `find`, a `gh
+              workflow` read) so a reader can repeat it, and never drop the
+              observation to avoid the rule: a suite nothing runs, a guard
+              no workflow calls, a check that exists only locally, is a
+              real finding.
             * BODY SNAPSHOT. Run `gh pr view` again immediately before you
               write the final verdict. A description can be corrected while
               you review, and a verdict demanding a change the author had
@@ -1573,6 +1581,14 @@ jobs:
               so the base branch's jobs apply even when the branch's own
               workflow file predates them; reading the branch's config is
               not evidence about what ran.
+            * A COVERAGE GAP CITES THE SEARCH (DRE-4433). Saying NO job
+              runs something is the opposite claim and has no job id to
+              cite — the evidence is a search over the workflow set. Paste
+              it (`grep -rn '<what>' .github/workflows`, a `find`, a `gh
+              workflow` read) so a reader can repeat it, and never drop the
+              observation to avoid the rule: a suite nothing runs, a guard
+              no workflow calls, a check that exists only locally, is a
+              real finding.
             * BODY SNAPSHOT. Run `gh pr view` again immediately before you
               write the final verdict. A description can be corrected while
               you review, and a verdict demanding a change the author had
@@ -2337,6 +2353,19 @@ jobs:
           A1_CAUSE_TEXT: ${{ steps.gate1.outputs.cause_text }}
           A2_CAUSE: ${{ steps.gate2.outputs.cause }}
           A2_CAUSE_TEXT: ${{ steps.gate2.outputs.cause_text }}
+          # DRE-4433: did the reviewer WRITE a verdict that the evidence
+          # gate then held, and on which rule? Run 35544826358's two
+          # attempts each produced a real, complete verdict — 73 and 66
+          # turns, $13.52, `is_error: false` both times — and this line
+          # said the critic "crashed on both attempts". The rule names
+          # come from verdict_evidence.py's own fixed vocabulary
+          # (`job-coverage`, `job-absence`, `command-output`), never from
+          # a byte of the verdict file: the same reason A1_CAUSE_TEXT is
+          # a fixed sentence and not the critic's prose.
+          A1_EVIDENCE: ${{ steps.gate1.outputs.evidence }}
+          A1_EVIDENCE_RULES: ${{ steps.gate1.outputs.evidence_rules }}
+          A2_EVIDENCE: ${{ steps.gate2.outputs.evidence }}
+          A2_EVIDENCE_RULES: ${{ steps.gate2.outputs.evidence_rules }}
           # Named, because "both attempts" is only findable if the reader
           # knows which run held them, and a run log outlives nothing else.
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2363,7 +2392,32 @@ jobs:
             esac
           }
 
-          if [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
+          # DRE-4433: the evidence answer of the attempt that ANSWERED
+          # LAST, which is the same precedence the comment step composes
+          # on ($RAN, $WHY) and for the same reason — it is the later
+          # evidence. Taken as a pair with its rule names, never mixed
+          # across attempts: a retry that ran out of turns after attempt 1
+          # was held is a turn wall, and the branch below must not claim
+          # attempt 1's story over it. The red line and the comment are
+          # composed from the same two gates and may never disagree.
+          if [ -n "${A2_OUTCOME:-}" ]; then
+            EVIDENCE="${A2_EVIDENCE:-}"; RULES="${A2_EVIDENCE_RULES:-}"
+          else
+            EVIDENCE="${A1_EVIDENCE:-}"; RULES="${A1_EVIDENCE_RULES:-}"
+          fi
+
+          if [ "$EVIDENCE" = "defective" ]; then
+            # DRE-4433. The reviewer authenticated, reviewed, and WROTE a
+            # verdict; the evidence gate held it. Ordered FIRST, ahead of
+            # every branch below, because it is the only one of them that
+            # is true of a run that produced a verdict — the crash wording
+            # and the empty-verdict wording are both false of it, and the
+            # crash one is what run 35544826358 printed over $13.52 of
+            # completed review. Naming the RULE is the actionable half:
+            # `job-coverage` sent a reviewer looking for the id of a job
+            # that does not exist.
+            echo "::error::QA critic wrote a verdict and the evidence gate HELD it — this is not a crash. The reviewer authenticated, reviewed and produced a verdict, so no credential needs rotating on the strength of this line. Held on: ${RULES:-a rule the gate did not name} (scripts/verdict_evidence.py, which printed the claims it held earlier in this run). Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility."
+          elif [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
             echo "::error::QA critic ran out of turns before it produced a verdict — turn exhaustion, not a crash. The reviewer authenticated and did real work; no credential needs rotating. Split this pull request, or check that pr_size_strategy.py routed it to the multi-pass review."
           elif [ "${A1_OUTCOME:-}" = "completed_no_verdict" ] || [ "${A2_OUTCOME:-}" = "completed_no_verdict" ]; then
             # DRE-3304. The reviewer authenticated, reviewed, exited cleanly
