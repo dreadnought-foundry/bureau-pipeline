@@ -23,7 +23,7 @@ backstop that lets agents ship without a human reading diffs — a backstop that
 can assert an unrun command's output blocks correct work, spends fix-loop
 attempts, and costs an operator decision each time.
 
-## The three rules
+## The rules
 
 1. **A verdict that cites a command includes that command's actual output.**
    Enough of it to be re-run and compared — the command **and** its result in
@@ -38,6 +38,20 @@ attempts, and costs an operator decision each time.
    executes from the merge ref, so the base branch's jobs apply even when the
    branch's own workflow file predates them; "the branch's config doesn't have
    it" is not evidence about what ran.
+2b. **A coverage GAP cites the SEARCH, not a job id** (DRE-4433). "No job runs
+   this" is the opposite kind of statement to rule 2's: it is about what does
+   not exist, and an absence has no run id and no job id to carry. Paste the
+   search that establishes it — `grep -rn '<what>' .github/workflows`, a
+   `find`, a `gh workflow` read — so a reader can repeat it. Rule 2's citation
+   also satisfies this, when you have one.
+
+   The rule as written demanded the id of a job that does not exist, which
+   nobody can produce and no reviewer can drop the observation to avoid: on
+   agent-bureau #2664 (run 35544826358) both critic attempts wrote a real,
+   complete verdict, both were held on one remark of this shape, $13.52 was
+   spent and the pull request got no review at all. Any reviewer noticing a
+   suite nothing runs, a guard no workflow calls, or a check that exists only
+   locally writes this sentence.
 3. **State the snapshot you reviewed.** A review takes minutes and a
    description can be corrected inside them. Re-read the pull request body
    immediately before writing the verdict, or state the moment you read it. The
@@ -72,6 +86,14 @@ carries the `QA Critic` marker (so it supersedes a stale APPROVE) and no
 `VERDICT:` line (so merge is held and the fix agent is not woken to fix
 findings nobody proved), and the job goes red for the medic. It can only ever
 hold a merge, never grant one.
+
+**The held review rides on that hold** (DRE-4433). A held verdict used to be
+posted nowhere, so a correct finding inside it reached no human and no fixing
+agent — #2664's had to be dug out of a death-receipt artifact, truncated at
+500 characters. The hold now quotes the whole verdict, with its `VERDICT:`
+token defanged so nothing reads the quote as a rejection, and the job's own
+red line names the hold and the rule that held it instead of saying the critic
+crashed.
 
 ## Fix, verifier and medic agents
 

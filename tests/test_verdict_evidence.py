@@ -568,10 +568,14 @@ class CoverageGapClaimTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
     def test_an_absence_claim_is_not_read_as_a_named_job_claim(self):
+        # Every one of these is a sentence the gate HELD before this card:
+        # the absence rule only re-routes claims that were already gated,
+        # so no verdict that passed starts failing (the module's own
+        # false-positive law).
         for sentence in (
             "No CI job runs `npx tsc --noEmit`.",
-            "Nothing in the workflow set runs this suite.",
-            "None of the workflows call the new guard.",
+            "Nothing runs this suite in CI.",
+            "No workflow job runs the new guard.",
             "There is no job that runs the type check.",
         ):
             with self.subTest(sentence=sentence):
@@ -788,6 +792,17 @@ class HeldVerdictReachesAHumanTest(unittest.TestCase):
         msg = ve.hold_message(ve.defects(held), held)
         self.assertLess(len(msg), 65536)
         self.assertIn("truncated", msg.lower())
+
+    def test_many_findings_plus_a_long_verdict_still_fit(self):
+        # The quote takes what is LEFT under the ceiling: the hold's own
+        # reasons are what merge-gate's reader acts on, so they may never
+        # be crowded out by the verdict being quoted.
+        claims = [f"I ran `python3 scripts/check_{i}.py --all` and it "
+                  f"exits 1 with a failure." for i in range(60)]
+        held = verdict(*claims) + "padding. " * 12000
+        msg = ve.hold_message(ve.defects(held), held)
+        self.assertLess(len(msg), 65536)
+        self.assertIn("check_59.py", msg)
 
     def test_the_message_without_the_verdict_is_unchanged(self):
         # The old one-argument call still composes the notice: a caller

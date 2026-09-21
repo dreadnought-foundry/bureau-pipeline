@@ -33,10 +33,20 @@ claim a command can settle:
   1. A verdict that cites a command must include that command's actual
      output — enough of it to be re-run and compared, which means the
      command AND its result in one fenced block, not a quoted fragment.
-  2. A finding that a CI job did not run something must cite the job: a run
-     id, a job id, and the line proving what it ran — a line that carries
-     one of those ids or the run's own result, not any fence that happens
-     to sit beside the claim.
+  2. A finding that a NAMED CI job did not run something must cite the job:
+     a run id, a job id, and the line proving what it ran — a line that
+     carries one of those ids or the run's own result, not any fence that
+     happens to sit beside the claim.
+  2b. A finding that NO job runs something cites the SEARCH that
+     establishes the absence (DRE-4433). It is the opposite kind of
+     statement to rule 2's and it has no job id to cite, so demanding one
+     asks for the id of a job that does not exist: on agent-bureau #2664
+     (run 35544826358) both critic attempts wrote a real, complete verdict,
+     both were held on one remark of this shape, $13.52 was spent and the
+     pull request got no review at all. The evidence for an absence is a
+     search over the workflow set — a grep, a find, a `gh workflow` read —
+     and rule 2's citation still satisfies it, so nothing that passed
+     before starts failing.
   3. The verdict states the PR-body snapshot it read (body_snapshot_footer,
      stamped by the workflow — the critic cannot be trusted to timestamp
      itself, and the workflow already knows both times).
@@ -72,6 +82,15 @@ APPROVE) and NO `VERDICT:` line (so merge-gate holds and the fix agent is
 not dispatched to fix findings nobody proved). The job then fails loudly,
 medic-visible. It can only ever hold a merge, never grant one.
 
+AND THE HELD REVIEW RIDES ON THAT HOLD (DRE-4433). It used to be posted
+nowhere: #2664's finding about a stale pull-request description was
+correct, reached no human and no fixing agent, and survived only inside a
+death-receipt artifact that truncates it at 500 characters. A review nobody
+can read is the expensive half of a hold, so `hold_message()` quotes the
+whole verdict with its `VERDICT:` token defanged — `"VERDICT:" in body` is
+how reconcile.py and fix_convergence.py decide a comment IS a verdict, and
+neither reads only the first line.
+
 WHAT THE MEDIC THEN DOES, named rather than left to be discovered
 (vendor-boundaries Q5). That loud fail is a `workflow_run` failure the medic
 watches. This hold carries neither medic_classify's CRITIC_NEUTRAL_MARKER
@@ -88,8 +107,10 @@ CLI:
         Exit 0 when the verdict carries its evidence (or is an APPROVE, or
         declares no verdict at all — that is check_critic_result.py's
         question, not this one). Exit 1 when a claim is unevidenced; the
-        defects go to stdout and the neutral hold message is written to
-        --hold-file. With --github-output, appends `evidence=ok|defective`.
+        defects go to stdout and the neutral hold message — carrying the
+        held verdict itself, so a person can read the review that was
+        held — is written to --hold-file. With --github-output, appends
+        `evidence=ok|defective` and `evidence_rules=<rule names>`.
 
     verdict_evidence.py snapshot --reviewed-at <ts> --edited-at <ts>
         Prints the body-snapshot footer (rule 3) for the posting step, or
@@ -197,6 +218,37 @@ _COVERAGE_DENIALS = re.compile(
     r"|\bnever\s+(?:ran|run|executed|exercised)\b",
     re.I,
 )
+
+#: THE OTHER KIND OF COVERAGE STATEMENT (DRE-4433) — the claim that NO job
+#: runs something. Rule 2 exists so a claim about what a run DID carries
+#: that run; this is its opposite, and its evidence is a search over the
+#: workflow set, not a job id. What separates the two mechanically is where
+#: the negation sits: here it QUANTIFIES the subject ("no CI job runs it",
+#: "nothing runs this suite", "none of the workflows call it"), where
+#: portico #407's negation follows a definite one ("this PR's own CI checks
+#: never ran the new spec"). That sentence must keep failing rule 2 — a
+#: grep says nothing about what a run that happened executed.
+_ABSENCE_SUBJECT = (r"(?:jobs?|workflows?|checks?|suites?|steps?|pipelines?"
+                    r"|runners?)")
+_RAN_VERB = (r"(?:runs?|ran|executes?|executed|invokes?|invoked|calls?"
+             r"|called|covers?|covered|exercises?|exercised)")
+_ABSENCE = re.compile(
+    r"\b(?:nothing|nobody|no\s+one)\b\s+(?:\w+\s+){0,3}?" + _RAN_VERB + r"\b"
+    r"|\b(?:no|none\s+of\s+the|not\s+a\s+single)\s+(?:\w+[\s-]+){0,3}?"
+    + _ABSENCE_SUBJECT + r"\b\s+(?:\w+\s+){0,3}?" + _RAN_VERB + r"\b",
+    re.I,
+)
+
+#: What establishes an absence: a search anyone can re-run over the set the
+#: claim is about. Read from a backticked span in prose or a line inside a
+#: fenced block — the same two places rule 1 reads a command from. A search
+#: that finds nothing PRINTS nothing, so its result is not demanded: what
+#: is demanded is that the reviewer say how they looked, which is the half
+#: a reader needs to check the claim and the half #2664's rule made
+#: impossible to give.
+_SEARCH_COMMAND = re.compile(
+    r"^(?:sudo\s+)?(?:grep|egrep|fgrep|rg|ripgrep|ack|ag|find|ls|yq"
+    r"|git\s+grep|gh\s+workflow|gh\s+search|gh\s+api)\b", re.I)
 
 #: The two ids a coverage claim must carry. `run 33724409256` /
 #: `/actions/runs/33724409256` and `job 100550113617` / `/job/100550113617`.
@@ -364,8 +416,8 @@ def run_claims(text: str) -> list[str]:
     return claims
 
 
-def job_claims(text: str) -> list[str]:
-    """Sentences denying that a CI job ran something."""
+def _coverage_denials(text: str) -> list[str]:
+    """Every sentence denying that CI ran something, of either kind."""
     claims = []
     for sentence in _SENTENCE.split(prose(text)):
         if not sentence.strip():
@@ -374,6 +426,40 @@ def job_claims(text: str) -> list[str]:
                 _COVERAGE_DENIALS.search(sentence):
             claims.append(sentence.strip())
     return claims
+
+
+def job_claims(text: str) -> list[str]:
+    """Sentences denying that a NAMED CI job ran something.
+
+    An absence claim is not one of these and never was: it says no such job
+    exists, which a run id and a job id cannot evidence (DRE-4433).
+    """
+    return [s for s in _coverage_denials(text) if not _ABSENCE.search(s)]
+
+
+def absence_claims(text: str) -> list[str]:
+    """Sentences claiming that NO job anywhere runs something."""
+    return [s for s in _coverage_denials(text) if _ABSENCE.search(s)]
+
+
+def searches(text: str) -> list[str]:
+    """The searches this section cites, in prose backticks or in a fence.
+
+    A search over the workflow set is what establishes an absence, so this
+    is the evidence rule 2b reads — deliberately NOT `_commands()`, whose
+    runner list is about executing a thing rather than looking for one.
+    """
+    found = []
+    for span in _BACKTICKED.findall(prose(text)):
+        candidate = span.strip().lstrip("$").strip()
+        if _SEARCH_COMMAND.match(candidate):
+            found.append(candidate)
+    for block in fenced_blocks(text):
+        for line in block.splitlines():
+            candidate = line.strip().lstrip("$").strip()
+            if _SEARCH_COMMAND.match(candidate):
+                found.append(candidate)
+    return found
 
 
 def _has_output_for(command: str, blocks: list[str]) -> bool:
@@ -422,6 +508,22 @@ def _proves_the_job_ran(blocks: list[str], section: str) -> bool:
     return False
 
 
+def _citation_gaps(section: str, blocks: list[str]) -> list[str]:
+    """Which halves of rule 2's citation this section is missing.
+
+    Computed over the whole findings section rather than per sentence: a
+    verdict that cites the run once has cited it for every claim in it.
+    """
+    gaps = []
+    if not _RUN_ID.search(section):
+        gaps.append("a run id")
+    if not _JOB_ID.search(section):
+        gaps.append("a job id")
+    if not _proves_the_job_ran(blocks, section):
+        gaps.append("the line proving what the job ran")
+    return gaps
+
+
 def defects(text: str) -> list[Defect]:
     """Every unevidenced factual claim in a blocking verdict.
 
@@ -446,23 +548,30 @@ def defects(text: str) -> list[Defect]:
                 "actual result in one fenced block so the run can be "
                 "repeated and compared",
             ))
-    if job_claims(section):
-        whole = section
-        gaps = []
-        if not _RUN_ID.search(whole):
-            gaps.append("a run id")
-        if not _JOB_ID.search(whole):
-            gaps.append("a job id")
-        if not _proves_the_job_ran(blocks, whole):
-            gaps.append("the line proving what the job ran")
-        if gaps:
-            for claim in job_claims(section):
+    gaps = _citation_gaps(section, blocks)
+    if gaps:
+        for claim in job_claims(section):
+            found.append(Defect(
+                "job-coverage", claim,
+                # Reads for one gap and for three: the common case is
+                # now a single missing half, not a citation-free claim.
+                "the verdict says a CI job did not run something and "
+                "does not cite " + " and ".join(gaps),
+            ))
+        # DRE-4433: an absence is answered by the search, and ALSO by rule
+        # 2's citation — a reviewer who read the run's own jobs API has
+        # answered the harder question, and nothing that passed before may
+        # start failing.
+        if not searches(section):
+            for claim in absence_claims(section):
                 found.append(Defect(
-                    "job-coverage", claim,
-                    # Reads for one gap and for three: the common case is
-                    # now a single missing half, not a citation-free claim.
-                    "the verdict says a CI job did not run something and "
-                    "does not cite " + " and ".join(gaps),
+                    "job-absence", claim,
+                    "the verdict says NO CI job runs something and does "
+                    "not cite the search that establishes the absence — "
+                    "paste the search over the workflow set (for example "
+                    "`grep -rn '<what>' .github/workflows`) so a reader "
+                    "can repeat it. A run id is not asked for here: an "
+                    "absence has no job to cite",
                 ))
     return found
 
@@ -509,7 +618,56 @@ def body_snapshot_footer(reviewed_at: str, edited_at: str | None) -> str:
 
 # ── the neutral hold a defective verdict becomes ───────────────────────────
 
-def hold_message(found: list[Defect]) -> str:
+#: GitHub refuses a comment body over 65,536 characters, and a hold that
+#: fails to post is this card's own defect wearing a new hat — a review
+#: nobody can read. The quote takes whatever is left under this ceiling
+#: after the notice and the list of what was missing, so the hold's own
+#: reasons are never crowded out by the verdict it quotes.
+_COMMENT_CEILING = 60000
+#: Below this, a quote is not worth the confusion of a truncation notice.
+_MIN_QUOTE_CHARS = 500
+
+#: The one token a quoted verdict may NOT carry. `"VERDICT:" in body` is how
+#: reconcile.py and fix_convergence.py decide a comment IS a verdict —
+#: neither reads only the first line — so quoting one verbatim would turn
+#: this neutral hold into the rejection it exists to withhold. The decision
+#: word itself stays: a reader has to see what the reviewer decided.
+_DEFANGED_VERDICT = "VERDICT (held):"
+
+
+def defang_verdict_markers(text: str) -> str:
+    """`VERDICT:` → `VERDICT (held):`, everywhere in a quoted verdict."""
+    return re.sub(r"VERDICT\s*:", _DEFANGED_VERDICT, text)
+
+
+def held_verdict_quote(text: str, budget: int = _COMMENT_CEILING) -> str:
+    """The held review itself, ready to ride on the hold comment.
+
+    DRE-4433: a held verdict is never posted, so on agent-bureau #2664 the
+    critic's real finding — a stale pull-request description — reached no
+    human and no fixing agent. It survived only in the run's death-receipt
+    artifact, where the quote is cut at 500 characters. The review is the
+    expensive half of this defect: the money buys a review nobody can read.
+
+    Fenced with a run of backticks longer than any inside the verdict, so a
+    review that pastes its own evidence blocks still renders as one quote.
+    """
+    body = defang_verdict_markers((text or "").strip())
+    if not body or budget < _MIN_QUOTE_CHARS:
+        return ""
+    if len(body) > budget:
+        body = (body[:budget]
+                + "\n… (truncated — the whole verdict is in the run log)")
+    longest = max((len(m) for m in re.findall(r"`+", body)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return (
+        "The review that was held, in full — read the findings, and if one "
+        "of them is right, it is still right:\n\n"
+        f"{fence}text\n{body}\n{fence}\n"
+    )
+
+
+def hold_message(found: list[Defect], verdict_text: str | None = None) -> str:
     """The comment posted in place of a verdict the gate cannot believe.
 
     Same neutral contract as qa-review.yml's crash and oversize notices:
@@ -523,7 +681,7 @@ def hold_message(found: list[Defect]) -> str:
     if not found:
         return ""
     body = "\n".join(f"- {d.line()}" for d in found)
-    return (
+    notice = (
         "🔎 QA Critic produced a verdict that asserts a result it did not "
         "show — re-review needed, this is not a code rejection.\n\n"
         "The review blocked this pull request on a claim about what a "
@@ -535,16 +693,33 @@ def hold_message(found: list[Defect]) -> str:
         "a review lands its evidence.\n\n"
         "What was missing:\n\n" + body + "\n"
     )
+    if not verdict_text:
+        return notice
+    # DRE-4433: and the review itself, because a held verdict that reaches
+    # nobody is the expensive half. #2664's finding about a stale
+    # description was correct and was never read by a human or a fixing
+    # agent — it had to be dug out of a death-receipt artifact, truncated
+    # at 500 characters. The quote gets what is left under the ceiling, so
+    # a huge verdict costs a truncation notice rather than the comment.
+    quote = held_verdict_quote(verdict_text, _COMMENT_CEILING - len(notice))
+    return notice + ("\n" + quote if quote else "")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
-def _write_output(path: str | None, value: str) -> None:
+def _write_output(path: str | None, value: str,
+                  found: list[Defect] | None = None) -> None:
     if not path:
         return
+    # DRE-4433: WHICH rules held it, as the rule NAMES this module already
+    # uses — a fixed vocabulary from the code, never a byte of the verdict
+    # file, so the fail annotation that reads it cannot be composed by a
+    # hostile diff. One line, comma-joined, empty when nothing was held.
+    rules = ",".join(sorted({d.rule for d in (found or [])}))
     try:
         with open(path, "a") as f:
             f.write(f"evidence={value}\n")
+            f.write(f"evidence_rules={rules}\n")
     except OSError as exc:
         # A gate that cannot write its outputs still has an answer.
         print(f"verdict evidence gate: could not write step outputs: {exc}")
@@ -593,11 +768,14 @@ def main(argv: list[str]) -> int:
           "claim(s) in a blocking verdict:")
     for defect in found:
         print(f"  {defect.line()}")
-    _write_output(args.github_output, "defective")
+    _write_output(args.github_output, "defective", found)
     if args.hold_file:
         try:
             with open(args.hold_file, "w", encoding="utf-8") as f:
-                f.write(hold_message(found))
+                # The held review rides with the reasons it was held
+                # (DRE-4433): the comment this becomes is the only place a
+                # person ever sees it.
+                f.write(hold_message(found, text))
         except OSError as exc:
             print(f"verdict evidence gate: could not write the hold "
                   f"message: {exc}")
