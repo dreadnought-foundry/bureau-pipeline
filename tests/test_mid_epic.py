@@ -175,6 +175,7 @@ WALKED = {
     ("linear_ops", "cmd_subissue"),
     ("reconcile", "card_is_epic"),
     ("linear_ops", "epic_branch_refusal"),
+    ("linear_ops", "cmd_advance"),
 }
 
 
@@ -277,6 +278,45 @@ class TestEveryCallerIsWalked:
             ["repo:agent-bureau", "agent:engineer"],
             False,
         ) is None
+
+    def _advance(self, *, title=PROBE_TITLE, labels=PROBE_LABELS, children=()):
+        """Run `cmd_advance --not-epic` over one card; return the write mock."""
+        issue = {
+            "id": "card-uuid",
+            "identifier": "DRE-3018",
+            "title": title,
+            "team": {"id": "team-1"},
+            "state": {"name": "Intake", "type": "backlog"},
+            "labels": {"nodes": [{"name": n} for n in labels]},
+            "children": {"nodes": [{"id": c} for c in children]},
+        }
+        with patch.object(linear_ops, "get_issue", return_value=issue), \
+             patch.object(
+                 linear_ops, "state_id_and_type", return_value=("st-r", "started")
+             ), \
+             patch.object(
+                 linear_ops, "guarded_state_write", return_value=True
+             ) as write:
+            linear_ops.cmd_advance(
+                "DRE-3018", "In Review", "Intake,In Progress", "--not-epic"
+            )
+        return write
+
+    def test_cmd_advance_does_not_read_the_planner_label_either(self):
+        """`linear_ops.cmd_advance --not-epic` — the PR-side lane write
+        (DRE-4179), and the newest caller.
+
+        It is the one this label would hurt most directly: the cards it exists
+        for are cards the relay never dispatched, and a classified one-off
+        keeps `agent:planner` all the way through. Reading it here would leave
+        exactly those cards in Intake — the defect, restored by its own fix.
+        """
+        assert self._advance().called
+
+    def test_cmd_advance_still_refuses_a_real_epic(self):
+        """Guard the guard: the two facts it does read still answer."""
+        assert not self._advance(title="[EPIC] the intake front door").called
+        assert not self._advance(children=("child-1",)).called
 
     def test_cmd_subissue_refuses_a_child_of_a_planner_owned_one_off(self):
         """`linear_ops.cmd_subissue` — the create seam, where the refusal is an

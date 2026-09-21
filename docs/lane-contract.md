@@ -113,7 +113,7 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate.  
+| **entrance** | A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate. The card may arrive here from ANY pre-review lane — Intake, Triage, Planning, Backlog, Todo or In Progress — and not only from In Progress: a pull request opened outside the relay's dispatch has no agent-task run behind it to have written In Progress, so qa-review.yml advances the card itself when the pull request opens (DRE-4179). Green Light is not a pre-review lane for this route: it is the CEO's own queue and a branch existing does not take a card out of it.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **exit** | GitHub merges the pull request and linear-sync writes Done — or the pull request is gone and the card is requeued under the dead-run cap.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |

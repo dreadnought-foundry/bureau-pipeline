@@ -2226,6 +2226,83 @@ jobs:
             python3 "$PIPELINE_DIR"/scripts/sync_review_state.py "$REPO" "$PR" || true
           fi
 
+      # ── The card's lane, written from the PR side (DRE-4179) ──────────────
+      # A card whose pull request was opened OUTSIDE the relay's dispatch never
+      # leaves the lane it was filed in. `agent-task.yml` is the ONLY writer of
+      # `In Progress` and it runs only on the relay's `agent-execute` dispatch;
+      # the relay refuses to dispatch anything that is not in Todo. No dispatch
+      # → no `agent-task` run → no lane write, ever. The reviewer, the fix agent
+      # and the merge gate all still run — they key off the PULL REQUEST — so
+      # the board read "Intake" while an agent was mid-build and the card jumped
+      # Intake → Done on the merge, having shown neither In Progress nor In
+      # Review. Counted 2026-09-17: 289 cards in Intake, 25 carrying build
+      # evidence, 4 with a pull request opened that day (DRE-4132 /
+      # bureau-pipeline#433 carried a critic APPROVE and still read Intake).
+      #
+      # So the lane is written from the side the evidence is on. This job
+      # already fires on every pull request, already holds LINEAR_API_KEY, and
+      # the head ref already names the card.
+      #
+      # This is the complement of `reconcile.move_hand_built_to_review()`
+      # (DRE-4356), which makes the same move for `hand-built` cards only and
+      # leaves a card without that label to "the run that opened its pull
+      # request". This is that run, and the two cannot both move one card.
+      - name: Card → In Review (a pull request opened outside the dispatch)
+        id: lane
+        # NOT gated on steps.decide: a chrome-only pull request is still a pull
+        # request that is open and being checked, and its card still belongs in
+        # the review lane. `always() && !cancelled()` for the same reason — the
+        # lane is a fact about the pull request, not about the verdict, so a
+        # critic that crashed must still leave the board honest.
+        #
+        # OPENED/REOPENED only. The critic fires on every push, and the move can
+        # only happen once: a per-push write would add hundreds of Linear writes
+        # per repo to re-answer a question `cmd_advance` has already answered
+        # with "not advancing". A workflow_dispatch re-review carries no
+        # `action` at all and is skipped here, which is correct — an operator
+        # re-review is not a pull request opening.
+        if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened')
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # ANCHORED, and that is the point. The Resolve PR step's card grep is
+          # `DRE-[0-9]+` anywhere in the ref — right for LOGGING which card a
+          # run belongs to, wrong for MOVING one, because a branch that merely
+          # mentions a card id would move it. This is linear-sync.yml's own
+          # shape (`^(agent|repair)/DRE-[0-9]+-`, delimiter required after the
+          # number, case-insensitive, normalised to upper case), narrowed to
+          # `agent/`: a Red-Main Repair files its own card and its lane is not
+          # this defect.
+          CARD=$(printf '%s' "$HEAD_REF" | grep -oiE '^agent/DRE-[0-9]+-' | grep -oiE 'DRE-[0-9]+' | tr '[:lower:]' '[:upper:]' || true)
+          if [ -z "$CARD" ]; then
+            echo "head branch '$HEAD_REF' is not a card's own agent branch — no lane write"
+            exit 0
+          fi
+          # The pre-review lanes, and only those. `In Review`, `Done`,
+          # `Canceled` and `Duplicate` are absent, so a card at or past the
+          # review lane is never moved — `cmd_advance` refuses a from-lane it
+          # was not given, and its guarded write re-reads the card immediately
+          # before the mutation (DRE-2316). `Green Light` is absent too: that
+          # lane is the CEO's own "needs you" queue, and taking a card out of it
+          # because a branch exists is not this step's business — the same line
+          # `reconcile.HAND_BUILT_REVIEW_LANES` draws. `Triage` IS here: a
+          # broken card with an open pull request is being checked like any
+          # other, and leaving it behind would recreate this defect in the one
+          # lane nobody watches.
+          #
+          # `--not-epic` refuses an epic outright (`mid_epic.is_epic`, the one
+          # helper): this step is driven by a BRANCH NAME, and one child's pull
+          # request does not put an epic's plan in review.
+          #
+          # `|| echo`: the verdict is already posted by the step above and a
+          # Linear outage must not turn a completed review red. The lane is the
+          # least load-bearing thing this job writes.
+          python3 "$PIPELINE_DIR"/scripts/linear_ops.py advance "$CARD" \
+            "In Review" "Intake,Triage,Planning,Backlog,Todo,In Progress" \
+            --not-epic \
+            || echo "::warning::could not write ${CARD}'s lane — the verdict is posted and unaffected"
+
       # ── Head-bound review check (DRE-2291) ────────────────────────────────
       # GitHub attributes a workflow_dispatch run to the DEFAULT BRANCH, so
       # this job's own `call / review` check run lands on main's tip and

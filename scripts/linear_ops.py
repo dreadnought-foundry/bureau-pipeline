@@ -1136,8 +1136,40 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
         print(f"{identifier} → {state_name}")
 
 
-def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
+def cmd_advance(
+    identifier: str, to_state: str, from_states_csv: str, *flags: str
+) -> None:
+    """Move a card into `to_state`, but only out of one of `from_states_csv`.
+
+    `--not-epic` (DRE-4179) refuses the move on an epic. The caller that needs
+    it is the PR-side lane write in `qa-review.yml`: it is driven by a BRANCH
+    NAME, and a branch named for an epic would otherwise walk an epic into the
+    review lane on the strength of one of its children's pull requests. Every
+    other caller names a card the pipeline itself put in the from-lane, so the
+    flag is opt-in rather than the default — turning it on everywhere would buy
+    nothing and change `cmd_advance` for callers that have never met an epic.
+
+    Epic-ness is `mid_epic.is_epic()`, the one helper `reconcile.card_is_epic`
+    and `epic_branch_refusal` ask (DRE-3038) — `[EPIC]` in the title, or any
+    children at all. No shape stamp is passed: `get_issue` reads the card with
+    one query and the stamp lives in its comments, exactly as `cmd_card_done`
+    has it. `agent:planner` is NOT read here, for DRE-3044's reason — every
+    card the relay sends to plan.yml wears it, one-offs included.
+    """
+    refuse_epic = "--not-epic" in flags
+    for flag in flags:
+        if flag and flag != "--not-epic":
+            raise LinearError(f"advance: unknown option {flag!r}")
     issue = get_issue(identifier)
+    if refuse_epic and mid_epic.is_epic(
+        issue.get("title"), bool(((issue.get("children") or {}).get("nodes")) or [])
+    ):
+        print(
+            f"{identifier} is an EPIC — not advancing it to {to_state!r}. One "
+            "child's pull request does not put an epic's plan in review, and an "
+            "epic's lane is moved by the CEO."
+        )
+        return
     current = issue["state"]["name"].lower()
     allowed = [s.strip().lower() for s in from_states_csv.split(",")]
     if current not in allowed:
