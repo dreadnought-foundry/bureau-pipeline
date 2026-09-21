@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-20T04:47:11Z",
+  "generated_at": "2026-09-21T04:51:42Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -965,7 +965,7 @@
       "card": "DRE-3022",
       "title": "The planner sizes against the ledger \u2014 every turn-cap death, split and hand-back as data it reads before it cuts a card",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3022/the-planner-sizes-against-the-ledger-every-turn-cap-death-split-and",
-      "state": "In Progress",
+      "state": "Done",
       "created_at": "2026-09-04T00:33:40Z",
       "reasons": [
         "turn-cap-death"
@@ -1398,18 +1398,39 @@
       "card": "DRE-4322",
       "title": "bureau-pipeline: a repo with no fix agent and a held pull request is reported once, not failed every 15 minutes",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-4322/bureau-pipeline-a-repo-with-no-fix-agent-and-a-held-pull-request-is",
-      "state": "Green Light",
+      "state": "Canceled",
       "created_at": "2026-09-19T17:11:26Z",
       "reasons": [
+        "split",
         "handed-back"
       ],
       "size": "UNKNOWN",
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
+      "piece_files": [
+        "config/pipeline-acts.json",
+        "docs/held-pr-recovery.md",
+        "docs/pipeline-acts.md",
+        "scripts/reconcile.py",
+        "tests/fixtures/act-receipt-bodies.json",
+        "tests/test_act_cadence.py",
+        "tests/test_act_emission.py",
+        "tests/test_conflict_sweep_per_pr_busy.py",
+        "tests/test_decision_answers_the_verdict.py",
+        "tests/test_hand_dispatch_no_work.py",
+        "tests/test_linear_sync_workflow.py",
+        "tests/test_operator_decision_restart.py",
+        "tests/test_pipeline_acts.py",
+        "tests/test_redispatch_standing_verdict.py",
+        "tests/test_restart_instruction_matches_gate.py",
+        "tests/test_verdict_sha_binding.py"
+      ],
+      "pieces": 2,
+      "pieces_named": [
+        "DRE-4378",
+        "DRE-4377"
+      ],
       "deaths": 0,
       "dollars": 0.0,
       "tells": [
@@ -1423,14 +1444,15 @@
         "unbounded-quantifier": "'every pass' with no count of pass anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-4377: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     }
   ],
   "monthly": [
     {
       "month": "2026-06",
-      "planner_children": 125,
+      "planner_children": 100,
       "split": 0,
       "died": 0,
       "complete": false
@@ -1451,8 +1473,8 @@
     },
     {
       "month": "2026-09",
-      "planner_children": 772,
-      "split": 6,
+      "planner_children": 809,
+      "split": 7,
       "died": 16,
       "complete": false
     }
