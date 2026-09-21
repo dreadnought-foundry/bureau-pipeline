@@ -224,10 +224,14 @@ _COVERAGE_DENIALS = re.compile(
 #: that run; this is its opposite, and its evidence is a search over the
 #: workflow set, not a job id. What separates the two mechanically is where
 #: the negation sits: here it QUANTIFIES the subject ("no CI job runs it",
-#: "nothing runs this suite", "none of the workflows call it"), where
-#: portico #407's negation follows a definite one ("this PR's own CI checks
-#: never ran the new spec"). That sentence must keep failing rule 2 — a
-#: grep says nothing about what a run that happened executed.
+#: "nothing runs this suite in CI", "no workflow job runs the new guard"),
+#: where portico #407's negation follows a definite one ("this PR's own CI
+#: checks never ran the new spec"). That sentence must keep failing rule 2
+#: — a grep says nothing about what a run that happened executed.
+#:
+#: Read only over sentences `_COVERAGE_DENIALS` already caught, so this is
+#: strictly a re-routing of claims the gate was holding anyway: a sentence
+#: the old rule let through cannot start failing on this one.
 _ABSENCE_SUBJECT = (r"(?:jobs?|workflows?|checks?|suites?|steps?|pipelines?"
                     r"|runners?)")
 _RAN_VERB = (r"(?:runs?|ran|executes?|executed|invokes?|invoked|calls?"

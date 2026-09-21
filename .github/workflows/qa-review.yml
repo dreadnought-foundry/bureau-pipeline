@@ -2392,7 +2392,21 @@ jobs:
             esac
           }
 
-          if [ "${A2_EVIDENCE:-${A1_EVIDENCE:-}}" = "defective" ]; then
+          # DRE-4433: the evidence answer of the attempt that ANSWERED
+          # LAST, which is the same precedence the comment step composes
+          # on ($RAN, $WHY) and for the same reason — it is the later
+          # evidence. Taken as a pair with its rule names, never mixed
+          # across attempts: a retry that ran out of turns after attempt 1
+          # was held is a turn wall, and the branch below must not claim
+          # attempt 1's story over it. The red line and the comment are
+          # composed from the same two gates and may never disagree.
+          if [ -n "${A2_OUTCOME:-}" ]; then
+            EVIDENCE="${A2_EVIDENCE:-}"; RULES="${A2_EVIDENCE_RULES:-}"
+          else
+            EVIDENCE="${A1_EVIDENCE:-}"; RULES="${A1_EVIDENCE_RULES:-}"
+          fi
+
+          if [ "$EVIDENCE" = "defective" ]; then
             # DRE-4433. The reviewer authenticated, reviewed, and WROTE a
             # verdict; the evidence gate held it. Ordered FIRST, ahead of
             # every branch below, because it is the only one of them that
@@ -2402,7 +2416,6 @@ jobs:
             # completed review. Naming the RULE is the actionable half:
             # `job-coverage` sent a reviewer looking for the id of a job
             # that does not exist.
-            RULES="${A2_EVIDENCE_RULES:-${A1_EVIDENCE_RULES:-}}"
             echo "::error::QA critic wrote a verdict and the evidence gate HELD it — this is not a crash. The reviewer authenticated, reviewed and produced a verdict, so no credential needs rotating on the strength of this line. Held on: ${RULES:-a rule the gate did not name} (scripts/verdict_evidence.py, which printed the claims it held earlier in this run). Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility."
           elif [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
             echo "::error::QA critic ran out of turns before it produced a verdict — turn exhaustion, not a crash. The reviewer authenticated and did real work; no credential needs rotating. Split this pull request, or check that pr_size_strategy.py routed it to the multi-pass review."

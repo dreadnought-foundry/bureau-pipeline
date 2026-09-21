@@ -314,6 +314,24 @@ class AHeldVerdictIsNotACrashTest(unittest.TestCase):
         # looking for a job id that does not exist.
         self.assertIn("job-coverage", self.annotation())
 
+    def test_a_retry_that_hit_the_turn_wall_is_not_reported_as_a_hold(self):
+        # Attempt 1 held, the retry ran out of turns: the retry is the
+        # later evidence and the comment step says turn exhaustion, so
+        # this line may not claim attempt 1's story over it — the red line
+        # and the comment are composed from the same two gates.
+        held = {"outcome": "ok", "evidence": "defective",
+                "evidence_rules": "job-coverage"}
+        wall = {"outcome": "turn_exhaustion"}
+        line = no_verdict_cause.annotation(held, wall)
+        self.assertIn("turns", line)
+        self.assertNotIn("HELD", line)
+
+    def test_a_hold_on_the_retry_wins_over_an_exhausted_first_attempt(self):
+        wall = {"outcome": "turn_exhaustion"}
+        line = no_verdict_cause.annotation(wall, self.HELD)
+        self.assertIn("HELD", line)
+        self.assertIn("job-coverage", line)
+
     def test_a_genuine_crash_still_reads_as_a_crash(self):
         crash = {"outcome": "crash"}
         self.assertIn("crashed", no_verdict_cause.annotation(crash, crash))
