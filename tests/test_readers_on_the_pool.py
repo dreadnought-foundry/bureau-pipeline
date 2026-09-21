@@ -123,18 +123,23 @@ CONSUMERS = {
             "Fetch fix-loop thread (blockers + operator decisions)": ("env", "GH_TOKEN"),
         },
         "stays": {
-            # The checkout's persisted credential is what the fix agent pushes
-            # with — the push is agent-bureau-bot's, like the PR it lands on.
+            # The checkout step's DECLARED token input, unchanged. Which
+            # credential is live in git when the fix agent pushes is
+            # claude-code-action's runtime behaviour and is not pinned here or
+            # anywhere — see tests/test_agent_fix_token_remint.py.
             "Checkout PR branch": ("with", "token", APP),
             # Worker-attributed comments: fix_budget.py counts attempt markers
             # by WORKER_LOGIN, so the author must be the App that login names.
             "Announce fix attempt": ("env", "GH_TOKEN", APP),
             "Receipt the operator-decision restart": ("env", "GH_TOKEN", APP),
-            # `Fix` was here and is not any more (DRE-4412). It was never
-            # identity-sensitive: the fix commit is pushed with `Checkout PR
-            # branch`'s persisted credential above, and the markers
-            # fix_budget.py counts by login are written by `Announce fix
-            # attempt`. This input is only the bucket the agent's own GitHub
+            # `Fix` was here and is not any more (DRE-4412). Nothing
+            # downstream reads whose token it is: the markers fix_budget.py
+            # counts by login are written by `Announce fix attempt` above, and
+            # the identity the fix commit is PUSHED under was never pinned by
+            # this entry — that is runtime behaviour, it may now be any pool
+            # member, and it is an accepted consequence (operator decision,
+            # 2026-09-20; tests/test_agent_fix_token_remint.py spells it out).
+            # This input is only the bucket the agent's own GitHub
             # calls are charged to, and on 2026-09-20 it was bot 1's spent
             # hour that killed two portico fix runs before any model turn.
             # It now reads the pool's own worker mint, pinned — with

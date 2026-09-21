@@ -50,8 +50,11 @@ question with its own pin:
     `tests/test_agent_fix_identity_gate.py` own the lock, unmodified.
   * The re-mint before `Report` (DRE-4320) and the identity the fix loop writes
     its attempt markers as — `tests/test_agent_fix_token_remint.py` and
-    `tests/test_readers_on_the_pool.py` own those. The push stays the boot
-    App's: it rides the checkout's persisted credential, not this input.
+    `tests/test_readers_on_the_pool.py` own those. The identity the fix commit
+    is PUSHED under is owned by nobody and cannot be: it is
+    claude-code-action's runtime behaviour, not a declared input, and it has
+    been observed both ways on build runs with this same arrangement. It may
+    be any pool member — accepted, see test_agent_fix_token_remint.py.
 
 These read the LIVE workflow YAML (the test_readers_on_the_pool.py pattern — no
 copied fixtures) and must FAIL on the tree before the wiring lands.

@@ -279,11 +279,17 @@ jobs:
       # agent edits a PR body and runs `gh` for itself.
       #
       # This step is NOT identity-sensitive the way the ones around it are.
-      # The branch push rides `Checkout PR branch`'s persisted boot credential
-      # and the attempt markers fix_budget.py counts by login are still
-      # written by `Announce fix attempt` on the boot token, so neither the
-      # author of the fix commit nor the login the budget counts changes here
-      # — only the bucket the agent's own GitHub calls are charged to. And a
+      # The attempt markers fix_budget.py counts by login are still written by
+      # `Announce fix attempt` on the boot token, so the login the budget
+      # counts does not change here. The identity the fix COMMIT is pushed
+      # under may change: whether the push authenticates with `Checkout PR
+      # branch`'s persisted credential or with this token is
+      # claude-code-action runtime behaviour, observed both ways on build runs
+      # with this same arrangement, so a fix commit may now arrive under any
+      # of the four worker bots. Accepted (operator decision, 2026-09-20):
+      # all four are on the author side of the two-robot boundary, qa-bot
+      # stays the only merger, and qa-review.yml and verify.yml already admit
+      # the whole pool. And a
       # pooled bot already writes to pull requests every day: agent-task.yml's
       # worker authors branches and comments as agent-bureau-bot-2/-3/-4, so a
       # fix pushed on a pool member's credential is not a new kind of actor

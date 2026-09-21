@@ -30,7 +30,9 @@ Who consults it
     reader). In each the identity-sensitive writes — the PR push, the
     worker-attributed comments, the verdict comment, the review check run,
     the merge — keep the App they used before; only the READS moved (and,
-    in agent-fix, its model step, by the DRE-4412 bullet above).
+    in agent-fix, its model step, by the DRE-4412 bullet above — which does
+    mean a fix commit may now be pushed under any pool member; accepted, all
+    four are authors and never the merger).
   * NOT ``medic.yml``: its reads ride ``github.token`` because the App has no
     ``actions:read`` (DRE-1346), a bucket this pool cannot improve on.
 

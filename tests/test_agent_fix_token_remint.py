@@ -319,9 +319,18 @@ class TheFixAgentsOwnTokenNeedsNoReMint(unittest.TestCase):
     over all three model-running workflows at once.
 
     The other half of that criterion was that the agent PUSHES as
-    agent-bureau-bot. It still does, and never through this input: the push
-    rides `Checkout PR branch`'s persisted credential, which
-    tests/test_readers_on_the_pool.py pins to the boot App.
+    agent-bureau-bot. That half is NOT pinned here and cannot be: which
+    credential is live in git when the model step pushes is
+    claude-code-action's runtime behaviour, and no static read of the YAML
+    observes it. GitHub's own activity record for the two build runs that
+    already have this arrangement (a boot-App checkout plus a pooled model
+    step) shows it going both ways — PR #467's branch was pushed by the boot
+    App `agent-bureau-bot[bot]`, PR #466's by the pool slot
+    `agent-bureau-bot-3[bot]`. So a fix commit may now be pushed under any of
+    the four worker bots. That is an accepted consequence (operator decision,
+    2026-09-20): all four sit on the author side of the two-robot boundary,
+    `agent-bureau-qa-bot` remains the only merger, and qa-review.yml and
+    verify.yml already admit the whole pool in `allowed_bots`.
 
     What stays pinned HERE is the timing rule, stated over the model step by
     name so a rewrite of the general assertions above cannot quietly stop
@@ -344,8 +353,10 @@ class TheFixAgentsOwnTokenNeedsNoReMint(unittest.TestCase):
         report_mint = _token_step_ids(_steps()[_index_named(CONSUMER_STEP)])[0]
         self.assertNotIn(report_mint, _token_step_ids(self._model()))
 
-    def test_the_checkout_credential_is_still_the_boot_apps(self):
-        # The push identity, which is not this input and did not move.
+    def test_the_checkout_steps_declared_token_input_is_unchanged(self):
+        # The DECLARED input only. This says nothing about which credential is
+        # live in git at push time — see the class docstring; that identity may
+        # be any pool member and is not observable from the YAML.
         checkouts = [
             s for s in _steps()
             if _action(s) == "actions/checkout" and (s.get("with") or {}).get("token")
