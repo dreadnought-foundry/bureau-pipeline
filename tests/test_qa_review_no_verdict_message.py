@@ -36,6 +36,10 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import test_critic_no_verdict_cause as no_verdict_cause  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
 GATE = ROOT / "scripts" / "check_critic_result.py"
@@ -275,6 +279,48 @@ class TheNumbersAreDataNotShellTest(unittest.TestCase):
             self.assertFalse(marker.exists(),
                              "a gate output was executed as shell")
             self.assertIn("QA Critic", body)
+
+
+class AHeldVerdictIsNotACrashTest(unittest.TestCase):
+    """DRE-4433. agent-bureau #2664, run 35544826358: both critic attempts
+    ended `is_error: false`, 73 and 66 turns, $13.52, and each WROTE a real
+    verdict. The job's red line said:
+
+        QA critic crashed on both attempts — no real verdict.
+
+    False twice over. The evidence gate held both verdicts, the gate knew
+    which rule it held them on, and none of that reached the one line a
+    medic or an operator reads first — the same fault DRE-3304 fixed for
+    the completed-no-verdict case, wearing the evidence gate's clothes.
+
+    The REAL fail step is executed here, fed the gate outputs Actions would
+    interpolate. Nothing is asserted by grepping YAML.
+    """
+
+    HELD = {"outcome": "ok", "evidence": "defective",
+            "evidence_rules": "job-coverage"}
+
+    def annotation(self, a1=None, a2=None) -> str:
+        return no_verdict_cause.annotation(a1 or self.HELD, a2 or self.HELD)
+
+    def test_it_does_not_say_the_critic_crashed(self):
+        self.assertNotIn("crashed", self.annotation())
+
+    def test_it_says_the_verdict_was_held(self):
+        self.assertIn("held", self.annotation().lower())
+
+    def test_it_names_the_rule_that_held_it(self):
+        # "Which rule" is the whole remedy: job-coverage sent a reviewer
+        # looking for a job id that does not exist.
+        self.assertIn("job-coverage", self.annotation())
+
+    def test_a_genuine_crash_still_reads_as_a_crash(self):
+        crash = {"outcome": "crash"}
+        self.assertIn("crashed", no_verdict_cause.annotation(crash, crash))
+
+    def test_turn_exhaustion_still_reads_as_turn_exhaustion(self):
+        wall = {"outcome": "turn_exhaustion"}
+        self.assertIn("turns", no_verdict_cause.annotation(wall, wall))
 
 
 class BothGateStepsAreWiredTest(unittest.TestCase):

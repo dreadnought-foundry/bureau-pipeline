@@ -81,6 +81,25 @@ no test commit precedes the implementation — commit the RED test first
 
 APPROVE = "VERDICT: APPROVE\n\n## Summary\n\nIt does what the card asked.\n"
 
+#: agent-bureau #2664, run 35544826358 attempt 2 (DRE-4433). A real,
+#: complete, blocking verdict whose one remark of this shape cost the whole
+#: review: an absence has no job id, so the reviewer could neither satisfy
+#: the rule nor drop the observation.
+COVERAGE_GAP = """VERDICT: REQUEST_CHANGES cause:unverified-claim
+convergence: new-finding prior-fixes-held in-scope
+
+## Summary
+
+The pull request description no longer describes what the change does.
+
+## For the fixing agent
+
+The description is stale: it still promises the old subscriptions table.
+
+`npx tsc --noEmit` exits 0 (this matters — no CI job runs it; `grep -rn \
+"tsc --noEmit" .github/workflows` returns nothing).
+"""
+
 
 def _post_step_run() -> str:
     doc = yaml.safe_load(QA_REVIEW.read_text())
@@ -222,6 +241,53 @@ class UnevidencedVerdictIsHeldTest(unittest.TestCase):
         low = self.body.lower()
         for word in ("auth", "credential", "token", "startup", "crash"):
             self.assertNotIn(word, low)
+
+
+class HeldVerdictReachesThePullRequestTest(unittest.TestCase):
+    """DRE-4433, the expensive half, walked end to end. A held verdict was
+    never posted anywhere a person reads, so #2664's real finding — a stale
+    pull-request description — reached no human and no fixing agent, and
+    was recovered only by unzipping a death receipt that truncates it at
+    500 characters. The hold the pipeline posts now carries the review it
+    held, and it still may not be read as a verdict by anything."""
+
+    def setUp(self):
+        self.proc, self.body = run_post(UNEVIDENCED)
+        self.assertEqual(self.proc.returncode, 0, self.proc.stderr)
+
+    def test_the_held_review_is_on_the_pull_request(self):
+        self.assertIn("The change does not keep the discipline the card "
+                      "asked for.", self.body)
+
+    def test_the_held_finding_itself_is_readable(self):
+        self.assertIn("check_tdd_commits.py", self.body)
+
+    def test_it_is_still_not_a_verdict_to_any_reader(self):
+        # reconcile.py and fix_convergence.py read `"VERDICT:" in body`
+        # over the WHOLE comment. Quoting the held verdict verbatim would
+        # dispatch the fix agent for findings nobody proved.
+        self.assertNotIn("VERDICT:", self.body)
+        self.assertIn("QA Critic", self.body)
+
+
+class CoverageGapVerdictPostsTest(unittest.TestCase):
+    """The run that cost $13.52, driven through the real gates and the real
+    shell: attempt 2's verdict now reaches the pull request as the
+    rejection its author wrote."""
+
+    def setUp(self):
+        self.proc, self.body = run_post(COVERAGE_GAP)
+        self.assertEqual(self.proc.returncode, 0, self.proc.stderr)
+
+    def test_the_verdict_posts(self):
+        self.assertIn("VERDICT: REQUEST_CHANGES", self.body.splitlines()[0])
+
+    def test_the_finding_nobody_could_read_is_on_the_pull_request(self):
+        self.assertIn("The description is stale", self.body)
+
+    def test_the_convergence_line_survives(self):
+        self.assertIn("convergence: new-finding prior-fixes-held in-scope",
+                      self.body)
 
 
 class EvidencedVerdictPostsTest(unittest.TestCase):

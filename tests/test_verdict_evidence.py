@@ -190,6 +190,15 @@ class StandardOnTheRailTest(unittest.TestCase):
         self.assertIn("job id", text)
         self.assertIn("snapshot", text)
 
+    def test_it_states_what_an_absence_cites_instead_of_a_job_id(self):
+        # DRE-4433: the standard the critic reads is where the rule it has
+        # to satisfy is written down. A rule stated only in the gate is a
+        # rule the reviewer meets for the first time as a rejection.
+        text = standard_body().lower()
+        self.assertIn("no job runs", text)
+        self.assertIn("search", text)
+        self.assertIn("dre-4433", text)
+
 
 # ── 2. rule 1 — a command claim carries the command's output ───────────────
 
@@ -480,6 +489,146 @@ class JobCoverageClaimTest(unittest.TestCase):
         )
 
 
+# ── 3b. rule 2's other half — an ABSENCE cites the search (DRE-4433) ───────
+
+#: agent-bureau PR #2664, run 35544826358, attempt 2. The 200 characters of
+#: the claim that survived in the hold the gate printed, VERBATIM — the
+#: quote is cut at `Defect._QUOTE_CHARS`, mid-`grep`, and the rest of the
+#: run's own record is a death-receipt artifact nobody unzips.
+RUN_35544826358_A2_QUOTED = (
+    "`npx tsc --noEmit` exits 0 (this matters — no CI job runs it; `grep -rn"
+)
+#: The same sentence with the search it was in the middle of citing, which
+#: is the shape the reviewer had already written and the gate refused.
+RUN_35544826358_A2_CLAIM = RUN_35544826358_A2_QUOTED + (
+    ' "tsc --noEmit" .github/workflows` returns nothing).'
+)
+#: Attempt 1 was held by the same rule on "a different sentence of the same
+#: kind" (DRE-4433). Its words did not survive — the receipt truncates at
+#: 500 characters and the run is in another repository — so this is that
+#: KIND, written the way a reviewer writes it: a guard that exists only
+#: locally, with the search that establishes the absence.
+RUN_35544826358_A1_CLAIM = (
+    "Nothing in CI runs the type check at all — "
+    "`grep -rn typecheck .github/workflows` returns no match, so this "
+    "would not have been caught."
+)
+
+
+class CoverageGapClaimTest(unittest.TestCase):
+    """DRE-4433. A finding that NO job runs something is the opposite kind
+    of statement to #407's, and the evidence for it is a search over the
+    workflow set, not a job id. An absence has no job id, so the DRE-3005
+    rule as written could not be satisfied and could not be dropped: both
+    critic attempts on agent-bureau #2664 wrote a real, complete verdict,
+    both were held, $13.52 was spent and the pull request got no review.
+    """
+
+    def test_attempt_2s_own_sentence_is_accepted_with_its_search(self):
+        rc, out = check_cli(verdict(RUN_35544826358_A2_CLAIM))
+        self.assertEqual(rc, 0, out)
+
+    def test_attempt_1s_shape_is_accepted_with_its_search(self):
+        rc, out = check_cli(verdict(RUN_35544826358_A1_CLAIM))
+        self.assertEqual(rc, 0, out)
+
+    def test_the_search_may_be_pasted_as_a_run_instead(self):
+        rc, out = check_cli(verdict(
+            "No workflow runs the new guard.", "",
+            "```",
+            "$ grep -rn check_absence.py .github/workflows",
+            "(no matches)",
+            "```",
+        ))
+        self.assertEqual(rc, 0, out)
+
+    def test_an_absence_asserted_with_no_search_at_all_is_still_held(self):
+        # The claim is still a factual one and still blocks a pull request.
+        # What changes is WHICH evidence answers it.
+        rc, out = check_cli(verdict("No CI job runs `npx tsc --noEmit`."))
+        self.assertEqual(rc, 1, out)
+
+    def test_the_hold_asks_for_the_search_and_not_for_a_job_id(self):
+        # The defect this card exists to fix: a message demanding an id for
+        # a job that does not exist cannot be satisfied by anyone.
+        rc, out = check_cli(verdict("No CI job runs `npx tsc --noEmit`."))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("search", out.lower())
+        self.assertNotIn("job id", out.lower())
+
+    def test_the_run_and_job_ids_still_satisfy_an_absence_claim(self):
+        # Nothing that passed before may start failing: a reviewer who read
+        # the run's own jobs API has answered the question a harder way.
+        rc, out = check_cli(verdict(
+            "No job in this workflow ran the new spec.", "",
+            "Checked run 33724409256, job 100550113617:", "",
+            "```", "npx playwright test e2e/*.spec.ts", "194 passed (5.1m)",
+            "```",
+        ))
+        self.assertEqual(rc, 0, out)
+
+    def test_an_absence_claim_is_not_read_as_a_named_job_claim(self):
+        for sentence in (
+            "No CI job runs `npx tsc --noEmit`.",
+            "Nothing in the workflow set runs this suite.",
+            "None of the workflows call the new guard.",
+            "There is no job that runs the type check.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertEqual(
+                    ve.job_claims(sentence), [],
+                    "an absence claim demanded a job id it cannot have",
+                )
+                self.assertEqual(len(ve.absence_claims(sentence)), 1)
+
+    def test_a_named_job_claim_is_not_read_as_an_absence(self):
+        # The DRE-3005 incident itself. If this ever reads as an absence,
+        # #407's finding becomes satisfiable by a grep and the whole rule
+        # is off.
+        self.assertEqual(ve.absence_claims(PORTICO_407_CLAIM), [])
+        self.assertEqual(len(ve.job_claims(PORTICO_407_CLAIM)), 1)
+
+    def test_a_positive_coverage_claim_is_still_not_gated(self):
+        self.assertEqual(
+            ve.absence_claims("The lint job runs `npx tsc --noEmit` on "
+                              "every push."),
+            [],
+        )
+
+
+class Dre3005IsUnchangedTest(unittest.TestCase):
+    """DRE-4433's acceptance criterion 2, as a test that goes RED if the
+    old rule is loosened. A claim about what a NAMED job actually DID is
+    still refused without a run id and a job id — a search over the
+    workflow set is evidence about what EXISTS, and says nothing about what
+    a run that happened executed."""
+
+    def test_a_search_does_not_evidence_what_a_named_job_did(self):
+        rc, out = check_cli(verdict(
+            PORTICO_407_CLAIM, "",
+            "I checked: `grep -rn new-spec .github/workflows` returns no "
+            "match.",
+        ))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("job id", out.lower())
+
+    def test_a_named_job_claim_with_a_run_id_alone_is_still_a_defect(self):
+        rc, out = check_cli(verdict(
+            PORTICO_407_CLAIM, "",
+            "See run 33724409256.", "", "```", "194 passed", "```",
+        ))
+        self.assertEqual(rc, 1, out)
+
+    def test_the_2247_command_claim_is_untouched_by_the_absence_rule(self):
+        # A search is not a command's output either.
+        rc, out = check_cli(verdict(
+            DRE_2247_CLAIM, "",
+            "`grep -rn check_tdd_commits .github/workflows` finds the job.",
+        ))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("check_tdd_commits.py", out)
+
+
 # ── 4. rule 3 — the PR-body snapshot the review read ───────────────────────
 
 class BodySnapshotTest(unittest.TestCase):
@@ -573,6 +722,100 @@ class DefectiveVerdictMessageTest(unittest.TestCase):
         self.assertEqual(ve.hold_message([]), "")
 
 
+class HeldVerdictReachesAHumanTest(unittest.TestCase):
+    """DRE-4433, the expensive half of the same defect: a held verdict is
+    never posted, so on agent-bureau #2664 the critic's real finding — a
+    stale pull-request description — reached no human and no fixing agent.
+    It was recovered by unzipping the run's death-receipt artifact, where
+    the quote is truncated at 500 characters. The hold now carries the
+    verdict it held, on the pull request, where its reader already is.
+
+    Two rules bound the quoting and both are load-bearing for merges: the
+    hold may not carry a `VERDICT:` token anywhere in its body (reconcile
+    and fix_convergence read that substring over the WHOLE comment, not
+    just its first line), and it stays a neutral hold, never a rejection.
+    """
+
+    HELD = verdict(
+        "The pull request description still claims the old behaviour.",
+        "", DRE_2247_CLAIM,
+    )
+
+    def message(self) -> str:
+        return ve.hold_message(ve.defects(self.HELD), self.HELD)
+
+    def test_the_held_verdict_text_rides_on_the_hold(self):
+        self.assertIn(
+            "The pull request description still claims the old behaviour.",
+            self.message(),
+            "the finding nobody could read is still unreadable",
+        )
+
+    def test_the_summary_the_ceo_reads_survives_too(self):
+        self.assertIn("The change does not do what the card asked for.",
+                      self.message())
+
+    def test_the_quoted_verdict_carries_no_verdict_token(self):
+        # `"VERDICT:" in body` is how reconcile.py and fix_convergence.py
+        # decide a comment IS a verdict. Quoting one verbatim would make
+        # this neutral hold a rejection the fix agent is dispatched for.
+        self.assertNotIn("VERDICT:", self.message())
+
+    def test_the_defanged_decision_is_still_legible(self):
+        # Defanged, not deleted: a reader has to be able to see what the
+        # reviewer decided, or the quote answers nothing.
+        self.assertIn("REQUEST_CHANGES", self.message())
+
+    def test_it_says_the_quote_is_the_held_review(self):
+        low = self.message().lower()
+        self.assertIn("held", low)
+
+    def test_it_is_still_not_a_code_rejection(self):
+        self.assertIn("not a code rejection", self.message().lower())
+
+    def test_a_verdict_with_its_own_fences_is_quoted_whole(self):
+        held = verdict(
+            DRE_2247_CLAIM, "", "```", "$ python3 x.py", "boom", "```",
+        )
+        msg = ve.hold_message(ve.defects(held), held)
+        self.assertIn("$ python3 x.py", msg)
+        self.assertIn("boom", msg)
+
+    def test_a_long_verdict_is_capped_and_says_so(self):
+        # GitHub refuses a comment body over 65,536 characters, and a hold
+        # that fails to post is the defect again.
+        held = verdict(DRE_2247_CLAIM, "", "padding. " * 12000)
+        msg = ve.hold_message(ve.defects(held), held)
+        self.assertLess(len(msg), 65536)
+        self.assertIn("truncated", msg.lower())
+
+    def test_the_message_without_the_verdict_is_unchanged(self):
+        # The old one-argument call still composes the notice: a caller
+        # that has no verdict text must not lose the hold.
+        found = ve.defects(self.HELD)
+        self.assertIn("check_tdd_commits.py", ve.hold_message(found))
+
+    def test_the_cli_writes_the_held_verdict_into_the_hold_file(self):
+        # The workflow reads the hold from this file and posts THAT.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "qa-verdict.md")
+            hold = os.path.join(d, "qa-evidence-hold.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.HELD)
+            subprocess.run(
+                [sys.executable,
+                 os.path.join(SCRIPTS, "verdict_evidence.py"), "check",
+                 path, "--hold-file", hold],
+                capture_output=True, text=True,
+            )
+            with open(hold, encoding="utf-8") as f:
+                body = f.read()
+        self.assertIn(
+            "The pull request description still claims the old behaviour.",
+            body)
+        self.assertNotIn("VERDICT:", body)
+
+
 # ── 6. the wiring — the rules reach the critic and the gate runs ───────────
 
 class CriticPromptTest(unittest.TestCase):
@@ -598,6 +841,13 @@ class CriticPromptTest(unittest.TestCase):
     def test_both_prompts_keep_judgement_findings_out_of_scope(self):
         for prompt in critic_prompts():
             self.assertIn("judgement", prompt.lower())
+
+    def test_both_prompts_tell_the_critic_how_to_evidence_an_absence(self):
+        # DRE-4433: the reviewer that cannot satisfy a rule writes the
+        # sentence anyway and loses the whole review. Both prompts say what
+        # a coverage GAP cites instead of a job id.
+        for prompt in critic_prompts():
+            self.assertIn("A COVERAGE GAP CITES THE SEARCH", prompt)
 
     def test_the_two_prompts_carry_identical_rules(self):
         first, second = critic_prompts()
