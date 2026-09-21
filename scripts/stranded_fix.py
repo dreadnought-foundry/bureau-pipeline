@@ -432,12 +432,12 @@ def card_body(*, repo: str, stranded: Stranded, card: str = "",
         for c in stranded.commits
     )
     where = (
-        f"They are on `origin/{stranded.branch}` and on no path to "
-        f"`{stranded.base}`."
+        f"The commits below are on `origin/{stranded.branch}` and on no path "
+        f"to `{stranded.base}`."
         if pushed else
-        "The push was refused before it reached `origin`, so this work exists "
-        "nowhere but the run that produced it — it has to be rebuilt, not "
-        "recovered."
+        "The push was refused before it reached `origin`, so the commits "
+        "below exist nowhere but the run that produced them — they have to "
+        "be rebuilt, not recovered."
     )
     link = f" ({stranded.url})" if stranded.url else ""
     origin = f" It was the fix run for {card}." if card else ""
@@ -451,7 +451,7 @@ def card_body(*, repo: str, stranded: Stranded, card: str = "",
 
 ## Why this card exists rather than a hand recovery
 
-This is the fifth time in the class (portico #611 / DRE-4183, which became the live bug DRE-4460; portico #351 / DRE-2637; DRE-2227, recovered as DRE-2989; DRE-2591). The first four were each found by a person looking at stale branches — this one was found by the pipeline, in minutes, which is the whole point of DRE-4486.
+This is a known class, not an incident: it has run at least four times before (portico #611 / DRE-4183, which became the live bug DRE-4460; portico #351 / DRE-2637; DRE-2227, recovered as DRE-2989; DRE-2591). Every one of those four was found by a person looking at stale branches, weeks later, and each was closed as a recovery — which is why it recurred. This one was found by the pipeline, in minutes (DRE-4486).
 
 ## Acceptance criteria
 
