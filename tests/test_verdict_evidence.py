@@ -491,10 +491,11 @@ class JobCoverageClaimTest(unittest.TestCase):
 
 # ── 3b. rule 2's other half — an ABSENCE cites the search (DRE-4433) ───────
 
-#: agent-bureau PR #2664, run 35544826358, attempt 2. The 200 characters of
-#: the claim that survived in the hold the gate printed, VERBATIM — the
-#: quote is cut at `Defect._QUOTE_CHARS`, mid-`grep`, and the rest of the
-#: run's own record is a death-receipt artifact nobody unzips.
+#: agent-bureau PR #2664, run 35544826358, attempt 2 — the claim the gate
+#: held, VERBATIM as far as the record preserved it. It ends mid-`grep`:
+#: the verdict itself was never posted anywhere, and what survives of it
+#: is a quote inside a death-receipt artifact nobody unzips, which is the
+#: other half of what this card fixes.
 RUN_35544826358_A2_QUOTED = (
     "`npx tsc --noEmit` exits 0 (this matters — no CI job runs it; `grep -rn"
 )
@@ -559,8 +560,13 @@ class CoverageGapClaimTest(unittest.TestCase):
     def test_the_run_and_job_ids_still_satisfy_an_absence_claim(self):
         # Nothing that passed before may start failing: a reviewer who read
         # the run's own jobs API has answered the question a harder way.
+        # The bare sentence IS held (asserted first, or this test would
+        # pass against a sentence the gate never looks at).
+        absence = "No CI job ran the new spec."
+        self.assertEqual(len(ve.absence_claims(absence)), 1)
+        self.assertEqual(check_cli(verdict(absence))[0], 1)
         rc, out = check_cli(verdict(
-            "No job in this workflow ran the new spec.", "",
+            absence, "",
             "Checked run 33724409256, job 100550113617:", "",
             "```", "npx playwright test e2e/*.spec.ts", "194 passed (5.1m)",
             "```",
