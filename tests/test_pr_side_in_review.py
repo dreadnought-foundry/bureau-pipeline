@@ -44,6 +44,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_pr_side_in_review.py -v
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -347,6 +348,88 @@ def _from_lanes_csv() -> str:
     return ",".join(_from_lanes())
 
 
+# --------------------------------------------------------------------------
+# the scenario: the real step, over the real cmd_advance, over a fake board
+# --------------------------------------------------------------------------
+def _run_scenario(head_ref: str, **card) -> dict:
+    """Drive the workflow step end to end and return the card's final state.
+
+    Unit-green is not live-working (standards/engineering.md): the step and
+    `cmd_advance` are two systems, and the bash above only proves which argv
+    the step composes. Here the stub `linear_ops.py` the step invokes is the
+    REAL module, driven against the same Linear double the unit tests use, so
+    the assertion is the lane the card actually ends in.
+    """
+    td = Path(tempfile.mkdtemp())
+    scripts = td / "pipeline" / "scripts"
+    scripts.mkdir(parents=True)
+    board = td / "board.json"
+    board.write_text(json.dumps(card))
+    (scripts / "linear_ops.py").write_text(
+        "import json, pathlib, sys\n"
+        f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+        "from unittest.mock import patch\n"
+        "import linear_ops\n"
+        f"CARD = {CARD!r}\n"
+        + inspect.getsource(_Linear)
+        + f"\nboard = pathlib.Path({str(board)!r})\n"
+        "opened = json.loads(board.read_text())\n"
+        "fake = _Linear(opened.pop('state'), **opened)\n"
+        "with patch.object(linear_ops, 'gql', side_effect=fake.gql):\n"
+        "    linear_ops.cmd_advance(*sys.argv[2:])\n"
+        "board.write_text(json.dumps("
+        "{'state': fake.current, 'updates': fake.updates}))\n"
+    )
+    script = td / "lane.sh"
+    script.write_text("set -eo pipefail\n" + _lane_step()["run"])
+    env = dict(os.environ)
+    env.update({
+        "PIPELINE_DIR": str(td / "pipeline"),
+        "HEAD_REF": head_ref,
+        "LINEAR_API_KEY": "test-key",
+    })
+    proc = subprocess.run(
+        ["bash", str(script)], cwd=td, env=env, capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
+    after = json.loads(board.read_text())
+    if "updates" not in after:
+        # The step never invoked Linear at all — the board file is exactly as
+        # it was opened. That is a real outcome (an unanchored branch), not a
+        # missing result, so it is spelled as one.
+        return {"state": after["state"], "updates": [], "invoked": False}
+    return {**after, "invoked": True}
+
+
+class TheCardEndsInTheReviewLaneTest(unittest.TestCase):
+    """The card's acceptance criteria, driven through the real step."""
+
+    def test_an_intake_card_with_a_pull_request_is_left_at_in_review(self):
+        after = _run_scenario(AGENT_BRANCH, state="Intake")
+        self.assertEqual(after["state"], REVIEW_LANE)
+        self.assertEqual(after["updates"], [REVIEW_LANE])
+
+    def test_a_card_already_in_review_or_finished_is_not_moved(self):
+        for lane in (REVIEW_LANE, "Done", "Canceled"):
+            with self.subTest(lane=lane):
+                after = _run_scenario(AGENT_BRANCH, state=lane)
+                self.assertEqual(after["state"], lane)
+                self.assertEqual(after["updates"], [])
+
+    def test_a_branch_that_only_mentions_the_card_moves_nothing(self):
+        after = _run_scenario("bot/rename-agent/DRE-1234-x", state="Intake")
+        self.assertEqual(after["state"], "Intake")
+        self.assertEqual(after["updates"], [])
+        self.assertFalse(after["invoked"], "Linear was reached at all")
+
+    def test_an_epic_is_not_moved(self):
+        for card in ({"children": ["child-1"]}, {"title": "[EPIC] a plan"}):
+            with self.subTest(card=card):
+                after = _run_scenario(AGENT_BRANCH, state="Intake", **card)
+                self.assertEqual(after["state"], "Intake")
+                self.assertEqual(after["updates"], [])
+
+
 class AdvanceFromAPreReviewLaneTest(unittest.TestCase):
     def test_an_intake_card_is_advanced(self):
         fake = _Linear("Intake")
@@ -419,10 +502,17 @@ class TheContractDocumentsTheRouteTest(unittest.TestCase):
         )
 
     def test_the_contract_check_passes(self):
-        report = lane_contract.check()
+        """Every clause that can be asserted without a live board, including
+        `pipeline.vocabulary_is_contract_lanes` — the one that reads the lane
+        names the workflows write and fails on a lane the contract does not
+        carry. The `board.*` clauses need Linear and are the CLI's job
+        (`python3 scripts/lane_contract.py check --live`)."""
+        report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
+        offline = [
+            f for f in report.failures() if not f.clause_id.startswith("board.")
+        ]
         self.assertEqual(
-            report.failures(), [],
-            f"the lane contract does not check: {report.text()}",
+            offline, [], f"the lane contract does not check: {report.text()}"
         )
 
 

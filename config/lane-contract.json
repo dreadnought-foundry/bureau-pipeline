@@ -436,7 +436,7 @@
       "note": "Folded from the two review lanes DRE-2726 retired (DRE-2818 deleted their entries once Linear archived the states). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.",
       "clauses": {
         "entrance": {
-          "text": "A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate.",
+          "text": "A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate. The card may arrive here from ANY pre-review lane — Intake, Triage, Planning, Backlog, Todo or In Progress — and not only from In Progress: a pull request opened outside the relay's dispatch has no agent-task run behind it to have written In Progress, so qa-review.yml advances the card itself when the pull request opens (DRE-4179). Green Light is not a pre-review lane for this route: it is the CEO's own queue and a branch existing does not take a card out of it.",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history Phase 5 records"
