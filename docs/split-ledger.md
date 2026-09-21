@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->
 
-Generated **2026-09-20T04:47:11Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
+Generated **2026-09-21T04:51:42Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
 
 Every card here did not fit one run: it died at the turn cap, it was split, or a build run handed it back as an epic. The point of writing it down is DRE-3022's: the planner has been sizing cards against nothing.
 
@@ -53,10 +53,10 @@ A month is **complete** when the window covers all of it and it ended before thi
 
 | Month | Planner-created children | Split | Died at the turn cap | Complete |
 | --- | --- | --- | --- | --- |
-| 2026-06 | 125 | 0 | 0 | no — a partial count |
+| 2026-06 | 100 | 0 | 0 | no — a partial count |
 | 2026-07 | 228 | 0 | 0 | yes |
 | 2026-08 | 307 | 6 | 17 | yes |
-| 2026-09 | 772 | 6 | 16 | no — a partial count |
+| 2026-09 | 809 | 7 | 16 | no — a partial count |
 
 ## The tells, in hindsight
 
@@ -115,7 +115,7 @@ DRE-2893's four tells, read back over each card's own body by `split_ledger.tell
 | [DRE-3275](https://linear.app/dreadnoughtfoundry/issue/DRE-3275/bureau-pipeline-declare-the-proof-waiting-act-in-the-registry-and-add) | 2026-09-07T00:14:30Z | S | devops | 5 files | `UNKNOWN` | 0 | 1 | $13.60 | `unbounded-quantifier` | `turn-cap-death` |
 | [DRE-3306](https://linear.app/dreadnoughtfoundry/issue/DRE-3306/one-river-atomic-rebuild-tier-4-the-templates-and-the-showroom-hand) | 2026-09-08T00:41:56Z | L | frontend | 13 files | `UNKNOWN` | 0 | 0 | $0.00 | `two-languages-or-tiers` | `handed-back` |
 | [DRE-4297](https://linear.app/dreadnoughtfoundry/issue/DRE-4297/the-record-contract-declares-the-heartbeat-its-event-name-and-delivery) | 2026-09-19T05:55:12Z | `UNKNOWN` | engineer | 7 files | `UNKNOWN` | 1 | 0 | $0.00 | — | `split` |
-| [DRE-4322](https://linear.app/dreadnoughtfoundry/issue/DRE-4322/bureau-pipeline-a-repo-with-no-fix-agent-and-a-held-pull-request-is) | 2026-09-19T17:11:26Z | `UNKNOWN` | engineer | `UNKNOWN` | `UNKNOWN` | 0 | 0 | $0.00 | `two-languages-or-tiers`, `unenumerated-count`, `unbounded-quantifier` | `handed-back` |
+| [DRE-4322](https://linear.app/dreadnoughtfoundry/issue/DRE-4322/bureau-pipeline-a-repo-with-no-fix-agent-and-a-held-pull-request-is) | 2026-09-19T17:11:26Z | `UNKNOWN` | engineer | `UNKNOWN` | 16 files | 2 | 0 | $0.00 | `two-languages-or-tiers`, `unenumerated-count`, `unbounded-quantifier` | `split`, `handed-back` |
 
 ## The footprints
 
@@ -334,7 +334,7 @@ What each card SAID it would touch, against what its pieces actually touched. Th
 ### DRE-4322
 
 - declared: `UNKNOWN`
-- pieces touched: `UNKNOWN`
+- pieces touched: `config/pipeline-acts.json`, `docs/held-pr-recovery.md`, `docs/pipeline-acts.md`, `scripts/reconcile.py`, `tests/fixtures/act-receipt-bodies.json`, `tests/test_act_cadence.py`, `tests/test_act_emission.py`, `tests/test_conflict_sweep_per_pr_busy.py`, `tests/test_decision_answers_the_verdict.py`, `tests/test_hand_dispatch_no_work.py`, `tests/test_linear_sync_workflow.py`, `tests/test_operator_decision_restart.py`, `tests/test_pipeline_acts.py`, `tests/test_redispatch_standing_verdict.py`, `tests/test_restart_instruction_matches_gate.py`, `tests/test_verdict_sha_binding.py`
 
 ## What could not be read
 
@@ -372,4 +372,4 @@ Named rather than counted, because the absence of evidence is not evidence that 
 - **DRE-3037** — the card declares no `Files:` line, so it made no footprint claim to compare against
 - **DRE-3213** — DRE-3238: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
 - **DRE-4297** — DRE-4298: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
-- **DRE-4322** — the card declares no `Files:` line, so it made no footprint claim to compare against
+- **DRE-4322** — the card declares no `Files:` line, so it made no footprint claim to compare against; DRE-4377: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
