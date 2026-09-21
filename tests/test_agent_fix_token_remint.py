@@ -74,9 +74,11 @@ MODEL_ACTION = "anthropics/claude-code-action"
 MODEL_STEP = "Fix"
 CONSUMER_STEP = "Report"
 START_MINT_ID = "app"
-# The pool's own mints (DRE-4282): mints, but not re-mints — the reader is
-# selected once, up front, and tests/test_readers_on_the_pool.py owns it.
-POOL_STEP_IDS = {"reader", "probe_2", "probe_3", "probe_4"}
+# The pool's own mints (DRE-4282, `worker` added by DRE-4412): mints, but not
+# re-mints — the slot is selected once, up front, and the two tokens minted
+# from it are owned by tests/test_readers_on_the_pool.py (the reads) and
+# tests/test_fix_worker_on_the_pool.py (the model step).
+POOL_STEP_IDS = {"reader", "worker", "probe_2", "probe_3", "probe_4"}
 
 
 def _steps() -> list[dict]:
@@ -303,17 +305,65 @@ class TheReMintIsTheBootMintAgain(unittest.TestCase):
         return _steps()[_index_named(CONSUMER_STEP)].get("if") or ""
 
 
-class TheFixAgentsOwnTokenIsUnchanged(unittest.TestCase):
-    """The card's fifth criterion. The agent PUSHES with this credential and
-    the push is agent-bureau-bot's, like the PR it lands on; the model step is
-    also where the hour is spent, so re-minting for it would buy nothing."""
+class TheFixAgentsOwnTokenNeedsNoReMint(unittest.TestCase):
+    """DRE-4320's fifth criterion, as DRE-4412 left it.
 
-    def test_the_model_step_still_takes_the_boot_token(self):
-        model = _steps()[_index_named(MODEL_STEP)]
-        self.assertEqual(
-            (model.get("with") or {}).get("github_token"),
-            "${{ steps.app.outputs.token }}",
-        )
+    The criterion was written as "the model step still takes the boot token",
+    and its REASON was that the model step is where the hour is spent, so
+    re-minting FOR it buys nothing — the rule this file is about. WHICH App
+    that token comes from was never DRE-4320's question and DRE-4412 answered
+    it differently: the model step is handed the dispatch pool's selection
+    (`steps.worker`, agent-task.yml's shape), because on 2026-09-20 two portico
+    fix runs died in claude-code-action's prepare step on bot 1's exhausted
+    installation. tests/test_fix_worker_on_the_pool.py owns which App it is,
+    over all three model-running workflows at once.
+
+    The other half of that criterion was that the agent PUSHES as
+    agent-bureau-bot. That half is NOT pinned here and cannot be: which
+    credential is live in git when the model step pushes is
+    claude-code-action's runtime behaviour, and no static read of the YAML
+    observes it. GitHub's own activity record for the two build runs that
+    already have this arrangement (a boot-App checkout plus a pooled model
+    step) shows it going both ways — PR #467's branch was pushed by the boot
+    App `agent-bureau-bot[bot]`, PR #466's by the pool slot
+    `agent-bureau-bot-3[bot]`. So a fix commit may now be pushed under any of
+    the four worker bots. That is an accepted consequence (operator decision,
+    2026-09-20): all four sit on the author side of the two-robot boundary,
+    `agent-bureau-qa-bot` remains the only merger, and qa-review.yml and
+    verify.yml already admit the whole pool in `allowed_bots`.
+
+    What stays pinned HERE is the timing rule, stated over the model step by
+    name so a rewrite of the general assertions above cannot quietly stop
+    covering it: its credential is minted ONCE, before it, and is not the
+    `Report` re-mint reaching backwards."""
+
+    def _model(self) -> dict:
+        return _steps()[_index_named(MODEL_STEP)]
+
+    def test_the_model_step_takes_one_token_minted_before_it(self):
+        ids = _token_step_ids(self._model())
+        self.assertEqual(len(ids), 1, f"the model step carries no fallback: {ids}")
+        mint = _index_of_id(ids[0])
+        self.assertEqual(_action(_steps()[mint]), MINT_ACTION)
+        self.assertLess(mint, _index_named(MODEL_STEP))
+
+    def test_it_is_not_the_report_re_mint(self):
+        # The re-mint exists because `Report` runs AFTER an unbounded model
+        # run. Nothing before the model step may read it.
+        report_mint = _token_step_ids(_steps()[_index_named(CONSUMER_STEP)])[0]
+        self.assertNotIn(report_mint, _token_step_ids(self._model()))
+
+    def test_the_checkout_steps_declared_token_input_is_unchanged(self):
+        # The DECLARED input only. This says nothing about which credential is
+        # live in git at push time — see the class docstring; that identity may
+        # be any pool member and is not observable from the YAML.
+        checkouts = [
+            s for s in _steps()
+            if _action(s) == "actions/checkout" and (s.get("with") or {}).get("token")
+        ]
+        self.assertTrue(checkouts, "the fix loop checks out the PR branch with a token")
+        for step in checkouts:
+            self.assertEqual(step["with"]["token"], "${{ steps.app.outputs.token }}")
 
 
 class SelfAgentFixRidesTheSameJob(unittest.TestCase):

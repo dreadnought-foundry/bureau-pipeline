@@ -629,8 +629,9 @@ one unwatched surface (accepted: it never mutates state beyond comments).
 
 ## Pool dispatch — scripts/dispatch_pool.py
 
-**Who consults it (DRE-4282).** `agent-task.yml` (DRE-2013), `verify.yml`
-(DRE-2429) and `red-main-repair.yml` mint their WORKER token through the pool.
+**Who consults it (DRE-4282, DRE-4412).** `agent-task.yml` (DRE-2013),
+`verify.yml` (DRE-2429), `red-main-repair.yml` and — since DRE-4412 —
+`agent-fix.yml` mint their WORKER token through the pool.
 Since DRE-4282 the heavy READERS do too, each in verify.yml's shape (guarded
 probe mints → `dispatch_pool.py select` → a `reader` mint that maps the slot and
 falls back to the workflow's own original pair): `qa-review.yml` (the critic's
@@ -639,7 +640,9 @@ bucket stays the fallback), `reconcile.yml` (`GH_READ_TOKEN`, swapped in by
 `reconcile.gh_read`), `agent-fix.yml` (the thread and verdict fetches),
 `plan.yml` (every planner and critic run's token, through DRE-3940's re-mints)
 and `harness.yml` (the driver's reader client). What did NOT move, per
-workflow: the PR-authoring checkout, push and fix in agent-fix; the receipts
+workflow: agent-fix's `Checkout PR branch` step, whose DECLARED `token:` input
+is still the boot App's (its model step moved onto the pool with DRE-4412, and
+that is a different input); the receipts
 reconcile posts and counts by the worker's login; the verdict comment
 merge-gate attributes to the qa-bot; **qa-review's review check run**, which
 stays on the dispatch App for the reason in Q3 below; the harness's acting
@@ -647,6 +650,21 @@ identities (the worker authors, the qa-bot merges). `medic.yml` is deliberately 
 consumer: its reads ride `github.token` because the App lacks `actions:read`
 (DRE-1346), a bucket the pool cannot improve on. All pinned by
 `tests/test_readers_on_the_pool.py`.
+
+**Which identity a fix commit is PUSHED under is not one of those, and is not
+pinned anywhere (DRE-4412).** Whether the push authenticates with the
+checkout's persisted credential or with the model step's own token is
+`claude-code-action` runtime behaviour, invisible to a static read of the YAML.
+GitHub's activity record for the two build runs that already have this exact
+arrangement — a boot-App checkout plus a pooled model step — shows both: PR
+#467's branch was pushed by `agent-bureau-bot[bot]` (the boot App), PR #466's
+by `agent-bureau-bot-3[bot]` (the pool slot). So a fix commit may arrive under
+any of the four worker bots. That is an accepted consequence, not a regression
+(operator decision, 2026-09-20): all four are on the author side of the
+two-robot boundary, `agent-bureau-qa-bot` is still the only merger, and
+`qa-review.yml` and `verify.yml` already admit the whole pool in
+`allowed_bots`, so a `synchronize` from a pool bot is already handled — build
+branches do it every day.
 
 **Q1 — actor.** The selected slot's App token authors the PR, so the PR author
 is `agent-bureau-bot` or `-2/-3/-4` — every allowlist that admits the worker
