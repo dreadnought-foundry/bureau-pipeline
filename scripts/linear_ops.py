@@ -116,7 +116,8 @@ Subcommands:
                                        stdout (the authoritative **Design:**
                                        source the visual-QA stage reads)
 
-Auth: LINEAR_API_KEY env var.
+Auth: LINEAR_API_KEY env var; outside GitHub Actions, when it is unset, the
+operator-tools key from Secrets Manager (`api_key`, DRE-4455).
 """
 
 from __future__ import annotations
@@ -126,6 +127,7 @@ import contextlib
 import json
 import os
 import re
+import subprocess  # nosec B404 - one fixed argv (the key read), no shell
 import sys
 import time
 import urllib.error
@@ -635,6 +637,62 @@ def _error_body(exc: urllib.error.HTTPError) -> str:
         return "<body unreadable>"
 
 
+#: Where the OPERATOR's key lives (DRE-4455) — the operator-tools user, with its
+#: own Linear budget. Never the fleet's key: in a workflow `LINEAR_API_KEY` is
+#: always set to that, and `api_key` refuses to fall back there at all.
+OPERATOR_KEY_SECRET = "bureau/operator-tools/linear-api-key"
+OPERATOR_KEY_REGION = "us-west-2"
+_secrets_run = subprocess.run
+#: The fetched key, once per process — a read is an `aws` process and `gql`
+#: asks on every request. The next command reads fresh, so a rotation lands.
+_operator_key: dict[str, str] = {}
+
+
+def api_key(*, env=None, run=None) -> str:
+    """The Linear key: `LINEAR_API_KEY`, else — outside CI only — Secrets Manager.
+
+    On the operator's machine a missing key used to mean copying it out of a
+    `.env` that went stale on rotation, and that an assistant session is
+    refused permission to read. So outside GitHub Actions it is read from
+    `OPERATOR_KEY_SECRET`, never printed or cached past this process.
+
+    Inside GitHub Actions a missing key is the same `KeyError` it always was:
+    there the key is the fleet's, and borrowing the operator's would sign fleet
+    work as the wrong user and spend the wrong budget (DRE-3168). agent-bureau's
+    `scripts/linear_key.py` resolves the same way (DRE-4454); change both.
+    """
+    env = os.environ if env is None else env
+    key = env.get("LINEAR_API_KEY")
+    if key:
+        return key
+    if env.get("GITHUB_ACTIONS") == "true":
+        raise KeyError("LINEAR_API_KEY")
+    if "key" in _operator_key:
+        return _operator_key["key"]
+    aws_env = {**env, "AWS_PROFILE": env.get("AWS_PROFILE") or "dreadnought"}
+    try:
+        out = (run or _secrets_run)(  # nosec B603 B607 - fixed argv, no shell
+            ["aws", "secretsmanager", "get-secret-value",
+             "--secret-id", OPERATOR_KEY_SECRET, "--region", OPERATOR_KEY_REGION,
+             "--query", "SecretString", "--output", "text"],
+            capture_output=True, text=True, timeout=30, env=aws_env, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"no LINEAR_API_KEY, and could not run aws to read {OPERATOR_KEY_SECRET}: {exc}"
+        ) from None
+    if out.returncode != 0:
+        raise RuntimeError(
+            f"no LINEAR_API_KEY, and reading {OPERATOR_KEY_SECRET} failed "
+            f"(AWS_PROFILE={aws_env['AWS_PROFILE']}): {out.stderr.strip()[:400]}"
+        )
+    key = out.stdout.strip()
+    if not key:
+        raise RuntimeError(f"{OPERATOR_KEY_SECRET} is empty — nothing to send to Linear.")
+    _operator_key["key"] = key
+    return key
+
+
 def gql(query: str, variables: dict | None = None) -> dict:
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
@@ -649,7 +707,7 @@ def gql(query: str, variables: dict | None = None) -> dict:
             API,
             data=payload,
             headers={
-                "Authorization": os.environ["LINEAR_API_KEY"],
+                "Authorization": api_key(),
                 "Content-Type": "application/json",
             },
         )
