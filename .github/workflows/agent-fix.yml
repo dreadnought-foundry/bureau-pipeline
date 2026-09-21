@@ -745,6 +745,52 @@ jobs:
         if: steps.pr.outputs.go == 'true'
         run: echo ".bureau-pipeline/" >> .git/info/exclude
 
+      # DRE-4486 — a fix run that finishes after its pull request merged
+      # pushes onto a dead branch.
+      #
+      # The `Resolve PR` step above already refuses a run that STARTS on a
+      # merged pull request. The race is the other one: the run starts while
+      # the PR is open, the merge gate merges it mid-run, and the agent
+      # pushes minutes later onto a branch GitHub has already deleted — so
+      # the push RECREATES it and the fix sits on origin, reviewed and
+      # measured, on no path to the default branch, while the card reads
+      # Done. Four times: portico #611 (DRE-4183, +9 min — the live bug is
+      # now DRE-4460), portico #351 (DRE-2637, +4 min), DRE-2227 (recovered
+      # as DRE-2989) and DRE-2591. Every one was found by a person.
+      #
+      # `git push` is the act to refuse, so it is refused at git's own seam
+      # rather than in a prompt: a pre-push hook, written BEFORE the agent
+      # starts (a hook written after it could not stop the push it exists to
+      # stop) and AFTER the checkout (which would overwrite it). The hook
+      # fails OPEN on an unreadable read — it runs on every push of every fix
+      # run, and one that refused on an API blip would break the loop it
+      # protects. The merge gate's condition F is the rule; this is the belt,
+      # and reconcile's reappearing-branch sweep is the net.
+      - name: Refuse a push onto a merged pull request
+        if: steps.pr.outputs.go == 'true'
+        env:
+          # A READ, so the pool-selected reader token (DRE-4282) — the same
+          # one `Resolve PR` spends, named bare rather than behind a `||`
+          # (tests/test_agent_fix_token_remint.py: a fallback is only
+          # warranted behind a mint that may fail).
+          HOOK_TOKEN: ${{ steps.reader.outputs.token }}
+          HOOK_REPO: ${{ github.repository }}
+          HOOK_PR: ${{ steps.pr.outputs.number }}
+          HOOK_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          HOOKS=$(git rev-parse --git-path hooks)
+          mkdir -p "$HOOKS"
+          # The token is baked into the hook because a hook does not inherit
+          # the step environment of whatever later step invokes git.
+          {
+            echo '#!/usr/bin/env bash'
+            echo "export GH_TOKEN='$HOOK_TOKEN'"
+            echo "exec python3 '$HOOK_ROOT/.bureau-pipeline/scripts/stranded_fix.py' guard --repo '$HOOK_REPO' --pr '$HOOK_PR'"
+          } > "$HOOKS/pre-push"
+          chmod +x "$HOOKS/pre-push"
+          echo "pre-push guard installed for $HOOK_REPO#$HOOK_PR"
+
       # DRE-2694: some required checks cannot be satisfied by ADDING a commit,
       # and this loop can only add commits. bureau-pipeline PR #176 was blocked
       # for three hours on exactly one finding — the required TDD commit-order
@@ -1727,6 +1773,66 @@ jobs:
           handoff check || refuse "the critic verdict is not this run's"
           # The one-line trailer every comment below carries: what it answers.
           ANSWERS=$(handoff attribution --card "$CARD")
+
+          # DRE-4486 — the pull request merged while this run was working it.
+          #
+          # Everything below this block reports ON the pull request: a fix
+          # attempt to re-review, a dispute for the critic to answer, a park
+          # for a human. None of it means anything once the PR is merged —
+          # the card is Done, the reviewer will not look again, and the merge
+          # gate has nothing left to gate. What the run owes instead is a
+          # record of the work that has nowhere to go, which is exactly what
+          # the four earlier occurrences were missing: portico #611
+          # (DRE-4183) took its fix nine minutes after the merge and nobody
+          # knew until a stale-branch audit six weeks later, by which time
+          # the bug it fixed was live and refiled as DRE-4460.
+          #
+          # The commits are read from the LOCAL clone, not from a compare
+          # against origin, because both outcomes have to be nameable: the
+          # pre-push guard above may have refused the push (the work exists
+          # only here) or the run may be on a channel that predates the guard
+          # (the work is on a branch GitHub deleted at merge and the push
+          # recreated). `--pushed` says which, and the card says so plainly
+          # rather than implying the work is recoverable when it is not.
+          #
+          # Filed as a card, not a comment: the CEO's answer of 2026-09-21
+          # chose a card, and a comment on a merged pull request is read by
+          # nobody. ONE card per branch — `find-open` is the idempotency key,
+          # so a second run on the same branch appends nothing.
+          PRSTATE=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || true)
+          if [ "$PRSTATE" = "MERGED" ]; then
+            BASEREF=$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null || true)
+            BRANCHREF=$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)
+            git fetch origin "$BASEREF" --quiet 2>/dev/null || true
+            python3 .bureau-pipeline/scripts/stranded_fix.py local-compare \
+              --base "origin/$BASEREF" --out /tmp/stranded-compare.json || true
+            LANDED=no
+            if git fetch origin "$BRANCHREF" --quiet 2>/dev/null \
+               && [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
+              LANDED=yes
+            fi
+            SLUG=$(python3 .bureau-pipeline/scripts/stranded_fix.py slug --repo "$REPO" || true)
+            if [ -n "$SLUG" ] && python3 .bureau-pipeline/scripts/stranded_fix.py route \
+                 --repo "$REPO" --pr "$PR" \
+                 --compare-file /tmp/stranded-compare.json \
+                 --card "$CARD" --pushed "$LANDED" \
+                 --out-title /tmp/stranded-title.txt \
+                 --out-body /tmp/stranded-body.md; then
+              TITLE=$(cat /tmp/stranded-title.txt)
+              EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
+              if [ -z "$EXISTING" ]; then
+                python3 .bureau-pipeline/scripts/linear_ops.py oneoff "$TITLE" \
+                  /tmp/stranded-body.md --label "repo:$SLUG" --label agent:engineer \
+                  || echo "::error::could not file the stranded-fix card for $REPO#$PR — the commits are named in this run's log above"
+              else
+                echo "stranded fix already filed as $EXISTING"
+              fi
+            else
+              echo "::warning::PR #$PR merged during this fix run and nothing provable is stranded on ${BRANCHREF:-its branch} — filing no card"
+            fi
+            echo "PR #$PR merged while this fix run was working it — reporting nothing on it (DRE-4486)"
+            exit 0
+          fi
           REFUTED_RC=0; REFUTATION=$(handoff read --kind refutation) || REFUTED_RC=$?
           if [ "$REFUTED_RC" -eq 4 ]; then refuse "the refutation is not this run's"; fi
           BLOCKED_RC=0; BLOCKER=$(handoff read --kind blocker) || BLOCKED_RC=$?

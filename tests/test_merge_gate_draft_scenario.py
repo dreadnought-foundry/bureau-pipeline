@@ -83,6 +83,12 @@ if args[:2] == ["pr", "view"]:
     value = fx["pr"][field]
     emit("true" if value is True else "false" if value is False else str(value))
 
+if args[:2] == ["run", "list"]:
+    # DRE-4486: the merge gate reads the Agent Fix lane before it merges.
+    # An idle lane is the fixture for every scenario here — the stranded-fix
+    # race has its own suite (tests/test_stranded_fix.py).
+    emit([])
+
 if args[:2] == ["pr", "merge"]:
     sys.stderr.write(os.environ["MERGE_ERROR"] + "\n")
     raise SystemExit(1)
@@ -209,6 +215,14 @@ def run_shipped_step(is_draft: bool, body=None) -> ShippedStepResult:
                 "FIXTURE": str(td / "fixture.json"),
                 "COMMENTS": str(td / "comments.json"),
                 "GH_LOG": str(td / "gh.log"),
+                # The step `env:` the shipped workflow declares. DRE-4486
+                # moved every `${{ github.repository }}` and
+                # `${{ github.token }}` out of the script and up here, so
+                # the harness supplies them the way Actions would — a step
+                # env the harness does not model is the same hole as a
+                # `${{ }}` `substitute()` has no value for.
+                "REPO_FULL": REPO,
+                "WORKFLOW_TOKEN": "workflow-token",
                 "QA_LOGIN": QA_LOGIN,
                 "MERGE_ERROR": DRAFT_REFUSAL,
             },

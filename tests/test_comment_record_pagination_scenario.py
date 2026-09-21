@@ -121,6 +121,12 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "merge"]:
     emit("merged")
 
+if args[:2] == ["run", "list"]:
+    # DRE-4486: the merge gate reads the Agent Fix lane before it merges.
+    # An idle lane is the fixture for every scenario here — the stranded-fix
+    # race has its own suite (tests/test_stranded_fix.py).
+    emit([])
+
 if args[0] == "api":
     path = [a for a in args[1:] if not a.startswith("-")][0]
     if (opt("--method") or "GET") == "POST" or "-F" in args:
@@ -255,6 +261,12 @@ def run_shipped_step(body=None, die_at_page: int = 0) -> ShippedStepResult:
             "FIXTURE": str(td / "fixture.json"),
             "COMMENTS": str(td / "comments.json"),
             "GH_LOG": str(td / "gh.log"),
+            # The step `env:` the shipped workflow declares (DRE-4486 moved
+            # the repository and token substitutions out of the script and
+            # up there); an env the harness does not model is the same hole
+            # as a `${{ }}` `substitute()` has no value for.
+            "REPO_FULL": REPO,
+            "WORKFLOW_TOKEN": "workflow-token",
         }
         if die_at_page:
             env["COMMENTS_DIE_AT_PAGE"] = str(die_at_page)

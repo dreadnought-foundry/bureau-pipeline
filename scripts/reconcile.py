@@ -209,6 +209,10 @@ import reviewer_environment  # noqa: E402
 # the marker and the receipt body all live there. This file is the wrapper:
 # it reads the payloads, makes the write and posts what the module composed.
 import stale_merge_ref  # noqa: E402
+# DRE-4486: ONE source for "a fix ended up only on a merged branch" — the
+# merge gate's condition F, the fix loop's pre-push guard and this sweep all
+# read the same detector and compose the same card.
+import stranded_fix  # noqa: E402
 # DRE-2682: ONE source for "this card is finished" — the terminal states the
 # structural sweep already names, read here rather than spelled a fifth time.
 import structural_repair  # noqa: E402
@@ -753,6 +757,13 @@ def _degrade(step: str, what: str, err: object,
     different facts to whoever reads the line, and only one of them tells the
     reader nobody owes the pull request an action."""
     entry = f"{step}: {what} unreadable — {then}: {err}"
+    # Deduped (DRE-4486): the ledger records distinct missed READINGS, not
+    # call sites. Two backstops share the branch listing — the unlanded-work
+    # watchdog and the stranded-fix sweep — so one refused listing reached
+    # this twice, and `_report_degraded` would have said "2 step(s) degraded"
+    # about one thing the sweep could not read.
+    if entry in _degraded:
+        return
     _degraded.append(entry)
     print(f"DEGRADED: {entry}")
 
@@ -5040,6 +5051,163 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
             print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
 
 
+# --- stranded-fix watchdog (DRE-4486) ----------------------------------------
+# A fix run can still be working a pull request when the merge gate merges it.
+# When the fix finishes it pushes to the PR's branch — which has already
+# merged — and the commit sits on `origin`, on no path to the default branch,
+# while the card reads Done. Four times: portico #611 (DRE-4183) took
+# `9f1b7542` nine minutes after its merge, and the bug that fix was for went
+# live and was refiled as DRE-4460; portico #351 (DRE-2637) took `72964abd`
+# four minutes after; DRE-2227 was recovered as DRE-2989; DRE-2591 "stranded a
+# better version on a dead branch". Every one of them was found by a person
+# looking at stale branches, weeks later.
+#
+# The merge gate's condition F now refuses to merge while a fix run is live,
+# and agent-fix.yml's pre-push guard refuses the push. This is the NET under
+# both: it needs no knowledge of why the race happened and it catches a repo
+# riding a release tag that predates either.
+#
+# The unlanded-work watchdog above cannot see this class and correctly so:
+# `_flag_one_unlanded_branch` returns the moment the branch has a pull request
+# in ANY state, and a stranded fix's branch has a MERGED one. That line is
+# right — every other backstop does apply to a branch with a PR — and this is
+# the one case where none of them does, because the PR is closed and nothing
+# reads a closed PR again.
+#
+# Alert-only, like every watchdog in this file: it files ONE card per branch
+# and moves nothing. The card it files is a real piece of work (re-apply the
+# commits, or write down why not), which is why it is a card and not a comment
+# on a card that reads Done.
+
+#: How many recently-merged pull requests each sweep looks back over. The
+#: window only has to outlast one sweep interval several times over — a fix
+#: pushed nine minutes after a merge is seen by the next pass — and every
+#: candidate past the first costs nothing unless its branch still exists.
+STRANDED_MERGED_LIMIT = int(os.environ.get("STRANDED_MERGED_LIMIT", "30"))
+
+
+def merged_prs(limit: int = STRANDED_MERGED_LIMIT) -> list[dict] | None:
+    """Recently-merged pull requests with the fields `stranded_fix.detect`
+    reads, or None when the listing is unreadable.
+
+    None, never [] — the DRE-2034 discipline: a blip must not read as "nothing
+    has merged", which here would mean "nothing is stranded".
+    """
+    try:
+        raw = gh(
+            "pr", "list", "--repo", REPO, "--state", "merged",
+            "--limit", str(limit), "--json",
+            "number,headRefName,baseRefName,mergedAt,url",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"stranded-fix watchdog: PR listing failed: {e}")
+        print(f"ERROR: stranded-fix watchdog: PR listing failed: {e}",
+              file=sys.stderr)
+        return None
+    try:
+        prs = json.loads(raw) if raw else None
+    except ValueError:
+        prs = None
+    return prs if isinstance(prs, list) else None
+
+
+def flag_stranded_fixes() -> None:
+    """DRE-4486 watchdog: a merged pull request whose head branch carries
+    commits dated AFTER the merge.
+
+    That is the finding, and nothing but a push after the merge can produce
+    it. The reappearing branch is the symptom the 2026-09-21 audit found these
+    by — portico has `delete_branch_on_merge` on, so GitHub deletes the branch
+    at the merge and the late push recreates it — but the symptom is
+    repo-configuration-dependent and the commit date is not, so the commit
+    date is what `stranded_fix.detect` reads.
+
+    Every unreadable answer says nothing this sweep: the PR listing, the
+    branch listing and each compare. This only ever ADDS a card, so a
+    fabricated finding is the only way it can do harm.
+    """
+    prs = merged_prs()
+    if prs is None:
+        print("stranded-fix: merged PR listing unreadable — nothing this sweep")
+        return
+    branches = card_branches()
+    if branches is None:
+        print("stranded-fix: branch listing unreadable — nothing this sweep")
+        return
+    live = {b.get("name") for b in branches}
+    for pr in prs:
+        if not isinstance(pr, dict) or pr.get("headRefName") not in live:
+            continue  # the branch is gone, which is the healthy outcome
+        try:
+            found = _stranded_on(pr)
+            if found is None:
+                continue
+            # PARKED is a decision, not a stall — the rule flag_stranded and
+            # flag_stalled_planning already apply, applied here for the same
+            # reason rather than because it fires often (a card whose pull
+            # request MERGED is rarely routed PARKED). Read only AFTER a
+            # finding, so a clean sweep spends no Linear request on it
+            # (DRE-2929) — which matters on a repo that does not auto-delete
+            # merged branches, where every merged PR reaches this loop.
+            card = branch_card(found.branch) or ""
+            if card and routing_verdict.is_parked(
+                    linear_ops.comment_bodies(card)):
+                print(f"stranded-fix: {card} is routed PARKED — deliberately "
+                      f"not built, so a commit left on {found.branch} is not "
+                      f"a finding to route")
+                continue
+            _file_stranded_fix_card(found, card)
+        except Exception as e:  # noqa: BLE001 — isolate one PR, sweep the rest
+            _write_failures.append(
+                f"stranded-fix watchdog on PR #{pr.get('number')}: {e}")
+            print(f"ERROR: stranded-fix watchdog on PR #{pr.get('number')}: {e}",
+                  file=sys.stderr)
+
+
+def _stranded_on(pr: dict):
+    """The finding for ONE merged pull request whose head branch still
+    exists, or None. One compare per candidate, and an unreadable one says
+    nothing — never alarm on a fabricated empty (DRE-2034)."""
+    branch, base = pr.get("headRefName"), pr.get("baseRefName")
+    raw = gh("api", f"repos/{REPO}/compare/{base}...{branch}")
+    try:
+        compare = json.loads(raw) if raw else None
+    except ValueError:
+        compare = None
+    if not isinstance(compare, dict):
+        return None
+    return stranded_fix.detect(pr, compare)
+
+
+def _file_stranded_fix_card(found, card: str) -> None:
+    """One card per branch, composed by the one composer the fix loop's own
+    re-route uses."""
+    slug = stranded_fix.slug_for_repo(REPO)
+    if slug is None:
+        print(f"stranded-fix: {REPO} is not in config/repo-map.json — "
+              f"PR #{found.pr}'s stranded commits cannot be routed to a card")
+        return
+    title = stranded_fix.card_title(slug, found.branch)
+    existing = linear_ops.find_open(title)
+    if existing:
+        return  # said once, and once is the point — keyed on the branch
+    body = stranded_fix.card_body(
+        repo=REPO, stranded=found, card=card, pushed=True,
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write(body)
+        path = fh.name
+    try:
+        linear_ops.cmd_oneoff(title, path, "--label", f"repo:{slug}",
+                              "--label", "agent:engineer")
+    finally:
+        os.unlink(path)
+    print(f"stranded-fix: PR #{found.pr} merged at {found.merged_at} and "
+          f"{found.branch} carries {len(found.commits)} commit(s) pushed "
+          f"after it — filed {title!r}")
+
+
 #: The label that says the PLANNER owns a card. Read here, and nowhere else in
 #: this file, for one narrow purpose: refusing to move a card DRE-4356 names as
 #: an epic tell. `card_is_epic` deliberately does not read it (DRE-3044 — every
@@ -7969,6 +8137,13 @@ def main(
             flag_no_checks_prs,
             flag_unowned_prs,
             flag_unlanded_work,
+            # DRE-4486, beside the unlanded-work watchdog because they are the
+            # two halves of "work that no gate can see": that one is a branch
+            # with no pull request, this one is a branch whose pull request
+            # MERGED and then took a commit anyway. The unlanded sweep
+            # correctly returns the moment a branch has a PR in any state, so
+            # this class fell between every backstop in the file.
+            flag_stranded_fixes,
             fix_approved_but_red,
             retry_dead_fix_runs,
             # DRE-3130, beside the dead-fix-run retry because they answer the

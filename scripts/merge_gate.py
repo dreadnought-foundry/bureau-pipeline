@@ -8,7 +8,7 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → 4.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → F → 4.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -166,6 +166,44 @@ not a critic catch).
    - Same authorship rule as the critic: a forged FAIL could stall merges,
      a forged PASS could mask a real FAIL.
 
+F. FIX RUN IN FLIGHT (DRE-4486) — the Agent Fix lane's own record for this
+   pull request. A fix run can still be working a PR when this gate merges
+   it; when the fix finishes it pushes to the PR's branch, which has
+   already merged, and the commit is on `origin` and on no path to `main`
+   while the card reads Done. It has happened at least four times:
+   portico #611 (DRE-4183) merged 08:34:12Z and took `9f1b7542` nine
+   minutes later — the live bug that fix was for is now DRE-4460; portico
+   #351 (DRE-2637) merged 18:55:47Z and took `72964abd` four minutes
+   later; DRE-2227 was recovered as DRE-2989 ("stranded on its branch, and
+   the card reads Done"); DRE-2591 "stranded a better version on a dead
+   branch". Every one was handled as a recovery and none filed the
+   prevention.
+
+   `--match-head-commit` (condition below, in the workflow) already stops
+   the other direction — a fix that pushes BEFORE the merge moves the head
+   and GitHub refuses the merge. Nothing asked the opposite question, so
+   this does: a run queued or running FOR this PR is `wait`. The CEO chose
+   the gate as the primary remedy on 2026-09-21 (signed console answer);
+   the fix loop's own refusal to push onto a merged branch and the
+   reappearing-branch detector are the belt and the net, in
+   scripts/stranded_fix.py.
+
+   Attribution is exact where GitHub gives it and bounded where it does
+   not: a run in flight that GitHub attributes to NO pull request (zero
+   jobs while pending on its concurrency group, or a repo riding a release
+   tag older than DRE-2908) reads as "could be any PR" and waits.
+   Unreadable waits too — a blip that read as "no fix run running" is
+   precisely this failure.
+
+   Evaluated after 1-3 and BEFORE condition 4, because condition 4's note
+   claims "everything else is green, so marking it ready for review is all
+   that is left", and with a fix run in flight that sentence is false.
+   After condition 0 for the mirror reason: a conflicted branch must still
+   reach the fix agent, or a DIRTY pull request with a queued fix run has
+   nothing left that can move it. And after condition 2, so a standing
+   REQUEST_CHANGES still reads `hold` — the run in flight is the one
+   working that very verdict, and `hold` is the more informative answer.
+
 4. DRAFT (DRE-3467) — GitHub's own `isDraft` for the PR. GitHub will not
    merge a draft under any circumstances: `mergePullRequest` answers
    "Pull Request is still a draft" and `gh pr merge` exits 1. The gate
@@ -254,6 +292,12 @@ from typing import Optional
 # should_review_pr and reconcile read it from here too, so the gate, the
 # review-skip and the sweep can never drift about what a verdict binds.
 from verdict_content import content_id, verdict_content_id  # noqa: F401
+
+# Condition F's record (DRE-4486). The lane parse, the refusal wording and the
+# fix loop's own two halves live in ONE module, for the reason the import
+# above exists: the gate, the fix run and the sweep must never drift about
+# what "a fix run is in flight for this pull request" means.
+from stranded_fix import lane_refusal, read_lane  # noqa: E402
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -597,6 +641,27 @@ def evaluate_draft(is_draft) -> Optional[Decision]:
     return None
 
 
+def evaluate_fix_lane(fix_lane, pr_number) -> Optional[Decision]:
+    """Condition F (DRE-4486). None = no fix run is in flight for this pull
+    request, proceed. Otherwise `wait`: a fix run that finishes after the
+    merge pushes onto a dead branch, and the gate is the one place that can
+    stop the race before it starts.
+
+    `None` for `fix_lane` is the pre-DRE-4486 caller and gates nothing —
+    the same default-to-old-behaviour shape conditions D, 0 and 4 take. An
+    UNREADABLE lane and an unattributable in-flight run both wait; the
+    wording of each comes from `stranded_fix.lane_refusal`, which is also
+    what reconcile reads, so the gate and the sweep can never disagree
+    about the lane.
+
+    This is `wait` and never `human`: the fix run finishing is exactly the
+    future event that changes the answer, and it arrives without anybody
+    being asked.
+    """
+    reason = lane_refusal(fix_lane, pr_number)
+    return Decision("wait", reason) if reason else None
+
+
 def currency_note(compare_status) -> Optional[str]:
     """The audit line for a head that is behind its base (DRE-2416).
 
@@ -781,8 +846,11 @@ def decide(
     head_content_id: Optional[str] = None,
     merge_state: str = "",
     is_draft: bool = False,
+    fix_lane=None,
+    pr_number=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → 4, first blocker wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → F → 4, first blocker
+    wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
@@ -811,7 +879,14 @@ def decide(
     `is_draft` is the draft record (DRE-3467) — condition 4, evaluated LAST
     so a draft that is not otherwise ready keeps reading as today's `wait`.
     The default (False) reproduces the pre-DRE-3467 behavior for every
-    caller that never passes it."""
+    caller that never passes it.
+
+    `fix_lane` / `pr_number` are the fix-lane record (DRE-4486) — condition
+    F, evaluated after 1-3 and before condition 4. The defaults (None)
+    reproduce the pre-DRE-4486 behavior exactly for every caller that never
+    passes them, which is what `test_the_race_merges_today_without_
+    condition_f` drives to prove this condition is the thing being
+    tested."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -860,6 +935,12 @@ def decide(
             decision.carried = carried
             decision.content_id = head_content_id
         return decision
+
+    # Condition F (DRE-4486), before the draft note: a fix run in flight for
+    # this pull request would be stranded on a dead branch by a merge now.
+    blocked = evaluate_fix_lane(fix_lane, pr_number)
+    if blocked:
+        return _decided(blocked)
 
     # Condition 4 LAST (DRE-3467): reaching it means every other condition
     # said merge, so the note the workflow posts is about the draft flag and
@@ -937,6 +1018,17 @@ def build_parser() -> argparse.ArgumentParser:
                              "(DRE-2039) and proves a carried verdict's "
                              "commit is still in this PR's history "
                              "(DRE-2340); an empty list is fail-closed")
+    # Condition F's record (DRE-4486) — optional; omitting both reproduces
+    # the pre-DRE-4486 behavior for every caller that never passes them.
+    parser.add_argument("--fix-lane-file", default=None,
+                        help="the Agent Fix lane record written by "
+                             "`stranded_fix.py lane` — which pull requests "
+                             "have a fix run queued or running (DRE-4486). A "
+                             "file that cannot be read is fail-closed: the "
+                             "gate waits rather than strand a late fix")
+    parser.add_argument("--pr-number", default=None,
+                        help="the pull request being gated — condition F "
+                             "attributes in-flight fix runs to it (DRE-4486)")
     return parser
 
 
@@ -1025,10 +1117,25 @@ def main(argv=None) -> int:
         if not isinstance(pr_commits, list):
             _die("pr-commits payload is not a list")
 
+    # DRE-4486: an unreadable lane file is NOT an idle lane. `read_lane`
+    # turns every unprovable shape into the fail-closed Lane, and a file the
+    # workflow never managed to write is handed to it as exactly that — the
+    # gate then waits, which costs one wake, instead of merging past a fix
+    # run that is still working.
+    fix_lane = None
+    if args.fix_lane_file:
+        try:
+            with open(args.fix_lane_file) as f:
+                lane_payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            lane_payload = {"readable": False,
+                            "detail": f"cannot read the fix-lane record: {e}"}
+        fix_lane = read_lane(lane_payload)
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
-        head_content_id, args.merge_state, is_draft,
+        head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
     )
     for note in decision.notes:
         print(f"note={note}")
