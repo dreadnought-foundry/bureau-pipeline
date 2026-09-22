@@ -166,13 +166,21 @@ def review_checks_at(now: str) -> str:
     1's crashed `call / review` (102264152565), attempt 2's later success
     (102288350419) and the head-bound `QA critic review` (102264839064).
 
-    Two things are time-travel rather than capture. The default listing the
-    sweep reads is `filter=latest` — one row per name, the newest — so for each
-    name the newest check run that had STARTED by `now` is the row. And the
-    head-bound check is ONE record patched in place: it was created at crash 1
-    (captured `started_at`), and its text today is the 17:26 PT verdict's, so
-    its conclusion at the time is taken as `failure` — which is what the real
-    15:46 PT sweep must have read, because it re-dispatched (captured)."""
+    ONE thing is time-travel rather than capture: the default listing the sweep
+    reads is `filter=latest` — one row per name, the newest — so for each name
+    the newest check run that had STARTED by `now` is the row.
+
+    `conclusion` is NOT time-travelled. It is read straight off the captured
+    listing for every record, including the head-bound `QA critic review`
+    (102264839064), which is a single record patched in place: created at crash
+    1 (captured `started_at`), carrying the 17:26 PT verdict's text by capture
+    time. There is no substitution keyed on that id anywhere in this file, and
+    what it read at 15:46 PT is not recoverable from a capture taken on
+    2026-09-20. (Docstring corrected 2026-09-22: this text previously claimed
+    the conclusion was "taken as `failure`". It never was — the code below has
+    always read the captured field. The description was fixed rather than the
+    code, because this file is a frozen artifact; see
+    `docs/reviewer-environment-hold-proof.md`.)"""
     by_name: dict[str, dict] = {}
     for run in _load("check-runs-81bcc242-filter-all.json")["check_runs"]:
         if not run["name"].endswith("review") or now < run["started_at"]:
