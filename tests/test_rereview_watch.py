@@ -27,7 +27,9 @@ One section per acceptance criterion:
      must never be.
   5. `report` — one thread read per epic per sweep, a reader that raises
      skipping only its own epic, and what it returns.
-  6. The CLI: `check` writes nothing and exits 0 either way.
+  6. The CLI: `check` writes nothing and exits 0 either way, and `sweep`
+     reports over the epics `linear_ops` names — only those it named an
+     identifier for.
   7. The wiring: the sweep calls `report` inside a `_phase(` block, and the
      grace constant stays out of `reconcile.REQUIRED_ENV`.
 
@@ -401,13 +403,7 @@ class TheCli(unittest.TestCase):
         self.assertIn("45", out)
         linear.cmd_comment.assert_not_called()
 
-    def test_sweep_runs_the_report_over_every_epic_in_flight(self):
-        """The operator's seam. The epic list is `linear_ops`' own reader, so
-        the lanes and the has-children test cannot drift from the critic's."""
-        rows = [
-            {"identifier": EPIC, "title": "e", "state": pc.APPROVAL_LANE},
-            {"identifier": "DRE-4083", "title": "e", "state": "Green Light"},
-        ]
+    def _sweep(self, rows, now=LATER):
         posted: list[str] = []
         linear = mock.MagicMock()
         linear.cmd_epics_in_flight.side_effect = lambda: print(json.dumps(rows))
@@ -415,10 +411,36 @@ class TheCli(unittest.TestCase):
         linear.cmd_comment.side_effect = lambda i, b, *f: posted.append(i)
         buf = io.StringIO()
         with mock.patch.object(rw, "linear_ops", linear), redirect_stdout(buf):
-            code = rw.main(["sweep", "--now", LATER])
+            code = rw.main(["sweep", "--now", now])
+        read = [c.args[0] for c in linear.comment_records.call_args_list]
+        return code, buf.getvalue(), posted, read
+
+    def test_sweep_runs_the_report_over_every_epic_in_flight(self):
+        """The operator's seam. The epic list is `linear_ops`' own reader, so
+        the lanes and the has-children test cannot drift from the critic's."""
+        rows = [
+            {"identifier": EPIC, "title": "e", "state": pc.APPROVAL_LANE},
+            {"identifier": "DRE-4083", "title": "e", "state": "Green Light"},
+        ]
+        code, out, posted, _ = self._sweep(rows)
         self.assertEqual(code, 0)
         self.assertEqual(posted, [EPIC])
-        self.assertIn("2 epic(s) in flight, spoke on 1", buf.getvalue())
+        self.assertIn("2 epic(s) in flight, spoke on 1", out)
+
+    def test_sweep_drops_a_row_linear_named_no_identifier_for(self):
+        """A row with no identifier is nothing to read a thread for. Carried
+        into `report` it is a `None` epic, and `report` sorts the epics it is
+        handed — so the whole sweep dies on it rather than skipping the row."""
+        rows = [
+            {"identifier": EPIC, "title": "e", "state": pc.APPROVAL_LANE},
+            {"identifier": None, "title": "e", "state": pc.APPROVAL_LANE},
+            {"title": "no identifier key at all", "state": pc.APPROVAL_LANE},
+        ]
+        code, out, posted, read = self._sweep(rows)
+        self.assertEqual(code, 0)
+        self.assertEqual(read, [EPIC])
+        self.assertEqual(posted, [EPIC])
+        self.assertIn("1 epic(s) in flight, spoke on 1", out)
 
 
 # --- 7. The wiring -----------------------------------------------------------
