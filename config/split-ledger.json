@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-21T04:51:42Z",
+  "generated_at": "2026-09-22T04:48:58Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -719,7 +719,7 @@
       "card": "DRE-2898",
       "title": "COMPLIANCE \u00b7 An answer to a question the form never asked exports as an ordinary answer, and reads 12/11",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2898/compliance-an-answer-to-a-question-the-form-never-asked-exports-as-an",
-      "state": "Backlog",
+      "state": "Canceled",
       "created_at": "2026-09-01T01:02:38Z",
       "reasons": [
         "turn-cap-death"
@@ -1447,12 +1447,42 @@
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
         "DRE-4377: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
+    },
+    {
+      "card": "DRE-4401",
+      "title": "agent-bureau: every pool membership change lands in the Record",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-4401/agent-bureau-every-pool-membership-change-lands-in-the-record",
+      "state": "Intake",
+      "created_at": "2026-09-20T19:36:00Z",
+      "reasons": [
+        "handed-back"
+      ],
+      "size": "UNKNOWN",
+      "role": "planner",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, web",
+        "unbounded-quantifier": "'Every change' with no count of changes anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
     }
   ],
   "monthly": [
     {
       "month": "2026-06",
-      "planner_children": 100,
+      "planner_children": 24,
       "split": 0,
       "died": 0,
       "complete": false
@@ -1473,14 +1503,14 @@
     },
     {
       "month": "2026-09",
-      "planner_children": 809,
+      "planner_children": 876,
       "split": 7,
       "died": 16,
       "complete": false
     }
   ],
   "rates": {
-    "cards": 43,
+    "cards": 44,
     "died": 33,
     "by_declared_files": [
       {
@@ -1620,9 +1650,9 @@
       },
       {
         "tell": "two-languages-or-tiers",
-        "of": 16,
+        "of": 17,
         "died": 11,
-        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 16 times"
+        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 17 times"
       },
       {
         "tell": "unenumerated-count",
@@ -1632,12 +1662,12 @@
       },
       {
         "tell": "unbounded-quantifier",
-        "of": 15,
+        "of": 16,
         "died": 11,
-        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 15 times"
+        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 16 times"
       }
     ],
-    "unreadable_footprint": 29,
+    "unreadable_footprint": 30,
     "dead_dollars": 1223.23,
     "dead_dollars_unreadable": 0
   }
