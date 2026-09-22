@@ -398,7 +398,10 @@ def _cmd_check(args) -> int:
 
 def _cmd_sweep(args) -> int:
     rows = _epics_in_flight()
-    lanes = {r.get("identifier"): r.get("state") for r in rows}
+    # A row Linear named no identifier for is nothing this can read a thread
+    # for — dropped here rather than carried into `report` as a `None` epic.
+    lanes = {r.get("identifier"): r.get("state")
+             for r in rows if r.get("identifier")}
     spoke = report(list(lanes), linear_ops.comment_records, lanes.get, args.now)
     print(f"rereview-missing: {len(lanes)} epic(s) in flight, "
           f"spoke on {len(spoke)}" + (f" ({', '.join(spoke)})" if spoke else ""))
