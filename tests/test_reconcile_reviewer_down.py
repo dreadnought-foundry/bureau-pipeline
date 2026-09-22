@@ -834,3 +834,32 @@ def test_the_backstop_composes_the_act_by_a_name_the_guard_can_read():
         "note — every comment this backstop posts composes through the ONE "
         f"act, by a name the guard can read; found {len(ours)}"
     )
+
+
+# --------------------------------------------------------------------------
+# DRE-4577: a repo the pipeline does not serve reports, and files nothing
+# --------------------------------------------------------------------------
+def test_a_repo_the_pipeline_does_not_serve_reports_the_outage_and_files_no_card(monkeypatch):
+    """Live: bureau-harness Reconcile 35670916057 (2026-09-22 00:11Z) reached
+    the file branch and `linear_ops.create_card` refused the slug — `create
+    REFUSED: --repo 'bureau-harness' is not a repo the pipeline serves` — and
+    that refused write took the sandbox sweep red, which a harness run
+    waiting on the sandbox reads as "sandbox down". The sandbox is outside
+    the roster BY DESIGN (config/repo-map.json), so the sweep says what it
+    saw in its own log and writes nothing: no create, no receipt, no lane
+    move, and nothing on the fail-loudly rail."""
+    import io
+
+    monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-harness")
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "bureau-harness")
+    assert "bureau-harness" not in reconcile.validate_card.VALID_SLUGS, (
+        "the sandbox must stay outside the roster for this test to mean anything"
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        written, _ = _run_outage(**_file_world(_medic_note()))
+    out = buf.getvalue()
+    assert written.created == [], "no card for a repo the pipeline does not serve"
+    assert written.comments == [] and written.states == []
+    assert reconcile._write_failures == [], reconcile._write_failures
+    assert "bureau-harness" in out and "no card" in out and "3 could-not-run" in out, out

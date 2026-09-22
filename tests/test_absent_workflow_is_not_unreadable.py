@@ -384,3 +384,68 @@ def test_callers_still_fail_closed_when_the_read_is_unreadable(func_name):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------------------------------
+# DRE-4577: the listing read spends the READ token, never the worker's
+# --------------------------------------------------------------------------
+# Live, 2026-09-21: bureau-harness Reconcile runs 35659096980, 35668039488,
+# 35669089551 and 35674045821 each printed `dispatch-pool: slot1=refused/…`
+# and then six `ERROR: gh run list … agent-fix.yml … HTTP 404 … Treating as
+# UNREADABLE` — while the sweeps between them (35660710780, 35670916057)
+# proved the very same absence green with `busy-guard: agent-fix.yml is not
+# on …'s default branch`. The adjudication above is fine; the one read that
+# feeds it, `_workflows_on_default_branch()`, went out as GH_TOKEN — the App
+# that was refused — while every other read of the sweep rode GH_READ_TOKEN
+# through gh_read (DRE-4282). Two harness runs on a3d15298 ended BLOCKED BY
+# SANDBOX on exactly those red sweeps.
+def _listing_read(env_overrides, rc=0, stdout="", stderr=""):
+    """One workflow_on_default_branch() under `env_overrides`; returns
+    (answer, the kwargs subprocess.run received for the contents read)."""
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((list(argv), kwargs))
+        return SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr)
+
+    with patch.dict(os.environ, env_overrides, clear=False), patch.object(
+        reconcile.subprocess, "run", side_effect=fake_run
+    ):
+        if "GH_READ_TOKEN" not in env_overrides:
+            os.environ.pop("GH_READ_TOKEN", None)
+        answer = reconcile.workflow_on_default_branch(FIX_STUB)
+    contents = [(a, k) for a, k in seen if any("/contents/" in x for x in a)]
+    assert len(contents) == 1, contents
+    return answer, contents[0][1]
+
+
+def test_the_listing_read_rides_the_read_token_when_one_is_set():
+    listing = json.dumps([{"name": n} for n in ABSENT])
+    answer, kwargs = _listing_read(
+        {"GH_TOKEN": "ghs_worker", "GH_READ_TOKEN": "ghs_reader"}, stdout=listing
+    )
+    assert answer is False
+    env = kwargs.get("env")
+    assert env is not None and env.get("GH_TOKEN") == "ghs_reader", (
+        "the contents listing must spend the read token's hour, not the "
+        f"worker's — subprocess.run got env={None if env is None else env.get('GH_TOKEN')!r}"
+    )
+
+
+def test_the_listing_read_stays_on_gh_token_without_a_read_token():
+    """A stub without the pool pairs, linear-sync's and plan's reconcile
+    steps, a local run: exactly as before — no env swap at all."""
+    listing = json.dumps([{"name": n} for n in ABSENT])
+    answer, kwargs = _listing_read({"GH_TOKEN": "ghs_worker"}, stdout=listing)
+    assert answer is False
+    env = kwargs.get("env")
+    assert env is None or env.get("GH_TOKEN") == "ghs_worker"
+
+
+def test_a_refused_listing_read_is_still_unprovable():
+    """DRE-2525 unchanged: only the identity moves, never the posture."""
+    answer, _ = _listing_read(
+        {"GH_TOKEN": "ghs_worker", "GH_READ_TOKEN": "ghs_reader"},
+        rc=1, stderr="HTTP 403: API rate limit exceeded for installation ID 123249480",
+    )
+    assert answer is None
