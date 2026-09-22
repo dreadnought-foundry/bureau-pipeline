@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 from harness import app_token, framework, sandbox_health
@@ -99,6 +100,51 @@ def token_supplier(
         return mint(app_id, private_key_pem, repo)
 
     return supply
+
+
+_POOL_APP_ID_RE = re.compile(r"^HARNESS_POOL_APP_ID_([0-9]+)$")
+
+
+def pool_fallbacks(env, selected_slot: str, repo: str, mint=None, log=print) -> list:
+    """`(name, supply)` pairs for every OTHER configured pool slot — the
+    reader's next identities when GitHub refuses the one it is on (DRE-4575).
+
+    In slot order after the selected one, wrapping: selected 3 → 4, 1, 2.
+    A slot is configured iff `HARNESS_POOL_APP_ID_<n>` AND its
+    `HARNESS_POOL_APP_PRIVATE_KEY_<n>` are both set (harness.yml passes every
+    pair; slot 1 is the worker App). Each supply mints sandbox-scoped through
+    the same `token_supplier` the reader's own re-mint uses, so a slot moved
+    to re-mints from its own key for the rest of the run. Empty without the
+    pairs — a local run keeps the pre-DRE-4575 shape, and a refusal stands.
+
+    Why the driver and not the workflow: the mint steps run once, before any
+    scenario, and a refusal arrives mid-run — run 35664409350 was refused on
+    every call from ~12 s after its first dispatch, four attempts running,
+    each on the slot the probe had just read as healthy.
+    """
+    mint = mint or app_token.mint_installation_token
+    slots: dict = {}
+    for name, value in env.items():
+        m = _POOL_APP_ID_RE.match(name)
+        if not m or not (value or "").strip():
+            continue
+        n = int(m.group(1))
+        key = (env.get(f"HARNESS_POOL_APP_PRIVATE_KEY_{n}") or "").strip()
+        if key:
+            slots[n] = (value.strip(), key)
+    try:
+        current = int(selected_slot)
+    except (TypeError, ValueError):
+        current = 1
+    others = sorted(n for n in slots if n != current)
+    after = [n for n in others if n > current] + [n for n in others if n < current]
+    return [
+        (
+            f"pool slot {n}",
+            token_supplier(f"reader (pool slot {n})", *slots[n], repo, mint=mint, log=log),
+        )
+        for n in after
+    ]
 
 
 def spend_lines(clients) -> list:
@@ -266,20 +312,27 @@ def main(argv=None) -> int:
     # with, are untouched. Its re-mint comes from the SELECTED App's key.
     reader_token = os.environ.get("HARNESS_READER_TOKEN")
     pool_slot = (os.environ.get("HARNESS_POOL_SLOT") or "").strip() or "1"
+    # …and when GitHub refuses that slot mid-run, the reader moves to the
+    # next configured one (DRE-4575) — every slot's pair comes from
+    # harness.yml, in HARNESS_POOL_APP_ID_<n> / _PRIVATE_KEY_<n>.
     gh_reader = (
         GitHub(
             reader_token,
+            identity=f"pool slot {pool_slot}",
             token_supplier=token_supplier(
                 "reader",
                 os.environ.get("HARNESS_READER_APP_ID", ""),
                 os.environ.get("HARNESS_READER_APP_PRIVATE_KEY", ""),
                 args.repo,
             ),
+            fallback_suppliers=pool_fallbacks(os.environ, pool_slot, args.repo),
         )
         if reader_token
         else None
     )
-    gh = GitHub(token, token_supplier=worker_supplier, reader=gh_reader)
+    # The worker has no fallback identity — WHICH identity acts is the thing
+    # under test — so a refusal there is waited out (github_api.RateLimited).
+    gh = GitHub(token, identity="worker", token_supplier=worker_supplier, reader=gh_reader)
     if not worker_supplier:
         print(
             "note: HARNESS_WORKER_APP_ID/_PRIVATE_KEY unset — no token "
@@ -420,12 +473,15 @@ def main(argv=None) -> int:
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
-    # The reader's line names the slot its reads rode on (DRE-4282); with no
-    # reader the worker's line IS the reads, and the note above said so.
+    # The reader's line names the slot its reads rode on (DRE-4282) — every
+    # slot, in order, when a refusal moved it mid-run (DRE-4575: `pool slot 3
+    # → pool slot 4`); with no reader the worker's line IS the reads, and the
+    # note above said so.
+    reader_trail = getattr(gh_reader, "identity_trail", None) or [f"pool slot {pool_slot}"]
     for line in spend_lines(
         [
             ("worker", gh),
-            (f"reader (pool slot {pool_slot})", gh_reader),
+            (f"reader ({' → '.join(reader_trail)})", gh_reader),
             ("qa", gh_qa),
             ("console", gh_console),
         ]

@@ -430,9 +430,15 @@ jobs:
           BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
           BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
           BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
-          # Deterministic fallback key on read failure: this run, so a re-run
-          # picks the same slot instead of scattering across buckets.
-          BUREAU_POOL_KEY: harness:${{ github.run_id }}
+          # The hash key for `spread` and the fallback: this run AND this
+          # attempt (DRE-4575). It was the run id alone, on purpose, so a
+          # re-run would pick the same slot — and on 2026-09-21 that is
+          # exactly what made run 35664409350's four attempts identical: the
+          # probe read slot 1 at 4,4xx remaining each time, the hash answered
+          # slot 1 each time, and each attempt was refused on it within
+          # forty seconds. A re-run is asked for BECAUSE the last attempt
+          # failed; landing it on a different bucket is the point.
+          BUREAU_POOL_KEY: harness:${{ github.run_id }}-${{ github.run_attempt }}
           # The repo the probe calls — the sandbox every token above is
           # scoped to, not GITHUB_REPOSITORY (bureau-pipeline, a 404 to them).
           BUREAU_POOL_PROBE_REPO: dreadnought-foundry/bureau-harness
@@ -527,6 +533,23 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
           HARNESS_POOL_SLOT: ${{ steps.pool.outputs.n }}
+          # EVERY slot's pair (DRE-4575), so the reader can MOVE when GitHub
+          # refuses the slot it is on mid-run: the driver orders the other
+          # slots after the selected one and re-mints from the next on a
+          # `RateLimited` answer (scripts/harness/github_api.py). The probe
+          # above is one call on one of GitHub's counters and proves nothing
+          # about the next call — run 35664409350 was refused on every call
+          # from ~12 s after its first dispatch, four attempts running, each
+          # on the slot the probe had just read as healthy. Slot 1 is the
+          # worker App; an absent pair shrinks the list (DRE-2013 shape).
+          HARNESS_POOL_APP_ID_1: ${{ secrets.BUREAU_APP_ID }}
+          HARNESS_POOL_APP_PRIVATE_KEY_1: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          HARNESS_POOL_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_2: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+          HARNESS_POOL_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_3: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+          HARNESS_POOL_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_4: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           # The commit this run PROVES — the same sha the stamp below binds,
           # resolved from the actual checkout (DRE-3486). The

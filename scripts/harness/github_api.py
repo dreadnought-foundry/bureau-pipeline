@@ -63,6 +63,71 @@ class GitHubError(RuntimeError):
         self.status = status
 
 
+#: How long a client with NO other identity to turn to (the worker) waits for
+#: GitHub's meter to reset before sending a refused call once more (DRE-4575).
+#: Inside the job: harness.yml caps the job at 180 minutes and the scenario
+#: receipt's budget is 40. The counter that refused run 35664409350's four
+#: attempts resets at about :04 past the hour, so a refusal at :40 waits ~25.
+RATE_LIMIT_WAIT_CAP_SECONDS = 40 * 60
+
+
+class RateLimited(GitHubError):
+    """A 403/429 whose body names GitHub's rate limit (DRE-4575).
+
+    Still a GitHubError — every caller that catches the parent holds. The
+    subclass carries `reset`: the epoch second the refusing counter resets,
+    read off the response HEADERS (`x-ratelimit-reset`, else now +
+    `retry-after`). The body alone — all the client read before this card —
+    says nothing about how long a refusal lasts. None when GitHub sent
+    neither header.
+    """
+
+    def __init__(self, status: int, message: str, reset: int | None = None):
+        super().__init__(status, message)
+        self.reset = reset
+
+
+def _is_rate_limit_refusal(status: int, detail: str) -> bool:
+    """`API rate limit exceeded for installation ID …` on a 403/429. A
+    permission 403 (`Resource not accessible by integration`) is not one."""
+    return status in (403, 429) and "rate limit" in detail.lower()
+
+
+def _header(headers, name: str) -> str | None:
+    """One header, whatever the mapping's case rules: an HTTPMessage matches
+    case-insensitively, a test's plain dict does not."""
+    getter = getattr(headers, "get", None)
+    if getter is None:
+        return None
+    for key in (name, name.lower(), name.title(), name.upper()):
+        value = getter(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _reset_note(err: "RateLimited", now: float) -> str:
+    if err.reset is None:
+        return "no reset named"
+    return f"reset in {max(0, int((err.reset - now) // 60))}m"
+
+
+def _reset_from_headers(headers, now: float) -> int | None:
+    raw = _header(headers, "x-ratelimit-reset")
+    if raw is not None:
+        try:
+            return int(float(raw))
+        except ValueError:
+            pass
+    raw = _header(headers, "retry-after")
+    if raw is not None:
+        try:
+            return int(now + float(raw))
+        except ValueError:
+            pass
+    return None
+
+
 class GitHub:
     """One authenticated identity against api.github.com. The harness
     mints one client per actor (worker bot, …) — WHICH identity performs
@@ -86,9 +151,26 @@ class GitHub:
         clock=time.monotonic,
         conditional: bool = True,
         reader: "GitHub | None" = None,
+        identity: str | None = None,
+        fallback_suppliers=None,
+        sleeper=time.sleep,
+        wall_clock=time.time,
+        log=print,
     ):
         self._token = token
         self._api = api_url.rstrip("/")
+        # Who this client is, for the run log and the spend line (DRE-4575):
+        # `identity` is who the requests go out as NOW, `identity_trail` every
+        # identity in order — a reader that moved slots names both.
+        self.identity = identity or "client"
+        self.identity_trail = [self.identity]
+        # (name, supply) pairs for OTHER pool slots, in the order to try them
+        # when GitHub refuses this one for rate limit. Empty for a client whose
+        # identity IS the thing under test (the worker): it waits instead.
+        self._fallbacks = list(fallback_suppliers or [])
+        self._sleeper = sleeper
+        self._wall = wall_clock
+        self._log = log
         # The client whose identity GETs go out as; None = this one.
         self._reader = reader
         # opener(urllib.request.Request) -> (status, bytes, headers);
@@ -167,12 +249,7 @@ class GitHub:
             return self._reader.request(method, path, body)
         if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
             self._remint()
-        try:
-            return self._attempt(method, path, body)
-        except GitHubError as e:
-            if e.status == 401 and self._remint():
-                return self._attempt(method, path, body)
-            raise
+        return self._send(lambda: self._attempt(method, path, body))
 
     def request_bytes(self, method: str, path: str) -> bytes:
         """One REST call whose body is NOT json — the Actions log archive is a
@@ -182,12 +259,84 @@ class GitHub:
             return self._reader.request_bytes(method, path)
         if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
             self._remint()
-        try:
-            return self._attempt(method, path, raw=True)
-        except GitHubError as e:
-            if e.status == 401 and self._remint():
-                return self._attempt(method, path, raw=True)
-            raise
+        return self._send(lambda: self._attempt(method, path, raw=True))
+
+    def _send(self, attempt):
+        """One request through the refusal and expiry paths.
+
+        A `RateLimited` answer is recovered by `_recover_from_rate_limit` —
+        once per identity this client can turn to, then once by waiting —
+        and the request goes out again; when nothing recovers it, the
+        refusal stands. A 401 re-mints once (the mint-time race no fixed
+        margin can close). Anything else raises as it always did.
+        """
+        waited = False
+        while True:
+            try:
+                return attempt()
+            except RateLimited as e:
+                if self._fallbacks:
+                    self._move_to_next_identity(e)
+                    continue
+                if not waited and self._wait_for_reset(e):
+                    waited = True
+                    continue
+                raise
+            except GitHubError as e:
+                if e.status == 401 and self._remint():
+                    return attempt()
+                raise
+
+    def _move_to_next_identity(self, err: RateLimited) -> None:
+        """A READER's answer to a refusal (DRE-4575): mint from the next pool
+        slot and go out as it from now on. A read is not an action anyone
+        attributes, so the identity may move; and the slot moved TO becomes
+        this client's re-mint source, or the 50-minute refresh would put the
+        late scenarios straight back on the refused one.
+
+        Why not the same slot again: run 35664409350's four attempts were
+        refused on every call for the rest of the hour — the counter behind
+        the refusal was empty, not blipping.
+        """
+        name, supply = self._fallbacks.pop(0)
+        self._log(
+            f"github: {self.identity} refused for rate limit "
+            f"({_reset_note(err, self._wall())}) — re-minting from {name} and "
+            "sending the request again as it"
+        )
+        self._supplier = supply
+        self._token = supply()
+        self._minted_at = self._clock()
+        self.identity = name
+        self.identity_trail.append(name)
+
+    def _wait_for_reset(self, err: RateLimited) -> bool:
+        """The WORKER's answer to a refusal (DRE-4575): its identity IS the
+        thing under test, so it cannot move — it waits for the counter to
+        reset, bounded by RATE_LIMIT_WAIT_CAP_SECONDS, and sends once more.
+        False when there is no reset to read or it is past the cap: the
+        refusal stands, and the run says why."""
+        if err.reset is None:
+            self._log(
+                f"github: {self.identity} refused for rate limit and GitHub "
+                "named no reset — nothing to wait for"
+            )
+            return False
+        wait = err.reset - self._wall()
+        if wait > RATE_LIMIT_WAIT_CAP_SECONDS:
+            self._log(
+                f"github: {self.identity} refused for rate limit and the reset "
+                f"is {int(wait // 60)}m out — past the "
+                f"{RATE_LIMIT_WAIT_CAP_SECONDS // 60}m cap, not waiting"
+            )
+            return False
+        wait = max(wait, 0.0) + 1.0
+        self._log(
+            f"github: {self.identity} refused for rate limit — waiting "
+            f"{int(wait)}s for the reset, then sending the request once more"
+        )
+        self._sleeper(wait)
+        return True
 
     def _attempt(self, method: str, path: str, body: dict | None = None,
                  raw: bool = False):
@@ -236,6 +385,13 @@ class GitHub:
                     return json.loads(recall[1])
                 self._billed += 1
                 detail = e.read().decode(errors="replace")[:500]
+                if _is_rate_limit_refusal(e.code, detail):
+                    # Named, with the reset off the HEADERS: the body alone
+                    # was all this read before DRE-4575, and it says nothing
+                    # about how long the refusal lasts.
+                    raise RateLimited(
+                        e.code, detail, _reset_from_headers(e.headers, self._wall())
+                    ) from e
                 if e.code >= 500 and attempt < _RETRIES:
                     last_error = GitHubError(e.code, detail)
                 else:
