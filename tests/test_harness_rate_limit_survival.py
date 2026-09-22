@@ -473,6 +473,21 @@ class WorkerWaitsForTheResetTest(unittest.TestCase):
         # away run 35664409350 resets at ~:04, so a refusal at :40 waits ~25.
         self.assertGreaterEqual(github_api.RATE_LIMIT_WAIT_CAP_SECONDS, 24 * 60)
 
+    def test_the_cap_covers_the_longest_wait_the_night_needed(self):
+        # The critic's round-2 finding on PR #478 (operator decision, 22:55 PT
+        # 2026-09-21): run 35664409350's four refused attempts — 23:37Z,
+        # 23:38Z, 23:54Z and 00:46Z, against the refusing counter's resets at
+        # ~00:03Z and ~01:03Z — needed waits of about 27, 26, 10 and 18
+        # minutes. A cap of 25 covered two of the four, so on the other two
+        # the worker would have given up exactly as before the card. The cap
+        # must clear the longest of them, 27; the number is pinned here so a
+        # later "tidy" back under the sweep's budget fails loudly instead of
+        # quietly re-opening half the night.
+        self.assertGreaterEqual(
+            github_api.RATE_LIMIT_WAIT_CAP_SECONDS, 27 * 60,
+            "the wait cap must cover the 27-minute wait attempt 1 needed",
+        )
+
     def test_a_401_after_a_remint_still_reaches_the_rate_limit_recovery(self):
         # The 401 arm used to `return attempt()` — outside the `while`, so a
         # refusal on the post-re-mint attempt was neither moved nor waited
