@@ -430,14 +430,34 @@ jobs:
           BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
           BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
           BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
-          # Deterministic fallback key on read failure: this run, so a re-run
-          # picks the same slot instead of scattering across buckets.
-          BUREAU_POOL_KEY: harness:${{ github.run_id }}
+          # The hash key for `spread` and the fallback: this run AND this
+          # attempt (DRE-4575). It was the run id alone, on purpose, so a
+          # re-run would pick the same slot — and on 2026-09-21 that is
+          # exactly what made run 35664409350's four attempts identical: the
+          # probe read slot 1 at 4,4xx remaining each time, the hash answered
+          # slot 1 each time, and each attempt was refused on it within
+          # forty seconds. A re-run is asked for BECAUSE the last attempt
+          # failed, so it should not be handed the same bucket by
+          # construction.
+          #
+          # This is a PROBABILISTIC re-pick, not a rotation, and the
+          # difference matters: `choose` reaches `hash_pick(key, in_band)`
+          # over however many slots are in band, so with four healthy slots a
+          # salted key still re-picks the refused one roughly one attempt in
+          # four. Deliberate — the selector is shared by seven workflows and a
+          # per-attempt rotation is its own card. What GUARANTEES the move is
+          # below: the driver's mid-run fallback, which leaves the refused
+          # slot on the first refusal whatever the hash said.
+          BUREAU_POOL_KEY: harness:${{ github.run_id }}-${{ github.run_attempt }}
           # The repo the probe calls — the sandbox every token above is
           # scoped to, not GITHUB_REPOSITORY (bureau-pipeline, a 404 to them).
           BUREAU_POOL_PROBE_REPO: dreadnought-foundry/bureau-harness
         run: |
-          python3 scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+          # --with-headroom: one extra output line carrying what the probe
+          # read off EVERY slot, so the driver can order the reader's mid-run
+          # fallbacks roomiest-first instead of by slot number (DRE-4575).
+          # Opt-in, so the six other consumers keep the `n`/`reason` shape.
+          python3 scripts/dispatch_pool.py select --with-headroom >> "$GITHUB_OUTPUT"
 
       # Read token: minted from the SELECTED pool app, sandbox-scoped.
       # Explicit per-N map (Actions can't index secrets dynamically); each
@@ -513,8 +533,15 @@ jobs:
           # goes out as this identity; writes and the clone/push credential
           # stay the worker's. Its re-mint credentials are the SAME per-slot
           # map the reader mint used, so a run past the hour re-mints the App
-          # it selected and never drifts back to slot 1. The slot is named in
-          # the run's `github-spend:` line.
+          # it SELECTED rather than the workflow's default pair.
+          #
+          # Not "never drifts back to slot 1", which is what this said before
+          # DRE-4575 and is no longer true: a refusal moves the reader to
+          # another slot and makes THAT slot its re-mint source, and slot 1 is
+          # in the fallback list below — last, and only once every roomier
+          # slot has refused or failed to mint, but reachable. Every slot the
+          # reads ride is named in the run's `github-spend:` lines, one line
+          # each.
           HARNESS_READER_TOKEN: ${{ steps.reader.outputs.token }}
           HARNESS_READER_APP_ID: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -527,6 +554,40 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
           HARNESS_POOL_SLOT: ${{ steps.pool.outputs.n }}
+          # …and what the probe read off each slot, so the driver orders those
+          # fallbacks roomiest-first rather than throwing the readings away
+          # and walking slot numbers (DRE-4575). Numbers only — no app id,
+          # no token.
+          HARNESS_POOL_HEADROOM: ${{ steps.pool.outputs.headroom }}
+          # EVERY slot's pair (DRE-4575), so the reader can MOVE when GitHub
+          # refuses the slot it is on mid-run: the driver orders the other
+          # slots by the headroom above (slot 1, the worker App, always last)
+          # and re-mints from the next on a `RateLimited` answer
+          # (scripts/harness/github_api.py). The probe
+          # above is one call on one of GitHub's counters and proves nothing
+          # about the next call — run 35664409350 was refused on every call
+          # from ~12 s after its first dispatch, four attempts running, each
+          # on the slot the probe had just read as healthy. An absent pair
+          # shrinks the list (DRE-2013 shape).
+          #
+          # BLAST RADIUS, considered and accepted: this step now holds all
+          # four App private keys rather than the selected slot's alone, so a
+          # compromise of the step reaches four installations instead of one.
+          # Accepted because the step runs exactly one command —
+          # `python3 -m harness`, this repo's own code at the reviewed sha —
+          # and because the alternative is the failure this card exists to
+          # end: a reader that cannot move has nowhere to go when its one
+          # slot is refused. The workflow's triggers are push-to-`main` and
+          # `workflow_dispatch` only (DRE-4149 removed `pull_request`), so no
+          # fork and no Dependabot store can reach these secrets.
+          HARNESS_POOL_APP_ID_1: ${{ secrets.BUREAU_APP_ID }}
+          HARNESS_POOL_APP_PRIVATE_KEY_1: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          HARNESS_POOL_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_2: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+          HARNESS_POOL_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_3: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+          HARNESS_POOL_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          HARNESS_POOL_APP_PRIVATE_KEY_4: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           # The commit this run PROVES — the same sha the stamp below binds,
           # resolved from the actual checkout (DRE-3486). The
