@@ -46,7 +46,8 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
 
 
 def payload(card: dict, *, trigger_state: str | None = None,
-            reason: str | None = None) -> dict:
+            reason: str | None = None,
+            sent_by_run: str | int | None = None) -> dict:
     """The `client_payload` `fire` sends for `card`.
 
     Its own function since DRE-3286, because a second caller now needs the
@@ -59,6 +60,17 @@ def payload(card: dict, *, trigger_state: str | None = None,
     sends the payload this function has always sent, key for key. The route
     tests `client_payload.trigger_state == "in progress"`, and an epic reaching
     it with the key absent takes the plan route exactly as it does today.
+
+    `sent_by_run` (DRE-4573) is the id of the planner run that is asking, when
+    the ask comes from inside one. A re-review or review-retry is always sent
+    by a planner run on the same card before that run ends, so the planner's
+    duplicate guard always found the sender still in flight and dropped the
+    review as its duplicate (DRE-4467, 2026-09-21). `plan.yml` hands this key
+    to the guard as `SENT_BY_RUN`, and the guard excuses that one run. It too
+    is added only when given, never as a null.
+
+    GitHub caps `client_payload` at 10 top-level keys. The six base fields
+    plus these three optional ones make at most 9, so the new key fits.
     """
     body = {
         "card_id": card["id"],
@@ -72,11 +84,14 @@ def payload(card: dict, *, trigger_state: str | None = None,
         body["trigger_state"] = trigger_state
     if reason is not None:
         body["reason"] = reason
+    if sent_by_run is not None:
+        body["sent_by_run"] = str(sent_by_run)
     return body
 
 
 def fire(card: dict, repo: str, *, trigger_state: str | None = None,
-         reason: str | None = None) -> tuple[bool, str]:
+         reason: str | None = None,
+         sent_by_run: str | int | None = None) -> tuple[bool, str]:
     """Fire the card's repository_dispatch at `repo`.
 
     Returns `(True, "")` ONLY on a confirmed rc=0 dispatch, else `(False,
@@ -88,11 +103,15 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
     `trigger_state` / `reason` (DRE-3286) are how a caller asks for the
     ACTIVATE route instead of the PLAN one — `review_rerun.py dispatch` is the
     only one that does. Omit them and nothing about this call changes.
+
+    `sent_by_run` (DRE-4573) names the planner run sending this, so the run it
+    starts does not skip itself as that run's duplicate. See `payload`.
     """
     if not repo:
         return False, (f"plan run {card['identifier']}: no REPO to dispatch at "
                        "— the step that runs this must pass one")
-    body = payload(card, trigger_state=trigger_state, reason=reason)
+    body = payload(card, trigger_state=trigger_state, reason=reason,
+                   sent_by_run=sent_by_run)
     event = "agent-plan" if "agent:planner" in body["labels"] else "agent-execute"
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"event_type": event, "client_payload": body}, f)

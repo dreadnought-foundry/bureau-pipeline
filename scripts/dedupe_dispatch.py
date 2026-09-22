@@ -83,9 +83,11 @@ convention):
                       as a human reply); reporting failures never flip the
                       decision.
   plan-gate <DRE-N>   the same, for a planner dispatch, on (c)/(d) above.
-                      Reads the trigger lane from $TRIGGER_STATE.
+                      Reads the trigger lane from $TRIGGER_STATE, and from
+                      $SENT_BY_RUN the planner run that asked for this one,
+                      which is never its duplicate (DRE-4573).
   env: GITHUB_RUN_ID (this run), REPO or GITHUB_REPOSITORY, GH_TOKEN,
-       LINEAR_API_KEY; TRIGGER_STATE for `plan-gate`.
+       LINEAR_API_KEY; TRIGGER_STATE and SENT_BY_RUN for `plan-gate`.
 """
 
 from __future__ import annotations
@@ -331,10 +333,21 @@ def window_may_be_short(runs: list, own_created_at: str) -> bool:
 
 
 def plan_decide(identifier: str, trigger_state: str, current_lane: str,
-                in_flight: list) -> Decision:
+                in_flight: list, sent_by_run: str = "") -> Decision:
     """The planner's skip decision. `in_flight` is what
     `in_flight_when_dispatched` returned for this card; the lane pair is the
-    dispatch's trigger lane against the card's lane as it is NOW."""
+    dispatch's trigger lane against the card's lane as it is NOW.
+
+    `sent_by_run` is the planner run that asked for this one, if one did
+    (DRE-4573). A re-review or review-retry is always sent by a planner run on
+    the same card before that run ends, so it is always in flight here, and
+    counting it dropped every revised plan's round-2 review as a duplicate
+    (DRE-4467, 2026-09-21). That ONE run is dropped before deciding; any other
+    planner run in flight is still a duplicate, and the lane check is
+    unchanged."""
+    if sent_by_run:
+        in_flight = [r for r in in_flight
+                     if str(r.get("id")) != str(sent_by_run)]
     if in_flight:
         names = ", ".join(str(r.get("id")) for r in in_flight)
         return Decision(
@@ -557,7 +570,8 @@ def cmd_plan_gate(identifier: str) -> None:
               file=sys.stderr)
         lane = ""
     decision = plan_decide(
-        identifier, os.environ.get("TRIGGER_STATE", ""), lane, in_flight
+        identifier, os.environ.get("TRIGGER_STATE", ""), lane, in_flight,
+        sent_by_run=os.environ.get("SENT_BY_RUN", ""),
     )
     if decision.skip:
         _receipt(identifier, decision,

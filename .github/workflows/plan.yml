@@ -280,6 +280,12 @@ jobs:
           # — the same value the route step reads as FROM. Through env, never
           # interpolated into the shell line (DRE-1996).
           TRIGGER_STATE: ${{ github.event.client_payload.trigger_state }}
+          # The planner run that asked for this one, when a planner run did
+          # (a re-review or review-retry, sent by `review_rerun.py dispatch`
+          # before its sender ends). The guard excuses that ONE run, which
+          # is always still in flight and is not a duplicate (DRE-4573).
+          # Empty for every other dispatch, which is judged as before.
+          SENT_BY_RUN: ${{ github.event.client_payload.sent_by_run }}
         run: |
           python3 .bureau-pipeline/scripts/dedupe_dispatch.py plan-gate \
             "${{ github.event.client_payload.identifier }}"
