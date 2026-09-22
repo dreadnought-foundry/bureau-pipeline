@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import os
 import sys
 import unittest
@@ -397,6 +398,25 @@ class TheCli(unittest.TestCase):
         self.assertTrue(out.startswith("quiet"), out)
         self.assertIn("45", out)
         linear.cmd_comment.assert_not_called()
+
+    def test_sweep_runs_the_report_over_every_epic_in_flight(self):
+        """The operator's seam. The epic list is `linear_ops`' own reader, so
+        the lanes and the has-children test cannot drift from the critic's."""
+        rows = [
+            {"identifier": EPIC, "title": "e", "state": pc.APPROVAL_LANE},
+            {"identifier": "DRE-4083", "title": "e", "state": "Green Light"},
+        ]
+        posted: list[str] = []
+        linear = mock.MagicMock()
+        linear.cmd_epics_in_flight.side_effect = lambda: print(json.dumps(rows))
+        linear.comment_records.return_value = thread()
+        linear.cmd_comment.side_effect = lambda i, b, *f: posted.append(i)
+        buf = io.StringIO()
+        with mock.patch.object(rw, "linear_ops", linear), redirect_stdout(buf):
+            code = rw.main(["sweep", "--now", LATER])
+        self.assertEqual(code, 0)
+        self.assertEqual(posted, [EPIC])
+        self.assertIn("2 epic(s) in flight, spoke on 1", buf.getvalue())
 
 
 # --- 7. The wiring -----------------------------------------------------------
