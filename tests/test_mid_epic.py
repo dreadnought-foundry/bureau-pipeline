@@ -385,7 +385,12 @@ def _route_call_sites() -> set:
 
 
 WALKED_ROUTE = {
-    ("planning_route", "_one_off_check"),
+    # DRE-4593 moved this call one function out of `_one_off_check` and into
+    # `mechanical_verdict`, which the one-off exit and the batch stamper for an
+    # epic's children now BOTH call — one classifier, two callers, so a card
+    # cannot be routed two ways depending on which door it came through. The
+    # call site moved; the answer it owes did not.
+    ("planning_route", "mechanical_verdict"),
     ("critic_score", "observe"),
     ("critic_score", "judgement_from_body"),
     ("proof_and_demo", "_verdict"),

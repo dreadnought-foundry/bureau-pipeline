@@ -1,0 +1,153 @@
+{
+  "_readme": [
+    "Epic DRE-4467 — the round robin — as its EIGHT children were created by",
+    "the planner on 2026-09-21. The CEO approved the epic at 20:03 PT; the",
+    "sweep then refused all seven build cards with `routing-no-verdict`,",
+    "because nothing wrote their routing verdicts. They moved only after a",
+    "person stamped them by hand on 2026-09-22 (four at 12:11 PT by an",
+    "assistant session, three at 20:47 PT by the CEO running the script).",
+    "DRE-4593 is the fix, and this file is the replay it is proved against.",
+    "",
+    "Read live from Linear on 2026-09-22. Each record is a",
+    "`linear_ops.py children-detail` record, with one narrowing and one",
+    "restoration, both stated so the replay is not mistaken for a full",
+    "card dump:",
+    "",
+    "  * `body` is each card's verbatim `## Acceptance criteria` section —",
+    "    what `routing_verdict.route()` actually reads — and not the whole",
+    "    description, which runs to 31 KB across the eight.",
+    "  * DRE-4475's `hand-built` label is REMOVED. The planner did not",
+    "    write it; `proof_and_demo.py check --stamp` did, as one of the",
+    "    marks the OPERATOR verdict declares. The fixture is the cards as",
+    "    the planner left them, so the replay starts where the bug did.",
+    "",
+    "The expected reading: seven FLEET (every one of them a judgement call —",
+    "their criteria name neither an interactive flow nor a rendered outcome —",
+    "so the one-off route's answer applies, and the reason names the criteria",
+    "it read), and DRE-4475, the PROOF card, untouched by this step and left",
+    "to `proof_and_demo.py`, which routes it OPERATOR off its `agent:ops`",
+    "and `no-code` labels."
+  ],
+  "epic": "DRE-4467",
+  "approved_at": "2026-09-21 20:03 PT",
+  "read_on": "2026-09-22",
+  "children": [
+    {
+      "identifier": "DRE-4468",
+      "title": "One instance writes the fleet's Claude secrets per tick — a leader lease on the two credential-writing monitors",
+      "body": "## Acceptance criteria\n\n- [ ] Two `Store` objects over one SQLite file (the `two_consoles` fixture shape from `test_record_retention.py`), each driving BOTH stubs with a fake secrets client and a plan that has one move: exactly one instance's write lands, the other writes nothing, touches no alert and no setting.\n- [ ] The leader keeps leading across consecutive ticks (renewal), and after `TTL_SECONDS` with no renewal the other instance takes over and writes.\n- [ ] The lease is taken by the auto-switch stub and still held by the same holder when the pool stub runs in the same tick — a follower cannot acquire between the two.\n- [ ] A follower tick logs the holder's name once and calls neither `run_auto_switch` nor `run_failover`.\n- [ ] Existing suites `test_claude_auto_switch.py`, `test_claude_pool_failover.py`, `test_runner_pool_monitor.py` pass unchanged (they drive the executors directly, not the stubs).\n- [ ] `record_lease.py`'s docstring, or the new module's, records that this is its second user, so the next reader knows the table is shared.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": []
+    },
+    {
+      "identifier": "DRE-4469",
+      "title": "The pure level-up planner and its replay harness — readings in, moves out, soonest reset first then level, fails closed",
+      "body": "## Acceptance criteria\n\n- [ ] Water-filling on the fixture 25/50/75 (equal resets, six repos): each of the six repos moves to the 25 account one per tick until it is within the band, then the split begins; replay reports spread inside `band + hysteresis` for ≥ 90 % of ticks.\n- [ ] An account at 70 % resetting in 2 h beats one at 30 % resetting in 6 days (tier 1), and once the 70 % account reaches the soft line on either window while the 30 % account is under it, it is no longer targeted.\n- [ ] **Soft line:** on a fixture of four accounts reading 94, 96, 97 and 30 on the week (fresh readings, credentials held), `open` holds exactly the accounts at 30 and 94, `overflow` is False, and no move targets 96 or 97; with the accounts at 30 and 94 removed, `open` is empty, `overflow` is True and levelling continues between 96 and 97.\n- [ ] **Hard line:** on the fixture 96/97/98.5/99, `eligible` is exactly 96 and 97; a repo serving on the 99 account, inside its dwell, is moved to a member of `L` on the first tick ahead of any levelling move, with `why` beginning `hard line`; on 98/98.5/99/99, `T` is empty, nothing moves and `stood_down` says every pool account is at the hard line. No target is ever at or above the hard line on either window, asserted over every replay tick.\n- [ ] A missing `as_of`, an `error`, a reading older than `target_max_age_s`, or a passed reset makes an account UNKNOWN and never a target; an empty `T` yields no moves and a `stood_down` sentence. One test feeds the planner exactly the six keys `claude_pool.usage_snapshots` returns on `main` today (no `as_of`) and asserts every account UNKNOWN and `stood_down` naming the undated readings — the test that keeps the tier from ever planning on readings nobody dated.\n- [ ] Dwell, `frozen`, one move per tick, and the `serving_max_age_s` bound — four bounds, four tests, and each one goes red when its rule is removed; the replay fixture shows no repo moved more than twice in any 6 h.\n- [ ] `levelup_mode` returns `off` for unset, garbage, and an unreadable store; `levelup_config` returns both default lines for `{\"soft\": 0.97, \"hard\": 0.96}`, `{\"soft\": 0.95, \"hard\": 1.0}`, `{\"soft\": 0.95}` and a non-JSON value, and reads `{\"soft\": 0.90, \"hard\": 0.97}` back as given; the defaults above are asserted by value, `soft_line == 0.95` and `hard_line == 0.98`, and the module neither imports nor mentions `NEAR_CAP_THRESHOLD`.\n- [ ] `python3 -m console.backend.claude_levelup_replay <file>` runs on the fixture and prints valid JSON with the five summary numbers.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": []
+    },
+    {
+      "identifier": "DRE-4470",
+      "title": "The level-up decision record — one table and one change-only writer that shadow mode and the proof read",
+      "body": "## Acceptance criteria\n\n- [ ] `store.Store` on a fresh SQLite file has the table (via the DDL glob) and `alembic upgrade head` on SQLite produces a structurally identical table; `test_alembic_baseline` stays green with exactly one head.\n- [ ] Two identical consecutive decisions write one row; a change in `desired`, `moves` or `stood_down` writes a second; `applied` is stored as given.\n- [ ] `decisions(since=…)` returns only rows at or after `since`, newest first, with JSON columns decoded; `last_decision` on an empty table is None.\n- [ ] With the table dropped, `record_decision` returns False and logs once; nothing raises.\n- [ ] The migration's docstring carries the lock profile and dialect notes in the shape of `0049`/`0050`, and `downgrade` drops the table.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": []
+    },
+    {
+      "identifier": "DRE-4471",
+      "title": "The pool learns the level-up vocabulary — a levelup reason, a pool-levelup trigger, no failover WARN for a balance, and operator pins that release after a set time",
+      "body": "## Acceptance criteria\n\n- [ ] `record_switch(trigger=\"pool-levelup\")` is accepted and its line reads `Moved <repos> A → B (pool-levelup): …`; every existing switch-log test passes.\n- [ ] `carried_repos_for` on an account homing three repos recorded away — one with reason `levelup`, one with reason `failover`, one with a blank reason (a pre-DRE-2662 record: assignment set, reason setting absent) — returns the `failover` and blank ones only; `absorbed_repos_for` on the same store returns all three, byte-for-byte today's answer; `_pool_absorbed` reads an account whose only placement is `levelup` and whose token no repo holds as absorbed (True).\n- [ ] **The mixed case, on one store, through** `_reconcile_alerts` (or `run_failover` with a fake transport): account A homes `x` and `y`; `x` is recorded away with reason `levelup`; A caps and `y` fails over. The `claude_pool_failover:A` row is WARN, its body names `y` and its target, and does not name `x`. Next tick A is healthy and `y` recovers home: the row is resolved while `x` is still away with reason `levelup`. A second fixture — A homes only `x`, recorded away with reason `levelup`, and A reads capped — raises no `claude_pool_failover:A` row at all across two ticks.\n- [ ] A failed secret write on a move with reason `levelup` (fake transport errors on that repo) lands on `result.failed` and raises the CRITICAL `claude_pool_failover:<origin>` row naming the stuck repo, exactly as a failed `failover` write does.\n- [ ] Every alert test already in `test_claude_pool_failover.py` passes unchanged: no fixture there records `levelup`, so `carried_repos_for` equals `absorbed_repos_for` on all of them, and that equality is asserted once over the existing failover fixture.\n- [ ] With `mode=\"live\"`: a `levelup` placement on a healthy eligible account plans no move; a `failover` placement with a healthy home plans no recovery; an operator pin older than the window is movable and one inside it is frozen. With `mode=\"off\"` and `mode=\"shadow\"` the plan equals today's for the same fixtures (parametrised over the existing `test_claude_pool_failover.py` scenarios), and the whole existing suite passes unchanged.\n- [ ] `pin_released` is False for a pin with no fan-out stamp, False inside the window, True past it; the boundary is tested to the minute.\n- [ ] A capped account still fails over in live mode with no dwell, ahead of everything else.\n- [ ] Calling `plan_failover` without `mode` — the way DRE-4476's picker query calls it — returns the same plan as before this card for every existing fixture.\n- [ ] `usage_snapshots([AccountUsageData(account=\"x\", five_hour_utilization=0.5, as_of=\"2026-09-22T00:00:00Z\")])` returns a row whose `as_of` is that string, and a row built with `as_of=None` returns `as_of` as `None`, not a timestamp; `health.classify` returns the same verdict for a snapshot with and without the key, asserted over the four verdicts.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": [
+        "DRE-4469",
+        "DRE-4476"
+      ]
+    },
+    {
+      "identifier": "DRE-4472",
+      "title": "The whole-fleet auto-switch stands down while level-up is live, instead of re-pinning every repo to one account",
+      "body": "## Acceptance criteria\n\n- [ ] With the mode `off` or `shadow`, every existing scenario in `test_claude_auto_switch.py` behaves identically and the suite passes unchanged — including DRE-3617's replayed-ordering stand-down test.\n- [ ] With the mode `live` and exhaustion evidence present, `run_auto_switch` performs no switch, writes no secret, arms no cooldown, raises and resolves no alert, and returns a `stood_down` sentence naming level-up.\n- [ ] Exactly one `stood-down` switch-log line is written over ten consecutive live ticks; switching the mode back to `off` then `live` writes a second.\n- [ ] `decide()` returns None in live mode even when a target exists.\n- [ ] `_failover_order(store)` returns the same list before and after this card for the same store, asserted directly.\n- [ ] The docstring names the receipts-path trade and the reader's remedy in one paragraph.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": [
+        "DRE-4469",
+        "DRE-4476"
+      ]
+    },
+    {
+      "identifier": "DRE-4473",
+      "title": "The operator's handles on level-up — mode, stop lines, pin release and the shadow decisions, as operator-gated GraphQL beside pool membership",
+      "body": "## Acceptance criteria\n\n- [ ] A non-operator caller is refused on all four fields (fail closed), the way `set_claude_pool_membership` is.\n- [ ] `setClaudeLevelupMode(\"live\")` then `claudeLevelup.mode` reads `live`; `\"LIVE\"`, `\"on\"` and `\"\"` are refused with the three valid names in the message and write nothing.\n- [ ] With nothing stored, `claudeLevelup` reads `softLine` 0.95 and `hardLine` 0.98 — the sibling's defaults, not a literal in this file.\n- [ ] `setClaudeLevelupLines(softLine: 0.90, hardLine: 0.97)` persists values the sibling's `levelup_config` then reads back as 0.90 / 0.97; five bad inputs — `softLine: 1.5`, `softLine: 0`, `hardLine: 1.0`, the pair `softLine: 0.96, hardLine: 0.95`, and `pinReleaseMinutes: 0` — are refused with a sentence naming the rule and write nothing.\n- [ ] `claudeLevelupDecisions(since:)` returns the rows the sibling's writer stored, newest first, JSON fields decoded, and an empty list on an empty table.\n- [ ] None of the four fields makes a usage probe: a counting fake on the probe asserts zero calls across all four (the DRE-3865 rule).\n- [ ] `console/web/schema.graphql` and `console/web/src/generated/graphql.ts` are regenerated and committed in the same PR; `test_schema_graphql_is_fresh.py` is green; `npm run typecheck` in `console/web` is green; `console/web/src/graphql/operations.graphql` is byte-identical to `main` (no operation reads the new fields yet, so the generated change is types only); `ruff` is clean.\n- [ ] The branch is cut from a `main` that already holds DRE-4429's and DRE-4430's merges: the PR body names both merge commit shas and `git merge-base --is-ancestor <sha> HEAD` exits 0 for each, and `TrainDeferral`, `DeployLagProject` and the `deploy_lag` resolver in `schema.py` are byte-identical to that `main`.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer"
+      ],
+      "blocked_by": [
+        "DRE-4469",
+        "DRE-4470",
+        "DRE-4419",
+        "DRE-4476",
+        "DRE-4429",
+        "DRE-4430"
+      ]
+    },
+    {
+      "identifier": "DRE-4474",
+      "title": "The level-up tier is wired into run_failover under the hard tier — off is today, shadow records and writes no secret, live moves one repo per tick",
+      "body": "## Acceptance criteria\n\n- [ ] With the mode unset or `off`, `run_failover` on every fixture in `test_claude_pool_failover.py` produces the same moves, alerts, switch-log lines and settings as before, `record_decision` is never called, and the existing suite passes unchanged.\n- [ ] **The readings are real-shaped.** Every fixture in this card's tier tests builds its `snapshots` by calling `claude_pool.usage_snapshots` over `cost_usage.AccountUsageData` rows dated with `as_of` — never a hand-written dict — so the test exercises the reshape the live tick uses. One test builds the same rows with `as_of=None` and asserts the shadow decision records every account UNKNOWN, no move, and a `stood_down` naming the undated readings; that is the test that would have caught a planner fed readings it could not date.\n- [ ] With `shadow` and readings 25/50/75 dated within the last minute, the tick writes no secret (a counting fake transport asserts zero writes), writes one `claude_levelup_decision` row with `applied=0` naming the move it would make, and a second identical tick writes no second row.\n- [ ] With `live`, the same tick writes exactly one repo's secret to the 25 account, records the assignment with reason `levelup`, writes a `pool-levelup` switch-log line, stamps `claude_levelup_moved_at:<slug>`, records the decision with `applied=1`, and raises no failover WARN.\n- [ ] With `live` and a capped serving account, the hard tier's failover move lands first and that repo is not also planned by the tier in the same tick; a proof refusal or failed write on a level-up target leaves the old assignment and no dwell stamp.\n- [ ] Identity unknown or foreign repos: level-up stands down (recorded in the decision's `stood_down` in shadow) and nothing moves in live; the hard tier still runs.\n- [ ] A shadow tick with the decision table missing completes the hard tier normally.\n- [ ] With `live` and a target whose proof answers 429, the level-up move is refused by the existing writer path (`refused`, verdict recorded), no secret is written, and no new refusal code exists in this card.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:engineer",
+        "turns:250"
+      ],
+      "blocked_by": [
+        "DRE-4468",
+        "DRE-4469",
+        "DRE-4470",
+        "DRE-4471",
+        "DRE-4476"
+      ]
+    },
+    {
+      "identifier": "DRE-4475",
+      "title": "PROOF: the replay over real readings water-fills, then level-up goes live on production and its first real moves are observed",
+      "body": "The CEO reads this record and closes this card; there is no demo sitting.\n\n## Acceptance criteria\n\n- [ ] The replay summary over ≥ 48 h of REAL readings and over the synthetic fixture are both in the record, with the export command and the recording's time span quoted.\n- [ ] The mode was set to `live` only after the replay passed, and the time it was set is recorded.\n- [ ] The first 24 hours of live `pool-levelup` moves are summarised: count, moves per day, zero targets at or above the 98% hard line, zero targets past 95% while an account under it existed, no repo moved more than twice in six hours, and secret-matches-pool after every move.\n- [ ] The record shows the `record_lease` holder twice (one holder), and how to turn level-up off.\n- [ ] The CEO closes this card after reading the record on `main`.",
+      "labels": [
+        "repo:agent-bureau",
+        "initiative:bureau",
+        "agent:ops",
+        "no-code"
+      ],
+      "blocked_by": [
+        "DRE-4468",
+        "DRE-4469",
+        "DRE-4470",
+        "DRE-4471",
+        "DRE-4472",
+        "DRE-4473",
+        "DRE-4474"
+      ]
+    }
+  ]
+}
