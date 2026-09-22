@@ -508,11 +508,12 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
-## The two runner lanes: short jobs and long jobs (DRE-3887, DRE-4276)
+## The two runner lanes: short jobs and long jobs (DRE-3887, DRE-4276, DRE-4606)
 
 Every job in a reusable reads the CALLER's repository variable
 `BUREAU_RUNS_ON` and runs on `ubuntu-latest` when it is unset (DRE-3350). The
-bookkeeping jobs read `BUREAU_SHORT_RUNS_ON` **in front of** that same chain,
+jobs that need nothing a long-job runner has read `BUREAU_SHORT_RUNS_ON`
+**in front of** that same chain,
 so a repo whose long-job runners are busy can route its bookkeeping elsewhere
 by setting one more variable — and with it unset every job renders exactly
 what it rendered before. The expression is one exact string,
@@ -521,7 +522,7 @@ what it rendered before. The expression is one exact string,
 
 | lane | variable | what rides it | how long a job takes |
 |---|---|---|---|
-| short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; and medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276) | seconds to a couple of minutes, and no model call at all — see the rule below for the observed numbers |
+| short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276); and release-train's `wait` and `plan` (DRE-4606) | seconds to a couple of minutes, and no model call at all — except release-train's `wait`, which is a SLEEP of up to seventy minutes and is on this lane for that very reason; see the rule below |
 | long | `BUREAU_RUNS_ON` | the default: **every reusable job the short row does not name.** Not enumerated here on purpose — a list would be wrong the day the next reusable lands; `test_reusable_jobs_read_the_callers_runner_variable` is the live enumeration and it fails on any job that reads neither variable | the Claude jobs run minutes to an hour; the rest are scripts, and they sit on this lane because nothing has moved them, not because they are slow |
 
 **Why.** On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued for
@@ -531,7 +532,13 @@ lane over: the mini's six runners were all busy, 38 jobs were queued, the
 oldest reviews had waited about 100 minutes, and fifteen of the queued jobs
 were agent-bureau `Pipeline Medic` runs plus three `Reconcile` sweeps — each a
 short script that reads and writes GitHub and Linear — taking a turn ahead of
-every review (DRE-4276).
+every review (DRE-4276). On 2026-09-22 between 13:00 and 13:17 PT it was the
+release train's turn (DRE-4606): Portico's `plan` job, which takes **16
+seconds**, waited **26 minutes** for a `bureau-light` slot while all three
+heavy runners sat idle and ineligible, and over 2026-09-18 22:00 PT →
+2026-09-22 13:00 PT that job's queue wait was **p90 44 minutes, max 81 minutes
+across 109 jobs**. Portico was 17 commits behind its last portal release: a
+train that cannot start is a train that does not ship.
 
 **The rule to keep.** A job belongs on the short lane only if it makes **no
 Claude call, runs no product test suite and runs no build**. That criterion is
@@ -542,24 +549,33 @@ them over a minute; the short-lane jobs carry `timeout-minutes` of five (medic's
 eight, merge-gate's `resolve`, linear-sync's `card-done`) or ten (reconcile's
 `sweep`, merge-gate's `evaluate`, linear-sync's `conflict-sweep`). What makes
 them safe to move is that none of them needs anything the long-lane runners
-have. That is why medic's `diagnose` stays on the long lane — it is the one medic job that
-spends a Claude run, up to twenty minutes and sixty turns of it — and why the
+have. Release-train's `wait` is the proof that the clock is not the criterion:
+it can sleep for seventy minutes, and it rides the short lane precisely
+BECAUSE holding a heavy-runner slot for an hour to do nothing is the worst use
+of one in the fleet. That is why medic's `diagnose` stays on the long lane — it is the one medic job that
+spends a Claude run, up to twenty minutes and sixty turns of it — why
+release-train's `release` stays there too, the job that assumes the caller's
+release role and cuts the release, and why the
 lane is pinned **by job name** in `tests/test_short_runs_on_lane.py`: a job
-added to one of these four files without a runner decision fails the build
-rather than inheriting one, and widening the lane to a fifth file is a card,
+added to one of these five files without a runner decision fails the build
+rather than inheriting one, and widening the lane to a sixth file is a card,
 not a tidy-up.
 
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.
 agent-bureau and portico already carry `BUREAU_SHORT_RUNS_ON`, so their sweeps
-move the moment this reaches `stable`; bureau-pipeline's own workflows run
+— and, since DRE-4606, their trains' `wait` and `plan` — move the moment this
+reaches `stable`; bureau-pipeline's own workflows run
 hosted already. **That move costs money**: a sweep on the mini bills nothing
 per minute and the same sweep on `ubuntu-latest` bills GitHub-hosted minutes,
 on the meter DRE-3350 was created to shut off. `reconcile` is the
 highest-frequency job in the fleet, so it is the bulk of that spend — the trade
 is reviews waiting behind chores versus a small hosted bill, it is opt-in per
-repo, and deleting the variable puts the sweeps straight back.
+repo, and deleting the variable puts the sweeps straight back. The train adds
+a second shape of that bill: a re-armed `wait` can burn up to seventy hosted
+minutes sleeping, where on the mini it burned nothing but a slot everything
+else wanted.
 
 ## A dependabot pull request gets a card of its own (DRE-3665)
 
