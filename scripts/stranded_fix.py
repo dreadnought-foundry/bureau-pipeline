@@ -490,6 +490,45 @@ def fix_workflow(repo: str) -> str:
     return "self-agent-fix.yml" if repo == SELF_HOST_REPO else "agent-fix.yml"
 
 
+#: Where a consumer repo's pipeline stubs live. The contents API answers for
+#: the DEFAULT BRANCH when no ref is given — the same branch `gh run list
+#: --workflow` resolves a workflow name against, which is the question below.
+WORKFLOWS_DIR = ".github/workflows"
+
+
+def workflow_on_default_branch(repo: str, workflow: str) -> bool | None:
+    """Is `workflow` a file in `.github/workflows` on `repo`'s default branch?
+
+    True / False / **None when it cannot be proved either way** — the
+    DRE-2525 distinction, copied from `reconcile.workflow_on_default_branch`
+    for the reason it exists there: `gh run list --workflow X` 404s both when
+    the workflow file is not on the default branch AND when the token may not
+    read that ref, and the two must not be conflated. Absence is drawn
+    POSITIVELY, off the contents API — the file is listed or it is not —
+    never by reading gh's error text.
+
+    Absence is proved only by a listing that was read, parsed, and does not
+    contain the file. An unreadable, empty, unparseable or non-list answer
+    proves NOTHING and returns None, so the caller records the failure and
+    fails closed exactly as before: git cannot store an empty directory, so
+    `[]` from a real repo is a failure wearing a success's clothes.
+
+    Asked only when the run listing has already failed, so a repo with a
+    stub — every product repo, and bureau-pipeline through its
+    self-agent-fix.yml — pays nothing for it.
+    """
+    out, _ = _gh(["api", f"repos/{repo}/contents/{WORKFLOWS_DIR}"])
+    if out is None:
+        return None
+    try:
+        entries = json.loads(out) if out else None
+    except ValueError:
+        entries = None
+    if not isinstance(entries, list) or not entries:
+        return None
+    return workflow in {e.get("name") for e in entries if isinstance(e, dict)}
+
+
 def gather_lane(repo: str, workflow: str) -> dict:
     """The lane record merge-gate.yml hands `--fix-lane-file`.
 
@@ -497,12 +536,32 @@ def gather_lane(repo: str, workflow: str) -> dict:
     which is the ordinary case, costs exactly one call. `readable: false` is
     a first-class answer: the gate fails closed on it, which is cheaper by
     far than the alternative this card exists to end.
+
+    A workflow ABSENT from the repo is a third answer, not a failure
+    (DRE-4583, the DRE-2525 class at this seam): no run of a file that does
+    not exist can be in flight, so the lane is idle and the gate proceeds.
+    bureau-harness carries no fix stub by design; from DRE-4486 until this
+    card its listing 404'd, the record said unreadable, and the gate waited
+    on every approved pull request forever — gate runs 35693033395 and
+    35693426673 answered `decision=wait` on the 404, the Integration Harness
+    waited on the merge they never made, and three runs on main hung 57–80
+    minutes each while `stable` stopped moving. A FAILED listing is
+    adjudicated before it is recorded: provably absent → idle; everything
+    else — a revoked permission, an unreadable ref, an absence the contents
+    API could not confirm — is still UNREADABLE, recorded, and waited on.
     """
     out, detail = _gh([
         "run", "list", "--repo", repo, "--workflow", workflow,
         "--limit", "20", "--json", "status,databaseId",
     ])
     if out is None:
+        if workflow_on_default_branch(repo, workflow) is False:
+            absent = (
+                f"{workflow} is not on {repo}'s default branch — this repo "
+                "has no such stub, so no run of it can be in flight (DRE-4583)"
+            )
+            print(f"stranded_fix: {absent}", file=sys.stderr)
+            return {"readable": True, "runs": [], "detail": absent}
         return {"readable": False,
                 "detail": f"listing {workflow} runs failed: {detail}"}
     try:

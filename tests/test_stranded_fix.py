@@ -638,3 +638,117 @@ class TheFourOccurrencesAreNamed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------- #
+# DRE-4583: a fix stub absent BY DESIGN is an idle lane, never an unreadable   #
+# one. Live, 2026-09-21/22: bureau-harness carries no agent-fix.yml, so the    #
+# gate's listing 404s, `gather_lane` recorded `readable: false`, and every     #
+# approved probe PR waited forever (gate runs 35693033395 / 35693426673:       #
+# `decision=wait reason=the Agent Fix run listing could not be read (listing   #
+# agent-fix.yml runs failed: HTTP 404: workflow agent-fix.yml not found on the #
+# default branch …)`). The Integration Harness waits on exactly that merge, so #
+# three runs on main hung 57–80 minutes each and `stable` stopped moving.      #
+#                                                                              #
+# The distinction is the DRE-2525 one reconcile._fix_runs_in_flight draws:     #
+# absence is PROVED off the contents API — the file is listed or it is not —   #
+# never inferred from gh's error text, and anything unprovable stays           #
+# unreadable, fail-closed.                                                     #
+# --------------------------------------------------------------------------- #
+
+SANDBOX = "dreadnought-foundry/bureau-harness"
+NOT_FOUND = (
+    "HTTP 404: workflow agent-fix.yml not found on the default branch "
+    f"(https://api.github.com/repos/{SANDBOX}/actions/workflows/agent-fix.yml)"
+)
+FORBIDDEN = "HTTP 403: Resource not accessible by integration"
+WITH_STUB = ["agent-task.yml", "agent-fix.yml", "qa-review.yml", "merge-gate.yml"]
+WITHOUT_STUB = ["agent-task.yml", "qa-review.yml", "merge-gate.yml", "reconcile.yml"]
+
+
+def _sandbox_gh(listing=(None, NOT_FOUND), contents=None, calls=None):
+    """A `stranded_fix._gh` that answers the run listing from `listing` and
+    the contents read from `contents` — `(stdout, None)` or `(None, detail)`
+    — and records every argv so a test can say what was asked."""
+    if calls is None:
+        calls = []
+
+    def fake(args):
+        calls.append(list(args))
+        joined = " ".join(args)
+        if args[:2] == ["run", "list"]:
+            return listing
+        if "/contents/" in joined:
+            if contents is None:
+                return json.dumps([{"name": n, "type": "file"} for n in WITHOUT_STUB]), None
+            return contents
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    return fake, calls
+
+
+class AnAbsentStubIsAnIdleLane(unittest.TestCase):
+
+    def _gather(self, **kw):
+        fake, calls = _sandbox_gh(**kw)
+        with mock.patch.object(sf, "_gh", side_effect=fake):
+            return sf.gather_lane(SANDBOX, "agent-fix.yml"), calls
+
+    def test_a_stub_provably_absent_from_the_default_branch_is_an_idle_lane(self):
+        record, _ = self._gather()
+        self.assertTrue(record["readable"], record)
+        self.assertEqual(record["runs"], [])
+        self.assertIn("agent-fix.yml", record.get("detail", ""))
+        lane = sf.read_lane(record)
+        self.assertTrue(lane.readable)
+        self.assertIsNone(sf.lane_refusal(lane, 2382))
+        decision = merge_gate.decide(
+            head_sha=HEAD, qa_login=QA, check_runs=green_checks(),
+            comments=[approve()], fix_lane=lane, pr_number=2382,
+        )
+        self.assertEqual(decision.action, "merge")
+
+    def test_absence_is_proved_off_the_contents_api_never_the_error_text(self):
+        # The SAME 404 wording, but the file IS on the default branch: that
+        # is a read the token could not make, not a repo with no stub.
+        record, _ = self._gather(
+            contents=(json.dumps([{"name": n} for n in WITH_STUB]), None))
+        self.assertFalse(record["readable"], record)
+        self.assertIsNotNone(sf.lane_refusal(sf.read_lane(record), 2382))
+
+    def test_a_permission_refusal_with_the_stub_present_still_waits(self):
+        record, _ = self._gather(
+            listing=(None, FORBIDDEN),
+            contents=(json.dumps([{"name": n} for n in WITH_STUB]), None))
+        self.assertFalse(record["readable"])
+
+    def test_an_unprovable_absence_stays_unreadable(self):
+        for contents in ((None, FORBIDDEN), ("", None), ("[]", None),
+                         ("not json", None), ('{"message": "Not Found"}', None)):
+            with self.subTest(contents=contents):
+                record, _ = self._gather(contents=contents)
+                self.assertFalse(record["readable"], record)
+                self.assertIn("agent-fix.yml", record["detail"])
+
+    def test_the_probe_reads_the_workflows_directory_once_and_only_on_failure(self):
+        # A healthy listing never pays for the probe: one call, as today.
+        _, calls = self._gather(listing=("[]", None))
+        self.assertEqual([c[:2] for c in calls], [["run", "list"]])
+        # A failed one pays exactly one contents read, on the default branch
+        # (no ?ref=), and never touches the Actions API to prove absence.
+        _, calls = self._gather()
+        probes = [c for c in calls if any("/contents/" in a for a in c)]
+        self.assertEqual(len(probes), 1, calls)
+        endpoint = " ".join(probes[0])
+        self.assertIn(f"repos/{SANDBOX}/contents/.github/workflows", endpoint)
+        self.assertNotIn("?ref=", endpoint)
+        self.assertNotIn("/actions/", endpoint)
+
+    def test_every_fleet_repo_with_a_stub_is_untouched(self):
+        # The self-host repo's stub is self-agent-fix.yml (fix_workflow); a
+        # listing that succeeds there is read exactly as before this card.
+        fake, calls = _sandbox_gh(listing=(json.dumps([]), None))
+        with mock.patch.object(sf, "_gh", side_effect=fake):
+            record = sf.gather_lane(sf.SELF_HOST_REPO, sf.fix_workflow(sf.SELF_HOST_REPO))
+        self.assertEqual(record, {"readable": True, "runs": []})
+        self.assertEqual(len(calls), 1)
