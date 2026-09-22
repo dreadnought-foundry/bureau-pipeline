@@ -390,6 +390,11 @@ STDOUT_WRITERS = {
     # Filesystem paths and a count, written by a module that prints its one
     # human line (`cleared a stale handoff`) to stderr already.
     "fix_handoff.py": "safe",
+    # Flags, a ref, a path and a URL already cut to its last line; the one
+    # value that quotes GitHub's own words (`error`) is collapsed by
+    # `one_line` for exactly this reason (DRE-3262), and every human line
+    # goes through `_log`, which writes to stderr.
+    "push_rescue.py": "safe",
 }
 
 #: The two above that render through the safe writer. Named, because "it
@@ -397,18 +402,33 @@ STDOUT_WRITERS = {
 GUARDED = {name for name, why in STDOUT_WRITERS.items() if why == "guarded"}
 
 
+#: Shell separators that end one command and start another. The redirect
+#: belongs to the command it sits in, so a `… --github-output "$GITHUB_OUTPUT"
+#: || echo "changed=true" >> "$GITHUB_OUTPUT"` step is the FALLBACK writing to
+#: the file, not the script's stdout (plan.yml's `review_rerun.py card-set`).
+_SEPARATORS = re.compile(r"\|\||&&|;|\|")
+
+REDIRECT = '>> "$GITHUB_OUTPUT"'
+
+
+def writers_in(text: str) -> set:
+    """The scripts in `text` whose own stdout lands in the output file."""
+    found = set()
+    for line in re.sub(r"\\\n\s*", " ", text).splitlines():
+        if REDIRECT not in line:
+            continue
+        command = _SEPARATORS.split(line[:line.index(REDIRECT)])[-1]
+        found.update(re.findall(r"scripts/([a-z_0-9]+\.py)", command))
+    return found
+
+
 def discovered_stdout_writers() -> set:
-    """Scripts a workflow step runs with `>> "$GITHUB_OUTPUT"` on the end."""
+    """Read off the workflows, never off a list somebody keeps."""
     found = set()
     for entry in sorted(os.listdir(WF_DIR)):
-        if not entry.endswith(".yml"):
-            continue
-        text = open(os.path.join(WF_DIR, entry), encoding="utf-8").read()
-        joined = re.sub(r"\\\n\s*", " ", text)
-        for line in joined.splitlines():
-            if ">> \"$GITHUB_OUTPUT\"" not in line:
-                continue
-            found.update(re.findall(r"scripts/([a-z_0-9]+\.py)", line))
+        if entry.endswith(".yml"):
+            found |= writers_in(
+                open(os.path.join(WF_DIR, entry), encoding="utf-8").read())
     return found
 
 
@@ -417,6 +437,25 @@ class StdoutWriterPopulationTest(unittest.TestCase):
 
     def test_every_stdout_writer_is_accounted_for(self):
         self.assertEqual(discovered_stdout_writers(), set(STDOUT_WRITERS))
+
+    def test_the_discovery_finds_a_redirected_script(self):
+        # The yardstick, so "found nothing" can never read as "all clear".
+        self.assertEqual(
+            writers_in('          python3 .bureau-pipeline/scripts/x_y.py go \\\n'
+                       '            --flag "$F" >> "$GITHUB_OUTPUT"\n'),
+            {"x_y.py"},
+        )
+
+    def test_the_discovery_ignores_a_fallback_redirect(self):
+        # The redirect belongs to the command it sits in. plan.yml's
+        # `review_rerun.py card-set` writes through --github-output and its
+        # `|| echo` fallback writes the file; the script's stdout does not.
+        self.assertEqual(
+            writers_in('python3 scripts/review_rerun.py card-set \\\n'
+                       '  --github-output "$GITHUB_OUTPUT" \\\n'
+                       '  || echo "changed=true" >> "$GITHUB_OUTPUT"\n'),
+            set(),
+        )
 
     def test_the_guarded_writers_own_their_stdout(self):
         for name in sorted(GUARDED):

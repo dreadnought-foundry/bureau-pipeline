@@ -45,9 +45,11 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
                    harness", i.e. the behaviour before DRE-3076's receipt
                    was read here.
 
-Prints go=, branch=, attempt=, escalate=, reason= lines; exit 0 on every
-decision (including the fail-closed ones). Anything genuinely unexpected
-raises and fails the job loudly — the medic sees it (never fail open).
+Emits go=, branch=, attempt=, escalate=, reason= through `github_output`, so a
+value that grows a second line rides a heredoc delimiter instead of killing
+the step (DRE-4202); exit 0 on every decision (including the fail-closed
+ones). Anything genuinely unexpected raises and fails the job loudly — the
+medic sees it (never fail open).
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ import json
 import re
 import sys
 
+import github_output
 import medic_classify
 import promote_channel
 
@@ -259,6 +262,23 @@ def _load_records(refs_file: str, pulls_file: str):
     return refs, pulls
 
 
+def outputs(decision: dict) -> str:
+    """The block the workflow appends to `$GITHUB_OUTPUT` for `decision`.
+
+    Every key goes through the safe writer, not only `reason`: `branch` and
+    `attempt` were single-line on the run that died by accident rather than by
+    construction, and the next key added here inherits the safety instead of
+    owing a review of whether its value can wrap (DRE-4202).
+    """
+    return github_output.render([
+        ("go", "true" if decision["go"] else "false"),
+        ("branch", decision["branch"]),
+        ("attempt", decision["attempt"]),
+        ("escalate", "true" if decision["escalate"] else "false"),
+        ("reason", decision["reason"]),
+    ])
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -276,34 +296,34 @@ def main(argv: list[str]) -> int:
     d.add_argument("--workflow-name", default="")
     args = parser.parse_args(argv)
 
-    records = _load_records(args.refs_file, args.pulls_file)
-    if records is None:
-        decision = {"go": False, "branch": "", "attempt": 0,
-                    "escalate": False, "reason": "records-unreadable"}
-        print("repair decide: attempt records unreadable — fail-closed, no "
-              "dispatch (the next failure event retries with fresh records)",
-              file=sys.stderr)
-    else:
-        refs, pulls = records
-        decision = decide(
-            conclusion=args.conclusion,
-            head_branch=args.head_branch,
-            default_branch=args.default_branch,
-            head_sha=args.head_sha,
-            log_text=_read_text(args.log_file),
-            refs=refs,
-            pulls=pulls,
-            workflow_name=args.workflow_name,
-        )
-        print(f"repair decide: {decision['reason']}"
-              + (f" → {decision['branch']}" if decision["go"] else ""),
-              file=sys.stderr)
+    # Stdout is the output FILE for this step, so the decision is made with
+    # that channel shut: anything this module or anything it imports prints
+    # would otherwise be a line the runner has to read as an output (DRE-4202).
+    with github_output.only_outputs():
+        records = _load_records(args.refs_file, args.pulls_file)
+        if records is None:
+            decision = {"go": False, "branch": "", "attempt": 0,
+                        "escalate": False, "reason": "records-unreadable"}
+            print("repair decide: attempt records unreadable — fail-closed, no "
+                  "dispatch (the next failure event retries with fresh records)",
+                  file=sys.stderr)
+        else:
+            refs, pulls = records
+            decision = decide(
+                conclusion=args.conclusion,
+                head_branch=args.head_branch,
+                default_branch=args.default_branch,
+                head_sha=args.head_sha,
+                log_text=_read_text(args.log_file),
+                refs=refs,
+                pulls=pulls,
+                workflow_name=args.workflow_name,
+            )
+            print(f"repair decide: {decision['reason']}"
+                  + (f" → {decision['branch']}" if decision["go"] else ""),
+                  file=sys.stderr)
 
-    print(f"go={'true' if decision['go'] else 'false'}")
-    print(f"branch={decision['branch']}")
-    print(f"attempt={decision['attempt']}")
-    print(f"escalate={'true' if decision['escalate'] else 'false'}")
-    print(f"reason={decision['reason']}")
+    sys.stdout.write(outputs(decision))
     return 0
 
 
