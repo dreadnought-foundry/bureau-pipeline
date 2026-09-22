@@ -9,11 +9,11 @@ verdict at all, and the sweep's promotion gate refused each one:
     🚨 routing-no-verdict: <CARD> carries no routing verdict, so nothing has
     said who builds it
 
-Measured: epic DRE-4425 (approved 2026-09-20 22:28 PT) had five cards frozen
-for about 37 hours. Epic DRE-4467, the round robin (approved 2026-09-21
-20:03 PT), had all seven build cards frozen until a person stamped them by hand
-on 2026-09-22 — four at 12:11 PT by an assistant session, three at 20:47 PT by
-the CEO running the script, because the assistant may not write them.
+Measured: epic DRE-4425 was approved 2026-09-20 22:28 PT, and as of 2026-09-22
+09:25 PT — about 35 hours later — none of its five cards had started. Epic
+DRE-4467, the round robin (approved 2026-09-21 20:03 PT), had all seven build
+cards frozen until a person stamped them by hand: four by an assistant session,
+three by the CEO running the script, because the assistant may not write them.
 DRE-3270 and DRE-3301 show the same refusal.
 
 WHAT THIS PINS, one section per acceptance criterion:
@@ -364,8 +364,8 @@ class TheUndecidableCaseTest(unittest.TestCase):
 # ===========================================================================
 class TheRoundRobinReplayTest(unittest.TestCase):
     """The epic that cost the most: approved 2026-09-21 20:03 PT, all seven
-    build cards refused, and nothing moved until a person stamped them on
-    2026-09-22."""
+    build cards refused, and nothing moved until a person stamped them by
+    hand."""
 
     @classmethod
     def setUpClass(cls):

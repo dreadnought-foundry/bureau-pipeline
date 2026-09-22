@@ -13,11 +13,12 @@ So every BUILD child reached Backlog verdictless and the sweep refused it:
 
 What that cost, measured on the board:
 
-  * DRE-4425, approved 2026-09-20 22:28 PT — five cards frozen ~37 hours.
+  * DRE-4425, approved 2026-09-20 22:28 PT — five cards, none of them started
+    as of 2026-09-22 09:25 PT, about 35 hours later.
   * DRE-4467, the round robin, approved 2026-09-21 20:03 PT — all seven build
-    cards frozen until a person stamped them on 2026-09-22 (four at 12:11 PT by
-    an assistant session, three at 20:47 PT by the CEO running the script,
-    because the assistant session may not write them).
+    cards frozen until a person stamped them by hand: four by an assistant
+    session, three by the CEO running the script, because the assistant
+    session may not write them.
   * DRE-3270 and DRE-3301 refused the same way in the 2026-09-22 sweep logs.
 
 This module is the batch stamper the plan run calls once the children exist.

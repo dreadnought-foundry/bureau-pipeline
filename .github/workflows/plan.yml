@@ -1755,10 +1755,10 @@ jobs:
       # stamps the PROOF card and nothing else. So every BUILD child reached
       # Backlog verdictless and the sweep refused it —
       # `🚨 routing-no-verdict: <CARD> carries no routing verdict, so nothing
-      # has said who builds it`. DRE-4425 (approved 2026-09-20 22:28 PT) had
-      # five cards frozen ~37 hours; DRE-4467, the round robin (approved
-      # 2026-09-21 20:03 PT), had all seven, until a person stamped them by
-      # hand on 2026-09-22.
+      # has said who builds it`. DRE-4425 was approved 2026-09-20 22:28 PT and
+      # none of its five cards had started as of 2026-09-22 09:25 PT, about 35
+      # hours later; DRE-4467, the round robin (approved 2026-09-21 20:03 PT),
+      # had all seven frozen until a person stamped them by hand.
       #
       # AFTER the proof gate, deliberately. That gate BOUNCES a malformed plan
       # back to Planning and exits 1, and an epic on its way back to Planning

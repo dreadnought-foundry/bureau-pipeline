@@ -463,8 +463,8 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("promote --promote-only", log)
         # DRE-4593: the children's routing verdicts are written on the way
         # through, before anything is promoted. A child reaching the promoter
-        # with no verdict is refused and sits — five cards for ~37 hours on
-        # DRE-4425, all seven of DRE-4467's until a person stamped them.
+        # with no verdict is refused and sits — five of DRE-4425's for about 35
+        # hours, all seven of DRE-4467's until a person stamped them by hand.
         self.assertIn("stamp-verdicts stamp --epic DRE-2721", log)
         self.assertLess(log.index("stamp-verdicts"), log.index("promote "))
         self.assertLess(log.index("stamp-verdicts"), log.index("state In Progress"))
