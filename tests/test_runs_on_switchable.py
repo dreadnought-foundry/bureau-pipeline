@@ -21,9 +21,13 @@ The rule this file pins:
   `tests/test_short_runs_on_lane.py` is where that lane is pinned.
   DRE-4276 widened it to the two SWEEPS — reconcile's `sweep` and every medic
   job but `diagnose`, which runs a Claude agent for up to twenty minutes and
-  stays on the long chain. So the lane is now a set of JOBS, not of files:
-  `SHORT_LANE` names the files that read the short variable and `LONG_JOBS`
-  names the jobs inside them that do not.
+  stays on the long chain. DRE-4606 widened it again, to the release train's
+  `wait` and `plan`: both are `release_train.py` and nothing else, and `wait`
+  is the worst offender in the fleet — it can hold a runner slot for seventy
+  minutes doing nothing but sleeping. `release` does the deploy and stays on
+  the long chain. So the lane is a set of JOBS, not of files: `SHORT_LANE`
+  names the files that read the short variable and `LONG_JOBS` names the jobs
+  inside them that do not.
 * Every job in a workflow that runs only in THIS repo stays on the literal
   `ubuntu-latest`. bureau-pipeline is public, its minutes bill at $0, and the
   org's Default runner group refuses public repos — a public-repo job pointed
@@ -48,15 +52,23 @@ SHORT_SWITCHABLE = (
     "${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON"
     " || '[\"ubuntu-latest\"]') }}"
 )
-# The reusables that carry sub-minute bookkeeping jobs. Exactly these — the
-# scope is the cards' (DRE-3887 the gates, DRE-4276 the sweeps), and widening
-# it is a decision, not a tidy-up.
-SHORT_LANE = {"merge-gate.yml", "linear-sync.yml", "reconcile.yml", "medic.yml"}
+# The reusables that carry jobs needing nothing the long-job runners have.
+# Exactly these — the scope is the cards' (DRE-3887 the gates, DRE-4276 the
+# sweeps, DRE-4606 the release train's decision jobs), and widening it is a
+# decision, not a tidy-up.
+SHORT_LANE = {
+    "merge-gate.yml",
+    "linear-sync.yml",
+    "reconcile.yml",
+    "medic.yml",
+    "release-train.yml",
+}
 # The jobs INSIDE a short-lane file that stay on the long chain, by name: a
 # job that spends a Claude run for minutes belongs with the agent, critic and
 # verifier jobs, and routing it to the short pool would recreate DRE-3875 with
-# the lanes swapped (DRE-4276).
-LONG_JOBS = {"medic.yml": {"diagnose"}}
+# the lanes swapped (DRE-4276). `release` is there for the other reason — it
+# is the job that does the real deploy work (DRE-4606).
+LONG_JOBS = {"medic.yml": {"diagnose"}, "release-train.yml": {"release"}}
 SHORT_VAR_HINT = "vars.BUREAU_SHORT_RUNS_ON"
 HOSTED = "ubuntu-latest"
 

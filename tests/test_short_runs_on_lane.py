@@ -1,4 +1,4 @@
-"""The short-job runner lane (DRE-3887, widened to the sweeps by DRE-4276).
+"""The short-job runner lane (DRE-3887, the sweeps DRE-4276, the train DRE-4606).
 
 On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued from 16:40 PT,
 about an hour. All three light runners were busy with long Claude jobs — Agent
@@ -15,9 +15,17 @@ read and write GitHub and Linear, taking a turn ahead of every review. They
 still read `vars.BUREAU_RUNS_ON` alone, so a repo could not move them without
 moving its reviews too.
 
+On 2026-09-22 between 13:00 and 13:17 PT it happened to the release train
+(DRE-4606). Portico's `plan` job — sixteen SECONDS of `release_train.py` —
+waited 26 minutes for a `bureau-light` slot while all three heavy runners sat
+idle and ineligible; over 2026-09-18 22:00 PT → 2026-09-22 13:00 PT that job's
+queue wait was p90 44 minutes and max 81 minutes across 109 jobs, and Portico
+was 17 commits behind its last portal release. `wait` is the worse of the two:
+it is a SLEEP, and it can hold a slot for seventy minutes doing nothing at all.
+
 The lane this file pins:
 
-* Every SHORT job of the four bookkeeping reusables reads
+* Every SHORT job of the five reusables below reads
   `BUREAU_SHORT_RUNS_ON || BUREAU_RUNS_ON || '["ubuntu-latest"]'`. That is
   the long expression with ONE variable in front of it, so a repo that has not
   set the new variable renders byte-identically to what it rendered before —
@@ -28,8 +36,11 @@ The lane this file pins:
   job is `diagnose`, which runs a Claude agent for up to twenty minutes and is
   pinned BY NAME to the long chain. Routing any of them to the short pool
   would recreate the incident with the lanes swapped.
+* Nor does the one job that does real work on a runner: `release-train.yml`'s
+  `release` assumes the caller's OIDC role and cuts the release, sixty minutes
+  of it, and is pinned BY NAME to the long chain the same way (DRE-4606).
 
-The scope is exactly these four files, and inside them every job is named:
+The scope is exactly these five files, and inside them every job is named:
 short ones in `SHORT_JOBS`, long ones in `LONG_JOBS`. A job added to any of
 them without a runner decision fails here rather than inheriting one, and
 widening the lane to another file is a card, not a tidy-up.
@@ -60,11 +71,17 @@ from test_runs_on_switchable import (  # noqa: E402
 
 SHORT_VAR = "BUREAU_SHORT_RUNS_ON"
 
-# Every short job of the four files, named. DRE-3887's criterion was "a test
-# pins that list"; DRE-4276 adds the two sweeps to it. The medic's eight
-# script jobs — the classifier, the one retry, and the six that write a note
-# or a receipt and end — are each `timeout-minutes: 5` and call nothing but
-# `gh` and `python3`; reconcile's `sweep` is `reconcile.py` and nothing else.
+# Every short job of the five files, named. DRE-3887's criterion was "a test
+# pins that list"; DRE-4276 adds the two sweeps to it and DRE-4606 the release
+# train's two decision jobs. The medic's eight script jobs — the classifier,
+# the one retry, and the six that write a note or a receipt and end — are each
+# `timeout-minutes: 5` and call nothing but `gh` and `python3`; reconcile's
+# `sweep` is `reconcile.py` and nothing else; the train's `wait` and `plan`
+# are `release_train.py` and nothing else, over the caller's own `github.token`
+# and no cloud role. `wait` is the one short-lane job that is not quick — it
+# SLEEPS, up to seventy minutes — and that is the argument for moving it, not
+# against: the criterion is no Claude call, no build and no test suite, never
+# the clock.
 SHORT_JOBS = {
     "merge-gate.yml": {"resolve", "evaluate"},
     "linear-sync.yml": {"card-done", "conflict-sweep"},
@@ -79,6 +96,7 @@ SHORT_JOBS = {
         "linear_rate_limited",
         "environment_hold",
     },
+    "release-train.yml": {"wait", "plan"},
 }
 
 # The whole-file long Claude jobs the DRE-3887 card named — none of them may
@@ -158,16 +176,31 @@ def test_the_medics_diagnosis_agent_stays_in_the_agent_lane() -> None:
     )
 
 
-def test_the_short_lane_is_exactly_four_files() -> None:
-    """The scope the CEO signed on 2026-09-14 (merge-gate and linear-sync) plus
-    the two sweeps DRE-4276 added on 2026-09-18 — and nothing else. Widening
-    the lane again is a decision, not a refactor."""
+def test_the_trains_release_job_stays_in_the_long_lane() -> None:
+    """The one release-train job that does real work on the runner — `release`
+    assumes the caller's OIDC role and cuts the release, `timeout-minutes: 60`
+    — keeps reading the long chain (DRE-4606). `wait` and `plan` only DECIDE;
+    this is the job the short lane clears the way for."""
+    assert LONG_JOBS["release-train.yml"] == {"release"}
+    jobs = _jobs("release-train.yml")
+    assert jobs["release"] == SWITCHABLE, (
+        f"release-train.yml:release does the deploy; it must keep reading "
+        f"{SWITCHABLE}, got {jobs['release']!r}"
+    )
+
+
+def test_the_short_lane_is_exactly_five_files() -> None:
+    """The scope the CEO signed on 2026-09-14 (merge-gate and linear-sync), the
+    two sweeps DRE-4276 added on 2026-09-18, and the release train DRE-4606
+    added on 2026-09-22 — and nothing else. Widening the lane again is a
+    decision, not a refactor."""
     assert SHORT_LANE == set(SHORT_JOBS)
     assert SHORT_LANE == {
         "merge-gate.yml",
         "linear-sync.yml",
         "reconcile.yml",
         "medic.yml",
+        "release-train.yml",
     }
     mentions = {
         path.name
