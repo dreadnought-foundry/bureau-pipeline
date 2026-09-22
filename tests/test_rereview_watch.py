@@ -237,12 +237,14 @@ class OncePerRound(unittest.TestCase):
         self.assertEqual(found["sent_back_at"], "2026-09-16T09:31:00Z")
 
     def test_a_comment_linear_gave_no_stamp_for_is_unknown_not_overdue(self):
-        records = [
-            _rec(pc.cycle_start_note(EPIC), "2026-09-15T17:21:02Z"),
-            _rec(pc.cycle_marker(EPIC), "2026-09-15T17:21:04Z"),
-            _rec(_round(1), None),
-        ]
-        self.assertIsNone(_overdue(records))
+        for stamp in (None, "", "not-a-time"):
+            records = [
+                _rec(pc.cycle_start_note(EPIC), "2026-09-15T17:21:02Z"),
+                _rec(pc.cycle_marker(EPIC), "2026-09-15T17:21:04Z"),
+                _rec(_round(1), stamp),
+            ]
+            with self.subTest(stamp=stamp):
+                self.assertIsNone(_overdue(records))
 
 
 # --- 4. What the CEO reads ---------------------------------------------------

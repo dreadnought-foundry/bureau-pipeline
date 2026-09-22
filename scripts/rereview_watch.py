@@ -214,7 +214,15 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
             f"round {row['round']} was sent back, but Linear named no time for "
             "the comment that recorded it — how long it has been is unknown"
         ))
-    minutes = _minutes_since(created, now)
+    try:
+        minutes = _minutes_since(created, now)
+    except ValueError:
+        # A stamp Linear gave us and we cannot read is unknown, exactly as
+        # `plan_critic.promotion_refusal` reads an unparseable green light.
+        return Reading(None, False, (
+            f"round {row['round']} was sent back at {created!r}, which is not "
+            "a time this can read — how long it has been is unknown"
+        ))
     reason = plan_critic.one_line(detail) or "no reason recorded"
     if minutes < grace:
         return Reading(None, False, (
