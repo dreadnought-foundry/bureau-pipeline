@@ -439,6 +439,58 @@ def test_the_stub_is_decoded_from_the_contents_api(monkeypatch):
     assert contents_jq.startswith("{"), contents_jq
 
 
+def test_the_whole_wake_up_runs_through_a_real_gh_on_PATH(tmp_path, monkeypatch,
+                                                          capsys):
+    """The scenario leg: the CLI, over a `gh` that answers the way GitHub
+    does, so the shapes of the calls themselves are pinned and not only the
+    decision. Unit-green is not live-working — a `--jq .content` that printed
+    a RAW string (gh's behaviour for a scalar filter) parsed as JSON in no
+    test that stubbed the reader, and crashed the first time it was run for
+    real.
+    """
+    import base64
+    calls = tmp_path / "calls.log"
+    content = base64.b64encode(CALLER_STUB.encode()).decode()
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    # A `gh` that answers the way gh answers, `--jq` included: an OBJECT
+    # filter prints JSON and a SCALAR filter prints the bare value with no
+    # quotes. That second line is the whole reason this test exists.
+    (fake / "gh").write_text(f'''#!/usr/bin/env python3
+import json, sys
+open({str(calls)!r}, "a").write(" ".join(sys.argv[1:]) + "\\n")
+args = sys.argv[1:]
+if args[0] == "workflow":
+    print("dispatched"); raise SystemExit(0)
+path = args[1]
+jq = args[args.index("--jq") + 1] if "--jq" in args else "."
+record = ({{"content": {content!r}, "encoding": "base64"}}
+          if "contents/" in path else {{"full_name": "x/y"}})
+if jq.strip().startswith("{{"):
+    keys = [k.split(":")[0].strip() for k in jq.strip("{{}} ").split(",")]
+    print(json.dumps({{k: record.get(k) for k in keys}}))
+else:
+    print(record.get(jq.strip().lstrip("."), ""))
+''')
+    (fake / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{__import__('os').environ['PATH']}")
+    monkeypatch.setenv("GH_TOKEN", "t")
+
+    path = tmp_path / "repo-map.json"
+    path.write_text(json.dumps({"portico": "dreadnought-foundry/portico"}),
+                    encoding="utf-8")
+    assert release_train.main(["wake", "--map", str(path)]) == 0
+
+    logged = calls.read_text().splitlines()
+    assert logged[0] == "api repos/dreadnought-foundry/portico --jq {full_name}"
+    assert "contents/.github/workflows/release-train.yml" in logged[1]
+    assert logged[-1] == ("workflow run release-train.yml "
+                          "--repo dreadnought-foundry/portico"), logged
+    out = capsys.readouterr().out
+    assert f"{release_train.WOKEN} dreadnought-foundry/portico" in out
+    assert "1 woken, 0 skipped, 0 could not be woken" in out
+
+
 # --------------------------------------------------------------------------
 # 5. The roster is the live map, and the owners come out of it.
 # --------------------------------------------------------------------------
