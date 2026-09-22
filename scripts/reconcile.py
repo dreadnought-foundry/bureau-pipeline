@@ -685,6 +685,35 @@ def gh(*args: str) -> str:
     ).stdout.strip()
 
 
+def _gh_as_reader(*args: str) -> str:
+    """`gh()`, spending the READ token's hour when reconcile.yml sets one.
+
+    DRE-4577. `_workflows_on_default_branch()` is the one read that proves a
+    stub ABSENT (DRE-2525) — and it went out as GH_TOKEN, the main App, while
+    every other read of the sweep rides GH_READ_TOKEN through `gh_read`
+    (DRE-4282). On 2026-09-21 the sandbox's sweeps 35659096980, 35668039488,
+    35669089551 and 35674045821 each printed `slot1=refused`, got nothing
+    back from this read, and recorded the agent-fix.yml 404 as UNREADABLE —
+    the sweeps between them, with slot 1 healthy, proved the same absence
+    green. Two harness runs ended BLOCKED BY SANDBOX on those red sweeps.
+
+    Same contract as `gh()` — silent, an empty answer on failure, for a caller
+    with its own fallback — and the same env swap as `gh_read`'s (line for
+    line: GH_READ_TOKEN when set, else the ambient GH_TOKEN). Not routed
+    through `gh_read` itself because that seam RAISES and spends the sweep's
+    retry budget; the listing's caller already answers None on nothing.
+    Without a read token it IS `gh()` — the same call, through the same
+    seam every existing test of the callers stubs.
+    """
+    read_token = os.environ.get("GH_READ_TOKEN")
+    if not read_token:
+        return gh(*args)
+    return subprocess.run(  # nosec B603 B607
+        ["gh", *args], capture_output=True, text=True, check=False,
+        env={**os.environ, "GH_TOKEN": read_token} if read_token else None,
+    ).stdout.strip()
+
+
 class ReconcileWriteError(RuntimeError):
     """A write-path gh call failed — surface it; never pretend success."""
 
@@ -1051,7 +1080,7 @@ def _workflows_on_default_branch() -> set | None:
     global _workflows_listing
     if _workflows_listing is not None:
         return _workflows_listing
-    raw = gh("api", f"repos/{REPO}/contents/{_WORKFLOWS_DIR}")
+    raw = _gh_as_reader("api", f"repos/{REPO}/contents/{_WORKFLOWS_DIR}")
     try:
         entries = json.loads(raw) if raw else None
     except ValueError:
@@ -7141,6 +7170,22 @@ def report_fleet_reviewer_outage() -> None:
         return
 
     # file
+    if REPO_SLUG not in validate_card.VALID_SLUGS:
+        # The sandbox (DRE-4577). bureau-harness is outside config/repo-map.json
+        # BY DESIGN, so `linear_ops.create_card` refuses its slug — and on
+        # 2026-09-22 (run 35670916057) that refused write took the sandbox's
+        # sweep red, which a harness run waiting on the sandbox read as
+        # "sandbox down". A repo nothing routes to has no card to file; what
+        # it saw is on this log, and a served repo's sweep — which counts the
+        # same fleet witness — files the card. Not a failure: nothing was
+        # attempted, so nothing lands on the fail-loudly rail.
+        print(
+            f"fleet-reviewer-outage: {len(fresh)} could-not-run in the window, "
+            f"but {REPO_SLUG!r} is not a repo the pipeline serves "
+            "(config/repo-map.json), so no card is filed from here — the "
+            "outage is on this log, and a served repo's sweep files the card"
+        )
+        return
     if FLEET_OUTAGE_SWEEP_CAP < 1:
         print(
             "fleet-reviewer-outage: FLEET_OUTAGE_SWEEP_CAP=0 — filing is off "
