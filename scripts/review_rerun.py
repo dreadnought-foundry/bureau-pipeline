@@ -399,7 +399,11 @@ def _cmd_dispatch(args) -> int:
         return 1
     ok, err = plan_run.fire(card, args.repo,
                             trigger_state=TRIGGER_STATE_ACTIVATE,
-                            reason=args.reason)
+                            reason=args.reason,
+                            # The planner run sending this, so the run it
+                            # starts does not skip itself as that run's
+                            # duplicate (DRE-4573). None from a terminal.
+                            sent_by_run=os.environ.get("GITHUB_RUN_ID") or None)
     if not ok:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1
