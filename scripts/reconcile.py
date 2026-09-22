@@ -188,6 +188,11 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # and the whole four-way decision. This file is the wrapper: it supplies the
 # board snapshot and the `gh` reads and makes the two writes.
 import repair_card  # noqa: E402
+# DRE-4492: ONE reading of "the post-approval critic promised a re-review and
+# nothing ran it" — the grace window, the credential it reads a round under and
+# every line it says live there, pure. This file is the wrapper: it supplies
+# the epics, the lanes and the thread reader, and makes the one write.
+import rereview_watch  # noqa: E402
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
@@ -8550,6 +8555,19 @@ def main(
     # count is a finding about the front door, not about the people using it.
     with _phase("report_break_glass"):
         report_break_glass()
+    # The promise nothing kept (DRE-4492): an epic sent back by the second
+    # critic, a 🔁 receipt saying the pipeline will run the review again, and
+    # then no round 2 and no tombstone. Lanes come off the board read this
+    # sweep already paid for, so narrowing to In Progress costs no request.
+    with _phase("report_rereview_missing"):
+        try:
+            rereview_watch.report(
+                epics, epic_thread,
+                {c["identifier"]: c["state"]["name"]
+                 for c in active_cards()}.get)
+        except Exception as e:  # noqa: BLE001 — a notice we could not post is a write
+            _write_failures.append(f"rereview-missing: {e}")
+            print(f"ERROR: report_rereview_missing: {e}", file=sys.stderr)
     # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
     # at N, running M, and any card that joined without the plan moving with it.
     with _phase("report_epic_growth"):
