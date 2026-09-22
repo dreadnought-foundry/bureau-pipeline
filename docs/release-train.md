@@ -21,7 +21,6 @@ Every repo the train serves declares its surfaces in `.github/bureau/release.jso
       "script": "infra/release-<name>.sh",
       "rollback": "make rollback-<name> VERSION=<tag>",
       "spacing_minutes": 30,
-      "window": "07:00-21:00 PT",
       "auto": false,
       "identity": "<role name>",
       "record": "tag"
@@ -30,6 +29,8 @@ Every repo the train serves declares its surfaces in `.github/bureau/release.jso
 }
 ```
 
+No `window` there on purpose: a surface that omits it releases on the fleet's hours (`05:00-21:00 PT`, the section below), which is what a surface should normally do. Add `"window": "HH:MM-HH:MM PT"` only to be deliberately different, and the train says on that surface's line that it is overriding the fleet default.
+
 | Field | Shape | What it means |
 | --- | --- | --- |
 | `tag_series` | list of tag globs | The newest tag across ALL the globs is the deployment record. It is what deploy-lag reads and what the console's Shipped-today panel measures commit ancestry against, so a legacy glob belongs here rather than in anyone's memory. |
@@ -37,10 +38,16 @@ Every repo the train serves declares its surfaces in `.github/bureau/release.jso
 | `script` | path in the caller, or null | The surface's own release script, called as `bash <script> --surface <name>` with `RELEASE_SHA` in the environment and the identity already assumed. Null only while `auto` is false. |
 | `rollback` | command, or null | The one command that puts the surface back, written out so nobody has to derive it at 2am. Null only while `auto` is false. |
 | `spacing_minutes` | whole minutes | How long after the newest tag in the series the next release may be cut. Two triggers inside the spacing produce one release. |
-| `window` | `HH:MM-HH:MM PT`, or `always` | The hours a release may be cut, read on the America/Los_Angeles clock. A trigger outside the window is a no-op that names it; a hand dispatch runs anyway. |
+| `window` *(optional)* | `HH:MM-HH:MM PT`, or `always` | The hours a release may be cut, read on the America/Los_Angeles clock. A trigger outside the window is a no-op that names it; a hand dispatch runs anyway. **Optional** — omit it and the surface inherits the fleet default `05:00-21:00 PT`, which is also what the fleet wake-up's crons are derived from, so the fleet's hours are one edit in one place. Declare one and it overrides the default, which the train says on the surface's own line. |
 | `auto` | true or false | Whether the train releases this surface unattended. False means it releases only on a hand dispatch naming it — which is how a supervised first release is run. |
 | `identity` | role name | Who the script runs as: the caller's own OIDC role, fed from the one required secret `RELEASE_ROLE_ARN`. On a `channel` surface it names whatever advances the ref, since nothing is assumed. |
 | `record` | `tag` or `channel` | `tag` is the default and the deployment record is the annotated tag the script cuts. `channel` is a moving tag another train advances: the release train never runs it, and deploy-lag measures it by compare. |
+
+## The fleet's hours, in one place
+
+**DRE-4450.** The fleet opens at `05:00 PT` and that is written ONCE, as `release_train.FLEET_WINDOW` (`05:00-21:00 PT`). A surface that omits `window` inherits it — the schema check accepts the omission — and a surface that declares its own keeps it, with every line the train prints about that window saying it overrides the fleet default. Before this the opening was written twice in every repo with a train, and on 2026-09-21 Portico's train slept until 07:03 PT because one of the two copies had been moved and the other had not.
+
+**The same constant wakes the fleet.** GitHub runs a `schedule:` only from a workflow on the default branch of the repo that holds it, and this train is `workflow_call` — so a cron inside it never fires for a caller. `.github/workflows/fleet-wake.yml` in bureau-pipeline carries the schedule for the whole fleet: its two cron lines are derived from the window above with `zoneinfo` (`0 13 * * *` and `0 12 * * *` — UTC has no timezone field, so one line is standard time and the other daylight time), and at the opening it reads `config/repo-map.json` and dispatches `.github/workflows/release-train.yml` in every roster repo that carries a caller stub. A repo with no stub is skipped and NAMED; a repo it could not wake — an unreadable stub, a refused dispatch — turns the run red, because a wake-up that silently did not happen is the whole fault being fixed. Each woken train then applies its own rules, nothing bypassed.
 
 ## A Linear release, by declaring one key
 
@@ -116,7 +123,7 @@ Which check runs on the commit COUNT is decided in one place — `merge_gate.gat
 
 ## A no-op that names a minute re-arms itself
 
-**DRE-3559.** A run that no-ops on the spacing names the minute the next release may be cut; one that no-ops on the window names the window's next open. Neither is a trigger, so the run re-arms itself: it dispatches the caller's own stub once, `gh workflow run <stub> -f not_before=<UTC minute>`, under the train's own `github.token` — which is why the stub grants `actions: write` and declares the `not_before` dispatch input. The re-armed run's `wait` job sleeps until that minute, never longer than the largest `spacing_minutes` among the `auto: true` surfaces plus 2 minutes (at most 60), and then the ordinary decision runs — green-at-SHA, the spacing, the window and the brake, nothing bypassed. A minute further away than that bound is not re-armed: a sleeping run holds a runner the whole time, and the line says the next CI completion or the 07:00 PT schedule wakes the train instead.
+**DRE-3559.** A run that no-ops on the spacing names the minute the next release may be cut; one that no-ops on the window names the window's next open. Neither is a trigger, so the run re-arms itself: it dispatches the caller's own stub once, `gh workflow run <stub> -f not_before=<UTC minute>`, under the train's own `github.token` — which is why the stub grants `actions: write` and declares the `not_before` dispatch input. The re-armed run's `wait` job sleeps until that minute, never longer than the largest `spacing_minutes` among the `auto: true` surfaces plus 2 minutes (at most 60), and then the ordinary decision runs — green-at-SHA, the spacing, the window and the brake, nothing bypassed. A minute further away than that bound is not re-armed: a sleeping run holds a runner the whole time, and the line says the next CI completion or the fleet wake-up at 05:00 PT wakes the train instead.
 
 The no-op's line gains one clause: `— re-armed for HH:MM PT`, `— re-armed for HH:MM PT (already waiting: <run>)` when a run is already armed for that minute, `— not re-armed: …` past the bound, or `— re-arm skipped: caller stub lacks not_before` / `— re-arm skipped: caller stub lacks actions: write` for a stub that cannot be dispatched that way. None of them fails the run. A hold, the brake, `auto: false`, `current`, `ci-pending`, a refusal and a release re-arm nothing: a person, or the next CI completion, owns those.
 

@@ -38,11 +38,19 @@
 # behind. Retrying it is safe because it is idempotent by construction — it
 # checks for a pull request on its own branch before it applies anything, so a
 # second run of a delivery that already landed does nothing at all.
+#
+# Fleet Wake (DRE-4450) is watched on the same terms, and it is the one
+# workflow here whose failure means somebody's train never left: it dispatches
+# every roster repo's release-train stub at the fleet opening. Retrying it is
+# safe because waking a train twice is already a no-op — the per-surface
+# concurrency lane holds the second run behind the first and it reads current —
+# which is the same property that lets the stubs keep their own crons while the
+# per-repo follow-up cards land.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake]
     types: [completed]
 
 permissions:

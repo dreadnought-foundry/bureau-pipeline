@@ -266,15 +266,18 @@ def test_a_malformed_release_json_is_refused_with_the_field_named():
                 "script": "infra/release-console.sh",
                 "rollback": "make rollback-console VERSION=<tag>",
                 "spacing_minutes": 30,
-                # `window` missing
+                "window": "07:00-21:00 PT",
                 "auto": True,
-                "identity": "bureau-console-release",
+                # `identity` missing. It used to be `window` — since DRE-4450
+                # that one is OPTIONAL and inherits the fleet default
+                # (tests/test_fleet_wake.py), so the missing-field rule is
+                # pinned here on a field that is still required.
             }
         }
     }
     problems = release_train.check_schema(bad)
-    assert problems, "a surface with no window must be refused"
-    assert any("window" in p for p in problems), problems
+    assert problems, "a surface with no identity must be refused"
+    assert any("identity" in p for p in problems), problems
 
 
 @pytest.mark.parametrize(
@@ -1059,7 +1062,11 @@ def test_the_cli_refuses_a_malformed_file_and_names_the_field(tmp_path, capsys):
     bad = tmp_path / "release.json"
     bad.write_text(json.dumps({"surfaces": {"console": {"auto": True}}}))
     assert release_train.main(["--file", str(bad), "schema"]) == 1
-    assert "console.window" in capsys.readouterr().out
+    # `window` is absent here too and is NOT named: since DRE-4450 a surface
+    # that omits it inherits the fleet default.
+    out = capsys.readouterr().out
+    assert "console.identity" in out
+    assert "console.window" not in out
 
 
 # --------------------------------------------------------------------------
