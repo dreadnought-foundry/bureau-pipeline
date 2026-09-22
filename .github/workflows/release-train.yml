@@ -160,7 +160,18 @@ jobs:
   wait:
     name: Wait until ${{ github.event.inputs.not_before }}
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.not_before != ''
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The SHORT-job lane (DRE-4606). This job is `release_train.py wait` and
+    # nothing else — no Claude call, no build, no test suite — and it SLEEPS:
+    # on the long chain it held a 20-minute-Claude-job runner for up to seventy
+    # minutes doing nothing. `plan` below is 16 SECONDS and drew from the same
+    # pool: on 2026-09-22 between 13:00 and 13:17 PT Portico's waited 26
+    # minutes for a `bureau-light` slot while all three heavy runners sat idle
+    # and ineligible, and over 2026-09-18 22:00 PT → 2026-09-22 13:00 PT its
+    # queue wait was p90 44 minutes, max 81, across 109 jobs. A repo routes its
+    # short jobs elsewhere by setting `BUREAU_SHORT_RUNS_ON`; with it unset
+    # this is the same chain it has always been, so nothing changes until a
+    # repo opts in (`tests/test_short_runs_on_lane.py`).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # Above release_train.WAIT_CEILING_MINUTES (60) plus the slack and the two
     # checkouts; tests/test_release_train_re_arm.py holds it there.
     timeout-minutes: 70
@@ -201,7 +212,10 @@ jobs:
     # group is the collapse working, and plans nothing.
     needs: wait
     if: ${{ !cancelled() && needs.wait.result != 'cancelled' }}
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `wait` above (DRE-4606). This job only DECIDES —
+    # two checkouts, then `release_train.py` over the caller's own
+    # `github.token`; it assumes no cloud role and cuts nothing.
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -316,6 +330,11 @@ jobs:
     # skipped on every run that was not re-armed. A failed plan (a refusal)
     # still releases nothing, exactly as before.
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != '' }}
+    # The LONG chain, on purpose (DRE-4606). This is the job that does the
+    # work — it assumes the caller's release role and cuts the release, up to
+    # sixty minutes of it — so it belongs with the agent, critic and verifier
+    # jobs. It is what the short lane clears the way for, never a rider on it;
+    # `tests/test_short_runs_on_lane.py` pins it here by name.
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     strategy:
