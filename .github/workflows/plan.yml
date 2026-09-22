@@ -1293,6 +1293,13 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
+               You do NOT stamp the children's routing verdicts (DRE-4593):
+               once the plan is checked, this run classifies every child by the
+               vocabulary's own precedence and writes each verdict itself. Your
+               job is the ACCEPTANCE CRITERIA — they are what the classifier
+               reads, so a child whose criteria name an interactive flow or
+               live system state routes to a person, and one that states no
+               criteria at all routes nowhere and is held.
             3b. A ONE-OFF — a card the plan concludes stands on its own and
                needs no epic — has no parent to inherit labels from, so create
                it PARENTLESS and take every label from the plan (DRE-2754):
@@ -1501,6 +1508,13 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
+               You do NOT stamp the children's routing verdicts (DRE-4593):
+               once the plan is checked, this run classifies every child by the
+               vocabulary's own precedence and writes each verdict itself. Your
+               job is the ACCEPTANCE CRITERIA — they are what the classifier
+               reads, so a child whose criteria name an interactive flow or
+               live system state routes to a person, and one that states no
+               criteria at all routes nowhere and is held.
             3b. A ONE-OFF — a card the plan concludes stands on its own and
                needs no epic — has no parent to inherit labels from, so create
                it PARENTLESS and take every label from the plan (DRE-2754):
@@ -2250,6 +2264,12 @@ jobs:
             fi
             exit 1
           fi
+          # A revision is the planner's output too (DRE-4593): a card round 2
+          # added would otherwise reach Backlog with no routing verdict on it,
+          # and the sweep refuses exactly that. A card round 1 already stamped
+          # is refused by the write path and costs one read.
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" < "$CHILDREN"
 
       # The re-plan rewrote the cards, so the findings the round-1 list carried
       # describe a plan that no longer exists. Re-run and re-post, or round 2
@@ -2419,6 +2439,77 @@ jobs:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}/plan-artifact.md
           if-no-files-found: error
+
+      # --- The children carry their routing verdicts (DRE-4593) -------------
+      #
+      # standards/card-quality.md says every card leaving the planning segment
+      # carries exactly one routing verdict, written by the planning-exit
+      # writer. For a planner-created epic's children, nothing wrote one: the
+      # planner creates them with `linear_ops.py subissue`, and the only
+      # verdict-writer that ran on its own was the proof check, which stamps
+      # the PROOF card and nothing else. So every BUILD child reached Backlog
+      # verdictless and the sweep refused it —
+      # `🚨 routing-no-verdict: <CARD> carries no routing verdict, so nothing
+      # has said who builds it`. DRE-4425 was approved 2026-09-20 22:28 PT and
+      # none of its five cards had started as of 2026-09-22 09:25 PT, about 35
+      # hours later; DRE-4467, the round robin (approved 2026-09-21 20:03 PT),
+      # had all seven frozen until a person stamped them by hand.
+      #
+      # HERE, and not beside the proof gate, because a verdict is written ONCE
+      # (DRE-4593 review). `routing_verdict.stamp_card` refuses a card that
+      # already carries one — which is what makes the three sites safe to run
+      # in sequence — so a verdict written before critic round 1 is a verdict a
+      # send-back can no longer correct. A re-plan rewriting a child's
+      # acceptance criteria from "an agent can finish this" to "a person
+      # switches it on and reads the first moves" would leave the old verdict
+      # standing and dispatch the fleet at a card that needs a person, and a
+      # plan going round again is the normal path, not the exception
+      # (standards/plan-artifact.md). The card's criterion is that the children
+      # carry their verdicts BEFORE THE EPIC CAN BE APPROVED, and this is the
+      # last point that is true: after both critic rounds have settled, before
+      # `Epic → Green Light` below. Nothing between the proof gate and here
+      # reads a child's routing verdict — `plan_critic.py` never imports
+      # `routing_verdict`, and `validate_card.py check-children` does not read
+      # verdicts — so the position costs nothing else.
+      #
+      # It is still AFTER the proof gate, which is the other half of the
+      # ordering: that gate BOUNCES a malformed plan back to Planning and exits
+      # 1, and an epic on its way back to Planning is not an epic whose cards
+      # get routing decisions written on them — the same rule
+      # `proof_and_demo.stamps()` already applies to its own card. The step is
+      # safe either way round regardless: it skips a `PROOF:` or `DEMO:` child
+      # BY TITLE, so it can never write FLEET onto the card that is supposed to
+      # confirm the fleet's own work.
+      #
+      # It classifies nothing of its own. `planning_route.mechanical_verdict`
+      # is the SAME function the one-off planning exit calls, so a card cannot
+      # be routed two ways depending on which door it came through.
+      - name: Routing verdicts — the epic's children
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          # Read into a FILE and feed the stamper from it. This workflow sets
+          # no `shell:`, so every step is Actions' default `bash -e {0}` and
+          # that is not `pipefail`; a pipe would let a crashed read reach the
+          # stamper as empty stdin and the step would go green having written
+          # nothing.
+          CHILDREN="${{ runner.temp }}/child-verdicts.json"
+          HELD="${{ runner.temp }}/child-verdicts-held.md"
+          rm -f "$HELD"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
+          # A child nothing will ever stamp freezes in Backlog on
+          # `routing-no-verdict`. `validate_card.py check-children` does NOT
+          # catch it — it never looks for acceptance criteria — so this note is
+          # the only thing that says so, and it lands on the epic the CEO is
+          # about to be asked to approve rather than in a run log.
+          if [ -s "$HELD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$HELD")"
+          fi
 
       # Green Light holds a card waiting on a human JUDGEMENT: an epic's plan
       # awaiting approval — this step — an agent's escalate-by-exception
@@ -3386,6 +3477,36 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          # The backstop, and the one gap the plan-time step cannot close
+          # (DRE-4593): the post-approval re-plan above re-runs no proof gate,
+          # so a card the second critic's send-back added would reach the
+          # promoter carrying no routing verdict. Stamped BEFORE the epic
+          # moves to In Progress — so a cron sweep landing in between finds
+          # the verdicts already written — and before the promotion sweep at
+          # the foot of this step.
+          # Idempotent: a child already carrying a verdict is refused by the
+          # one write path and costs one read.
+          #
+          # The read goes into a FILE, never a pipe, for the reason the other
+          # two sites already do it this way (DRE-4593 review): this workflow
+          # sets no `shell:`, so every step is Actions' default `bash -e {0}`
+          # and that is NOT `pipefail`. A pipe would hand the step the
+          # stamper's status alone — a failed `children-detail` would reach it
+          # as empty stdin, and the run would move the epic to In Progress and
+          # promote with every child unstamped, green. `> "$CHILDREN"` is a
+          # simple command and `bash -e` aborts the step on it.
+          CHILDREN="${{ runner.temp }}/activate-children.json"
+          HELD="${{ runner.temp }}/activate-children-held.md"
+          rm -f "$HELD"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
+          # A child nothing will ever stamp freezes in Backlog. Say so on the
+          # epic rather than in a run log nobody reads.
+          if [ -s "$HELD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$HELD")"
+          fi
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "▶️ Epic activated ($KIDS children) — the dependency gate will flow them to build in order. Nothing else to do."

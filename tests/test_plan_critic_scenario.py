@@ -162,6 +162,12 @@ def main():
         cards = os.environ.get("STUB_CARDS", "DRE-9001,DRE-9002").split(",")
         print(json.dumps([{"identifier": c, "body": "", "labels": [],
                            "parent": EPIC} for c in cards if c]))
+    elif cmd == "children-detail":
+        # The fuller record the routing-verdict stamper reads (DRE-4593). Same
+        # card set as `children-json`, with the three fields that read pulls.
+        cards = os.environ.get("STUB_CARDS", "DRE-9001,DRE-9002").split(",")
+        print(json.dumps([{"identifier": c, "title": c, "body": "",
+                           "labels": [], "blocked_by": []} for c in cards if c]))
     elif cmd == "epics-in-flight":
         print(os.environ.get("STUB_EPICS", "[]"))
     else:
@@ -176,6 +182,19 @@ RECONCILE_STUB = '''#!/usr/bin/env python3
 import os, sys
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write("promote " + " ".join(sys.argv[1:]) + "\\n")
+'''
+
+# The routing-verdict stamper (DRE-4593), stubbed for the same reason reconcile
+# is: these walks are about the two critics and what they gate, and the stamper
+# is exercised by tests/test_planner_stamps_children.py against a fake Linear.
+# What the walk has to see is that it RAN, and that it ran before the promotion
+# below it — a verdict written after the promoter has already read the card
+# would be a verdict that arrived too late.
+CHILD_VERDICT_STUB = '''#!/usr/bin/env python3
+import os, sys
+sys.stdin.read()
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write("stamp-verdicts " + " ".join(sys.argv[1:]) + "\\n")
 '''
 
 # `gh`, on PATH, for the ONE vendor call this walk makes: the
@@ -241,6 +260,7 @@ class CriticWalk(unittest.TestCase):
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
+        self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(self.bin)
         gh = os.path.join(self.bin, "gh")
@@ -441,6 +461,13 @@ class CriticWalk(unittest.TestCase):
         log = self._log()
         self.assertIn("state In Progress", log)
         self.assertIn("promote --promote-only", log)
+        # DRE-4593: the children's routing verdicts are written on the way
+        # through, before anything is promoted. A child reaching the promoter
+        # with no verdict is refused and sits — five of DRE-4425's for about 35
+        # hours, all seven of DRE-4467's until a person stamped them by hand.
+        self.assertIn("stamp-verdicts stamp --epic DRE-2721", log)
+        self.assertLess(log.index("stamp-verdicts"), log.index("promote "))
+        self.assertLess(log.index("stamp-verdicts"), log.index("state In Progress"))
 
     def test_a_send_back_after_approval_stops_the_children(self):
         self._critic_writes(

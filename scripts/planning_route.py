@@ -66,6 +66,18 @@ one exit that is not a plan (DRE-2848) — so the CEO, or the classifier, gets i
 back. Nothing is stamped on that path: the card has not left the planning
 segment, so it is not carrying a verdict out of it.
 
+## And that answer is shared, not copied (DRE-4593)
+
+A planner-created epic's CHILDREN needed the same mechanical answer, and nothing
+wrote one for them: the sweep refused seven of DRE-4467's eight cards with
+`routing-no-verdict` and they sat until a person stamped them by hand. The fix
+is a batch stamper (`scripts/plan_child_verdicts.py`), and what it must NOT be
+is a second classifier. So the answer above lives in `mechanical_verdict()`,
+which `_one_off_check` and that batch both call. A one-off and a planner's child
+are both one card and one pull request — the plan prompt decomposes an epic into
+exactly that — so the judgement branch's argument holds for both, and two
+readings of it is how the two readings drift.
+
 CLI:
 
     python3 scripts/planning_route.py check           # validate the routes
@@ -100,6 +112,16 @@ ROUTE_MARK = "🚦"
 # by `route_problems()`: rename the human in the contract and this fails
 # loudly instead of quietly deciding that nothing stops for anyone.
 HUMAN_ACTORS = ("operator",)
+
+#: The shape of a card that is one card and one pull request. It was a literal
+#: in `exit_plan` alone until DRE-4593's review needed a second reader for it:
+#: a planner's CHILD is this shape by construction — the plan prompt decomposes
+#: an epic into exactly that, and it is the premise the judgement branch below
+#: already rests on — so the batch stamper passes it rather than passing no
+#: shape at all. Passing none let `mid_epic.is_epic` fall back to an unanchored
+#: `[epic]` in the title, which sent a child carrying that literal down the
+#: epic branch and past an explicit role label.
+ONE_OFF_SHAPE = "one-off"
 
 
 class Unroutable(Exception):
@@ -340,15 +362,56 @@ def _one_off_check(card: dict, comment_bodies, shape: str,
             f"the card already carries {' and '.join(carried)} — a card leaving "
             "Planning carries exactly one verdict"
         )
-    description = card.get("description") or ""
-    decision = routing_verdict.route(
+    return mechanical_verdict(
         card.get("title") or "",
-        description,
+        card.get("description") or "",
         card.get("labels") or (),
         bool(card.get("has_children")),
         doc,
         shape=shape,
     )
+
+
+def mechanical_verdict(title: str, description: str, labels=(),
+                       has_children: bool = False, doc: dict | None = None,
+                       *, shape: str | None = None) -> tuple:
+    """`(verdict, reason)` for ONE card the planning segment is finishing with.
+
+    The whole mechanical answer in one place: `routing_verdict.route()`'s strict
+    precedence — role label, anchored title convention, acceptance criteria —
+    and, where that reaches a JUDGEMENT call, the promotable verdict with the
+    criteria that were weighed named in the reason.
+
+    Extracted from `_one_off_check` by DRE-4593, which needed the same answer
+    for an epic's CHILDREN and must not invent a second classifier to get it.
+    Two callers of one function cannot disagree about a card, which is the
+    point: a one-off and a planner's child are both one card and one pull
+    request — the plan prompt says so in as many words — so the judgement
+    branch's argument is the same for both, and reading it twice is how the two
+    readings drift.
+
+    Never a bare FLEET default: the judgement branch says which criteria it
+    read, so the verdict comment states what decided rather than reciting a
+    sentence, and a card that states no exit condition comes back NEEDS WORK
+    instead of being dispatched at an agent.
+
+    `route()` returns no verdict in TWO cases and `Decision.source` is what
+    tells them apart (DRE-4593 review): a JUDGEMENT call, which is the one the
+    fallback below answers, and an EPIC, which is never given a buildability
+    verdict at all. Folding the second into the first stamped FLEET on a card
+    the epic branch had claimed — and the epic branch is reachable from a
+    caller that passes no `shape`, because `mid_epic.is_epic` then falls back to
+    an UNANCHORED `[epic]` in the title and to `has_children`. That put an
+    explicit role label — precedence 1, the level `route()` guarantees decides
+    before anything else is read — behind a substring, and sent the fleet at an
+    operator's card. So the epic branch returns NO verdict and its own reason,
+    and every caller decides what to do with a card it may not route.
+    """
+    decision = routing_verdict.route(
+        title, description, labels, has_children, doc, shape=shape,
+    )
+    if decision.source == "epic":
+        return None, decision.reason
     if decision.verdict is not None:
         return decision.verdict, decision.reason
     return fleet_verdict(), _judgement_reason(description, doc)
@@ -476,7 +539,7 @@ def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
             "the plan run itself — artifact, children, green light. There is "
             "nothing for this module to perform."
         )
-    if route.shape == "one-off":
+    if route.shape == ONE_OFF_SHAPE:
         verdict, reason = _one_off_check(card, comment_bodies, route.shape, doc)
         if verdict is not None and _comes_back_to_planning(verdict, doc):
             return Exit(

@@ -1531,6 +1531,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$HELD\")\"",
+      "step": "Routing verdicts — the epic's children",
+      "kind": "not-an-act",
+      "means": "The epic is told which of its children no writer will stamp, so the cards that will freeze in Backlog are named on the card a person is about to read (DRE-4593).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK — these cards state no exit condition, so nothing can say who builds them — where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_child_verdicts.py, which owns the note, exactly as the proof-card bounce above belongs to scripts/proof_and_demo.py."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$HELD\")\"",
+      "step": "Activate the approved epic",
+      "kind": "not-an-act",
+      "means": "The same note, from the activation backstop — the one site that sees a card the post-approval re-plan added (DRE-4593).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK — these cards state no exit condition, so nothing can say who builds them — where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_child_verdicts.py, which owns the note, exactly as the proof-card bounce above belongs to scripts/proof_and_demo.py."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
       "step": "First critic — round 1 decision",
       "kind": "not-an-act",
