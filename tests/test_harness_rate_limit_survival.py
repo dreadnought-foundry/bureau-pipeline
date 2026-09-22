@@ -22,22 +22,35 @@ every later scenario died in setup and cleanup. The response headers —
 `x-ratelimit-reset`, the one fact that says how long the refusal lasts —
 were discarded: only the body was read.
 
+WHICH HEADER SAYS HOW LONG (review round 1). GitHub has two ways of saying
+slow down and sends two "come back at" times in the same breath: a SECONDARY
+limit answers `retry-after` (~60 s) while the same response still carries the
+PRIMARY window's `x-ratelimit-reset`, up to ~59 minutes out. `retry-after`
+first is GitHub's documented order; the other way round reads the common
+one-minute refusal as an hour, judges it past the cap and gives up on the
+spot — the exact death this card exists to end.
+
 WHAT THIS SUITE PINS.
   * A 403/429 whose body names a rate limit raises `RateLimited`, a
-    `GitHubError` carrying the reset read from the headers. A permission 403
+    `GitHubError` carrying the reset read from the headers — `retry-after`
+    first, `x-ratelimit-reset` only when it is absent. A permission 403
     is still a plain `GitHubError`, and is not retried.
   * A READER built with `fallback_suppliers` answers a refusal by minting from
     the next pool slot, retrying the request once as that identity, and
     keeping that supplier as its re-mint source — so the 50-minute re-mint
     cannot put it back on the refused slot.
+  * A fallback whose MINT raises is skipped, not fatal: the client stays where
+    it is, the next slot is tried, and when every one is spent the exception
+    that propagates is the original `RateLimited` — never the mint's error.
   * A client with NO fallback (the worker — WHICH identity acts is the thing
     under test) waits for the reset through an injectable sleeper, capped by
-    a named constant inside the job's budget, and retries once.
+    a named constant that leaves the sweep's own budget room, and retries once.
   * The driver builds the reader's fallbacks from HARNESS_POOL_APP_ID_<n> /
-    HARNESS_POOL_APP_PRIVATE_KEY_<n>, in slot order after the selected slot,
-    wrapping; the `github-spend:` line names where the reads ended up.
-  * harness.yml hands the scenario step every slot's pair and salts the pool
-    key with the run attempt, so a re-run lands somewhere else.
+    HARNESS_POOL_APP_PRIVATE_KEY_<n>, ordered by the probe's headroom with the
+    worker App last; the `github-spend:` lines name every slot the reads rode
+    and what each one's own hour paid.
+  * harness.yml hands the scenario step every slot's pair and its headroom,
+    and salts the pool key with the run attempt.
 
 Run: python3 -m pytest tests/test_harness_rate_limit_survival.py -v
 """
@@ -46,7 +59,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
+import subprocess
 import sys
 import unittest
 import urllib.error
@@ -123,6 +138,66 @@ class RateLimitedIsNamedTest(unittest.TestCase):
         self.assertEqual(caught.exception.reset, 1790049858)
         self.assertEqual(len(naps), 1, "one wait, never a loop")
         self.assertEqual(len(api.tokens), 2, "one retry after the wait, then it stands")
+
+    def test_a_secondary_limit_is_read_off_retry_after_not_the_primary_window(self):
+        # The review-round-1 defect, end to end. GitHub's secondary-limit
+        # refusal carries BOTH headers: `retry-after: 60` (this refusal) and
+        # the primary window's `x-ratelimit-reset`, 55 minutes out. Reading
+        # the primary one made the client conclude it had been asked to wait
+        # the best part of an hour, judge that past the cap, and give up on a
+        # refusal it only had to sit out — with no fallback identity, which
+        # is the worker's shape by design.
+        naps, log = [], []
+        secondary = (
+            b'{"message": "You have exceeded a secondary rate limit and have '
+            b'been temporarily blocked from content creation. Please retry '
+            b'your request again later."}'
+        )
+        now = 1_000_000.0
+        api = ScriptedOpener([
+            _refusal(
+                body=secondary,
+                headers={
+                    "retry-after": "60",
+                    "x-ratelimit-reset": str(int(now + 55 * 60)),
+                },
+            ),
+            (201, b'{"id": 9}', {}),
+        ])
+        worker = GitHub(
+            "ghs_worker", opener=api, wall_clock=lambda: now,
+            sleeper=naps.append, log=log.append, identity="worker",
+        )
+        self.assertEqual(worker.create_comment(REPO, 1, "x"), {"id": 9})
+        self.assertEqual(len(naps), 1, f"the one-minute pause must be waited out: {log}")
+        self.assertGreaterEqual(naps[0], 60)
+        self.assertLessEqual(naps[0], 65, "~60s, not the primary window's 55 minutes")
+        self.assertEqual(api.tokens, ["Bearer ghs_worker", "Bearer ghs_worker"])
+
+    def test_retry_after_wins_over_x_ratelimit_reset_in_the_header_read(self):
+        # The unit under the test above: whichever order the mapping happens
+        # to iterate in, `retry-after` is the one about THIS refusal.
+        self.assertEqual(
+            github_api._reset_from_headers(
+                {"retry-after": "60", "x-ratelimit-reset": "1790000000"}, 1000.0
+            ),
+            1060,
+        )
+        # Absent, the primary window is still better than nothing.
+        self.assertEqual(
+            github_api._reset_from_headers({"x-ratelimit-reset": "1790000000"}, 1000.0),
+            1790000000,
+        )
+        # Unparseable `retry-after` falls through rather than swallowing the
+        # other header (GitHub may send an HTTP-date form).
+        self.assertEqual(
+            github_api._reset_from_headers(
+                {"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT",
+                 "x-ratelimit-reset": "1790000000"},
+                1000.0,
+            ),
+            1790000000,
+        )
 
     def test_a_429_with_retry_after_is_RateLimited_too(self):
         naps = []
@@ -245,6 +320,97 @@ class ReaderFallsBackTest(unittest.TestCase):
         self.assertEqual(reader.request_bytes("GET", "/repos/x/actions/runs/1/logs"), b"PK\x03\x04")
         self.assertEqual(api.tokens, ["Bearer ghs_slot1", "Bearer ghs_slot2"])
 
+    def test_a_fallback_whose_mint_raises_is_skipped_for_the_next_slot(self):
+        # A supply() is two live REST calls behind an openssl signature, and
+        # it can raise — 404 when the App is not installed on the sandbox,
+        # 401, 5xx, an openssl failure. Unguarded that killed the run,
+        # abandoned every healthy slot still in the list, and replaced a
+        # recoverable refusal with an unrelated error.
+        api = ScriptedOpener([_refusal(), (200, b'{"ok": 1}', {})])
+        log = []
+
+        def dead():
+            raise GitHubError(404, '{"message": "Not Found"}')
+
+        reader = GitHub(
+            "ghs_slot1", opener=api, identity="pool slot 1", log=log.append,
+            fallback_suppliers=[("pool slot 2", dead),
+                                ("pool slot 3", lambda: "ghs_slot3")],
+        )
+        self.assertEqual(reader.request("GET", "/repos/x"), {"ok": 1})
+        self.assertEqual(api.tokens, ["Bearer ghs_slot1", "Bearer ghs_slot3"])
+        self.assertEqual(reader.identity, "pool slot 3")
+        self.assertEqual(reader.identity_trail, ["pool slot 1", "pool slot 3"])
+        self.assertTrue(
+            any("pool slot 2" in line and "mint" in line for line in log),
+            f"the dead slot must be said in the run log, got {log}",
+        )
+
+    def test_when_every_fallback_fails_to_mint_the_original_refusal_stands(self):
+        # Not the mint's 404: `_send`'s recovery loop and every caller that
+        # branches on `RateLimited` have to still see the refusal, and the
+        # wait path has to get its turn.
+        naps = []
+        api = ScriptedOpener([
+            _refusal(headers={"x-ratelimit-reset": "1300"}),
+            _refusal(headers={"x-ratelimit-reset": "1300"}),
+        ])
+
+        def dead(which):
+            def supply():
+                raise RuntimeError(f"openssl RS256 signing failed ({which})")
+            return supply
+
+        reader = GitHub(
+            "ghs_slot1", opener=api, identity="pool slot 1",
+            wall_clock=lambda: 1000.0, sleeper=naps.append, log=lambda *_: None,
+            fallback_suppliers=[("pool slot 2", dead(2)), ("pool slot 3", dead(3))],
+        )
+        with self.assertRaises(github_api.RateLimited) as caught:
+            reader.request("GET", "/repos/x")
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.reset, 1300)
+        # Still on the slot it started on, and the wait it could not move
+        # away from was taken instead.
+        self.assertEqual(reader.identity, "pool slot 1")
+        self.assertEqual(reader.identity_trail, ["pool slot 1"])
+        self.assertEqual(len(naps), 1)
+        self.assertEqual(len(api.tokens), 2)
+
+    def test_a_failed_mint_leaves_the_re_mint_source_alone(self):
+        # The poisoning half: `_supplier` used to be assigned before the mint
+        # was attempted, so one bad slot broke every LATER proactive re-mint
+        # — `current_token()` included — for the rest of the run.
+        clock = [0.0]
+        healthy = []
+
+        def slot1():
+            healthy.append(1)
+            return f"ghs_slot1_{len(healthy)}"
+
+        def dead():
+            raise GitHubError(401, '{"message": "Bad credentials"}')
+
+        api = ScriptedOpener([
+            _refusal(headers={"x-ratelimit-reset": "100"}),
+            (200, b"[]", {}),
+            (200, b"[]", {}),
+        ])
+        reader = GitHub(
+            "ghs_slot1", opener=api, identity="pool slot 1",
+            clock=lambda: clock[0], token_supplier=slot1,
+            sleeper=lambda _: None, wall_clock=lambda: 0.0, log=lambda *_: None,
+            fallback_suppliers=[("pool slot 2", dead)],
+        )
+        # Refused, slot 2 will not mint, the wait recovers it on slot 1.
+        self.assertEqual(reader.list_open_prs(REPO), [])
+        self.assertEqual(reader.identity, "pool slot 1")
+        # Past the refresh window the client still re-mints, from its own key.
+        clock[0] += github_api.TOKEN_REFRESH_SECONDS + 1
+        self.assertEqual(reader.current_token(), "ghs_slot1_1")
+        reader.list_open_prs(REPO)
+        self.assertEqual(api.tokens[-1], "Bearer ghs_slot1_1")
+
     def test_without_fallbacks_and_without_a_reset_the_client_is_exactly_the_old_one(self):
         api = ScriptedOpener([_refusal()])
         naps = []
@@ -287,10 +453,61 @@ class WorkerWaitsForTheResetTest(unittest.TestCase):
             worker.create_comment(REPO, 1, "x")
         self.assertEqual(naps, [])
 
-    def test_the_cap_sits_inside_the_jobs_budget(self):
-        # harness.yml: timeout-minutes 180, scenario receipt budget 40.
+    def test_the_cap_leaves_the_sweeps_own_budget_room(self):
+        # READ the budget out of harness.yml rather than restating it: a cap
+        # pinned against a second copy of the number drifts silently when
+        # either moves. And the relation is STRICTLY less — the receipt
+        # annotates past BUDGET_MINUTES, and a cap AT the budget makes every
+        # waited run trip a warning whose own text says such a run "holds the
+        # sandbox, holds every queued run behind it, and holds the release
+        # channel with them".
+        doc = yaml.safe_load(HARNESS_YML.read_text(encoding="utf-8"))
+        steps = {s.get("name") or s.get("uses"): s for s in doc["jobs"]["harness"]["steps"]}
+        budget = int(steps["Scenario duration receipt"]["env"]["BUDGET_MINUTES"])
         self.assertGreater(github_api.RATE_LIMIT_WAIT_CAP_SECONDS, 0)
-        self.assertLessEqual(github_api.RATE_LIMIT_WAIT_CAP_SECONDS, 40 * 60)
+        self.assertLess(
+            github_api.RATE_LIMIT_WAIT_CAP_SECONDS, budget * 60,
+            f"the wait cap must leave room inside the {budget}m scenario budget",
+        )
+        # And still long enough for the real refusal: the counter that turned
+        # away run 35664409350 resets at ~:04, so a refusal at :40 waits ~25.
+        self.assertGreaterEqual(github_api.RATE_LIMIT_WAIT_CAP_SECONDS, 24 * 60)
+
+    def test_a_401_after_a_remint_still_reaches_the_rate_limit_recovery(self):
+        # The 401 arm used to `return attempt()` — outside the `while`, so a
+        # refusal on the post-re-mint attempt was neither moved nor waited
+        # out, and the whole of this card was bypassed by one expired token.
+        naps = []
+        api = ScriptedOpener([
+            _refusal(status=401, body=b'{"message": "Bad credentials"}'),
+            _refusal(headers={"x-ratelimit-reset": "1300"}),
+            (200, b'{"ok": 1}', {}),
+        ])
+        worker = GitHub(
+            "ghs_stale", opener=api, token_supplier=lambda: "ghs_fresh",
+            wall_clock=lambda: 1000.0, sleeper=naps.append, log=lambda *_: None,
+        )
+        self.assertEqual(worker.request("POST", "/repos/x", {"a": 1}), {"ok": 1})
+        self.assertEqual(
+            api.tokens,
+            ["Bearer ghs_stale", "Bearer ghs_fresh", "Bearer ghs_fresh"],
+        )
+        self.assertEqual(len(naps), 1, "the refusal after the re-mint is waited out")
+
+    def test_a_persistent_401_still_surfaces_after_exactly_one_remint(self):
+        api = ScriptedOpener([
+            _refusal(status=401, body=b'{"message": "Bad credentials"}'),
+            _refusal(status=401, body=b'{"message": "Bad credentials"}'),
+        ])
+        worker = GitHub(
+            "ghs_stale", opener=api, log=lambda *_: None,
+            token_supplier=lambda: "ghs_fresh",
+        )
+        with self.assertRaises(GitHubError) as caught:
+            worker.request("GET", "/repos/x")
+        self.assertEqual(caught.exception.status, 401)
+        self.assertNotIsInstance(caught.exception, github_api.RateLimited)
+        self.assertEqual(len(api.tokens), 2, "one re-mint, never a loop")
 
     def test_a_reset_already_behind_us_retries_at_once(self):
         naps = []
@@ -322,34 +539,88 @@ BASE_ENV = {
 
 class DriverBuildsTheFallbacksTest(unittest.TestCase):
 
-    def test_fallbacks_follow_the_selected_slot_and_wrap(self):
+    def test_fallbacks_are_ordered_by_the_probes_headroom(self):
+        # The probe read every slot's meter in this same job, and it chose
+        # slot 3 because 3 read best. Walking slot numbers threw those
+        # readings away and sent the first move to whichever slot happened to
+        # come next; roomiest-first sends it where there is actually room.
         minted = []
 
-        def fake_mint(app_id, private_key_pem, repo):
+        def fake_mint(app_id, private_key_pem, repo, **kwargs):
             minted.append((app_id, private_key_pem, repo))
             return f"ghs_{app_id}"
 
+        env = {**POOL_ENV, "HARNESS_POOL_HEADROOM": "1:4900,2:120,3:4990,4:3100"}
         fallbacks = harness_main.pool_fallbacks(
-            POOL_ENV, "3", REPO, mint=fake_mint, log=lambda *_: None
+            env, "3", REPO, mint=fake_mint, log=lambda *_: None
         )
+        # 4 (3,100) before 2 (120), and slot 1 last however well it reads —
+        # it is the WORKER App, whose hour the worker's own writes ride.
         self.assertEqual(
-            [name for name, _ in fallbacks], ["pool slot 4", "pool slot 1", "pool slot 2"]
+            [name for name, _ in fallbacks],
+            ["pool slot 4", "pool slot 2", "pool slot 1"],
         )
         self.assertEqual(fallbacks[0][1](), "ghs_4266539")
         self.assertEqual(minted, [("4266539", "PEM4", REPO)])
 
+    def test_unread_and_refused_slots_sort_behind_the_readable_ones(self):
+        env = {**POOL_ENV, "HARNESS_POOL_HEADROOM": "1:4900,2:refused,3:10,4:unreadable"}
+        fallbacks = harness_main.pool_fallbacks(
+            env, "3", REPO, mint=lambda *a, **k: "t", log=lambda *_: None
+        )
+        # Nothing readable but slot 1 (last by rule), so: unreadable, then
+        # the slot the probe was itself refused on, then the worker App.
+        self.assertEqual(
+            [name for name, _ in fallbacks],
+            ["pool slot 4", "pool slot 2", "pool slot 1"],
+        )
+
+    def test_without_headroom_the_order_falls_back_to_slot_number(self):
+        # A local run, or a selector that was not asked for the readings.
+        fallbacks = harness_main.pool_fallbacks(
+            POOL_ENV, "3", REPO, mint=lambda *a, **k: "t", log=lambda *_: None
+        )
+        self.assertEqual(
+            [name for name, _ in fallbacks],
+            ["pool slot 2", "pool slot 4", "pool slot 1"],
+        )
+        # Garbage is no readings, never a crash.
+        self.assertEqual(
+            [
+                name
+                for name, _ in harness_main.pool_fallbacks(
+                    {**POOL_ENV, "HARNESS_POOL_HEADROOM": "not-a-reading"},
+                    "3", REPO, mint=lambda *a, **k: "t", log=lambda *_: None,
+                )
+            ],
+            ["pool slot 2", "pool slot 4", "pool slot 1"],
+        )
+
+    def test_pool_headroom_parses_the_selectors_line(self):
+        self.assertEqual(
+            harness_main.pool_headroom("1:4812,2:refused,3:unreadable,4:4990"),
+            {1: 4812, 2: "refused", 3: None, 4: 4990},
+        )
+        self.assertEqual(harness_main.pool_headroom(""), {})
+        self.assertEqual(harness_main.pool_headroom(None), {})
+
     def test_a_slot_missing_its_pair_is_skipped_and_an_empty_pool_is_empty(self):
         env = {k: v for k, v in POOL_ENV.items() if k.endswith(("_1", "_3"))}
-        fallbacks = harness_main.pool_fallbacks(env, "1", REPO, mint=lambda *_: "t", log=lambda *_: None)
+        fallbacks = harness_main.pool_fallbacks(env, "1", REPO, mint=lambda *a, **k: "t", log=lambda *_: None)
         self.assertEqual([name for name, _ in fallbacks], ["pool slot 3"])
         half = {"HARNESS_POOL_APP_ID_2": "4266537"}  # id without its key
-        self.assertEqual(harness_main.pool_fallbacks(half, "1", REPO, mint=lambda *_: "t", log=lambda *_: None), [])
-        self.assertEqual(harness_main.pool_fallbacks({}, "1", REPO, mint=lambda *_: "t", log=lambda *_: None), [])
+        self.assertEqual(harness_main.pool_fallbacks(half, "1", REPO, mint=lambda *a, **k: "t", log=lambda *_: None), [])
+        self.assertEqual(harness_main.pool_fallbacks({}, "1", REPO, mint=lambda *a, **k: "t", log=lambda *_: None), [])
 
-    def test_the_spend_line_names_where_the_reads_ended_up(self):
+    def test_the_spend_lines_name_every_slot_and_what_each_one_paid(self):
         # Five polls as the reader: the first is refused on slot 3, the reader
         # moves to slot 4 and the remaining reads ride it. The worker's one
         # write is untouched.
+        #
+        # ONE LINE PER SLOT. Merging the two into `reader (pool slot 3 → pool
+        # slot 4) 6 billed` put two installations' billing behind one label,
+        # which is exactly the question DRE-4132's ledger exists to answer the
+        # next time a slot runs dry.
         refused = []
 
         def opener(req):
@@ -361,7 +632,7 @@ class DriverBuildsTheFallbacksTest(unittest.TestCase):
 
         minted = []
 
-        def fake_mint(app_id, private_key_pem, repo):
+        def fake_mint(app_id, private_key_pem, repo, **kwargs):
             minted.append(app_id)
             return f"ghs_fresh_{app_id}"
 
@@ -369,22 +640,63 @@ class DriverBuildsTheFallbacksTest(unittest.TestCase):
             **BASE_ENV, **POOL_ENV,
             "HARNESS_READER_TOKEN": "ghs-reader", "HARNESS_POOL_SLOT": "3",
             "HARNESS_READER_APP_ID": "4266538", "HARNESS_READER_APP_PRIVATE_KEY": "PEM3",
+            "HARNESS_POOL_HEADROOM": "1:4900,2:120,3:4990,4:3100",
         }
         code, out = _drive(env, opener, fake_mint)
         self.assertEqual(code, 0, out)
-        self.assertEqual(minted, ["4266539"], "the next slot after 3 is 4")
+        self.assertEqual(minted, ["4266539"], "the roomiest slot after 3 is 4")
         lines = [ln for ln in out.splitlines() if ln.startswith("github-spend:")]
         self.assertIn(
+            "github-spend: reader (pool slot 3) 1 billed, 0 free (304 Not Modified)",
+            lines,
+        )
+        self.assertIn(
+            "github-spend: reader (pool slot 4) 5 billed, 0 free (304 Not Modified)",
+            lines,
+        )
+        self.assertNotIn(
             "github-spend: reader (pool slot 3 → pool slot 4) 6 billed, 0 free (304 Not Modified)",
             lines,
         )
         self.assertIn("github-spend: worker 1 billed, 0 free (304 Not Modified)", lines)
+        self.assertIn("github-spend: qa 0 billed, 0 free (304 Not Modified)", lines)
 
     def test_without_a_refusal_the_spend_line_is_exactly_the_old_one(self):
         env = {**BASE_ENV, **POOL_ENV, "HARNESS_READER_TOKEN": "ghs-reader", "HARNESS_POOL_SLOT": "3"}
         code, out = _drive(env, lambda req: (200, b"[]", {"ETag": '"x"'}), lambda *_: "unused")
         self.assertEqual(code, 0, out)
         self.assertIn("github-spend: reader (pool slot 3) 5 billed, 0 free (304 Not Modified)", out)
+
+    def test_a_rate_limited_mint_waits_on_the_callers_sleeper(self):
+        # `mint_installation_token` builds its OWN client for the two
+        # JWT-authed calls, and that client's default sleeper is the real
+        # `time.sleep`. Refused there, it would nap for real INSIDE the outer
+        # client's recovery, unreachable by the sleeper the caller injected —
+        # so the sleeper is threaded all the way down.
+        naps = []
+        calls = []
+
+        def opener(req):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise _refusal(headers={"retry-after": "30"})
+            if req.full_url.endswith("/installation"):
+                return 200, b'{"id": 4242}', {}
+            return 201, b'{"token": "ghs_minted"}', {}
+
+        supply = harness_main.token_supplier(
+            "reader (pool slot 4)", "4266539", "PEM4", REPO,
+            mint=lambda *a, **kw: harness_main.app_token.mint_installation_token(
+                *a, opener=opener, **kw
+            ),
+            log=lambda *_: None,
+            sleeper=naps.append,
+        )
+        with mock.patch.object(harness_main.app_token, "app_jwt", lambda *a: "jwt"):
+            self.assertEqual(supply(), "ghs_minted")
+        self.assertEqual(len(naps), 1, "the mint's own refusal was waited out")
+        self.assertGreaterEqual(naps[0], 30)
+        self.assertLessEqual(naps[0], 35)
 
 
 class _PollingScenario(framework.Scenario):
@@ -449,6 +761,55 @@ class HarnessWorkflowWiringTest(unittest.TestCase):
         key = self.steps["Select dispatch-pool app"]["env"]["BUREAU_POOL_KEY"]
         self.assertIn("github.run_id", key)
         self.assertIn("github.run_attempt", key)
+
+    def test_the_selector_is_asked_for_the_headroom_and_it_reaches_the_driver(self):
+        # The readings the probe already paid for, carried from the step that
+        # took them to the step that needs them.
+        self.assertIn(
+            "--with-headroom",
+            self.steps["Select dispatch-pool app"]["run"],
+        )
+        env = self.steps["Run harness scenarios"]["env"]
+        self.assertIn("steps.pool.outputs.headroom", env["HARNESS_POOL_HEADROOM"])
+
+    def test_the_selector_still_prints_only_output_lines(self):
+        # stdout is appended VERBATIM to $GITHUB_OUTPUT — a `headroom=` line
+        # has to be one key=value with no spaces, and must carry no app id
+        # and no token.
+        env = {
+            "BUREAU_APP_ID": "3350400", "BUREAU_APP_ID_2": "4266537",
+            "BUREAU_APP_ID_3": "4266538", "BUREAU_APP_ID_4": "4266539",
+            "BUREAU_APP_PRIVATE_KEY": "PRIVATE-KEY-MATERIAL",
+            "BUREAU_POOL_KEY": "harness:1-1",
+            "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-harness",
+            "BUREAU_FAKE_POOL_PROBES": json.dumps({
+                "1": {"status": 200, "x-ratelimit-remaining": "4900"},
+                "2": {"status": 403},
+                "3": None,
+                "4": {"status": 200, "x-ratelimit-remaining": "3100"},
+            }),
+        }
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "dispatch_pool.py"),
+             "select", "--with-headroom"],
+            capture_output=True, text=True, env={**os.environ, **env}, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for line in result.stdout.splitlines():
+            self.assertRegex(line, r"^(n|reason|headroom)=\S+$")
+        self.assertIn(
+            "headroom=1:4900,2:refused,3:unreadable,4:3100",
+            result.stdout.splitlines(),
+        )
+        self.assertNotIn("PRIVATE-KEY-MATERIAL", result.stdout + result.stderr)
+        # And without the flag the six other consumers' shape is untouched.
+        plain = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "dispatch_pool.py"), "select"],
+            capture_output=True, text=True, env={**os.environ, **env}, check=False,
+        )
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        for line in plain.stdout.splitlines():
+            self.assertRegex(line, r"^(n|reason)=\S+$")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,11 @@ Env (harness.yml sets all of these):
                         drifting back to the worker's.
   HARNESS_POOL_SLOT     the slot the reads rode on (`n` from the selector),
                         named in the reader's `github-spend:` line.
+  HARNESS_POOL_HEADROOM optional — `headroom=` from the same selector run,
+                        `1:4812,2:refused,3:unreadable,4:4990`: what the
+                        probe read off each slot's meter. Orders the
+                        reader's fallbacks roomiest-first when a refusal
+                        moves it (DRE-4575). Absent: slot order.
   HARNESS_WORKER_APP_ID / HARNESS_WORKER_APP_PRIVATE_KEY
   HARNESS_CONSOLE_TOKEN optional — a token scoped to the CONSOLE's repository,
                         for the lane contract's console-parity clause. Absent:
@@ -88,16 +93,26 @@ def token_supplier(
     repo: str,
     mint=app_token.mint_installation_token,
     log=print,
+    sleeper=None,
 ):
     """A re-mint callable for GitHub(token_supplier=...), or None when the
     App credentials are not in the env (local PAT runs keep their static
-    token and the old behavior)."""
+    token and the old behavior).
+
+    `sleeper`, when given, is handed to the mint so the client it builds for
+    its two JWT-authed calls waits on the CALLER's clock (DRE-4575) — a mint
+    is run inside a rate-limit recovery and can be refused itself. None means
+    the mint keeps its own default (`time.sleep`), which is also what keeps
+    the call three positional arguments for every stand-in mint in the suite.
+    """
     if not app_id or not private_key_pem:
         return None
 
     def supply() -> str:
         log(f"re-minting the {role} App installation token (hourly TTL)")
-        return mint(app_id, private_key_pem, repo)
+        if sleeper is None:
+            return mint(app_id, private_key_pem, repo)
+        return mint(app_id, private_key_pem, repo, sleeper=sleeper)
 
     return supply
 
@@ -105,11 +120,50 @@ def token_supplier(
 _POOL_APP_ID_RE = re.compile(r"^HARNESS_POOL_APP_ID_([0-9]+)$")
 
 
-def pool_fallbacks(env, selected_slot: str, repo: str, mint=None, log=print) -> list:
+def pool_headroom(raw: str | None) -> dict:
+    """`{slot: remaining | None | "refused"}` from the selector's `headroom=`
+    output — `1:4812,2:refused,3:unreadable,4:4990` (dispatch_pool.py,
+    DRE-4575). An int is the `x-ratelimit-remaining` the probe read, None is
+    a slot nothing could be read for, `"refused"` is one GitHub turned the
+    probe itself away from.
+
+    The probe read every slot's meter in this same job; without this the
+    fallback order threw those readings away and walked slot numbers. A
+    malformed or absent value is simply no readings — the order degrades to
+    slot number, never a crash.
+    """
+    out: dict = {}
+    for item in (raw or "").split(","):
+        slot, _, reading = item.strip().partition(":")
+        if not slot.strip().isdigit():
+            continue
+        reading = reading.strip()
+        if reading == "refused":
+            out[int(slot)] = "refused"
+            continue
+        try:
+            out[int(slot)] = int(reading)
+        except ValueError:
+            out[int(slot)] = None
+    return out
+
+
+def pool_fallbacks(
+    env, selected_slot: str, repo: str, mint=None, log=print, sleeper=None
+) -> list:
     """`(name, supply)` pairs for every OTHER configured pool slot — the
     reader's next identities when GitHub refuses the one it is on (DRE-4575).
 
-    In slot order after the selected one, wrapping: selected 3 → 4, 1, 2.
+    ROOMIEST FIRST, SLOT 1 LAST. The order is the probe's own readings,
+    handed down from the selector in `HARNESS_POOL_HEADROOM`: the slot with
+    the most requests left is tried first, a slot nothing could be read for
+    after those, and a slot the probe itself was refused last of all. Walking
+    slot numbers instead — the first cut of this card — put selected-slot 4's
+    first move onto slot 1, which is the WORKER App: the bucket the worker
+    client's own writes are already charged to, and the one the probe had
+    just ranked below the slot it chose. So slot 1 stays last however well it
+    reads, and ties fall back to slot order.
+
     A slot is configured iff `HARNESS_POOL_APP_ID_<n>` AND its
     `HARNESS_POOL_APP_PRIVATE_KEY_<n>` are both set (harness.yml passes every
     pair; slot 1 is the worker App). Each supply mints sandbox-scoped through
@@ -136,12 +190,25 @@ def pool_fallbacks(env, selected_slot: str, repo: str, mint=None, log=print) -> 
         current = int(selected_slot)
     except (TypeError, ValueError):
         current = 1
-    others = sorted(n for n in slots if n != current)
-    after = [n for n in others if n > current] + [n for n in others if n < current]
+    headroom = pool_headroom(env.get("HARNESS_POOL_HEADROOM"))
+
+    def rank(n: int):
+        # (worker App last, read before unread before refused, roomiest
+        # first, then slot number). A slot the selector never mentioned is
+        # "not read", which is not the same as "empty".
+        reading = headroom.get(n)
+        if isinstance(reading, int):
+            return (n == 1, 0, -reading, n)
+        return (n == 1, 2 if reading == "refused" else 1, 0, n)
+
+    after = sorted((n for n in slots if n != current), key=rank)
     return [
         (
             f"pool slot {n}",
-            token_supplier(f"reader (pool slot {n})", *slots[n], repo, mint=mint, log=log),
+            token_supplier(
+                f"reader (pool slot {n})", *slots[n], repo,
+                mint=mint, log=log, sleeper=sleeper,
+            ),
         )
         for n in after
     ]
@@ -160,6 +227,13 @@ def spend_lines(clients) -> list:
     (DRE-4282) is its own identity and its own line, labelled with the pool
     slot it was minted from; absent, there is no line, and the worker's
     `billed` is the reads.
+
+    A client that MOVED identity mid-run (DRE-4575) gets one line per slot,
+    each with what that slot's own hour paid — `reader (pool slot 3) 1
+    billed` then `reader (pool slot 4) 5 billed`. Merging them into one
+    number would put two installations' billing behind one label, which is
+    precisely the question this ledger exists to answer the next time a slot
+    runs dry. A client that never moved reads exactly as it did before.
     """
     lines, seen = [], set()
     for role, client in clients:
@@ -168,14 +242,23 @@ def spend_lines(clients) -> list:
         seen.add(id(client))
         # Telemetry must never be what fails a run: a stand-in client with no
         # ledger is skipped, not crashed on.
-        ledger = getattr(client, "spend", None)
-        if not callable(ledger):
-            continue
-        spend = ledger()
-        lines.append(
-            f"github-spend: {role} {spend['billed']} billed, "
-            f"{spend['free']} free (304 Not Modified)"
-        )
+        history = getattr(client, "spend_history", None)
+        if callable(history):
+            entries = history()
+        else:
+            ledger = getattr(client, "spend", None)
+            if not callable(ledger):
+                continue
+            entries = [(getattr(client, "identity", None), ledger())]
+        for identity, spend in entries:
+            # The reader's identity is a pool slot and the role is `reader`,
+            # so the label names both; every other client IS its role and
+            # would only read as `worker (worker)`.
+            label = role if not identity or identity == role else f"{role} ({identity})"
+            lines.append(
+                f"github-spend: {label} {spend['billed']} billed, "
+                f"{spend['free']} free (304 Not Modified)"
+            )
     return lines
 
 
@@ -347,6 +430,9 @@ def main(argv=None) -> int:
     gh_qa = (
         GitHub(
             qa_token,
+            # Named, like every other client: the spend line labels a client
+            # by its identity, and `qa` is what it has always read as.
+            identity="qa",
             token_supplier=token_supplier(
                 "qa",
                 os.environ.get("HARNESS_QA_APP_ID", ""),
@@ -373,7 +459,7 @@ def main(argv=None) -> int:
     # reports UNEVALUATED — which the contract escalates to a hard failure from
     # the phase it names, so this is a schedule, not a shrug.
     console_token = os.environ.get("HARNESS_CONSOLE_TOKEN")
-    gh_console = GitHub(console_token) if console_token else None
+    gh_console = GitHub(console_token, identity="console") if console_token else None
     if not gh_console:
         print(
             "note: HARNESS_CONSOLE_TOKEN unset — the console's state lists "
@@ -473,15 +559,14 @@ def main(argv=None) -> int:
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
-    # The reader's line names the slot its reads rode on (DRE-4282) — every
-    # slot, in order, when a refusal moved it mid-run (DRE-4575: `pool slot 3
-    # → pool slot 4`); with no reader the worker's line IS the reads, and the
-    # note above said so.
-    reader_trail = getattr(gh_reader, "identity_trail", None) or [f"pool slot {pool_slot}"]
+    # The reader's line names the slot its reads rode on (DRE-4282) — and one
+    # line PER slot, with that slot's own billing, when a refusal moved it
+    # mid-run (DRE-4575). With no reader the worker's line IS the reads, and
+    # the note above said so.
     for line in spend_lines(
         [
             ("worker", gh),
-            (f"reader ({' → '.join(reader_trail)})", gh_reader),
+            ("reader", gh_reader),
             ("qa", gh_qa),
             ("console", gh_console),
         ]

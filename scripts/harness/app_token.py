@@ -71,12 +71,30 @@ def app_jwt(app_id: str, private_key_pem: str, now: float | None = None) -> str:
 
 
 def mint_installation_token(
-    app_id: str, private_key_pem: str, repo: str, api_url: str = API_URL, opener=None
+    app_id: str,
+    private_key_pem: str,
+    repo: str,
+    api_url: str = API_URL,
+    opener=None,
+    sleeper=time.sleep,
 ) -> str:
     """A fresh installation token for `repo` (owner/name), scoped to that
     single repository — never the whole installation. Two REST calls, both
-    JWT-authenticated, riding the existing client's retry logic."""
-    gh = GitHub(app_jwt(app_id, private_key_pem), api_url=api_url, opener=opener)
+    JWT-authenticated, riding the existing client's retry logic.
+
+    `sleeper` is threaded into that inner client on purpose (DRE-4575). A
+    mint happens INSIDE the caller's own rate-limit recovery, and those two
+    JWT-authed calls can themselves be refused; with the client's default
+    `time.sleep` the inner wait would be a real nap nested inside the outer
+    one, unreachable by the sleeper the caller injected and therefore by any
+    test. Pass the caller's sleeper and the whole nesting is one clock.
+    """
+    gh = GitHub(
+        app_jwt(app_id, private_key_pem),
+        api_url=api_url,
+        opener=opener,
+        sleeper=sleeper,
+    )
     installation = gh.request("GET", f"/repos/{repo}/installation")
     out = gh.request(
         "POST",

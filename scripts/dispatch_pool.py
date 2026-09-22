@@ -124,7 +124,12 @@ steers to the roomiest instead.
 Output contract
 ---------------
 stdout is appended VERBATIM to ``$GITHUB_OUTPUT`` by the workflow, so it
-carries only ``n=<slot>`` and ``reason=<why>`` lines; humans read stderr:
+carries only ``n=<slot>`` and ``reason=<why>`` lines — plus, with
+``--with-headroom``, one ``headroom=1:4812,2:refused,3:unreadable,4:4990``
+line naming what the probe read off every slot. That flag is opt-in BECAUSE
+the default shape is a contract seven workflows append to: only harness.yml
+asks for it, so the reader's mid-run fallbacks can be ordered roomiest-first
+instead of by slot number (DRE-4575). Humans read stderr:
 one greppable line per run, every slot's reading and the rule —
 ``dispatch-pool: slot1=4,812 slot2=4,997 slot3=refused slot4=4,990 →
 selected slot 4 (spread)``. The selector must never fail a build: any
@@ -408,19 +413,43 @@ def log_line(slot: int, reason: str, readings: dict[int, Reading], now: float) -
     return f"dispatch-pool: {' '.join(parts)} → selected slot {slot} ({reason})"
 
 
+def headroom_line(readings: dict[int, Reading]) -> str:
+    """`headroom=1:4812,2:refused,3:unreadable,4:4990` — every slot's meter as
+    an OUTPUT, for a consumer that has to make a second choice later in the
+    run (DRE-4575: the harness reader's fallback order).
+
+    Numbers only, never an app id and never a token: the remaining count is
+    the whole of it. No spaces, so the line stays one `key=value` for
+    `$GITHUB_OUTPUT`.
+    """
+    parts = []
+    for slot in sorted(readings):
+        reading = readings[slot]
+        if reading.refused:
+            parts.append(f"{slot}:refused")
+        elif reading.remaining is None:
+            parts.append(f"{slot}:unreadable")
+        else:
+            parts.append(f"{slot}:{reading.remaining}")
+    return "headroom=" + ",".join(parts)
+
+
 def main(argv: list[str]) -> int:
     """CLI for every consumer workflow.
 
-      select    print `n=<slot>` + `reason=<why>` (stdout -> $GITHUB_OUTPUT)
+      select                    print `n=<slot>` + `reason=<why>`
+                                (stdout -> $GITHUB_OUTPUT)
+      select --with-headroom    …and a `headroom=<slot>:<remaining>,…` line
 
     Exit 0 ALWAYS on `select`: a selector failure must never fail a build —
     any unexpected error routes to the original app (slot 1).
     """
     import time
 
-    if not argv or argv[0] != "select":
-        print("usage: dispatch_pool.py select", file=sys.stderr)
+    if not argv or argv[0] != "select" or set(argv[1:]) - {"--with-headroom"}:
+        print("usage: dispatch_pool.py select [--with-headroom]", file=sys.stderr)
         return 2
+    with_headroom = "--with-headroom" in argv[1:]
     try:
         slot, reason, readings = decide()
     except Exception as exc:  # never block a build on the selector
@@ -438,6 +467,8 @@ def main(argv: list[str]) -> int:
         print(log_line(slot, reason, readings, time.time()), file=sys.stderr)
     print(f"n={slot}")
     print(f"reason={reason}")
+    if with_headroom:
+        print(headroom_line(readings))
     return 0
 
 

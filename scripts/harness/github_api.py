@@ -65,10 +65,15 @@ class GitHubError(RuntimeError):
 
 #: How long a client with NO other identity to turn to (the worker) waits for
 #: GitHub's meter to reset before sending a refused call once more (DRE-4575).
-#: Inside the job: harness.yml caps the job at 180 minutes and the scenario
-#: receipt's budget is 40. The counter that refused run 35664409350's four
-#: attempts resets at about :04 past the hour, so a refusal at :40 waits ~25.
-RATE_LIMIT_WAIT_CAP_SECONDS = 40 * 60
+#: Sized against the SWEEP's budget, not the job's timeout: harness.yml's
+#: scenario receipt warns past `BUDGET_MINUTES: "40"` — and that annotation
+#: says a run that long "holds the sandbox, holds every queued run behind it,
+#: and holds the release channel with them" — while healthy runs take
+#: 9m40s–18m. A cap AT the budget would make every waited run trip it. 25
+#: leaves the sweep its room and still covers the real refusal: the counter
+#: that turned away run 35664409350's four attempts resets at about :04 past
+#: the hour, so a refusal at :40 waits ~25.
+RATE_LIMIT_WAIT_CAP_SECONDS = 25 * 60
 
 
 class RateLimited(GitHubError):
@@ -76,10 +81,9 @@ class RateLimited(GitHubError):
 
     Still a GitHubError — every caller that catches the parent holds. The
     subclass carries `reset`: the epoch second the refusing counter resets,
-    read off the response HEADERS (`x-ratelimit-reset`, else now +
-    `retry-after`). The body alone — all the client read before this card —
-    says nothing about how long a refusal lasts. None when GitHub sent
-    neither header.
+    read off the response HEADERS (`retry-after`, else `x-ratelimit-reset`).
+    The body alone — all the client read before this card — says nothing
+    about how long a refusal lasts. None when GitHub sent neither header.
     """
 
     def __init__(self, status: int, message: str, reset: int | None = None):
@@ -113,16 +117,27 @@ def _reset_note(err: "RateLimited", now: float) -> str:
 
 
 def _reset_from_headers(headers, now: float) -> int | None:
-    raw = _header(headers, "x-ratelimit-reset")
-    if raw is not None:
-        try:
-            return int(float(raw))
-        except ValueError:
-            pass
+    """When the counter that refused THIS call resets, as an epoch second.
+
+    `retry-after` FIRST, `x-ratelimit-reset` only when it is absent — that is
+    GitHub's documented order, and reading it the other way round is what the
+    first cut of this card got wrong. A SECONDARY rate limit answers with
+    `retry-after` (typically ~60 s) while the very same response still carries
+    the PRIMARY window's `x-ratelimit-reset`, which can be the best part of an
+    hour out. Preferring the primary header there turns a one-minute pause
+    into a reset past the cap, and the client gives up on a refusal it only
+    had to sit out.
+    """
     raw = _header(headers, "retry-after")
     if raw is not None:
         try:
             return int(now + float(raw))
+        except ValueError:
+            pass
+    raw = _header(headers, "x-ratelimit-reset")
+    if raw is not None:
+        try:
+            return int(float(raw))
         except ValueError:
             pass
     return None
@@ -193,6 +208,12 @@ class GitHub:
         # a 404 costs what a 200 does), `free` is every 304.
         self._billed = 0
         self._free = 0
+        # One (identity, billed, free) snapshot per identity this client has
+        # LEFT, taken at the moment it moved (DRE-4575). DRE-4132's ledger
+        # exists so a run can say WHOSE hour it cost; a reader that moved
+        # slots mid-run spent two installations' allowances and has to report
+        # them separately, or the next dry slot is undiagnosable.
+        self._ledger_marks: list[tuple[str, int, int]] = []
 
     @staticmethod
     def _urlopen(req: urllib.request.Request):
@@ -205,8 +226,33 @@ class GitHub:
 
     def spend(self) -> dict:
         """`{"billed": n, "free": m}` — requests GitHub charged to this
-        identity's hourly allowance vs. 304s it did not (DRE-4132)."""
+        identity's hourly allowance vs. 304s it did not (DRE-4132).
+
+        The whole client, every identity it has been. `spend_history()` is
+        the same totals split by the identity that actually paid them.
+        """
         return {"billed": self._billed, "free": self._free}
+
+    def spend_history(self) -> list:
+        """`[(identity, {"billed": n, "free": m}), …]` — the ledger split per
+        identity, in the order this client went out as them (DRE-4575).
+
+        One entry for a client that never moved, so the caller needs no
+        special case; the entries always sum to `spend()`.
+        """
+        out, billed, free = [], 0, 0
+        for identity, at_billed, at_free in self._ledger_marks:
+            out.append(
+                (identity, {"billed": at_billed - billed, "free": at_free - free})
+            )
+            billed, free = at_billed, at_free
+        out.append(
+            (
+                self.identity,
+                {"billed": self._billed - billed, "free": self._free - free},
+            )
+        )
+        return out
 
     def _remember(self, url: str, etag: str, payload: bytes) -> None:
         self._remembered[url] = (etag, payload)
@@ -264,30 +310,33 @@ class GitHub:
     def _send(self, attempt):
         """One request through the refusal and expiry paths.
 
-        A `RateLimited` answer is recovered by `_recover_from_rate_limit` —
-        once per identity this client can turn to, then once by waiting —
-        and the request goes out again; when nothing recovers it, the
-        refusal stands. A 401 re-mints once (the mint-time race no fixed
-        margin can close). Anything else raises as it always did.
+        A `RateLimited` answer is recovered by moving to the next identity
+        this client can turn to — as many as it has, since a mint can fail —
+        and then, when none is left, once by waiting; the request goes out
+        again after each. When nothing recovers it the ORIGINAL refusal
+        stands, never some later mint's error. A 401 re-mints once (the
+        mint-time race no fixed margin can close) and re-enters this loop, so
+        a refusal on the post-re-mint attempt is still moved or waited out.
+        Anything else raises as it always did.
         """
-        waited = False
+        waited = reminted = False
         while True:
             try:
                 return attempt()
             except RateLimited as e:
-                if self._fallbacks:
-                    self._move_to_next_identity(e)
+                if self._move_to_next_identity(e):
                     continue
                 if not waited and self._wait_for_reset(e):
                     waited = True
                     continue
                 raise
             except GitHubError as e:
-                if e.status == 401 and self._remint():
-                    return attempt()
+                if e.status == 401 and not reminted and self._remint():
+                    reminted = True
+                    continue
                 raise
 
-    def _move_to_next_identity(self, err: RateLimited) -> None:
+    def _move_to_next_identity(self, err: RateLimited) -> bool:
         """A READER's answer to a refusal (DRE-4575): mint from the next pool
         slot and go out as it from now on. A read is not an action anyone
         attributes, so the identity may move; and the slot moved TO becomes
@@ -297,18 +346,41 @@ class GitHub:
         Why not the same slot again: run 35664409350's four attempts were
         refused on every call for the rest of the hour — the counter behind
         the refusal was empty, not blipping.
+
+        THE MINT IS GUARDED, and nothing is committed until it returns. A
+        supply() is two live REST calls behind an openssl signature
+        (`app_token.mint_installation_token`) and can raise — 404 when the App
+        is not installed on the sandbox, 401, 5xx, an openssl failure. Left
+        unguarded that one unlucky moment replaced a recoverable refusal with
+        an unrelated error, skipped every healthy slot still in the list, and
+        left `_supplier` pointing at the dead slot so every later re-mint
+        raised too. So: try each slot in turn, log the ones that will not
+        mint, and return False when the list is spent — the client is then
+        exactly where it was, and `_send` still has the wait to try.
         """
-        name, supply = self._fallbacks.pop(0)
-        self._log(
-            f"github: {self.identity} refused for rate limit "
-            f"({_reset_note(err, self._wall())}) — re-minting from {name} and "
-            "sending the request again as it"
-        )
-        self._supplier = supply
-        self._token = supply()
-        self._minted_at = self._clock()
-        self.identity = name
-        self.identity_trail.append(name)
+        while self._fallbacks:
+            name, supply = self._fallbacks.pop(0)
+            self._log(
+                f"github: {self.identity} refused for rate limit "
+                f"({_reset_note(err, self._wall())}) — re-minting from {name} "
+                "and sending the request again as it"
+            )
+            try:
+                token = supply()
+            except Exception as mint_error:  # noqa: BLE001 — see the docstring
+                self._log(
+                    f"github: {name} would not mint ({mint_error}) — staying "
+                    f"as {self.identity} and trying the next slot"
+                )
+                continue
+            self._ledger_marks.append((self.identity, self._billed, self._free))
+            self._supplier = supply
+            self._token = token
+            self._minted_at = self._clock()
+            self.identity = name
+            self.identity_trail.append(name)
+            return True
+        return False
 
     def _wait_for_reset(self, err: RateLimited) -> bool:
         """The WORKER's answer to a refusal (DRE-4575): its identity IS the
@@ -386,7 +458,10 @@ class GitHub:
                 self._billed += 1
                 detail = e.read().decode(errors="replace")[:500]
                 if _is_rate_limit_refusal(e.code, detail):
-                    # Named, with the reset off the HEADERS: the body alone
+                    # Named, with the reset off the HEADERS — `retry-after`
+                    # first, `x-ratelimit-reset` second (see
+                    # _reset_from_headers: a secondary limit sends both, and
+                    # only the first is about THIS refusal). The body alone
                     # was all this read before DRE-4575, and it says nothing
                     # about how long the refusal lasts.
                     raise RateLimited(
