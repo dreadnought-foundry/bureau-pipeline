@@ -387,6 +387,59 @@ def test_every_result_is_one_greppable_line_naming_the_repo():
 
 
 # --------------------------------------------------------------------------
+# 4b. Reading a repo's stub — where an invisible repo must not read as one
+#     without a train.
+# --------------------------------------------------------------------------
+
+def _reads(monkeypatch, answers):
+    """Stand in for `_gh_json`, recording (path, jq) and answering from a
+    dict keyed on the path. A path with no answer is a 404, which `_gh_json`
+    returns as `None`."""
+    calls = []
+
+    def gh(path, jq, what):
+        calls.append((path, jq))
+        return answers.get(path)
+
+    monkeypatch.setattr(release_train, "_gh_json", gh)
+    return calls
+
+
+def test_a_repo_the_token_cannot_see_is_never_read_as_having_no_train(monkeypatch):
+    """GitHub answers 404 both for a file that is absent and for a repo the
+    installation cannot see — and only one of those means "no train". The
+    repo is probed first, so an invisible one is a failure the run names
+    (the split-ledger rule: a repo this token cannot see records UNKNOWN,
+    never 0)."""
+    calls = _reads(monkeypatch, {})
+    with pytest.raises(RuntimeError) as err:
+        release_train.fetch_stub("dreadnought-foundry/agent-bureau")
+    assert calls[0][0] == "repos/dreadnought-foundry/agent-bureau"
+    assert "404" in str(err.value)
+
+
+def test_a_visible_repo_with_no_stub_file_simply_has_no_train(monkeypatch):
+    _reads(monkeypatch, {"repos/x/y": {"full_name": "x/y"}})
+    assert release_train.fetch_stub("x/y") is None
+
+
+def test_the_stub_is_decoded_from_the_contents_api(monkeypatch):
+    """And the jq filter is an OBJECT, never a bare `.content`: gh prints a
+    raw string for a scalar filter, which `_gh_json` cannot parse as JSON."""
+    import base64
+    calls = _reads(monkeypatch, {
+        "repos/x/y": {"full_name": "x/y"},
+        f"repos/x/y/contents/{release_train.TRAIN_WORKFLOW}": {
+            "content": base64.b64encode(CALLER_STUB.encode()).decode(),
+            "encoding": "base64",
+        },
+    })
+    assert release_train.fetch_stub("x/y") == CALLER_STUB
+    contents_jq = calls[-1][1].strip()
+    assert contents_jq.startswith("{"), contents_jq
+
+
+# --------------------------------------------------------------------------
 # 5. The roster is the live map, and the owners come out of it.
 # --------------------------------------------------------------------------
 
