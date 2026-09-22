@@ -1293,6 +1293,13 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
+               You do NOT stamp the children's routing verdicts (DRE-4593):
+               once the plan is checked, this run classifies every child by the
+               vocabulary's own precedence and writes each verdict itself. Your
+               job is the ACCEPTANCE CRITERIA — they are what the classifier
+               reads, so a child whose criteria name an interactive flow or
+               live system state routes to a person, and one that states no
+               criteria at all routes nowhere and is held.
             3b. A ONE-OFF — a card the plan concludes stands on its own and
                needs no epic — has no parent to inherit labels from, so create
                it PARENTLESS and take every label from the plan (DRE-2754):
@@ -1501,6 +1508,13 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
+               You do NOT stamp the children's routing verdicts (DRE-4593):
+               once the plan is checked, this run classifies every child by the
+               vocabulary's own precedence and writes each verdict itself. Your
+               job is the ACCEPTANCE CRITERIA — they are what the classifier
+               reads, so a child whose criteria name an interactive flow or
+               live system state routes to a person, and one that states no
+               criteria at all routes nowhere and is held.
             3b. A ONE-OFF — a card the plan concludes stands on its own and
                needs no epic — has no parent to inherit labels from, so create
                it PARENTLESS and take every label from the plan (DRE-2754):
@@ -1730,6 +1744,46 @@ jobs:
             fi
             exit 1
           fi
+
+      # --- The children carry their routing verdicts (DRE-4593) -------------
+      #
+      # standards/card-quality.md says every card leaving the planning segment
+      # carries exactly one routing verdict, written by the planning-exit
+      # writer. For a planner-created epic's children, nothing wrote one: the
+      # planner creates them with `linear_ops.py subissue`, and the only
+      # verdict-writer that ran on its own was the proof check above, which
+      # stamps the PROOF card and nothing else. So every BUILD child reached
+      # Backlog verdictless and the sweep refused it —
+      # `🚨 routing-no-verdict: <CARD> carries no routing verdict, so nothing
+      # has said who builds it`. DRE-4425 (approved 2026-09-20 22:28 PT) had
+      # five cards frozen ~37 hours; DRE-4467, the round robin (approved
+      # 2026-09-21 20:03 PT), had all seven, until a person stamped them by
+      # hand on 2026-09-22.
+      #
+      # AFTER the proof gate, deliberately. That gate BOUNCES a malformed plan
+      # back to Planning and exits 1, and an epic on its way back to Planning
+      # is not an epic whose cards get routing decisions written on them — the
+      # same rule `proof_and_demo.stamps()` already applies to its own card.
+      # Running after also means the proof card already carries its verdict.
+      # The step is safe either way round: it skips a `PROOF:` or `DEMO:` child
+      # BY TITLE, so it can never write FLEET onto the card that is supposed to
+      # confirm the fleet's own work.
+      #
+      # It classifies nothing of its own. `planning_route.mechanical_verdict`
+      # is the SAME function the one-off planning exit calls, so a card cannot
+      # be routed two ways depending on which door it came through.
+      - name: Routing verdicts — the epic's children
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          # The proof gate above wrote this file from the same read; rewritten
+          # here so the step does not depend on another step's temp file.
+          CHILDREN="${{ runner.temp }}/child-verdicts.json"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" < "$CHILDREN"
 
       # --- Hand-planning is an escalation and nothing else (DRE-2848) -------
       #
@@ -2250,6 +2304,12 @@ jobs:
             fi
             exit 1
           fi
+          # A revision is the planner's output too (DRE-4593): a card round 2
+          # added would otherwise reach Backlog with no routing verdict on it,
+          # and the sweep refuses exactly that. A card round 1 already stamped
+          # is refused by the write path and costs one read.
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" < "$CHILDREN"
 
       # The re-plan rewrote the cards, so the findings the round-1 list carried
       # describe a plan that no longer exists. Re-run and re-post, or round 2
@@ -3386,6 +3446,17 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          # The backstop, and the one gap the plan-time step cannot close
+          # (DRE-4593): the post-approval re-plan above re-runs no proof gate,
+          # so a card the second critic's send-back added would reach the
+          # promoter carrying no routing verdict. Stamped BEFORE the epic
+          # moves to In Progress — so a cron sweep landing in between finds
+          # the verdicts already written — and before the promotion sweep at
+          # the foot of this step.
+          # Idempotent: a child already carrying a verdict is refused by the
+          # one write path and costs one read.
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" \
+            | python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp --epic "$EPIC"
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "▶️ Epic activated ($KIDS children) — the dependency gate will flow them to build in order. Nothing else to do."

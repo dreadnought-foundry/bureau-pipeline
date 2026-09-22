@@ -66,6 +66,18 @@ one exit that is not a plan (DRE-2848) — so the CEO, or the classifier, gets i
 back. Nothing is stamped on that path: the card has not left the planning
 segment, so it is not carrying a verdict out of it.
 
+## And that answer is shared, not copied (DRE-4593)
+
+A planner-created epic's CHILDREN needed the same mechanical answer, and nothing
+wrote one for them: the sweep refused seven of DRE-4467's eight cards with
+`routing-no-verdict` and they sat until a person stamped them by hand. The fix
+is a batch stamper (`scripts/plan_child_verdicts.py`), and what it must NOT be
+is a second classifier. So the answer above lives in `mechanical_verdict()`,
+which `_one_off_check` and that batch both call. A one-off and a planner's child
+are both one card and one pull request — the plan prompt decomposes an epic into
+exactly that — so the judgement branch's argument holds for both, and two
+readings of it is how the two readings drift.
+
 CLI:
 
     python3 scripts/planning_route.py check           # validate the routes
@@ -340,14 +352,41 @@ def _one_off_check(card: dict, comment_bodies, shape: str,
             f"the card already carries {' and '.join(carried)} — a card leaving "
             "Planning carries exactly one verdict"
         )
-    description = card.get("description") or ""
-    decision = routing_verdict.route(
+    return mechanical_verdict(
         card.get("title") or "",
-        description,
+        card.get("description") or "",
         card.get("labels") or (),
         bool(card.get("has_children")),
         doc,
         shape=shape,
+    )
+
+
+def mechanical_verdict(title: str, description: str, labels=(),
+                       has_children: bool = False, doc: dict | None = None,
+                       *, shape: str | None = None) -> tuple:
+    """`(verdict, reason)` for ONE card the planning segment is finishing with.
+
+    The whole mechanical answer in one place: `routing_verdict.route()`'s strict
+    precedence — role label, anchored title convention, acceptance criteria —
+    and, where that reaches a JUDGEMENT call, the promotable verdict with the
+    criteria that were weighed named in the reason.
+
+    Extracted from `_one_off_check` by DRE-4593, which needed the same answer
+    for an epic's CHILDREN and must not invent a second classifier to get it.
+    Two callers of one function cannot disagree about a card, which is the
+    point: a one-off and a planner's child are both one card and one pull
+    request — the plan prompt says so in as many words — so the judgement
+    branch's argument is the same for both, and reading it twice is how the two
+    readings drift.
+
+    Never a bare FLEET default: the judgement branch says which criteria it
+    read, so the verdict comment states what decided rather than reciting a
+    sentence, and a card that states no exit condition comes back NEEDS WORK
+    instead of being dispatched at an agent.
+    """
+    decision = routing_verdict.route(
+        title, description, labels, has_children, doc, shape=shape,
     )
     if decision.verdict is not None:
         return decision.verdict, decision.reason
