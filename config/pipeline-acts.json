@@ -1896,6 +1896,13 @@
       "kind": "not-an-act",
       "means": "Which agent step went silent on this card, when it last spoke and for how long, after the watchdog stopped it (DRE-3991).",
       "why": "A REPORT about a run, not something the pipeline did on its own — the `reviewer_environment.evidence_note` reading exactly, and for the same reasons. Nothing is held, nothing is re-dispatched and nothing moves: the medic's ordinary one retry still runs alongside it, so the three questions a trailer answers (what obligation does this create, who has the work now, what does it discharge) all read 'not applicable'. The act on this path is the REFUSAL that follows a second consecutive stall, and that one already has a row (`retry-declined`) and composes through the writer. Its `run=<id> attempt=<n>` is an idempotency key the medic step checks before posting, so one stall never writes two records."
+    },
+    {
+      "file": "scripts/rereview_watch.py",
+      "anchor": "linear_ops.cmd_comment(epic, notice(epic, reading.found))",
+      "kind": "undeclared-act",
+      "means": "The post-approval critic sent this plan back, the 🔁 receipt promised the pipeline would run the review again, and it never did — nothing is scheduled and the children are held (DRE-4492).",
+      "why": "Act-shaped — it hands the work to a person and names the one act that discharges it (`plan_critic.REAPPROVE_HOW`) — and the registry has no row for it, which is the same debt the two 🔁 re-review receipts in plan.yml carry. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091) — so the detector ships first as an undeclared act and the row follows with its console half. Named here so the debt is countable rather than invisible. Its idempotency key is the `🚨 plan-critic-rereview-missing:` opener the module reads back off the thread once per round, in the `dead_run.DEAD_TAG` grammar the sweep's other refusals already use; a trailer here would be a second key for one notice."
     }
   ]
 }

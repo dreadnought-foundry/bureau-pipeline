@@ -47,6 +47,11 @@ from unittest import mock
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
+# `reconcile` reads these at import (section 7 reads the sweep's own source).
+os.environ.setdefault("LINEAR_API_KEY", "test-key")
+os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
+os.environ.setdefault("GH_TOKEN", "x")
 
 import plan_critic as pc  # noqa: E402
 import rereview_watch as rw  # noqa: E402
@@ -143,7 +148,17 @@ class TheReading(unittest.TestCase):
         self.assertIsNone(_overdue(now=SOON))
 
     def test_a_round_two_record_is_the_promise_kept(self):
-        self.assertIsNone(_overdue(thread(_round(2, open_count=0))))
+        self.assertIsNone(_overdue(thread(_round(2, pc.PASS, ""))))
+
+    def test_a_second_send_back_starts_its_own_window(self):
+        """A later round record is a fresh promise, clocked from itself."""
+        records = thread(_rec(_round(2, open_count=0), "2026-09-15T18:40:00Z"))
+        self.assertIsNone(rw.overdue(records, EPIC, pc.APPROVAL_LANE,
+                                     "2026-09-15T19:00:00Z", 45))
+        found = rw.overdue(records, EPIC, pc.APPROVAL_LANE,
+                           "2026-09-15T19:40:00Z", 45)
+        self.assertEqual(found["round"], 2)
+        self.assertEqual(found["sent_back_at"], "2026-09-15T18:40:00Z")
 
     def test_a_tombstone_is_post_dieds_business_not_this_ones(self):
         self.assertIsNone(_overdue(thread(_tombstone())))
