@@ -108,27 +108,43 @@ class ScriptedOpener:
 class RateLimitedIsNamedTest(unittest.TestCase):
 
     def test_a_rate_limit_403_raises_RateLimited_carrying_the_reset(self):
-        api = ScriptedOpener([_refusal(headers={"x-ratelimit-reset": "1790049858"})])
-        gh = GitHub("ghs_x", opener=api)
+        # Refused, waited out once (the sleeper is injected — nothing here
+        # sleeps), refused again: the refusal stands, and it is the named kind.
+        naps = []
+        api = ScriptedOpener([
+            _refusal(headers={"x-ratelimit-reset": "1790049858"}),
+            _refusal(headers={"x-ratelimit-reset": "1790049858"}),
+        ])
+        gh = GitHub("ghs_x", opener=api, wall_clock=lambda: 1790049800.0, sleeper=naps.append)
         with self.assertRaises(github_api.RateLimited) as caught:
             gh.list_open_prs(REPO)
         self.assertIsInstance(caught.exception, GitHubError)
         self.assertEqual(caught.exception.status, 403)
         self.assertEqual(caught.exception.reset, 1790049858)
-        self.assertEqual(len(api.tokens), 1, "a refusal with nowhere to go is not retried")
+        self.assertEqual(len(naps), 1, "one wait, never a loop")
+        self.assertEqual(len(api.tokens), 2, "one retry after the wait, then it stands")
 
     def test_a_429_with_retry_after_is_RateLimited_too(self):
-        api = ScriptedOpener([_refusal(status=429, headers={"Retry-After": "60"})])
-        gh = GitHub("ghs_x", opener=api, wall_clock=lambda: 1000.0)
+        naps = []
+        api = ScriptedOpener([
+            _refusal(status=429, headers={"Retry-After": "60"}),
+            _refusal(status=429, headers={"Retry-After": "60"}),
+        ])
+        gh = GitHub("ghs_x", opener=api, wall_clock=lambda: 1000.0, sleeper=naps.append)
         with self.assertRaises(github_api.RateLimited) as caught:
             gh.list_open_prs(REPO)
+        self.assertEqual(caught.exception.status, 429)
         self.assertEqual(caught.exception.reset, 1060)
+        self.assertEqual(len(naps), 1)
 
     def test_a_refusal_with_no_reset_header_carries_none(self):
+        naps = []
         api = ScriptedOpener([_refusal()])
         with self.assertRaises(github_api.RateLimited) as caught:
-            GitHub("ghs_x", opener=api).list_open_prs(REPO)
+            GitHub("ghs_x", opener=api, sleeper=naps.append).list_open_prs(REPO)
         self.assertIsNone(caught.exception.reset)
+        self.assertEqual(naps, [], "nothing to wait for")
+        self.assertEqual(len(api.tokens), 1)
 
     def test_a_permission_403_is_still_a_plain_GitHubError(self):
         # `Resource not accessible by integration` on cancelling a sandbox
