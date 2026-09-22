@@ -65,15 +65,24 @@ class GitHubError(RuntimeError):
 
 #: How long a client with NO other identity to turn to (the worker) waits for
 #: GitHub's meter to reset before sending a refused call once more (DRE-4575).
-#: Sized against the SWEEP's budget, not the job's timeout: harness.yml's
-#: scenario receipt warns past `BUDGET_MINUTES: "40"` — and that annotation
-#: says a run that long "holds the sandbox, holds every queued run behind it,
-#: and holds the release channel with them" — while healthy runs take
-#: 9m40s–18m. A cap AT the budget would make every waited run trip it. 25
-#: leaves the sweep its room and still covers the real refusal: the counter
-#: that turned away run 35664409350's four attempts resets at about :04 past
-#: the hour, so a refusal at :40 waits ~25.
-RATE_LIMIT_WAIT_CAP_SECONDS = 25 * 60
+#:
+#: Sized against the night's own record. Run 35664409350's four refused
+#: attempts began at 23:37Z, 23:38Z, 23:54Z and 00:46Z against a counter
+#: that reset at about 00:03Z and 01:03Z, so the waits they needed were
+#: about 27, 26, 10 and 18 minutes. A 25-minute cap covered two of the four;
+#: on the other two the worker would have given up exactly as it did before
+#: this card. 35 clears the longest of them with room for the reset clock to
+#: drift a few minutes later in the hour, as it did across that evening.
+#:
+#: What it costs, stated: harness.yml's scenario receipt annotates past
+#: `BUDGET_MINUTES: "40"`, and that is a WARNING, not a limit — the only hard
+#: ceiling is the job's `timeout-minutes: 180`. A run that sat out a refusal
+#: for 35 minutes and then did its normal 9–18 minutes of work lands at
+#: 44–53 minutes, trips the over-budget warning, and that is the honest
+#: reading of a run that waited for GitHub; it stays far inside 180.
+#: tests/test_harness_rate_limit_survival.py pins the floor (27, the longest
+#: observed wait) and the ceiling (under the budget it warns against).
+RATE_LIMIT_WAIT_CAP_SECONDS = 35 * 60
 
 
 class RateLimited(GitHubError):
