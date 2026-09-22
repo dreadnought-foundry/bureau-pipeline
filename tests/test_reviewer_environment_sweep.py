@@ -274,7 +274,17 @@ class TestTheIncidentReplay:
         """ACCEPTANCE: crash at head H with an evidence note → sweep 1
         re-dispatches (receipt). The re-dispatch crashes and the medic leaves a
         SECOND note → exactly ONE hold receipt on the pull request and ONE on
-        the card. Sweeps 2, 3 and 4 dispatch nothing: `_nudge` is not called."""
+        the card. Sweeps 2, 3 and 4 dispatch nothing: `_nudge` is not called.
+
+        The second note is this test's convenience, not the trigger. In the real
+        incident (agent-bureau #2370, replayed in
+        `docs/reviewer-environment-hold-proof.md`) the medic left exactly ONE
+        note: the re-dispatch runs against the default branch, so the medic
+        cannot find a card to write to and never posts a second. The sweep does
+        not require one — it asks only whether a note names the cause for THIS
+        commit — so the hold fires there on the spent retry plus crash 1's note.
+        Do not read this docstring as "two notes are needed"; if that ever
+        becomes true, the replay's result changes and the record is wrong."""
         world = _World([_pr()], cards={CARD: [_note()]})
 
         first = world.sweep(capsys)
