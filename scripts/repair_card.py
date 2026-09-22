@@ -84,6 +84,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import github_output  # noqa: E402
 import red_main_repair  # noqa: E402
 
 #: Where the card lands. Never Todo — see the module docstring.
@@ -634,18 +635,24 @@ class _SettleOps:
 
 
 def outputs(result: dict) -> str:
-    """`$GITHUB_OUTPUT` lines. Single-line values only: a multi-line value
-    would let the failure note leak into another key."""
-    def one(text: str) -> str:
-        return " ".join(str(text or "").split())
+    """`$GITHUB_OUTPUT` lines, through the writer that survives a value with
+    a newline in it (DRE-4202).
 
-    return "\n".join([
-        f"card={one(result['card'])}",
-        f"card_url={one(result['card_url'])}",
-        f"branch={one(result['branch'])}",
-        f"card_owed={'true' if result['card_owed'] else 'false'}",
-        f"card_note={one(result.get('note'))}",
-    ]) + "\n"
+    This used to collapse every value to one line, which made a multi-line
+    value safe by squashing it — and left the safety resting on somebody
+    remembering to wrap the NEXT key added here. `github_output.render` moves
+    that guarantee into the writer: a value that fits on a line still emits as
+    plain `key=value`, and one that does not rides a heredoc delimiter it
+    cannot close, so the failure note arrives whole instead of leaking into
+    another key or killing the step.
+    """
+    return github_output.render([
+        ("card", result["card"]),
+        ("card_url", result["card_url"]),
+        ("branch", result["branch"]),
+        ("card_owed", "true" if result["card_owed"] else "false"),
+        ("card_note", result.get("note")),
+    ])
 
 
 def _settle_cli(args) -> int:
@@ -681,11 +688,18 @@ def main(argv: list[str]) -> int:
     if args.cmd == "settle":
         return _settle_cli(args)
 
-    result = open_card(
-        repo_slug=args.repo, workflow_name=args.workflow_name,
-        head_sha=args.head_sha, run_url=args.run_url, attempt=args.attempt,
-        fallback_branch=args.fallback_branch,
-    )
+    # Stdout is the output FILE for this step. `open_card` talks to Linear,
+    # and the Linear seam talks BACK on stdout — `linear_ops.cmd_comment`
+    # prints `commented on DRE-4200`, which is the line portico run
+    # 35314499681 died on: a card filed, budget spent, main still red, and a
+    # death wearing the fingerprint of a dead credential (DRE-4202/DRE-4201).
+    # Human text belongs on stderr whoever wrote it.
+    with github_output.only_outputs():
+        result = open_card(
+            repo_slug=args.repo, workflow_name=args.workflow_name,
+            head_sha=args.head_sha, run_url=args.run_url, attempt=args.attempt,
+            fallback_branch=args.fallback_branch,
+        )
     sys.stdout.write(outputs(result))
     print(
         f"repair card: {result['card'] or 'NOT FILED'} → branch "
