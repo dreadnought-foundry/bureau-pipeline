@@ -43,7 +43,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -62,6 +64,7 @@ import plan_child_verdicts  # noqa: E402
 import planning_route  # noqa: E402
 import proof_and_demo  # noqa: E402
 import routing_verdict  # noqa: E402
+import validate_card  # noqa: E402
 
 WF = ROOT / ".github" / "workflows" / "plan.yml"
 FIXTURE = ROOT / "tests" / "fixtures" / "round-robin-children-2026-09-21.json"
@@ -182,15 +185,62 @@ class ABuildChildGetsItsVerdictTest(unittest.TestCase):
     def test_it_is_the_same_classifier_the_one_off_exit_uses(self):
         """No second classifier (the card says so in as many words). The
         planning exit for a ONE-OFF and this batch read one function, so a card
-        cannot be routed two ways depending on which door it came through."""
-        for body in (WORK_BODY, LIVE_BODY, PROOF_BODY):
-            card = {"identifier": "DRE-1", "title": "a card",
-                    "description": body, "labels": list(NO_ROLE_LABELS)}
+        cannot be routed two ways depending on which door it came through.
+
+        The `[EPIC]` titles are the cases that caught the hole: the batch
+        passes no `shape`, so `mid_epic.is_epic` falls back to an UNANCHORED
+        `[epic]` substring, and the epic branch used to be folded into the
+        judgement fallback and stamped FLEET. The one-off door passes
+        `shape="one-off"` and could never reach it, so the two doors disagreed
+        — including on a card carrying an explicit role label, the level
+        `routing_verdict.route` guarantees decides first."""
+        cases = [
+            ("a card", WORK_BODY, NO_ROLE_LABELS),
+            ("a card", LIVE_BODY, NO_ROLE_LABELS),
+            ("a card", PROOF_BODY, NO_ROLE_LABELS),
+            ("[EPIC] the ops card", WORK_BODY, OPS_LABELS),
+            ("[EPIC] turn it on", LIVE_BODY, NO_ROLE_LABELS),
+            ("the ops card", WORK_BODY, OPS_LABELS),
+        ]
+        for title, body, labels in cases:
+            card = {"identifier": "DRE-1", "title": title,
+                    "description": body, "labels": list(labels)}
             one_off, _ = planning_route._one_off_check(card, [], "one-off")
             batch = plan_child_verdicts.verdicts_for(
-                [_card("DRE-1", "a card", body=body, labels=NO_ROLE_LABELS)]
+                [_card("DRE-1", title, body=body, labels=labels)]
             )[0]
-            self.assertEqual(batch.verdict, one_off, body[:40])
+            self.assertEqual(batch.verdict, one_off, f"{title} / {body[:30]}")
+
+    def test_the_batch_says_which_shape_it_is_classifying(self):
+        """A planner's child is one card and one pull request — the premise the
+        judgement branch already rests on — so the batch says so. Passing no
+        shape left `mid_epic.is_epic` reading an unanchored `[epic]` out of the
+        title, which is how a role-labelled card got FLEET."""
+        src = MODULE.read_text(encoding="utf-8")
+        self.assertIn("shape=planning_route.ONE_OFF_SHAPE", src)
+
+    def test_the_epic_branch_is_an_explicit_no_verdict_not_a_fleet_default(self):
+        """Belt and braces on the shared classifier itself, which also covers
+        `has_children` — the other fact `mid_epic.is_epic` reclassifies on.
+        `route()` returns no verdict in two different cases, and folding the
+        EPIC one into the JUDGEMENT fallback stamped FLEET on a card the
+        vocabulary had just said is not a unit of build."""
+        verdict, reason = planning_route.mechanical_verdict(
+            "the ops card", WORK_BODY, list(OPS_LABELS), has_children=True)
+        self.assertIsNone(verdict)
+        self.assertIn("epic", reason)
+
+    def test_a_child_nothing_can_route_is_held_not_stamped(self):
+        """And where that branch is reached, the batch writes NOTHING and holds
+        the card for the note on the epic, rather than falling through."""
+        with patch.object(planning_route, "mechanical_verdict",
+                          return_value=(None, "this is an epic — the planner "
+                                              "owns it")):
+            record = plan_child_verdicts.verdicts_for(
+                [_card("DRE-901", "the ops card", labels=OPS_LABELS)])[0]
+        self.assertFalse(record.write)
+        self.assertIsNone(record.verdict)
+        self.assertTrue(record.held)
 
     def test_every_verdict_says_why(self):
         """`verdict_comment` refuses a verdict with no reason."""
@@ -319,6 +369,10 @@ class AnAlreadyStampedChildIsUntouchedTest(unittest.TestCase):
 # ===========================================================================
 class TheUndecidableCaseTest(unittest.TestCase):
 
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmp, True)
+
     def test_a_judgement_call_takes_the_one_off_route_s_answer(self):
         """`routing_verdict.route()` returns no verdict when the criteria name
         neither signal. That is not a new question: `planning_route` already
@@ -347,9 +401,10 @@ class TheUndecidableCaseTest(unittest.TestCase):
         self.assertEqual(_stamped(plan), {"DRE-902": "FLEET"})
 
     def test_a_needs_work_child_does_not_fail_the_step(self):
-        """`validate_card.py check-children` runs first and fails the plan for a
-        child with no criteria; if one reaches here anyway, this step reports it
-        and lets the rest of the plan's children through."""
+        """It reports the child and lets the rest of the plan's children
+        through. The step staying green is only safe BECAUSE the note below
+        goes on the epic — failing here would bounce a whole plan for one
+        card, and staying silent was the hole."""
         plan = _plan(work_bodies=(NO_CRITERIA_BODY, WORK_BODY))
         with patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), \
                 patch.object(linear_ops, "comment_bodies", return_value=[]), \
@@ -357,6 +412,59 @@ class TheUndecidableCaseTest(unittest.TestCase):
                 patch.object(linear_ops, "add_label"):
             self.assertEqual(
                 plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
+
+    def test_nothing_upstream_catches_a_child_with_no_criteria(self):
+        """The premise this module used to rest on, checked rather than
+        asserted: `validate_card.child_problems` reads the repo label, the role
+        label, the title/repo match and the body shape — it never looks for a
+        `- [ ]` criterion. A child with a heading and prose and no criteria
+        passes `check-children` and arrives here unstampable, so the silence
+        had nothing holding it up."""
+        body = ("## What to do\n\n- tidy the sweep so the logs read cleanly\n"
+                "- keep the existing behaviour\n")
+        self.assertEqual(
+            validate_card.child_problems("tidy the sweep", body, list(LABELS)),
+            [])
+        self.assertEqual(routing_verdict.acceptance_criteria(body), [])
+        record = plan_child_verdicts.verdicts_for(
+            [_card("DRE-901", "tidy the sweep", body=body)])[0]
+        self.assertFalse(record.write)
+        self.assertTrue(record.held)
+
+    def test_the_epic_is_told_about_every_child_no_writer_will_stamp(self):
+        """The escalation the run log was standing in for. A card frozen on
+        `routing-no-verdict` is invisible in a run log; the note lands on the
+        epic, which is the card a person is about to read."""
+        plan = _plan(work_bodies=(NO_CRITERIA_BODY, WORK_BODY))
+        note = os.path.join(self._tmp, "held.md")
+        with patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), \
+                patch.object(linear_ops, "comment_bodies", return_value=[]), \
+                patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "add_label"):
+            self.assertEqual(
+                plan_child_verdicts.main(
+                    ["stamp", "--epic", EPIC, "--comment-file", note]), 0)
+        body = Path(note).read_text(encoding="utf-8")
+        self.assertIn(plan_child_verdicts.WITHHELD_TAG, body)
+        self.assertIn("DRE-901", body)
+        self.assertNotIn("DRE-902", body)      # stamped, nothing to say
+        self.assertNotIn("DRE-9099", body)     # the proof check's card
+        self.assertIn("acceptance criteria", body)
+
+    def test_no_note_is_written_when_every_child_is_accounted_for(self):
+        """A note with nothing in it is noise on a card the CEO is reading."""
+        note = os.path.join(self._tmp, "quiet.md")
+        with patch.object(sys, "stdin", io.StringIO(json.dumps(_plan()))), \
+                patch.object(linear_ops, "comment_bodies", return_value=[]), \
+                patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "add_label"):
+            plan_child_verdicts.main(
+                ["stamp", "--epic", EPIC, "--comment-file", note])
+        self.assertFalse(os.path.exists(note))
+
+    def test_the_note_refuses_to_be_written_empty(self):
+        with self.assertRaises(ValueError):
+            plan_child_verdicts.withheld_comment(EPIC, [])
 
 
 # ===========================================================================
@@ -431,6 +539,65 @@ class OneWritePathTest(unittest.TestCase):
         count, _, _ = _written(_plan(), existing={"DRE-901": [already]})
         self.assertEqual(count, 1)
 
+    def test_the_log_says_what_happened_not_what_was_intended(self):
+        """The per-card line is printed from the WRITE RESULT. On the second
+        and third passes the intention and the outcome differ, and the log used
+        to read as though verdicts had been written when nothing was."""
+        plan = _plan()
+        already = routing_verdict.verdict_comment("FLEET", "an agent builds it")
+        out = io.StringIO()
+        with patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), \
+                patch.object(sys, "stdout", out), \
+                patch.object(linear_ops, "comment_bodies",
+                             side_effect=lambda i: [already] if i == "DRE-901"
+                             else []), \
+                patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "add_label"):
+            plan_child_verdicts.main(["stamp", "--epic", EPIC])
+        lines = {line.split(":")[0]: line for line in out.getvalue().splitlines()
+                 if line.startswith("DRE-")}
+        self.assertIn("already carries a verdict", lines["DRE-901"])
+        self.assertIn("FLEET", lines["DRE-902"])
+
+
+# ===========================================================================
+# 6b — a read that did not happen is not an epic with no children
+# ===========================================================================
+class EmptyStdinIsRefusedTest(unittest.TestCase):
+    """standards/console-honesty.md rule 1, at the one place this step could
+    break it. Both plan-time sites and the activation backstop only ever run
+    on an epic that HAS children, so empty stdin means the read that should
+    have produced them did not. Defaulting to `[]` turned a Linear 500 into
+    `0 of 0 stamped`, a green step, and every child unstamped."""
+
+    def test_empty_stdin_returns_non_zero(self):
+        with patch.object(sys, "stdin", io.StringIO("")):
+            self.assertNotEqual(
+                plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
+
+    def test_whitespace_only_stdin_returns_non_zero(self):
+        with patch.object(sys, "stdin", io.StringIO("   \n")):
+            self.assertNotEqual(
+                plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
+
+    def test_it_says_why_rather_than_reporting_a_plan_stamped(self):
+        err = io.StringIO()
+        with patch.object(sys, "stdin", io.StringIO("")), \
+                patch.object(sys, "stderr", err):
+            plan_child_verdicts.main(["stamp", "--epic", EPIC])
+        self.assertIn(EPIC, err.getvalue())
+        self.assertIn("nothing arrived on stdin", err.getvalue())
+
+    def test_an_epic_with_children_still_reports_and_writes(self):
+        """The guard must not fire on the ordinary path — `[]` on the wire is
+        still an answer Linear gave, and is not what this refuses."""
+        with patch.object(sys, "stdin", io.StringIO("[]")), \
+                patch.object(linear_ops, "comment_bodies", return_value=[]), \
+                patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "add_label"):
+            self.assertEqual(
+                plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
+
 
 # ===========================================================================
 # 7 — wired into the plan run, everywhere a plan's children are finished
@@ -491,6 +658,29 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
             names.index(next(n for n in names if GATE in n)),
             names.index(next(n for n in names if "Epic → Green Light" in n)))
 
+    def test_it_runs_after_both_critic_rounds_have_settled(self):
+        """A verdict is written ONCE — `stamp_card` refuses a card that already
+        carries one, which is what makes the three sites safe to repeat. So a
+        verdict written before critic round 1 is one a send-back can no longer
+        correct: a re-plan rewriting a child's criteria from agent-finishable
+        to person-required would leave the old FLEET standing and dispatch an
+        agent at a card that needs a person, and a plan going round again is
+        the normal path (standards/plan-artifact.md). The last point before
+        approval is after the round-2 decision."""
+        names = [s.get("name") or "" for s in wf_steps()]
+        self.assertLess(
+            names.index(next(n for n in names
+                             if "First critic — round 2 decision" in n)),
+            names.index(next(n for n in names if GATE in n)))
+
+    def test_nothing_runs_between_it_and_the_green_light(self):
+        """Pinned adjacent so it cannot drift back up the job: any step added
+        between the two would be a step reading a plan whose children were
+        stamped for a reason nobody re-checked."""
+        names = [s.get("name") or "" for s in wf_steps()]
+        gate = names.index(next(n for n in names if GATE in n))
+        self.assertIn("Epic → Green Light", names[gate + 1])
+
     def test_a_revised_plan_is_stamped_too(self):
         """A re-plan is the planner's output too: cards it added after round 1
         would otherwise reach Backlog with nothing on them."""
@@ -509,6 +699,43 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
                         run.index('state "$EPIC" "In Progress"'))
         self.assertLess(run.index("plan_child_verdicts.py stamp"),
                         run.index("--promote-only"))
+
+    def test_no_site_feeds_the_stamper_through_a_pipe(self):
+        """The failure semantics, not the ordering. This workflow sets no
+        `shell:` and no `defaults.run.shell`, so every step is Actions' default
+        `bash -e {0}` — which is NOT `pipefail`; that arrives only with an
+        explicit `shell: bash`. A pipe therefore hands the step the STAMPER's
+        exit status alone: a failed `children-detail` writes nothing, reaches
+        the stamper as empty stdin, and the step goes green having written no
+        verdict at all. Read into a file and redirect, which `bash -e` aborts
+        on."""
+        doc = yaml.safe_load(WF.read_text(encoding="utf-8"))
+        for job in doc["jobs"].values():
+            self.assertNotIn("defaults", job)
+            for step in job.get("steps") or []:
+                self.assertNotIn("shell", step, step.get("name"))
+        self.assertNotIn("defaults", doc)
+        for name in ("Routing verdicts", "Re-check the revised plan",
+                     "Activate the approved epic"):
+            run = step_named(name)["run"]
+            stamp = next(line for line in run.splitlines()
+                         if "plan_child_verdicts.py stamp" in line)
+            self.assertNotIn("|", stamp, name)
+            self.assertIn("children-detail", run, name)
+            self.assertIn('> "$CHILDREN"', run, name)
+            self.assertIn('< "$CHILDREN"', run, name)
+
+    def test_the_children_nobody_will_stamp_are_named_on_the_epic(self):
+        """The escalation the run log was standing in for, wired at both sites
+        that can see a plan's whole child set. Nothing upstream rejects a child
+        with no acceptance criteria, so without this the card freezes in
+        Backlog and only a run log says so."""
+        for name in (GATE, "Activate the approved epic"):
+            run = step_named(name)["run"]
+            self.assertIn("--comment-file", run, name)
+            self.assertIn('linear_ops.py comment "$EPIC"', run, name)
+            self.assertLess(run.index("plan_child_verdicts.py stamp"),
+                            run.index('if [ -s "$HELD" ]'), name)
 
     def test_the_gate_is_not_silently_optional(self):
         self.assertNotIn("continue-on-error", step_named(GATE))

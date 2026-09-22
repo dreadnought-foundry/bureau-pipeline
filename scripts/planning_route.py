@@ -113,6 +113,16 @@ ROUTE_MARK = "🚦"
 # loudly instead of quietly deciding that nothing stops for anyone.
 HUMAN_ACTORS = ("operator",)
 
+#: The shape of a card that is one card and one pull request. It was a literal
+#: in `exit_plan` alone until DRE-4593's review needed a second reader for it:
+#: a planner's CHILD is this shape by construction — the plan prompt decomposes
+#: an epic into exactly that, and it is the premise the judgement branch below
+#: already rests on — so the batch stamper passes it rather than passing no
+#: shape at all. Passing none let `mid_epic.is_epic` fall back to an unanchored
+#: `[epic]` in the title, which sent a child carrying that literal down the
+#: epic branch and past an explicit role label.
+ONE_OFF_SHAPE = "one-off"
+
 
 class Unroutable(Exception):
     """The card's shape cannot be read, so Planning has no route for it.
@@ -384,10 +394,24 @@ def mechanical_verdict(title: str, description: str, labels=(),
     read, so the verdict comment states what decided rather than reciting a
     sentence, and a card that states no exit condition comes back NEEDS WORK
     instead of being dispatched at an agent.
+
+    `route()` returns no verdict in TWO cases and `Decision.source` is what
+    tells them apart (DRE-4593 review): a JUDGEMENT call, which is the one the
+    fallback below answers, and an EPIC, which is never given a buildability
+    verdict at all. Folding the second into the first stamped FLEET on a card
+    the epic branch had claimed — and the epic branch is reachable from a
+    caller that passes no `shape`, because `mid_epic.is_epic` then falls back to
+    an UNANCHORED `[epic]` in the title and to `has_children`. That put an
+    explicit role label — precedence 1, the level `route()` guarantees decides
+    before anything else is read — behind a substring, and sent the fleet at an
+    operator's card. So the epic branch returns NO verdict and its own reason,
+    and every caller decides what to do with a card it may not route.
     """
     decision = routing_verdict.route(
         title, description, labels, has_children, doc, shape=shape,
     )
+    if decision.source == "epic":
+        return None, decision.reason
     if decision.verdict is not None:
         return decision.verdict, decision.reason
     return fleet_verdict(), _judgement_reason(description, doc)
@@ -515,7 +539,7 @@ def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
             "the plan run itself — artifact, children, green light. There is "
             "nothing for this module to perform."
         )
-    if route.shape == "one-off":
+    if route.shape == ONE_OFF_SHAPE:
         verdict, reason = _one_off_check(card, comment_bodies, route.shape, doc)
         if verdict is not None and _comes_back_to_planning(verdict, doc):
             return Exit(
