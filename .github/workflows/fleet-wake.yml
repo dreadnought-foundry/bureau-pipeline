@@ -1,0 +1,141 @@
+# The fleet wake-up (DRE-4450) — ONE schedule, here, for every train.
+#
+# The CEO, 2026-09-21: "The schedule should be integrated into the train so
+# it's in one place." Until this file, a train's opening time was written
+# twice in every repo that had one — the `window` in its
+# `.github/bureau/release.json` and two `schedule:` crons in its
+# `release-train.yml` stub. On 2026-09-20 the instruction was "the train
+# should start at 5 am"; DRE-4357 moved agent-bureau and not Portico, and on
+# 2026-09-21 Portico's train slept until 07:03 PT.
+#
+# WHY THE SCHEDULE CANNOT LIVE IN THE TRAIN ITSELF. GitHub runs a `schedule:`
+# trigger only from a workflow file on the default branch of the repo that
+# HOLDS it, and `release-train.yml` is `workflow_call` — a cron inside it
+# never fires for a caller. So "the schedule in the train" is this: one
+# workflow, in the train's own repo, whose two cron lines are DERIVED from
+# `release_train.FLEET_WINDOW` (`python3 scripts/release_train.py wake`), and
+# which dispatches every roster repo's own stub at the opening. The fleet's
+# hours are one edit, in one file, in one repo — the window every surface
+# inherits and the crons that wake it read the same constant, and
+# tests/test_fleet_wake.py fails if either moves alone.
+#
+# WHAT IT DECIDES: NOTHING. It wakes trains; each train then applies its own
+# rules — the brake, the window, the spacing, green-at-SHA — exactly as it
+# does on any other trigger. A repo with no stub is skipped and NAMED, never
+# failed; a repo it could not wake turns the run red, because a wake-up that
+# silently did not happen is the failure this workflow exists to end.
+#
+# THE STUBS STILL CARRY THEIR OWN CRONS, deliberately, until the per-repo
+# follow-up cards remove them (one card per repo, blocked on DRE-4450). So a
+# repo may be woken twice at the opening. The second wake-up is a harmless
+# no-op and that is proved, not assumed: the per-surface concurrency lane in
+# release-train.yml holds the second run behind the first
+# (`cancel-in-progress: false`), and the second reads `current` — the first
+# run's tag already contains its commit — or names the spacing.
+# tests/test_fleet_wake.py pins both.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`, as Reconcile,
+#      Channel Watch and Split ledger already do here. The DISPATCH goes out
+#      as the bureau App installation for the owner being woken: a
+#      `GITHUB_TOKEN` cannot reach another repository at all, and each woken
+#      run then initiates in ITS repo as `github-actions` — the same actor a
+#      train's own re-arm dispatch produces (DRE-3559), which every stub
+#      already admits.
+#   Q2 secrets — a schedule-triggered run in THIS repo reads this repo's
+#      normal secrets store (never the Dependabot store), so the App id and
+#      key resolve. The token is minted PER OWNER (`owner: ${{ matrix.owner
+#      }}`) because an installation token is scoped to one installation and
+#      this fleet spans three owners. The permission that matters is
+#      `Actions: write` on that installation: without it GitHub answers
+#      "HTTP 403: Resource not accessible by integration" (DRE-1254, the
+#      silent 2026-06-12 stall). Here it is not silent — the repo is named,
+#      a `::warning::` is raised and the run exits non-zero.
+#   Q3 re-run / re-dispatch — idempotent where it matters: waking a train
+#      twice is the double-wake-up case above, which the train collapses. A
+#      re-run of this workflow simply wakes the same trains again.
+#   Q4 command limits — `gh workflow run` needs the target workflow to
+#      declare `workflow_dispatch` on the DEFAULT branch; a file that does
+#      not (including this repo's own `release-train.yml`, which is the
+#      reusable definition) answers 422, so it is skipped by reading the file
+#      first and named for what it is. No `--ref`: gh dispatches the
+#      repository's default branch, the only branch a train releases from.
+#   Q5 our crash — no receipts and no markers: a crash anywhere leaves the
+#      stubs' own crons as the backstop, and the next day's run repeats. A
+#      red run routes through the medic (self-medic.yml watches this
+#      workflow by name).
+name: Fleet Wake
+
+on:
+  schedule:
+    # DERIVED, never typed: `release_train.wake_crons()` converts the fleet
+    # opening to UTC on the America/Los_Angeles clock with zoneinfo. GitHub's
+    # `schedule:` takes UTC only and has no timezone field, so two lines are
+    # the only way to hit one local hour all year — under PST 13:00 UTC is
+    # the opening and 12:00 UTC is an hour before it (a window no-op that
+    # re-arms itself); under PDT 12:00 UTC is the opening and 13:00 UTC is an
+    # ordinary run an hour into the day.
+    - cron: "0 13 * * *"
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+# It dispatches other repos' trains and writes nothing here: no push, no ref
+# move, no card. The cross-repo dispatch rides the minted App token below,
+# never this one.
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-wake
+  cancel-in-progress: false
+
+jobs:
+  # The roster is `config/repo-map.json` — the same snapshot the relay routes
+  # on. A repo onboarded into the map is woken with no second edit, which is
+  # the whole reason the owner list is computed rather than typed.
+  owners:
+    name: Read the roster
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      owners: ${{ steps.read.outputs.owners }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Owners in the roster
+        id: read
+        run: python3 scripts/release_train.py wake-owners
+
+  wake:
+    name: Wake ${{ matrix.owner }}
+    needs: owners
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      # One owner's missing or under-permissioned installation must not stop
+      # the other owners' trains — the opposite of the fleet-wide failure
+      # this workflow replaces.
+      fail-fast: false
+      matrix:
+        owner: ${{ fromJSON(needs.owners.outputs.owners) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Per owner, because an App installation token is scoped to ONE
+      # installation. `continue-on-error` so a missing installation produces
+      # the named, greppable refusal below rather than an opaque red action.
+      - name: Mint bot token (this owner's installation)
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+
+      # Through env, never interpolated into the shell line — the roster is
+      # repo-controlled data today and the next writer of it may not be.
+      - name: Wake every train this owner holds
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ matrix.owner }}
+        run: python3 scripts/release_train.py wake --owner "$OWNER"

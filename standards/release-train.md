@@ -187,20 +187,67 @@ fires on every CI completion on the default branch and the TRAIN does the path
 filtering: a surface whose declared `paths` are untouched since its newest tag
 reads current and is a no-op that says so.
 
-**Two cron lines, deliberately.** GitHub's `schedule:` takes UTC only and has
-no timezone field. 07:00 PT is 15:00 UTC under PST and 14:00 UTC under PDT, so
-the stub carries both and knows nothing about which is which: every day one
-fires at 07:00 PT and the other at 06:00 PST in winter or 08:00 PDT in summer.
-The train reads the clock in `America/Los_Angeles` and applies the surface's
-window to it — the 06:00 PST firing is outside `07:00-21:00 PT` and is a no-op
-that names the window; the 08:00 PDT firing is an ordinary run. This is the
-first schedule in the fleet that tracks a local clock; there is no precedent to
-copy and these two lines are the contract.
+**The stub's own cron lines are legacy (DRE-4450).** They are still in the
+block above, and they still work, but the schedule that matters is now the
+fleet wake-up below — one workflow, in bureau-pipeline, for every train.
+Removing these two lines (and the surface's `window`, where it only restates
+the fleet default) is one follow-up card per repo, blocked on DRE-4450. Until
+then a train may be woken twice at the opening; the second wake-up is a no-op,
+because the per-surface concurrency lane holds it behind the first and it then
+reads `current` — or names the spacing. A repo onboarded from today copies the
+block with the `schedule:` omitted.
 
 `RELEASE_ROLE_ARN` is the one required secret — the caller's own OIDC role, so
 a repo can only ever deploy itself. The two Linear keys are optional and pass
 through to the script's environment; `LINEAR_API_KEY` is also what the train
 writes a declared surface's Linear release with.
+
+## The fleet's hours, and the wake-up that reads them
+
+**The opening time is written once, in the train (DRE-4450).** The CEO, on
+2026-09-21: *"The schedule should be integrated into the train so it's in one
+place."* Before that it was written twice in every repo with a train — the
+`window` in `.github/bureau/release.json` and two `schedule:` crons in the stub
+— and on 2026-09-21 Portico's train slept until 07:03 PT because DRE-4357 had
+moved one copy and not the other.
+
+The one declaration is `FLEET_WINDOW` in `scripts/release_train.py`, today
+`05:00-21:00 PT`:
+
+* **A surface that omits `window` inherits it.** The schema check accepts the
+  omission, and the train's lines name it as the fleet default. Omitting it is
+  what a surface on the fleet's hours should do.
+* **A surface that declares its own keeps it**, and every line the train prints
+  about that window says it overrides the fleet default — so a surface that is
+  deliberately different reads as deliberate, and one that is accidentally
+  stale is visible on its own run.
+
+**The wake-up is a workflow in bureau-pipeline, not a cron in the train.**
+GitHub runs a `schedule:` trigger only from a workflow file on the default
+branch of the repo that HOLDS it, and this train is `workflow_call` — a cron
+inside it never fires for a caller. So `.github/workflows/fleet-wake.yml` in
+bureau-pipeline carries the schedule for the whole fleet. Its two cron lines
+are derived from `FLEET_WINDOW` with `zoneinfo` (`python3
+scripts/release_train.py wake-owners` / `wake`), never typed: UTC has no
+timezone field, so one line is standard time and the other daylight time, and
+`tests/test_fleet_wake.py` fails if either moves alone or if the window moves
+without them.
+
+At the opening it reads `config/repo-map.json` and dispatches
+`release-train.yml` in every roster repo that carries a caller stub —
+`gh workflow run release-train.yml -R <repo>`, the DRE-3559 re-arm's own
+primitive, here cross-repo under a bot App token minted per owner (an
+installation token is scoped to one installation, and this fleet spans three).
+A repo with no stub is **skipped and named**, never failed; so is this repo,
+whose `release-train.yml` IS the `workflow_call` reusable. A repo it could not
+wake — an unreadable stub, a refused dispatch — is named, warned about, and
+turns the run red, because a wake-up that silently did not happen is the fault
+this replaces. The App installation needs **`Actions: write`** on each owner or
+the dispatch answers `HTTP 403: Resource not accessible by integration`
+(DRE-1254); the run says exactly that, per repo.
+
+The woken train then decides as it always does: the brake, `auto`, current,
+the spacing, the window, green-at-SHA. The wake-up decides nothing.
 
 ## The supervised first release
 

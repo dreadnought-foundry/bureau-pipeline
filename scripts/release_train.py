@@ -9,8 +9,8 @@ rule is testable without a token, a runner or a tag push
 (`tests/test_release_train.py`).
 
 WHAT A TRAIN DOES, IN ONE PARAGRAPH. A caller's `.github/bureau/release.json`
-declares its surfaces. Every time CI completes on the default branch, on the
-07:00 PT schedule, and on a hand dispatch, the train reads that file at the
+declares its surfaces. Every time CI completes on the default branch, at the
+fleet opening, and on a hand dispatch, the train reads that file at the
 head of the default branch at that moment. The COLLAPSE rule, stated once
 here because it is the only reason two pushes a minute apart produce one
 release: the per-surface concurrency lane holds the second run behind the
@@ -129,7 +129,7 @@ red train on an API blip would be a second kind of noise. Both this plan and
 (`Channel.receipt`), byte-stable, which agent-bureau's console parses.
 
 A NO-OP THAT NAMES A MINUTE RE-ARMS FOR IT (DRE-3559). The triggers are CI
-completing on the default branch, the 07:00 PT schedule and a hand dispatch —
+completing on the default branch, the fleet wake-up and a hand dispatch —
 so a run that no-op'd on the spacing named the exact minute the next release
 could be cut, and then nothing existed to cut it. On 2026-09-12 four runs
 (15:23, 15:25, 15:31 and 15:35:52 PT) each said "may be cut at 15:36 PT" and
@@ -168,11 +168,30 @@ release. A tip that cannot be re-read is a `::warning::` naming the
 dispatch-time commit the run walks from instead — never a silent fall-back to
 this bug, and never a stopped train. Every run that did not sleep walks from
 the head it was handed, as before.
+
+THE FLEET'S OPENING IS ONE EDIT (DRE-4450, the CEO's 2026-09-21 rule: "the
+schedule should be integrated into the train so it's in one place"). It was
+two per repo — the `window` in `release.json` and two `schedule:` crons in
+the stub — and on 2026-09-21 Portico's train slept until 07:03 PT because
+DRE-4357 had moved one copy and not the other. Now `FLEET_WINDOW` is the
+declaration: a surface that omits `window` inherits it, one that declares its
+own keeps it and every line about that window says it is overriding the
+default, and the same constant derives the two cron lines of the FLEET
+WAKE-UP (`.github/workflows/fleet-wake.yml` in this repo — GitHub fires a
+`schedule:` only from the repo holding the file, and this workflow is
+`workflow_call`, so the cron cannot be in the train itself). At the opening
+that workflow reads `config/repo-map.json` and dispatches each roster repo's
+own stub; a repo with no stub is skipped and named, and a repo it could not
+wake turns the run red. The stubs keep their own crons until the per-repo
+follow-up cards remove them, so a train may be woken twice at the opening —
+the collapse rule two paragraphs up is why that is a no-op and not a second
+release.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import fnmatch
 import json
 import os
@@ -191,10 +210,22 @@ import merge_gate  # noqa: E402
 import release_linear  # noqa: E402 — the Linear release every declared surface gets (DRE-3854)
 
 #: The clock every window is read on. GitHub's `schedule:` takes UTC only and
-#: has no timezone field, so the STUB carries two cron lines and knows nothing
-#: about PT; the train converts here — the way `linear_ops._PT` and
-#: agent-bureau's `check_deploy_activity.py` already do.
+#: has no timezone field, so a cron line knows nothing about PT; the train
+#: converts here — the way `linear_ops._PT` and agent-bureau's
+#: `check_deploy_activity.py` already do.
 PT = ZoneInfo("America/Los_Angeles")
+
+#: THE FLEET'S HOURS, DECLARED ONCE (DRE-4450). The CEO, 2026-09-20: "The
+#: train should start at 5 am." Before this constant that sentence had to be
+#: written twice in every repo with a train — the `window` in its
+#: `release.json` and the two `schedule:` crons in its stub — and DRE-4357
+#: moved agent-bureau while Portico slept until 07:03 PT the next morning.
+#: Now the opening is HERE: a surface that declares no `window` inherits it,
+#: `wake_crons()` derives the fleet wake-up's two cron lines from it, and a
+#: time change is one edit in one repo. A surface may still declare its own
+#: window, and every line the train prints about that window says it is
+#: overriding this default.
+FLEET_WINDOW = "05:00-21:00 PT"
 
 #: Opens every line the train prints, so one run's receipts are greppable.
 TAG = "release-train"
@@ -311,6 +342,10 @@ class Field(NamedTuple):
     kind: str
     means: str
     nullable: bool = False
+    #: A field a surface may leave out entirely, because something else
+    #: supplies it: `window` inherits `FLEET_WINDOW`, `record` defaults to
+    #: `tag`. `REQUIRED_FIELDS` is derived from this, never restated.
+    optional: bool = False
 
 
 SCHEMA: tuple[Field, ...] = (
@@ -338,7 +373,12 @@ SCHEMA: tuple[Field, ...] = (
     Field("window", "`HH:MM-HH:MM PT`, or `always`",
           "The hours a release may be cut, read on the America/Los_Angeles "
           "clock. A trigger outside the window is a no-op that names it; a "
-          "hand dispatch runs anyway."),
+          "hand dispatch runs anyway. **Optional** — omit it and the surface "
+          f"inherits the fleet default `{FLEET_WINDOW}`, which is also what "
+          "the fleet wake-up's crons are derived from, so the fleet's hours "
+          "are one edit in one place. Declare one and it overrides the "
+          "default, which the train says on the surface's own line.",
+          optional=True),
     Field("auto", "true or false",
           "Whether the train releases this surface unattended. False means it "
           "releases only on a hand dispatch naming it — which is how a "
@@ -354,7 +394,8 @@ SCHEMA: tuple[Field, ...] = (
           "compare."),
 )
 
-REQUIRED_FIELDS = tuple(f.name for f in SCHEMA if f.name != "record")
+REQUIRED_FIELDS = tuple(f.name for f in SCHEMA
+                        if f.name != "record" and not f.optional)
 
 
 class Surface(NamedTuple):
@@ -370,6 +411,11 @@ class Surface(NamedTuple):
     auto: bool
     identity: str
     record: str
+    #: Did the surface declare `window` itself, or is `window` above the
+    #: fleet default it inherited (DRE-4450)? The window is the same kind of
+    #: value either way — this only says where it came from, so the line can
+    #: say "overriding the fleet default" and mean it.
+    declared_window: bool = False
 
 
 class Channel(NamedTuple):
@@ -494,7 +540,13 @@ def load(path=None) -> dict:
 
 def surface(name: str, data: dict) -> Surface:
     """One surface record → a `Surface`. Shape errors are `check_schema`'s to
-    report; this only reads."""
+    report; this only reads.
+
+    A surface that declares no `window` inherits `FLEET_WINDOW` (DRE-4450) —
+    never `always`, which would have made an omission mean "release at any
+    hour" and is the one reading of a missing field that must not be silent.
+    """
+    declared = isinstance(data.get("window"), str) and bool(data.get("window"))
     return Surface(
         name=name,
         tag_series=list(data.get("tag_series") or []),
@@ -502,10 +554,11 @@ def surface(name: str, data: dict) -> Surface:
         script=data.get("script"),
         rollback=data.get("rollback"),
         spacing_minutes=int(data.get("spacing_minutes") or 0),
-        window=str(data.get("window") or WINDOW_ALWAYS),
+        window=str(data["window"]) if declared else FLEET_WINDOW,
         auto=bool(data.get("auto")),
         identity=str(data.get("identity") or ""),
         record=str(data.get("record") or "tag"),
+        declared_window=declared,
     )
 
 
@@ -975,7 +1028,8 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
             return Decision(
                 NO_OP, "window",
                 f"the clock reads {local:%H:%M} PT and {surface.name}'s window "
-                f"is {surface.window} — this defers to {start} PT",
+                f"is {surface.window} ({window_note(surface)}) — this defers "
+                f"to {start} PT",
                 re_arm_at=next_window_open(surface.window, now))
 
     checks = ci_green if isinstance(ci_green, Checks) else (
@@ -997,10 +1051,15 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
     # would be the one sentence in this file that is not true.
     said = checks.detail if checks is ASSUMED_GREEN else (
         f"{checks.detail}; {checks.describe()}")
+    # The override rides on the RELEASE line too (DRE-4450): a surface whose
+    # own window is open never no-ops on it, so this is the only line that
+    # can say the fleet default was overridden for it.
+    override = (f" — its window {surface.window} is {window_note(surface)}"
+                if surface.declared_window else "")
     return Decision(
         RELEASE, "release",
         f"{surface.name} is behind and the spacing has elapsed — releasing "
-        f"({said})")
+        f"({said}){override}")
 
 
 def _channel_decision(surface, now, channel: Channel | None) -> Decision:
@@ -1079,6 +1138,15 @@ def _ci_refusal(checks: Checks) -> str:
                 f"refusal, never a wait — no check proves this commit "
                 f"({checks.describe()})")
     return f"CI at the SHA is not green: {checks.detail} ({checks.describe()})"
+
+
+def window_note(surface) -> str:
+    """Where this surface's window came from, as the clause its lines carry
+    (DRE-4450). One sentence with two readings, and the train says which:
+    the fleet default, or the surface's own overriding it."""
+    if surface.declared_window:
+        return f"its own, overriding the fleet default {FLEET_WINDOW}"
+    return "the fleet default, declared once in the train"
 
 
 def window_bounds(window: str):
@@ -1224,8 +1292,8 @@ def re_arm_plan(planned, *, now: datetime, bound_minutes: int) -> ReArm:
             at, False,
             f"not re-armed: {when} is more than the {bound_minutes}-minute "
             f"wait a re-armed run may hold a runner for — the next CI "
-            f"completion on the default branch or the daily 07:00 PT "
-            f"schedule wakes the train")
+            f"completion on the default branch or the fleet wake-up at "
+            f"{window_bounds(FLEET_WINDOW)[0]} PT wakes the train")
     return ReArm(at, True, f"re-armed for {when}")
 
 
@@ -1395,6 +1463,220 @@ def wake_head(repo_root, branch: str, dispatched_at: str, not_before) -> Woken:
     return Woken(tip, (f"{TAG}: {armed} and woke — {branch}'s head is now "
                        f"{tip[:7]}, not {short} as when it was dispatched; "
                        f"walking from {tip[:7]} (DRE-3791)"))
+
+
+# ---------------------------------------------------------------------------
+# The fleet wake-up (DRE-4450) — one schedule, here, for every train
+# ---------------------------------------------------------------------------
+#
+# GitHub runs a `schedule:` trigger only from a workflow file on the default
+# branch of the repo that HOLDS it, and this repo's `release-train.yml` is
+# `workflow_call` — so a cron inside the train never fires for a caller. The
+# schedule therefore cannot be IN the train; it is one workflow in this repo
+# (`.github/workflows/fleet-wake.yml`) whose crons are derived from
+# `FLEET_WINDOW` and which dispatches every roster repo's own stub at the
+# opening. That is the second half of "the opening lives in one place": the
+# first half is the window every surface inherits, and both read the same
+# constant.
+
+#: The year the wake-up crons are derived on. Any year does — the offsets
+#: come from the zoneinfo database, not from this number — and it is fixed so
+#: the derivation is the same on 31 December as on 1 January.
+CRON_ANCHOR_YEAR = 2026
+
+#: Opens every line the fleet wake-up prints. NOT `TAG`: these lines are
+#: about repos rather than surfaces, and the console parses `release-train:`
+#: lines as a surface's decision.
+FLEET_TAG = "fleet-wake"
+
+#: The roster the wake-up reads — the same snapshot the relay routes on and
+#: `validate_card.py` derives `VALID_SLUGS` from. Never a list in the
+#: workflow file: a repo onboarded into the map is woken with no second edit.
+FLEET_MAP = ROOT / "config" / "repo-map.json"
+
+#: What one repo's wake-up came to.
+WOKEN = "woken"
+SKIPPED = "skipped"
+FAILED = "could-not-wake"
+
+
+def wake_crons(window: str = FLEET_WINDOW) -> tuple:
+    """The UTC cron lines that wake the fleet at `window`'s opening — one for
+    standard time and one for daylight time, in that order.
+
+    Derived on the `America/Los_Angeles` clock with `zoneinfo`, never from a
+    restated offset: `schedule:` takes UTC only and has no timezone field, so
+    two lines are the only way to hit one local hour all year, and every day
+    one of them fires at the opening while the other fires an hour either
+    side of it (a window no-op in winter, an ordinary run in summer — exactly
+    what the two stub crons have always done).
+    """
+    hour, minute = (int(part) for part in window_bounds(window)[0].split(":"))
+    lines: list[str] = []
+    for month in (1, 7):   # a standard-time date and a daylight-time one
+        local = datetime(CRON_ANCHOR_YEAR, month, 15, hour, minute, tzinfo=PT)
+        at = local.astimezone(timezone.utc)
+        line = f"{at.minute} {at.hour} * * *"
+        if line not in lines:
+            lines.append(line)
+    return tuple(lines)
+
+
+def fleet_roster(path=None, owner: str | None = None) -> dict:
+    """The roster, `slug -> owner/repo`, optionally narrowed to one owner.
+
+    Narrowed because an App installation token is scoped to ONE installation
+    and this fleet spans three owners, so the wake-up runs once per owner
+    with that owner's token (premortem Q1/Q2).
+    """
+    with open(path or FLEET_MAP, encoding="utf-8") as fh:
+        roster = json.load(fh)
+    if owner:
+        roster = {slug: repo for slug, repo in roster.items()
+                  if repo.split("/")[0] == owner}
+    return roster
+
+
+def fleet_owners(roster: dict) -> list:
+    """Every owner in the roster, sorted — the wake-up's matrix."""
+    return sorted({repo.split("/")[0] for repo in roster.values()})
+
+
+_DISPATCH_TRIGGER = re.compile(r"^\s+workflow_dispatch\s*:", re.M)
+_CALL_TRIGGER = re.compile(r"^\s+workflow_call\s*:", re.M)
+
+
+def stub_wakeable(text) -> tuple:
+    """(can this repo's `release-train.yml` be dispatched, and if not why).
+
+    Read as text, the way `stub_declares_not_before` reads the same file: the
+    wake-up runs on a bare `python3`, and GitHub's 422 is the backstop for a
+    false positive. A repo without a train is SKIPPED and named — never a
+    failure, because most repos are supposed to have no train.
+    """
+    if text is None:
+        return False, (f"it carries no {TRAIN_WORKFLOW} — no train to wake")
+    if not _DISPATCH_TRIGGER.search(text):
+        if _CALL_TRIGGER.search(text):
+            return False, (
+                f"its {TRAIN_WORKFLOW} IS the `workflow_call` reusable "
+                f"definition, not a caller stub — `gh workflow run` answers "
+                f"422 there (the `reconcile.review_workflow()` resolution)")
+        return False, (f"its {TRAIN_WORKFLOW} declares no `workflow_dispatch` "
+                       f"trigger, so nothing can wake it")
+    return True, ""
+
+
+class Wake(NamedTuple):
+    """What one roster repo's wake-up came to, and the plain sentence why."""
+
+    slug: str
+    repo: str
+    act: str       # woken | skipped | could-not-wake
+    reason: str
+
+
+def wake_line(entry: Wake) -> str:
+    """The ONE line this repo contributes to the run log."""
+    return f"{FLEET_TAG}: {entry.act} {entry.repo} — {entry.reason}"
+
+
+def wake_exit(results) -> int:
+    """A skip is the wake-up working; a repo it could not wake is not.
+
+    Fail closed, the `channel-unknown` rule applied to a write: a stub that
+    could not be read may still be a train, and a refused dispatch is a train
+    that did not leave. Either way the run goes red and the medic reads it,
+    because the alternative is Portico sleeping until 07:03 PT again with
+    every run green.
+    """
+    return 1 if any(entry.act == FAILED for entry in results) else 0
+
+
+def wake_fleet(roster: dict, read_stub, dispatch) -> list:
+    """Wake every roster repo that carries a dispatchable train stub.
+
+    `read_stub(repo)` returns the stub's text, `None` when the repo has none,
+    and raises `RuntimeError` when it could not be read; `dispatch(repo)`
+    raises `RuntimeError` when GitHub refuses. Both are seams so the whole
+    decision is testable without a token.
+    """
+    results: list[Wake] = []
+    for slug, repo in sorted(roster.items()):
+        try:
+            stub = read_stub(repo)
+        except RuntimeError as err:
+            results.append(Wake(slug, repo, FAILED,
+                                f"{TRAIN_WORKFLOW} could not be read, which "
+                                f"is never 'no train' — "
+                                f"{' '.join(str(err).split())[:300]}"))
+            continue
+        wakeable, why = stub_wakeable(stub)
+        if not wakeable:
+            results.append(Wake(slug, repo, SKIPPED, why))
+            continue
+        try:
+            dispatch(repo)
+        except RuntimeError as err:
+            results.append(Wake(slug, repo, FAILED,
+                                f"the dispatch was refused — "
+                                f"{' '.join(str(err).split())[:300]}"))
+            continue
+        results.append(Wake(slug, repo, WOKEN,
+                            f"dispatched {TRAIN_WORKFLOW}; the train decides "
+                            f"(the brake, the window, the spacing, "
+                            f"green-at-SHA — nothing bypassed)"))
+    return results
+
+
+def fetch_stub(repo: str) -> str | None:
+    """One repo's `release-train.yml` at its default branch, or `None` when
+    it has none. A `RuntimeError` on anything else.
+
+    THE REPO IS PROBED FIRST, and that read is the load-bearing one. GitHub
+    answers 404 for a file that is absent AND for a repository the
+    installation cannot see, and only the first means "no train": read
+    naively, a token narrowed by one owner's uninstalled App reports every
+    repo there as trainless and the run goes green having woken nothing.
+    Measured on this runner, which sees one repo of the six. It is the
+    split-ledger rule — a repo this token cannot see records UNKNOWN, never
+    0 — and it costs one extra read per repo, once a day.
+    """
+    if _gh_json(f"repos/{repo}", "{full_name}", repo) is None:
+        raise RuntimeError(
+            f"{repo} answered 404 — this token cannot see the repository, "
+            f"which is never the same answer as 'it has no train'")
+    # `{content: …}` and not a bare `.content`: gh's `--jq` prints a raw
+    # string for a scalar filter, which `_gh_json` cannot parse as JSON — the
+    # `.object | {sha}` shape every other read here uses, for that reason.
+    record = _gh_json(f"repos/{repo}/contents/{TRAIN_WORKFLOW}",
+                      "{content, encoding}", f"{repo}'s {TRAIN_WORKFLOW}")
+    if not record or not record.get("content"):
+        return None
+    if record.get("encoding") not in (None, "base64"):
+        raise RuntimeError(f"{repo}'s {TRAIN_WORKFLOW} came back "
+                           f"{record['encoding']}-encoded, which this cannot read")
+    return base64.b64decode(record["content"]).decode("utf-8", "replace")
+
+
+def dispatch_train(repo: str) -> None:
+    """`gh workflow run release-train.yml -R <repo>` — the DRE-3559 re-arm's
+    primitive, here cross-repo under the bot App's token. No `--ref`: gh
+    dispatches the repository's default branch, which is the only branch a
+    train releases from. A `RuntimeError` carrying GitHub's answer.
+
+    The 403 to expect is the DRE-1254 one — "Resource not accessible by
+    integration" — which means the App installation lacks `Actions: write`
+    on that owner. It is reported per repo and turns the run red rather than
+    being swallowed; nothing here retries.
+    """
+    done = subprocess.run(
+        ["gh", "workflow", "run", TRAIN_WORKFLOW.rsplit("/", 1)[-1],
+         "--repo", repo],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        raise RuntimeError(done.stderr.strip()
+                           or f"gh workflow run exited {done.returncode}")
 
 
 # ---------------------------------------------------------------------------
@@ -1777,17 +2059,58 @@ def render_markdown() -> str:
         "script": "infra/release-<name>.sh",
         "rollback": "make rollback-<name> VERSION=<tag>",
         "spacing_minutes": 30,
-        "window": "07:00-21:00 PT",
         "auto": False,
         "identity": "<role name>",
         "record": "tag",
     }}}, indent=2))
     w("```")
     w("")
+    w(
+        f"No `window` there on purpose: a surface that omits it releases on "
+        f"the fleet's hours (`{FLEET_WINDOW}`, the section below), which is "
+        "what a surface should normally do. Add `\"window\": \"HH:MM-HH:MM "
+        "PT\"` only to be deliberately different, and the train says on that "
+        "surface's line that it is overriding the fleet default."
+    )
+    w("")
     w("| Field | Shape | What it means |")
     w("| --- | --- | --- |")
     for field in SCHEMA:
-        w(f"| `{field.name}` | {field.kind} | {field.means} |")
+        optional = " *(optional)*" if field.optional else ""
+        w(f"| `{field.name}`{optional} | {field.kind} | {field.means} |")
+    w("")
+    w("## The fleet's hours, in one place")
+    w("")
+    w(
+        f"**DRE-4450.** The fleet opens at "
+        f"`{window_bounds(FLEET_WINDOW)[0]} PT` and that is written ONCE, as "
+        f"`release_train.FLEET_WINDOW` (`{FLEET_WINDOW}`). A surface that "
+        "omits `window` inherits it — the schema check accepts the omission "
+        "— and a surface that declares its own keeps it, with every line the "
+        "train prints about that window saying it overrides the fleet "
+        "default. Before this the opening was written twice in every repo "
+        "with a train, and on 2026-09-21 Portico's train slept until 07:03 "
+        "PT because one of the two copies had been moved and the other had "
+        "not."
+    )
+    w("")
+    w(
+        "**The same constant wakes the fleet.** GitHub runs a `schedule:` "
+        "only from a workflow on the default branch of the repo that holds "
+        "it, and this train is `workflow_call` — so a cron inside it never "
+        "fires for a caller. `.github/workflows/fleet-wake.yml` in "
+        "bureau-pipeline carries the schedule for the whole fleet: its two "
+        "cron lines are derived from the window above with `zoneinfo` "
+        f"(`{'` and `'.join(wake_crons())}` — UTC has no timezone field, so "
+        "one line is standard time and the other daylight time), and at the "
+        "opening it reads `config/repo-map.json` and dispatches "
+        f"`{TRAIN_WORKFLOW}` in every roster repo that carries a caller "
+        "stub. A repo with no stub is skipped and NAMED; a repo it could not "
+        "wake — an unreadable stub, a refused dispatch — turns the run red, "
+        "because a wake-up that silently did not happen is the whole fault "
+        "being fixed. Each woken train then applies its own rules, nothing "
+        "bypassed."
+    )
     w("")
     w("## A Linear release, by declaring one key")
     w("")
@@ -1925,8 +2248,9 @@ def render_markdown() -> str:
         "then the ordinary decision runs — green-at-SHA, the spacing, the "
         "window and the brake, nothing bypassed. A minute further away than "
         "that bound is not re-armed: a sleeping run holds a runner the whole "
-        "time, and the line says the next CI completion or the 07:00 PT "
-        "schedule wakes the train instead."
+        "time, and the line says the next CI completion or the fleet "
+        f"wake-up at {window_bounds(FLEET_WINDOW)[0]} PT wakes the train "
+        "instead."
     )
     w("")
     w(
@@ -2245,6 +2569,48 @@ def _cmd_release(args) -> int:
     return 0 if decision.ok else 1
 
 
+def _cmd_wake(args) -> int:
+    """The fleet wake-up (DRE-4450): dispatch every roster repo's own train
+    stub, name every repo it skipped and why, and go red on any it could not
+    wake."""
+    roster = fleet_roster(args.map or None, owner=args.owner or None)
+    if not roster:
+        print(f"{FLEET_TAG}: {args.map or FLEET_MAP} names no repo"
+              + (f" under {args.owner}" if args.owner else ""))
+        return 0
+    if not os.environ.get("GH_TOKEN"):
+        # No token is not an empty fleet. Say which installation is missing
+        # and fail, rather than reporting a wake-up that never happened.
+        _warning("Fleet wake-up has no token",
+                 f"no GH_TOKEN for {args.owner or 'the fleet'} — the bureau "
+                 f"App must be installed on that owner with Actions: write, "
+                 f"or {len(roster)} train(s) are not woken")
+        print(f"{FLEET_TAG}: no token for {args.owner or 'the fleet'} — "
+              f"{', '.join(sorted(roster.values()))} not woken")
+        return 1
+    results = wake_fleet(roster, read_stub=fetch_stub, dispatch=dispatch_train)
+    for entry in results:
+        print(wake_line(entry))
+        if entry.act == FAILED:
+            _warning(f"Release train not woken: {entry.repo}", entry.reason)
+    counted = {act: sum(1 for e in results if e.act == act)
+               for act in (WOKEN, SKIPPED, FAILED)}
+    print(f"{FLEET_TAG}: {counted[WOKEN]} woken, {counted[SKIPPED]} skipped, "
+          f"{counted[FAILED]} could not be woken "
+          f"(the fleet opens at {window_bounds(FLEET_WINDOW)[0]} PT)")
+    return wake_exit(results)
+
+
+def _cmd_wake_owners(args) -> int:
+    """The wake-up's matrix: every owner in the roster, so the token is
+    minted once per installation."""
+    owners = fleet_owners(fleet_roster(args.map or None))
+    _emit_output("owners", json.dumps(owners))
+    print(f"{FLEET_TAG}: {len(owners)} owner(s) in the roster: "
+          f"{', '.join(owners) or 'none'}")
+    return 0
+
+
 def _cmd_render(args) -> int:
     rendered = render_markdown()
     with open(DOC_PATH, "w", encoding="utf-8") as fh:
@@ -2302,6 +2668,20 @@ def main(argv=None) -> int:
 
     sub.add_parser("render", help="rewrite docs/release-train.md")
 
+    waker = sub.add_parser(
+        "wake", help="dispatch every roster repo's release-train stub at the "
+                     "fleet opening (DRE-4450)")
+    waker.add_argument("--map", default="",
+                       help=f"the roster; {FLEET_MAP} by default")
+    waker.add_argument("--owner", default="",
+                       help="wake only this owner's repos — the token is "
+                            "scoped to one App installation")
+
+    owners = sub.add_parser(
+        "wake-owners", help="the owners in the roster, as the wake-up's matrix")
+    owners.add_argument("--map", default="",
+                        help=f"the roster; {FLEET_MAP} by default")
+
     channel = sub.add_parser(
         "channel", help="where the channel stands — the one receipt line "
                         "promote-channel.yml prints (DRE-3568)")
@@ -2326,6 +2706,8 @@ def main(argv=None) -> int:
         "render": _cmd_render,
         "channel": _cmd_channel,
         "wait": _cmd_wait,
+        "wake": _cmd_wake,
+        "wake-owners": _cmd_wake_owners,
     }[args.command](args)
 
 

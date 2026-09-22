@@ -30,6 +30,17 @@ reads the `stable` channel like any other surface; the train never runs a
 surface declared that way, and nothing about how this repo's own channel
 advances (below) changes.
 
+**The fleet's opening time is one edit (DRE-4450).** It is declared once, as
+`release_train.FLEET_WINDOW` — a surface that omits `window` inherits it, one
+that declares its own keeps it and the train says on that surface's line that
+it overrides the default. The same constant derives the two cron lines of
+`.github/workflows/fleet-wake.yml`, the ONE schedule the fleet has: GitHub
+fires a `schedule:` only from the repo holding the file and the train is
+`workflow_call`, so at the opening that workflow reads `config/repo-map.json`
+and dispatches each roster repo's own train stub, naming every repo it skipped
+and why. Callers' stubs keep their own crons until one follow-up card per repo
+removes them; a train woken twice collapses to one release.
+
 ## The lane contract (DRE-2726)
 
 `config/lane-contract.json` declares every lane's entrance condition, exit
