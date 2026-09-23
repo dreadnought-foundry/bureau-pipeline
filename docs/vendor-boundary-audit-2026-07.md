@@ -62,10 +62,12 @@ duplicate-dispatch guard (see `dedupe_dispatch.py` section) plus the stub's
 reuse the run id and never self-block.
 
 **Q4 — command limitations.** The pool token mint has an explicit clause per
-slot because Actions cannot index secrets dynamically; the pool probe is one
-real, counted call per candidate (DRE-4290 — the free endpoint reports a meter
-the runners are not charged against). Both are encoded in `dispatch_pool.py`
-comments and its tests.
+slot because Actions cannot index secrets dynamically; the pool probe takes
+`PROBE_SAMPLES` real, counted calls per candidate — two since DRE-4576, because
+GitHub answers one token from two counters and a single call reports the
+healthy one about half the time whatever the other says (DRE-4290 — and the
+free endpoint reports a meter the runners are not charged against at all). Both
+are encoded in `dispatch_pool.py` comments and its tests.
 
 **Q5 — crash mid-flow.** The `🧠 model-attempt:` heartbeat carries the run URL,
 so reconcile checks GitHub's real run status before declaring death (DRE-2032).
@@ -651,6 +653,19 @@ consumer: its reads ride `github.token` because the App lacks `actions:read`
 (DRE-1346), a bucket the pool cannot improve on. All pinned by
 `tests/test_readers_on_the_pool.py`.
 
+**The main App left the read pool (DRE-4576).** Slot 1 is the identity every
+write has to come from — merges, verdicts, receipts, the agents' own `gh`
+calls — so `BUREAU_POOL_READ_ONLY: "1"` on the `Select dispatch-pool app` step
+holds it back: the ranking runs over the spares whenever one is readable, and
+slot 1 is taken only when none is. It is a last resort, never an exclusion — a
+run whose spares have all refused still gets a token. The flag is set on the
+three sites whose pick is used for reads alone (`harness.yml`, `qa-review.yml`,
+`reconcile.yml`) and on no other: `verify.yml` and `red-main-repair.yml` have
+no separate reading step, and `agent-fix.yml` and `plan.yml` re-use the reading
+pick for a write. `tests/test_dispatch_pool_read_pool.py` discovers which is
+which off the workflows and fails if a site whose pick also mints a
+write-capable identity carries the flag.
+
 **Which identity a fix commit is PUSHED under is not one of those, and is not
 pinned anywhere (DRE-4412).** Whether the push authenticates with the
 checkout's persisted credential or with the model step's own token is
@@ -678,13 +693,16 @@ across the pool without touching any allowlist.
 never private keys (those stay in the workflow's per-slot mint clauses).
 Missing slots shrink the pool gracefully.
 
-**Q3 — vendor behavior.** Quota-aware: probes every slot with one real call
-and ranks on the `x-ratelimit-remaining` response header — the meter the
-runner is charged against (DRE-4290; the free endpoint's body is a different
-counter, and ranking on it sent every run to slot 1). Healthy slots share the
-load by hash; a drained one is steered away from; a refused one is out for the
-run. The 2026-06-28 shared-bucket exhaustion is the incident this design
-answers.
+**Q3 — vendor behavior.** Quota-aware: probes every slot with `PROBE_SAMPLES`
+real calls and ranks on the `x-ratelimit-remaining` response header — the meter
+the runner is charged against (DRE-4290; the free endpoint's body is a
+different counter, and ranking on it sent every run to slot 1). Two samples,
+because one token is answered from two counters and one call reads only one of
+them (DRE-4576): any refused sample puts the slot out for the run, otherwise
+the smallest reading is the one that counts. Healthy slots share the load by
+hash; a drained one is steered away from. On a read-only site the main App is
+held back from the ranking and taken only as a last resort. The 2026-06-28
+shared-bucket exhaustion is the incident this design answers.
 
 On RETRY and RE-RUN the slot is re-selected from live headroom, so two runs
 over the same object routinely act as different Apps. That is harmless for a

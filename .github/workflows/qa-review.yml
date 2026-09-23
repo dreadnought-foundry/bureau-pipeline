@@ -359,6 +359,14 @@ jobs:
           # Deterministic fallback key on read failure: the PR, so a re-review
           # of the same PR picks the same slot instead of scattering.
           BUREAU_POOL_KEY: review:${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # The read pool (DRE-4576): this pick only ever feeds the `reader`
+          # mint below, and every step that consumes it READS — the PR record,
+          # the compare, the files list, the thread, the critic's own model
+          # reads. The verdict comment and the review check run keep the
+          # qa-bot token they were always posted with. Slot 1 here IS that
+          # qa-bot App, so holding it back is the same rule for the same
+          # reason: its hour is what merge-gate's writes spend.
+          BUREAU_POOL_READ_ONLY: "1"
         run: |
           python3 "$PIPELINE_DIR"/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
 

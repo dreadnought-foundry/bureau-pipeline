@@ -21,9 +21,11 @@ and DRE-2013's proof — written against a fake that injected the per-slot
 number directly — could not see it.
 
 WHAT THIS SUITE PINS.
-  * The ranking reads `x-ratelimit-remaining` off ONE real, counted call per
+  * The ranking reads `x-ratelimit-remaining` off real, counted calls per
     candidate (`GET /repos/{owner}/{repo}` on the repo the run is in), and the
-    `/rate_limit` body is never consulted. The first test below feeds four
+    `/rate_limit` body is never consulted. DRE-4576 made that TWO calls per
+    candidate — one sample lands on only one of GitHub's counters — and the
+    pin below was changed with it. The first test below feeds four
     candidates whose `/rate_limit` bodies all say 5,000 while their real-call
     headers say 5,000 / 4,900 / 200 / 4,950, through a fake `urlopen` that
     serves BOTH shapes, so it is red on the `/rate_limit` code and green on the
@@ -187,8 +189,12 @@ class RanksByTheChargedMeterTest(unittest.TestCase):
         self.assertNotEqual(picks, {1}, "the pool must not always answer slot 1")
         self.assertEqual(picks, {1, 2, 4})
 
-    def test_rate_limit_is_never_consulted_and_each_candidate_costs_one_call(self):
-        # One real, counted call per candidate — on the repo the run is in.
+    def test_rate_limit_is_never_consulted_and_each_candidate_is_sampled_twice(self):
+        # Real, counted calls per candidate — on the repo the run is in, and
+        # PROBE_SAMPLES of them (DRE-4576 changed this pin from one deliberately:
+        # a single call reports the healthy counter about half the time whatever
+        # the other one says, which is how run 35664409350 chose slot 1 four
+        # attempts running and was refused on every call it then made).
         calls: list = []
         fake = two_meter_github(
             {1: 5000, 2: 5000, 3: 5000, 4: 5000},
@@ -196,7 +202,11 @@ class RanksByTheChargedMeterTest(unittest.TestCase):
             calls=calls,
         )
         select_under(fake, pool_env(BUREAU_POOL_KEY="DRE-4290"))
-        self.assertEqual(sorted(s for s, _ in calls), [1, 2, 3, 4])
+        self.assertEqual(
+            sorted(s for s, _ in calls),
+            sorted([1, 2, 3, 4] * dispatch_pool.PROBE_SAMPLES),
+        )
+        self.assertEqual(dispatch_pool.PROBE_SAMPLES, 2)
         for _, url in calls:
             self.assertEqual(url, f"https://api.github.com/repos/{REPO}")
 
@@ -588,7 +598,7 @@ class TheRecordTest(unittest.TestCase):
         self.assertIn("2026-09-17", doc)
         self.assertIn("2026-09-18", doc)
         self.assertIn("x-ratelimit-remaining", doc)
-        self.assertIn("one", doc.lower())
+        self.assertIn("two", doc.lower())  # DRE-4576: two samples, not one
         self.assertIn("per candidate per run", doc)
         self.assertNotIn("quota-exempt, so probing costs nothing", doc)
 

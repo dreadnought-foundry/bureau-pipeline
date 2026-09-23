@@ -59,6 +59,12 @@ count, and never a private key:
     slot to feed it.
   * ``BUREAU_POOL_KEY`` (the card id; run id as fallback) seeds the
     deterministic hash used for the spread and the fallback.
+  * ``BUREAU_POOL_READ_ONLY=1`` marks a consumer whose selected token is
+    used for READS ALONE — the read pool (DRE-4576, below). Anything else,
+    including unset, is today's behaviour exactly.
+  * ``BUREAU_POOL_PROBE_SAMPLES`` overrides ``PROBE_SAMPLES``, how many times
+    the probe reads each candidate's meter (below). Nonsense or absent is the
+    constant.
   * ``GITHUB_REPOSITORY`` (set on every runner) names the repo the probe
     calls; ``BUREAU_POOL_PROBE_REPO`` overrides it for a consumer whose pool
     tokens are scoped to a different repo than the one it runs in (harness.yml
@@ -68,11 +74,31 @@ count, and never a private key:
 
 The meter (DRE-4290) — read this before "simplifying" it back
 --------------------------------------------------------------
-Each probe is ONE real, counted call — ``GET /repos/{owner}/{repo}`` with the
-candidate's token — and the reading is the ``x-ratelimit-remaining`` header on
-that response (``x-ratelimit-reset`` beside it, for the log). The probe costs
-one request per candidate per run: at the 184 runs/hour measured on
-2026-09-18 that is ~184 requests an hour on each bucket, under 4% of 5,000.
+Each probe SAMPLE is one real, counted call — ``GET /repos/{owner}/{repo}``
+with the candidate's token — and the reading is the ``x-ratelimit-remaining``
+header on that response (``x-ratelimit-reset`` beside it, for the log).
+The probe takes ``PROBE_SAMPLES`` of them, so the cost went from one to
+two requests per candidate per run: at the 184 runs/hour measured on
+2026-09-18 that is ~368 requests an hour on each bucket, under 8% of 5,000.
+
+Two samples, not one (DRE-4576) — one call lands on only one counter
+--------------------------------------------------------------------
+On 2026-09-23, one token calling one endpoint 20 times in a row from the
+operator's machine at 20:29–20:31 PT was answered from TWO different counters:
+~60% ``used ~60, reset 21:28 PT`` and ~40% ``used ~3,385, reset 21:04 PT``.
+The second one had 3,338 used 25 minutes into its window — ~8,000 requests an
+hour, exhausted by about :40 and refused until :04. A single call therefore
+reports the healthy counter roughly half the time whatever state the other is
+in, which is how harness run 35664409350 read slot 1 at 4,454 / 4,415 / 3,606
+/ 4,432 remaining across four attempts, chose it every time, and had every
+call it then made refused with ``API rate limit exceeded for installation ID
+123249480``.
+
+So each candidate is sampled ``PROBE_SAMPLES`` times and the readings are
+combined pessimistically: ANY refused sample marks the slot refused (and stops
+the sampling — the bucket is already out for this run), otherwise the SMALLEST
+``x-ratelimit-remaining`` is the reading. An unreadable sample beside a
+readable one is simply dropped; all-unreadable stays unreadable.
 
 It is NOT ``GET /rate_limit``. That endpoint is free, and DRE-2013 ranked on
 its ``resources.core.remaining`` for that reason — but it reports a counter
@@ -121,6 +147,38 @@ share, so spreading onto it is safe and the choice among such buckets is
 free; below 2,000 a bucket is inside its last hour of share and the pool
 steers to the roomiest instead.
 
+The read pool (DRE-4576) — slot 1 is a last resort, never an exclusion
+----------------------------------------------------------------------
+Every write the fleet makes on GitHub — merges, verdicts, receipts, the
+agents' own ``gh`` calls — has to come from the main App (installation
+123249480), because that identity is the one the gates recognise. Slot 1 is
+that App, and it was also an ordinary candidate for every read, so the sweeps,
+the critics and the harness spent its hour on polling and it ran dry for the
+second half of every hour.
+
+With ``BUREAU_POOL_READ_ONLY=1`` the rules above run over the SPARES alone:
+slot 1 is never returned while any other slot is readable, and it is returned
+only when nothing else is. A held-back run says so in the log line, after the
+rule — ``→ selected slot 3 (spread) (read pool, slot 1 held back)``. The
+``reason=`` output is untouched: it stays the same space-free rule vocabulary
+seven workflows append to ``$GITHUB_OUTPUT``.
+
+Last resort, NOT exclusion: a run whose spares have all refused or gone
+unreadable still gets slot 1, and still gets a token. And holding slot 1 back
+never collapses the pool into ``single-app`` — that reason means "no pool at
+all", and a pool of two minus slot 1 is ``only-readable``.
+
+The flag is set only on the ``Select dispatch-pool app`` steps whose token is
+used for READS ALONE — ``harness.yml``, ``qa-review.yml`` and
+``reconcile.yml``. ``verify.yml`` and ``red-main-repair.yml`` have no separate
+reading step (the pick IS the worker token); ``agent-fix.yml`` and
+``plan.yml`` re-use the reading pick for a write (DRE-4412's model step,
+DRE-3940's re-mints). Those four keep today's behaviour, and
+``tests/test_dispatch_pool_read_pool.py`` discovers which is which off the
+workflows rather than remembering it. (In ``qa-review.yml`` slot 1 is the
+qa-bot App, not the main one — same rule, same reason: that App's hour is
+what merge-gate's writes spend.)
+
 Output contract
 ---------------
 stdout is appended VERBATIM to ``$GITHUB_OUTPUT`` by the workflow, so it
@@ -163,6 +221,11 @@ SPREAD_BAND = 2000
 #: The probe's own refusal: the bucket is out for this run.
 _REFUSED_STATUSES = (403, 429)
 
+#: How many times the probe reads each candidate's meter per run (DRE-4576).
+#: Two, because one call is answered from only one of GitHub's two counters —
+#: see "Two samples, not one" above. `BUREAU_POOL_PROBE_SAMPLES` overrides it.
+PROBE_SAMPLES = 2
+
 
 # --------------------------------------------------------------------------- #
 # Pool discovery                                                               #
@@ -194,6 +257,27 @@ def probe_repo(env) -> str:
         (env.get("BUREAU_POOL_PROBE_REPO") or "").strip()
         or (env.get("GITHUB_REPOSITORY") or "").strip()
     )
+
+
+def read_only_pool(env=None) -> bool:
+    """True for a consumer whose selected token only ever READS (DRE-4576).
+
+    Exactly ``1`` — an unset repo variable renders as '' in workflow env, and
+    anything else (``0``, ``false``, a typo) means today's behaviour rather
+    than a silent opt-in to a different pool.
+    """
+    env = os.environ if env is None else env
+    return (env.get("BUREAU_POOL_READ_ONLY") or "").strip() == "1"
+
+
+def probe_samples(env=None) -> int:
+    """How many times to read each candidate's meter (>= 1)."""
+    env = os.environ if env is None else env
+    try:
+        count = int((env.get("BUREAU_POOL_PROBE_SAMPLES") or "").strip())
+    except ValueError:
+        return PROBE_SAMPLES
+    return count if count >= 1 else PROBE_SAMPLES
 
 
 # --------------------------------------------------------------------------- #
@@ -251,14 +335,33 @@ def parse_probe(status: int, headers) -> Reading:
     return Reading(_int_or_none(_header(headers, "x-ratelimit-remaining")), reset)
 
 
-def _probe_real(token: str, repo: str) -> Reading:
-    """GET /repos/{repo} with one candidate's installation token — one
-    counted request — and the meter off its response headers.
+def worst(readings: list[Reading]) -> Reading:
+    """The pessimistic combination of one candidate's samples (DRE-4576).
+
+    Any refusal is the answer — that bucket is out for this run whatever the
+    other sample said. Otherwise the SMALLEST remaining is the reading, because
+    GitHub answers one token from two counters and the roomy one proves
+    nothing about the next call. All-unreadable stays unreadable; an
+    unreadable sample beside a readable one is simply dropped.
+    """
+    for reading in readings:
+        if reading.refused:
+            return reading
+    numbers = [r for r in readings if r.remaining is not None]
+    if not numbers:
+        return UNREADABLE
+    return min(numbers, key=lambda r: r.remaining)
+
+
+def _probe_real(token: str, repo: str, samples: int | None = None) -> Reading:
+    """GET /repos/{repo} with one candidate's installation token — PROBE_SAMPLES
+    counted requests — and the meter off their response headers, combined by
+    `worst` above.
 
     urllib RAISES on 403/429 (HTTPError), which is the whole reason a
     refusal is caught separately here: swallowed as "unreadable" it would be
     hashed back into the pool. Anything else — network, timeout — is
-    unreadable. stdlib urllib; 10s timeout.
+    unreadable. stdlib urllib; 10s timeout per sample.
     """
     import urllib.error
     import urllib.request
@@ -271,13 +374,25 @@ def _probe_real(token: str, repo: str) -> Reading:
             "user-agent": "bureau-dispatch-pool",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return parse_probe(resp.status, resp.headers)
-    except urllib.error.HTTPError as err:
-        return parse_probe(err.code, err.headers or {})
-    except Exception:
-        return UNREADABLE
+
+    def once() -> Reading:
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return parse_probe(resp.status, resp.headers)
+        except urllib.error.HTTPError as err:
+            return parse_probe(err.code, err.headers or {})
+        except Exception:
+            return UNREADABLE
+
+    readings: list[Reading] = []
+    for _ in range(probe_samples() if samples is None else max(1, samples)):
+        reading = once()
+        readings.append(reading)
+        if reading.refused:
+            # Already out for this run — a second call buys nothing and
+            # deepens the limit that refused the first (DRE-1921's lesson).
+            break
+    return worst(readings)
 
 
 def _fake_readings_from_env(env, slots: list[int]) -> dict[int, Reading] | None:
@@ -336,14 +451,39 @@ def _as_reading(value) -> Reading:
     return Reading(value)
 
 
-def choose(readings: dict, key: str | None) -> tuple[int, str]:
-    """(slot, reason) from per-slot readings — the rules in the module doc."""
+def holds_back_slot_one(readings: dict, read_only: bool) -> bool:
+    """Whether the read pool actually keeps slot 1 out of THIS run's choice.
+
+    One definition, read by `choose` (which applies it) and by the CLI (which
+    says so in the log line) — the alternative is two rules that drift and a
+    log that lies about the pick. False whenever slot 1 is the only thing that
+    can work: no flag, no slot 1, a pool of one, or no spare readable.
+    """
+    if not read_only or 1 not in readings or len(readings) < 2:
+        return False
+    return any(
+        _as_reading(r).readable for s, r in readings.items() if s != 1
+    )
+
+
+def choose(readings: dict, key: str | None, read_only: bool = False) -> tuple[int, str]:
+    """(slot, reason) from per-slot readings — the rules in the module doc.
+
+    `read_only` is the read pool (DRE-4576): the ranking runs over the spares
+    alone whenever one of them is readable, so the main App's hour is kept for
+    the writes only it can make. Slot 1 stays the last resort.
+    """
     slots = sorted(readings)
     if not slots:
         return 1, "no-pool"
     if len(slots) == 1:
         return slots[0], "single-app"
     normalised = {s: _as_reading(readings[s]) for s in slots}
+    if holds_back_slot_one(normalised, read_only):
+        # Deliberately AFTER the single-app short-circuit: a pool of two minus
+        # slot 1 is one readable candidate, not "no pool at all".
+        normalised = {s: r for s, r in normalised.items() if s != 1}
+        slots = sorted(normalised)
     readable = {s: r.remaining for s, r in normalised.items() if r.readable}
     if not readable:
         candidates = [s for s, r in normalised.items() if not r.refused] or slots
@@ -382,7 +522,11 @@ def decide(env=None, reader=None) -> tuple[int, str, dict[int, Reading]]:
         for slot in slots:
             token = (env.get(token_env_name(slot)) or "").strip()
             readings[slot] = reader(token, repo) if (token and repo) else UNREADABLE
-    slot, reason = choose(readings, (env.get("BUREAU_POOL_KEY") or "").strip())
+    slot, reason = choose(
+        readings,
+        (env.get("BUREAU_POOL_KEY") or "").strip(),
+        read_only=read_only_pool(env),
+    )
     return slot, reason, readings
 
 
@@ -408,9 +552,20 @@ def _describe(reading: Reading, now: float) -> str:
     return f"{reading.remaining:,}"
 
 
-def log_line(slot: int, reason: str, readings: dict[int, Reading], now: float) -> str:
+def log_line(slot: int, reason: str, readings: dict[int, Reading], now: float,
+             held_back: bool = False) -> str:
+    """The one greppable human line per run.
+
+    `held_back` is its own parenthetical rather than part of `reason` on
+    purpose: `reason` is an OUTPUT seven workflows append to `$GITHUB_OUTPUT`
+    and its vocabulary is a fixed, space-free contract (DRE-4575's
+    `headroom=` line is pinned to the same shape).
+    """
     parts = [f"slot{s}={_describe(readings[s], now)}" for s in sorted(readings)]
-    return f"dispatch-pool: {' '.join(parts)} → selected slot {slot} ({reason})"
+    note = " (read pool, slot 1 held back)" if held_back else ""
+    return (
+        f"dispatch-pool: {' '.join(parts)} → selected slot {slot} ({reason}){note}"
+    )
 
 
 def headroom_line(readings: dict[int, Reading]) -> str:
@@ -464,7 +619,13 @@ def main(argv: list[str]) -> int:
             print("dispatch-pool: no repo to probe (GITHUB_REPOSITORY and "
                   "BUREAU_POOL_PROBE_REPO unset) — no meter read this run",
                   file=sys.stderr)
-        print(log_line(slot, reason, readings, time.time()), file=sys.stderr)
+        print(
+            log_line(
+                slot, reason, readings, time.time(),
+                held_back=holds_back_slot_one(readings, read_only_pool(os.environ)),
+            ),
+            file=sys.stderr,
+        )
     print(f"n={slot}")
     print(f"reason={reason}")
     if with_headroom:

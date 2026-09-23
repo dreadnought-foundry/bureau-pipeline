@@ -246,6 +246,16 @@ jobs:
           # Deterministic fallback key on read failure: this run, so a re-run
           # of the same sweep picks the same slot.
           BUREAU_POOL_KEY: reconcile:${{ github.run_id }}
+          # The read pool (DRE-4576): this pick only ever feeds the `reader`
+          # mint below, and the sweep consumes it as GH_READ_TOKEN — reads
+          # alone. Its writes (the receipts counted by the worker's login, the
+          # merge-sweep commits) stay on GH_TOKEN, the main App, and its
+          # dispatches on the workflow's own token. So slot 1 is held back for
+          # those writes and taken only when no spare is readable. The two
+          # probes that read slot 1 `refused/reset-in-16m` and
+          # `refused/reset-in-5m` (runs 35669089551 at 23:47Z and 35674045821
+          # at 00:58Z) were this sweep, in bureau-harness.
+          BUREAU_POOL_READ_ONLY: "1"
         run: |
           python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
 
