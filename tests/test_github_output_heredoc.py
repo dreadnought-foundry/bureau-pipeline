@@ -254,9 +254,14 @@ class PlainValueTest(unittest.TestCase):
     a rewrite of thirty step conditions."""
 
     def test_the_ordinary_decision_emits_plain_key_value_lines(self):
+        # The timeout_* keys (DRE-4674) are empty on an ordinary dispatch and
+        # ride the plain form exactly as an empty `branch` does — every key
+        # goes through the writer, and none of them is made a heredoc by it.
         block = red_main_repair.outputs({
             "go": True, "branch": "repair/DRE-4200-eeac2b140cef",
             "attempt": 2, "escalate": False, "reason": "dispatch",
+            "timeout_job": "", "timeout_step": "", "timeout_limit": "",
+            "timeout_commits": "",
         })
         self.assertEqual(block.splitlines(), [
             "go=true",
@@ -264,6 +269,10 @@ class PlainValueTest(unittest.TestCase):
             "attempt=2",
             "escalate=false",
             "reason=dispatch",
+            "timeout_job=",
+            "timeout_step=",
+            "timeout_limit=",
+            "timeout_commits=",
         ])
 
     def test_render_leaves_a_single_line_value_alone(self):
