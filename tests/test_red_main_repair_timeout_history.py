@@ -219,6 +219,54 @@ class NotARepeatTest(unittest.TestCase):
         self.assertEqual(d["reason"], "dispatch")
 
 
+class QuotingTheRunnersWordsTest(unittest.TestCase):
+    """The DRE-3076 gap, one marker later.
+
+    The harness's block receipt had to be scoped to the harness because this
+    repo's own unit suite carries it in FIXTURES, and a red unit suite is
+    exactly the failure a fix agent exists for. The timeout line is now in
+    fixtures too — in this very file — so the same trap is open, and the same
+    kind of scoping closes it: `gh run view --log-failed` says which step
+    printed each line, and a genuine timeout line is printed by the step it
+    names.
+    """
+
+    #: This file's own fixture, as a red `Pipeline Tests` run would print it:
+    #: the failing step is "Unit tests" and the line it prints names "Test".
+    QUOTED = (
+        "scripts unit tests\tUnit tests\t2026-09-23T10:00:00.0Z "
+        "E       AssertionError: 'infra — typecheck & test\tTest\t"
+        "##[error]The action 'Test' has timed out after 12 minutes' != ''\n"
+    )
+
+    def test_a_red_suite_quoting_the_runners_words_is_not_a_timeout(self):
+        self.assertFalse(red_main_repair.is_step_timeout(self.QUOTED))
+
+    def test_and_it_still_dispatches_a_repair_agent(self):
+        d = _decide(log_text=self.QUOTED, history=_history(
+            _run(head_sha=SHA, log=self.QUOTED,
+                 job="scripts unit tests", step="Unit tests"),
+            [_run(head_sha=PRIOR_SHA, log=self.QUOTED,
+                  job="scripts unit tests", step="Unit tests")],
+        ))
+        self.assertTrue(d["go"])
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_the_step_that_printed_it_is_the_step_it_names(self):
+        self.assertEqual(
+            red_main_repair.timed_out_actions(_log()),
+            {(JOB, STEP): "12 minutes"},
+        )
+
+    def test_an_unattributable_log_is_taken_at_face_value(self):
+        # No job/step prefixing to check against — a log gathered in some
+        # other shape is read as the card's rule reads it.
+        bare = "##[error]The action 'Test' has timed out after 12 minutes.\n"
+        self.assertTrue(red_main_repair.is_step_timeout(bare))
+        self.assertEqual(
+            red_main_repair.timed_out_actions(bare), {("", STEP): "12 minutes"})
+
+
 class WhatTheDecisionCarriesTest(unittest.TestCase):
     """The fix agent is sent at a named step with a named clock, or the
     escalation names them — otherwise the repair starts by re-deriving what

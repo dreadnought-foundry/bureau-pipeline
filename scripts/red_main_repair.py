@@ -139,62 +139,68 @@ def is_infra_failure(log_text: str, workflow_name: str = "") -> bool:
 # The clock, and whether it has killed this step before (DRE-4674)             #
 # --------------------------------------------------------------------------- #
 
-#: What GitHub's own runner writes when a step or a job runs past its
-#: `timeout-minutes`: `##[error]The action 'Test' has timed out after 12
-#: minutes`. Those are the vendor's words, and that line is the ONLY place the
-#: limit appears at all — the jobs API reports the step as `failure`, never as
-#: "the clock ran out". The capture is what the fix agent and the human are
-#: told the limit is.
-TIMEOUT_MARKER = re.compile(r"has timed out after(?:\s+([^\r\n.]+))?", re.I)
+#: The line GitHub's own runner writes when a step runs past its
+#: `timeout-minutes`, verbatim: `##[error]The action 'Test' has timed out
+#: after 12 minutes.` It is the ONLY place the limit appears at all — the jobs
+#: API reports the step as `failure`, never as "the clock ran out" — so the
+#: second capture is what the fix agent and the human are told the limit is.
+_TIMEOUT_LINE = re.compile(
+    r"##\[error\]The action '([^'\r\n]*)' has timed out after ([^\r\n.]+)",
+    re.I,
+)
+
+#: How `gh run view --log-failed` attributes a line: `<job>\t<step>\t<text>`.
+_LOG_PREFIX_FIELDS = 3
 
 #: A step whose own conclusion is one of these MAY be the one the clock took.
 #: `skipped` is not here on purpose: the steps after a timeout are skipped, and
-#: counting them would make every later step in the file a "timed-out step" and
-#: match a repeat on any of them.
+#: counting them would make every later step in the file a "timed-out step".
 _TIMED_OUT_STEP_CONCLUSIONS = ("failure", "cancelled", "canceled", "timed_out")
 
 #: The job conclusion GitHub uses when it stopped the job on the clock itself.
-#: It states the timeout without a log line, which is the half of the rule a
-#: log fetch failure must not take away.
+#: It states the timeout without a log line, which is the half of the rule an
+#: unreadable log must not take away.
 _TIMED_OUT_JOB_CONCLUSION = "timed_out"
 
 
-def timeout_limit(log_text: str) -> str:
-    """The limit the runner printed ("12 minutes"), or "" if it printed none."""
-    found = TIMEOUT_MARKER.search(log_text or "")
-    return (found.group(1) or "").strip() if found else ""
+def timed_out_actions(log_text: str) -> dict:
+    """`{(job name, step name): the limit as printed}` off a `--log-failed` dump.
+
+    Read line by line and SELF-CHECKED, which is the whole of the protection
+    here. `gh` prefixes every line with the job and step it came from, so a
+    genuine timeout line is one where the step that PRINTED it is the step the
+    runner names in it. A log that merely quotes the runner's words — a red
+    unit suite printing this repo's own fixtures, which
+    `tests/test_red_main_repair_timeout_history.py` now carries — is printed by
+    some other step and names a step that did not print it, so it does not
+    count. That is exactly the gap run 34258403698 fell through with the
+    harness's block receipt (DRE-3076), reappearing one marker later.
+
+    A dump with no prefixing at all cannot be attributed, so the line is taken
+    at face value under the step it names.
+    """
+    found = {}
+    for line in (log_text or "").splitlines():
+        seen = _TIMEOUT_LINE.search(line)
+        if not seen:
+            continue
+        named, limit = seen.group(1), seen.group(2).strip()
+        fields = line.split("\t")
+        if len(fields) >= _LOG_PREFIX_FIELDS:
+            job, step = fields[0], fields[1]
+            if step != named:
+                continue
+            found[(job, step)] = limit
+        else:
+            found[("", named)] = limit
+    return found
 
 
 def is_step_timeout(log_text: str) -> bool:
     """Did the clock end this run? The "a timeout can be infrastructure ONCE"
     half of DRE-4674 — a lone one still backs off, and it is this predicate
     that makes it back off rather than dispatch."""
-    return bool(TIMEOUT_MARKER.search(log_text or ""))
-
-
-def _job_log(log_text: str, job_name: str) -> str:
-    """The lines of a `gh run view --log-failed` dump that belong to one job.
-
-    That dump prefixes every line with the job's own name and a tab, so one
-    job's lines are selectable — and must be selected: a run's failed jobs all
-    land in one file, and reading one job's clock onto another job's step is
-    how a repeat gets invented out of two unrelated failures.
-
-    When no line names the job and the dump IS job-prefixed, that silence is
-    itself the answer — this job's lines are not in the file — and the job
-    gets an empty log rather than every other job's. Only a log with no
-    prefixing at all (an empty fetch, or a log gathered in some other shape)
-    is read whole, because there is nothing there to attribute it by.
-    """
-    text = log_text or ""
-    lines = text.splitlines()
-    if job_name:
-        mine = [ln for ln in lines if job_name in ln]
-        if mine:
-            return "\n".join(mine)
-        if any("\t" in ln for ln in lines):
-            return ""
-    return text
+    return bool(timed_out_actions(log_text))
 
 
 def timed_out_steps(entry) -> dict:
@@ -202,31 +208,34 @@ def timed_out_steps(entry) -> dict:
     run of the history document.
 
     A step counts as timed out when its own conclusion is a failure or a
-    cancellation AND either its job's log carries the runner's timeout line or
-    GitHub concluded the whole job `timed_out`.
+    cancellation AND either the runner wrote the timeout line under that exact
+    job and step, or GitHub concluded the whole job `timed_out` (which says so
+    with no log at all).
     """
     if not isinstance(entry, dict):
         return {}
     path = entry.get("workflow_path") or ""
-    log = entry.get("log") or ""
+    actions = timed_out_actions(entry.get("log") or "")
     found = {}
     for job in entry.get("jobs") or ():
         if not isinstance(job, dict):
             continue
         name = job.get("name") or ""
-        job_log = _job_log(log, name)
         on_the_clock = (
             (job.get("conclusion") or "").lower() == _TIMED_OUT_JOB_CONCLUSION
-            or is_step_timeout(job_log)
         )
-        if not on_the_clock:
-            continue
-        limit = timeout_limit(job_log)
         for step in job.get("steps") or ():
             if not isinstance(step, dict):
                 continue
-            if (step.get("conclusion") or "").lower() in _TIMED_OUT_STEP_CONCLUSIONS:
-                found[(path, name, step.get("name") or "")] = limit
+            if (step.get("conclusion") or "").lower() not in _TIMED_OUT_STEP_CONCLUSIONS:
+                continue
+            step_name = step.get("name") or ""
+            # The unprefixed key is the same fallback `timed_out_actions`
+            # describes: a log nothing could attribute names only the step.
+            limit = actions.get((name, step_name), actions.get(("", step_name)))
+            if limit is None and not on_the_clock:
+                continue
+            found[(path, name, step_name)] = limit or ""
     return found
 
 
