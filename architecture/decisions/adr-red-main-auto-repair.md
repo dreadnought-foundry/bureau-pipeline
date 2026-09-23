@@ -137,6 +137,23 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     diff was thirteen `runs-on:` lines. The receipt is believed only from the
     harness's own run — the unit suite carries the same string in fixtures,
     and a red unit suite is precisely what a fix agent is for.
+  - **A timeout is an infra fingerprint exactly ONCE (DRE-4674).** The clock
+    running out looks like the weather and sometimes is, so a lone timeout
+    still backs off. The SAME step timing out again is the code — the work
+    outgrew the limit, and no amount of waiting fixes that. "The same step"
+    is the same workflow file path, the same job name and the same step name,
+    compared exactly, over a window of this run's previous attempt plus the
+    3 most recent completed runs of that workflow on the default branch;
+    `scripts/repair_history.py` fetches that window into
+    `/tmp/repair-history.json` before the decision reads it, and a fetch that
+    fails writes a marker the decision reads as "no history", never as
+    "repeated". A repeat dispatches, and the decision carries the job, the
+    step, the limit and the commits it timed out on into the agent's prompt
+    and into the budget-exhausted card. Portico's `main` failed
+    `infra — typecheck & test` on four commits in a row from 2026-09-22 19:40
+    PT, each retried once, every time on *The action 'Test' has timed out
+    after 12 minutes*; the loop read all eight runs as infrastructure, started
+    nothing, and the red main surfaced ~12 hours later when a person asked.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the repair branch and its PR are the attempt record — no external state;

@@ -208,10 +208,12 @@ class RepeatedTimeoutHistoryTest(unittest.TestCase):
                          "${{ steps.decide.outputs.timeout_limit }}")
         self.assertEqual(env.get("TIMEOUT_COMMITS"),
                          "${{ steps.decide.outputs.timeout_commits }}")
+        # Read in the script, in either shell form (`$X` / `${X:-default}`) —
+        # an env var declared and never read is a card that says nothing.
         run = card.get("run") or ""
-        for var in ("$TIMEOUT_STEP", "$TIMEOUT_JOB", "$TIMEOUT_LIMIT",
-                    "$TIMEOUT_COMMITS"):
-            self.assertIn(var, run)
+        for var in ("TIMEOUT_STEP", "TIMEOUT_JOB", "TIMEOUT_LIMIT",
+                    "TIMEOUT_COMMITS"):
+            self.assertRegex(run, r"\$\{?" + var)
 
 
 class QuotaIsolationTest(unittest.TestCase):
