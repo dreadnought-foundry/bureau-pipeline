@@ -36,7 +36,9 @@ WHAT THIS FILE PINS:
    `check_tdd_commits.py`'s per-commit listing is the fixture: quoting the
    failure string alone is exactly the defect.
 3. RULE 2, the CI-coverage claim — a finding that a job never ran something
-   must cite the run id, the job id and a line proving what it ran.
+   must cite the run id, the job id and a line proving what it ran. And ONLY
+   such a finding: the denial's subject has to be the job (DRE-4648), or the
+   rule holds reviews over their own disclaimers.
 4. RULE 3, the body snapshot — the verdict states the moment it read the PR
    description, and an edit landing after that moment is SAID so on the
    verdict instead of silently disputing text that no longer exists.
@@ -637,6 +639,208 @@ class Dre3005IsUnchangedTest(unittest.TestCase):
         ))
         self.assertEqual(rc, 1, out)
         self.assertIn("check_tdd_commits.py", out)
+
+
+# ── 3c. rule 2, narrowed — the denial's SUBJECT is the job (DRE-4648) ──────
+
+#: agent-bureau #2695. The evidence gate held this review three times on
+#: 2026-09-21 — 17:28, 19:48 and 22:16 PT — as `job-coverage` defects, over
+#: sentences that make no claim about any CI job at all.
+HELD_2695 = os.path.join(os.path.dirname(__file__), "fixtures",
+                         "agent-bureau-2695-held-2026-09-21.md")
+
+#: The three sentences the 17:28 PT hold quoted, verbatim. Each one carries
+#: a coverage word beside a denied verb — "the SUITE" one could not execute,
+#: "NOT from a RUN", a CHECK that fails when something has "NO recorded
+#: RUNS" — and none of them says a job did not run anything.
+OWN_CHECKOUT_2695 = (
+    "I could not execute the suite in this checkout: `python3 -m pytest` "
+    "reports `No module named pytest` and the repo is a depth-1 clone "
+    "(`git log --oneline HEAD^2` → `fatal: ambiguous argument 'HEAD^2'`)…"
+)
+DISCLAIMER_2695 = (
+    "Every finding below is from the diff and the surrounding source, not "
+    "from a run, and I assert nothing about what any job did."
+)
+RECOMMENDED_CHECK_2695 = (
+    "Settle it one of three ways, and say which in the body: (a) show that "
+    "an uncovered repo is impossible by construction — the recorder is "
+    "org-wide and every `REPOS` entry is in it — and pin it with a check "
+    "that fails when a roster entry has no recorded runs…"
+)
+
+
+class Dre4648TheDenialsSubjectIsTheJobTest(unittest.TestCase):
+    """DRE-4648. `_COVERAGE_DENIALS` asked only that a coverage word and a
+    denied verb share a sentence, and three times in one night that held
+    agent-bureau #2695 over a reviewer's report of its own broken checkout,
+    the reviewer's own disclaimer, and a check it was recommending someone
+    write. Each cost a re-review and posted no verdict.
+
+    A run id cannot settle any of them, so the rule as written could not be
+    satisfied — the DRE-4433 shape again, one rule over. What separates them
+    from portico #407 is grammatical: there, the job IS what did not run.
+    """
+
+    def held(self) -> str:
+        with open(HELD_2695, encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_fixture_is_the_verdict_that_was_held(self):
+        # Asserted, not assumed: an APPROVE or a verdict missing its
+        # findings section is not gated at all, and a fixture that quietly
+        # became one would make every test below vacuous.
+        body = self.held()
+        self.assertTrue(ve.is_blocking(body))
+        self.assertTrue(ve.findings_section(body).strip())
+        for sentence in (OWN_CHECKOUT_2695, DISCLAIMER_2695,
+                         RECOMMENDED_CHECK_2695):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertIn(sentence, body)
+
+    def test_the_held_verdict_produces_no_job_coverage_defect(self):
+        # The card's first criterion, over the fixture the hold was about.
+        self.assertEqual(
+            [d.line() for d in ve.defects(self.held())
+             if d.rule == "job-coverage"],
+            [],
+        )
+
+    def test_the_held_verdict_produces_no_defect_at_all(self):
+        # Its only "claims" are those three sentences, so nothing about it
+        # should reach a hold by any rule — including rule 1, which reads
+        # the two commands in the first sentence.
+        self.assertEqual([d.line() for d in ve.defects(self.held())], [])
+
+    def test_the_cli_lets_the_held_verdict_through(self):
+        rc, out = check_cli(self.held())
+        self.assertEqual(rc, 0, out)
+
+    def test_none_of_the_three_sentences_is_a_job_claim(self):
+        for sentence in (OWN_CHECKOUT_2695, DISCLAIMER_2695,
+                         RECOMMENDED_CHECK_2695):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(ve.job_claims(sentence), [])
+
+    def test_two_of_them_are_sentences_the_old_rule_caught(self):
+        # Non-vacuity, stated rather than trusted: these are denials
+        # `_coverage_denials` still reads, so they were `job-coverage`
+        # defects until the narrowing and this file goes red without it.
+        # (The first sentence, quoted only as far as the hold quoted it,
+        # trips no denial on its own — the shapes it stands for are pinned
+        # by OWN_ENVIRONMENT below, which do.)
+        for sentence in (DISCLAIMER_2695, RECOMMENDED_CHECK_2695):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(len(ve._coverage_denials(sentence)), 1)
+
+    #: A reviewer describing its OWN environment, in the shapes that trip
+    #: the denial rule. #2695's first sentence is this kind of statement;
+    #: the standard already calls it a legitimate finding ("I could not run
+    #: it" — say that instead), so the gate may not hold a review for
+    #: saying it.
+    OWN_ENVIRONMENT = (
+        "I could not run the suite in this checkout.",
+        "In this checkout the suite did not run: `python3 -m pytest` "
+        "reports `No module named pytest`.",
+        "The suite was not run locally.",
+    )
+    #: The opposite of a coverage claim: a reviewer saying it is NOT making
+    #: one. Holding a review for disclaiming is the rule at its most
+    #: backwards.
+    DISCLAIMERS = (
+        "I assert nothing about what any job did — the suite was not run "
+        "for this review.",
+        "This makes no claim about the e2e job: the suite here was not run "
+        "by me.",
+    )
+    #: A check that does not exist yet. The denied verb belongs to the
+    #: recommendation, not to anything that ran.
+    RECOMMENDED = (
+        "Add a check that fails when the nightly job never runs.",
+        "A follow-up guard would catch it when the e2e job does not run "
+        "the spec.",
+        "Pin it with a gate that goes red when the suite is not run.",
+    )
+
+    def test_the_reviewers_own_environment_is_not_a_job_claim(self):
+        for sentence in self.OWN_ENVIRONMENT:
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(len(ve._coverage_denials(sentence)), 1,
+                                 "the fixture no longer trips the old rule")
+                self.assertEqual(ve.job_claims(sentence), [])
+
+    def test_an_explicit_disclaimer_is_not_a_job_claim(self):
+        for sentence in self.DISCLAIMERS:
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(len(ve._coverage_denials(sentence)), 1,
+                                 "the fixture no longer trips the old rule")
+                self.assertEqual(ve.job_claims(sentence), [])
+
+    def test_a_recommended_check_is_not_a_job_claim(self):
+        for sentence in self.RECOMMENDED:
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(len(ve._coverage_denials(sentence)), 1,
+                                 "the fixture no longer trips the old rule")
+                self.assertEqual(ve.job_claims(sentence), [])
+
+    def test_a_coverage_word_that_is_somebody_elses_subject_is_not_one(self):
+        # #2695's third sentence, distilled: "check" is seven words and two
+        # clause breaks away from the denial, whose subject is the roster
+        # entry. The subject rule is what reads that, and nothing else here
+        # would.
+        sentence = "The check is fine; a roster entry has no recorded runs."
+        self.assertEqual(len(ve._coverage_denials(sentence)), 1)
+        self.assertEqual(ve.job_claims(sentence), [])
+
+    #: THE POSITIVE CONTROL, beside them: the sentence rule 2 exists for.
+    #: If this ever stops defecting, the narrowing has turned the rule off.
+    def test_the_positive_control_still_defects(self):
+        rc, out = check_cli(verdict(PORTICO_407_CLAIM))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("job id", out.lower())
+        self.assertEqual(len(ve.job_claims(PORTICO_407_CLAIM)), 1)
+
+    def test_the_positive_control_defects_inside_the_held_verdict_too(self):
+        # The narrowing is per sentence, not per verdict: a review that
+        # disclaims its own environment AND asserts what a job did still
+        # owes the citation for the second one.
+        held = self.held() + "\n" + PORTICO_407_CLAIM + "\n"
+        self.assertEqual({d.rule for d in ve.defects(held)},
+                         {"job-coverage"})
+
+    def test_other_job_subject_phrasings_still_defect(self):
+        # The shapes rule 2 must keep reading, so the narrowing cannot be
+        # sidestepped by rewording #407's sentence.
+        for sentence in (
+            "The `e2e` job never ran the new spec.",
+            "This PR's CI checks did not run the migration step.",
+            "The new spec was not run by the e2e job.",
+            "The e2e job never ran the spec, so this should be fixed.",
+        ):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(len(ve.job_claims(sentence)), 1)
+
+    def test_dre_4433s_absence_claims_still_route_to_job_absence(self):
+        # The card's second criterion: the other rule's traffic is
+        # unchanged, by the RULE NAME the hold is filed under, not by the
+        # message it prints.
+        for sentence in (
+            "No CI job runs `npx tsc --noEmit`.",
+            "Nothing runs this suite in CI.",
+            "No workflow job runs the new guard.",
+        ):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertEqual(
+                    [d.rule for d in ve.defects(verdict(sentence))],
+                    ["job-absence"],
+                )
+
+    def test_rule_1_is_untouched_by_the_narrowing(self):
+        # #2247's claim carries no coverage word at all, and the narrowing
+        # may not reach it: rule 1 is a different rule over a different
+        # sentence shape.
+        self.assertEqual(len(ve.run_claims(DRE_2247_CLAIM)), 1)
+        self.assertEqual(check_cli(verdict(DRE_2247_CLAIM))[0], 1)
 
 
 # ── 4. rule 3 — the PR-body snapshot the review read ───────────────────────

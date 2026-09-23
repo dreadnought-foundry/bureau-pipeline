@@ -38,6 +38,14 @@ attempts, and costs an operator decision each time.
    executes from the merge ref, so the base branch's jobs apply even when the
    branch's own workflow file predates them; "the branch's config doesn't have
    it" is not evidence about what ran.
+
+   **This rule is about the job, not about the words** (DRE-4648). It reads a
+   sentence where the JOB is what did not run. Saying your own checkout could
+   not execute the suite, saying you assert nothing about what any job did, or
+   recommending a check that fails when something has no recorded runs are none
+   of them claims a run id could settle — and the gate held agent-bureau #2695
+   three times in one night (2026-09-21) for writing all three. Write them
+   freely; only an assertion about what a job actually did owes the citation.
 2b. **A coverage GAP cites the SEARCH, not a job id** (DRE-4433). "No job runs
    this" is the opposite kind of statement to rule 2's: it is about what does
    not exist, and an absence has no run id and no job id to carry. Paste the

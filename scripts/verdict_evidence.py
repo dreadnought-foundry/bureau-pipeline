@@ -36,7 +36,12 @@ claim a command can settle:
   2. A finding that a NAMED CI job did not run something must cite the job:
      a run id, a job id, and the line proving what it ran — a line that
      carries one of those ids or the run's own result, not any fence that
-     happens to sit beside the claim.
+     happens to sit beside the claim. A sentence is such a finding only
+     when the JOB is what did not run (DRE-4648): a coverage word sharing
+     a sentence with a denied verb is not enough, or the rule holds a
+     review for reporting its own broken checkout, for disclaiming, and
+     for recommending a check that does not exist yet — which it did,
+     three times in one night, on agent-bureau #2695.
   2b. A finding that NO job runs something cites the SEARCH that
      establishes the absence (DRE-4433). It is the opposite kind of
      statement to rule 2's and it has no job id to cite, so demanding one
@@ -216,6 +221,76 @@ _COVERAGE_DENIALS = re.compile(
     r"|\b(?:did|does|do|has|have|was|were|is|are)\s*n[o']?t\s+(?:\w+\s+){0,3}?"
     r"(?:ran|run|runs|executed|exercised|covered)\b"
     r"|\bnever\s+(?:ran|run|executed|exercised)\b",
+    re.I,
+)
+
+#: WHAT MAKES A DENIAL A CLAIM ABOUT A JOB (DRE-4648). `_COVERAGE_DENIALS`
+#: asks only that a coverage word and a denied verb share a sentence, and on
+#: agent-bureau #2695 that held one review three times (2026-09-21, 17:28,
+#: 19:48 and 22:16 PT) over three sentences that say nothing about any CI
+#: job: "I could not execute the SUITE in this checkout", "NOT from a RUN …
+#: I assert NOTHING about what any JOB did", "pin it with a CHECK that fails
+#: when a roster entry has NO recorded RUNS". The rule is right for portico
+#: #407 and wrong for all three, and the difference is grammatical — in
+#: #407's sentence the job IS what did not run; in these it is the
+#: reviewer's shell, the reviewer's own disclaimer, and a check that does
+#: not exist yet.
+#:
+#: So rule 2 reads the denial's SUBJECT. Three things disqualify a sentence
+#: outright, each one a thing a reviewer says ABOUT ITSELF rather than about
+#: a run: it is first-person about the reviewer's own environment, it is an
+#: explicit disclaimer, or the denied verb belongs to a check being
+#: recommended rather than one that ran.
+_OWN_ENVIRONMENT = re.compile(
+    r"\bi\s+(?:could|can|was|were|am|did|do|have|had)\s*n[o']?t\b"
+    r"|\b(?:in|on)\s+(?:this|my)\s+(?:checkout|clone|container|environment"
+    r"|sandbox|workspace|tree|machine|box)\b"
+    r"|\bon\s+my\s+(?:machine|box|laptop)\b"
+    r"|\blocally\b",
+    re.I,
+)
+_DISCLAIMER = re.compile(
+    r"\b(?:i|we)\s+(?:assert|claim|allege)\s+nothing\b"
+    r"|\b(?:i|we|this|which|it)\s+(?:makes?|made)\s+no\s+(?:claim|assertion)"
+    r"|\bno\s+(?:claim|assertion)\s+is\s+(?:made|being\s+made)\b"
+    r"|\bnot\s+from\s+a\s+run\b",
+    re.I,
+)
+#: A hypothetical or recommended check, read over the text BEFORE the denied
+#: verb — "pin it with a check that fails when X has no recorded runs" is a
+#: recommendation; "the e2e job never ran the spec, so this should be fixed"
+#: is a claim with a recommendation after it, and only the first is out of
+#: scope.
+_HYPOTHETICAL = re.compile(
+    r"\b(?:should|would|ought\s+to|shall)\b"
+    r"|\bpin\s+it\s+with\b"
+    r"|\b(?:recommend|suggest)"
+    r"|\b(?:a|an|one)\s+(?:new\s+)?(?:check|job|test|step|guard|workflow"
+    r"|assertion|gate)\s+that\b",
+    re.I,
+)
+
+#: Where a clause the denial belongs to starts. The subject of a denied verb
+#: is the noun beside it, not any coverage word earlier in the sentence: in
+#: #2695's third sentence "check" sits seven words and two clause breaks
+#: away from "no recorded runs", whose subject is "a roster entry".
+_CLAUSE_BREAK = re.compile(
+    r"[,;:()—]"
+    r"|\b(?:that|which|when|where|while|if|because|so|and|but|or|since"
+    r"|unless|until|after|before)\b",
+    re.I,
+)
+#: How many words before the denial may carry the subject. Four, so a
+#: qualified subject still reads as one ("the CI checks for this PR never
+#: ran it"), and a different noun in between does not.
+_SUBJECT_WINDOW = 4
+#: The passive's agent: "the new spec was not run BY the e2e job". The job
+#: is still what did not run, so the sentence is rule 2's — anchored
+#: immediately after the denied verb, or #2695's "could not execute the
+#: suite in this checkout" would qualify on its object.
+_DENIED_AGENT = re.compile(
+    r"^\s*(?:by|through|in)\s+(?:\w+[\s-]+){0,3}?"
+    r"(?:ci|jobs?|checks?|workflows?|pipelines?|suites?|runners?)\b",
     re.I,
 )
 
@@ -432,13 +507,59 @@ def _coverage_denials(text: str) -> list[str]:
     return claims
 
 
+def _clause_head(before: str) -> str:
+    """The tail of `before` since the last clause break — the words the
+    denied verb's own subject is in, if it has one here."""
+    start = 0
+    for m in _CLAUSE_BREAK.finditer(before):
+        start = m.end()
+    return before[start:]
+
+
+def _subject_is_the_job(head: str) -> bool:
+    """Is a coverage word the last few words before the denied verb?
+
+    Read off the clause the denial sits in, so a coverage word on the other
+    side of a `that`/`when`/comma is somebody else's subject.
+    """
+    words = re.findall(r"[\w'-]+", head)
+    return any(_COVERAGE_SUBJECTS.fullmatch(w)
+               for w in words[-_SUBJECT_WINDOW:])
+
+
+def _denies_what_a_job_did(sentence: str) -> bool:
+    """Is this denial ABOUT a CI job, rather than merely near the word?
+
+    DRE-4648. Rule 2 exists for portico #407 — "this PR's own CI checks
+    never ran the new spec" — where the job is what did not run. A sentence
+    where the coverage word is the reviewer's shell, the object of the
+    reviewer's own disclaimer, or a check being recommended makes no claim
+    a run id could settle, and holding a review over one costs a re-review
+    to protect nobody (#2695, held three times on one night).
+    """
+    if _OWN_ENVIRONMENT.search(sentence) or _DISCLAIMER.search(sentence):
+        return False
+    for m in _COVERAGE_DENIALS.finditer(sentence):
+        before = sentence[:m.start()]
+        if _HYPOTHETICAL.search(before):
+            continue
+        if _subject_is_the_job(_clause_head(before)) or \
+                _DENIED_AGENT.match(sentence[m.end():]):
+            return True
+    return False
+
+
 def job_claims(text: str) -> list[str]:
     """Sentences denying that a NAMED CI job ran something.
 
     An absence claim is not one of these and never was: it says no such job
-    exists, which a run id and a job id cannot evidence (DRE-4433).
+    exists, which a run id and a job id cannot evidence (DRE-4433). Nor is
+    a sentence whose denial is about something other than a job, however
+    many coverage words it happens to carry (DRE-4648) — the narrowing is
+    here and only here, so rule 1 and rule 2b are untouched by it.
     """
-    return [s for s in _coverage_denials(text) if not _ABSENCE.search(s)]
+    return [s for s in _coverage_denials(text)
+            if not _ABSENCE.search(s) and _denies_what_a_job_did(s)]
 
 
 def absence_claims(text: str) -> list[str]:
