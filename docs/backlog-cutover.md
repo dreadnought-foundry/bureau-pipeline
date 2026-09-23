@@ -115,7 +115,16 @@ and the approved batch goes to Planning.
 **And if nobody runs it, nothing moves.** That is the rule as of DRE-4141, on
 the CEO's signed console answer of 2026-09-17: *"A card is never moved out of
 Intake because it is old. No 48-hour age-out and no window of any length; it
-stays where it is."* The groomer's approved batch is the only exit.
+stays where it is."* The groomer's approved batch is the only exit **for a card
+with no parent epic**.
+
+A card that was filed into Intake and then grouped under an epic leaves by the
+other exit: when that epic is planned, the planning exit writes the child's
+routing verdict and moves it to Backlog, where it waits for the epic's green
+light (DRE-4668, on the CEO's signed console answer of 2026-09-23 — *"An epic's
+green light is the approval for the cards filed under it."*). Backlog is not a
+build lane: the sweep releases the card only once the CEO moves the epic to
+In Progress. Both exits are an approval he gives, and there is no third.
 
 The sweep still LOOKS at the lane. Every full pass prints one line —
 `intake-depth: N cards waiting in Intake, oldest D days` — in its own run log,
@@ -165,9 +174,11 @@ Three things control how fast work enters the pipeline after the cutover, and
 between them the inflow is exactly the batches the CEO approves, at the capacity
 he sets, and nothing else:
 
-1. **The groomer batch** — the valve, and since DRE-4141 the only exit from
-   Intake. Nothing leaves without the CEO approving that exact batch
-   (`docs/groomer.md`).
+1. **The groomer batch** — the valve for a card with no parent epic, and since
+   DRE-4141 that card's only exit from Intake. Nothing leaves without the CEO
+   approving that exact batch (`docs/groomer.md`). A child of an epic leaves by
+   adoption instead (DRE-4668, above) and lands in Backlog, where his approval
+   of the epic is what releases it.
 2. **PARKED** — the per-card "stay still". A PARKED card is deliberately not
    dispatchable and is never reported as stalled by any sweep.
 3. **`intake_hold`** — the switch, below. It is a `workflow_call` input on the

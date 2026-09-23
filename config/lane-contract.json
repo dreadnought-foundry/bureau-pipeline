@@ -247,13 +247,13 @@
           "pending": "DRE-2680 points every writer at Intake"
         },
         "exit": {
-          "text": "A classification exists: one-off, epic, or wave. The way out is the groomer — it proposes a batch, the CEO approves it in Green Light, and the approved batch drains to Planning (groomer.py drain). That is the only exit, and AGE IS NOT ONE: no card is moved out of this lane for being old, this lane carries no stall window, and there is no window of any length in its place (DRE-4141, on the CEO's signed answer of 2026-09-17). The sweep reports how many cards are waiting and how old the oldest is, and moves none of them.",
+          "text": "A classification exists: one-off, epic, or wave. There are exactly TWO ways out, and both are an approval the CEO gives. For a card nobody filed under an epic the way out is the groomer — it proposes a batch, the CEO approves it in Green Light, and the approved batch drains to Planning (groomer.py drain). For a card whose PARENT EPIC is being planned the way out is adoption (DRE-4668, on the CEO's signed answer of 2026-09-23): the planning exit writes the child's routing verdict and moves it to Backlog, where it waits — the epic's own green light is the approval for the cards filed under it, and nothing builds until the CEO moves that epic to In Progress. A child the verdict sends back to Planning is not adopted and stays here. AGE IS NOT AN EXIT: no card is moved out of this lane for being old, this lane carries no stall window, and there is no window of any length in its place (DRE-4141, on the CEO's signed answer of 2026-09-17). The sweep reports how many cards are waiting and how old the oldest is, and moves none of them.",
           "enforced_from": "5",
           "assertion": null,
           "pending": null
         },
         "writers": {
-          "text": "Anything that creates a card, the retroactive pass that moves the legacy Backlog in, and nothing that moves one onward.",
+          "text": "Anything that creates a card, and the retroactive pass that moves the legacy Backlog in. ONE of them also moves a card onward, and only with an approval behind it: plan.yml adopts a planned epic's own children into Backlog (DRE-4668). The groomer's drain — the other way out — writes Planning rather than this lane, so it is named as a writer there.",
           "who": ["relay", "plan.yml", "mid_epic.py", "linear_ops.py", "backlog_cutover.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
