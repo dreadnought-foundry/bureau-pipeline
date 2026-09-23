@@ -604,6 +604,35 @@ repo off the repo map (the harness sandbox) files nothing. The console's own
 readers derive a row's card from the head ref alone and learn this line under
 a sibling agent-bureau card.
 
+## Merged is not landed (DRE-4647)
+
+The head ref says WHICH card a merge belongs to; the **base** ref says whether
+the merge landed it. `linear-sync` read only the first, so a pull request
+merged into its parent's agent branch closed its card with the code on no
+default branch: on 2026-09-21 17:46 PT agent-bureau #2691 and #2692 merged
+into `agent/DRE-4534-record-reads` and DRE-4535 and DRE-4536 went Done, while
+the parent (#2690) and its own parent (#2688) sat open as drafts until
+2026-09-22 09:57 PT. **A card is Done only when its code is on the default
+branch**, and the cloud era has no auto-revert.
+
+The `Card → Done` step now reads `base.ref` against the repository's own
+`default_branch` — through step env, never interpolated, the rule `PR_BODY`
+already follows, because a base branch is named by whoever opened the pull
+request. When they differ it calls no `card-done`, runs no merge sweep
+(nothing this merge changed is on the default branch, so there is nothing to
+promote and no epic to close), leaves the state alone and posts ONE comment on
+the card:
+
+    🪜 Merged into `<base>`, not `<default>`. This card goes Done when `<base>` lands on `<default>` (pull request <url>).
+
+That opener is a **contract**: the sibling card that closes these cards when
+the base finally lands finds them by it. The `conflict-sweep` job is gated on
+the same question — "a merge to the default branch is the exact moment sibling
+PRs go DIRTY" is the sweep's own reason for existing and it does not hold for
+a merge into a side branch; the `*/15` reconcile sweep stays the backstop.
+Pinned by `tests/test_linear_sync_stacked_base.py`, which executes the shipped
+step against recording stubs and replays the 2026-09-21 case.
+
 ## The sweep reads every row (DRE-2681)
 
 Linear serves at most 100 nodes per page and says another page exists only in
