@@ -452,6 +452,15 @@ jobs:
           # The repo the probe calls — the sandbox every token above is
           # scoped to, not GITHUB_REPOSITORY (bureau-pipeline, a 404 to them).
           BUREAU_POOL_PROBE_REPO: dreadnought-foundry/bureau-harness
+          # The read pool (DRE-4576): this pick only ever feeds the `reader`
+          # mint below, whose token is the driver's READ client. Every write
+          # the harness makes rides HARNESS_WORKER_TOKEN / HARNESS_QA_TOKEN,
+          # which are minted from their own Apps and never from this choice.
+          # So slot 1 — the main App, the identity the gates recognise — is
+          # held back for the writes only it can make, and taken only when no
+          # spare is readable. Run 35664409350 spent its hour on polling and
+          # was then refused on every call it made.
+          BUREAU_POOL_READ_ONLY: "1"
         run: |
           # --with-headroom: one extra output line carrying what the probe
           # read off EVERY slot, so the driver can order the reader's mid-run

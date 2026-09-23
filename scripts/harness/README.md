@@ -146,19 +146,27 @@ numbers here are an illustration, not a measurement):
 The polling above is READS, and a read is not an action anyone attributes — no
 scenario asserts who asked. So `harness.yml` selects a dispatch-pool App the
 way `verify.yml` does (`scripts/dispatch_pool.py`: probe every configured
-slot with one real call on the sandbox — `BUREAU_POOL_PROBE_REPO`, since every
-pool token here is sandbox-scoped — rank on the `x-ratelimit-remaining` header
-(DRE-4290), mint from the chosen App's key, sandbox-scoped) and hands the
+slot with `PROBE_SAMPLES` real calls on the sandbox — `BUREAU_POOL_PROBE_REPO`,
+since every pool token here is sandbox-scoped — rank on the smallest
+`x-ratelimit-remaining` header those samples returned (DRE-4290, DRE-4576),
+mint from the chosen App's key, sandbox-scoped) and hands the
 driver `HARNESS_READER_TOKEN`. The worker client
 is built with that client as its `reader`, and every `GET` it would have sent
 goes out as the reader instead — its own hour, its own ETag memory, its own
 `github-spend:` line naming the slot. Writes stay the worker's, and so does
 `GitHub.current_token()`, the credential the agent scenarios clone and push
 with: WHICH identity ACTS is still the thing under test. The reader re-mints
-mid-run from `HARNESS_READER_APP_ID/_PRIVATE_KEY`, the SELECTED App's pair, so
-a long run never drifts back to slot 1. Without the pool secrets the reader is
+mid-run from `HARNESS_READER_APP_ID/_PRIVATE_KEY`, the SELECTED App's pair.
+Without the pool secrets the reader is
 absent, reads ride the worker on slot 1 exactly as before, and the run says so
 in one `note:` line.
+
+Slot 1 — the main App, the identity every write on GitHub has to come from —
+is held back here: `harness.yml`'s selector carries `BUREAU_POOL_READ_ONLY`,
+so the driver's reads go to the spares and slot 1 is taken only when no spare
+is readable (DRE-4576). It is a last resort, not an exclusion, and DRE-4575's
+mid-run fallback already ordered it last, so a long run can still end up on it
+— every slot the reads ride is named in the run's `github-spend:` lines.
 
 ## Namespacing and self-cleaning
 
