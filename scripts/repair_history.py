@@ -203,6 +203,20 @@ def _log_or_empty(gh, run_id, attempt=None) -> str:
         return ""
 
 
+def _is_older(candidate, run_id) -> bool:
+    """Is `candidate` a run from BEFORE this one?
+
+    Actions run ids increase within a repository, so the comparison is the id.
+    When either will not parse as a number the answer narrows to "not this run"
+    — a run that cannot be ordered is still worth comparing against, and the
+    one thing that must never be in the window is the run being decided.
+    """
+    try:
+        return int(candidate) < int(run_id)
+    except (TypeError, ValueError):
+        return str(candidate) != str(run_id)
+
+
 def gather(*, repo: str, workflow_id, run_id, run_attempt: int, branch: str,
            workflow_path: str, head_sha: str, current_log: str, gh) -> dict | None:
     """The history document, or None when there is no usable one.
@@ -252,9 +266,10 @@ def gather(*, repo: str, workflow_id, run_id, run_attempt: int, branch: str,
     candidates = [
         run for run in listing or ()
         if isinstance(run, dict)
-        # Never this run: it is a completed run of this workflow on this
-        # branch and appears in its own listing, where it would match itself.
-        and str(run.get("id")) != str(run_id)
+        # Older than this one — which excludes this run itself, since it is a
+        # completed run of this workflow on this branch and appears in its own
+        # listing, where it would match itself.
+        and _is_older(run.get("id"), run_id)
         # A run that has not finished has half-written jobs and proves nothing.
         and (run.get("status") or "completed") == "completed"
     ][:PRIOR_RUNS]

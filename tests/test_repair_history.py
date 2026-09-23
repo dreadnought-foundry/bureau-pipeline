@@ -140,6 +140,17 @@ class DocumentShapeTest(unittest.TestCase):
         self.assertEqual(
             [entry["head_sha"] for entry in doc["prior"]], PRIOR_SHAS[:3])
 
+    def test_a_run_newer_than_this_one_is_not_history(self):
+        # "The 3 most recent completed runs OLDER than this one": a run that
+        # finished while this repair queued is not what this run is compared
+        # against, and it would push a genuinely older one out of the window.
+        gh = FakeGh()
+        gh.runs = [{"id": RUN_ID + 1, "path": WF_PATH, "head_sha": "f" * 40,
+                    "status": "completed", "conclusion": "failure"}] + gh.runs
+        doc = _gather(gh)
+        self.assertEqual(
+            [entry["head_sha"] for entry in doc["prior"]], PRIOR_SHAS[:3])
+
     def test_an_unfinished_run_is_not_history(self):
         # `status=completed` is asked for, but a listing that answers with an
         # in-progress run must not have its half-written jobs compared.
