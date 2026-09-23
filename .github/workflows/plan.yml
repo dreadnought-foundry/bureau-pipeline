@@ -2484,6 +2484,25 @@ jobs:
       # It classifies nothing of its own. `planning_route.mechanical_verdict`
       # is the SAME function the one-off planning exit calls, so a card cannot
       # be routed two ways depending on which door it came through.
+      #
+      # IT ALSO ADOPTS (DRE-4668). Since the intake cutover the normal shape of
+      # an epic is hand-filed: cards go into Intake, somebody groups them under
+      # a new epic, the epic is sent to Planning. Nothing moved those children
+      # — the re-plan prompt creates only the MISSING sub-issues and writes no
+      # existing child's lane, this step stamped and moved nothing, and nothing
+      # else takes a card out of Intake by design. So the epic was approved and
+      # nothing built: `reconcile.backlog_children` asks Linear for
+      # `state: {name: {eq: "Backlog"}}` and every one of them was still in
+      # Intake. Read 2026-09-23 before approving DRE-4666 (12 such children);
+      # DRE-4626 and DRE-4633 are 7 each.
+      #
+      # So every child that carries a verdict out of here is moved Intake →
+      # Backlog, after the verdict is written, and out of no other lane. The
+      # CEO's signed answer on DRE-4668 is the approval model: an epic's green
+      # light is the approval for the cards filed under it. Backlog is not a
+      # build lane — the sweep still holds the card until the epic reaches In
+      # Progress and every blocker is Done — and a card in Intake with no
+      # parent epic is not in this set at all.
       - name: Routing verdicts — the epic's children
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:

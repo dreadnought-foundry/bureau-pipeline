@@ -488,10 +488,15 @@ PLANNING_MINUTES = int(
 # lane is still read here, and that half stands — what went is the TIMER.
 #
 # NO CARD LEAVES INTAKE FOR BEING OLD. The CEO's signed console answer of
-# 2026-09-17 09:57 PT, point 1: no 48 hours, no window of any length. Cards
-# leave Intake when the groomer proposes a batch and he approves it in Green
-# Light, and that is the only exit — `groomer.py drain` performs it, in its own
-# workflow, against an approval thread. This sweep performs none.
+# 2026-09-17 09:57 PT, point 1: no 48 hours, no window of any length. A card
+# with no parent epic leaves Intake when the groomer proposes a batch and he
+# approves it in Green Light — `groomer.py drain` performs that, in its own
+# workflow, against an approval thread. A card whose PARENT EPIC is being
+# planned leaves by adoption: the planning exit writes its routing verdict and
+# moves it to Backlog, where this sweep still holds it until the epic reaches
+# In Progress (DRE-4668, the CEO's signed answer of 2026-09-23). Those two are
+# the whole set, both are an approval he gives, and THIS SWEEP PERFORMS
+# NEITHER — it moves nothing out of Intake, on age or on anything else.
 #
 # WHY THE TIMER WENT. DRE-2687 moved an Intake card past the contract's
 # `stale_minutes` into Green Light, three per sweep, on the argument that a

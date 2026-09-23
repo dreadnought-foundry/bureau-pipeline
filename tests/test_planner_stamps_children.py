@@ -409,6 +409,7 @@ class TheUndecidableCaseTest(unittest.TestCase):
         with patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), \
                 patch.object(linear_ops, "comment_bodies", return_value=[]), \
                 patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "cmd_advance"), \
                 patch.object(linear_ops, "add_label"):
             self.assertEqual(
                 plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
@@ -440,6 +441,7 @@ class TheUndecidableCaseTest(unittest.TestCase):
         with patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), \
                 patch.object(linear_ops, "comment_bodies", return_value=[]), \
                 patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "cmd_advance"), \
                 patch.object(linear_ops, "add_label"):
             self.assertEqual(
                 plan_child_verdicts.main(
@@ -457,6 +459,7 @@ class TheUndecidableCaseTest(unittest.TestCase):
         with patch.object(sys, "stdin", io.StringIO(json.dumps(_plan()))), \
                 patch.object(linear_ops, "comment_bodies", return_value=[]), \
                 patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "cmd_advance"), \
                 patch.object(linear_ops, "add_label"):
             plan_child_verdicts.main(
                 ["stamp", "--epic", EPIC, "--comment-file", note])
@@ -552,6 +555,7 @@ class OneWritePathTest(unittest.TestCase):
                              side_effect=lambda i: [already] if i == "DRE-901"
                              else []), \
                 patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "cmd_advance"), \
                 patch.object(linear_ops, "add_label"):
             plan_child_verdicts.main(["stamp", "--epic", EPIC])
         lines = {line.split(":")[0]: line for line in out.getvalue().splitlines()
@@ -594,6 +598,7 @@ class EmptyStdinIsRefusedTest(unittest.TestCase):
         with patch.object(sys, "stdin", io.StringIO("[]")), \
                 patch.object(linear_ops, "comment_bodies", return_value=[]), \
                 patch.object(linear_ops, "cmd_comment"), \
+                patch.object(linear_ops, "cmd_advance"), \
                 patch.object(linear_ops, "add_label"):
             self.assertEqual(
                 plan_child_verdicts.main(["stamp", "--epic", EPIC]), 0)
