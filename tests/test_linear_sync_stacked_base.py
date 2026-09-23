@@ -109,7 +109,12 @@ class MergeScenario:
         self.dir = Path(td)
         self.scripts = self.dir / ".bureau-pipeline" / "scripts"
         self.scripts.mkdir(parents=True)
-        for name in ("linear_ops.py", "dependabot_card.py", "reconcile.py"):
+        # `stacked_landing.py` joined the step in DRE-4650 — the closer that
+        # acts on the landing this gate is waiting for. Stubbed here so the
+        # gate's own scenarios keep executing the whole shipped script; what
+        # the closer does is pinned by tests/test_stacked_landing.py.
+        for name in ("linear_ops.py", "dependabot_card.py", "reconcile.py",
+                     "stacked_landing.py"):
             (self.scripts / name).write_text(RECORDING_STUB, encoding="utf-8")
         (self.scripts / "merge_sweep_gate.py").write_text(
             SWEEP_GATE_STUB, encoding="utf-8"

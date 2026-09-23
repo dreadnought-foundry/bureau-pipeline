@@ -625,13 +625,58 @@ the card:
 
     🪜 Merged into `<base>`, not `<default>`. This card goes Done when `<base>` lands on `<default>` (pull request <url>).
 
-That opener is a **contract**: the sibling card that closes these cards when
-the base finally lands finds them by it. The `conflict-sweep` job is gated on
-the same question — "a merge to the default branch is the exact moment sibling
-PRs go DIRTY" is the sweep's own reason for existing and it does not hold for
-a merge into a side branch; the `*/15` reconcile sweep stays the backstop.
-Pinned by `tests/test_linear_sync_stacked_base.py`, which executes the shipped
-step against recording stubs and replays the 2026-09-21 case.
+That opener is the human-readable trace of the wait — and it is **not** what
+closes the card. The closer below keys on GitHub's merged-pull-request list, so
+a card that carries the receipt and a card whose receipt never posted are
+closed identically. The `conflict-sweep` job is gated on the same question —
+"a merge to the default branch is the exact moment sibling PRs go DIRTY" is the
+sweep's own reason for existing and it does not hold for a merge into a side
+branch; the `*/15` reconcile sweep stays the backstop. Pinned by
+`tests/test_linear_sync_stacked_base.py`, which executes the shipped step
+against recording stubs and replays the 2026-09-21 case.
+
+## …and the landing is what closes them (DRE-4650)
+
+The gate above is a refusal, and a refusal with no closer is a card that waits
+for ever. The closer is the other half. On 2026-09-22 at 09:57 PT #2690
+(`agent/DRE-4534-record-reads`) landed on `main` carrying #2691 and #2692 with
+it: at that instant DRE-4535's and DRE-4536's code was on the default branch
+and nothing moved their cards.
+
+So when a merge DOES reach the default branch, the `Card → Done` step closes
+the merged card and then asks GitHub what that landing carried:
+
+    python3 .bureau-pipeline/scripts/stacked_landing.py landed "$GITHUB_REPOSITORY" "$HEAD_REF" "$DEFAULT_BRANCH"
+
+`gh pr list --state merged --base <landed head>` is the answer — the merged
+pull requests whose base was the branch that just landed. Each one's card comes
+from the SAME anchored own-branch rule the step applies to its own head ref
+(`agent/DRE-<n>-` or `repair/DRE-<n>-`, delimiter required), and each is closed
+through the same `linear_ops.py card-done`, so the `no-code` / `DEMO:` / epic
+guard still refuses the three classes a merge may not close. A hand-named
+`ops/...` head closes nothing; a row whose base is not the landed head is
+discarded rather than trusted.
+
+Four properties, each pinned by `tests/test_stacked_landing.py`:
+
+- **Keyed on GitHub, never on the receipt.** The `🪜 Merged into` comment is
+  documentation; the merged-PR list is the fact.
+- **One level per landed head, bounded.** A grandchild stacked on a child is
+  closed too, down to a small fixed depth, and every head is listed at most
+  once so a cycle terminates.
+- **Idempotent.** A card already in a terminal state is skipped with a line
+  saying which — including `Canceled`, because `card-done`'s state write treats
+  Done as a terminal *target* and would resurrect it.
+- **Fail closed.** A GitHub read that fails lists nothing, says `could not list
+  stacked pull requests`, and closes nothing. It exits 0: this runs after the
+  merged card's own `card-done`, and a closer that could not look is not a
+  reason to fail a merge that succeeded.
+
+Its position in the step is the contract — after the merged card's `card-done`,
+before the merge-sweep gate, so `--promote-only` sees the whole set of cards
+this landing made Done. The `card-done` job mints the qa-bot token for the one
+GitHub read, `continue-on-error`, so a repo without that App still closes the
+card that merged.
 
 ## The sweep reads every row (DRE-2681)
 
