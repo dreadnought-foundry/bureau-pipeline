@@ -363,7 +363,10 @@ def scripted(*responses, calls: list | None = None):
     def fake_urlopen(req, timeout=None):
         if calls is not None:
             calls.append(req.full_url)
-        answer = queue.pop(0) if queue else queue
+        # A call past the script is a probe spending more than it was told to:
+        # fail loudly rather than answer something the test never wrote.
+        assert queue, "the probe made more calls than the script has answers"
+        answer = queue.pop(0)
         headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1758250000"}
         if answer in (403, 429):
             raise urllib.error.HTTPError(
