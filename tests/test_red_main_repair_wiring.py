@@ -123,6 +123,99 @@ class DecideBeforeDispatchTest(unittest.TestCase):
         self.assertIn("Triage", body)
 
 
+class RepeatedTimeoutHistoryTest(unittest.TestCase):
+    """DRE-4674: `decide` is given a memory, and the fetch that fills it.
+
+    Portico's main failed the same `infra — typecheck & test` step on four
+    commits in a row, each retried once, every time on
+    `The action 'Test' has timed out after 12 minutes` — and every run read as
+    infrastructure. The history is FETCHED (never assumed), it is gathered
+    before the decision that reads it, and what the decision learns reaches
+    the agent and the human.
+    """
+
+    @staticmethod
+    def _steps():
+        return doc(REUSABLE)["jobs"]["repair"]["steps"]
+
+    @staticmethod
+    def _index(steps, needle):
+        for i, step in enumerate(steps):
+            if needle in (step.get("run") or ""):
+                return i
+        return -1
+
+    def test_the_history_is_gathered_before_the_decision(self):
+        steps = self._steps()
+        gather = self._index(steps, "repair_history.py")
+        decide = self._index(steps, "red_main_repair.py")
+        self.assertGreater(gather, -1, "no step gathers the repair history")
+        self.assertGreater(decide, -1, "no decide step")
+        self.assertLess(gather, decide,
+                        "the history must be fetched before decide reads it")
+
+    def test_the_history_is_fetched_from_this_runs_own_workflow(self):
+        # The comparison is "the same workflow file", so the listing is keyed
+        # on the event's own workflow id and the event's own path — never a
+        # literal, which would read one fleet repo's runs for all of them.
+        steps = self._steps()
+        gather = steps[self._index(steps, "repair_history.py")]
+        env = gather.get("env") or {}
+        self.assertEqual(env.get("WORKFLOW_ID"),
+                         "${{ github.event.workflow_run.workflow_id }}")
+        self.assertEqual(env.get("RUN_ATTEMPT"),
+                         "${{ github.event.workflow_run.run_attempt }}")
+        self.assertEqual(env.get("WORKFLOW_PATH"),
+                         "${{ github.event.workflow_run.path }}")
+        self.assertEqual(env.get("DEFAULT_BRANCH"),
+                         "${{ github.event.repository.default_branch }}")
+        # DRE-1996: every untrusted event field travels by env, never
+        # interpolated into the script line.
+        self.assertNotIn("github.event", gather.get("run") or "")
+
+    def test_decide_is_handed_the_history_file(self):
+        body = src(REUSABLE)
+        self.assertIn("--history-file /tmp/repair-history.json", body)
+        self.assertIn("--out /tmp/repair-history.json", body)
+
+    def test_the_agent_is_told_which_step_which_clock_which_commits(self):
+        # A repair dispatched at a repeated timeout starts at the named step
+        # with the named limit, instead of re-deriving what the decision knew.
+        body = src(REUSABLE)
+        for output in ("timeout_job", "timeout_step", "timeout_limit",
+                       "timeout_commits"):
+            self.assertIn(f"steps.decide.outputs.{output}", body,
+                          f"the decision's {output} reaches nothing")
+        prompt = [
+            s for s in self._steps()
+            if "claude-code-action" in (s.get("uses") or "")
+        ][0]["with"]["prompt"]
+        for output in ("timeout_job", "timeout_step", "timeout_limit",
+                       "timeout_commits"):
+            self.assertIn(f"steps.decide.outputs.{output}", prompt)
+
+    def test_the_budget_exhausted_card_names_the_step_and_the_clock(self):
+        # The human who picks this up is told which step and which clock, not
+        # just "main is red" — that card is the whole handover.
+        steps = self._steps()
+        card = steps[self._index(steps, "linear_ops.py")]
+        env = card.get("env") or {}
+        self.assertEqual(env.get("TIMEOUT_STEP"),
+                         "${{ steps.decide.outputs.timeout_step }}")
+        self.assertEqual(env.get("TIMEOUT_JOB"),
+                         "${{ steps.decide.outputs.timeout_job }}")
+        self.assertEqual(env.get("TIMEOUT_LIMIT"),
+                         "${{ steps.decide.outputs.timeout_limit }}")
+        self.assertEqual(env.get("TIMEOUT_COMMITS"),
+                         "${{ steps.decide.outputs.timeout_commits }}")
+        # Read in the script, in either shell form (`$X` / `${X:-default}`) —
+        # an env var declared and never read is a card that says nothing.
+        run = card.get("run") or ""
+        for var in ("TIMEOUT_STEP", "TIMEOUT_JOB", "TIMEOUT_LIMIT",
+                    "TIMEOUT_COMMITS"):
+            self.assertRegex(run, r"\$\{?" + var)
+
+
 class QuotaIsolationTest(unittest.TestCase):
     """Guardrail 4: mint through the dispatch pool, keyed by the repair."""
 
