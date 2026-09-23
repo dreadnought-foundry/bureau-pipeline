@@ -64,6 +64,25 @@
 # go DIRTY. Closing those cards when the parent finally lands is a sibling
 # card; it finds them by the `🪜 Merged into` receipt.
 #
+# Stacked-landing closer (DRE-4650): the other half of that gate. When the
+# parent finally lands on the default branch, the pull requests that merged INTO
+# its head ref are the ones whose code has just arrived — and until this card
+# nothing moved them. On 2026-09-22 09:57 PT agent-bureau #2690
+# (`agent/DRE-4534-record-reads`) landed on `main` carrying #2691 and #2692 with
+# it; with the gate above in place DRE-4535 and DRE-4536 would have sat In
+# Review holding a receipt and waiting on a closer that did not exist.
+# `scripts/stacked_landing.py landed <repo> <head> <default>` lists those pull
+# requests off GitHub (`gh pr list --state merged --base <head>`, never off the
+# receipt — a card that carries it and a card that does not are closed the same
+# way), names each one's card by the SAME anchored own-branch rule below, and
+# closes it through the same `card-done` with the same guard. It recurses one
+# level per landed head for a grandchild, bounded; a GitHub read that fails
+# closes nothing and says so. It runs inside the step below, after the merged
+# card's own `card-done` and before the merge sweeps, so `--promote-only` sees
+# the whole set of cards this landing made Done — and after the gate above, so
+# it runs only on a default-branch merge. That read is the one thing this job
+# never had: it mints the qa-bot token for it, and survives a mint that fails.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 
@@ -136,9 +155,36 @@ jobs:
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
+      # The stacked-landing closer's ONE credential (DRE-4650). This job has
+      # never held a GitHub token — closing a card is Linear calls — and the
+      # closer needs to ask GitHub which pull requests merged into the head
+      # that just landed. The qa-bot is the identity that merged them, and the
+      # read is read-only; `github.token` cannot do it, because the calling
+      # stub grants this reusable `contents: read` and a declared permissions
+      # block makes every other scope `none`.
+      #
+      # `continue-on-error` is load-bearing, not tidiness: a repo that has not
+      # installed the qa-bot App (these secrets are `required: false` above)
+      # would otherwise fail this job at the mint and never close the card that
+      # actually merged — a regression paid by every merge, to add a closer for
+      # stacked ones. A mint that fails renders an empty token, `gh pr list`
+      # exits non-zero, and the closer takes its own fail-closed path: it lists
+      # nothing, says `could not list stacked pull requests`, and closes
+      # nothing.
+      - name: Mint qa-bot token (for the stacked-landing read)
+        id: qa
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
       - name: Card → Done
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The stacked-landing closer's GitHub read (DRE-4650). Empty when the
+          # mint above could not run; the closer fails closed on it.
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           # The dependabot arm's inputs (DRE-3665), through env and never
@@ -208,6 +254,25 @@ jobs:
           # skipped card still gets the merge commented so the state never
           # lies in either direction.
           python3 .bureau-pipeline/scripts/linear_ops.py card-done "$CARD" "$PR_URL"
+          # >>> DRE-4650 stacked landing — executed verbatim by tests/test_stacked_landing.py
+          # The other half of the gate above. This merge reached the default
+          # branch, so every pull request that had merged into THIS head ref is
+          # on the default branch too — and the gate above deliberately left
+          # those cards open when they merged. Closing them is this line.
+          #
+          # HERE, and not a step of its own, because the position is the
+          # contract: after the merged card's own `card-done` so the parent is
+          # closed first, and before the merge-sweep gate below so
+          # `--promote-only` sees the whole set of cards this landing made Done
+          # rather than one of them. It is also below the DRE-4647 gate's
+          # `exit 0`, which is what makes it run on a default-branch merge only.
+          #
+          # Fail-closed and exit 0 by construction (see the script): a GitHub
+          # read that fails lists nothing and says so, so a closer that could
+          # not look never fails a merge that succeeded, and no card is guessed
+          # Done. Values come from the step env; nothing is interpolated.
+          python3 .bureau-pipeline/scripts/stacked_landing.py landed "$GITHUB_REPOSITORY" "$HEAD_REF" "$DEFAULT_BRANCH"
+          # <<< DRE-4650 stacked landing
           # Event-driven sweeps, but only the ones THIS merge can have changed
           # (DRE-2930). Two board-wide passes used to run here unconditionally:
           #   --promote-only  a Done may have unblocked dependent Backlog

@@ -644,15 +644,17 @@ class TheCloserRunsOnALandingInOrder(unittest.TestCase):
             )
 
     def test_a_branch_no_card_owns_never_reaches_the_closer_either(self):
-        """The head ref gave no card, so the step exits before any of this —
-        DRE-2027 is untouched."""
+        """The head ref gave no card, so the step exits at the DRE-2027 arm —
+        after the dependabot lookup and before everything this card added.
+        A hand-named branch merged to the default branch closes nothing, and
+        a landing it did not make closes nothing either."""
         with tempfile.TemporaryDirectory() as td:
             scenario = StepScenario(td)
             proc = scenario.run(
                 head_ref="ops/tidy-things", base_ref="main", default_branch="main"
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
-            self.assertEqual([], scenario.calls)
+            self.assertEqual(["dependabot_card.py"], scenario.order)
 
     def test_the_fenced_region_is_in_the_shipped_step(self):
         run = done_step()["run"]
