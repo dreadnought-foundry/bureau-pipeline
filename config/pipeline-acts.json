@@ -1903,6 +1903,13 @@
       "kind": "undeclared-act",
       "means": "The post-approval critic sent this plan back, the 🔁 receipt promised the pipeline would run the review again, and it never did — nothing is scheduled and the children are held (DRE-4492).",
       "why": "Act-shaped — it hands the work to a person and names the one act that discharges it (`plan_critic.REAPPROVE_HOW`) — and the registry has no row for it, which is the same debt the two 🔁 re-review receipts in plan.yml carry. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091) — so the detector ships first as an undeclared act and the row follows with its console half. Named here so the debt is countable rather than invisible. Its idempotency key is the `🚨 plan-critic-rereview-missing:` opener the module reads back off the thread once per round, in the `dead_run.DEAD_TAG` grammar the sweep's other refusals already use; a trailer here would be a second key for one notice."
+    },
+    {
+      "file": ".github/workflows/linear-sync.yml",
+      "anchor": "\"$CARD\" \"$STACKED\"",
+      "kind": "undeclared-act",
+      "means": "The pull request merged into another agent's branch rather than the default one, so the card is not Done: the state is left alone and the merge is said once on the card (DRE-4647).",
+      "why": "Act-shaped — a refusal: the pipeline declined to close the card and says why, and the work stays exactly where it was — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the gate ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog did. Named here so the debt is countable rather than invisible. Its opener `🪜 Merged into ` is a CONTRACT with the sibling card that closes these cards when the base finally lands — that card finds the receipt by it — so the opener is fixed by something other than this file, and a trailer sits after the body without touching it."
     }
   ]
 }

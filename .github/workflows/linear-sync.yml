@@ -48,6 +48,22 @@
 # (tests/test_linear_sync_done_gate.py); the arm is pinned by
 # tests/test_dependabot_card.py.
 #
+# Stacked-base gate (DRE-4647): "merged" and "landed" were the same word, and
+# for a stacked pull request they are not. On 2026-09-21 17:46 PT the merge
+# gate merged agent-bureau #2691 and #2692 into `agent/DRE-4534-record-reads` —
+# their parent's branch, not `main` — and this workflow moved DRE-4535 and
+# DRE-4536 to Done. Their code was on no default branch: the parent (#2690) and
+# its own parent (#2688) were still open drafts and did not land until
+# 2026-09-22 09:57 PT. A card is Done only when its code is on the default
+# branch. The job now reads `base.ref` against the repository's own
+# `default_branch` (through step env, never interpolated — a branch name is
+# attacker-nameable, the same rule `PR_BODY` already follows) and on a
+# non-default base it closes nothing, sweeps nothing, and posts ONE plain
+# comment on the card instead. The conflict sweep is gated on the same
+# question: a merge into a side branch is not the moment sibling pull requests
+# go DIRTY. Closing those cards when the parent finally lands is a sibling
+# card; it finds them by the `🪜 Merged into` receipt.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 
@@ -129,6 +145,12 @@ jobs:
           # interpolated into the shell: the body is untrusted text.
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # The stacked-base gate's two inputs (DRE-4647), through env for the
+          # same reason the body is: a base branch is named by whoever opened
+          # the pull request. The default branch is read off the REPOSITORY,
+          # never assumed to be `main` — the fleet's repos are free to differ.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
@@ -161,6 +183,25 @@ jobs:
             echo "card references in PR titles/bodies never transition cards; hand-named branches are closed by the operator"
             exit 0
           fi
+          # >>> DRE-4647 stacked-base gate — executed verbatim by tests/test_linear_sync_stacked_base.py
+          # Merged is not landed. A pull request merged into another agent's
+          # branch puts nothing on the default branch, so its card is not Done
+          # and nothing this merge touched is promotable — the two false Dones
+          # of 2026-09-21 (see the header) are exactly this. The card keeps its
+          # state and gets ONE comment saying where the work actually went; the
+          # `🪜 Merged into` opener is the contract the sibling card that closes
+          # these cards on the landing reads them back by. Both values come
+          # from the step env above and are never interpolated into this shell.
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ]; then
+            echo "::notice::$CARD is NOT going Done: pull request $PR_URL merged into '$BASE_REF', which is not the default branch '$DEFAULT_BRANCH'"
+            echo "a card is Done only when its code is on the default branch; the state is left alone and the merge is commented on the card"
+            echo "no merge sweep runs either — nothing this merge changed is on '$DEFAULT_BRANCH', so there is nothing to promote and no epic to close"
+            STACKED=$(printf '🪜 Merged into `%s`, not `%s`. This card goes Done when `%s` lands on `%s` (pull request %s).' \
+              "$BASE_REF" "$DEFAULT_BRANCH" "$BASE_REF" "$DEFAULT_BRANCH" "$PR_URL")
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$STACKED"
+            exit 0
+          fi
+          # <<< DRE-4647 stacked-base gate
           # card-done, NOT a bare `state Done`: the no-code/DEMO guard lives
           # inside it (the six portico false closes — see header). Ordinary
           # code cards go Done + "✅ Merged" comment exactly as before; a
@@ -213,8 +254,16 @@ jobs:
   # moment sibling PRs touching the same files go DIRTY — and DIRTY PRs emit
   # zero workflow events, so without this only the drifting cron notices.
   # (Origin: PR #1348 / DRE-1277 waited ~1h between sibling merges.)
+  #
+  # "To the default branch" is now checked rather than assumed (DRE-4647). A
+  # merge into another agent's branch changes nothing on the default branch, so
+  # it is not the moment siblings go DIRTY — the sentence above is the gate's
+  # own reason and it does not hold for a stacked merge. The 15-minute
+  # reconcile sweep remains the backstop for everything this declines.
   conflict-sweep:
-    if: github.event.pull_request.merged == true
+    if: >-
+      github.event.pull_request.merged == true
+      && github.event.pull_request.base.ref == github.event.repository.default_branch
     # The short lane, same as `card-done` above (DRE-3887).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
