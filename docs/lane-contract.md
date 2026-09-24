@@ -152,12 +152,12 @@ _Waiting on: DRE-2723._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A human decided the work will not be done — or, for a dependabot card, the pull request it was filed for closed unmerged (DRE-3665).  
+| **entrance** | A human decided the work will not be done — or, for a dependabot card, the pull request it was filed for closed unmerged (DRE-3665) — or, for a card the CEO agreed to cancel on a groomer proposal, the groomer's drain moved it with his reason written onto the card (DRE-4677). In all three a human decided; what differs is who wrote it down.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **exit** | None. Terminal.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | A human — and the sweep, for exactly one class: a card it filed for a dependabot pull request that then closed without merging (DRE-3665). Dependabot superseding its own pull request, or a person closing it, is the decision; the sweep records it.  
-Permitted writers: `operator`, `reconcile.py` | Phase 2 — live |
+| **writers** | A human — and two mechanisms, each for exactly one class, neither of them deciding anything. The sweep, for a card it filed for a dependabot pull request that then closed without merging (DRE-3665): dependabot superseding its own pull request, or a person closing it, is the decision; the sweep records it. The groomer's drain, for a card the CEO agreed to cancel on a groomer proposal (DRE-4677): the groomer proposes cancellations and the CEO agrees card by card in the console, and his per-card agree is the decision — the drain writes Canceled for exactly the cards on the approved proposal's Cancel table that he did not exclude, with the reason he read written onto each one as a comment. The principle the clause states is unchanged in both: a human decided. What changes is who writes it down.  
+Permitted writers: `operator`, `reconcile.py`, `groomer.py` | Phase 2 — live |
 | **evidence** | A human's decision, on the card.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
