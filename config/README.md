@@ -9,15 +9,22 @@ of it is ever a runtime lookup.
 - **`models.yaml`** — which model each agent runs on (see below).
 - **`turn-budgets.json`** — how many turns a build run gets (DRE-3097). A
   `turns:<n>` label picks a rung from a closed, reviewed set; absent that the
-  `size:` label maps to one; absent both it is the unchanged 150.
+  `size:` label maps to one; absent both it is the default, **400 since
+  DRE-4361** — every run gets the top rung, and every `size:` rung is 400 too.
+  The lower rungs stay in `allowed` because a card may still ask DOWNWARDS
+  (the PROOF card of that epic plants a turn-cap death with `turns:150`).
   `agent-task.yml` reads it through `scripts/turn_budget.py` in the same step
   that selects the model, and prints the result in the `🧠 model-attempt`
-  receipt (`turns=250`). **The set is the guard**: a card picks a rung, it
+  receipt (`turns=400`). **The set is the guard**: a card picks a rung, it
   never names a number, so a label cannot vote itself an unbounded run — the
-  same rule `models.yaml` states for membership of a ladder. The module also
+  same rule `models.yaml` states for membership of a ladder, and the job's
+  120-minute wall clock is the real ceiling either way. The module also
   reads the other direction: `diagnose()` tells a turn-cap park caused by the
   BUDGET (every dead run reached implementation green and died after it) from
-  one caused by SIZE, which is what the park receipt now says.
+  one caused by SIZE, which is what the park receipt now says — and
+  `decide_by(turns)` (`decide_by_fraction` × the ceiling, floored at 10) is
+  the turn by which a build agent must have decided to continue or hand back,
+  which is what replaces the ceiling as the guard on a lost run at 400.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
