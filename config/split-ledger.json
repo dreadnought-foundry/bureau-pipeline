@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-23T04:49:21Z",
+  "generated_at": "2026-09-24T04:49:44Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -16,6 +16,37 @@
     "DRE-2676"
   ],
   "rows": [
+    {
+      "card": "DRE-2467",
+      "title": "[EPIC] Internal / External roots \u2014 make who-can-see-this visible in the library",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2467/epic-internal-external-roots-make-who-can-see-this-visible-in-the",
+      "state": "Canceled",
+      "created_at": "2026-08-16T18:56:29Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "planner",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-2468"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'Every project' with no count of projects anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2468: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
     {
       "card": "DRE-2676",
       "title": "Stop reading dependencies out of prose entirely \u2014 a blocker is a Linear relation or it does not exist",
@@ -1477,6 +1508,35 @@
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
+    },
+    {
+      "card": "DRE-4520",
+      "title": "portico: MCP read tools form_progress and forms_status \u2014 where the placed forms stand, root forms included, failures never dropped",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-4520/portico-mcp-read-tools-form-progress-and-forms-status-where-the-placed",
+      "state": "Backlog",
+      "created_at": "2026-09-21T22:50:47Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": [
+        "infra/lambda/mcp_tools/form_status.ts",
+        "infra/test/mcp_tools_form_status.test.ts"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-4522"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "DRE-4522: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
     }
   ],
   "monthly": [
@@ -1496,26 +1556,26 @@
     },
     {
       "month": "2026-08",
-      "planner_children": 308,
-      "split": 6,
+      "planner_children": 282,
+      "split": 7,
       "died": 17,
       "complete": true
     },
     {
       "month": "2026-09",
-      "planner_children": 912,
-      "split": 7,
+      "planner_children": 962,
+      "split": 8,
       "died": 16,
       "complete": false
     }
   ],
   "rates": {
-    "cards": 44,
+    "cards": 46,
     "died": 33,
     "by_declared_files": [
       {
         "more_than": 1,
-        "of": 13,
+        "of": 14,
         "died": 9,
         "cards": [
           "DRE-3016",
@@ -1528,7 +1588,7 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 1 file died 9 of 13 times"
+        "sentence": "cards declaring more than 1 file died 9 of 14 times"
       },
       {
         "more_than": 2,
@@ -1662,12 +1722,12 @@
       },
       {
         "tell": "unbounded-quantifier",
-        "of": 16,
+        "of": 17,
         "died": 11,
-        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 16 times"
+        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 17 times"
       }
     ],
-    "unreadable_footprint": 30,
+    "unreadable_footprint": 31,
     "dead_dollars": 1223.23,
     "dead_dollars_unreadable": 0
   }
