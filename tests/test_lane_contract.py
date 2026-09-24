@@ -116,8 +116,13 @@ class TestTheFileExists:
         )
         # `reconcile.py` joined Canceled on DRE-3665: it cancels the card it
         # filed for a dependabot pull request when that pull request closes
-        # unmerged — the one class the pipeline cancels on its own.
-        assert lane_contract.lane_writers("Canceled") == ("operator", "reconcile.py")
+        # unmerged. `groomer.py` joined it on DRE-4689, for the second class of
+        # the same shape: the CEO agrees to a proposed cancellation card by
+        # card and the drain records his decision
+        # (tests/test_lane_contract_groomer_cancels.py).
+        assert lane_contract.lane_writers("Canceled") == (
+            "operator", "reconcile.py", "groomer.py",
+        )
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):
         known = set(lane_contract.writers())
