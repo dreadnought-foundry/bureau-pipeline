@@ -306,13 +306,25 @@ class SelectModelScenario(unittest.TestCase):
         written, _ = self._run("repo:bureau-pipeline,agent:engineer,turns:250")
         self.assertEqual("250", written["turns"])
 
-    def test_a_card_with_neither_label_still_runs_with_150(self):
+    def test_a_card_with_neither_label_runs_with_the_default_400(self):
+        """DRE-4361 moved the default to the top rung; the number the workflow
+        interpolates into --max-turns for an unlabelled card is 400."""
         written, _ = self._run("repo:bureau-pipeline,agent:engineer")
-        self.assertEqual("150", written["turns"])
+        self.assertEqual("400", written["turns"])
 
-    def test_the_size_label_alone_picks_the_rung(self):
+    def test_the_size_label_alone_resolves_to_the_same_ceiling(self):
         written, _ = self._run("repo:bureau-pipeline,size:M")
-        self.assertEqual("250", written["turns"])
+        self.assertEqual("400", written["turns"])
+
+    def test_the_blank_label_note_survives_the_step_that_writes_it(self):
+        """THE DEFECT DRE-4361 FIXES, end to end. The real step body writes
+        the note into GITHUB_OUTPUT through a double-quoted shell string, and
+        a backtick in it is command substitution — the card read "this card
+        carries no  or  label". Read the output the real step wrote."""
+        written, _ = self._run("repo:bureau-pipeline,agent:engineer")
+        self.assertNotIn("`", written["turns_why"])
+        self.assertIn("turns:", written["turns_why"])
+        self.assertIn("size:", written["turns_why"])
 
     def test_the_selection_note_never_corrupts_the_captured_number(self):
         """`TURNS=$(… select …)` captures stdout. The note has to stay off
@@ -374,7 +386,7 @@ class SelectModelScenario(unittest.TestCase):
             for line in open(outputs, encoding="utf-8").read().splitlines()
             if "=" in line
         )
-        self.assertEqual("150", written["turns"])
+        self.assertEqual("400", written["turns"])
 
 
 # --------------------------------------------------------------------------- #
