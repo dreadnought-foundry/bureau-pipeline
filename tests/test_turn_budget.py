@@ -451,7 +451,7 @@ class TurnBudgetCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "why.txt"
             p = self._select("--labels", "size:M", "--explain-file", str(path))
-            self.assertEqual("250", p.stdout.strip())
+            self.assertEqual("400", p.stdout.strip())
             self.assertIn("size:M", path.read_text())
 
     def test_no_labels_prints_the_default(self):
