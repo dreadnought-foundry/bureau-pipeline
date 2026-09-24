@@ -44,14 +44,25 @@ THREE QUESTIONS, ONE MODULE, because they are the same fact from three ends:
      longer the thing that catches a lost agent, so the checkpoint is named
      instead: by then the run has either decided to continue or handed back.
 
-NO NOTE THIS MODULE RETURNS CONTAINS A BACKTICK (DRE-4361). `agent-task.yml`
-interpolates the note from `budget_for` inside a double-quoted shell string,
-where a backtick opens command substitution — so the heartbeat on a card
-carrying neither label reached Linear reading *"this card carries no  or
-label"*, both names eaten. It is fixed here rather than at that one call site
-because the same note is written into a GitHub output, a step summary, an
+NO NOTE THIS MODULE RETURNS CONTAINS A BACKTICK (DRE-4361) — nor a `$`, a `"`,
+a backslash or a newline, whatever the card's labels say. `agent-task.yml`
+splices the note from `budget_for` into a double-quoted shell string, where a
+backtick opens command substitution — so the heartbeat on a card carrying
+neither label reached Linear reading *"this card carries no  or  label"*,
+both names eaten. It is fixed here rather than at that one call site because
+the same note is written into a GitHub output, a step summary, an
 `--explain-file` and a Linear comment, and only one of the four is a shell
 string. A note that is safe everywhere is the smaller contract to keep.
+
+THE SAME BUG HAS TWO HALVES, and the review caught the second one open. The
+first fix dropped the backticks the note's own LITERAL text wrapped label
+names in. The label VALUES kept going in raw — and a value is the card's own
+Linear text, which needs only a typo to carry a metacharacter. GitHub
+substitutes `${{ }}` TEXTUALLY into the `run:` script before bash parses it,
+so `turns:1`+backtick+`id`+backtick made the heartbeat step run `id` on the
+runner, in a step holding LINEAR_API_KEY. `safe_for_note` is the answer, and
+it is applied to every note this module returns rather than to the two fields
+that happen to be reachable today.
 
 THE SET IS THE GUARD. A card picks a rung; it does not name a number. That is
 the "cost cap stays" half of the card: the run's own guard (agent-task's
@@ -215,6 +226,44 @@ def _label_value(labels, prefix: str) -> str | None:
     return None
 
 
+#: What a note may never carry. `agent-task.yml` splices the note into a
+#: DOUBLE-QUOTED `run:` string using GitHub's own textual `${{ }}`
+#: substitution, which happens before bash parses a character of the line — so
+#: these arrive as syntax rather than as text. Inside double quotes a backtick
+#: opens command substitution, `$` opens an expansion, `"` closes the string
+#: and `\` escapes whatever follows. The step it lands in holds LINEAR_API_KEY.
+_NOTE_HAZARDS = frozenset('`$"\\')
+
+#: What replaces one. Visible on purpose: the note exists so a human can see
+#: WHICH label they mistyped, and a silently deleted character reads back as a
+#: label nobody applied.
+_NOTE_REDACTION = "?"
+
+
+def safe_for_note(text) -> str:
+    """`text` with every character a shell string would act on replaced by `?`.
+
+    THE SECOND HALF OF THE DRE-4361 FIX, and the half that matters. Dropping
+    the note's own hardcoded backticks made every well-formed label safe and
+    left the label VALUE going in raw — and the value is the card's own Linear
+    text, where a typo is enough to plant a metacharacter. `turns:1`+backtick+
+    `id`+backtick produced a note that ran `id` on the runner.
+
+    Escaped HERE rather than at the one call site that is a shell string, for
+    the reason the module docstring gives: the same note is written into a
+    GitHub output, a step summary, an `--explain-file` and a Linear comment,
+    and a note that is safe everywhere is the smaller contract to keep.
+
+    Control characters go with them. A note is ONE LINE in all four places, and
+    a newline would split `echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"`
+    into the real output plus a forged second key.
+    """
+    return "".join(
+        _NOTE_REDACTION if (ch in _NOTE_HAZARDS or not ch.isprintable()) else ch
+        for ch in str("" if text is None else text)
+    )
+
+
 def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
     """`(turns, why)` for a card carrying `labels`.
 
@@ -233,9 +282,12 @@ def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
     note NAMES the refused value, so it shows up in the step summary and in the
     `🧠 model-attempt` receipt instead of being quietly ignored.
 
-    NO RETURNED NOTE CONTAINS A BACKTICK, on any branch — see the module
-    docstring. The labels are named in single quotes, which survive the
-    double-quoted shell string the workflow interpolates the note into.
+    NO RETURNED NOTE CONTAINS A BACKTICK — or a `$`, a `"`, a `\\` or a
+    newline — ON ANY BRANCH, whatever the labels say. The literal text names
+    the labels in single quotes, which survive the double-quoted shell string
+    the workflow interpolates the note into; the label VALUES are the card's
+    own text and go through `safe_for_note` first, which is the half of this
+    the first DRE-4361 fix missed.
     """
     cfg = config or load_config()
     allowed = allowed_budgets(cfg)
@@ -246,12 +298,12 @@ def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
         try:
             asked = int(raw)
         except (TypeError, ValueError):
-            refused = (f"the 'turns:{raw}' label is not a number and was "
-                       f"ignored. ")
+            refused = (f"the 'turns:{safe_for_note(raw)}' label is not a "
+                       f"number and was ignored. ")
         else:
             if asked in allowed:
-                return asked, (f"turn budget {asked}: the card's "
-                               f"'turns:{asked}' label.")
+                return asked, safe_for_note(
+                    f"turn budget {asked}: the card's 'turns:{asked}' label.")
             refused = (f"the 'turns:{asked}' label asks for a budget that is "
                        f"not one of {', '.join(str(n) for n in allowed)} and "
                        f"was refused — the rungs are a reviewed set, not a "
@@ -261,12 +313,14 @@ def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
     if size:
         mapped = size_map(cfg).get(size.upper())
         if mapped is not None:
-            return mapped, (f"{refused}turn budget {mapped}: the card's "
-                            f"'size:{size.upper()}' label.")
+            return mapped, safe_for_note(
+                f"{refused}turn budget {mapped}: the card's "
+                f"'size:{size.upper()}' label.")
 
     fallback = default_budget(cfg)
-    return fallback, (f"{refused}turn budget {fallback}: the default — this "
-                      f"card carries no 'turns:' or 'size:' label.")
+    return fallback, safe_for_note(
+        f"{refused}turn budget {fallback}: the default — this card carries no "
+        f"'turns:' or 'size:' label.")
 
 
 def next_rung(current: int, config: dict | None = None) -> int:
@@ -474,7 +528,10 @@ def _cmd_select(rest: list[str]) -> int:
         return 2
 
     turns, why = budget_for(labels)
-    note = f"{prefix}{why}"
+    # `prefix` names the card identifier, which arrives from the dispatch
+    # payload, so it gets the same treatment the labels do — the note this
+    # writes is the one agent-task.yml splices into its heartbeat.
+    note = safe_for_note(f"{prefix}{why}")
     print(turns)
     print(note, file=sys.stderr)
     if explain:
