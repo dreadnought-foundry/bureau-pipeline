@@ -265,40 +265,52 @@ def comments(journal) -> list[str]:
 # the SELECT half: a `turns:250` card really does get 250 turns                 #
 # --------------------------------------------------------------------------- #
 
+def run_select_model(tc, labels: str, **stub_env):
+    """Drive the real `Select model` block; return `(GITHUB_OUTPUT, proc)`.
+
+    Module-level rather than a method because the heartbeat scenario below
+    feeds on the SAME outputs — `Card → In Progress` reads
+    `steps.model.outputs.turns_why` off this step, and a hand-written note
+    there would prove the harness rather than the workflow.
+    """
+    td = tempfile.mkdtemp()
+    tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
+    base = _checkout(td)
+    _executable(os.path.join(base, "scripts", "model_fallback.py"), MODEL_STUB)
+    outputs = os.path.join(td, "github_output")
+    open(outputs, "w").close()
+    summary = os.path.join(td, "step_summary")
+    open(summary, "w").close()
+    body = substitute(step("model")["run"], {
+        "steps.gate.outputs.role": "engineer",
+        "github.event.client_payload.identifier": CARD,
+    })
+    proc = _bash(td, "select.sh", body, dict(
+        os.environ,
+        PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
+        RUNNER_TEMP=td,
+        GITHUB_OUTPUT=outputs,
+        GITHUB_STEP_SUMMARY=summary,
+        LINEAR_API_KEY="test-key",
+        LINEAR_STUB_LOG=os.path.join(td, "linear.jsonl"),
+        LINEAR_STUB_LABELS=labels,
+        **stub_env,
+    ))
+    tc.assertEqual(0, proc.returncode, proc.stderr)
+    written = dict(
+        line.split("=", 1)
+        for line in open(outputs, encoding="utf-8").read().splitlines()
+        if "=" in line
+    )
+    return written, proc
+
+
 class SelectModelScenario(unittest.TestCase):
     """Drive the real `Select model` block. Its output is what
     `--max-turns ${{ steps.model.outputs.turns }}` interpolates."""
 
     def _run(self, labels: str):
-        td = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
-        base = _checkout(td)
-        _executable(os.path.join(base, "scripts", "model_fallback.py"), MODEL_STUB)
-        outputs = os.path.join(td, "github_output")
-        open(outputs, "w").close()
-        summary = os.path.join(td, "step_summary")
-        open(summary, "w").close()
-        body = substitute(step("model")["run"], {
-            "steps.gate.outputs.role": "engineer",
-            "github.event.client_payload.identifier": CARD,
-        })
-        proc = _bash(td, "select.sh", body, dict(
-            os.environ,
-            PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
-            RUNNER_TEMP=td,
-            GITHUB_OUTPUT=outputs,
-            GITHUB_STEP_SUMMARY=summary,
-            LINEAR_API_KEY="test-key",
-            LINEAR_STUB_LOG=os.path.join(td, "linear.jsonl"),
-            LINEAR_STUB_LABELS=labels,
-        ))
-        self.assertEqual(0, proc.returncode, proc.stderr)
-        written = dict(
-            line.split("=", 1)
-            for line in open(outputs, encoding="utf-8").read().splitlines()
-            if "=" in line
-        )
-        return written, proc
+        return run_select_model(self, labels)
 
     def test_a_card_labelled_turns_250_runs_with_250(self):
         """The acceptance criterion, as far as a test can carry it: the
@@ -358,35 +370,94 @@ class SelectModelScenario(unittest.TestCase):
         """Linear refuses the label read. The step must still exit 0 with the
         default — a budget lookup that can fail a build is worse than no
         budget lookup."""
+        written, _ = run_select_model(self, "", LINEAR_STUB_FAIL="get_issue")
+        self.assertEqual("400", written["turns"])
+
+
+# --------------------------------------------------------------------------- #
+# the HEARTBEAT half: a card label cannot run a command on the runner          #
+# --------------------------------------------------------------------------- #
+
+class HostileLabelScenario(unittest.TestCase):
+    """Drive the real `Card → In Progress` block, which is where the note is
+    NOT safe by construction (DRE-4361, review round 1).
+
+    `Select model` reads the note into a bash variable and echoes
+    `"$TURNS_WHY"` — a parameter expansion, where a backtick is already inert.
+    That step can never catch this. The heartbeat step is the dangerous one:
+    GitHub substitutes `${{ steps.model.outputs.turns_why }}` TEXTUALLY into
+    the `run:` script before bash parses a character of it, inside a
+    double-quoted string, in a step whose env carries LINEAR_API_KEY. The note
+    it splices in names the card's own labels, so a mistyped label is enough.
+
+    The two halves are driven end to end: the real selector produces the note
+    from the real label, and the real heartbeat step interpolates it.
+    """
+
+    def _heartbeat(self, label: str, canary: str):
+        """`(recorded comments, proc)` for a card carrying `label`."""
+        written, _ = run_select_model(self, label)
         td = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, td, ignore_errors=True)
-        base = _checkout(td)
-        _executable(os.path.join(base, "scripts", "model_fallback.py"), MODEL_STUB)
-        outputs = os.path.join(td, "github_output")
-        open(outputs, "w").close()
-        summary = os.path.join(td, "step_summary")
-        open(summary, "w").close()
-        body = substitute(step("model")["run"], {
-            "steps.gate.outputs.role": "engineer",
+        _checkout(td)
+        log = os.path.join(td, "linear.jsonl")
+        body = substitute(step("inprogress")["run"], {
             "github.event.client_payload.identifier": CARD,
+            "steps.gate.outputs.role": "engineer",
+            "steps.model.outputs.model": written["model"],
+            "steps.model.outputs.turns": written["turns"],
+            "steps.model.outputs.why": written["why"],
+            "steps.model.outputs.turns_why": written["turns_why"],
+            "github.server_url": "https://github.com",
+            "github.repository": REPO,
+            "github.run_id": RUN_ID,
         })
-        proc = _bash(td, "select.sh", body, dict(
+        proc = _bash(td, "inprogress.sh", body, dict(
             os.environ,
             PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
             RUNNER_TEMP=td,
-            GITHUB_OUTPUT=outputs,
-            GITHUB_STEP_SUMMARY=summary,
             LINEAR_API_KEY="test-key",
-            LINEAR_STUB_LOG=os.path.join(td, "linear.jsonl"),
-            LINEAR_STUB_FAIL="get_issue",
+            PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
+            LINEAR_STUB_LOG=log,
         ))
+        self.assertFalse(os.path.exists(canary),
+                         f"{label!r} ran a command in the heartbeat step")
+        return comments(_journal(log)), proc
+
+    def test_a_backticked_label_does_not_execute_in_the_heartbeat_step(self):
+        """The reproduction from the review, driven through the real step
+        rather than a hand-built `echo`. Revert the escaping and the canary
+        appears on the runner's disk."""
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        canary = os.path.join(td, "pwned")
+        posted, proc = self._heartbeat(f"turns:1`touch {canary}`", canary)
         self.assertEqual(0, proc.returncode, proc.stderr)
-        written = dict(
-            line.split("=", 1)
-            for line in open(outputs, encoding="utf-8").read().splitlines()
-            if "=" in line
-        )
-        self.assertEqual("400", written["turns"])
+        self.assertEqual(1, len(posted), posted)
+
+    def test_a_command_substitution_label_does_not_execute_either(self):
+        """`$(…)` is the same hole through a different character, and `$` is
+        what the first fix left in the note beside the backtick."""
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        canary = os.path.join(td, "pwned")
+        posted, proc = self._heartbeat(f"turns:1$(touch {canary})", canary)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(1, len(posted), posted)
+
+    def test_the_heartbeat_still_says_which_label_was_refused(self):
+        """Defanging the value must not cost the receipt its meaning: the card
+        still gets the budget it ran with and the name of the bad label."""
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        canary = os.path.join(td, "pwned")
+        posted, _ = self._heartbeat(f"turns:1`touch {canary}`", canary)
+        receipt = posted[0]
+        self.assertIn("turns=400", receipt)
+        self.assertIn("turns:1", receipt)
+        self.assertIn("is not a number and was ignored", receipt)
+        self.assertEqual(400, turn_budget.current_budget([receipt]))
+        self.assertEqual(RUN_ID, dedupe_dispatch.heartbeat_run_id([receipt]))
 
 
 # --------------------------------------------------------------------------- #

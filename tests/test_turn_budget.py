@@ -611,6 +611,23 @@ NOTE_BRANCHES = {
     "size label": ["size:M"],
     "refused turns falling through to size": ["turns:300", "size:XL"],
     "refused turns falling through to the default": ["turns:10000"],
+    # THE HOLE THE FIRST FIX LEFT OPEN (DRE-4361 review round 1). Every row
+    # above is a WELL-FORMED label, so removing the note's own hardcoded
+    # backticks was enough to make all of them pass — while the label VALUE,
+    # which is the card's own text and needs only a typo to carry a
+    # metacharacter, went into the note unescaped. These rows are the inputs
+    # that defeat that fix, one per character bash acts on inside a
+    # double-quoted string.
+    "turns label whose value carries a backtick": ["turns:1`id`"],
+    "turns label whose value carries a command substitution": ["turns:$(id)"],
+    "turns label whose value carries a quote": ['turns:1"; id; echo "'],
+    "turns label whose value carries a backslash": ["turns:1\\2"],
+    # A `size:` value only reaches a note when it MATCHES a rung key, so this
+    # row cannot reproduce the hole today — it is the guard that keeps it that
+    # way if a future branch ever names an unmatched size out loud.
+    "size label whose value carries a backtick": ["size:M`id`"],
+    "refused turns whose value carries a backtick, then a size":
+        ["turns:10000`id`", "size:M"],
 }
 
 
@@ -625,6 +642,15 @@ class NoteHasNoBacktickTest(unittest.TestCase):
     site: the note is written into a GitHub output, a step summary, an
     --explain-file and a Linear comment, and only one of those four is a
     shell string. A note that is safe everywhere is the smaller contract.
+
+    ROUND 1 OF THE REVIEW FOUND THE FIX HALF-DONE, and the half that was
+    missing is the dangerous half. Removing the note's own hardcoded backticks
+    made every well-formed label safe; the label VALUE was still spliced in
+    raw, and it is the card's own text — `turns:1`+backtick+`id`+backtick is a
+    label a person can apply by typo, and `agent-task.yml` runs the resulting
+    note through GitHub's textual `${{ }}` substitution into a double-quoted
+    `run:` string in a step that holds LINEAR_API_KEY. The tests below are the
+    inputs the first fix passed and should not have.
     """
 
     def test_no_branch_of_budget_for_returns_a_backtick(self):
@@ -653,6 +679,64 @@ class NoteHasNoBacktickTest(unittest.TestCase):
                     capture_output=True, text=True,
                 ).stdout.strip()
                 self.assertEqual(why, echoed)
+
+    def test_no_branch_returns_a_character_the_shell_string_would_act_on(self):
+        """The backtick is one of four. Inside double quotes `$` opens an
+        expansion, `"` closes the string and `\\` escapes what follows — and
+        the note passes through GitHub's textual substitution BEFORE bash
+        parses the line, so every one of them is syntax rather than text."""
+        for name, labels in NOTE_BRANCHES.items():
+            with self.subTest(branch=name):
+                _, why = turn_budget.budget_for(labels)
+                for hazard in "`$\"\\":
+                    self.assertNotIn(hazard, why,
+                                     f"the {name} note carries {hazard!r}")
+
+    def test_a_label_cannot_run_a_command_through_the_note(self):
+        """The proof, not the proxy. A label value chosen to write a file runs
+        through the exact seam the workflow uses — `echo "<note>"` — and the
+        file must not be there afterwards. Revert the escaping and this test
+        finds the canary on disk."""
+        with tempfile.TemporaryDirectory() as td:
+            # A canary PER case: one shared path would let the first case's
+            # file stand in for the third's and report a hole that case never
+            # actually opened.
+            for n, shape in enumerate(("turns:1`touch {c}`",
+                                       "turns:1$(touch {c})",
+                                       'turns:1"; touch {c}; echo "')):
+                canary = Path(td) / f"pwned-{n}"
+                label = shape.format(c=canary)
+                with self.subTest(label=label):
+                    _, why = turn_budget.budget_for([label])
+                    subprocess.run(["bash", "-c", f'echo "{why}"'],
+                                   capture_output=True, text=True)
+                    self.assertFalse(
+                        canary.exists(),
+                        f"{label!r} executed a command through the note")
+
+    def test_a_defanged_label_is_still_recognisable_in_the_note(self):
+        """Escaping must not swallow the label. A human reading the heartbeat
+        has to be able to see WHICH label they mistyped — the whole reason the
+        note names the refused value at all. The hazard is neutered in place,
+        so the rest of the value stays legible beside it."""
+        _, why = turn_budget.budget_for(["turns:1`id`"])
+        self.assertIn("turns:1", why)
+        self.assertIn("id", why)
+        self.assertIn("is not a number and was ignored", why)
+
+    def test_a_note_is_always_a_single_line(self):
+        """`echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"` is one line per
+        output. A newline inside a label value would split the assignment and
+        write the rest of the note as a second, forged output key."""
+        _, why = turn_budget.budget_for(["turns:1\nturns=999\n"])
+        self.assertNotIn("\n", why)
+        self.assertNotIn("\r", why)
+
+    def test_safe_for_note_leaves_ordinary_text_alone(self):
+        """The escaping is not allowed to cost the notes their prose — the
+        em-dash, the colons and the quotes the notes already use survive."""
+        plain = "turn budget 400: the default — this card carries no 'turns:'"
+        self.assertEqual(plain, turn_budget.safe_for_note(plain))
 
 
 # --------------------------------------------------------------------------- #
