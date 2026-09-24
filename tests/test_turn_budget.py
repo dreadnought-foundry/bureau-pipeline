@@ -30,6 +30,25 @@ WHAT THIS FILE PINS
    reached implementation green are a BUDGET problem and the receipt says so,
    naming the label to raise. Deaths that stalled early are a SIZE problem and
    the receipt says split, exactly as it does today.
+
+DRE-4361 (2026-09-23, on the CEO's instruction) MOVED THE DEFAULT TO 400.
+Every run gets the top rung: in 22 days no run died at 400 (26 runs) and every
+one of the 110 turn-cap deaths was at 150. `allowed` is unchanged — the lower
+rungs stay reachable only by a card that asks for one with a `turns:` label,
+which is how the PROOF card plants a death at `turns:150`. The 120-minute job
+wall clock is untouched and remains the real ceiling.
+
+Two more things landed with it, and both are pinned below:
+
+5. **No note `budget_for` returns contains a backtick.** `agent-task.yml`
+   interpolates the note inside a double-quoted shell string, where a backtick
+   is command substitution — so the blank-label receipt reached the card
+   reading "this card carries no  or  label". Fixed at the source, for every
+   branch, not by quoting it differently at one call site.
+6. **`decide_by(turns)`** — the turn by which the build agent must have decided
+   to continue or hand back: `decide_by_fraction` (0.2) x the ceiling, rounded
+   down, never below 10. At 400 it is the guard against a lost agent burning
+   the whole budget.
 """
 from __future__ import annotations
 
@@ -92,7 +111,7 @@ DRE_3088 = _thread(3, 3, 3)
 
 
 # --------------------------------------------------------------------------- #
-# 1 — label → budget, size → budget, both absent → 150                         #
+# 1 — label → budget, size → budget, both absent → 400                         #
 # --------------------------------------------------------------------------- #
 
 class BudgetFromLabelsTest(unittest.TestCase):
@@ -108,35 +127,45 @@ class BudgetFromLabelsTest(unittest.TestCase):
             with self.subTest(n=n):
                 self.assertEqual(n, turn_budget.budget_for([f"turns:{n}"])[0])
 
-    def test_the_size_label_sets_the_budget_when_no_turns_label_is_present(self):
-        """XS/S → 150, M → 250, L → 400. The size a card was planned at is
-        already on the board; a card that carries it should not have to carry
-        a second label saying the same thing."""
-        for size, expected in (("XS", 150), ("S", 150), ("M", 250), ("L", 400)):
+    def test_every_size_label_gets_the_top_rung(self):
+        """DRE-4361: XS through XL all map to 400. With one ceiling for
+        everything there is no rung for a size to choose — the `size:` label
+        still resolves, it just resolves to the same number the default does,
+        so a card carrying one is never budgeted BELOW a card carrying none."""
+        for size in ("XS", "S", "M", "L", "XL"):
             with self.subTest(size=size):
                 turns, why = turn_budget.budget_for([f"size:{size}"])
-                self.assertEqual(expected, turns)
+                self.assertEqual(400, turns)
                 self.assertIn(f"size:{size}", why)
 
-    def test_both_absent_is_the_unchanged_default(self):
-        """The acceptance criterion that guards every card that carries
-        neither label: nothing about today's behaviour changes."""
+    def test_both_absent_is_the_default_400(self):
+        """The headline of DRE-4361: every run gets the top rung. In 22 days
+        no run died at 400 (26 runs); all 110 turn-cap deaths were at 150."""
         turns, why = turn_budget.budget_for(["repo:bureau-pipeline", "agent:devops"])
-        self.assertEqual(150, turns)
-        self.assertEqual(150, turn_budget.DEFAULT_TURNS)
+        self.assertEqual(400, turns)
+        self.assertEqual(400, turn_budget.DEFAULT_TURNS)
         self.assertIn("default", why.lower())
 
     def test_no_labels_at_all_is_the_default(self):
-        self.assertEqual(150, turn_budget.budget_for([])[0])
+        self.assertEqual(400, turn_budget.budget_for([])[0])
+
+    def test_the_lower_rungs_stay_reachable_by_an_explicit_turns_label(self):
+        """`allowed` is unchanged, and that is the point: a card that WANTS a
+        smaller ceiling can still ask for one. The PROOF card of this epic
+        plants its turn-cap deaths with `turns:150`, which only works while
+        the lower rungs remain selectable."""
+        self.assertEqual(150, turn_budget.budget_for(["turns:150"])[0])
+        self.assertEqual(250, turn_budget.budget_for(["turns:250"])[0])
 
     def test_the_turns_label_wins_over_the_size_label(self):
         """A `turns:` label is an explicit human decision about THIS card; the
-        size is an estimate made before anyone had run it."""
-        self.assertEqual(400, turn_budget.budget_for(["size:XS", "turns:400"])[0])
+        size is an estimate made before anyone had run it. Now that every size
+        maps to 400, the direction that proves precedence is DOWNWARDS."""
+        self.assertEqual(150, turn_budget.budget_for(["size:XL", "turns:150"])[0])
 
     def test_labels_are_matched_case_insensitively(self):
         self.assertEqual(250, turn_budget.budget_for(["Turns:250"])[0])
-        self.assertEqual(250, turn_budget.budget_for(["Size:M"])[0])
+        self.assertEqual(400, turn_budget.budget_for(["Size:M"])[0])
 
     def test_a_budget_outside_the_allowed_set_is_refused_and_said_so(self):
         """THE COST CAP STAYS. The turn count is a knob, not a blank cheque: a
@@ -145,28 +174,40 @@ class BudgetFromLabelsTest(unittest.TestCase):
         note says which value was refused so it is visible rather than silent.
         """
         turns, why = turn_budget.budget_for(["turns:10000"])
-        self.assertEqual(150, turns)
+        self.assertEqual(400, turns)
         self.assertIn("10000", why)
         self.assertNotIn(10000, turn_budget.allowed_budgets())
 
+    def test_a_refused_turns_label_names_the_allowed_set(self):
+        """`turns:300` is a plausible-looking number that is not a rung. The
+        note has to name the set, or the human who applied it has no way to
+        know what to apply instead."""
+        turns, why = turn_budget.budget_for(["turns:300"])
+        self.assertEqual(400, turns)
+        self.assertIn("300", why)
+        for rung in turn_budget.allowed_budgets():
+            self.assertIn(str(rung), why)
+
     def test_a_refused_budget_still_falls_through_to_the_size(self):
         turns, why = turn_budget.budget_for(["turns:999", "size:M"])
-        self.assertEqual(250, turns)
+        self.assertEqual(400, turns)
         self.assertIn("999", why)
+        self.assertIn("size:M", why)
 
     def test_a_malformed_turns_label_never_raises(self):
         for label in ("turns:", "turns:abc", "turns:-5", "turns:250x"):
             with self.subTest(label=label):
-                self.assertEqual(150, turn_budget.budget_for([label])[0])
+                self.assertEqual(400, turn_budget.budget_for([label])[0])
 
-    def test_the_allowed_set_is_small_and_bounded(self):
-        """The set is the guard. Every rung is a reviewed spend decision in a
-        config file, the same way membership of a model ladder is."""
+    def test_the_allowed_set_is_exactly_the_three_reviewed_rungs(self):
+        """The set is the guard, and DRE-4361 did NOT change it. Every rung is
+        a reviewed spend decision in a config file, the same way membership of
+        a model ladder is — moving the default does not retire the rungs."""
         allowed = turn_budget.allowed_budgets()
+        self.assertEqual((150, 250, 400), allowed)
         self.assertIn(turn_budget.DEFAULT_TURNS, allowed)
-        self.assertLessEqual(len(allowed), 6)
-        self.assertLessEqual(max(allowed), 400)
-        self.assertEqual(sorted(allowed), list(allowed), "rungs must be ordered")
+        self.assertEqual(max(allowed), turn_budget.DEFAULT_TURNS,
+                         "the default is the top rung")
 
     def test_every_size_maps_onto_an_allowed_rung(self):
         allowed = set(turn_budget.allowed_budgets())
@@ -221,8 +262,8 @@ class ThreadReadingTest(unittest.TestCase):
         self.assertEqual(250, turn_budget.current_budget(_thread(3, 3, turns=250)))
 
     def test_a_thread_with_no_receipt_reads_as_the_default(self):
-        self.assertEqual(150, turn_budget.current_budget([]))
-        self.assertEqual(150, turn_budget.current_budget(["nothing here"]))
+        self.assertEqual(400, turn_budget.current_budget([]))
+        self.assertEqual(400, turn_budget.current_budget(["nothing here"]))
 
     def test_the_phase_label_is_never_parsed_only_the_number(self):
         """The three build briefs spell phase 3 differently — "implementation
@@ -410,11 +451,11 @@ class TurnBudgetCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "why.txt"
             p = self._select("--labels", "size:M", "--explain-file", str(path))
-            self.assertEqual("250", p.stdout.strip())
+            self.assertEqual("400", p.stdout.strip())
             self.assertIn("size:M", path.read_text())
 
     def test_no_labels_prints_the_default(self):
-        self.assertEqual("150", self._select("--labels", "").stdout.strip())
+        self.assertEqual("400", self._select("--labels", "").stdout.strip())
 
     def test_an_unreadable_card_degrades_to_the_default_and_exits_zero(self):
         """A Linear read that fails must cost a run its RAISE, never its run.
@@ -425,7 +466,7 @@ class TurnBudgetCliTest(unittest.TestCase):
             capture_output=True, text=True, env=env,
         )
         self.assertEqual(0, p.returncode, p.stderr)
-        self.assertEqual("150", p.stdout.strip())
+        self.assertEqual("400", p.stdout.strip())
 
 
 # --------------------------------------------------------------------------- #
@@ -524,14 +565,250 @@ class ConfigDegradationTest(unittest.TestCase):
             broken = Path(tmp) / "turn-budgets.json"
             broken.write_text("{ this is not json")
             cfg = turn_budget.load_config(broken)
-        self.assertEqual(150, turn_budget.default_budget(cfg))
-        self.assertEqual(150, turn_budget.budget_for(["size:XS"], cfg)[0])
+        self.assertEqual(400, turn_budget.default_budget(cfg))
+        self.assertEqual(400, turn_budget.budget_for(["size:XS"], cfg)[0])
+        self.assertEqual(80, turn_budget.decide_by(400, cfg))
         turn_budget.clear_config_cache()
 
     def test_a_missing_config_degrades_to_the_default_map(self):
         cfg = turn_budget.load_config(Path("/nonexistent/turn-budgets.json"))
-        self.assertEqual(150, turn_budget.budget_for([], cfg)[0])
+        self.assertEqual(400, turn_budget.budget_for([], cfg)[0])
         self.assertEqual(250, turn_budget.budget_for(["turns:250"], cfg)[0])
+
+    def test_the_fallback_map_agrees_with_the_file_it_degrades_from(self):
+        """The module's own comment requires it: a build that cannot read its
+        config gets today's behaviour, never a surprise budget. Read BOTH and
+        compare, rather than trusting two hand-maintained copies of one
+        number to have been edited together."""
+        on_disk = json.loads(turn_budget.CONFIG_PATH.read_text())
+        fallback = turn_budget._FALLBACK_CONFIG
+        self.assertEqual(on_disk["default"], fallback["default"])
+        self.assertEqual(on_disk["size"], fallback["size"])
+        self.assertEqual(on_disk["allowed"], fallback["allowed"])
+        self.assertEqual(on_disk["decide_by_fraction"],
+                         fallback["decide_by_fraction"])
+
+    def test_the_file_carries_the_decide_by_fraction_under_that_exact_key(self):
+        """The key name is a contract shared with the siblings that read it."""
+        on_disk = json.loads(turn_budget.CONFIG_PATH.read_text())
+        self.assertEqual(0.2, on_disk["decide_by_fraction"])
+
+
+# --------------------------------------------------------------------------- #
+# 6 — the blank-label receipt: no note carries a backtick (DRE-4361)           #
+# --------------------------------------------------------------------------- #
+
+#: Every branch `budget_for` can return a note from, and the labels that reach
+#: it. Named so a new branch added without a note reviewed here is visible as a
+#: missing row rather than as a silent gap.
+NOTE_BRANCHES = {
+    "default": [],
+    "default with other labels": ["repo:bureau-pipeline", "agent:engineer"],
+    "turns label accepted": ["turns:150"],
+    "turns label refused": ["turns:300"],
+    "turns label not a number": ["turns:abc"],
+    "turns label empty": ["turns:"],
+    "size label": ["size:M"],
+    "refused turns falling through to size": ["turns:300", "size:XL"],
+    "refused turns falling through to the default": ["turns:10000"],
+    # THE HOLE THE FIRST FIX LEFT OPEN (DRE-4361 review round 1). Every row
+    # above is a WELL-FORMED label, so removing the note's own hardcoded
+    # backticks was enough to make all of them pass — while the label VALUE,
+    # which is the card's own text and needs only a typo to carry a
+    # metacharacter, went into the note unescaped. These rows are the inputs
+    # that defeat that fix, one per character bash acts on inside a
+    # double-quoted string.
+    "turns label whose value carries a backtick": ["turns:1`id`"],
+    "turns label whose value carries a command substitution": ["turns:$(id)"],
+    "turns label whose value carries a quote": ['turns:1"; id; echo "'],
+    "turns label whose value carries a backslash": ["turns:1\\2"],
+    # A `size:` value only reaches a note when it MATCHES a rung key, so this
+    # row cannot reproduce the hole today — it is the guard that keeps it that
+    # way if a future branch ever names an unmatched size out loud.
+    "size label whose value carries a backtick": ["size:M`id`"],
+    "refused turns whose value carries a backtick, then a size":
+        ["turns:10000`id`", "size:M"],
+}
+
+
+class NoteHasNoBacktickTest(unittest.TestCase):
+    """THE DEFECT (DRE-4361). The `🧠 model-attempt` heartbeat on a card
+    carrying neither label read *"this card carries no  or  label"* — both
+    label names gone. The note held them in backticks, and `agent-task.yml`
+    interpolates the note inside a DOUBLE-QUOTED shell string, where a
+    backtick opens command substitution.
+
+    Fixed at the source rather than by quoting it differently at one call
+    site: the note is written into a GitHub output, a step summary, an
+    --explain-file and a Linear comment, and only one of those four is a
+    shell string. A note that is safe everywhere is the smaller contract.
+
+    ROUND 1 OF THE REVIEW FOUND THE FIX HALF-DONE, and the half that was
+    missing is the dangerous half. Removing the note's own hardcoded backticks
+    made every well-formed label safe; the label VALUE was still spliced in
+    raw, and it is the card's own text — `turns:1`+backtick+`id`+backtick is a
+    label a person can apply by typo, and `agent-task.yml` runs the resulting
+    note through GitHub's textual `${{ }}` substitution into a double-quoted
+    `run:` string in a step that holds LINEAR_API_KEY. The tests below are the
+    inputs the first fix passed and should not have.
+    """
+
+    def test_no_branch_of_budget_for_returns_a_backtick(self):
+        for name, labels in NOTE_BRANCHES.items():
+            with self.subTest(branch=name):
+                _, why = turn_budget.budget_for(labels)
+                self.assertNotIn("`", why, f"the {name} note carries a backtick")
+
+    def test_every_note_still_names_the_labels_it_talks_about(self):
+        """Dropping the backticks must not drop the label with them — a note
+        that says nothing is the defect, not the fix."""
+        self.assertIn("turns:", turn_budget.budget_for([])[1])
+        self.assertIn("size:", turn_budget.budget_for([])[1])
+        self.assertIn("turns:150", turn_budget.budget_for(["turns:150"])[1])
+        self.assertIn("size:M", turn_budget.budget_for(["size:M"])[1])
+
+    def test_the_note_survives_the_shell_string_the_workflow_puts_it_in(self):
+        """The live seam, reproduced: `echo "…$NOTE…"` is what agent-task.yml
+        does. Revert the fix and this goes red with the exact text that
+        reached the card."""
+        for name, labels in NOTE_BRANCHES.items():
+            with self.subTest(branch=name):
+                _, why = turn_budget.budget_for(labels)
+                echoed = subprocess.run(
+                    ["bash", "-c", f'echo "{why}"'],
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                self.assertEqual(why, echoed)
+
+    def test_no_branch_returns_a_character_the_shell_string_would_act_on(self):
+        """The backtick is one of four. Inside double quotes `$` opens an
+        expansion, `"` closes the string and `\\` escapes what follows — and
+        the note passes through GitHub's textual substitution BEFORE bash
+        parses the line, so every one of them is syntax rather than text."""
+        for name, labels in NOTE_BRANCHES.items():
+            with self.subTest(branch=name):
+                _, why = turn_budget.budget_for(labels)
+                for hazard in "`$\"\\":
+                    self.assertNotIn(hazard, why,
+                                     f"the {name} note carries {hazard!r}")
+
+    def test_a_label_cannot_run_a_command_through_the_note(self):
+        """The proof, not the proxy. A label value chosen to write a file runs
+        through the exact seam the workflow uses — `echo "<note>"` — and the
+        file must not be there afterwards. Revert the escaping and this test
+        finds the canary on disk."""
+        with tempfile.TemporaryDirectory() as td:
+            # A canary PER case: one shared path would let the first case's
+            # file stand in for the third's and report a hole that case never
+            # actually opened.
+            for n, shape in enumerate(("turns:1`touch {c}`",
+                                       "turns:1$(touch {c})",
+                                       'turns:1"; touch {c}; echo "')):
+                canary = Path(td) / f"pwned-{n}"
+                label = shape.format(c=canary)
+                with self.subTest(label=label):
+                    _, why = turn_budget.budget_for([label])
+                    subprocess.run(["bash", "-c", f'echo "{why}"'],
+                                   capture_output=True, text=True)
+                    self.assertFalse(
+                        canary.exists(),
+                        f"{label!r} executed a command through the note")
+
+    def test_a_defanged_label_is_still_recognisable_in_the_note(self):
+        """Escaping must not swallow the label. A human reading the heartbeat
+        has to be able to see WHICH label they mistyped — the whole reason the
+        note names the refused value at all. The hazard is neutered in place,
+        so the rest of the value stays legible beside it."""
+        _, why = turn_budget.budget_for(["turns:1`id`"])
+        self.assertIn("turns:1", why)
+        self.assertIn("id", why)
+        self.assertIn("is not a number and was ignored", why)
+
+    def test_a_note_is_always_a_single_line(self):
+        """`echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"` is one line per
+        output. A newline inside a label value would split the assignment and
+        write the rest of the note as a second, forged output key."""
+        _, why = turn_budget.budget_for(["turns:1\nturns=999\n"])
+        self.assertNotIn("\n", why)
+        self.assertNotIn("\r", why)
+
+    def test_safe_for_note_leaves_ordinary_text_alone(self):
+        """The escaping is not allowed to cost the notes their prose — the
+        em-dash, the colons and the quotes the notes already use survive."""
+        plain = "turn budget 400: the default — this card carries no 'turns:'"
+        self.assertEqual(plain, turn_budget.safe_for_note(plain))
+
+
+# --------------------------------------------------------------------------- #
+# 7 — decide_by: the turn the agent must have decided by (DRE-4361)            #
+# --------------------------------------------------------------------------- #
+
+class DecideByTest(unittest.TestCase):
+    """At 400 turns the ceiling stops being the thing that catches a lost
+    agent, so the checkpoint has to be named instead: a fifth of the way in,
+    the agent must have decided to continue or to hand back."""
+
+    def test_every_rung_has_its_checkpoint(self):
+        self.assertEqual(80, turn_budget.decide_by(400))
+        self.assertEqual(50, turn_budget.decide_by(250))
+        self.assertEqual(30, turn_budget.decide_by(150))
+
+    def test_the_checkpoint_is_the_fraction_the_config_names(self):
+        """The number is not a literal in the module: it is
+        `decide_by_fraction` x the ceiling, and a config that moves the
+        fraction moves every checkpoint with it."""
+        cfg = dict(turn_budget.load_config(), decide_by_fraction=0.5)
+        self.assertEqual(200, turn_budget.decide_by(400, cfg))
+        self.assertEqual(75, turn_budget.decide_by(150, cfg))
+
+    def test_it_rounds_DOWN_so_the_checkpoint_is_never_past_the_fraction(self):
+        self.assertEqual(18, turn_budget.decide_by(93))
+        self.assertEqual(20, turn_budget.decide_by(101))
+
+    def test_it_never_falls_below_ten_turns(self):
+        """A fifth of a tiny ceiling is a checkpoint before the agent has read
+        anything — it would hand back every card it was given."""
+        self.assertEqual(10, turn_budget.decide_by(40))
+        self.assertEqual(10, turn_budget.decide_by(1))
+        self.assertEqual(10, turn_budget.decide_by(0))
+
+    def test_it_never_raises_on_a_value_it_cannot_read(self):
+        """Same direction as everything else in this module: a checkpoint we
+        cannot compute costs a run its checkpoint, never its run."""
+        for bad in (None, "", "abc", []):
+            with self.subTest(bad=bad):
+                self.assertEqual(turn_budget.decide_by(turn_budget.DEFAULT_TURNS),
+                                 turn_budget.decide_by(bad))
+
+    def test_a_broken_fraction_falls_back_to_the_built_in_one(self):
+        cfg = dict(turn_budget.load_config(), decide_by_fraction="a fifth")
+        self.assertEqual(80, turn_budget.decide_by(400, cfg))
+
+
+class DecideByCliTest(unittest.TestCase):
+    """`turn_budget.py decide-by <turns>` — the seam DRE-4370 reads. STDOUT is
+    the number alone, the same discipline `select` keeps."""
+
+    def _decide_by(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "turn_budget.py"), "decide-by", *args],
+            capture_output=True, text=True,
+        )
+
+    def test_stdout_is_only_the_number(self):
+        p = self._decide_by("400")
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertEqual("80", p.stdout.strip())
+        self.assertEqual("80\n", p.stdout)
+
+    def test_the_other_rungs_through_the_same_seam(self):
+        self.assertEqual("50", self._decide_by("250").stdout.strip())
+        self.assertEqual("30", self._decide_by("150").stdout.strip())
+
+    def test_no_argument_is_a_usage_error_and_prints_no_number(self):
+        p = self._decide_by()
+        self.assertEqual(2, p.returncode)
+        self.assertEqual("", p.stdout.strip())
 
 
 class StandardIsCurrentTest(unittest.TestCase):

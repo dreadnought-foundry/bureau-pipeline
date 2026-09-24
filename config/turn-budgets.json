@@ -11,6 +11,14 @@
     "(plan.yml is ~1,850 lines). The park receipt already named the other remedy,",
     "'or raises the turn budget', and there was no handle on it.",
     "",
+    "THE DEFAULT IS 400, FOR EVERY RUN (DRE-4361, 2026-09-23, on the CEO's",
+    "instruction). The evidence: in 22 days no run died at 400 (26 runs), and",
+    "every one of the 110 turn-cap deaths was at 150. There is no footprint rung",
+    "to choose any more — one ceiling, everything gets it, and the 120-minute job",
+    "wall clock is unchanged and remains the real ceiling. `allowed` keeps all",
+    "three rungs because a card may still ask DOWNWARDS with a `turns:` label",
+    "(the epic's PROOF card plants its deaths with turns:150).",
+    "",
     "THE RULE: THE SET IS THE GUARD. The turn count is a KNOB and the run's own",
     "cap is the GUARD — a card picks a rung, it does not name a number. `allowed`",
     "is a closed, ordered set of reviewed rungs, exactly the way membership of a",
@@ -20,6 +28,11 @@
     "the runs that today produce nothing at all: --max-turns is a ceiling, not a",
     "target, and a card that finishes in 90 turns costs 90 turns' worth whatever",
     "the ceiling says.",
+    "",
+    "DECIDE-BY. `decide_by_fraction` x the ceiling, rounded down, never below 10,",
+    "is the turn by which the build agent must have decided to continue or hand",
+    "back: 400 → 80, 250 → 50, 150 → 30. At 400 the ceiling is no longer the",
+    "thing that catches a lost agent, so the checkpoint is named instead.",
     "",
     "WHY A FILE, not a lookup: the same constraint models.yaml and repo-map.json",
     "are documented under in config/README.md — the workflows that read this run",
@@ -33,7 +46,7 @@
 
   "version": 1,
 
-  "default": 150,
+  "default": 400,
 
   "allowed": [150, 250, 400],
 
@@ -41,19 +54,21 @@
 
   "size_label_prefix": "size:",
 
+  "decide_by_fraction": 0.2,
+
   "size": {
-    "XS": 150,
-    "S": 150,
-    "M": 250,
+    "XS": 400,
+    "S": 400,
+    "M": 400,
     "L": 400,
     "XL": 400
   },
 
   "rungs": {
-    "150": "the default, unchanged. What every card ran on before DRE-3097 and what every card that carries neither label still runs on.",
-    "250": "the first raise. DRE-3088's runs each reached implementation green and died in the two steps after it — the commit ordering for the TDD check and the PR — so the work that was left was small and the margin was zero.",
-    "400": "the top rung, for a card whose work is spread across files large enough that reading them is the spend. Nothing above it: past here the answer is a smaller card, and the job's 120-minute wall clock is the real ceiling anyway."
+    "150": "what every card ran on before DRE-4361, and no longer the default. Reachable only by a card that asks for it with a turns:150 label — the epic's PROOF card does exactly that to plant a turn-cap death.",
+    "250": "the middle rung, likewise reachable only by an explicit turns:250 label. It was the first raise DRE-3097 offered, and no card is put on it automatically any more.",
+    "400": "the default for every run (DRE-4361). Nothing above it: past here the answer is a smaller card, and the job's 120-minute wall clock is the real ceiling anyway."
   },
 
-  "size_note": "size:XS…size:XL mean EFFORT (config/planning-shapes.json) and already sit on the board, so a card that carries one need not carry a second label saying the same thing. XL maps onto the top rung rather than adding one — the set stays closed."
+  "size_note": "size:XS…size:XL mean EFFORT (config/planning-shapes.json) and already sit on the board. They all map onto 400 now: with one ceiling for everything there is no rung for a size to choose, and a card carrying a size must never be budgeted BELOW a card carrying none. The key stays so a card's size can never be read as a request for less."
 }

@@ -263,18 +263,28 @@ jobs:
       # looked identical to one that got its first choice. The note rides the
       # heartbeat comment below, and a DEGRADED note also raises a ::warning::.
       #
-      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). `--max-turns 150` was a
-      # literal below, with no per-card, per-size or per-repo knob — and the
+      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). The `--max-turns` flag
+      # below carried a literal 150, with no per-card, per-size or per-repo
+      # knob (spelled without the flag's own argument shape on purpose: the
+      # roster check in tests/test_agents_registry.py reads this file for the
+      # ceilings it runs with, and a number in prose is not one) — and the
       # park receipt's own second remedy ("or raises the turn budget") had no
       # handle. DRE-3088 died at that cap three times, $19.12/$19.12/$17.53,
       # every run reaching `⏳ 3/5 implementation green` and dying in the two
       # steps after it, the THIRD time after the card had already been split to
       # XS: the cost was the ~1,850-line file the agent had to keep re-reading,
       # not the size of the change. turn_budget.py reads a `turns:<n>` label
-      # (from a closed, reviewed set), else the `size:` label, else 150 — in
-      # THIS step, so a run cannot read the card one way for its model and
-      # another for its budget. It never exits non-zero: an unreadable card
-      # costs the raise, never the run.
+      # (from a closed, reviewed set), else the `size:` label, else the
+      # default — in THIS step, so a run cannot read the card one way for its
+      # model and another for its budget. It never exits non-zero: an
+      # unreadable card costs the raise, never the run.
+      #
+      # THAT DEFAULT IS 400 SINCE DRE-4361 (CEO's instruction, 2026-09-23) and
+      # every size rung with it: in 22 days no run died at 400 (26 runs), and
+      # every one of the 110 turn-cap deaths was at 150. The inline `|| 400`
+      # below is the same number for the case where this step wrote nothing at
+      # all, and `tests/test_fix_turn_budget.py` holds the two together. The
+      # 120-minute job wall clock is unchanged and remains the real ceiling.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -490,7 +500,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns ${{ steps.model.outputs.turns || 150 }}
+            --max-turns ${{ steps.model.outputs.turns || 400 }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
@@ -675,7 +685,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns ${{ steps.model.outputs.turns || 150 }}
+            --max-turns ${{ steps.model.outputs.turns || 400 }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
@@ -857,7 +867,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns ${{ steps.model.outputs.turns || 150 }}
+            --max-turns ${{ steps.model.outputs.turns || 400 }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |

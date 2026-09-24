@@ -16,11 +16,19 @@ The park receipt already offered the other remedy — the card would sit there
 the second option had no handle. This module is the handle, and the reader that
 tells the two causes apart.
 
-TWO QUESTIONS, ONE MODULE, because they are the same fact from both ends:
+DRE-4361 (2026-09-23, on the CEO's instruction) MOVED THE DEFAULT TO 400 and
+every `size` rung with it. The evidence: in 22 days no run died at 400 (26
+runs), and every one of the 110 turn-cap deaths was at 150. With one ceiling
+for everything there is no rung left to choose, so nothing picks one — but
+`allowed` is unchanged, because a card may still ask DOWNWARDS with a `turns:`
+label, which is how this epic's PROOF card plants a death at `turns:150`. The
+120-minute job wall clock is untouched and remains the real ceiling.
+
+THREE QUESTIONS, ONE MODULE, because they are the same fact from three ends:
 
   1. **What budget does this card get?** `budget_for(labels)`. A `turns:<n>`
      label from the closed set in `config/turn-budgets.json` wins; absent that
-     the `size:` label maps to a rung; absent both it is the unchanged 150.
+     the `size:` label maps to a rung; absent both it is the default, 400.
      Called from the step that selects the model, so a run cannot read the
      card one way for its model and another for its budget.
 
@@ -29,6 +37,32 @@ TWO QUESTIONS, ONE MODULE, because they are the same fact from both ends:
      marker or a later one, and the last is `implementation green` or later ⇒
      the work finishes and the RUN does not: budget. Anything else ⇒ split, as
      the receipt has always said.
+
+  3. **By which turn must the agent have decided?** `decide_by(turns)` —
+     `decide_by_fraction` (0.2) × the ceiling, rounded down, never below
+     `DECIDE_BY_FLOOR`: 400 → 80, 250 → 50, 150 → 30. At 400 the ceiling is no
+     longer the thing that catches a lost agent, so the checkpoint is named
+     instead: by then the run has either decided to continue or handed back.
+
+NO NOTE THIS MODULE RETURNS CONTAINS A BACKTICK (DRE-4361) — nor a `$`, a `"`,
+a backslash or a newline, whatever the card's labels say. `agent-task.yml`
+splices the note from `budget_for` into a double-quoted shell string, where a
+backtick opens command substitution — so the heartbeat on a card carrying
+neither label reached Linear reading *"this card carries no  or  label"*,
+both names eaten. It is fixed here rather than at that one call site because
+the same note is written into a GitHub output, a step summary, an
+`--explain-file` and a Linear comment, and only one of the four is a shell
+string. A note that is safe everywhere is the smaller contract to keep.
+
+THE SAME BUG HAS TWO HALVES, and the review caught the second one open. The
+first fix dropped the backticks the note's own LITERAL text wrapped label
+names in. The label VALUES kept going in raw — and a value is the card's own
+Linear text, which needs only a typo to carry a metacharacter. GitHub
+substitutes `${{ }}` TEXTUALLY into the `run:` script before bash parses it,
+so `turns:1`+backtick+`id`+backtick made the heartbeat step run `id` on the
+runner, in a step holding LINEAR_API_KEY. `safe_for_note` is the answer, and
+it is applied to every note this module returns rather than to the two fields
+that happen to be reachable today.
 
 THE SET IS THE GUARD. A card picks a rung; it does not name a number. That is
 the "cost cap stays" half of the card: the run's own guard (agent-task's
@@ -45,6 +79,7 @@ prose would make the diagnosis depend on which role happened to build the card.
 CLI:
     turn_budget.py select <CARD> [--explain-file PATH]
     turn_budget.py select --labels turns:250,size:M [--explain-file PATH]
+    turn_budget.py decide-by <turns>
     turn_budget.py diagnose <CARD> | --comments-file PATH
 """
 
@@ -54,6 +89,7 @@ import json
 import os
 import re
 import sys
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -66,16 +102,22 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "turn-budgets.jso
 #: byte-equivalent to the file's own values for the default rung: a build that
 #: cannot read its config gets today's behaviour, never a surprise budget.
 _FALLBACK_CONFIG = {
-    "default": 150,
+    "default": 400,
     "allowed": [150, 250, 400],
     "label_prefix": "turns:",
     "size_label_prefix": "size:",
-    "size": {"XS": 150, "S": 150, "M": 250, "L": 400, "XL": 400},
+    "decide_by_fraction": 0.2,
+    "size": {"XS": 400, "S": 400, "M": 400, "L": 400, "XL": 400},
 }
 
 #: The literal that was in the YAML, kept as the module's own answer so the
 #: workflow's inline fallback and the tests read one number.
 DEFAULT_TURNS = _FALLBACK_CONFIG["default"]
+
+#: The floor under `decide_by`. A fifth of a small ceiling is a checkpoint
+#: reached before the agent has finished reading the card, and an agent asked
+#: to decide there hands back everything it is given.
+DECIDE_BY_FLOOR = 10
 
 #: `⏳ <n>/5 <label>` — the phase heartbeat every build brief tells its agent to
 #: post. Anchored on the emoji so a comment merely quoting "3/5" is not a phase.
@@ -145,7 +187,7 @@ def allowed_budgets(config: dict | None = None) -> tuple[int, ...]:
 
 
 def default_budget(config: dict | None = None) -> int:
-    """What a card carrying neither label gets. Unchanged at 150."""
+    """What a card carrying neither label gets. 400 since DRE-4361."""
     cfg = config or load_config()
     try:
         return int(cfg.get("default", DEFAULT_TURNS))
@@ -184,22 +226,68 @@ def _label_value(labels, prefix: str) -> str | None:
     return None
 
 
+#: What a note may never carry. `agent-task.yml` splices the note into a
+#: DOUBLE-QUOTED `run:` string using GitHub's own textual `${{ }}`
+#: substitution, which happens before bash parses a character of the line — so
+#: these arrive as syntax rather than as text. Inside double quotes a backtick
+#: opens command substitution, `$` opens an expansion, `"` closes the string
+#: and `\` escapes whatever follows. The step it lands in holds LINEAR_API_KEY.
+_NOTE_HAZARDS = frozenset('`$"\\')
+
+#: What replaces one. Visible on purpose: the note exists so a human can see
+#: WHICH label they mistyped, and a silently deleted character reads back as a
+#: label nobody applied.
+_NOTE_REDACTION = "?"
+
+
+def safe_for_note(text) -> str:
+    """`text` with every character a shell string would act on replaced by `?`.
+
+    THE SECOND HALF OF THE DRE-4361 FIX, and the half that matters. Dropping
+    the note's own hardcoded backticks made every well-formed label safe and
+    left the label VALUE going in raw — and the value is the card's own Linear
+    text, where a typo is enough to plant a metacharacter. `turns:1`+backtick+
+    `id`+backtick produced a note that ran `id` on the runner.
+
+    Escaped HERE rather than at the one call site that is a shell string, for
+    the reason the module docstring gives: the same note is written into a
+    GitHub output, a step summary, an `--explain-file` and a Linear comment,
+    and a note that is safe everywhere is the smaller contract to keep.
+
+    Control characters go with them. A note is ONE LINE in all four places, and
+    a newline would split `echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"`
+    into the real output plus a forged second key.
+    """
+    return "".join(
+        _NOTE_REDACTION if (ch in _NOTE_HAZARDS or not ch.isprintable()) else ch
+        for ch in str("" if text is None else text)
+    )
+
+
 def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
     """`(turns, why)` for a card carrying `labels`.
 
     Precedence, and the reason for it:
 
-      1. `turns:<n>` — an explicit decision a human made about THIS card,
-         usually after watching it die. It wins over an estimate.
-      2. `size:<x>` — the effort estimate the card already carries. Free: no
-         second label saying the same thing.
-      3. the default, 150. Unchanged, and reached by every card that carries
-         neither.
+      1. `turns:<n>` — an explicit decision a human made about THIS card. It
+         wins over an estimate, and since DRE-4361 it is the only way to reach
+         a rung BELOW the default.
+      2. `size:<x>` — the effort estimate the card already carries. Every size
+         maps to the same 400 now; the step stays so that a card's size can
+         never be read as a request for less.
+      3. the default, 400. Reached by every card that carries neither.
 
     A `turns:` value outside the allowed set does not silently become a
     budget and does not stop the run: it falls through to 2/3 and the returned
     note NAMES the refused value, so it shows up in the step summary and in the
     `🧠 model-attempt` receipt instead of being quietly ignored.
+
+    NO RETURNED NOTE CONTAINS A BACKTICK — or a `$`, a `"`, a `\\` or a
+    newline — ON ANY BRANCH, whatever the labels say. The literal text names
+    the labels in single quotes, which survive the double-quoted shell string
+    the workflow interpolates the note into; the label VALUES are the card's
+    own text and go through `safe_for_note` first, which is the half of this
+    the first DRE-4361 fix missed.
     """
     cfg = config or load_config()
     allowed = allowed_budgets(cfg)
@@ -210,13 +298,13 @@ def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
         try:
             asked = int(raw)
         except (TypeError, ValueError):
-            refused = (f"the `turns:{raw}` label is not a number and was "
-                       f"ignored. ")
+            refused = (f"the 'turns:{safe_for_note(raw)}' label is not a "
+                       f"number and was ignored. ")
         else:
             if asked in allowed:
-                return asked, (f"turn budget {asked}: the card's "
-                               f"`turns:{asked}` label.")
-            refused = (f"the `turns:{asked}` label asks for a budget that is "
+                return asked, safe_for_note(
+                    f"turn budget {asked}: the card's 'turns:{asked}' label.")
+            refused = (f"the 'turns:{asked}' label asks for a budget that is "
                        f"not one of {', '.join(str(n) for n in allowed)} and "
                        f"was refused — the rungs are a reviewed set, not a "
                        f"free number. ")
@@ -225,12 +313,14 @@ def budget_for(labels, config: dict | None = None) -> tuple[int, str]:
     if size:
         mapped = size_map(cfg).get(size.upper())
         if mapped is not None:
-            return mapped, (f"{refused}turn budget {mapped}: the card's "
-                            f"`size:{size.upper()}` label.")
+            return mapped, safe_for_note(
+                f"{refused}turn budget {mapped}: the card's "
+                f"'size:{size.upper()}' label.")
 
     fallback = default_budget(cfg)
-    return fallback, (f"{refused}turn budget {fallback}: the default — this "
-                      f"card carries no `turns:` or `size:` label.")
+    return fallback, safe_for_note(
+        f"{refused}turn budget {fallback}: the default — this card carries no "
+        f"'turns:' or 'size:' label.")
 
 
 def next_rung(current: int, config: dict | None = None) -> int:
@@ -346,6 +436,47 @@ def diagnose(comment_bodies, config: dict | None = None) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# question 3 — by which turn must the agent have decided? (DRE-4361)           #
+# --------------------------------------------------------------------------- #
+
+def decide_by(turns, config: dict | None = None) -> int:
+    """The turn by which the build agent must have decided: continue, or hand
+    back.
+
+    `decide_by_fraction` (0.2) × the ceiling, rounded DOWN, never below
+    `DECIDE_BY_FLOOR`: 400 → 80, 250 → 50, 150 → 30.
+
+    WHY IT EXISTS AT ALL. Until DRE-4361 the ceiling was the checkpoint: a run
+    that had understood nothing by turn 150 died there, and the turn-cap park
+    was the signal. At 400 that guard is four hundred turns away, so a lost
+    agent has the whole budget to burn before anything notices. Naming the
+    checkpoint is what replaces it — the run reaches turn 80 having either
+    decided to carry on or handed the card back.
+
+    ROUNDED DOWN, and in DECIMAL. A checkpoint past the fraction is not a
+    checkpoint, and binary floats round the wrong way at exactly the values a
+    config edit would reach for (0.29 × 100 is 28.999999999999996 in binary,
+    so `int()` would answer 28 where the config plainly says 29).
+
+    NEVER RAISES, the same direction everything else here takes: a ceiling we
+    cannot read costs a run its checkpoint, never its run.
+    """
+    cfg = config if config is not None else load_config()
+    try:
+        ceiling = int(turns)
+    except (TypeError, ValueError):
+        ceiling = default_budget(cfg)
+    try:
+        fraction = Decimal(str(cfg.get("decide_by_fraction")))
+    except (TypeError, ValueError, InvalidOperation):
+        fraction = Decimal(str(_FALLBACK_CONFIG["decide_by_fraction"]))
+    if not fraction.is_finite() or fraction <= 0:
+        fraction = Decimal(str(_FALLBACK_CONFIG["decide_by_fraction"]))
+    checkpoint = (Decimal(ceiling) * fraction).to_integral_value(ROUND_FLOOR)
+    return max(DECIDE_BY_FLOOR, int(checkpoint))
+
+
+# --------------------------------------------------------------------------- #
 # CLI                                                                          #
 # --------------------------------------------------------------------------- #
 
@@ -397,7 +528,10 @@ def _cmd_select(rest: list[str]) -> int:
         return 2
 
     turns, why = budget_for(labels)
-    note = f"{prefix}{why}"
+    # `prefix` names the card identifier, which arrives from the dispatch
+    # payload, so it gets the same treatment the labels do — the note this
+    # writes is the one agent-task.yml splices into its heartbeat.
+    note = safe_for_note(f"{prefix}{why}")
     print(turns)
     print(note, file=sys.stderr)
     if explain:
@@ -406,6 +540,18 @@ def _cmd_select(rest: list[str]) -> int:
         except OSError as exc:  # a note we cannot write must not kill a run
             print(f"turn_budget: could not write {explain} ({exc})",
                   file=sys.stderr)
+    return 0
+
+
+def _cmd_decide_by(rest: list[str]) -> int:
+    """STDOUT IS ONLY THE NUMBER, the same contract `select` keeps: the caller
+    does `DECIDE_BY=$(… decide-by "$TURNS")`, so anything else printed on
+    stdout is a corrupted value rather than a longer message."""
+    _, positional = _split_flags(rest, ())
+    if not positional:
+        print("usage: turn_budget.py decide-by <turns>", file=sys.stderr)
+        return 2
+    print(decide_by(positional[0]))
     return 0
 
 
@@ -440,20 +586,25 @@ def main(argv: list[str]) -> int:
 
       select <CARD> [--explain-file PATH]     the budget this card runs with
       select --labels a,b [--explain-file P]  the same, from a label list
+      decide-by <turns>                       the checkpoint turn for a ceiling
       diagnose <CARD> | --comments-file PATH  budget-vs-size, as JSON
 
     STDOUT OF `select` IS ONLY THE NUMBER — the workflow does
     `TURNS=$(… select …)`. The note goes to stderr and to `--explain-file`, so
     adding to it can never corrupt the captured value. `select` NEVER exits
     non-zero for a card it could not read: it degrades to the default, which
-    is exactly today's behaviour.
+    is exactly today's behaviour. `decide-by` keeps the same stdout contract
+    for the prompt step that reads it (DRE-4370).
     """
     if not argv:
-        print("usage: turn_budget.py select … | diagnose …", file=sys.stderr)
+        print("usage: turn_budget.py select … | decide-by … | diagnose …",
+              file=sys.stderr)
         return 2
     cmd, *rest = argv
     if cmd == "select":
         return _cmd_select(rest)
+    if cmd == "decide-by":
+        return _cmd_decide_by(rest)
     if cmd == "diagnose":
         return _cmd_diagnose(rest)
     print(f"unknown command {cmd!r}", file=sys.stderr)

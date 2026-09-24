@@ -43,9 +43,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pr_size_strategy as pss  # noqa: E402
 from test_agent_linear_key import DOCUMENTED_EXCEPTIONS  # noqa: E402
 
-# `--max-turns 80`, or the size-step output qa-review.yml selects (DRE-2466).
+# `--max-turns 80`; the default inside agent-task.yml's per-card expression
+# (DRE-3097 `${{ steps.model.outputs.turns || 400 }}`); or the size-step output
+# qa-review.yml selects (DRE-2466).
+#
+# THE MIDDLE FORM IS NEW (DRE-4361), and it closes a hole. agent-task.yml has
+# carried an expression rather than a literal since DRE-3097, so this regex
+# matched nothing in it — nothing except the PROSE COMMENT above the step,
+# which still said `--max-turns 150`. Four roster entries were being checked
+# against a sentence describing the number the workflow used to use. Resolving
+# the expression's own fallback is what `tests/test_fix_turn_budget.py` already
+# does, and it makes the four build agents checked against the workflow again.
 _TURNS_RE = re.compile(
-    r"--max-turns\s+(?:(\d+)|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\})"
+    r"--max-turns\s+(?:(\d+)"
+    r"|\$\{\{[^}]*?\|\|\s*(\d+)\s*\}\}"
+    r"|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\})"
 )
 _SIZE_OUTPUTS = ("max_turns", "retry_max_turns")
 
@@ -220,14 +232,18 @@ class AgentsRegistryTest(unittest.TestCase):
         selected. An expression is RESOLVED here through the same table the
         workflow reads (standard strategy, the path a review normally takes),
         so the console still cannot drift from the workflow; it just can no
-        longer be checked by grepping for a number."""
+        longer be checked by grepping for a number.
+
+        DRE-4361: agent-task.yml's per-card expression is resolved the same
+        way, through the default it falls back to. Before that it was not read
+        at all and the four agents pointing at it were checked against a
+        comment."""
         for a in load():
             src = open(os.path.join(ROOT, a["workflow"])).read()
             declared = [
-                int(literal) if literal else pss.turn_budget("standard")[
-                    _SIZE_OUTPUTS.index(name)
-                ]
-                for literal, name in _TURNS_RE.findall(src)
+                int(literal or fallback) if (literal or fallback)
+                else pss.turn_budget("standard")[_SIZE_OUTPUTS.index(name)]
+                for literal, fallback, name in _TURNS_RE.findall(src)
             ]
             self.assertIn(a["maxTurns"], declared,
                           f"{a['name']}: maxTurns {a['maxTurns']} is not a "
