@@ -263,8 +263,11 @@ jobs:
       # looked identical to one that got its first choice. The note rides the
       # heartbeat comment below, and a DEGRADED note also raises a ::warning::.
       #
-      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). `--max-turns 150` was a
-      # literal below, with no per-card, per-size or per-repo knob — and the
+      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). The `--max-turns` flag
+      # below carried a literal 150, with no per-card, per-size or per-repo
+      # knob (spelled without the flag's own argument shape on purpose: the
+      # roster check in tests/test_agents_registry.py reads this file for the
+      # ceilings it runs with, and a number in prose is not one) — and the
       # park receipt's own second remedy ("or raises the turn budget") had no
       # handle. DRE-3088 died at that cap three times, $19.12/$19.12/$17.53,
       # every run reaching `⏳ 3/5 implementation green` and dying in the two

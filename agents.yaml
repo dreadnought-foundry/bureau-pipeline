@@ -102,14 +102,15 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
-    # DRE-2785 grants the web and leaves this budget where it is, on purpose.
-    # Every build agent already has the fleet's largest ceiling AND the only
-    # per-card handle on it: `turns:`/`size:` labels pick a reviewed rung from
-    # config/turn-budgets.json (150/250/400, DRE-3097), and 150 is the default
-    # a card that names neither gets. A card whose research makes it expensive
-    # takes a rung; raising the default would spend on every card to pay for
-    # the few.
-    maxTurns: 150
+    # DRE-2785 granted the web and left this budget alone, on the reasoning
+    # that a card whose research makes it expensive can take a rung rather
+    # than every card paying for the few. DRE-4361 answered that with 22 days
+    # of data (CEO's instruction, 2026-09-23): no run died at 400 across 26,
+    # and every one of the 110 turn-cap deaths was at 150. So the default IS
+    # the top rung now — `turns:`/`size:` labels still pick a reviewed rung
+    # from config/turn-budgets.json, and a `turns:` label is the only way to
+    # ask for less. The 120-minute job wall clock is the real ceiling.
+    maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
@@ -131,10 +132,10 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
-    # Web tools since DRE-2785; turn budget unchanged for the same reason as
-    # the engineer above — it shares agent-task.yml's rung selection
-    # (config/turn-budgets.json), which is the per-card handle on the ceiling.
-    maxTurns: 150
+    # Web tools since DRE-2785; turn budget moves with the engineer's for the
+    # same reason — it shares agent-task.yml's rung selection
+    # (config/turn-budgets.json), whose default is 400 since DRE-4361.
+    maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
@@ -163,9 +164,9 @@ agents:
     # Web tools since DRE-2785 — it is in the roster and the card grants ALL
     # ten, dispatched or not; leaving the one entry nobody routes to without
     # the grant is how a roster ends up with an exception nobody remembers.
-    # Turn budget unchanged: it declares agent-task.yml's ceiling, and that
-    # ceiling is picked per card from config/turn-budgets.json (DRE-3097).
-    maxTurns: 150
+    # Turn budget: it declares agent-task.yml's ceiling, picked per card from
+    # config/turn-budgets.json (DRE-3097), whose default is 400 (DRE-4361).
+    maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
@@ -185,9 +186,9 @@ agents:
     # Web tools since DRE-2785 — the role with the most to gain from them,
     # since a vendor's current behaviour is the whole subject of
     # standards/vendor-boundaries.md and the answer moves without telling us.
-    # Turn budget unchanged: shares agent-task.yml's per-card rung selection
-    # (config/turn-budgets.json, DRE-3097).
-    maxTurns: 150
+    # Turn budget: shares agent-task.yml's per-card rung selection
+    # (config/turn-budgets.json, DRE-3097), default 400 since DRE-4361.
+    maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
@@ -213,12 +214,14 @@ agents:
     # console's copy of the fleet's budgets and tests/test_agents_registry.py
     # fails if it drifts from the ceiling the workflow actually runs with.
     #
-    # Web tools since DRE-2785; ceiling unchanged at 150. This agent re-runs
-    # the same work the engineer's budget was sized for, in the same shape,
-    # and 150 is already the fleet's largest fixed ceiling — a fix round that
-    # needs more turns than a build is a card the review loop should be
-    # handing back, not a budget to widen.
-    maxTurns: 150
+    # Web tools since DRE-2785; ceiling 400 since DRE-4361, which moved every
+    # build and fix run to the top rung. This agent re-runs the same work the
+    # engineer's budget was sized for, in the same shape, so it tracks the
+    # engineer's number — and tracks it as a FLOOR, since the repair job also
+    # has to comprehend someone else's diff first. A fix round that needs more
+    # turns than a build is still a card the review loop should be handing
+    # back, not a budget to widen past this.
+    maxTurns: 400
     maxBudget: 9
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
