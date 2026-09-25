@@ -22,6 +22,14 @@ word answers the question, send one word.
 4. **One concrete ask, last.** "Let me know what time works." · "Just say when."
 
 ## Mechanics
+- **American English, always.** Everything written for a person — messages to
+  the CEO, critic verdicts, PR descriptions, Linear cards and comments — uses
+  American spelling and usage. The common swaps: canceled, color, behavior,
+  organization, analyze, center, license (noun and verb), program, catalog.
+  Quoted text, identifiers, filenames, labels and Linear state names stay
+  exactly as written — changing one of those is a code change, not a spelling
+  change — and the British text already in the repo is not a pattern to
+  imitate.
 - Short declaratives dominate; **em-dashes**, never semicolons.
 - Plain vocabulary. **No corporate-speak** (no "leverage", "circle back", "touch
   base", "synergies").

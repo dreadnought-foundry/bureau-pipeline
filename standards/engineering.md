@@ -58,6 +58,8 @@ is the floor. Every rule here exists because its violation shipped a bug.
 - **Copy, not rebuild.** Almost everything you need already exists (the relay,
   the pipeline scripts, the proxy, the backend template, the alert engine, the
   CDK stacks). Reuse and adapt the proven asset; do not re-derive it.
+- **American English in code comments, docstrings, commit messages and docs.**
+  The spelling rule lives once, in `standards/comms.md` — read it there.
 - **Match the codebase.** Mirror existing naming, comment density, and test
   patterns. Read neighboring code before writing yours.
 - **Empty-diff check.** Before opening the PR, `git diff --stat <default>...HEAD`
