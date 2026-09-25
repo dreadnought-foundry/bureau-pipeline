@@ -66,7 +66,13 @@ PACK = groom_context.pack(now=NOW)
 # fleet's runners install the CLI at run time and a test may not have one.
 CLI_OUTPUT_UPPER_LIMITS = {
     "claude-fable-5-1": 128000,
-    "claude-opus-5": 128000,
+    # `claude-opus-5-5` took this rung from `claude-opus-5` on 2026-09-25
+    # (DRE-4836). 128,000 is Opus 5.5's published output maximum — unchanged
+    # from Opus 5's, which is the half of the migration notes this number
+    # depends on. It was NOT re-read out of an installed CLI binary the way the
+    # other two were; if this rung ever clamps lower than the ceiling below,
+    # that is where to look first.
+    "claude-opus-5-5": 128000,
     "claude-sonnet-4-6": 128000,
 }
 
