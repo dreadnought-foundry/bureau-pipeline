@@ -1,0 +1,190 @@
+# The missing-nightly alarm (DRE-4805).
+#
+# PR CI now runs only the suites a change can reach, and a nightly `schedule:`
+# run on `main` runs everything (standards/engineering.md, "CI: narrow per
+# change, whole every night"). That makes the nightly the only thing that runs
+# the suites a pull request skipped. If it silently stops running, those tests
+# are never run again and nobody knows — which is the CEO's decision of
+# 2026-09-24 in one line: "we have to have an alarm if the nightly one doesn't
+# run so we know that we're not creating tech debt."
+#
+# A nightly that runs and goes RED already has a rail: Red-Main Repair keys on
+# the head branch being the default branch, never on the event, so a scheduled
+# run that fails is repaired like a push that fails. What nothing watches is
+# the run that NEVER HAPPENS — a schedule GitHub disabled after 60 days of repo
+# inactivity, a cron typo, a workflow that errors before any job starts, a run
+# stuck in the queue. Nothing fails, because nothing ran.
+#
+# This file only gathers GitHub's records and acts on the verdict; the
+# decision, the thresholds and where they came from live in
+# scripts/nightly_watch.py, unit-tested in tests/test_nightly_watch.py. It is
+# `channel-watch.yml` pointed at a different silence, and it raises its alarm
+# through the same mechanism — ONE deduplicated Linear card, commented on
+# rather than duplicated while the condition lasts — so no new surface is
+# added. tests/test_nightly_watch.py asserts that against channel-watch.yml
+# rather than restating it, so the two cannot drift.
+#
+# WHO IS WATCHED: computed, never listed. Every workflow, in every repo in
+# config/repo-map.json, whose file on the default branch triggers on BOTH
+# `pull_request` and `schedule`. A repo that adds a nightly is watched from its
+# first merge and one that removes it stops being watched, with no edit here —
+# the `check_workflow_watchers.py` rule, because a list that is remembered is a
+# list that drifts in the direction of watching less.
+#
+# WHAT IT DELIBERATELY CANNOT DO: change anything. Read-only permissions, no
+# ref write, no dispatch, no POST anywhere in the file, and a test that fails
+# if one appears. An alarm that can touch what it watches is not an alarm.
+#
+# WHAT IF THE WATCHER ITSELF STOPS: "Nightly Watch" is in the medic's watch
+# list (self-medic.yml), so a red run is diagnosed — and
+# scripts/check_workflow_watchers.py fails the build if it ever leaves that
+# list. A run that never fires at all is the same gap channel-watch.yml's
+# header states about itself, and it is written down here rather than papered
+# over: nothing in this repo detects a scheduled workflow that stops for good.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`, the same actor the
+#      Reconcile, Model drift and Channel Watch schedules already run as; the
+#      medic admits those today. Nothing is pushed or dispatched, so no
+#      downstream trigger depends on the identity.
+#   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
+#      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
+#      and the App keys resolve. The CROSS-REPO reads cannot use
+#      `github.token`, which is scoped to this repository and 404s on every
+#      other one — that would report the whole fleet UNKNOWN. An App
+#      installation token is scoped to ONE installation and this fleet spans
+#      three owners, so the watch job is a matrix over the roster's owners with
+#      a token minted per owner, exactly as fleet-wake.yml dispatches.
+#   Q3 re-run — idempotent by construction: the card lookup is by exact title
+#      and the titles are constants per owner, so a re-run comments on the open
+#      card instead of minting a second. A card CANCELED while the condition
+#      still holds invites a fresh one next hour — park it in Backlog instead,
+#      the model-drift rule.
+#   Q4 command limits — reading a workflow's TRIGGERS needs the file, which the
+#      Actions API does not carry, so this reads each workflow's contents at
+#      the default branch: roughly one read per workflow per repo per hour,
+#      against an installation's 5,000/hour. A refusal is never retried past
+#      gh_read_retry's bounded backoff and never substituted for an answer.
+#   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
+#      anywhere repeats next hour, and its failure routes through the medic.
+#      `fail-fast: false` so one owner's missing installation cannot stop the
+#      other owners being read.
+name: Nightly Watch
+
+on:
+  schedule:
+    # Hourly at :23. Off the hour on purpose — GitHub delays scheduled jobs
+    # hardest at :00 — and clear of the sweep's */15. The cadence is paired
+    # with nightly_watch.INTERVAL_HOURS by a wiring test. Hourly, on a
+    # schedule of its own: this must not depend on the repos it watches
+    # running anything.
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+# READ ONLY. The alarm must never be able to change what it is watching.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: nightly-watch
+  cancel-in-progress: false
+
+jobs:
+  # The roster is `config/repo-map.json` — the same snapshot the relay routes
+  # on and the fleet wake-up dispatches from. A repo onboarded into the map is
+  # watched with no second edit, which is why the owner list is computed rather
+  # than typed.
+  owners:
+    name: Read the roster
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      owners: ${{ steps.read.outputs.owners }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Owners in the roster
+        id: read
+        run: python3 scripts/nightly_watch.py owners
+
+  watch:
+    name: Watch ${{ matrix.owner }}
+    needs: owners
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # One owner's missing or under-permissioned installation must not stop
+      # the other owners being read — and it does not go quiet either: those
+      # repos are reported UNKNOWN, which alarms.
+      fail-fast: false
+      matrix:
+        owner: ${{ fromJSON(needs.owners.outputs.owners) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The decision parses workflow YAML, so it needs PyYAML — from the one
+      # pinned manifest, through the fleet's shared plumbing, cached and
+      # skipped on a hit. NAMED, or ci_minutes_report.py cannot attribute it.
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      # Per owner, because an App installation token is scoped to ONE
+      # installation. `continue-on-error` so a missing installation produces an
+      # empty token and a fleet of UNKNOWN readings — which alarm, and name the
+      # reason — rather than an opaque red action step.
+      - name: Mint bot token (this owner's installation)
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+
+      # Through env, never interpolated into the shell line — the roster is
+      # repo-controlled data today and the next writer of it may not be.
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ matrix.owner }}
+        run: |
+          python3 scripts/nightly_watch.py watch \
+            --owner "$OWNER" \
+            --title-file "$RUNNER_TEMP/alarm-title.txt" \
+            --body-file "$RUNNER_TEMP/alarm-body.md" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # ONE card per condition per owner, and it keeps saying it. The title is
+      # a constant, so next hour's identical finding comments on this hour's
+      # card instead of minting a second — an alarm that mints a card an hour
+      # is the inbox this programme exists to escape.
+      - name: Raise the alarm where a human will see it
+        if: steps.decide.outputs.alarm == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEADLINE: ${{ steps.decide.outputs.headline }}
+        run: |
+          # The repo the CARD is filed against — this one, which owns the
+          # watcher; the repos the alarm is ABOUT are named in its body.
+          # Derived, not hardcoded (DRE-2680): the card needs a repo:<slug>
+          # label or the readiness gate cannot route it out of Planning.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
+          EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
+          if [ -n "$EXISTING" ]; then
+            python3 scripts/linear_ops.py comment "$EXISTING" \
+              "🌙 Still true this hour: $HEADLINE  Watch run: $RUN_URL"
+          else
+            {
+              cat "$RUNNER_TEMP/alarm-body.md"
+              echo ""
+              echo "Watch run: $RUN_URL"
+            } > "$RUNNER_TEMP/alarm-card.md"
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/alarm-card.md" --repo "$REPO_SLUG"
+          fi

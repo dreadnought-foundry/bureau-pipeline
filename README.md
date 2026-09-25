@@ -1304,6 +1304,60 @@ mechanical:
   adding a sixth mechanism nobody checks would be Wave 0's mistake at one
   more level of indirection.
 
+## Missing-nightly alarm (DRE-4805)
+
+The same shape of watcher, pointed at a different silence. PR CI now runs only
+the suites a change can reach and a nightly `schedule:` run on `main` runs
+everything (`standards/engineering.md`, "CI: narrow per change, whole every
+night"), which makes the nightly **the only thing that runs the suites a pull
+request skipped**. If it quietly stops, those tests are never run again and
+nobody knows.
+
+`nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
+must not depend on the repos it watches running anything — and raises one
+deduplicated Linear card through the same `linear_ops.py` mechanism
+`channel-watch.yml` uses. The decision is `scripts/nightly_watch.py`.
+
+- **Who is watched is computed, never listed.** Every workflow, in every repo
+  in `config/repo-map.json`, whose file on the default branch triggers on
+  **both** `pull_request` and `schedule`. That is agent-bureau's `CI`
+  (DRE-3656, live today), Portico's `CI` (DRE-4804) and this repo's
+  `Pipeline Tests` once DRE-4807 gives it a schedule — none of which is named
+  in the code. A scheduled sweep such as `reconcile.yml` has no
+  `pull_request` trigger and is not watched. A repo that adds a nightly is
+  watched from its first merge; one that removes it stops being watched. The
+  `check_workflow_watchers.py` rule: a list that is remembered is a list that
+  drifts, in the direction of watching less.
+- **What alarms.** The newest `schedule`-event run of that workflow on the
+  default branch is **more than 26 hours old** (a nightly plus two hours of
+  slack — GitHub does not promise a scheduled run at the minute), or has been
+  **queued or in progress for 3 hours**, or has **never happened at all** —
+  the shape of a schedule GitHub disabled after 60 days of repo inactivity, a
+  cron typo, or a workflow that errors before any job starts.
+- **A red nightly is not this alarm's business.** Red-Main Repair already
+  fires on any failed run whose head branch is the default branch — it keys on
+  the branch, never on the event — so a scheduled run that goes red is
+  repaired like a push that goes red. Two alarms on one fact is how both get
+  ignored.
+- **UNKNOWN never passes.** A repo the token cannot read, a workflow file that
+  will not fetch, a run listing GitHub declines: each is reported unknown and
+  alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
+  missing nightly takes the card title when both are true, because it is the
+  actionable one, but the unknown is still named in the body.
+- **One token per owner.** An App installation token is scoped to one
+  installation and the roster spans three owners, so the watch job is a matrix
+  over the roster's owners with a token minted per owner — `fleet-wake.yml`'s
+  shape — and each owner gets its own card title, so three concurrent jobs
+  cannot race for one card.
+- **It holds no write anywhere**, and a test fails if one appears. A red run is
+  diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
+  never fires at all is the same gap stated above for the channel watcher, and
+  it is stated here rather than papered over.
+- **Known limit.** The 2026-09-22 outside-read audit (DRE-4655..4665) found
+  production has no alert-delivery environment, so CRITICAL alarms do not
+  currently reach the CEO. This alarm reaches exactly as far as the card
+  mechanism it rides, and no further.
+
 ## Layout
 
 - `.github/workflows/` — the reusable workflows (must live here for
