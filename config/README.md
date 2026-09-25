@@ -229,7 +229,7 @@ but not selectable* (retired ids, and ids excluded by cost policy).
 
 | kind | who | model | why |
 |---|---|---|---|
-| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5; Opus 5.5 once the Claude Code pin allows it, DRE-4862) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
+| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5.5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
 | `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around. |
 | `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
@@ -297,7 +297,7 @@ review_separation:
   roles: [critic, verifier]          # the roles that REVIEW a pull request
   rules:
     - built_on: claude-sonnet-5        # …when the build ran on this…
-      reviewers_use: claude-opus-5     # …those roles run on this instead
+      reviewers_use: claude-opus-5-5   # …those roles run on this instead
 ```
 
 The critic's and the verifier's Select-model steps read the model the build ran
@@ -310,7 +310,7 @@ Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
 than Sonnet 5 on any pull request whose card cannot be read.
 
 The overlap is not new in principle — the advisory ladder's own fallback is
-`claude-opus-5`, the workhorse **primary**, so reviewer and worker have
+`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker have
 coincided whenever the critic falls back. What is new is that the guarantee is
 explicit per run instead of incidental.
 
@@ -322,16 +322,7 @@ carry-forward: a same-family successor replaces this rung on *both* ladders at
 once, so an adoption that leaves the rule behind fails `--check` twice — the new
 rung is a bare overlap, and the old rule names a model that is no longer one.
 **DRE-4836 (2026-09-25) is the first adoption that hit it**: Opus 5.5 replaced
-Opus 5 on all three ladders at once, and the rule moved with the rung. It moved
-back the same way the next morning (DRE-4852), when every run on Opus 5.5 died
-because the pinned Claude Code could not run it.
-
-**A cardless pull request is the case that exposed that.** A bot PR has no card,
-so its critic runs `--built-on-unknown`, skips Sonnet 5, and lands on the Opus
-rung. When that rung was Opus 5.5, every such review died with the builds. A
-hand-built PR on an `agent/DRE-<n>-*` branch whose card carries a
-`model-attempt:` heartbeat naming any model but Sonnet 5 is reviewed on Sonnet 5
-as usual.
+Opus 5 on all three ladders at once, and the rule moved with the rung.
 
 The separation binds reviewers and **only** reviewers. The medic is advisory too
 and is deliberately absent: it diagnoses a failed run and reviews nothing. The
@@ -410,20 +401,12 @@ healthy run.
 ## The effort level (DRE-4836)
 
 `models.yaml` carries an `effort:` block — model id → the level every run on
-that model asks for, passed to the CLI as `--effort`. With Opus 5.5 on its
-rungs it reads:
+that model asks for, passed to the CLI as `--effort`:
 
 ```yaml
 effort:
   claude-opus-5-5: high
 ```
-
-**Today the block is empty (`effort: {}`, DRE-4852).** Opus 5.5 is off every
-ladder until the pinned Claude Code (2.1.263) is raised to 2.1.280 or newer, and
-validation refuses a level for a model no ladder names. `tests/test_model_cli_support.py`
-fails if a model goes back on a ladder before the pin supports it. DRE-4862
-raises the pin, proves it on the harness, and restores the rungs and this line
-together.
 
 It exists because **Claude Opus 5.5 defaults to `medium`**, one level below
 Claude Opus 5's `high`. Adopting the id and saying nothing about effort would
@@ -444,6 +427,16 @@ Validation refuses a level the CLI does not accept (`low`, `medium`, `high`,
 `xhigh`, `max`) and an entry for an id no ladder names — the likeliest cause of
 the second being a typo in the id the fleet is meant to be running at that
 level.
+
+**A model also needs a Claude Code new enough to run it.** On 2026-09-25 every
+run on Opus 5.5 died with `400 Claude Code 2.1.263 does not support this model;
+version 2.1.280 or newer is required`, because the pinned installer predated it.
+DRE-4852 took Opus 5.5 off the ladders that morning, and DRE-3417 put it back
+in the same PR that raised the pin to 2.1.282 (`claude-code-action` v1.0.234).
+`tests/test_model_cli_support.py` now fails any ladder that names a model the
+pinned Claude Code (`.github/actions/install-claude-code/action.yml`
+`default:`) cannot run, so an adoption like DRE-4836 and the pin it needs have
+to land together.
 
 ## Changing a model
 

@@ -102,9 +102,8 @@
 #                  in-flight cards must keep attributing, and dropping an id
 #                  would resolve those deaths to None instead of reporting them.
 #   excluded       ids that are available but excluded from EVERY ladder by
-#                  POLICY (cost/quota), or because the pinned Claude Code
-#                  cannot run them yet (DRE-4852). Same read-not-select
-#                  treatment as `retired`.
+#                  POLICY (cost/quota). Same read-not-select treatment as
+#                  `retired`.
 
 kinds:
   # THE HOT PATH. Hundreds of turns per card, every card, every repo — this is
@@ -138,23 +137,36 @@ kinds:
 
 ladders:
   # The WORKHORSE ladder: what every build agent runs on. Opus-first since
-  # 2026-08-09. Opus 5.5 led it for one night (2026-09-24 21:00 PT, DRE-4836)
-  # and came off every ladder the next morning (DRE-4852): the pinned Claude
-  # Code cannot run it — see `excluded` below.
+  # 2026-08-09, and Opus 5.5-first since 2026-09-25 (DRE-4836).
   # `claude-fable-5` is absent by POLICY, not availability, and
   # validation now enforces that absence rather than trusting the next edit.
   workhorse:
+    - model: claude-opus-5-5
+      reason: >-
+        preferred — the workhorse build model since 2026-09-25 (DRE-4836).
+        Adopted under the CEO's "newer versions auto" rule of 2026-09-14: a
+        same-family newer version at the same or a lower price goes in through
+        a normal PR, with no CEO decision of its own. It is CHEAPER than the
+        Opus 5 it takes over from — $4/$20 per MTok against $5/$25, cache reads
+        $0.20 — with the same 1M context, 128K output and tokenizer. Its
+        effort DEFAULT is `medium`, one level below Opus 5's, so every run on
+        it sets `high` explicitly; see the `effort` block below. It was off
+        every ladder from 2026-09-25 07:42 PT (DRE-4852, PR #510) because the
+        pinned Claude Code 2.1.263 could not run it ("version 2.1.280 or
+        newer is required"); DRE-3417 undoes that rollback in the same PR
+        that raises the pin to 2.1.282 (claude-code-action v1.0.234), and
+        tests/test_model_cli_support.py holds the pair.
     - model: claude-opus-5
       reason: >-
-        preferred — the workhorse build model since 2026-08-09, and again since
-        2026-09-25 (DRE-4852). DRE-4836 moved this rung to `claude-opus-5-5`,
-        and every run that selected it died with a 400 because the pinned
-        Claude Code (2.1.263) predates it. That decision stands; it is deferred
-        only until the installer supports Opus 5.5 (2.1.280 or newer), and
-        DRE-4862 puts it back once the pin is raised and proved.
+        the fallback rung, and the model this ladder led with from 2026-08-09
+        to 2026-09-25 (DRE-4836). A run that cannot get Opus 5.5 — the probe
+        404s it, or the subscription does not serve it — lands on the model the
+        fleet has been building on all along, which is what makes the first
+        fleet build on the new ladder safe to be the first real run.
     - model: claude-sonnet-5
       reason: >-
-        fallback if Opus is unavailable. Replaced `claude-sonnet-4-6` here on
+        the last rung — what a build gets when NEITHER Opus rung above is
+        available. Replaced `claude-sonnet-4-6` here on
         2026-09-16 (CEO decision, DRE-3880): same 1M context and 128k output,
         and cheaper ($2/$10 against $3/$15). Sonnet 4.6 was NOT retired — it
         keeps the judgement ladder's last rung below, and only its WORKHORSE
@@ -181,16 +193,16 @@ ladders:
         Sonnet 5 has the SAME 1M context and 128k output as Opus 5 and Fable 5,
         so nothing is given up on large diffs, and it is cheaper than the
         sonnet-4-6 the critic ran for 691 verdicts ($2/$10 vs $3/$15).
-    - model: claude-opus-5
+    - model: claude-opus-5-5
       reason: >-
         the LOUD fallback — selection note prefixed DEGRADED, workflow raises a
-        ::warning::. The Opus rung is one decision written in three places, so
-        it moved to `claude-opus-5-5` with the workhorse primary (DRE-4836) and
-        back with it (DRE-4852): a critic that falls here on a card it cannot
-        read was dying on the same 400 as the builds. The ladder's FIRST rung
-        never changed — reviewers start on Sonnet 5. NOTE the direction
-        INVERTED on 2026-08-12: falling to Opus
-        is now falling UP in capability and cost ($5/$25 vs $2/$10), not down.
+        ::warning::. This rung moved from `claude-opus-5` to `claude-opus-5-5`
+        on 2026-09-25 (DRE-4836) with the workhorse ladder's primary: the Opus
+        rung is one decision written in three places, and a ladder left on the
+        older id would have reviewers falling onto a model no build runs on.
+        The ladder's FIRST rung is unchanged — reviewers still start on Sonnet
+        5. NOTE the direction INVERTED on 2026-08-12: falling to Opus
+        is now falling UP in capability and cost ($4/$20 vs $2/$10), not down.
         The warning still matters — an advisory role that did not get its
         intended model is a run worth looking at — but read it as "unexpected
         spend", not "weakened critic".
@@ -210,14 +222,14 @@ ladders:
         loop per child. NOTE the id — `claude-fable-5-1`, NOT the
         `claude-fable-5` listed under `excluded` below. A different model, and
         that exclusion still stands.
-    - model: claude-opus-5
+    - model: claude-opus-5-5
       reason: >-
         the LOUD fallback — selection note prefixed DEGRADED, workflow raises a
-        ::warning::, exactly as the advisory ladder does it. The id moved to
-        `claude-opus-5-5` with the other two ladders' Opus rung (DRE-4836) and
-        back with them (DRE-4852); everything below about WHY the planner falls
-        here is about the rung, not the version. This ladder's first rung
-        never changed — the planner starts on Fable 5.1. Read it as "the
+        ::warning::, exactly as the advisory ladder does it. The id moved from
+        `claude-opus-5` on 2026-09-25 (DRE-4836), with the other two ladders'
+        Opus rung; everything below about WHY the planner falls here is about
+        the rung, not the version, and is untouched. This ladder's first rung
+        is unchanged — the planner still starts on Fable 5.1. Read it as "the
         planner did not get the model it was promised", which is a plan worth
         looking at, not a broken run. Confirmed as the planner's fallback by the
         CEO on 2026-09-13 (DRE-3709), after Fable refused every planner run on a
@@ -239,7 +251,7 @@ ladders:
         ladder on 2026-09-16 (DRE-3880) and kept this rung, on the CEO's answer
         in as many words: do not retire it. It sits below the rung this ladder
         degrades onto, which is admissible because it is CHEAPER than that rung
-        ($3/$15 against Opus 5 at $5/$25, config/model-prices.yaml) — the rule is
+        ($3/$15 against Opus 5.5 at $4/$20, config/model-prices.yaml) — the rule is
         "no dearer model hides below the fallback", and validation reads the
         declared price rather than assuming every lower rung is a build model.
 
@@ -301,14 +313,15 @@ review_separation:
     - verifier
   rules:
     - built_on: claude-sonnet-5
-      reviewers_use: claude-opus-5
+      reviewers_use: claude-opus-5-5
       reason: >-
-        a Sonnet-5 build is never reviewed by Sonnet 5. Opus 5 is the advisory
-        ladder's own next rung, so the substitute is a model these roles
-        already run on rather than a new spend decision. The id follows that
-        rung — to `claude-opus-5-5` with DRE-4836 and back with DRE-4852 — the
-        DRE-3892 carry-forward: a rule left naming a model that is off the
-        advisory ladder is refused by validation.
+        a Sonnet-5 build is never reviewed by Sonnet 5. Opus 5.5 is the
+        advisory ladder's own next rung, so the substitute is a model these
+        roles already run on rather than a new spend decision. The id moved
+        with that rung on 2026-09-25 (DRE-4836) — this is the DRE-3892
+        carry-forward arriving exactly as written: a same-family adoption moves
+        the overlap on both ladders at once, and a rule left naming
+        `claude-opus-5` would be STALE and refused by validation.
 
 # THE EFFORT LEVEL, DECLARED (DRE-4836, CEO decision 2026-09-24)
 # ---------------------------------------------------------------
@@ -324,12 +337,8 @@ review_separation:
 # chooses a model emits the argument for the model it actually chose. A run
 # that FELL to another rung gets that rung's level — Opus 5's, which is to say
 # none, because Opus 5 already defaults to `high`.
-#
-# EMPTY SINCE 2026-09-25 (DRE-4852). Opus 5.5 is off every ladder until the
-# pinned Claude Code can run it, and validation refuses a level for a model no
-# ladder names. The machinery stays: when DRE-4862 puts Opus 5.5 back, its
-# `claude-opus-5-5: high` line comes back with it — the CEO's decision stands.
-effort: {}
+effort:
+  claude-opus-5-5: high
 
 discovery:
   # A model id we SEE but do not name here may, at most, be proposed for the
@@ -359,13 +368,3 @@ retired:
 excluded:
   - model: claude-fable-5
     reason: "off every ladder on cost policy (2026-08-12)"
-  # Excluded for a different reason than Fable, and for a while rather than for
-  # good: the fleet's Claude Code cannot run it yet. Kept readable, so the
-  # `model-error: claude-opus-5-5` deaths from 2026-09-24 still attribute.
-  - model: claude-opus-5-5
-    reason: >-
-      off every ladder 2026-09-25 (DRE-4852): the pinned Claude Code 2.1.263
-      gets "400 ... version 2.1.280 or newer is required" on every run.
-      DRE-4836's decision to build on it stands, deferred only until the
-      installer is 2.1.280 or newer; DRE-4862 raises the pin, proves it on the
-      harness, and puts this model back on its three rungs.

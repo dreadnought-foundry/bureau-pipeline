@@ -111,9 +111,15 @@ does not wait a week to be proposed again.
 
 ## Currently held pins
 
+None. The one hold this ledger has carried is lifted:
+
 | Dependency | Ecosystem | Held at | Placed by | Lifted by | Rule added |
 | -- | -- | -- | -- | -- | -- |
-| `anthropics/claude-code-action` | github-actions | v1.0.217 (`9c5ddab2e6d17b83ea679153b31f1d5f023cf636`) | DRE-3416 — v1.0.218's installer left no launcher and every Claude-running job in the fleet died for 72 minutes | DRE-3417 | DRE-4336, after PR #452 |
+| `anthropics/claude-code-action` | github-actions | v1.0.217 (`9c5ddab2e6d17b83ea679153b31f1d5f023cf636`) — **lifted 2026-09-25**, pin moved to v1.0.234 (Claude Code 2.1.282) | DRE-3416 — v1.0.218's installer left no launcher and every Claude-running job in the fleet died for 72 minutes | DRE-3417, in the same PR that deleted the rule and its `HELD_PINS` row | DRE-4336, after PR #452 |
+
+Dependabot now proposes `claude-code-action` releases again, inside the
+weekly minor/patch group, and each one is a PR the critic reviews and the
+harness proves before the channel carries it.
 
 ## Currently rejected majors
 

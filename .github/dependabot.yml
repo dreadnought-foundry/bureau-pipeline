@@ -100,10 +100,3 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # HELD at v1.0.217 (sha 9c5ddab2…) by DRE-3416 — REMOVE THIS STANZA IN
-      # THE DRE-3417 UPGRADE, in the same PR that moves the pin. No
-      # `update-types` on purpose: that ignores every update of this one
-      # action, and the bump it refuses (v1.0.217 -> v1.0.226, PR #452) is a
-      # patch. The pin itself is guarded by tests/test_check_action_pins.py;
-      # this only stops the weekly sweep proposing past it (DRE-4336).
-      - dependency-name: "anthropics/claude-code-action"
