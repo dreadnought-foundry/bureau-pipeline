@@ -303,7 +303,18 @@ def collect(api: Callable[[str], object], *, roster: dict,
         except Unreadable as refusal:
             readings.append(Reading(repo, UNKNOWN, _unreadable_repo(repo, refusal)))
             continue
-        for workflow in listing.get("workflows") or []:
+        workflows = listing.get("workflows") or []
+        # GitHub pages this list. A repo with more workflows than one page
+        # would have its nightly fall off the end, and the watcher would report
+        # on the ones it happened to see — watching less, without saying so.
+        # It says so: a partial read is a read we did not finish.
+        total = listing.get("total_count")
+        if isinstance(total, int) and total > len(workflows):
+            readings.append(Reading(repo, UNKNOWN, _unreadable_repo(
+                repo, f"it has {total} workflows and only {len(workflows)} came "
+                      f"back in one page, so the list was read in part")))
+            continue
+        for workflow in workflows:
             readings.extend(
                 _read_workflow(api, repo, branch, workflow, now)
             )
