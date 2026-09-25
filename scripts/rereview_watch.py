@@ -35,12 +35,18 @@ disagree about one epic:
     notice names is the act the relay honours.
 
 CLI:
-  check <EPIC> [--now <ISO>]   read the live thread and lane, say `overdue …`
-                               or `quiet …` with the reason. Writes nothing,
-                               exits 0 either way. `--now` replays a real
-                               thread as it stood at a moment.
+  check <EPIC> [--now <ISO>]   say `overdue …` or `quiet …` with the reason.
+                               Writes nothing, exits 0 either way. Bare, it
+                               reads the live thread and lane. With `--now` it
+                               REPLAYS, and a replay moves all three: the lane
+                               comes off the epic's own state history at that
+                               instant, the thread keeps only the comments that
+                               existed by then, and the clock is that instant
+                               (DRE-4758).
   sweep [--now <ISO>]          run `report` over `linear_ops.py epics-in-flight`
-                               for an operator. This POSTS.
+                               for an operator. This POSTS. `--now` here is the
+                               clock only — the sweep reads live state, which is
+                               the whole of its job.
 
 The reconcile sweep calls `report` directly (one call, in `main()`'s report
 phase beside `report_break_glass()`).
@@ -369,6 +375,137 @@ def _lane(identifier: str) -> str | None:
     return ((data.get("issue") or {}).get("state") or {}).get("name")
 
 
+# --- The replay (DRE-4758) ----------------------------------------------------
+#
+# `--now` used to move the clock and nothing else, while the lane and the whole
+# comment thread were still read as they stand TODAY. That is not a replay, and
+# the tool said nothing about the difference: DRE-4025 replayed `quiet` at an
+# instant when it was really `overdue`, because it has been in Done since
+# 2026-09-21 and `read` refuses on the lane before it reaches a comment. All
+# three of the proof card's replays printed `quiet` that way
+# (docs/rereview-continuation-proof-2026-09.md §2b).
+#
+# The decision itself is untouched — these two helpers hand `read` the past and
+# it applies exactly the reading the live sweep applies.
+
+#: One page of the epic's own history. Nested under `issue`, so
+#: `linear_ops.gql_paged` (which walks a TOP-LEVEL connection) cannot serve it
+#: and the cursor is followed here — unfollowed, the lane would be derived from
+#: the oldest hundred entries and nothing would say so (DRE-2681, nested).
+_HISTORY_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
+     history(first: 100, after: $after) {
+       nodes { createdAt fromState { name } toState { name } }
+       pageInfo { hasNextPage endCursor }
+     } } }"""
+
+
+def _instant(iso: str | None) -> datetime | None:
+    """`iso` as an aware UTC datetime, or None when it cannot be read.
+
+    Tolerant on purpose, unlike `_minutes_since`: a stamp that cannot be placed
+    in time must leave the reading unknown rather than raise out of a replay.
+    """
+    try:
+        at = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
+def _state_history(identifier: str) -> list[dict]:
+    """Every LANE MOVE on the card, as `{"at": iso, "from": name, "to": name}`.
+
+    Linear's history carries every change — a label, an assignee, an estimate —
+    and records `fromState`/`toState` only on the ones that moved the lane, so
+    an entry naming no `toState` is dropped here rather than carried into the
+    derivation as a move to nowhere.
+    """
+    moves: list[dict] = []
+    after: str | None = None
+    seen: set[str] = set()
+    while True:
+        data = linear_ops.gql(_HISTORY_QUERY,
+                              {"id": identifier, "after": after}) or {}
+        history = ((data.get("issue") or {}).get("history")) or {}
+        for node in history.get("nodes") or []:
+            to = ((node.get("toState") or {}).get("name"))
+            if not to:
+                continue
+            moves.append({
+                "at": node.get("createdAt"),
+                "from": ((node.get("fromState") or {}).get("name")),
+                "to": to,
+            })
+        info = history.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return moves
+        after = info.get("endCursor")
+        if not after or after in seen:
+            print(f"rereview-missing: {identifier}'s history claims another "
+                  f"page with cursor {after!r} — stopping at {len(moves)} "
+                  "move(s)", file=sys.stderr)
+            return moves
+        seen.add(after)
+
+
+def lane_at(moves, now: str, current: str | None) -> str | None:
+    """The lane the epic was in at `now`, off its own history. Three readings,
+    in order, and each is the only honest one for its case:
+
+      * the NEWEST move at or before `now` — its `to` is where the epic was put
+        and where it stayed until the next move.
+      * no move that early, so nothing had moved it yet: the OLDEST move after
+        `now` records what it was moved OUT of, which is where it was. That
+        move may name no `from` at all (the epic was created into its first
+        lane), and then there is no lane to name — None, which `read` treats as
+        unknown and says nothing about.
+      * no moves at all: an epic that never moved is where it is today.
+
+    A move Linear named no readable time for is on neither side of `now` —
+    unknown is unknown (standards/console-honesty.md rule 2), and reading it as
+    the newest would answer with whatever it happens to be.
+    """
+    when = _instant(now)
+    if when is None:
+        return current
+    placed: list[tuple[datetime, dict]] = []
+    for move in moves or []:
+        stamp = _instant(move.get("at"))
+        if stamp:
+            placed.append((stamp, move))
+    placed.sort(key=lambda pair: pair[0])
+    before = [move for stamp, move in placed if stamp <= when]
+    if before:
+        return before[-1].get("to")
+    after = [move for stamp, move in placed if stamp > when]
+    if after:
+        return after[0].get("from")
+    return current
+
+
+def at_or_before(records, now: str) -> list[dict]:
+    """The thread as it stood at `now` — every comment Linear stamped later
+    dropped, so a round, a tombstone or a notice that came afterwards cannot
+    answer a question asked before it.
+
+    A comment Linear gave NO stamp for is KEPT, and that is the same rule from
+    the other side: nothing here knows when it was written, and dropping it
+    would assert it did not exist yet. `read` already declines to do arithmetic
+    on an unknown stamp, so such a round reads as unknown in a replay exactly
+    as it does live.
+    """
+    when = _instant(now)
+    if when is None:
+        return list(records or [])
+    kept = []
+    for record in records or []:
+        stamp = _instant(_created_at(record))
+        if stamp is not None and stamp > when:
+            continue
+        kept.append(record)
+    return kept
+
+
 def _epics_in_flight() -> list[dict]:
     """`linear_ops.py epics-in-flight`, read in process.
 
@@ -386,9 +523,20 @@ def _epics_in_flight() -> list[dict]:
 def _cmd_check(args) -> int:
     """Read one epic and say what is true. Writes nothing, exits 0 either way:
     this is a reader for a person replaying a thread, and an exit code would
-    make it look like a gate."""
-    reading = read(linear_ops.comment_records(args.epic), args.epic,
-                   _lane(args.epic), args.now)
+    make it look like a gate.
+
+    With `--now` every input is taken at that instant, not just the clock
+    (DRE-4758) — the lane off the epic's state history, the thread trimmed to
+    what existed by then. The reading is `read` either way: the point of the
+    replay is to ask the LIVE sweep's question about a past moment, so a
+    second decision here would be a second answer to disagree with.
+    """
+    records = linear_ops.comment_records(args.epic)
+    lane = _lane(args.epic)
+    if args.now:
+        records = at_or_before(records, args.now)
+        lane = lane_at(_state_history(args.epic), args.now, lane)
+    reading = read(records, args.epic, lane, args.now)
     if reading.found and not reading.spoken:
         print(f"overdue: {log_line(args.epic, reading.found)} — {reading.why}")
     else:
@@ -415,7 +563,8 @@ def main(argv: list[str]) -> int:
     c = sub.add_parser("check", help="is this epic's promised re-review overdue?")
     c.add_argument("epic")
     c.add_argument("--now", default=None,
-                   help="replay the thread as it stood at this ISO instant")
+                   help="replay: the lane and the thread as they stood at "
+                        "this ISO instant, read against that clock")
     c.set_defaults(fn=_cmd_check)
 
     s = sub.add_parser("sweep", help="report over every epic in flight (POSTS)")

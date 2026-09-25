@@ -168,6 +168,14 @@ card gives. The card says quiet "because round 2 exists"; the detector says
 quiet because the epic is in Done. Three separate things produce this.
 
 **(i) The detector's `--now` does not replay the thread. This is a defect.**
+
+> **Fixed by DRE-4758** (2026-09-25). `check --now` now derives the lane from
+> the epic's state history at that instant and keeps only the comments created
+> at or before it, then applies the same decision the live sweep applies. The
+> readings below are what the tool printed on 2026-09-24 and are left as they
+> were recorded; the scratch harness's `overdue` is now what the tool itself
+> prints. The sweep path is unchanged — it was never the broken half.
+
 The module promises otherwise. Its docstring (lines 40–41) says "`--now`
 replays a real thread as it stood at a moment", and the flag's help text
 (line 418) says "replay the thread as it stood at this ISO instant". The code
@@ -350,7 +358,8 @@ DRE-4112's four criteria, as written on the epic:
    sweep half hold. §2a shows it naming six silent epics on 2026-09-24 and
    posting the notice on DRE-3622. The `check --now` replay does not replay
    (§2b, reason i), so the card's replay readings could not be reproduced as
-   written.
+   written. (DRE-4758 fixed the replay on 2026-09-25 — see the note at §2b (i).
+   The sweep half was never the defective one.)
 
 **Which repos were riding the race fix on 2026-09-24:** atlas, deltasolv,
 agent-bureau-demo and portico (all `@stable` = `4f7c2c93`), plus
@@ -361,12 +370,13 @@ repo in `config/repo-map.json`.
 
 ## What is owed
 
-1. **A card for the detector's `--now` option** (bureau-pipeline).
-   `rereview_watch.py check --now` must read the thread as it stood (only
-   comments with `created_at` ≤ `--now`) and the lane as it stood (from the
-   issue's state history), or its docstring and help text must stop promising
-   a replay. Until then, a `--now` replay of any epic that has since moved on
-   or gained later rounds prints `quiet`.
+1. ~~**A card for the detector's `--now` option** (bureau-pipeline).~~
+   **Done — DRE-4758, 2026-09-25.** `rereview_watch.py check --now` must read
+   the thread as it stood (only comments with `created_at` ≤ `--now`) and the
+   lane as it stood (from the issue's state history), or its docstring and help
+   text must stop promising a replay. It now does the first: the lane comes off
+   `issue.history`, the thread is trimmed to `--now`, and `read` — the sweep's
+   own reading — is applied to that. Bare `check` is unchanged.
 2. **The card's DRE-4425 instant.** `2026-09-21T06:00:00Z` is 26 minutes after
    the send-back, inside the 45-minute grace window. A mid-gap instant is
    around `2026-09-21T10:00:00Z` (03:00 PT). The criterion should name that
