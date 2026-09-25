@@ -1418,6 +1418,14 @@
       "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
     },
     {
+      "file": ".github/workflows/nightly-watch.yml",
+      "anchor": "🌙 Still true today:",
+      "step": "Raise the alarm where a human will see it",
+      "kind": "not-an-act",
+      "means": "A standing alarm — a repo's nightly full CI run on main did not run — is re-confirmed on its existing card rather than filed again.",
+      "why": "A REPORT about the world, not something the pipeline did to a piece of work. The fact it carries is that a nightly did not run in somebody else's repository: it creates no obligation, hands the work to nobody and has nothing to discharge, so the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Declared exactly as the channel-staleness alarm above it is (DRE-2552) — the same shape of watcher, the same mechanism, the same reason it is not an act."
+    },
+    {
       "file": ".github/workflows/groomer.yml",
       "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
       "step": "Judgement receipt — the model that answered",

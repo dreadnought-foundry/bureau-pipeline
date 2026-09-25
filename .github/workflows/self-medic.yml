@@ -24,7 +24,14 @@
 # watcher itself stops"; the other half (a run that never fires at all) is in
 # that workflow's own header. Retrying it is safe: it holds no write on the
 # channel and its Linear card is looked up by exact title, so a second run
-# comments where the first one would have. The Groomer (DRE-2683) is watched on
+# comments where the first one would have. Nightly Watch (DRE-4805) is watched
+# on exactly those terms and for exactly that reason: it is the alarm for a
+# repo's nightly full CI run that stopped happening — the safety net under
+# narrowed PR CI — so a red one is a watchdog nobody is watching. Retrying it
+# is safe on the same two grounds: it holds no write anywhere (read-only
+# permissions, no dispatch, nothing posted to GitHub) and its card is looked up
+# by exact title per owner, so a second run comments where the first one would
+# have. The Groomer (DRE-2683) is watched on
 # the same terms: a retried `propose` writes nothing — it reads the card before
 # posting and skips a proposal already on it, so a re-dispatch adds no duplicate
 # copy of the same batch — and a retried `drain` re-derives the batch from live
@@ -50,7 +57,7 @@ name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake]
     types: [completed]
 
 permissions:
