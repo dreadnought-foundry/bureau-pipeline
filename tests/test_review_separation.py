@@ -64,9 +64,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import model_fallback as mf  # noqa: E402
 
 OPUS = "claude-opus-5"
-# The Opus rung of all three ladders since DRE-4836 (2026-09-25) — the first
-# same-family adoption the carry-forward below was written for.
-OPUS55 = "claude-opus-5-5"
 SONNET46 = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
 FABLE51 = "claude-fable-5-1"
@@ -159,9 +156,7 @@ class LaddersAsDataTest(unittest.TestCase):
     """The two ladder facts the CEO's answer states, pinned as data."""
 
     def test_the_workhorse_ladder_is_opus_then_sonnet_5(self):
-        # Opus 5.5 took the top rung on 2026-09-25 (DRE-4836) and Opus 5 kept
-        # the one below it; Sonnet 5 is still the rung this file is about.
-        self.assertEqual(_ladder(_canonical(), WORKHORSE), [OPUS55, OPUS, SONNET5])
+        self.assertEqual(_ladder(_canonical(), WORKHORSE), [OPUS, SONNET5])
 
     def test_sonnet_4_6_keeps_the_judgement_ladders_last_rung(self):
         # "Do NOT retire it" — it keeps its existing place as the planner's
@@ -169,7 +164,7 @@ class LaddersAsDataTest(unittest.TestCase):
         # availability. An earlier answer on this card (2026-09-14) said to
         # retire it; the 2026-09-16 answer supersedes that.
         judgement = _ladder(_canonical(), JUDGEMENT)
-        self.assertEqual(judgement, [FABLE51, OPUS55, SONNET46])
+        self.assertEqual(judgement, [FABLE51, OPUS, SONNET46])
         self.assertEqual(judgement[-1], SONNET46)
 
     def test_sonnet_4_6_is_neither_retired_nor_excluded(self):
@@ -188,7 +183,7 @@ class LaddersAsDataTest(unittest.TestCase):
         cfg = _canonical()
         self.assertIn(SONNET5, _ladder(cfg, WORKHORSE))
         self.assertEqual(_ladder(cfg, ADVISORY)[0], SONNET5)
-        self.assertEqual(_rules(cfg).get(SONNET5), OPUS55)
+        self.assertEqual(_rules(cfg).get(SONNET5), OPUS)
 
 
 class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
@@ -347,8 +342,8 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
             for avail in (
                 {},                                   # everything up
                 {SONNET5: False},
-                {OPUS55: False},
-                {OPUS55: False, SONNET5: False},
+                {OPUS: False},
+                {OPUS: False, SONNET5: False},
             ):
                 with self.subTest(role=role, avail=avail):
                     mf.clear_availability_cache()
@@ -361,7 +356,7 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
                         got, SONNET5,
                         f"{role} reviewed a Sonnet-5 build on Sonnet 5",
                     )
-                    self.assertEqual(got, OPUS55)
+                    self.assertEqual(got, OPUS)
 
     def test_an_unknown_build_model_still_never_reviews_on_an_overlap_model(self):
         # Fail CLOSED. A card we could not read is not evidence the build ran
@@ -371,7 +366,7 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
                 mf.clear_availability_cache()
                 self.assertEqual(
                     mf.select(role, probe=lambda m: True, built_on_unknown=True),
-                    OPUS55,
+                    OPUS,
                 )
 
     def test_a_build_on_the_workhorse_primary_still_gets_the_advisory_top(self):
@@ -395,7 +390,7 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
         )
         mf.clear_availability_cache()
         self.assertEqual(
-            mf.select("engineer", probe=lambda m: True, built_on=SONNET5), OPUS55
+            mf.select("engineer", probe=lambda m: True, built_on=SONNET5), OPUS
         )
 
     def test_the_separation_is_recorded_but_is_not_a_degradation(self):
@@ -405,7 +400,7 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
         decision = mf.select_with_reasons(
             "critic", probe=lambda m: True, built_on=SONNET5
         )
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], OPUS)
         self.assertEqual(decision["separated"], [SONNET5])
         self.assertFalse(decision["degraded"], "separation is not a degradation")
         note = mf.selection_note(decision)
@@ -419,7 +414,7 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
         # with it: a reviewer that lost a rung to a 404 still says DEGRADED.
         mf.clear_availability_cache()
         decision = mf.select_with_reasons(
-            "verifier", probe=lambda m: m != OPUS55, built_on=SONNET5
+            "verifier", probe=lambda m: m != OPUS, built_on=SONNET5
         )
         self.assertTrue(decision["degraded"])
         self.assertTrue(mf.selection_note(decision).startswith("DEGRADED"))
@@ -431,19 +426,19 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
                 with self.subTest(role=role):
                     model, note = _cli_select(
                         tree, role, "--built-on", SONNET5,
-                        available={OPUS55: True, SONNET5: True},
+                        available={OPUS: True, SONNET5: True},
                     )
-                    self.assertEqual(model, OPUS55)
+                    self.assertEqual(model, OPUS)
                     self.assertIn(SONNET5, note)
                     model, _ = _cli_select(
                         tree, role, "--built-on-unknown",
-                        available={OPUS55: True, SONNET5: True},
+                        available={OPUS: True, SONNET5: True},
                     )
-                    self.assertEqual(model, OPUS55)
+                    self.assertEqual(model, OPUS)
             # stdout is still ONLY the model id — every workflow captures it.
             model, _ = _cli_select(
-                tree, "critic", "--built-on", OPUS55,
-                available={OPUS55: True, SONNET5: True},
+                tree, "critic", "--built-on", OPUS,
+                available={OPUS: True, SONNET5: True},
             )
             self.assertEqual(model, SONNET5)
 
@@ -567,9 +562,9 @@ class TheDegradePathKeepsTheRuleTest(unittest.TestCase):
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
             model, _ = _cli_select(
                 tree, "critic", "--built-on", SONNET5,
-                available={OPUS55: True, SONNET5: True},
+                available={OPUS: True, SONNET5: True},
             )
-            self.assertEqual(model, OPUS55)
+            self.assertEqual(model, OPUS)
 
 
 class CarriedForwardToDre3892Test(unittest.TestCase):
@@ -607,7 +602,7 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
     def test_adopting_the_rung_WITH_the_rule_is_accepted(self):
         cfg = self._adopt(_canonical(), SONNET6)
         cfg["review_separation"]["rules"] = [
-            {"built_on": SONNET6, "reviewers_use": OPUS55, "reason": "carried forward"}
+            {"built_on": SONNET6, "reviewers_use": OPUS, "reason": "carried forward"}
         ]
         self.assertEqual(mf.policy_errors(cfg), [])
 
@@ -628,7 +623,6 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
         import model_adoption
 
         catalog = [
-            {"id": OPUS55, "created_at": "2026-09-22T00:00:00Z"},
             {"id": OPUS, "created_at": "2026-05-01T00:00:00Z"},
             {"id": FABLE51, "created_at": "2026-08-01T00:00:00Z"},
             {"id": SONNET46, "created_at": "2026-02-17T00:00:00Z"},

@@ -55,9 +55,7 @@ import planning_classify  # noqa: E402
 
 WF = ROOT / ".github" / "workflows" / "plan.yml"
 FABLE51 = "claude-fable-5-1"
-# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836
-# (2026-09-25), when the adoption moved it on all three ladders.
-OPUS55 = "claude-opus-5-5"
+OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 
 # The sentence, verbatim, from portico run 34924370626 (2026-09-15 03:17 UTC).
@@ -170,17 +168,17 @@ def _card() -> dict:
 def test_a_fable_spend_limit_refusal_is_answered_by_opus_in_the_same_classify():
     call = _refusing_on(FABLE51, _one_off_answer())
     decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert call.seen == [FABLE51, OPUS55], "one call per rung, Fable then Opus"
+    assert call.seen == [FABLE51, OPUS], "one call per rung, Fable then Opus"
     assert not decision.transport, "Opus answered — nothing failed to reach a model"
     assert decision.refusal is None
     assert decision.answered
     assert decision.asked == FABLE51
-    assert decision.model == OPUS55
+    assert decision.model == OPUS
     assert decision.fell_from == FABLE51
     receipt = planning_classify.model_receipt(
         decision.asked, decision.model, because=decision.fell_because)
     assert receipt.startswith("DEGRADED"), receipt
-    assert FABLE51 in receipt and OPUS55 in receipt
+    assert FABLE51 in receipt and OPUS in receipt
     assert "out of capacity" in receipt
     assert "model-error:" not in receipt, "a receipt must never read as a death"
 
@@ -234,7 +232,7 @@ def test_opus_refused_too_is_still_a_transport_failure_after_one_fall():
             f"is_error True: {SPEND_LIMIT}", "success")
 
     decision = planning_classify.classify(_card(), call=call, model=FABLE51)
-    assert seen == [FABLE51, OPUS55]
+    assert seen == [FABLE51, OPUS]
     assert decision.transport
     assert decision.asked == FABLE51
 
@@ -267,9 +265,9 @@ def test_the_groomer_falls_to_opus_on_a_fable_capacity_refusal():
     call = _refusing_on(FABLE51, answer)
     pack = groom_context.pack(now="2026-09-05T12:00:00Z")
     result = groom_judgement.run(rows, pack, call=call, model=FABLE51)
-    assert call.seen == [FABLE51, OPUS55]
+    assert call.seen == [FABLE51, OPUS]
     assert result.asked == FABLE51
-    assert result.answered == OPUS55
+    assert result.answered == OPUS
     assert result.calls == 2
     assert result.problem is None, result.problem
 
@@ -281,7 +279,7 @@ def test_the_groomer_falls_to_opus_on_a_fable_capacity_refusal():
 def test_a_rung_out_of_capacity_is_skipped_with_its_own_reason():
     decision = mf.select_with_reasons(
         "planner", probe=lambda m: True, out_of_capacity=[FABLE51])
-    assert decision["model"] == OPUS55
+    assert decision["model"] == OPUS
     assert decision["degraded"]
     assert decision["skipped"] == [{"model": FABLE51, "reason": mf._SKIP_CAPACITY}]
     note = mf.selection_note(decision)
@@ -292,15 +290,15 @@ def test_a_rung_out_of_capacity_is_skipped_with_its_own_reason():
 
 
 def test_the_fallback_is_the_rung_below_the_chosen_one():
-    assert mf.fallback_for("planner", FABLE51) == OPUS55
-    assert mf.fallback_for("planner", OPUS55) == SONNET
+    assert mf.fallback_for("planner", FABLE51) == OPUS
+    assert mf.fallback_for("planner", OPUS) == SONNET
     assert mf.fallback_for("planner", SONNET) is None
     assert mf.fallback_for("planner", "gpt-9") is None
 
 
 def _run_cli(*args):
     env = dict(os.environ)
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps({FABLE51: True, OPUS55: True, SONNET: True})
+    env["BUREAU_FAKE_AVAILABLE"] = json.dumps({FABLE51: True, OPUS: True, SONNET: True})
     return subprocess.run([sys.executable, str(ROOT / "scripts" / "model_fallback.py"),
                            *args], capture_output=True, text=True, env=env)
 
@@ -309,13 +307,13 @@ def test_the_cli_takes_out_of_capacity_and_writes_the_fallback(tmp_path):
     fb = tmp_path / "fallback.txt"
     out = _run_cli("select", "planner", "--out-of-capacity", FABLE51,
                    "--fallback-file", str(fb))
-    assert out.stdout.strip() == OPUS55, out.stderr
+    assert out.stdout.strip() == OPUS, out.stderr
     assert fb.read_text().strip() == SONNET
     fb2 = tmp_path / "fallback2.txt"
     out = _run_cli("select", "planner", "--out-of-capacity", "",
                    "--fallback-file", str(fb2))
     assert out.stdout.strip() == FABLE51, out.stderr
-    assert fb2.read_text().strip() == OPUS55
+    assert fb2.read_text().strip() == OPUS
 
 
 def _step(name: str) -> dict:
@@ -341,7 +339,7 @@ def _run_select_step(tmp: Path, *, fell_from: str):
         "GITHUB_OUTPUT": str(out_file), "GITHUB_STEP_SUMMARY": str(tmp / "summary"),
         "RUNNER_TEMP": str(tmp), "LINEAR_API_KEY": "stub",
         "FELL_FROM": fell_from,
-        "BUREAU_FAKE_AVAILABLE": json.dumps({FABLE51: True, OPUS55: True, SONNET: True}),
+        "BUREAU_FAKE_AVAILABLE": json.dumps({FABLE51: True, OPUS: True, SONNET: True}),
     })
     proc = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, env=env,
                           capture_output=True, text=True)
@@ -357,7 +355,7 @@ def test_select_model_reads_the_classifiers_fell_from():
 
 def test_a_classifier_that_fell_off_fable_starts_the_planner_on_opus(tmp_path):
     out = _run_select_step(tmp_path, fell_from=FABLE51)
-    assert out["model"] == OPUS55
+    assert out["model"] == OPUS
     assert out["why"].startswith("DEGRADED")
     assert "out of capacity" in out["why"]
     assert out["fallback_arg"] == f"--fallback-model {SONNET}"
@@ -366,7 +364,7 @@ def test_a_classifier_that_fell_off_fable_starts_the_planner_on_opus(tmp_path):
 def test_a_clean_classify_keeps_the_planner_on_fable(tmp_path):
     out = _run_select_step(tmp_path, fell_from="")
     assert out["model"] == FABLE51
-    assert out["fallback_arg"] == f"--fallback-model {OPUS55}"
+    assert out["fallback_arg"] == f"--fallback-model {OPUS}"
 
 
 # --------------------------------------------------------------------------- #
@@ -394,7 +392,7 @@ def test_every_planner_step_carries_the_selected_fallback(name):
 # --------------------------------------------------------------------------- #
 
 def test_the_judgement_ladder_is_fable_first_again():
-    assert mf.ladder_for("planner") == [FABLE51, OPUS55, SONNET]
+    assert mf.ladder_for("planner") == [FABLE51, OPUS, SONNET]
     assert FABLE51 not in mf.CONFIG["excluded"]
     assert mf.policy_errors(yaml.safe_load(
         (ROOT / "config" / "models.yaml").read_text())) == []

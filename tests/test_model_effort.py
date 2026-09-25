@@ -20,16 +20,27 @@ else.
 
 `tests/test_model_config.py` is the sibling that pins the canonical file and
 its generated mirrors; this one pins the effort level and its wiring.
+
+Deferred 2026-09-25 (DRE-4852)
+------------------------------
+Opus 5.5 is off every ladder until the pinned Claude Code can run it
+(`tests/test_model_cli_support.py`), so its `high` line is out of the effort
+block, because validation refuses a level for a model no ladder names. The
+decision stands and the machinery stays wired: the reader, the CLI and every
+workflow's `effort_arg` are tested here against a config that declares a
+level, and DRE-4862 restores the Opus 5.5 rungs and their line together.
 """
 
 import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -62,35 +73,58 @@ def _ladder(cfg: dict, name: str) -> list:
     return [rung["model"] for rung in cfg["ladders"][name]]
 
 
+def _tree_declaring(tmp: Path, effort: dict) -> Path:
+    """A copy of the selector and its config in `tmp`, with `effort` as the
+    declared block — so the CLI can be run against a level while the canonical
+    block is empty (DRE-4852)."""
+    (tmp / "scripts").mkdir(parents=True)
+    (tmp / "config").mkdir(parents=True)
+    shutil.copy(MODEL_FALLBACK, tmp / "scripts" / "model_fallback.py")
+    shutil.copy(PRICES, tmp / "config" / "model-prices.yaml")
+    cfg = _canonical()
+    cfg["effort"] = effort
+    (tmp / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return tmp
+
+
 class LadderTest(unittest.TestCase):
-    """The ladders as the card adopts them, and the file still validating."""
+    """The ladders while Opus 5.5 waits on the Claude Code pin (DRE-4852)."""
 
-    def test_workhorse_ladder_is_opus_5_5_then_opus_5_then_sonnet_5(self):
-        # The "newer versions auto" rule (CEO, 2026-09-14): a same-family newer
-        # version at the same or lower price is adopted through a normal PR.
-        # Opus 5 keeps the rung below it, so a run that cannot get 5.5 falls
-        # back to the model the fleet has been building on.
+    def test_workhorse_ladder_is_opus_5_then_sonnet_5(self):
+        # DRE-4836 put Opus 5.5 on top, and every run that picked it died with
+        # a 400 (the pinned Claude Code predates it). Opus 5 leads again until
+        # DRE-4862 raises the pin.
         cfg = _canonical()
-        self.assertEqual(
-            _ladder(cfg, cfg["default_ladder"]), [OPUS55, OPUS, SONNET5]
-        )
+        self.assertEqual(_ladder(cfg, cfg["default_ladder"]), [OPUS, SONNET5])
 
-    def test_the_opus_rung_of_the_other_two_ladders_is_opus_5_5(self):
-        # Their FIRST rungs are unchanged — Sonnet 5 still tops the advisory
-        # ladder and Fable 5.1 the judgement one. Only the Opus fallback moves.
+    def test_the_opus_rung_of_the_other_two_ladders_is_opus_5(self):
+        # Their FIRST rungs never moved — Sonnet 5 tops the advisory ladder and
+        # Fable 5.1 the judgement one. The Opus fallback moved back with the
+        # workhorse primary, because a critic or planner falling onto Opus 5.5
+        # died on the same 400.
         cfg = _canonical()
-        self.assertEqual(_ladder(cfg, "advisory"), [SONNET5, OPUS55])
-        self.assertEqual(_ladder(cfg, "judgement"), [FABLE51, OPUS55, SONNET46])
+        self.assertEqual(_ladder(cfg, "advisory"), [SONNET5, OPUS])
+        self.assertEqual(_ladder(cfg, "judgement"), [FABLE51, OPUS, SONNET46])
 
-    def test_review_separation_sends_a_sonnet_5_build_to_opus_5_5(self):
-        # DRE-3892's carry-forward, arriving: a same-family adoption moves the
-        # overlapping rung on both ladders at once, and a rule left naming the
-        # old id is refused as stale. Reviewers stay on Sonnet 5 for everything
-        # else — only the substitute for a Sonnet-5 BUILD is named here.
+    def test_opus_5_5_is_on_no_ladder_and_stays_readable(self):
+        # Excluded, not dropped: the `model-error: claude-opus-5-5` deaths of
+        # 2026-09-24 must still attribute to a model the config knows.
+        cfg = _canonical()
+        for name in cfg["ladders"]:
+            self.assertNotIn(OPUS55, _ladder(cfg, name), name)
+        self.assertIn(OPUS55, [e["model"] for e in cfg["excluded"]])
+        self.assertIn(OPUS55, mf.KNOWN_MODELS)
+        self.assertEqual(mf.last_error_model([f"model-error: {OPUS55}"]), OPUS55)
+
+    def test_review_separation_sends_a_sonnet_5_build_to_opus_5(self):
+        # DRE-3892's carry-forward: the substitute follows the advisory
+        # ladder's Opus rung, and a rule left naming a model that is off that
+        # ladder is refused. Reviewers stay on Sonnet 5 for everything else —
+        # only the substitute for a Sonnet-5 BUILD is named here.
         cfg = _canonical()
         rules = cfg["review_separation"]["rules"]
         self.assertEqual([r["built_on"] for r in rules], [SONNET5])
-        self.assertEqual(rules[0]["reviewers_use"], OPUS55)
+        self.assertEqual(rules[0]["reviewers_use"], OPUS)
 
     def test_the_canonical_config_still_validates(self):
         self.assertEqual(mf.policy_errors(_canonical()), [])
@@ -106,16 +140,13 @@ class LadderTest(unittest.TestCase):
                     f"ladders.{name}: {rung.get('model')} has no reason",
                 )
 
-    def test_the_new_rungs_cite_the_card_and_the_price(self):
+    def test_the_exclusion_cites_the_decision_it_defers_and_the_way_back(self):
+        # The exclusion is a deferral, not a reversal of DRE-4836, and it has
+        # to say so where the next editor will read it.
         cfg = _canonical()
-        reasons = " ".join(
-            rung["reason"]
-            for rungs in cfg["ladders"].values()
-            for rung in rungs
-            if rung["model"] == OPUS55
-        )
-        self.assertIn("DRE-4836", reasons)
-        self.assertIn("$4", reasons)
+        reason = next(e["reason"] for e in cfg["excluded"] if e["model"] == OPUS55)
+        for needle in ("DRE-4852", "DRE-4836", "DRE-4862", "2.1.280"):
+            self.assertIn(needle, reason)
 
 
 class PriceTest(unittest.TestCase):
@@ -142,29 +173,47 @@ class PriceTest(unittest.TestCase):
 class DeclaredEffortTest(unittest.TestCase):
     """The level itself: data in the canonical file, one reader."""
 
-    def test_the_config_declares_high_for_opus_5_5(self):
+    def test_the_effort_block_is_empty_while_opus_5_5_waits(self):
+        # Nothing on a ladder today declares a level: Opus 5 and every other
+        # rung run at their own default, exactly as before DRE-4836.
         cfg = _canonical()
-        self.assertEqual(cfg.get("effort", {}).get(OPUS55), HIGH)
+        self.assertEqual(cfg.get("effort") or {}, {})
+
+    def test_the_file_names_the_line_that_comes_back(self):
+        # DRE-4862 restores it with the rungs. The CEO's decision is written
+        # beside the empty block so it is not lost with the entry.
+        self.assertIn(f"{OPUS55}: {HIGH}", CONFIG.read_text())
+
+    def test_declaring_opus_5_5_while_it_is_on_no_ladder_is_refused(self):
+        # The half of the restore that cannot land alone: the level without
+        # the rungs is a level nothing applies.
+        cfg = _canonical()
+        cfg["effort"] = {OPUS55: HIGH}
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(any(OPUS55 in e and "no ladder" in e for e in errors), errors)
 
     def test_effort_for_reads_it(self):
-        self.assertEqual(mf.effort_for(OPUS55), HIGH)
+        with mock.patch.dict(mf.EFFORT, {OPUS: HIGH}):
+            self.assertEqual(mf.effort_for(OPUS), HIGH)
 
     def test_a_model_with_no_declared_effort_gets_no_argument(self):
-        # The adoption changes Opus 5.5 and nothing else: every other model
-        # keeps whatever the harness would have used, so nobody's spend moves
-        # on a card this one was not about.
-        for model in (SONNET5, OPUS, FABLE51, SONNET46):
+        # A model with no declared level keeps whatever the harness would have
+        # used, so nobody's spend moves on a card that was not about it.
+        for model in (SONNET5, OPUS, OPUS55, FABLE51, SONNET46):
             self.assertIsNone(mf.effort_for(model), model)
 
-    def test_the_generated_mirror_carries_the_level(self):
+    def test_the_generated_mirror_carries_the_declared_block(self):
         # The degrade path is the whole point of the mirror: a checkout whose
         # YAML will not parse still runs the ladders — and must still ask for
-        # the level, or the fall-back-to-literal path silently drops to medium.
-        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"].get(OPUS55), HIGH)
+        # whatever level is declared, or the fall-back-to-literal path silently
+        # drops to the model's own default.
+        self.assertEqual(
+            mf._FALLBACK_MODEL_CONFIG["effort"], _canonical().get("effort") or {}
+        )
 
     def test_an_unknown_level_is_refused(self):
         cfg = _canonical()
-        cfg["effort"] = {OPUS55: "maximum-effort"}
+        cfg["effort"] = {OPUS: "maximum-effort"}
         errors = mf.policy_errors(cfg)
         self.assertTrue(any("maximum-effort" in e for e in errors), errors)
 
@@ -181,43 +230,63 @@ class DeclaredEffortTest(unittest.TestCase):
 class SelectorCliTest(unittest.TestCase):
     """The CLI the workflows actually call."""
 
-    def _run(self, *args, available=None):
+    def _run(self, *args, available=None, tree=None):
         env = dict(os.environ)
         env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available or {})
+        selector = (tree / "scripts" / "model_fallback.py") if tree else MODEL_FALLBACK
         proc = subprocess.run(
-            [sys.executable, str(MODEL_FALLBACK), *args],
+            [sys.executable, str(selector), *args],
             capture_output=True, text=True, env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        # A tree whose config the selector REFUSED would still exit 0 on the
+        # generated literal; say so rather than test the literal by accident.
+        self.assertNotIn("REFUSING", proc.stderr)
         return proc.stdout.strip()
 
     def test_effort_command_prints_the_level(self):
-        self.assertEqual(self._run("effort", OPUS55), HIGH)
+        with tempdir() as tmp:
+            tree = _tree_declaring(tmp, {OPUS: HIGH})
+            self.assertEqual(self._run("effort", OPUS, tree=tree), HIGH)
 
     def test_effort_command_prints_nothing_for_an_undeclared_model(self):
         # Empty, exit 0 — the shell writes `effort_arg=` and the step passes no
         # argument, which is how a model with no declared level stays untouched.
         self.assertEqual(self._run("effort", SONNET5), "")
+        self.assertEqual(self._run("effort", OPUS55), "")
         self.assertEqual(self._run("effort", "claude-who"), "")
 
     def test_select_writes_the_effort_of_the_model_it_chose(self):
         with tempdir() as tmp:
+            tree = _tree_declaring(tmp / "tree", {OPUS: HIGH})
             path = tmp / "effort.txt"
             model = self._run(
                 "select", "engineer", "--effort-file", str(path),
-                available={OPUS55: True},
+                available={OPUS: True}, tree=tree,
             )
-            self.assertEqual(model, OPUS55)
+            self.assertEqual(model, OPUS)
             self.assertEqual(path.read_text().strip(), HIGH)
 
     def test_select_writes_an_empty_effort_when_it_fell_to_another_rung(self):
-        # The fall is the case that matters: Opus 5.5 unavailable, the run
-        # lands on Opus 5, and it must NOT inherit 5.5's level.
+        # The fall is the case that matters: the declared model unavailable,
+        # the run lands on the next rung, and it must NOT inherit the level.
+        with tempdir() as tmp:
+            tree = _tree_declaring(tmp / "tree", {OPUS: HIGH})
+            path = tmp / "effort.txt"
+            model = self._run(
+                "select", "engineer", "--effort-file", str(path),
+                available={OPUS: False, SONNET5: True}, tree=tree,
+            )
+            self.assertEqual(model, SONNET5)
+            self.assertEqual(path.read_text().strip(), "")
+
+    def test_the_live_config_selects_opus_5_with_no_effort_argument(self):
+        # Today's fleet: Opus 5 at its own default, which is `high`.
         with tempdir() as tmp:
             path = tmp / "effort.txt"
             model = self._run(
                 "select", "engineer", "--effort-file", str(path),
-                available={OPUS55: False, OPUS: True},
+                available={OPUS: True},
             )
             self.assertEqual(model, OPUS)
             self.assertEqual(path.read_text().strip(), "")
