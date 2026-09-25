@@ -158,6 +158,11 @@ BACKSTOP_ROLES = ("critic", "verifier")
 # config/models.yaml is the only way up.
 DISCOVERY_TARGETS = (ADVISORY_KIND, "none")
 
+# The effort levels the CLI accepts (`claude --effort <level>`). A config
+# naming anything else would hand the agent step an argument the CLI rejects,
+# so the schema refuses it here rather than at the top of a build run.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 # The canonical model config, bundled in this checkout (never a runtime lookup —
 # the workflows that read it hold no cloud credentials and no private-repo
 # token). config/README.md documents that constraint.
@@ -187,9 +192,9 @@ _FALLBACK_MODEL_CONFIG = {
         "judgement": "judgement",
     },
     "ladders": {
-        "workhorse": ["claude-opus-5", "claude-sonnet-5"],
-        "advisory": ["claude-sonnet-5", "claude-opus-5"],
-        "judgement": ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"],
+        "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5"],
+        "advisory": ["claude-sonnet-5", "claude-opus-5-5"],
+        "judgement": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -205,11 +210,14 @@ _FALLBACK_MODEL_CONFIG = {
         "plan-critic-pre": "advisory",
         "plan-critic-post": "advisory",
     },
+    "effort": {
+        "claude-opus-5-5": "high",
+    },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "review_separation": {
         "roles": ["critic", "verifier"],
         "rules": {
-            "claude-sonnet-5": "claude-opus-5",
+            "claude-sonnet-5": "claude-opus-5-5",
         },
     },
     "retired": ["claude-opus-4-8"],
@@ -260,6 +268,15 @@ def _normalize_config(raw) -> dict | None:
 
     agents = {str(name): str(kind) for name, kind in (raw.get("agents") or {}).items()}
 
+    # The declared effort level per model (DRE-4836). Carried through verbatim,
+    # exactly as `agents` is: a level `policy_errors` would refuse must reach
+    # it to BE refused, and a silently dropped entry is a model running at its
+    # own default with nothing saying so.
+    effort = {
+        str(model): str(level).strip().lower()
+        for model, level in (raw.get("effort") or {}).items()
+    }
+
     raw_discovery = raw.get("discovery") or {}
     discovery = {
         "on_new_model": str(raw_discovery.get("on_new_model") or "").strip().lower(),
@@ -270,6 +287,7 @@ def _normalize_config(raw) -> dict | None:
         "kinds": kinds,
         "ladders": ladders,
         "agents": agents,
+        "effort": effort,
         "discovery": discovery,
         "review_separation": _normalize_separation(raw.get("review_separation")),
         "retired": ids(raw.get("retired")),
@@ -616,6 +634,24 @@ def policy_errors(config, prices=None) -> list[str]:
         )
     if not cfg["discovery"]["alert"]:
         errors.append("discovery.alert: must be true — discovery is never silent")
+
+    # Rule 9 (DRE-4836): a declared effort level is real and reaches something.
+    # Both halves fail the same way in production — an unknown level is an
+    # argument the CLI rejects at the top of a build run, and an id no ladder
+    # names is a level nothing applies, whose likeliest cause is a typo in the
+    # id the fleet is meant to be running at that level.
+    on_a_ladder = {m for models in ladders.values() for m in models}
+    for model, level in cfg["effort"].items():
+        if level not in EFFORT_LEVELS:
+            errors.append(
+                f"effort.{model}: {level!r} is not an effort level (choose one "
+                f"of {list(EFFORT_LEVELS)}) — the CLI refuses anything else"
+            )
+        if model not in on_a_ladder:
+            errors.append(
+                f"effort.{model}: names a model that is on no ladder, so the "
+                "level applies to nothing — check the id"
+            )
     return errors
 
 
@@ -677,6 +713,10 @@ AGENT_KINDS: dict[str, str] = CONFIG["agents"]
 # What happens to a model id we see but do not configure: `advisory` (may be
 # proposed for the advisory ladder by a human) or `none`. Never `workhorse`.
 DISCOVERY: dict = CONFIG["discovery"]
+
+# model id → the effort level every run on it asks for (DRE-4836). Read by
+# `effort_for`; a model absent from it runs with no `--effort` argument.
+EFFORT: dict[str, str] = CONFIG["effort"]
 
 # The build/review fence (DRE-3880): `{"declared": bool, "roles": [critic,
 # verifier], "rules": {built_on: reviewers_use}}`. `select(..., built_on=…)`
@@ -1012,6 +1052,24 @@ def capacity_refusal(text: str | None, record: Mapping | None = None) -> str | N
         if signature in lowered:
             return signature
     return None
+
+
+def effort_for(model: str) -> str | None:
+    """The effort level a run on `model` asks for, or None when this config
+    declares none (DRE-4836).
+
+    Claude Opus 5.5 defaults to `medium`, one level below Claude Opus 5's
+    `high`, so the level is set EXPLICITLY wherever the fleet runs it — the
+    CEO's decision of 2026-09-24. Every other model is left alone: None means
+    the step passes no `--effort` argument at all, so adopting one model's
+    level never moves another model's spend.
+
+    Read off the config, never a literal, for the same reason the model id is
+    (DRE-2316) — the level is a spend decision and it is made in
+    config/models.yaml, in a reviewed PR.
+    """
+    level = EFFORT.get(model or "")
+    return level if level in EFFORT_LEVELS else None
 
 
 def fallback_for(role: str, model: str) -> str | None:
@@ -1361,7 +1419,7 @@ def main(argv: list[str]) -> int:
 
       select [<agent>] [--explain-file <path>] [--avoid <model>]...
              [--out-of-capacity <model>]... [--fallback-file <path>]
-             [--built-on <model>] [--built-on-unknown]
+             [--effort-file <path>] [--built-on <model>] [--built-on-unknown]
                                    print the model the next attempt should use
                                    (walks that agent's ladder from
                                    config/models.yaml, probes availability) and,
@@ -1373,10 +1431,18 @@ def main(argv: list[str]) -> int:
                                    run saw refused for capacity (DRE-3970);
                                    --fallback-file writes the rung below the
                                    chosen one (empty when there is none);
+                                   --effort-file writes the effort level the
+                                   CHOSEN model runs at, empty when it declares
+                                   none (DRE-4836);
                                    --built-on names the model the pull request
                                    under review was BUILT on and
                                    --built-on-unknown says we could not find
                                    out, which fails closed (DRE-3880)
+      effort <model>               print the effort level that model runs at,
+                                   or NOTHING when it declares none (DRE-4836).
+                                   Exit 0 either way: the caller writes
+                                   `effort_arg=${EFFORT:+--effort $EFFORT}`, so
+                                   an empty answer is "pass no argument"
       build-model <comments.json>  print the model the build ran on, read from
                                    the card's own attempt heartbeats — the JSON
                                    array `linear_ops.py dump-comments` writes.
@@ -1412,11 +1478,15 @@ def main(argv: list[str]) -> int:
     if cmd == "build-model":
         print(_build_model_from_thread(rest[0] if rest else "") or "")
         return 0
+    if cmd == "effort":
+        print(effort_for(rest[0] if rest else "") or "")
+        return 0
     if cmd == "select":
         explain_path = None
         avoid: list[str] = []
         refused: list[str] = []
         fallback_path = None
+        effort_path = None
         built_on = None
         built_on_unknown = False
         args: list[str] = []
@@ -1431,6 +1501,8 @@ def main(argv: list[str]) -> int:
                 refused.append(pending.pop(0) if pending else "")
             elif arg == "--fallback-file":
                 fallback_path = pending.pop(0) if pending else None
+            elif arg == "--effort-file":
+                effort_path = pending.pop(0) if pending else None
             elif arg == "--built-on":
                 built_on = pending.pop(0) if pending else None
             elif arg == "--built-on-unknown":
@@ -1462,6 +1534,16 @@ def main(argv: list[str]) -> int:
                     fh.write((fallback_for(role, decision["model"]) or "") + "\n")
             except OSError as exc:  # same rule as the note
                 print(f"model_fallback: could not write {fallback_path} ({exc})",
+                      file=sys.stderr)
+        if effort_path:
+            # The level of the model actually CHOSEN, never the ladder's top:
+            # a run that fell to another rung takes that rung's level, which
+            # for every model but Opus 5.5 is none at all (DRE-4836).
+            try:
+                with open(effort_path, "w") as fh:
+                    fh.write((effort_for(decision["model"]) or "") + "\n")
+            except OSError as exc:  # same rule as the note
+                print(f"model_fallback: could not write {effort_path} ({exc})",
                       file=sys.stderr)
         return 0
     print(f"unknown command {cmd!r}")

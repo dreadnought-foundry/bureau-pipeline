@@ -229,7 +229,7 @@ but not selectable* (retired ids, and ids excluded by cost policy).
 
 | kind | who | model | why |
 |---|---|---|---|
-| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
+| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5.5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
 | `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around. |
 | `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
@@ -296,8 +296,8 @@ bought at **selection time**, per pull request, instead:
 review_separation:
   roles: [critic, verifier]          # the roles that REVIEW a pull request
   rules:
-    - built_on: claude-sonnet-5      # …when the build ran on this…
-      reviewers_use: claude-opus-5   # …those roles run on this instead
+    - built_on: claude-sonnet-5        # …when the build ran on this…
+      reviewers_use: claude-opus-5-5   # …those roles run on this instead
 ```
 
 The critic's and the verifier's Select-model steps read the model the build ran
@@ -310,7 +310,7 @@ Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
 than Sonnet 5 on any pull request whose card cannot be read.
 
 The overlap is not new in principle — the advisory ladder's own fallback is
-`claude-opus-5`, the workhorse **primary**, so reviewer and worker have
+`claude-opus-5-5`, the workhorse **primary**, so reviewer and worker have
 coincided whenever the critic falls back. What is new is that the guarantee is
 explicit per run instead of incidental.
 
@@ -321,6 +321,8 @@ describing an overlap that no longer exists. That last one is the DRE-3892
 carry-forward: a same-family successor replaces this rung on *both* ladders at
 once, so an adoption that leaves the rule behind fails `--check` twice — the new
 rung is a bare overlap, and the old rule names a model that is no longer one.
+**DRE-4836 (2026-09-25) is the first adoption that hit it**: Opus 5.5 replaced
+Opus 5 on all three ladders at once, and the rule moved with the rung.
 
 The separation binds reviewers and **only** reviewers. The medic is advisory too
 and is deliberately absent: it diagnoses a failed run and reviews nothing. The
@@ -395,6 +397,36 @@ changes what the fleet selects.
 The literal carries `review_separation` too (DRE-3880): a degrade that dropped
 the fence would review a Sonnet-5 build on Sonnet 5 and look exactly like a
 healthy run.
+
+## The effort level (DRE-4836)
+
+`models.yaml` carries an `effort:` block — model id → the level every run on
+that model asks for, passed to the CLI as `--effort`:
+
+```yaml
+effort:
+  claude-opus-5-5: high
+```
+
+It exists because **Claude Opus 5.5 defaults to `medium`**, one level below
+Claude Opus 5's `high`. Adopting the id and saying nothing about effort would
+have every build agent in the fleet thinking one level less, on every card, with
+nothing in any log saying so. The CEO's decision of 2026-09-24 is that wherever
+the fleet runs Opus 5.5 it runs it at `high`, explicitly — not the model's own
+default, and not the harness's.
+
+A model that is **not named here gets no `--effort` argument at all**, which is
+what keeps an adoption of one model's level from moving another model's spend.
+The level travels with the model actually CHOSEN: `select --effort-file <path>`
+writes the chosen rung's level (empty when it declares none), so a run that
+*fell* to a lower rung gets that rung's answer, never the top of the ladder's.
+`model_fallback.py effort <model>` answers the same question by id, for the one
+step whose model arrives as an input rather than off a ladder (the trial run).
+
+Validation refuses a level the CLI does not accept (`low`, `medium`, `high`,
+`xhigh`, `max`) and an entry for an id no ladder names — the likeliest cause of
+the second being a typo in the id the fleet is meant to be running at that
+level.
 
 ## Changing a model
 

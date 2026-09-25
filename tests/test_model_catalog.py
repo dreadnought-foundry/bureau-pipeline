@@ -63,6 +63,8 @@ WORKFLOW_PATH = ROOT / ".github" / "workflows" / "model-drift.yml"
 MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 
 OPUS = "claude-opus-5"
+# The workhorse ladder's primary since DRE-4836 (2026-09-25).
+OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
 # The workhorse ladder's backup rung since 2026-09-16 (DRE-3880) — it replaced
 # SONNET there, which kept the judgement ladder's last rung.
@@ -452,12 +454,12 @@ def test_generating_the_snapshot_never_mutates_the_ladder_or_agents_yaml(tmp_pat
     )
 
     assert "claude-opus-99" in out.read_text(), "the snapshot did record it"
-    assert mf.LADDER == ladder_before == [OPUS, SONNET5]
+    assert mf.LADDER == ladder_before == [OPUS55, OPUS, SONNET5]
     assert "claude-opus-99" not in mf.LADDER
     assert set(mf.KNOWN_MODELS) == known_before
     assert hashlib.sha256(AGENTS_YAML.read_bytes()).hexdigest() == yaml_before
     assert hashlib.sha256(fallback.read_bytes()).hexdigest() == fallback_before
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == OPUS
+    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == OPUS55
 
 
 def test_the_committed_snapshot_is_present_and_shaped():

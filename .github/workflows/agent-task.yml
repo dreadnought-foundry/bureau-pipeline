@@ -323,10 +323,18 @@ jobs:
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE" \
-            --explain-file "$WHY_FILE")
+            --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
+          # DRE-4836: the effort level the CHOSEN model runs at, declared in
+          # config/models.yaml. Empty for every model that declares none, and
+          # then no `--effort` argument is passed at all — so this moves Opus
+          # 5.5 (whose own default is `medium`, one level down) and nothing
+          # else. A run that FELL to another rung gets that rung's answer.
+          EFFORT=$(cat "$EFFORT_FILE" 2>/dev/null || true)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
           echo "why=$WHY" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (role: $ROLE)"
           echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
@@ -528,6 +536,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.model.outputs.turns }}
             --model ${{ steps.model.outputs.model }}
+            ${{ steps.model.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
@@ -713,6 +722,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.model.outputs.turns }}
             --model ${{ steps.model.outputs.model }}
+            ${{ steps.model.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
@@ -895,6 +905,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.model.outputs.turns }}
             --model ${{ steps.model.outputs.model }}
+            ${{ steps.model.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled

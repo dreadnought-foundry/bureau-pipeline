@@ -49,7 +49,9 @@ SCRIPT = ROOT / "scripts" / "planner_capacity.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 FABLE51 = "claude-fable-5-1"
-OPUS = "claude-opus-5"
+# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836
+# (2026-09-25), when the adoption moved it on all three ladders.
+OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
 SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
                "continue.")
@@ -130,7 +132,7 @@ def test_a_spend_limit_refusal_retries_on_the_next_rung(tmp_path):
     assert proc.returncode == 0, proc.stderr
     got = _outputs(out)
     assert got["retry"] == "true"
-    assert got["model"] == OPUS
+    assert got["model"] == OPUS55
     assert got["because"] == "monthly spend limit"
 
 
@@ -192,15 +194,15 @@ def test_fable_refused_and_opus_planned_is_a_success_with_a_degraded_receipt(tmp
     proc, got = _finish(
         tmp_path, first="failure", second="success",
         first_exec=_write(tmp_path, "a.json", _refusal()),
-        second_exec=_write(tmp_path, "b.json", _success(OPUS)),
-        second_model=OPUS, because="monthly spend limit")
+        second_exec=_write(tmp_path, "b.json", _success(OPUS55)),
+        second_model=OPUS55, because="monthly spend limit")
     assert proc.returncode == 0, proc.stderr
     assert got["outcome"] == "success"
-    assert got["model"] == OPUS
+    assert got["model"] == OPUS55
     assert got["execution_file"].endswith("b.json")
     receipt = got["receipt"]
     assert receipt.startswith("DEGRADED"), receipt
-    assert f"{FABLE51} (asked) / {OPUS} (answered)" in receipt
+    assert f"{FABLE51} (asked) / {OPUS55} (answered)" in receipt
     assert "out of capacity (monthly spend limit)" in receipt
     assert "model-error:" not in receipt
     assert "planner agent starting" not in receipt, "the DRE-3824 --since needle"
@@ -210,11 +212,11 @@ def test_both_rungs_refused_fails_required_and_names_the_second(tmp_path):
     proc, got = _finish(
         tmp_path, first="failure", second="failure",
         first_exec=_write(tmp_path, "a.json", _refusal()),
-        second_exec=_write(tmp_path, "b.json", _refusal(OPUS)),
-        second_model=OPUS, because="monthly spend limit")
+        second_exec=_write(tmp_path, "b.json", _refusal(OPUS55)),
+        second_model=OPUS55, because="monthly spend limit")
     assert proc.returncode == 1
     assert got["outcome"] == "failure"
-    assert got["model"] == OPUS, "the death marker names the model that died last"
+    assert got["model"] == OPUS55, "the death marker names the model that died last"
 
 
 def test_a_genuine_failure_with_no_retry_still_fails_the_job(tmp_path):
@@ -248,12 +250,12 @@ def test_a_silent_cli_fallback_is_named_by_the_model_that_answered(tmp_path):
     payload = [{"type": "result", "subtype": "success", "is_error": False,
                 "num_turns": 40, "total_cost_usd": 4.1,
                 "modelUsage": {FABLE51: {"outputTokens": 0},
-                               OPUS: {"outputTokens": 28000}}}]
+                               OPUS55: {"outputTokens": 28000}}}]
     proc, got = _finish(tmp_path, first="success",
                         first_exec=_write(tmp_path, "a.json", payload))
     assert proc.returncode == 0
     assert got["receipt"].startswith("DEGRADED"), got
-    assert f"{FABLE51} (asked) / {OPUS} (answered)" in got["receipt"]
+    assert f"{FABLE51} (asked) / {OPUS55} (answered)" in got["receipt"]
 
 
 # --------------------------------------------------------------------------- #
@@ -312,9 +314,13 @@ def test_the_retry_is_the_same_step_on_the_next_rung(site):
         assert b["with"][key] == a["with"][key], f"{retry}.with.{key} drifted from {orig}"
     assert a["with"]["github_token"] == f"${{{{ steps.{mint0}.outputs.token }}}}"
     assert b["with"]["github_token"] == f"${{{{ steps.{mint}.outputs.token }}}}"
+    # The retry runs on the NEXT RUNG, so both arguments that name a model move
+    # with it: the id, and the effort level that rung declares (DRE-4836).
     expected = (a["with"]["claude_args"]
                 .replace("--model ${{ steps.model.outputs.model }}",
                          f"--model ${{{{ steps.{cap}.outputs.model }}}}")
+                .replace("${{ steps.model.outputs.effort_arg }}",
+                         f"${{{{ steps.{cap}.outputs.effort_arg }}}}")
                 .replace("${{ steps.model.outputs.fallback_arg }}\n", ""))
     assert b["with"]["claude_args"] == expected
 
@@ -399,16 +405,16 @@ def test_the_plan_epic_steps_run_end_to_end_on_a_refusal(tmp_path):
     proc, cap = _bash(_by_id("plan_cap"), tmp_path, {
         "EXEC_FILE": first, "MODEL": FABLE51, "EPIC": "DRE-3949"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert cap["retry"] == "true" and cap["model"] == OPUS
+    assert cap["retry"] == "true" and cap["model"] == OPUS55
 
-    second = _write(tmp_path, "second.json", _success(OPUS))
+    second = _write(tmp_path, "second.json", _success(OPUS55))
     (tmp_path / "gh_output").unlink()
     proc, done = _bash(_by_id("plan_done"), tmp_path, {
         "FIRST_OUTCOME": "failure", "SECOND_OUTCOME": "success",
         "FIRST_EXEC": first, "SECOND_EXEC": second, "ASKED": FABLE51,
-        "SECOND_MODEL": OPUS, "BECAUSE": cap["because"], "EPIC": "DRE-3949"})
+        "SECOND_MODEL": OPUS55, "BECAUSE": cap["because"], "EPIC": "DRE-3949"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert done["model"] == OPUS and done["outcome"] == "success"
+    assert done["model"] == OPUS55 and done["outcome"] == "success"
     posted = [json.loads(l) for l in (tmp_path / "linear.log").read_text().splitlines()]
     assert len(posted) == 1
     assert posted[0][0] == "comment" and posted[0][1] == "DRE-3949"

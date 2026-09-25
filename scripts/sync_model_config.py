@@ -113,6 +113,14 @@ def load_config(path: Path = CONFIG) -> dict:
         "kinds": kinds,
         "ladders": ladders,
         "agents": agents,
+        # The declared effort level per model (DRE-4836). It rides into the
+        # mirror with everything else: a checkout whose YAML will not parse
+        # still runs the ladders, and a mirror that dropped the level would run
+        # Opus 5.5 at its own `medium` default with nothing saying so.
+        "effort": {
+            str(model): str(level).strip().lower()
+            for model, level in (raw.get("effort") or {}).items()
+        },
         "discovery": {
             "on_new_model": str(discovery.get("on_new_model") or "").strip().lower(),
             "alert": bool(discovery.get("alert")),
@@ -149,6 +157,10 @@ def render_literal(cfg: dict) -> str:
     lines.append('    "agents": {')
     for name, kind in cfg["agents"].items():
         lines.append(f'        "{name}": "{kind}",')
+    lines.append("    },")
+    lines.append('    "effort": {')
+    for model, level in cfg["effort"].items():
+        lines.append(f'        "{model}": "{level}",')
     lines.append("    },")
     lines.append(
         '    "discovery": {"on_new_model": '

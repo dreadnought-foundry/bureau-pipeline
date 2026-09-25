@@ -10,7 +10,8 @@ from steps, and this module is their two decisions:
     python3 planner_capacity.py decide <execution-file> --model <m> \\
         [--role planner] [--github-output <path>]
 
-writes `retry=true|false`, `model=<next rung>` and `because=<signature>`. It
+writes `retry=true|false`, `model=<next rung>`, `effort_arg=<--effort level>`
+(empty when that rung declares none, DRE-4836) and `because=<signature>`. It
 says `true` only for a model refused for CAPACITY — read by the one detector,
 `model_fallback.capacity_refusal`, which a run that did real work (turn cap,
 more than one turn, any spend) never satisfies — and only when the ladder has a
@@ -59,15 +60,27 @@ def _text(record: dict) -> str:
 
 
 def decide(record, model: str, role: str = ROLE) -> dict:
-    """`retry`/`model`/`because` for one failed planner attempt."""
-    no = {"retry": "false", "model": "", "because": ""}
+    """`retry`/`model`/`effort_arg`/`because` for one failed planner attempt.
+
+    `effort_arg` is the `--effort` argument for the rung being retried ON, or
+    empty when that rung declares no level (DRE-4836). The retry is a fresh
+    claude-code-action step with its own `claude_args`, so it needs the level
+    of the model IT runs, not of the one that just refused.
+    """
+    no = {"retry": "false", "model": "", "effort_arg": "", "because": ""}
     if not isinstance(record, dict) or record.get("is_error") is not True:
         return no
     because = model_fallback.capacity_refusal(_text(record), record=record)
     below = model_fallback.fallback_for(role, model) if because else None
     if not below:
         return no
-    return {"retry": "true", "model": below, "because": because}
+    level = model_fallback.effort_for(below)
+    return {
+        "retry": "true",
+        "model": below,
+        "effort_arg": f"--effort {level}" if level else "",
+        "because": because,
+    }
 
 
 def answered(record, asked: str | None) -> str | None:

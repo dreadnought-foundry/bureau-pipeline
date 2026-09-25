@@ -52,6 +52,16 @@
 # "newer and a decision for a person".
 
 prices:
+  # The workhorse ladder's primary since 2026-09-25 (DRE-4836) — and the
+  # figure the adoption rests on: Opus 5.5 is CHEAPER than the Opus 5 below it
+  # on both sides, which is what makes it a "newer versions auto" adoption
+  # (CEO's rule of 2026-09-14) rather than a decision for the CEO. Cache reads
+  # are $0.20/MTok; this file declares the two sides the rule reads.
+  claude-opus-5-5:
+    input: 4.00
+    output: 20.00
+    source: "https://www.anthropic.com/pricing"
+    declared: 2026-09-25
   claude-opus-5:
     input: 5.00
     output: 25.00
