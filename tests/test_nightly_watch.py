@@ -525,6 +525,32 @@ class UnknownTest(unittest.TestCase):
                           nightly_watch.UNKNOWN})
         self.assertTrue(nightly_watch.evaluate(readings).alarm)
 
+    def test_a_workflow_listing_longer_than_one_page_is_unknown(self):
+        """GitHub pages the workflow list. A repo with more workflows than one
+        page would have its nightly fall off the end — and the watcher would
+        report on the ones it happened to see, which is watching less without
+        saying so. It says so."""
+
+        class Truncated(FakeGitHub):
+            def __call__(self, path):
+                answer = super().__call__(path)
+                if "/actions/workflows?" in path:
+                    answer["total_count"] = len(answer["workflows"]) + 7
+                return answer
+
+        api = Truncated({
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+        })
+        readings = nightly_watch.collect(
+            api, roster={"agent-bureau": "dreadnought-foundry/agent-bureau"},
+            now=NOW)
+        self.assertEqual(
+            _states(readings),
+            {"dreadnought-foundry/agent-bureau": nightly_watch.UNKNOWN})
+        self.assertTrue(nightly_watch.evaluate(readings).alarm)
+
     def test_a_run_listing_that_cannot_be_read_is_unknown_not_never(self):
         """"GitHub did not answer" and "the nightly never ran" are different
         facts with different next actions."""
