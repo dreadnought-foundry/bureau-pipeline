@@ -413,6 +413,13 @@ jobs:
           # (DRE-4848): posted on the reader above, the halt was authored by
           # whichever pool bot was selected, and its own once-per-commit
           # check never found it — forty identical halts on portico #687.
+          # The same card lets a PERSON's `Operator decision`, newer than the
+          # newest halt on this commit, allow exactly ONE more run there (the
+          # restart DRE-3451 promised was being refused); if that run also
+          # pushes nothing the halt stands again, posted once for the new
+          # round. The rule is fix_convergence.halt(); the run block below
+          # sources its answer (kept short there — the expression budget,
+          # tests/test_workflow_expression_budget.py).
           WRITER_TOKEN: ${{ steps.app.outputs.token }}
           # The loop's own identity, from THIS run's minted token (DRE-1988
           # discipline — never a hardcoded name that an App rename outdates).
@@ -459,13 +466,7 @@ jobs:
           # marker must not freeze the loop on a healthy PR), paginated
           # (--slurp = one array per page; a busy PR's markers fall off the
           # first page) and sha-bound (a new commit resets the count).
-          #
-          # A PERSON's `Operator decision`, newer than the newest halt on
-          # this commit, allows exactly ONE more run here (DRE-4848 — the
-          # restart DRE-3451 promised was being refused). If that run also
-          # pushes nothing the halt stands again, posted once for the new
-          # round. The rule and its reasons are fix_convergence.halt(); this
-          # step sources its answer and acts on it.
+          # A person's decision allows ONE more run (DRE-4848, see env above).
           #
           # ONE read of the thread for everything below (DRE-4157; it was
           # four, the first piped straight into jq — a throttled `gh` put the
@@ -479,9 +480,7 @@ jobs:
             gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100"
           SHA8=${HEAD_SHA:0:8}
-          # Sourced, not eval'd: HALT, POST_HALT, CLEARED are true|false and
-          # NOPROG an integer. An unreadable thread exits non-zero and stops
-          # the step here under `bash -e` — never a default of "no halt".
+          # Sourced: words and an integer. Unreadable stops the step (bash -e).
           python3 .bureau-pipeline/scripts/fix_convergence.py halt \
             --comments-file "$TMPD/thread.json" --worker-login "$WORKER_LOGIN" \
             --sha8 "$SHA8" --env-out "$TMPD/halt.env"
