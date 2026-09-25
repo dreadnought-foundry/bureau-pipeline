@@ -1170,10 +1170,31 @@ jobs:
       # here rather than up there because the pipeline scripts are only
       # checked out further up this job.
       #
-      # Conflict-resolution rounds are unchanged: they pass NO model arg and
-      # ride the action's default. That path is a mechanical merge, not a
-      # re-derivation, and pinning it would be a spend change this card is not
-      # making.
+      # Conflict-resolution rounds are unchanged in their MODEL: they pass NO
+      # model arg and ride the action's default. That path is a mechanical
+      # merge, not a re-derivation, and pinning it would be a spend change this
+      # card is not making. Their BUDGET is selected like everybody else's —
+      # see below.
+      #
+      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-4364), the same way
+      # agent-task.yml's Select model step chooses it, so a run cannot read the
+      # card one way for its model and another for its budget. Until this card
+      # the fixer's ceiling was a literal typed into `claude_args`: a card that
+      # asked for more turns could not reach it, and DRE-3926 (`turns:400`) and
+      # DRE-4028 (`turns:250`) both died in this loop at 150 carrying the label
+      # that would have saved them. portico PR #676 is the live case — a fix
+      # run that finished its work at 151 turns, cost $18.21, and was failed by
+      # the ceiling.
+      #
+      # THE BUDGET IS SELECTED BEFORE THE CONFLICT EARLY EXIT, and that order
+      # is load-bearing: the Fix step carries THIS step's `if`, so a conflict
+      # round runs the agent with whatever `turns` holds. Selecting after the
+      # exit would hand the action a bare `--max-turns` on exactly the path
+      # nobody watches. `tests/test_fix_turn_budget.py` pins the order.
+      #
+      # A `repair/*` branch carries no DRE-N, so `card` is empty there.
+      # `select --labels ""` is the module's answer for "no card": the default
+      # rung, without sending an empty identifier to Linear.
       - name: Select model
         id: model
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
@@ -1181,8 +1202,28 @@ jobs:
           # The probe authenticates with the same CLAUDE token the fixer uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          # The budget is a `turns:`/`size:` label on the CARD, so this step
+          # reads Linear — agent-task.yml's Select model step declares the same
+          # secret for the same reason. Without it every card gets the default.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # DRE-1996: the id is derived from an agent-chosen branch name, so it
+          # arrives through env and is never interpolated into the script.
+          CARD: ${{ steps.pr.outputs.card }}
           MODE: ${{ steps.pr.outputs.mode }}
         run: |
+          TURNS_FILE="$RUNNER_TEMP/turn-budget.txt"
+          if [ -n "$CARD" ]; then
+            TURNS=$(python3 .bureau-pipeline/scripts/turn_budget.py select \
+              "$CARD" --explain-file "$TURNS_FILE")
+          else
+            TURNS=$(python3 .bureau-pipeline/scripts/turn_budget.py select \
+              --labels "" --explain-file "$TURNS_FILE")
+          fi
+          TURNS_WHY=$(cat "$TURNS_FILE")
+          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
+          echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"
+          echo "$TURNS_WHY"
+          echo "$TURNS_WHY" >> "$GITHUB_STEP_SUMMARY"
           if [ "$MODE" = "conflict" ]; then
             echo "model_arg=" >> "$GITHUB_OUTPUT"
             echo "why=model-policy: conflict mode — no model pin (action default)" >> "$GITHUB_OUTPUT"
@@ -1392,13 +1433,27 @@ jobs:
           # repairs. The 120-minute wall clock above is unchanged and is the
           # real ceiling for both. Pinned by tests/test_fix_turn_budget.py.
           #
+          # THERE IS NO NUMBER HERE ANY MORE (DRE-4364). 400 was still a
+          # LITERAL, which is a ceiling no card can move: the rung below is
+          # reachable only by a `turns:` label, and a label the fix loop never
+          # read is a label that does nothing. The ceiling is now whatever the
+          # Select model step above selected for this PR's card through
+          # `scripts/turn_budget.py` — the same module, the same config file
+          # and the same default agent-task.yml reads, so the two jobs cannot
+          # drift the way agent-fix's 60 drifted beside agent-task's 150.
+          # NO `|| <n>` FALLBACK: this step carries the same `if` as the step
+          # that writes the output and `select` never exits non-zero, so a
+          # fallback cannot fire on any path a run takes — it could only mask
+          # a bug in the selecting step, with the literal this card deleted.
+          # `tests/test_no_literal_turn_ceiling.py` is the guard.
+          #
           # A CEILING, not a target: the run that finished in 47 turns costs 47
-          # turns' worth whichever number sits here. This changes the bill only
-          # for runs that today produce nothing at all, and DRE-2024's halt
-          # still bounds a non-converging loop to two attempts per head sha, so
-          # it cannot become an unbounded burn.
+          # turns' worth whichever number the selector answers. This changes the
+          # bill only for runs that today produce nothing at all, and DRE-2024's
+          # halt still bounds a non-converging loop to two attempts per head
+          # sha, so it cannot become an unbounded burn.
           claude_args: |
-            --max-turns 400
+            --max-turns ${{ steps.model.outputs.turns }}
             ${{ steps.model.outputs.model_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |

@@ -501,11 +501,55 @@ class WiringTest(unittest.TestCase):
         self.assertNotRegex(args, r"--max-turns\s+\d+\s*$|--max-turns\s+\d+\s")
         self.assertRegex(args, r"--max-turns\s+\$\{\{\s*steps\.model\.outputs\.turns")
 
-    def test_the_cap_falls_back_to_the_default_if_the_step_wrote_nothing(self):
-        """A bare `--max-turns` would be handed to claude-code-action as a
-        flag with no value. The expression carries the default inline."""
-        args = _step("agent-task.yml", "execute", "claude")["with"]["claude_args"]
-        self.assertIn(str(turn_budget.DEFAULT_TURNS), args)
+    def test_no_agent_step_can_run_without_the_step_that_writes_the_budget(self):
+        """What the inline `|| <default>` used to stand in for (DRE-4364).
+
+        THIS TEST REPLACED ONE THAT ASSERTED THE FALLBACK EXISTED. DRE-3097
+        wrote `--max-turns ${{ steps.model.outputs.turns || 150 }}` so that a
+        bare `--max-turns` could never reach claude-code-action, and this test
+        pinned the number in the expression. DRE-4364 deleted the fallback:
+        it is a literal wearing a `||`, it could not fire on any path a run
+        takes, and a ceiling nothing can reach is a ceiling nobody reviews.
+        `tests/test_no_literal_turn_ceiling.py` now refuses it.
+
+        So what is pinned here is the REASON the fallback was unnecessary,
+        which is the thing that would have to break for a bare `--max-turns`
+        to reach the action:
+
+          * the first agent step carries the Select-model step's own `if`, so
+            a run that skips the selector skips the agent with it;
+          * the two retry steps carry `always()` — which DOES run a step after
+            an earlier failure — and are gated on `install_claude` having
+            SUCCEEDED. That step sits after the selector and carries no
+            `always()`, so a `model` step that failed or was skipped takes
+            `install_claude` with it and the retries never start.
+
+        The other half — that `select` never exits non-zero, so an unreadable
+        card degrades to the default INSIDE the module rather than out here —
+        is `CliTest` above.
+        """
+        doc = yaml.safe_load((WORKFLOWS / "agent-task.yml").read_text())
+        steps = doc["jobs"]["execute"]["steps"]
+        ids = [s.get("id") for s in steps]
+        selector = _step("agent-task.yml", "execute", "model")["if"]
+
+        self.assertIn(selector, _step("agent-task.yml", "execute", "claude")["if"])
+
+        self.assertLess(ids.index("model"), ids.index("install_claude"),
+                        "the budget must be selected before the install step "
+                        "the retries are gated on, or a failed selector no "
+                        "longer stops them")
+        install = _step("agent-task.yml", "execute", "install_claude")
+        self.assertNotIn("always()", install["if"],
+                         "install_claude runs `always()`, so it survives a "
+                         "failed Select model step — and the retry steps it "
+                         "gates would then run with `turns` unset")
+        for step_id in ("claude_retry1", "claude_retry2"):
+            with self.subTest(step=step_id):
+                condition = _step("agent-task.yml", "execute", step_id)["if"]
+                self.assertIn("steps.install_claude.outcome == 'success'",
+                              condition)
+                self.assertIn(selector, condition)
 
     def test_the_budget_is_chosen_where_the_model_is_chosen(self):
         """One step reads the card's labels, so a run cannot select a model
