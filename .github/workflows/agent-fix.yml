@@ -409,6 +409,18 @@ jobs:
           # Reads only (the PR record, the thread) — the pool-selected token
           # (DRE-4282); the login below stays the writer's.
           GH_TOKEN: ${{ steps.reader.outputs.token }}
+          # The one write the halt makes, as the App WORKER_LOGIN names
+          # (DRE-4848): posted on the reader above, the halt was authored by
+          # whichever pool bot was selected, and its own once-per-commit
+          # check never found it — forty identical halts on portico #687.
+          # The same card lets a PERSON's `Operator decision`, newer than the
+          # newest halt on this commit, allow exactly ONE more run there (the
+          # restart DRE-3451 promised was being refused); if that run also
+          # pushes nothing the halt stands again, posted once for the new
+          # round. The rule is fix_convergence.halt(); the run block below
+          # sources its answer (kept short there — the expression budget,
+          # tests/test_workflow_expression_budget.py).
+          WRITER_TOKEN: ${{ steps.app.outputs.token }}
           # The loop's own identity, from THIS run's minted token (DRE-1988
           # discipline — never a hardcoded name that an App rename outdates).
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
@@ -454,6 +466,7 @@ jobs:
           # marker must not freeze the loop on a healthy PR), paginated
           # (--slurp = one array per page; a busy PR's markers fall off the
           # first page) and sha-bound (a new commit resets the count).
+          # A person's decision allows ONE more run (DRE-4848, see env above).
           #
           # ONE read of the thread for everything below (DRE-4157; it was
           # four, the first piped straight into jq — a throttled `gh` put the
@@ -467,16 +480,22 @@ jobs:
             gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100"
           SHA8=${HEAD_SHA:0:8}
-          NOPROG=$(jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("pushed no new commit")) | select(.body | contains($sha8))] | length' "$TMPD/thread.json")
-          if [ "${NOPROG:-0}" -ge 2 ]; then
-            HALTED=$(jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("fix-convergence-halt")) | select(.body | contains($sha8))] | length' "$TMPD/thread.json")
-            if [ "${HALTED:-0}" -eq 0 ]; then
-              gh pr comment "$PR" --repo ${{ github.repository }} \
-                --body "🧯 fix-convergence-halt @$SHA8: $NOPROG fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+          # Sourced: words and an integer. Unreadable stops the step (bash -e).
+          python3 .bureau-pipeline/scripts/fix_convergence.py halt \
+            --comments-file "$TMPD/thread.json" --worker-login "$WORKER_LOGIN" \
+            --sha8 "$SHA8" --env-out "$TMPD/halt.env"
+          . "$TMPD/halt.env"
+          if [ "$HALT" = "true" ]; then
+            if [ "$POST_HALT" = "true" ]; then
+              GH_TOKEN="$WRITER_TOKEN" gh pr comment "$PR" --repo ${{ github.repository }} \
+                --body "🧯 fix-convergence-halt @$SHA8: $NOPROG fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A new commit on the branch, or a comment from your own account whose first line starts with the words Operator decision, is needed to move this PR. A decision allows one more run on this commit."
             fi
             echo "convergence halt: $NOPROG no-push fix runs at $SHA8 — refusing to run again"
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [ "$CLEARED" = "true" ]; then
+            echo "convergence halt cleared: a person's Operator decision allows one more run at $SHA8"
           fi
 
           # Two separate budgets. Review-fix attempts (critic findings or

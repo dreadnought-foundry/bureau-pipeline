@@ -68,13 +68,19 @@ moving under a branch is not a question about convergence, and the two
 budgets have been deliberately separate since PR #13.
 
 Read by scripts/fix_budget.py, which owns the decision and the CLI; this
-module is pure and has no I/O.
+module is pure and has no I/O — except THE CONVERGENCE HALT at the bottom
+(DRE-2024, DRE-4848), a different refusal with its own small `halt` CLI,
+which agent-fix.yml's Resolve step runs before any budget is read.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import sys
 
+import fix_context
 from fix_concurrency import QA_BOT_LOGIN
 from merge_gate import verdict_sha
 from verdict_cause import verdict_decision
@@ -371,3 +377,159 @@ def state(comments, attempts: int = 0,
           critic_login: str = CRITIC_LOGIN) -> State:
     """The whole reading, from the thread and the attempts already made."""
     return State(rounds(comments, critic_login, attempts), attempts)
+
+
+# ---------------------------------------------------------------------------
+# The convergence halt (DRE-2024, DRE-4848)
+# ---------------------------------------------------------------------------
+#
+# A different refusal from the budget above, counted by its own key. Fix runs
+# that ended with the no-progress marker on THIS exact head sha mean the loop
+# is not converging, and another identical run is a token bonfire rather than
+# a retry: at HALT_AFTER of them the Resolve step refuses — and says so ONCE
+# per commit.
+#
+# DRE-4848 (Portico PR #687, 2026-09-24) found both halves broken. The halt
+# ignored a person's `Operator decision`, so the restart DRE-3451 promised was
+# refused; and the once-per-commit receipt never held, so the identical halt
+# went up about forty times, once a sweep, overnight. The receipt check read
+# every page — the cause was WHO posted it: the Resolve step's GH_TOKEN is the
+# pool reader (DRE-4282), so the halt was authored by agent-bureau-bot-2/3/4
+# and the check, counting agent-bureau-bot[bot] alone, never found it. The
+# workflow now posts it as the writer, and a halt by any bot of the loop's own
+# pool counts (is_loop_bot), so the ones already standing keep counting.
+#
+# THE DECISION, in one sentence: an `Operator decision` by a person, newer
+# than the newest halt on this commit, allows exactly one more fix run there.
+# "One" is read off the markers, the way the halt itself is: a single no-push
+# marker after the decision halts again, and that halt is posted once for the
+# new round — it is newer than the decision, so the window closes behind it.
+# A commit with no halt yet is the same rule with nothing to be newer than
+# (#687's own order: the decision landed before the first halt went up), and
+# a decision the loop already ran on is older than that run's marker, so it
+# buys nothing twice.
+
+#: No-push runs at one commit before the halt. Two, since DRE-2024.
+HALT_AFTER = 2
+
+#: The receipt's key. The body is `🧯 fix-convergence-halt @<sha8>: …`, read
+#: back ANCHORED at the start of the first line, so a comment that quotes or
+#: summarises a halt is not one.
+HALT_TAG = "fix-convergence-halt"
+HALT_PREFIX = "🧯 " + HALT_TAG + " @"
+
+#: What the Report step's no-progress marker says (it cites the sha in
+#: backticks). Matched as DRE-2024 matched it.
+NO_PROGRESS = "pushed no new commit"
+
+
+def _login(c: dict) -> str:
+    return (c.get("user") or {}).get("login") or ""
+
+
+def is_loop_bot(c: dict, worker_login: str) -> bool:
+    """Is this comment by the fix loop itself — the worker App, or one of its
+    dispatch-pool siblings (`<worker>-<n>[bot]`, DRE-2013)?
+
+    The siblings are derived from the worker's own login rather than listed:
+    a `[bot]` login is an App's, which no person can hold, and the pool apps
+    are the worker's name with a slot number (dispatch_pool.py). Used for the
+    HALT only — every halt already standing on a live PR was written by a
+    pool bot, and it has to keep counting."""
+    login = _login(c)
+    if login == worker_login:
+        return True
+    base = worker_login[:-len("[bot]")] if worker_login.endswith("[bot]") else ""
+    return bool(base) and re.fullmatch(re.escape(base) + r"-\d+\[bot\]", login) is not None
+
+
+def is_halt(c: dict, sha8: str, worker_login: str) -> bool:
+    return (is_loop_bot(c, worker_login)
+            and fix_context.first_line(c.get("body")).startswith(HALT_PREFIX + sha8))
+
+
+def is_no_progress(c: dict, sha8: str, worker_login: str) -> bool:
+    """The Report step's marker, from the worker App only (DRE-1995: a planted
+    marker must not freeze the loop on a healthy PR). Only the Report step
+    writes it, and it writes it as the worker."""
+    body = c.get("body") or ""
+    return _login(c) == worker_login and NO_PROGRESS in body and sha8 in body
+
+
+def is_person_decision(c: dict) -> bool:
+    """An operator decision BY A PERSON: GitHub's own user.type, never a login
+    (fix_context's rule, read through it), and the phrase leading the first
+    line (fix_context.is_decision_body — the reading the comment-triggered
+    start and the restart sweep use)."""
+    return fix_context._is_human(c) and fix_context.is_decision_body(c.get("body"))
+
+
+class Halt:
+    """The halt answer for one commit, at one moment."""
+
+    def __init__(self, halted: bool, post: bool, cleared: bool, noprog: int):
+        self.halted = halted    # refuse this run
+        self.post = post        # and post the halt — nothing stands for this round
+        self.cleared = cleared  # a person's decision is letting this run go
+        self.noprog = noprog    # no-push runs at this commit, in all
+
+    def env(self) -> str:
+        """Sourced by the Resolve step: a word or an integer per line, never
+        text from the thread."""
+        word = {True: "true", False: "false"}
+        return (f"HALT={word[self.halted]}\nPOST_HALT={word[self.post]}\n"
+                f"CLEARED={word[self.cleared]}\nNOPROG={self.noprog}\n")
+
+
+def halt(comments, sha8: str, worker_login: str) -> Halt:
+    """Does the convergence halt refuse a fix run at `sha8`, and does it post?"""
+    newest_halt = -1
+    for i, c in enumerate(comments):
+        if is_halt(c, sha8, worker_login):
+            newest_halt = i
+    decision = -1
+    for i in range(newest_halt + 1, len(comments)):
+        if is_person_decision(comments[i]):
+            decision = i
+    noprog = sum(1 for c in comments if is_no_progress(c, sha8, worker_login))
+    if decision >= 0:
+        since = sum(1 for c in comments[decision + 1:]
+                    if is_no_progress(c, sha8, worker_login))
+        # The decision's one run. Spent, it halts again — and the halt is
+        # posted, because none stands newer than this decision.
+        halted = since >= 1
+        return Halt(halted, post=halted, cleared=not halted, noprog=noprog)
+    halted = noprog >= HALT_AFTER
+    return Halt(halted, post=halted and newest_halt < 0, cleared=False,
+                noprog=noprog)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="The fix loop's convergence halt (DRE-2024, DRE-4848).")
+    parser.add_argument("command", choices=["halt"])
+    # The raw REST thread: a flat array, or the array-of-pages
+    # `gh api --paginate --slurp` emits.
+    parser.add_argument("--comments-file", required=True)
+    parser.add_argument("--worker-login", required=True)
+    parser.add_argument("--sha8", required=True)
+    parser.add_argument("--env-out", required=True)
+    args = parser.parse_args(argv)
+    try:
+        with open(args.comments_file, encoding="utf-8") as fh:
+            comments = fix_context.flatten_pages(json.load(fh))
+        if not all(isinstance(c, dict) for c in comments):
+            raise ValueError("a comment is not an object")
+    except (OSError, ValueError) as exc:
+        # Loud, and no env file: an unreadable thread is UNKNOWN (DRE-4157),
+        # and "no halt" is the reading that runs another doomed fix.
+        print(f"fix_convergence: cannot read the PR thread: {exc}", file=sys.stderr)
+        return 2
+    answer = halt(comments, args.sha8, args.worker_login)
+    with open(args.env_out, "w", encoding="utf-8") as fh:
+        fh.write(answer.env())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
