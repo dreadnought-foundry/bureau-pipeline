@@ -309,6 +309,14 @@ something else is not evidence that it did, and the guarantee has to survive a
 Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
 than Sonnet 5 on any pull request whose card cannot be read.
 
+**A cardless pull request is the everyday case of that.** A bot PR has no card,
+so its critic runs `--built-on-unknown`, skips Sonnet 5 and lands on the Opus
+rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
+`agent/DRE-<n>-*` branch whose card carries a `model-attempt:` heartbeat naming
+any model but Sonnet 5 is reviewed on Sonnet 5 as usual.
+`tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
+is what holds it.
+
 The overlap is not new in principle — the advisory ladder's own fallback is
 `claude-opus-5-5`, the workhorse **primary**, so reviewer and worker have
 coincided whenever the critic falls back. What is new is that the guarantee is

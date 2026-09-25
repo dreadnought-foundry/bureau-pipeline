@@ -10,12 +10,13 @@ carrying the subscription windows the run is drawing on — per window a
 `status`, the `rateLimitType` and the overage fields. Two shapes exist and both
 are read: the `unifiedWindows` map (five_hour / seven_day /
 seven_day_overage_included, as Claude Code 2.1.278 emitted it on 2026-09-19)
-and the flat single-window shape `@anthropic-ai/claude-agent-sdk` 0.3.263 —
-the SDK the pinned action bundles — declares for `SDKRateLimitInfo`
+and the flat single-window shape `@anthropic-ai/claude-agent-sdk` 0.3.282 —
+the SDK the pinned action bundles since DRE-3417 moved the pin on 2026-09-25 —
+declares for `SDKRateLimitInfo`
 (`status`, `resetsAt`, `rateLimitType`, `utilization`). The SDK says the event
 is "emitted when rate limit info changes", so a run may emit several or none.
 
-`anthropics/claude-code-action` (pinned sha 9c5ddab, base-action/src/
+`anthropics/claude-code-action` (pinned sha 9171db3, base-action/src/
 run-claude-sdk.ts:191) pushes every message into an array and writes it to
 `$RUNNER_TEMP/claude-execution-output.json`; its `sanitizeSdkOutput()` prints
 only `system/init` and `result` to the job log. The reading is therefore on the
@@ -121,8 +122,13 @@ _SEGMENT = re.compile(r"[A-Za-z0-9_-]{1,128}")
 #: DROPPED until a person has read the vendor's declaration of it and put it
 #: here. Same discipline as execution_result.py's `_DIAGNOSTIC_FIELDS`, which
 #: holds the public job log to a whitelist for the same reason. The fields
-#: below are those `@anthropic-ai/claude-agent-sdk` 0.3.263 declares for
-#: `SDKRateLimitInfo` plus the `unifiedWindows` map 2.1.278 emits.
+#: below are the ones read off `@anthropic-ai/claude-agent-sdk` 0.3.263's
+#: `SDKRateLimitInfo` plus the `unifiedWindows` map 2.1.278 emits. The pin the
+#: fleet now runs bundles 0.3.282, and its declaration adds exactly one field
+#: to that type — `limitScope`, which spend limit blocked the request. It is
+#: NOT added here: the rule above is that a person reads the vendor's
+#: declaration first, and until then the name travels under
+#: `raw.fields_dropped` rather than the value being kept (DRE-3417).
 _EVENT_KEYS = ("type", "uuid", "session_id", "rate_limit_info")
 _INFO_KEYS = ("status", "rateLimitType", "utilization", "resetsAt",
               "overageStatus", "overageDisabledReason", "isUsingOverage",

@@ -4,8 +4,8 @@ What this pins shut
 -------------------
 DRE-4836 (PR #508, merged 2026-09-24 21:00 PT) put `claude-opus-5-5` on top of
 the workhorse ladder and on the advisory and judgement ladders' Opus rung. The
-fleet's Claude Code is pinned at 2.1.263 by
-`.github/actions/install-claude-code`, and the API refuses the new model from
+fleet's Claude Code was then pinned at 2.1.263 by
+`.github/actions/install-claude-code`, and the API refused the new model from
 that version:
 
     API Error: 400 Claude Code 2.1.263 does not support this model;
@@ -19,8 +19,10 @@ ladder names.
 
 So the question is asked here, as data: a model with a known minimum Claude
 Code version may sit on a ladder only while the pinned installer meets it.
-Raising the pin (DRE-4862) is what lets Opus 5.5 back on; this file is what
-fails if it goes back on first.
+Raising the pin is what lets Opus 5.5 back on, and DRE-3417 did that on
+2026-09-25 — 2.1.282, from `anthropics/claude-code-action` v1.0.234 — putting
+the model back on the ladders in the same pull request. This file is what
+fails if a model ever goes on a ladder before the pin can run it.
 
 The table below is the only place a minimum is written. Add a row when the API
 starts refusing a model from an older Claude Code, with the version its 400

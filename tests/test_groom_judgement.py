@@ -57,21 +57,23 @@ NOW = "2026-09-05T12:00:00Z"
 BASE = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
 PACK = groom_context.pack(now=NOW)
 
-# The output-token UPPER LIMIT the installed Claude Code CLI (2.1.263) applies
-# to each rung of the planner ladder, read out of the CLI binary's own model
-# registry (`max_output_tokens:{default,upper}`) — the number `c3()` returns as
-# `upperLimit` and `Ete()` caps `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to. A budget
+# The output-token UPPER LIMIT the installed Claude Code CLI (2.1.282, the
+# version `.github/actions/install-claude-code` pins since DRE-3417) applies to
+# each rung of the planner ladder, read out of the CLI binary's own model
+# registry (`max_output_tokens:{default,upper}`) — the number `a5()` returns as
+# `upperLimit` and `Pet()` caps `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to. A budget
 # above it runs AT it, so the ceiling is held under the smallest of them rather
 # than trusting the number we ask for. Recorded here rather than probed: the
 # fleet's runners install the CLI at run time and a test may not have one.
+# All three were re-read off the 2.1.282 binary on 2026-09-25; the previous
+# reading was off 2.1.263 and is superseded, not carried forward.
 CLI_OUTPUT_UPPER_LIMITS = {
     "claude-fable-5-1": 128000,
     # `claude-opus-5-5` took this rung from `claude-opus-5` on 2026-09-25
-    # (DRE-4836). 128,000 is Opus 5.5's published output maximum — unchanged
-    # from Opus 5's, which is the half of the migration notes this number
-    # depends on. It was NOT re-read out of an installed CLI binary the way the
-    # other two were; if this rung ever clamps lower than the ceiling below,
-    # that is where to look first.
+    # (DRE-4836). Under 2.1.263 this number was Opus 5.5's PUBLISHED output
+    # maximum rather than a reading — 2.1.263 could not run the model at all.
+    # 2.1.282 carries it in the registry (`{default:128000,upper:128000}`) and
+    # that is where this 128,000 now comes from.
     "claude-opus-5-5": 128000,
     "claude-sonnet-4-6": 128000,
 }
