@@ -726,10 +726,15 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select medic \
-            --explain-file "$WHY_FILE")
+            --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
           WHY=$(cat "$WHY_FILE")
+          # DRE-4836: the CHOSEN model's declared effort level, empty when it
+          # declares none — see agent-task.yml's Select model step.
+          EFFORT=$(cat "$EFFORT_FILE" 2>/dev/null || true)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
           echo "why=$WHY" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (agent: medic)"
           echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
@@ -784,6 +789,7 @@ jobs:
           claude_args: |
             --max-turns 60
             --model ${{ steps.model.outputs.model }}
+            ${{ steps.model.outputs.effort_arg }}
             --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the shared bureau
