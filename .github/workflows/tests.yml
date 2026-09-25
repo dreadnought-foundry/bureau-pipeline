@@ -6,6 +6,26 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The nightly full run on main (DRE-4807) — the fleet's one CI rule, the
+  # CEO's decision of 2026-09-24 (`standards/engineering.md`, "CI: narrow per
+  # change, whole every night"): each change runs the suites it can reach, once
+  # a night `main` runs everything, a red nightly is repaired by an agent
+  # (`self-red-main-repair.yml` already watches this workflow), and a missing
+  # nightly alarms (DRE-4805). bureau-pipeline is the repo every other repo's
+  # run is made of, so it carries the same net.
+  #
+  # 10:41 UTC = 03:41 PT — off the hour, clear of agent-bureau's `23 10 * * *`
+  # (DRE-3656) and Portico's 02:30 PT (DRE-4804), and outside the release
+  # window (`release_train.FLEET_WINDOW`, 05:00-21:00 PT), because a nightly
+  # competing with a train for runners delays both.
+  #
+  # A schedule run executes every job below with ONE named exemption: `tdd`,
+  # which reads a pull request's commit list for test-before-fix order and has
+  # neither a pull request nor commits to order on a schedule. It is the only
+  # job the nightly may skip, and `tests/test_tests_workflow_nightly.py` turns
+  # red on a second one.
+  schedule:
+    - cron: "41 10 * * *"
 
 permissions:
   contents: read
