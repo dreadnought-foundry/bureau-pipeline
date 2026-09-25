@@ -2,9 +2,11 @@
 # Never merged. Proves the PR #511 head (Claude Code 2.1.282 via the house
 # installer, claude-code-action v1.0.234) runs claude-opus-5-5 on a real runner.
 name: DRE-3417 live Opus 5.5 trial
+# claude-code-action accepts no `push` event (it never has: v1.0.217 and v1.0.234
+# list the same events), so the trial rides a draft PR into PR #511's branch.
 on:
-  push:
-    branches: ["trial/DRE-3417-opus-5-5-live"]
+  pull_request:
+    branches: ["agent/DRE-3417-claude-code-2-1-282-opus-5-5"]
 permissions:
   contents: read
 jobs:
