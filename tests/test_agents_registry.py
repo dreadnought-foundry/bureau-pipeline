@@ -41,23 +41,35 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pr_size_strategy as pss  # noqa: E402
+import turn_budget  # noqa: E402
 from test_agent_linear_key import DOCUMENTED_EXCEPTIONS  # noqa: E402
 
-# `--max-turns 80`; the default inside agent-task.yml's per-card expression
-# (DRE-3097 `${{ steps.model.outputs.turns || 400 }}`); or the size-step output
-# qa-review.yml selects (DRE-2466).
+# `--max-turns 80`; the per-card budget the build and fix jobs select
+# (DRE-3097/DRE-4364 `${{ steps.model.outputs.turns }}`); the same expression
+# carrying a `|| <n>` fallback, which is how agent-task.yml wrote it between
+# DRE-3097 and DRE-4364; or the size-step output qa-review.yml selects
+# (DRE-2466).
 #
-# THE MIDDLE FORM IS NEW (DRE-4361), and it closes a hole. agent-task.yml has
-# carried an expression rather than a literal since DRE-3097, so this regex
-# matched nothing in it — nothing except the PROSE COMMENT above the step,
-# which still said `--max-turns 150`. Four roster entries were being checked
-# against a sentence describing the number the workflow used to use. Resolving
-# the expression's own fallback is what `tests/test_fix_turn_budget.py` already
-# does, and it makes the four build agents checked against the workflow again.
+# THE EXPRESSION FORMS CLOSE A HOLE (DRE-4361). agent-task.yml has carried an
+# expression rather than a literal since DRE-3097, so this regex matched
+# nothing in it — nothing except the PROSE COMMENT above the step, which still
+# said `--max-turns 150`. Four roster entries were being checked against a
+# sentence describing the number the workflow used to use.
+#
+# THE FALLBACK-FREE FORM IS NEW (DRE-4364), and it is now the ONLY form
+# agent-task.yml and agent-fix.yml are allowed to write: a `|| <n>` there could
+# never be reached by a correct run and could only mask a broken one, so
+# `tests/test_no_literal_turn_ceiling.py` forbids it. It resolves through
+# `turn_budget.default_budget()` — the card's own `turns:`/`size:` label can
+# select a rung below it, but the default is the ceiling a roster entry
+# describes, and it is read from the same config the workflow reads rather than
+# retyped here. The `|| <n>` alternative stays for the workflows outside those
+# two, which are free to keep writing it.
 _TURNS_RE = re.compile(
     r"--max-turns\s+(?:(\d+)"
     r"|\$\{\{[^}]*?\|\|\s*(\d+)\s*\}\}"
-    r"|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\})"
+    r"|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\}"
+    r"|(\$\{\{\s*steps\.model\.outputs\.turns\s*\}\}))"
 )
 _SIZE_OUTPUTS = ("max_turns", "retry_max_turns")
 
@@ -237,13 +249,21 @@ class AgentsRegistryTest(unittest.TestCase):
         DRE-4361: agent-task.yml's per-card expression is resolved the same
         way, through the default it falls back to. Before that it was not read
         at all and the four agents pointing at it were checked against a
-        comment."""
+        comment.
+
+        DRE-4364: agent-fix.yml joined it and the `|| <n>` fallback came out of
+        both, so the build and fix jobs now write the expression bare. It
+        resolves through `turn_budget.default_budget()`, which reads
+        `config/turn-budgets.json` — the same file the workflow's own selector
+        reads. A roster entry describes the budget a card gets when it asks for
+        nothing; a `turns:` label can still select a rung below it."""
         for a in load():
             src = open(os.path.join(ROOT, a["workflow"])).read()
             declared = [
                 int(literal or fallback) if (literal or fallback)
+                else turn_budget.default_budget() if selected
                 else pss.turn_budget("standard")[_SIZE_OUTPUTS.index(name)]
-                for literal, fallback, name in _TURNS_RE.findall(src)
+                for literal, fallback, name, selected in _TURNS_RE.findall(src)
             ]
             self.assertIn(a["maxTurns"], declared,
                           f"{a['name']}: maxTurns {a['maxTurns']} is not a "
