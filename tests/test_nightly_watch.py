@@ -648,6 +648,29 @@ class AlarmMechanismTest(unittest.TestCase):
                 owner="DeltaSolv").title,
         )
 
+    def test_a_standing_alarm_is_re_confirmed_daily_not_hourly(self):
+        """The watcher runs hourly so a missing nightly is FOUND within the
+        hour. Saying it again is a different cadence: 24 comments a day on one
+        standing card is the inbox this programme exists to escape, and the
+        sibling alarm — which runs daily — sets the rate that reads as
+        deliberate rather than as a stuck process."""
+        self.assertEqual(nightly_watch.RECONFIRM_AFTER_HOURS, 24.0)
+        speaks = [hour for hour in range(24)
+                  if nightly_watch.should_reconfirm(
+                      now=f"2026-09-25T{hour:02d}:30:00Z")]
+        self.assertEqual(len(speaks), 1)
+
+    def test_the_first_card_is_filed_the_hour_it_is_found(self):
+        """The re-confirm cadence must not delay the FINDING. The workflow
+        gates only the comment on an existing card; the create branch is
+        reached on whichever hour the alarm first fires."""
+        run = _alarm_step(WATCH_WORKFLOW)["run"]
+        create = run.index("linear_ops.py create")
+        guard = run.index("RECONFIRM")
+        comment = run.index("linear_ops.py comment")
+        self.assertLess(guard, comment, "the guard is on the re-confirm")
+        self.assertLess(comment, create, "…and never on the first filing")
+
     def test_the_headline_is_one_line(self):
         """It goes through GITHUB_OUTPUT, which is line-based."""
         verdict = nightly_watch.evaluate([
