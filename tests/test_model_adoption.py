@@ -65,7 +65,6 @@ CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 
 OPUS = "claude-opus-5"
-OPUS55 = "claude-opus-5-5"
 SONNET46 = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
 FABLE51 = "claude-fable-5-1"
@@ -250,9 +249,7 @@ def test_the_newer_opus_with_no_declared_price_is_ask(tmp_path):
     assert opus6["rule"] == "ask"
     assert opus6["price"] is None, "an undeclared price is null, never a guess"
     assert opus6["reason"].startswith("no declared price")
-    # Both Opus rungs are on a ladder since DRE-4836, and a newer Opus is
-    # proposed against each of them.
-    assert {r["model"] for r in opus6["replaces"]} == {OPUS, OPUS55}
+    assert {r["model"] for r in opus6["replaces"]} == {OPUS}
 
 
 def test_a_new_family_newer_than_a_rung_is_ask_and_replaces_nothing(tmp_path):

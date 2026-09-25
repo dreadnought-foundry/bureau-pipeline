@@ -83,8 +83,6 @@ import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 
 OPUS = "claude-opus-5"
-# The workhorse primary since DRE-4836 (2026-09-25); OPUS is the rung below.
-OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
 FABLE = "claude-fable-5"
@@ -355,19 +353,18 @@ class IncidentConditionTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             all_up = {OPUS: True, SONNET: True, SONNET5: True,
                       FABLE: True, FABLE51: True}
-            self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS55)
+            self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS)
             self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
             self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET5)
 
     def test_availability_still_only_walks_down(self):
         # The other half of the rule: a probe may decide how far DOWN a ladder
-        # we walk, never how far up. The rung below the top became OPUS on
-        # 2026-09-25 (DRE-4836), when Opus 5.5 took the top and Opus 5 kept the
-        # rung under it; the rule is unchanged.
+        # we walk, never how far up. The rung below Opus became SONNET5 on
+        # 2026-09-16 (DRE-3880); the rule is unchanged.
         self.assertEqual(
-            mf.select("engineer", probe=lambda m: m != OPUS55), _workhorse_ladder()[1]
+            mf.select("engineer", probe=lambda m: m != OPUS), _workhorse_ladder()[1]
         )
-        self.assertEqual(_workhorse_ladder()[1], OPUS)
+        self.assertEqual(_workhorse_ladder()[1], SONNET5)
 
 
 class JudgementKindTest(unittest.TestCase):
@@ -396,7 +393,7 @@ class JudgementKindTest(unittest.TestCase):
         # so a plan never blocks on availability. `claude-sonnet-4-6` left the
         # WORKHORSE ladder on 2026-09-16 (DRE-3880) and kept this rung — the
         # CEO's answer says so in as many words: do not retire it.
-        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS55, SONNET])
+        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS, SONNET])
         self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
         self.assertNotIn(SONNET, _workhorse_ladder())
 
@@ -427,7 +424,7 @@ class JudgementKindTest(unittest.TestCase):
         # ::warning::. A planner that quietly ran on Opus would be
         # indistinguishable from one that got what it was promised.
         decision = mf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], OPUS)
         self.assertEqual(decision["kind"], JUDGEMENT)
         self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
         note = mf.selection_note(decision)
@@ -474,7 +471,7 @@ class JudgementKindTest(unittest.TestCase):
                       FABLE: True, FABLE51: True}
             for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
                 with self.subTest(role=role):
-                    self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS55)
+                    self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS)
             self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
 
     def test_fable_on_a_build_ladder_is_still_rejected(self):
@@ -513,7 +510,7 @@ class JudgementKindTest(unittest.TestCase):
                 tree, "engineer", {OPUS: True, SONNET: True, FABLE51: True}
             )
             self.assertEqual(
-                model, OPUS55, "a policy-violating config must not reach the build path"
+                model, OPUS, "a policy-violating config must not reach the build path"
             )
 
     def test_discovery_may_not_target_the_judgement_ladder(self):
@@ -637,7 +634,7 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
             _write_config(tree, cfg)
             model, _ = _cli_select(tree, "engineer", {OPUS: True, SONNET: True, FABLE: True})
             self.assertEqual(
-                model, OPUS55, "a policy-violating config must not reach the build path"
+                model, OPUS, "a policy-violating config must not reach the build path"
             )
 
 
@@ -655,7 +652,7 @@ class SelectionIsRecordedTest(unittest.TestCase):
         # The unavailable rung is the advisory TOP, whatever it currently is —
         # SONNET5 since 2026-08-12, FABLE before that.
         decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET5)
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], OPUS)
         self.assertEqual(decision["kind"], ADVISORY)
         self.assertEqual([s["model"] for s in decision["skipped"]], [SONNET5])
         self.assertTrue(decision["skipped"][0]["reason"])
@@ -668,12 +665,12 @@ class SelectionIsRecordedTest(unittest.TestCase):
             return True
 
         decision = mf.select_with_reasons("critic", probe=probe)
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], OPUS)
         self.assertIn("inconclusive", decision["skipped"][0]["reason"].lower())
 
     def test_the_top_rung_records_that_nothing_was_skipped(self):
         decision = mf.select_with_reasons("engineer", probe=lambda m: True)
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], OPUS)
         self.assertEqual(decision["skipped"], [])
         self.assertFalse(decision["degraded"])
         self.assertIn("nothing", mf.selection_note(decision).lower())
@@ -682,7 +679,7 @@ class SelectionIsRecordedTest(unittest.TestCase):
         decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET5)
         note = mf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1, "the note is a single line")
-        self.assertIn(OPUS55, note)
+        self.assertIn(OPUS, note)
         self.assertIn(SONNET5, note)
         self.assertIn("skip", note.lower())
 
@@ -707,7 +704,7 @@ class SelectionIsRecordedTest(unittest.TestCase):
                 {OPUS: True, SONNET: True, SONNET5: False}, explain=True
             )
             # stdout stays exactly the model id — the workflows capture it.
-            self.assertEqual(model, OPUS55)
+            self.assertEqual(model, OPUS)
             self.assertTrue(note.startswith("DEGRADED"), note)
             self.assertIn(SONNET5, note)
 

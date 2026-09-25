@@ -57,9 +57,6 @@ import model_fallback as mf  # noqa: E402
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
-# The workhorse ladder's primary since DRE-4836 (2026-09-25) — Opus 5 keeps
-# the rung below it.
-OPUS55 = "claude-opus-5-5"
 FABLE = "claude-fable-5"
 # The current Fable id — the judgement ladder's top rung since DRE-3015. A
 # different model from the excluded `claude-fable-5` above.
@@ -190,12 +187,9 @@ class CanonicalConfigTest(unittest.TestCase):
         # Fable is not reachable from a build ladder at any availability.
         # Both Fable ids — the excluded `claude-fable-5` and the
         # `claude-fable-5-1` DRE-3015 put on the planner's ladder.
-        # Opus 5.5 took the top rung on 2026-09-25 (DRE-4836); Opus 5 is the
-        # rung below it, and tests/test_model_effort.py pins the whole order.
         cfg = _canonical()
         workhorse = _ladder_models(cfg["ladders"][cfg["default_ladder"]])
-        self.assertEqual(workhorse[0], OPUS55)
-        self.assertIn(OPUS, workhorse)
+        self.assertEqual(workhorse[0], OPUS)
         self.assertNotIn(FABLE, workhorse)
         self.assertNotIn(FABLE51, workhorse)
 
@@ -463,7 +457,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         # the next dispatch. (The generated mirror is only the degrade path.)
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
+            self.assertEqual(_cli_select(tree, "engineer"), OPUS)
             _swap_workhorse(tree)
             self.assertEqual(
                 _cli_select(tree, "engineer"), SONNET5,
@@ -507,7 +501,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
             self.assertEqual(_cli_select(tree, "critic"), SONNET)
             # …and the build fleet is untouched by that edit.
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
+            self.assertEqual(_cli_select(tree, "engineer"), OPUS)
 
     def test_selector_degrades_to_the_mirror_when_the_config_is_unreadable(self):
         # The config ships in the public .bureau-pipeline checkout, so it is
@@ -515,7 +509,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
-            self.assertEqual(_cli_select(tree, "engineer"), OPUS55)
+            self.assertEqual(_cli_select(tree, "engineer"), OPUS)
             # Hardcoded on purpose: the mirror is GENERATED from models.yaml, so
             # asserting it against a literal is the canary that catches a mirror
             # change nobody meant. Moved fable-5 -> sonnet-5 on 2026-08-12 with
