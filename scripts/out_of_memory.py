@@ -202,8 +202,7 @@ def describe(kill: Kill | None) -> str:
     where = kill.runner or "an unnamed runner"
     times = "" if kill.kills == 1 else f", {kill.kills} times in this run"
     return (
-        f"the machine ran out of memory: {where} "
-        f"({_CLASS_WORDS[kill.runner_class]}) hit its memory limit and the "
+        f"{where} ({_CLASS_WORDS[kill.runner_class]}) ran out of memory: the "
         f"kernel killed the job with exit {KILL_EXIT}{times}"
     )
 

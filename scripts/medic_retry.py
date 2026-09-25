@@ -349,9 +349,10 @@ _WHY_NOT = {
         "going silent."
     ),
     RULE_OUT_OF_MEMORY: (
-        "The machine this ran on hit its memory limit, so the system killed "
-        "the job — it is not a fault in the work and nothing was rejected. "
-        "Running it again on the same size of machine dies the same way, so "
+        "The medic re-runs a failed run once, for a transient infrastructure "
+        "flake; a machine that ran out of memory is not one. Nothing is wrong "
+        "with the work — the system killed it, nothing was rejected — and "
+        "running it again on the same size of machine dies the same way, so "
         "no second build was started and nothing more was charged to this "
         "card. What moves it is a bigger machine or a smaller card, and "
         "neither of those is a retry."
