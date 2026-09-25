@@ -56,7 +56,7 @@ DRE-4149; the harness now proves `main` once — see `docs/self-hosting.md`,
 | --- | --- | --- |
 | `agent_task_parses` | yes | a real `agent-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `agent-task.yml` with a resolved commit |
 | `bot_pr_flow` | yes | the happy path: worker-bot authorship → sha-bound critic verdict → qa-bot merge (author ≠ merger) |
-| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds |
+| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds — **NOT EXERCISABLE** on a run with no genuine Dependabot PR open (DRE-4841) |
 | `gate_paths` | yes | merge-gate semantics: a behind-base merge at the reviewed head, condition D's waiting-for-human state, and a stale-verdict race |
 | `lane_contract` | yes | `config/lane-contract.json`'s conformance rules over the live board, the console's state lists and this checkout's own vocabulary |
 | `noop_resubmission`, `partial_delivery`, `checklist_gaming`, `already_live`, `unverified_claim` | no — opt-in by name | the DRE-2490 adversarial corpus: a real build agent, on the shipped prompt, against a replayed rejection |

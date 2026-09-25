@@ -224,6 +224,33 @@ class ScenarioFailure(Exception):
     happy path promises."""
 
 
+class ScenarioNotExercisable(Exception):
+    """The LIVE fixture this scenario reads is not present, so it asserted
+    nothing (DRE-4841).
+
+    The third outcome, and it is neither of the other two. `ScenarioFailure`
+    says the pipeline is broken. `SandboxBlocked` says the sandbox is a corpse,
+    and the run stops because every later scenario would wait on the same one.
+    This says a vendor artifact the harness CANNOT synthesize — a pull request
+    authored by dependabot[bot] is the case it exists for — is simply not
+    there: nothing failed, nothing is proven either way about the clauses that
+    need it, and the next scenario's fixture is a separate question, so the run
+    carries on.
+
+    Raise it only for a fixture's ABSENCE. A fixture that is present and
+    misbehaving is a `ScenarioFailure`, or the scenario is decoration.
+
+    The driver reports it as NOT EXERCISABLE, never PASS, and annotates the run
+    with `.reason` — which must name what went unproven and what still pins it,
+    because a green run that checked nothing silently is the failure mode the
+    harness exists to prevent.
+    """
+
+    def __init__(self, message: str, reason: str = ""):
+        super().__init__(message)
+        self.reason = reason or message
+
+
 def new_run_id() -> str:
     return f"local-{time.strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}"
 
@@ -391,6 +418,10 @@ class ScenarioResult:
     #: "not proven either way"; the driver stops the run and the promote
     #: receipt says blocked, not failed.
     blocked: Optional[str] = None
+    #: Why this scenario asserted nothing: the live fixture it reads was not
+    #: present (DRE-4841). Set leaves `ok` True — nothing failed — and the
+    #: driver reports NOT EXERCISABLE rather than PASS, so the gap is named.
+    not_exercisable: Optional[str] = None
 
 
 class Scenario:
@@ -430,6 +461,15 @@ def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
             result.failed_phase = phase
             result.blocked = e.cause
             result.errors.append(f"{phase}: blocked by the sandbox: {e}")
+            break
+        except ScenarioNotExercisable as e:
+            # `ok` STAYS TRUE and this is a note, not an error: the fixture the
+            # scenario reads is absent, which is a fact about the sandbox and
+            # not a verdict on the commit (DRE-4841). The remaining phases have
+            # nothing to read, so stop — cleanup still runs below, because
+            # leaving the sandbox usable is not excused by asserting nothing.
+            result.not_exercisable = e.reason
+            result.notes.append(f"{phase}: not exercisable: {e}")
             break
         except Exception as e:  # any failure: record, stop progressing
             result.ok = False

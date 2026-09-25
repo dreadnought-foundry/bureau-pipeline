@@ -114,6 +114,34 @@ scenario waiting on it had no way to tell that from slowness, so it waited
 out `timeout-minutes: 180` and `stable` sat 50 commits behind until a human
 cancelled the run.
 
+## NOT EXERCISABLE — the fixture is not there (DRE-4841)
+
+A third outcome, and the narrowest. A scenario that reads a LIVE artifact the
+harness cannot synthesize — today only `dependabot_flow`, which needs a pull
+request authored by `dependabot[bot]` — raises
+`framework.ScenarioNotExercisable` when that artifact is absent. The run
+continues (one missing fixture says nothing about the next scenario's), the
+summary says `NOT EXERCISABLE` and never `PASS`, the driver's exit code is
+unaffected, and `write_unexercised_receipt` puts the gap on the run page as a
+`::warning::` annotation and a step-summary section.
+
+Raise it for a fixture's ABSENCE only. A fixture that is present and
+misbehaving is a `ScenarioFailure` — the tests in
+`tests/test_harness_not_exercisable.py` and
+`tests/test_harness_dependabot_flow.py` hold that line, because an escape
+hatch that could swallow a real failure would make the scenario decoration.
+
+It deliberately does NOT write `blocked=true`: blocked means *not proven,
+re-proved next run*, and this gap does not clear by re-running.
+
+Origin: 2026-09-25, run `36081827143`. Every scenario but `dependabot_flow`
+passed; that one failed at setup because the sandbox's standing Dependabot PR
+had been closed 19 minutes earlier under the house rule that semver-majors are
+never auto-filed (DRE-2064, applied to the sandbox by DRE-4829). The fixture
+had persisted only because it WAS a major the gate parks for a human, so
+nothing was coming back to un-red main — and the failure's own remedy asked a
+human to re-file the pull request their rule forbids.
+
 ## What a wait costs GitHub (DRE-4132)
 
 Every wait above is the same URL asked again, and GitHub bills each ask against
@@ -290,11 +318,16 @@ is about writes and is unchanged: no mutation, and still no card addressed.
   full intended set, and what each stub covers, is
   `docs/harness.md`.
 * For `dependabot_flow` (DRE-2100): a reconcile stub on its ~15-min cron
-  (the workflow_dispatch review route under test) and a stale pinned
-  dependency that keeps a genuine Dependabot PR filed — chosen
-  major-stale so the gate parks it and the fixture persists between
-  runs. `@dependabot rebase` / `@dependabot recreate` comments
-  regenerate activity when needed.
+  (the workflow_dispatch review route under test) and a genuine open
+  Dependabot PR to read. There is **no standing fixture any more**
+  (DRE-4841): the old one persisted only because it was a semver-major
+  the gate parks for a human, and the house rule forbids those
+  (DRE-2064, applied to the sandbox by DRE-4829) — what Dependabot files
+  now is a minor/patch bump, which the gate auto-merges. So the scenario
+  reports NOT EXERCISABLE on a run with none open and observes the live
+  path on the runs that have one. `@dependabot rebase` regenerates
+  activity on a DIRTY PR; do not `recreate` a closed major to feed the
+  harness.
 
 * For the DRE-2490 adversarial scenarios: **Issues enabled** on the
   sandbox (the carrier the seeded card points the agent at) and this
@@ -341,9 +374,12 @@ readable with no harness PRs left open.
 
 ## Scenario `dependabot_flow` (DRE-2100)
 
-Consumes the sandbox's REAL open Dependabot PR (never closes it — it is
-the vendor's standing fixture): asserts the dependabot-actor
-`pull_request` review run self-skipped clean (a `skipped` check run on
+Consumes the sandbox's REAL open Dependabot PR when there is one, and
+reports NOT EXERCISABLE when there is not (DRE-4841 — see above; the
+vendor's artifact cannot be synthesized and no standing fixture
+survives the house rule). It never closes the PR it finds: asserts the
+dependabot-actor `pull_request` review run self-skipped clean (a
+`skipped` check run on
 the head, never a red crash — DRE-2067; read on the RUN-attributed
 checks only, since the head-bound `QA critic review` record DRE-2291
 publishes is review-named too and goes red on a REQUEST_CHANGES verdict,

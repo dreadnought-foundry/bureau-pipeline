@@ -24,13 +24,24 @@ incidents:
 
 HONEST COVERAGE LIMITS — what this scenario can and cannot synthesize:
 
-  * A Dependabot PR cannot be conjured by API. If none is open, setup
-    fails with the regeneration command named (`@dependabot recreate` on
-    the newest closed Dependabot PR, or Dependabot's own schedule). The
-    steady state keeps one open: the sandbox pin is chosen so the gate
-    parks it as waiting-for-human, and an unmerged PR persists — so
-    repeated back-to-back runs assert the SETTLED state cheaply instead
-    of burning a critic run each time.
+  * A Dependabot PR cannot be conjured by API, and since 2026-09-25 the
+    sandbox keeps no standing one. Until then the fixture was
+    bureau-harness #1, a pytest 7→9 major bump open since 2026-07-21: it
+    persisted precisely BECAUSE it was a major the gate parks as
+    waiting-for-human. The operator closed it under the house rule that
+    majors are never auto-filed (DRE-2064), alongside the card bringing
+    the sandbox's own `dependabot.yml` to that shape (DRE-4829) — and
+    with majors ignored what Dependabot files is a minor/patch bump,
+    which is the arm the gate AUTO-MERGES. Nothing persists between runs
+    any more.
+    So when no genuine Dependabot PR is open, setup reports NOT
+    EXERCISABLE (DRE-4841) and the three clauses below are simply not
+    observed this run. That is not a verdict on the commit — this run
+    gates `stable` and every `v*` tag, and failing it on a vendor
+    artifact nobody can conjure held both on a policy decision instead
+    of on a defect. When Dependabot DOES have one open (its monthly
+    schedule, or before the gate merges it) the scenario observes the
+    live path exactly as it always did.
   * The crashed-review retry itself cannot be forced (we cannot crash
     the sandbox critic on demand). That path is unit-pinned in
     tests/test_dependabot_receipt_retry.py; live, it is observed only
@@ -50,6 +61,7 @@ from __future__ import annotations
 from harness import framework
 from harness.framework import (
     ScenarioFailure,
+    ScenarioNotExercisable,
     find_real_dependabot_pr,
     same_bot,
     sweep_leftovers,
@@ -79,11 +91,26 @@ CHECKS_TIMEOUT = 600.0
 # head-bound record's conclusion is a verdict, not a liveness report.
 RED_CONCLUSIONS = frozenset({"failure", "timed_out"})
 
-NO_PR_GUIDANCE = (
-    "no open genuine Dependabot PR in the sandbox — one cannot be conjured "
-    "by API. Regenerate: comment `@dependabot recreate` on the newest "
-    "closed Dependabot PR (or wait for the schedule; the sandbox's stale "
-    "pin makes Dependabot re-file), then re-run the harness."
+# What a NOT EXERCISABLE run says out loud (DRE-4841). It has to carry three
+# things, because it is all a reader of a GREEN run gets: which clauses went
+# unobserved, what still pins them without the live PR, and why the fixture is
+# absent — so a policy decision is not mistaken for a defect, and a defect is
+# not mistaken for this.
+NO_PR_REASON = (
+    "no open genuine Dependabot PR in the sandbox, so the live vendor path "
+    "was NOT observed this run: the self-skip on an empty Dependabot secrets "
+    "store (DRE-2067), the reconcile dispatch route (DRE-2047/2053) and the "
+    "receipt lifecycle (DRE-2049/2071) all need a pull request authored by "
+    "dependabot[bot], which cannot be conjured by API. Nothing is claimed "
+    "about them; the gate's dependabot decision table stays unit-pinned in "
+    "tests/test_merge_gate_dependabot.py, the crashed-review retry in "
+    "tests/test_dependabot_receipt_retry.py, and gate_paths still exercises "
+    "the condition-D arm on a synthesized dependabot-named branch. This is "
+    "NOT a verdict on the commit: the sandbox keeps no standing fixture since "
+    "the house rule reached it (DRE-2064 ignores semver-majors and DRE-4829 "
+    "applies that to bureau-harness, and a minor/patch bump is the arm the "
+    "gate auto-merges), so no Dependabot PR persists between runs. The "
+    "scenario observes the path on any run where one is open."
 )
 
 
@@ -139,7 +166,7 @@ class DependabotFlow(framework.Scenario):
         ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
         pr = find_real_dependabot_pr(ctx.gh.list_open_prs(ctx.repo))
         if pr is None:
-            raise ScenarioFailure(NO_PR_GUIDANCE)
+            raise ScenarioNotExercisable(NO_PR_REASON)
         detail = ctx.gh.get_pr(ctx.repo, pr["number"])
         ctx.state["number"] = detail["number"]
         ctx.state["head"] = detail["head"]["sha"]

@@ -69,9 +69,14 @@ Env (harness.yml sets all of these):
                         deadline is not a shorter budget: a healthy-but-slow
                         sandbox keeps its full one. `0` switches the check off.
 
-Exit 0 iff every selected scenario passed; 1 if one failed; 2 on a bad
+Exit 0 iff no selected scenario failed; 1 if one failed; 2 on a bad
 invocation; `framework.BLOCKED_EXIT` (3) when the SANDBOX blocked the run —
 nothing proven about the commit either way, and the next run re-proves.
+
+A scenario whose LIVE fixture was absent is reported NOT EXERCISABLE and does
+not fail the run (DRE-4841): it asserted nothing, which is a fact about the
+sandbox and not a verdict on the commit. It is never printed as a PASS, and
+the gap is annotated on the run page — see `write_unexercised_receipt`.
 """
 
 from __future__ import annotations
@@ -302,6 +307,37 @@ def write_blocked_receipt(cause: str, log=print) -> str:
             fh.write(f"### Harness blocked by the sandbox\n\n{cause}\n")
     log(f"::error::{line}")
     return line
+
+
+#: The step-summary heading for the scenarios that asserted nothing. Its own
+#: section, because a reader scanning the run page for what a green run did
+#: NOT prove should not have to read a 60-minute log to find out.
+UNEXERCISED_HEADING = "### Scenarios that asserted nothing"
+
+
+def write_unexercised_receipt(results, log=print) -> list:
+    """Publish the scenarios that could not be exercised (DRE-4841).
+
+    Deliberately NOT `write_blocked_receipt`'s channels: `blocked=true` tells
+    `promote_channel.evaluate` "nothing proven, the next run re-proves", and a
+    missing vendor fixture is a permanent, named gap rather than a transient
+    one. So this writes no output the stamp step reads and does not touch the
+    exit code — it writes the two surfaces a person looks at, a `::warning::`
+    annotation and a step-summary section, so a green run says out loud what it
+    did not prove.
+    """
+    lines = []
+    for r in results:
+        line = f"{r.scenario} asserted nothing: {r.not_exercisable}"
+        lines.append(line)
+        log(f"::warning::{line}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(f"{UNEXERCISED_HEADING}\n\n")
+            for line in lines:
+                fh.write(f"* {line}\n")
+    return lines
 
 
 def select_names(available: dict, wanted: list) -> list:
@@ -550,7 +586,12 @@ def main(argv=None) -> int:
     failed = [r for r in results if not r.ok]
     print("\n== harness summary ==")
     for r in results:
-        if r.ok:
+        if r.not_exercisable:
+            # Asked FIRST: such a scenario is `ok` (nothing failed) but it is
+            # not a PASS, and printing one would be the silent green this
+            # status exists to refuse (DRE-4841).
+            status = "NOT EXERCISABLE"
+        elif r.ok:
             status = "PASS"
         elif r.blocked:
             status = f"BLOCKED at {r.failed_phase}"
@@ -559,6 +600,8 @@ def main(argv=None) -> int:
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
+        for note in r.notes if r.not_exercisable else []:
+            print(f"    - {note}")
     # The reader's line names the slot its reads rode on (DRE-4282) — and one
     # line PER slot, with that slot's own billing, when a refusal moved it
     # mid-run (DRE-4575). With no reader the worker's line IS the reads, and
@@ -572,6 +615,11 @@ def main(argv=None) -> int:
         ]
     ):
         print(line)
+    unexercised = [r for r in results if r.not_exercisable]
+    if unexercised:
+        # Green, and saying so: the run's own page names the clauses it did not
+        # prove, so "nobody looked" cannot pass for "nothing is wrong".
+        write_unexercised_receipt(unexercised)
     if blocked:
         # Not a verdict on the commit: the sandbox never let us reach one.
         print(
