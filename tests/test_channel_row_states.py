@@ -439,9 +439,14 @@ def test_the_plan_cli_prints_the_receipt_warns_and_writes_a_blocked_summary(
     assert any("workflows/harness.yml/runs" in line and "branch=main" in line
                for line in logged)
     assert any("--log-failed" in line for line in logged)
-    # Read-only, and a few reads: the ref, the compare, the run and its log.
-    assert len(logged) == 4, logged
-    assert not any("--method" in line for line in logged)
+    # The channel row is READ-ONLY and a few reads: the ref, the compare, the
+    # run and its log. The one write in the run is the decision message
+    # (DRE-4771) — the plan records every surface it does not release, and a
+    # channel row is a no-op it never releases.
+    reads = [line for line in logged if "--method" not in line]
+    assert len(reads) == 4, logged
+    assert [line for line in logged if "--method" in line] == [
+        f"api repos/{REPO}/deployments --method POST --input -"], logged
 
 
 def test_the_plan_cli_reads_no_log_when_the_gate_is_green_or_running(

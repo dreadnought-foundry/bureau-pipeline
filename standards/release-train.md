@@ -104,6 +104,7 @@ permissions:
   contents: write
   checks: read
   actions: write
+  deployments: write
 
 jobs:
   call:
@@ -135,6 +136,15 @@ and what was ignored. `checks: read` is the permission green-at-SHA reads
 `commits/{sha}/check-runs` with; `actions: write` covers the workflow-runs
 record that says which of those runs gate, and the re-arm below dispatches
 the stub with it.
+
+**`deployments: write` is what the train records its decision with**
+(DRE-4771): every run writes one deployment plus one status per surface it
+decides about — the decision as the payload,
+`docs/release-decision.md` — and a stub that has not granted it gets
+`decision not recorded: caller stub lacks deployments: write` on every run
+and never a failure. The grant has to be the CALLER's, because a called job
+asking for more than its caller granted fails the whole run at startup, so
+the reusable workflow declares no job-level `permissions:` of its own.
 
 **A no-op that names a minute re-arms itself (DRE-3559).** A run that no-ops
 on the spacing names the minute the next release may be cut — the first whole
