@@ -46,6 +46,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -55,6 +56,7 @@ import channel_watch  # noqa: E402
 import check_act_receipts  # noqa: E402
 import check_workflow_watchers  # noqa: E402
 import nightly_watch  # noqa: E402
+from gh_read_retry import GhReadError  # noqa: E402
 import pipeline_act  # noqa: E402
 import release_train  # noqa: E402
 
@@ -154,7 +156,8 @@ class FakeRepo:
     """One repo as the watcher sees it: a default branch, workflow files, runs."""
 
     def __init__(self, workflows=None, runs=None, default_branch="main",
-                 unreadable=False, unreadable_files=(), listing_unreadable=False):
+                 unreadable=False, unreadable_files=(), listing_unreadable=False,
+                 changed=None, commits_unreadable=False, listed_only=()):
         # path -> (display name, file text)
         self.workflows = dict(workflows or {})
         # workflow file name -> the newest schedule run, or None
@@ -163,6 +166,14 @@ class FakeRepo:
         self.unreadable = unreadable
         self.unreadable_files = set(unreadable_files)
         self.listing_unreadable = listing_unreadable
+        # path -> hours since the file last changed on the default branch. A
+        # file not named here last changed a month ago: an established nightly.
+        self.changed = dict(changed or {})
+        self.commits_unreadable = commits_unreadable
+        # path -> display name: listed by the Actions API (a run happened once,
+        # on some branch) but NOT a file on the default branch — GitHub answers
+        # the contents read with a 404.
+        self.listed_only = dict(listed_only or {})
 
 
 def run_record(*, status="completed", conclusion="success", hours_ago=2.0):
@@ -191,15 +202,20 @@ class FakeGitHub:
         if rest.startswith("/actions/workflows?"):
             if repo.listing_unreadable:
                 raise nightly_watch.Unreadable(f"GitHub refused {path}")
+            listed = {p: name for p, (name, _) in repo.workflows.items()}
+            listed.update(repo.listed_only)
             return {"workflows": [
                 {"path": p, "name": name, "state": "active"}
-                for p, (name, _) in sorted(repo.workflows.items())
+                for p, name in sorted(listed.items())
             ]}
         contents = re.match(r"^/contents/(?P<file>[^?]+)", rest)
         if contents:
             wanted = contents.group("file")
             if wanted in repo.unreadable_files:
                 raise nightly_watch.Unreadable(f"GitHub refused {path}")
+            if wanted in repo.listed_only:
+                raise nightly_watch.Unreadable(
+                    "gh: Not Found (HTTP 404)", not_found=True)
             text = repo.workflows[wanted][1]
             return {
                 "encoding": "base64",
@@ -209,6 +225,15 @@ class FakeGitHub:
         if runs:
             record = repo.runs.get(runs.group("file"))
             return {"workflow_runs": [record] if record else []}
+        commits = re.match(r"^/commits\?path=(?P<file>[^&]+)&sha=(?P<sha>[^&]+)"
+                           r"&per_page=1$", rest)
+        if commits:
+            if repo.commits_unreadable:
+                raise nightly_watch.Unreadable(f"GitHub refused {path}")
+            assert commits.group("sha") == repo.default_branch, path
+            hours = repo.changed.get(commits.group("file"), 24.0 * 30)
+            return [{"sha": "abc123",
+                     "commit": {"committer": {"date": _ago(hours)}}}]
         raise AssertionError(f"the watcher made a read nothing declares: {path}")
 
     def _split(self, path):
@@ -600,6 +625,323 @@ class UnknownTest(unittest.TestCase):
         self.assertFalse(verdict.alarm)
         self.assertEqual(verdict.state, nightly_watch.OK)
         self.assertEqual(verdict.title, "")
+
+    def test_a_run_listing_answer_with_no_run_list_is_unknown_not_never(self):
+        """DRE-4851, the third defect on the card (DRE-4867): Portico's nightly
+        ran, and the watcher said it never had. An answer that carries no
+        `workflow_runs` list is an answer we could not read — not an empty
+        history. Only a real, empty list is "no schedule run yet"."""
+
+        class NoRunList(FakeGitHub):
+            def __call__(self, path):
+                if "/runs?" in path:
+                    self.paths.append(path)
+                    return {"message": "Not Found"}
+                return super().__call__(path)
+
+        api = NoRunList({
+            "dreadnought-foundry/portico": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)}),
+        })
+        readings = nightly_watch.collect(
+            api, roster={"portico": "dreadnought-foundry/portico"}, now=NOW)
+        self.assertEqual(_states(readings),
+                         {"dreadnought-foundry/portico · CI":
+                          nightly_watch.UNKNOWN})
+        self.assertNotIn(nightly_watch.NEVER, [r.state for r in readings])
+
+    def test_an_empty_answer_to_the_run_listing_is_unknown_not_never(self):
+        """`gh` exiting 0 with nothing on stdout is not GitHub saying "no runs".
+        Read through the real `_gh_api`, the path the watch job takes."""
+        answers = _GhAnswers(runs=lambda: "")
+        readings = answers.collect({
+            "dreadnought-foundry/portico": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)}),
+        })
+        self.assertEqual(_states(readings),
+                         {"dreadnought-foundry/portico · CI":
+                          nightly_watch.UNKNOWN})
+
+
+# --------------------------------------------------------------------------- #
+# 3b. a new schedule gets a night's grace (DRE-4851)                           #
+# --------------------------------------------------------------------------- #
+
+
+class NewScheduleGraceTest(unittest.TestCase):
+    """DRE-4844: bureau-pipeline's `Pipeline Tests` gained its schedule at
+    19:39 PT and the watcher called it "never ran" at 20:34 PT — 55 minutes
+    later, eight hours before the cron could first fire. A workflow with no
+    schedule run yet is judged from when its file last changed on the default
+    branch, against the same 26 hours a running nightly gets."""
+
+    PATH = ".github/workflows/tests.yml"
+    SUBJECT = "dreadnought-foundry/bureau-pipeline · Pipeline Tests"
+
+    def _fleet(self, **repo):
+        return {
+            "dreadnought-foundry/bureau-pipeline": FakeRepo(
+                workflows={self.PATH: ("Pipeline Tests", PIPELINE_TESTS_NIGHTLY)},
+                runs={}, **repo),
+        }
+
+    def test_a_schedule_added_55_minutes_ago_does_not_alarm(self):
+        readings, _ = _collect(self._fleet(changed={self.PATH: 55 / 60}))
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.WAITING})
+        verdict = nightly_watch.evaluate(readings)
+        self.assertFalse(verdict.alarm)
+        self.assertEqual(verdict.title, "")
+
+    def test_a_new_schedule_is_not_reported_as_having_run(self):
+        """Waiting is not ok. A nightly that has never run has run nothing,
+        and the report must not say it did."""
+        readings, _ = _collect(self._fleet(changed={self.PATH: 25.5}))
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.WAITING})
+        self.assertNotEqual(readings[0].state, nightly_watch.OK)
+        verdict = nightly_watch.evaluate(readings)
+        self.assertNotIn("Ran:", verdict.detail)
+        self.assertNotIn("has run", verdict.headline)
+        self.assertIn("first", readings[0].detail)
+
+    def test_a_file_unchanged_for_more_than_26_hours_still_reads_never(self):
+        """The grace ends where a running nightly's slack ends. After that,
+        no run is the alarm it always was, in the sentence it always had."""
+        readings, _ = _collect(self._fleet(changed={self.PATH: 26.5}))
+        self.assertEqual(_states(readings), {self.SUBJECT: nightly_watch.NEVER})
+        verdict = nightly_watch.evaluate(readings)
+        self.assertTrue(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.MISSING)
+        self.assertIn("no scheduled run has EVER happened on the default branch",
+                      verdict.detail)
+
+    def test_a_refused_last_changed_read_is_unknown_never_ok(self):
+        readings, _ = _collect(self._fleet(commits_unreadable=True))
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.UNKNOWN})
+        verdict = nightly_watch.evaluate(readings)
+        self.assertTrue(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.UNKNOWN)
+
+    def test_a_last_change_github_will_not_date_is_unknown(self):
+        """An empty history or a commit with no date is a read we did not
+        finish — the file is on the branch, so it has a last change."""
+        for answer in ([], [{"sha": "abc123", "commit": {}}], {"message": "x"}):
+            with self.subTest(answer=answer):
+
+                class Undated(FakeGitHub):
+                    def __call__(self, path):
+                        if "/commits?" in path:
+                            self.paths.append(path)
+                            return answer
+                        return super().__call__(path)
+
+                api = Undated(self._fleet())
+                readings = nightly_watch.collect(
+                    api, roster={"bureau-pipeline":
+                                 "dreadnought-foundry/bureau-pipeline"},
+                    now=NOW)
+                self.assertEqual(_states(readings),
+                                 {self.SUBJECT: nightly_watch.UNKNOWN})
+
+    def test_the_last_change_is_read_for_the_file_on_the_default_branch(self):
+        readings, api = _collect(self._fleet(default_branch="trunk",
+                                             changed={self.PATH: 1}))
+        reads = [p for p in api.paths if "/commits?" in p]
+        self.assertEqual(reads, [
+            "repos/dreadnought-foundry/bureau-pipeline/commits"
+            f"?path={self.PATH}&sha=trunk&per_page=1",
+        ])
+        self.assertEqual(_states(readings),
+                         {self.SUBJECT: nightly_watch.WAITING})
+
+    def test_a_nightly_that_has_run_is_not_asked_when_its_file_changed(self):
+        """The grace is for a nightly with no run yet. One that has run is
+        judged by its run, and costs no extra read."""
+        _, api = _collect({
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+        })
+        self.assertFalse([p for p in api.paths if "/commits?" in p])
+
+    def test_a_new_nightly_beside_a_running_one_is_quiet(self):
+        readings, _ = _collect({
+            **self._fleet(changed={self.PATH: 2}),
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=3)}),
+        })
+        verdict = nightly_watch.evaluate(readings)
+        self.assertFalse(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.OK)
+        self.assertIn(self.SUBJECT, verdict.detail)
+
+    def test_the_derivation_states_the_grace(self):
+        """The thresholds text printed in every alarm says a new schedule is
+        given a night before it counts as never run."""
+        derivation = nightly_watch.DERIVATION
+        self.assertIn("last changed on the default branch", derivation)
+        self.assertIn("grace", derivation)
+        self.assertIn(f"{nightly_watch.STALE_AFTER_HOURS:.0f}h", derivation)
+
+
+# --------------------------------------------------------------------------- #
+# 3c. a workflow file that is not on the default branch (DRE-4851)             #
+# --------------------------------------------------------------------------- #
+
+
+class _GhAnswers:
+    """Reads through the REAL `_gh_api`, with `gh` itself replaced.
+
+    `FakeGitHub` answers every read the watcher makes; the reads named here
+    are instead handed to `nightly_watch._gh_api` with `gh_read` patched to
+    fail or answer as the gh CLI does. That is the one place a 404 is told
+    apart from every other refusal, so the tests go through it.
+    """
+
+    def __init__(self, contents=None, runs=None):
+        self.contents = contents   # callable -> gh stdout, or raises GhReadError
+        self.runs = runs
+
+    def collect(self, repos, roster=None):
+        outer = self
+
+        class Through(FakeGitHub):
+            def __call__(self, path):
+                gh = None
+                if outer.contents and "/contents/" in path:
+                    gh = outer.contents
+                if outer.runs and "/runs?" in path:
+                    gh = outer.runs
+                if gh is None:
+                    return super().__call__(path)
+                self.paths.append(path)
+                with mock.patch.object(nightly_watch, "gh_read",
+                                       lambda args, log=None: gh()):
+                    return nightly_watch._gh_api(path)
+
+        api = Through(repos)
+        roster = roster or {name.split("/")[-1]: name for name in repos}
+        return nightly_watch.collect(api, roster=roster, now=NOW)
+
+
+def _gh_fails(stderr, *, rate_limited=False, returncode=1):
+    def fail():
+        raise GhReadError(f"gh api failed rc={returncode}: {stderr}",
+                          returncode=returncode, stderr=stderr,
+                          rate_limited=rate_limited)
+    return fail
+
+
+#: What the gh CLI prints on stderr for each refusal of the file read.
+NOT_FOUND = "gh: Not Found (HTTP 404)"
+REFUSALS = {
+    "403": "gh: Resource not accessible by integration (HTTP 403)",
+    "5xx": "gh: Server Error (HTTP 502)",
+    "throttle": "gh: API rate limit exceeded for installation ID 123249480. "
+                "(HTTP 403)",
+}
+
+
+class NotOnDefaultBranchTest(unittest.TestCase):
+    """agent-bureau's `probe-workflow-ref-caller.yml` ran once, on a probe
+    branch since deleted, and was never on `main`. The Actions API still lists
+    it as `active`. Its file is not on the default branch, so it is not a
+    nightly on main — no reading, no card. Only GitHub's 404 means that."""
+
+    PROBE = ".github/workflows/probe-workflow-ref-caller.yml"
+
+    def _fleet(self):
+        return {
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)},
+                listed_only={self.PROBE: "Probe caller — DRE-2606"}),
+        }
+
+    def test_a_listed_workflow_whose_file_404s_produces_no_reading(self):
+        readings, api = _collect(self._fleet())
+        self.assertEqual(_states(readings),
+                         {"dreadnought-foundry/agent-bureau · CI":
+                          nightly_watch.OK})
+        self.assertFalse(nightly_watch.evaluate(readings).alarm)
+        # …and the probe really was listed and really was asked for, or the
+        # assertion above would pass for a watcher that never saw it.
+        self.assertTrue(any(f"/contents/{self.PROBE}" in p for p in api.paths))
+        self.assertFalse([p for p in api.paths
+                          if "probe-workflow-ref-caller.yml/runs" in p])
+
+    def test_a_repo_whose_only_listed_workflow_404s_files_no_card(self):
+        readings, _ = _collect({
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                listed_only={self.PROBE: "Probe caller — DRE-2606"}),
+        })
+        self.assertEqual(readings, [])
+        verdict = nightly_watch.evaluate(readings, owner="dreadnought-foundry")
+        self.assertFalse(verdict.alarm)
+        self.assertEqual(verdict.title, "")
+
+    def test_the_gh_cli_404_is_read_as_not_found(self):
+        """Through the real `_gh_api`: `Not Found (HTTP 404)` on stderr is the
+        only thing `gh` says, so that is what is read."""
+        readings = _GhAnswers(contents=_gh_fails(NOT_FOUND)).collect({
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                listed_only={self.PROBE: "Probe caller — DRE-2606"}),
+        })
+        self.assertEqual(readings, [])
+
+    def test_every_other_refusal_of_the_file_stays_unknown(self):
+        """A 403, a 5xx, a throttle, or an answer that will not parse: none of
+        them says the file is absent, so each stays UNKNOWN and alarms."""
+        cases = {name: _gh_fails(stderr, rate_limited=(name == "throttle"))
+                 for name, stderr in REFUSALS.items()}
+        cases["not JSON"] = lambda: "<!DOCTYPE html><title>Unicorn</title>"
+        cases["empty"] = lambda: ""
+        for name, gh in cases.items():
+            with self.subTest(refusal=name):
+                readings = _GhAnswers(contents=gh).collect({
+                    "dreadnought-foundry/agent-bureau": FakeRepo(
+                        workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                        runs={"ci.yml": run_record(hours_ago=2)}),
+                })
+                self.assertEqual(_states(readings),
+                                 {"dreadnought-foundry/agent-bureau · CI":
+                                  nightly_watch.UNKNOWN})
+                verdict = nightly_watch.evaluate(readings)
+                self.assertTrue(verdict.alarm)
+                self.assertEqual(verdict.state, nightly_watch.UNKNOWN)
+
+    def test_a_throttle_that_mentions_404_is_still_a_throttle(self):
+        """The flag comes from GitHub's status, never from a number that
+        happens to appear in the message."""
+        stderr = ("gh: API rate limit exceeded for installation ID 1404 on "
+                  "repos/o/r/contents/404.yml (HTTP 403)")
+        readings = _GhAnswers(
+            contents=_gh_fails(stderr, rate_limited=True)).collect({
+                "dreadnought-foundry/agent-bureau": FakeRepo(
+                    workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                    runs={"ci.yml": run_record(hours_ago=2)}),
+            })
+        self.assertEqual(_states(readings),
+                         {"dreadnought-foundry/agent-bureau · CI":
+                          nightly_watch.UNKNOWN})
+
+    def test_only_a_404_sets_the_not_found_flag(self):
+        with mock.patch.object(nightly_watch, "gh_read",
+                               lambda args, log=None: _gh_fails(NOT_FOUND)()):
+            with self.assertRaises(nightly_watch.Unreadable) as caught:
+                nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+        self.assertTrue(caught.exception.not_found)
+        for name, stderr in REFUSALS.items():
+            with self.subTest(refusal=name), mock.patch.object(
+                    nightly_watch, "gh_read",
+                    lambda args, log=None, s=stderr, n=name: _gh_fails(
+                        s, rate_limited=(n == "throttle"))()):
+                with self.assertRaises(nightly_watch.Unreadable) as caught:
+                    nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+                self.assertFalse(caught.exception.not_found)
 
 
 # --------------------------------------------------------------------------- #
