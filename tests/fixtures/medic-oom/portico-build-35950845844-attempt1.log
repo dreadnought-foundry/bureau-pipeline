@@ -1,0 +1,10 @@
+build	UNKNOWN STEP	2026-09-24T18:02:11.1234567Z Runner name: 'bureau-mini-light-1'
+build	UNKNOWN STEP	2026-09-24T18:02:11.1244567Z Runner group name: 'Default'
+build	UNKNOWN STEP	2026-09-24T18:02:11.1254567Z Machine name: 'bureau-mini-light-1'
+build	UNKNOWN STEP	2026-09-24T18:41:02.7712345Z ##[error]Process completed with exit code 137.
+build	UNKNOWN STEP	2026-09-24T18:41:04.2212345Z ##[group]Run # Deliver the branch if the agent could not
+build	UNKNOWN STEP	2026-09-24T18:41:05.8812345Z ##[error]Process completed with exit code 137.
+build	UNKNOWN STEP	2026-09-24T18:41:07.3312345Z ##[group]Run python3 .bureau-pipeline/scripts/credential_clock.py
+build	UNKNOWN STEP	2026-09-24T18:41:08.9912345Z ##[error]Process completed with exit code 137.
+build	UNKNOWN STEP	2026-09-24T18:41:10.4412345Z ##[group]Run python3 .bureau-pipeline/scripts/death_receipt.py emit
+build	UNKNOWN STEP	2026-09-24T18:41:12.0012345Z ##[error]Process completed with exit code 137.

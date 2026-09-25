@@ -1,0 +1,7 @@
+agent	UNKNOWN STEP	2026-09-24T22:41:03.1234567Z Runner name: 'bureau-mini-light-3'
+agent	UNKNOWN STEP	2026-09-24T22:41:03.1244567Z Runner group name: 'Default'
+agent	UNKNOWN STEP	2026-09-24T22:41:03.1254567Z Machine name: 'bureau-mini-light-3'
+agent	UNKNOWN STEP	2026-09-24T23:09:12.4412345Z ##[error]Process completed with exit code 137.
+agent	UNKNOWN STEP	2026-09-24T23:09:14.0012345Z ##[group]Run # Deliver the branch if the agent could not
+agent	UNKNOWN STEP	2026-09-24T23:09:21.3312345Z push-rescue: delivered the branch and opened dreadnought-foundry/agent-bureau#2767
+agent	UNKNOWN STEP	2026-09-24T23:09:23.7712345Z ##[error]Process completed with exit code 1.
