@@ -1568,6 +1568,12 @@ jobs:
                (git checkout origin/<default-branch> -- <lockfile>) and
                regenerate it from this branch's manifest with the package
                manager (e.g. npm install) so it matches both.
+               If you end without a push — the merge would not go green,
+               or you judged it unsafe — then before you end, write one
+               short paragraph to ${{ steps.handoff.outputs.reason }}: what
+               conflicted, what you tried, and why you did not push. The
+               pull request's escalation quotes it verbatim (DRE-4849);
+               without it a person redoes your diagnosis from scratch.
             3. Fix the findings AND the failing checks on this branch. Stay in
                scope: address what the critic and CI raised, nothing else.
             4. Run the repo's local checks (see .github/bureau/overrides.md)
@@ -1636,7 +1642,7 @@ jobs:
                Use it only for a finding evidence actually settles: a
                disagreement of judgement is ${{ steps.handoff.outputs.blocker }}, and one
                re-review is all this commit gets either way.
-            6c. Those two paths are THIS run's, keyed to this repo, this pull
+            6c. Those paths are THIS run's, keyed to this repo, this pull
                request and this head (DRE-3951). Write them exactly as spelled
                above and nowhere else: a fix-blocker.txt under /tmp belongs to
                whichever job on this machine wrote it, so the Report step
@@ -1937,6 +1943,11 @@ jobs:
           if [ "$REFUTED_RC" -eq 4 ]; then refuse "the refutation is not this run's"; fi
           BLOCKED_RC=0; BLOCKER=$(handoff read --kind blocker) || BLOCKED_RC=$?
           if [ "$BLOCKED_RC" -eq 4 ]; then refuse "the blocker is not this run's"; fi
+          # DRE-4849: the conflict agent's reason for ending without a push.
+          # Read here, with the other two, so a foreign one refuses before
+          # anything is posted; quoted only on the no-new-commit escalation.
+          REASON_RC=0; REASON=$(handoff read --kind reason) || REASON_RC=$?
+          if [ "$REASON_RC" -eq 4 ]; then refuse "the no-push reason is not this run's"; fi
 
           # The copy-pasteable answer format, from its ONE source (DRE-2409).
           # Every comment below that HOLDS this PR quotes it: the escalate-by-
@@ -2194,12 +2205,20 @@ jobs:
                 fi
                 park_for_human
               else
-                gh pr comment "$PR" --repo $REPO \
-                  --body "🛑 Fix attempt $ATTEMPT pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck.
-
-          $FORMAT
-
-          $ANSWERS"
+                # DRE-4849: in conflict mode the body quotes the agent's own
+                # reason for not pushing, or says it left none and names this
+                # run's log. fix_budget.no_push_body owns the wording; the
+                # reason goes through a file so none of it meets the shell.
+                REASON_FILE=$(mktemp)
+                printf '%s' "$REASON" > "$REASON_FILE"
+                NO_PUSH_FILE=$(mktemp)
+                python3 .bureau-pipeline/scripts/fix_budget.py no-push \
+                  --mode "$MODE" --attempt "$ATTEMPT" --head "$POST_SHA" \
+                  --reason-file "$REASON_FILE" --run-url "$RUN_URL" \
+                  --out "$NO_PUSH_FILE" \
+                  || printf '%s' "🛑 Fix attempt $ATTEMPT pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck." > "$NO_PUSH_FILE"
+                printf '\n\n%s\n\n%s\n' "$FORMAT" "$ANSWERS" >> "$NO_PUSH_FILE"
+                gh pr comment "$PR" --repo $REPO --body-file "$NO_PUSH_FILE"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true

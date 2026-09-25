@@ -76,6 +76,11 @@ Contract with agent-fix.yml:
                a plain success.
   exit 0 = decided; exit 2 = malformed input (loud — a silently absent thread
     is how a held PR looks exactly like an unanswered one).
+
+  argv: no-push --mode fix|conflict --attempt N --head SHA
+    --reason-file F --run-url U --out F (DRE-4849).
+  --out        the "pushed no new commit" escalation body, composed by
+               no_push_body. An absent or blank reason file is no reason.
 """
 
 from __future__ import annotations
@@ -279,30 +284,87 @@ def decide(
     )
 
 
+def no_push_body(mode: str, attempt, head: str, reason: str, run_url: str) -> str:
+    """The escalation a fix run posts when it ended with no new commit.
+
+    THE FAULT (DRE-4849, 2026-09-24): the conflict agent ended "success" with
+    no push on portico #699 and #701 twice each and #687 twice, about 30 turns
+    and $0.60 a run on a conflict the operator then resolved in minutes. The
+    action's output is hidden and the agent-log upload had failed, so every one
+    of these reached a person with no reason attached.
+
+    In conflict mode the agent is now asked for a reason file before it ends
+    without a push, and this quotes it verbatim — each line blockquoted, never
+    reflowed. With no reason (absent, or only whitespace) it says the agent
+    left none and names the run log, so the person at least starts there.
+    Fix mode keeps today's wording: that agent already has the blocker file.
+    """
+    body = (
+        f"🛑 Fix attempt {attempt} pushed no new commit (branch still at "
+        f"`{head[:8]}`) — the reviewer will not re-run and the last verdict "
+        "stands. Escalating to a human rather than leaving this PR stuck."
+    )
+    if mode != "conflict":
+        return body
+    if reason.strip():
+        quoted = "\n".join(f"> {line}" if line else ">"
+                           for line in reason.strip("\n").splitlines())
+        return (f"{body}\n\nWhy the conflict agent did not push, in its own "
+                f"words:\n\n{quoted}")
+    return (f"{body}\n\nWhy the conflict agent did not push: the agent left no "
+            f"reason — its run log is {run_url}")
+
+
 def _write(path: Optional[str], text: str) -> None:
     if path:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
 
 
+def _read_reason(path: str) -> str:
+    """The reason file's text; an absent or unreadable file is no reason."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["decide"])
-    parser.add_argument("--comments-file", required=True)
-    parser.add_argument("--worker-login", required=True)
-    parser.add_argument("--mode", choices=sorted(BUDGETS), default="fix")
-    parser.add_argument("--hand-dispatch", default="false")
-    parser.add_argument("--pr", type=int)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    decider = sub.add_parser("decide", help="may this dispatch run?")
+    decider.add_argument("--comments-file", required=True)
+    decider.add_argument("--worker-login", required=True)
+    decider.add_argument("--mode", choices=sorted(BUDGETS), default="fix")
+    decider.add_argument("--hand-dispatch", default="false")
+    decider.add_argument("--pr", type=int)
     # The critic identity, defaulted rather than passed: agent-fix.yml mints
     # only the worker App's token, so the fix job cannot derive this one from
     # an app-slug. The literal lives in fix_concurrency.py, on DRE-2120's
     # roster, and the flag exists so a test can drive a different one.
-    parser.add_argument("--critic-login", default=fix_convergence.CRITIC_LOGIN)
-    parser.add_argument("--env-out")
-    parser.add_argument("--note-out")
-    parser.add_argument("--summary-out")
-    parser.add_argument("--classification-out")
+    decider.add_argument("--critic-login", default=fix_convergence.CRITIC_LOGIN)
+    decider.add_argument("--env-out")
+    decider.add_argument("--note-out")
+    decider.add_argument("--summary-out")
+    decider.add_argument("--classification-out")
+
+    no_push = sub.add_parser("no-push", help="the no-new-commit escalation")
+    no_push.add_argument("--mode", choices=sorted(BUDGETS), default="fix")
+    no_push.add_argument("--attempt", required=True)
+    no_push.add_argument("--head", required=True)
+    no_push.add_argument("--reason-file", required=True)
+    no_push.add_argument("--run-url", required=True)
+    no_push.add_argument("--out", required=True)
+
     args = parser.parse_args(argv)
+
+    if args.command == "no-push":
+        _write(args.out, no_push_body(args.mode, args.attempt, args.head,
+                                      _read_reason(args.reason_file),
+                                      args.run_url))
+        return 0
 
     try:
         with open(args.comments_file, encoding="utf-8") as fh:
