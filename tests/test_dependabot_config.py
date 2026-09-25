@@ -47,14 +47,13 @@ ACTIONS = ROOT / ".github" / "actions"
 # lifts it. The sha is here to answer "does the hold still stand?" off the live
 # tree; the guards that ENFORCE the pin are tests/test_check_action_pins.py and
 # its two siblings, and this file never replaces them.
-HELD_PINS = {
-    "anthropics/claude-code-action": {
-        "ecosystem": "github-actions",
-        "held_sha": "9c5ddab2e6d17b83ea679153b31f1d5f023cf636",  # v1.0.217
-        "held_by": "DRE-3416",
-        "lifted_by": "DRE-3417",
-    },
-}
+#
+# Empty since 2026-09-25: the one hold this table carried —
+# `anthropics/claude-code-action` at v1.0.217 (`9c5ddab2…`), placed by DRE-3416
+# — was lifted by DRE-3417, which moved the pin to v1.0.234 and deleted the rule
+# and this row in the same PR, as `test_the_hold_is_removed_with_the_pin_it_protects`
+# asks. The playbook's "Currently held pins" section keeps the history.
+HELD_PINS = {}
 
 
 def updates_by_ecosystem():

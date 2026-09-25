@@ -36,7 +36,8 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import model_fallback as mf  # noqa: E402
 
 FABLE51 = "claude-fable-5-1"
-OPUS = "claude-opus-5"
+# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836.
+OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
 
 HEARTBEAT_NEEDLE = "planner agent starting"
@@ -108,7 +109,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
             "STUB_THREAD": json.dumps(thread),
             "STUB_LINEAR_LOG": self.log,
             "BUREAU_FAKE_AVAILABLE": json.dumps(
-                available or {FABLE51: True, OPUS: True, SONNET: True}
+                available or {FABLE51: True, OPUS55: True, SONNET: True}
             ),
         })
         if linear_fails:
@@ -132,7 +133,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
     def test_a_death_on_fable_in_the_last_attempt_moves_the_planner_to_opus(self):
         # DRE-3693's thread at 14:28 PT on 2026-09-13, in shape.
         out = self.run_step([self.heartbeat(FABLE51), self.death(FABLE51)])
-        self.assertEqual(out["model"], OPUS)
+        self.assertEqual(out["model"], OPUS55)
         self.assertTrue(out["why"].startswith("DEGRADED"), out["why"])
 
     def test_a_card_with_no_death_stays_on_fable(self):
@@ -142,7 +143,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
     def test_an_old_fable_death_before_a_later_attempt_does_not_hold_fable_off(self):
         # Fable died once, Opus planned after it: the next plan tries Fable again.
         out = self.run_step([
-            self.heartbeat(FABLE51), self.death(FABLE51), self.heartbeat(OPUS),
+            self.heartbeat(FABLE51), self.death(FABLE51), self.heartbeat(OPUS55),
         ])
         self.assertEqual(out["model"], FABLE51)
 
@@ -174,7 +175,7 @@ class TheTwoHalvesAgreeTest(unittest.TestCase):
     def test_the_death_step_writes_the_marker_the_select_step_reads(self):
         record = step("Record is_error death")["run"]
         self.assertIn("error_marker", record)
-        self.assertEqual(mf.error_marker(OPUS), f"model-error: {OPUS}")
+        self.assertEqual(mf.error_marker(OPUS55), f"model-error: {OPUS55}")
         self.assertIn('"model-error: $MODEL"', step("Select model")["run"])
 
 

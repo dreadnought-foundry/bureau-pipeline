@@ -258,15 +258,46 @@ class LiveTreeTest(unittest.TestCase):
         self.assertGreater(pinned, 100, "the live scan went vacuous")
         self.assertEqual(missing, [], f"pins with no version comment: {missing}")
 
-    def test_the_claude_code_action_pin_from_dre_3416_is_preserved(self):
-        """DRE-3416's pin is v1.0.217 and stays there until DRE-3417 — this
-        card resolves every OTHER action at today's tag, not this one."""
+    def test_the_claude_code_action_pin_is_the_dre_3417_release(self):
+        """DRE-3416 held the vendor at v1.0.217 (Claude Code 2.1.263); DRE-3417
+        moved it to v1.0.234 (Claude Code 2.1.282) on 2026-09-25, because the
+        API refuses Claude Opus 5.5 from anything older than 2.1.280 (DRE-4852).
+        One sha, everywhere: a workflow left on the old one would run a vendor
+        action built for a different Claude Code than the one installed."""
         found = set()
         for path in self._yaml_files():
             for ref in check_action_pins.references(path):
                 if ref.action == "anthropics/claude-code-action":
                     found.add(ref.ref)
-        self.assertEqual(found, {"9c5ddab2e6d17b83ea679153b31f1d5f023cf636"})
+        self.assertEqual(found, {"9171db3e57d6a3140a37ddc2ba92788584e0ead6"})
+
+    #: What each vendor sha this repo has pinned installs, read from that
+    #: release's `base-action/action.yml` (`CLAUDE_CODE_VERSION=`). Recorded,
+    #: not fetched: CI here has no business reading another repo at test time.
+    VENDOR_INSTALLS = {
+        "9c5ddab2e6d17b83ea679153b31f1d5f023cf636": "2.1.263",  # v1.0.217
+        "9171db3e57d6a3140a37ddc2ba92788584e0ead6": "2.1.282",  # v1.0.234
+    }
+
+    def test_the_installer_default_is_what_the_pinned_vendor_installs(self):
+        """The pair the installer's own comment promises is held here: its
+        `version` default decides which Claude Code the fleet runs (the vendor
+        skips its install when handed the proved path), so it must be exactly
+        what the pinned vendor release would have installed — moved together,
+        never one without the other."""
+        action = yaml.safe_load(
+            (ROOT / ".github" / "actions" / "install-claude-code" / "action.yml").read_text())
+        default = action["inputs"]["version"]["default"]
+        shas = set()
+        for path in self._yaml_files():
+            for ref in check_action_pins.references(path):
+                if ref.action == "anthropics/claude-code-action":
+                    shas.add(ref.ref)
+        self.assertEqual(len(shas), 1, f"more than one vendor sha pinned: {shas}")
+        (sha,) = shas
+        self.assertIn(sha, self.VENDOR_INSTALLS,
+                      f"record what vendor sha {sha} installs in VENDOR_INSTALLS")
+        self.assertEqual(default, self.VENDOR_INSTALLS[sha])
 
     def test_tests_yml_runs_the_checker(self):
         """A guard nobody runs is a guard that has already failed."""
