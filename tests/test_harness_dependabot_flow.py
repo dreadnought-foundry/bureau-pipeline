@@ -15,6 +15,11 @@ vendor path that produced most of the 2026-07-12 incidents — and asserts:
     receipts on an untouched head means the receipted route was bypassed,
     and receipts past the cap mean the sweep is looping.
 
+When no such PR is open the scenario asserts NONE of that and says so: NOT
+EXERCISABLE, never a pass and never a failure (DRE-4841 — the absence of a
+vendor artifact is not a verdict on the commit). `MissingPrTest` holds that,
+and `EscapeHatchScopeTest` holds its scope.
+
 The LIVE scenario mocks nothing GitHub-side; this suite drives its LOGIC
 against the shared in-memory FakeGitHub. The receipt tag/cap literals the
 scenario matches against are PINNED to reconcile.py's own constants so
@@ -208,8 +213,9 @@ class PureLogicTest(unittest.TestCase):
 class SteadyStateTest(unittest.TestCase):
     def test_settled_head_passes_and_never_touches_the_real_pr(self):
         # Back-to-back-runs steady state: the head already carries its
-        # skipped self-skip run, exactly one receipt, and a bound verdict
-        # (major pins never merge, so the PR persists between runs).
+        # skipped self-skip run, exactly one receipt, and a bound verdict —
+        # what the scenario sees whenever Dependabot has a PR open that the
+        # gate has not merged yet.
         gh = FakeGitHub()
         number, head = _seed_real_pr(gh)
         _skipped_review_runs(gh, head)
@@ -412,14 +418,92 @@ class DirtyPrTest(unittest.TestCase):
 
 
 class MissingPrTest(unittest.TestCase):
-    def test_no_open_dependabot_pr_fails_with_operator_guidance(self):
-        # A Dependabot PR cannot be conjured by API — honest failure with
-        # the regeneration command named beats pretend coverage.
+    """No genuine Dependabot PR open: NOT EXERCISABLE, never a failure and
+    never a pass (DRE-4841).
+
+    The sandbox's standing fixture was bureau-harness #1 — a pytest 7→9 major
+    bump — and it persisted only BECAUSE the gate parks a major for a human.
+    The operator closed it on 2026-09-25T01:44:01Z under the house rule that
+    majors are never auto-filed (DRE-2064), alongside the card that brings the
+    sandbox's `dependabot.yml` to that shape (DRE-4829). With majors ignored,
+    what Dependabot files is a minor/patch bump — the arm the gate
+    AUTO-MERGES — so nothing persists between runs and no fixture is coming
+    back. Reporting its absence as a failed scenario made main permanently red
+    on a vendor artifact nobody can conjure, and held `stable` and every `v*`
+    tag behind it.
+    """
+
+    def test_no_open_dependabot_pr_is_not_exercisable(self):
         gh = FakeGitHub()
         result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(result.errors, [])
+        self.assertIsNone(result.failed_phase)
+        self.assertTrue(result.not_exercisable)
+
+    def test_the_reason_names_what_went_unproven_and_what_still_pins_it(self):
+        # Never a silent green: the clauses that need the live PR are named,
+        # and so are the unit tests that keep the decision table honest
+        # without it.
+        reason = dependabot_flow.NO_PR_REASON
+        self.assertIn("self-skip", reason)
+        self.assertIn("dispatch route", reason)
+        self.assertIn("test_merge_gate_dependabot.py", reason)
+
+    def test_the_reason_explains_why_no_fixture_persists(self):
+        # The absence is the fleet's own policy, not a defect — a reader of the
+        # run must be able to tell those apart without opening Linear.
+        reason = dependabot_flow.NO_PR_REASON
+        self.assertIn("DRE-2064", reason)
+        self.assertIn("DRE-4829", reason)
+
+    def test_the_reason_no_longer_asks_for_the_major_to_be_re_filed(self):
+        # The stale remedy: `@dependabot recreate` on the newest closed
+        # Dependabot PR re-files the semver-major bump the house rule forbids,
+        # so the harness was asking a human to undo their own decision.
+        self.assertNotIn("recreate", dependabot_flow.NO_PR_REASON)
+
+    def test_it_writes_nothing_to_the_sandbox(self):
+        gh = FakeGitHub()
+        framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertEqual(gh.prs, {})
+        self.assertEqual(
+            [c for comments in gh.comments.values() for c in comments], []
+        )
+
+
+class EscapeHatchScopeTest(unittest.TestCase):
+    """The opt-out covers the fixture's ABSENCE and nothing else — a fixture
+    that is present and misbehaving still fails, loudly."""
+
+    def test_a_present_fixture_with_a_crashed_review_still_fails(self):
+        # THE incident class (DRE-2047/2067). If the opt-out could reach this,
+        # the scenario would be decoration.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        gh.check_runs[head] = [
+            {"name": "qa / review", "status": "completed", "conclusion": "failure"},
+        ]
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "APPROVE", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
         self.assertFalse(result.ok)
-        self.assertEqual(result.failed_phase, "setup")
-        self.assertIn("@dependabot recreate", "\n".join(result.errors))
+        self.assertIsNone(result.not_exercisable)
+
+    def test_a_present_fixture_with_a_frozen_head_still_fails(self):
+        # No verdict ever arrives: the receipted route is broken and the PR is
+        # stuck. Present fixture, real failure.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        _skipped_review_runs(gh, head)
+        gh.comments[number].append(_receipt(head))
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.not_exercisable)
 
 
 class RebaseMidFlightTest(unittest.TestCase):
