@@ -124,3 +124,5 @@ The brake is the repository variable `RELEASE_HOLD`, which resolves against the 
 ## What this never does
 
 `write` never raises and never retries. A message that could not be sent is one clause — `decision not recorded: <why>` — the run is as green as it was, and the tag stays the only record a release depends on. A 403 is named for what it is: `caller stub lacks deployments: write`.
+
+It also reads nothing back, which is what makes a half-written message harmless. A run that dies between the two posts leaves a deployment with no status, and nothing is waiting on one: the next run writes its own pair, every run's decision is its own record, and `auto_inactive: false` means neither retires the other.

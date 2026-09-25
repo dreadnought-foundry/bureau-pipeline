@@ -624,6 +624,14 @@ def render() -> str:
         f"on. A 403 is named for what it is: `{LACKS_DEPLOYMENTS}`."
     )
     w("")
+    w(
+        "It also reads nothing back, which is what makes a half-written "
+        "message harmless. A run that dies between the two posts leaves a "
+        "deployment with no status, and nothing is waiting on one: the next "
+        "run writes its own pair, every run's decision is its own record, and "
+        "`auto_inactive: false` means neither retires the other."
+    )
+    w("")
     return "\n".join(out)
 
 
