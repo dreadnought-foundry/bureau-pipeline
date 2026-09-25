@@ -49,6 +49,18 @@ THE THRESHOLDS
     these repos have — this repo's own unit job is budgeted 20 minutes and
     agent-bureau's whole CI is ten jobs — so three hours is not a slow run, it
     is a run that is not going to finish.
+  * **A night's grace for a new schedule** (DRE-4851). A workflow that
+    declares a nightly and has no schedule run yet is judged from when its
+    file last changed on the default branch, against the same 26 hours. On its
+    first evening DRE-4844 called bureau-pipeline's `Pipeline Tests` "never
+    ran" 55 minutes after its schedule merged, eight hours before the cron
+    could first fire. Younger than that is a new nightly waiting for its first
+    run: it does not alarm, and it is not reported as having run either.
+
+A workflow the Actions API lists but whose file is NOT on the default branch —
+a probe that ran once on a branch since deleted — is not a nightly on main and
+produces no reading. Only GitHub's 404 for the file says so; every other
+refusal of the same read stays UNKNOWN.
 
 UNKNOWN IS ITS OWN READING AND NEVER PASSES
 -------------------------------------------
@@ -80,6 +92,7 @@ import base64
 import datetime as dt
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from typing import Callable
@@ -129,6 +142,9 @@ LATE = "late"
 STUCK = "stuck"
 NEVER = "never"
 UNKNOWN = "unknown"
+#: A nightly with no schedule run yet whose file changed on the default branch
+#: inside the grace. Neither an alarm nor a run: it has run nothing.
+WAITING = "waiting"
 
 #: The verdict states. LATE/STUCK/NEVER all mean one thing to a reader — the
 #: nightly did not run — so they share a title and a card.
@@ -153,17 +169,32 @@ DERIVATION = (
     f"the default branch is more than {STALE_AFTER_HOURS:.0f}h old (a nightly "
     f"plus two hours' slack — GitHub does not promise a scheduled run at the "
     f"minute), when its newest run has been queued or in progress for "
-    f"{STUCK_AFTER_HOURS:.0f}h, or when it has never run at all. A run that "
-    f"completed RED does not alarm here: Red-Main Repair already fires on any "
-    f"failed run whose head branch is the default branch, schedule runs "
-    f"included. Watched = every workflow whose file on the default branch "
-    f"triggers on BOTH `pull_request` and `schedule`, read from the file "
-    f"itself — no list of repos or workflows is kept anywhere."
+    f"{STUCK_AFTER_HOURS:.0f}h, or when it has never run at all. A new "
+    f"schedule gets a night's grace: a workflow with no schedule run yet "
+    f"counts as never run only once its file last changed on the default "
+    f"branch more than {STALE_AFTER_HOURS:.0f}h ago, and until then it is "
+    f"waiting for its first run — not an alarm, and not reported as ran. A "
+    f"run that completed RED does not alarm here: Red-Main Repair already "
+    f"fires on any failed run whose head branch is the default branch, "
+    f"schedule runs included. Watched = every workflow whose file on the "
+    f"default branch triggers on BOTH `pull_request` and `schedule`, read from "
+    f"the file itself — no list of repos or workflows is kept anywhere; a "
+    f"workflow whose file GitHub reports is not on the default branch is not "
+    f"a nightly on main and is not read."
 )
 
 
 class Unreadable(RuntimeError):
-    """GitHub did not answer a read. Never a value, never a zero."""
+    """GitHub did not answer a read. Never a value, never a zero.
+
+    `not_found` is True only for GitHub's 404 — the one refusal that is an
+    answer ("there is no such thing here"). Every other refusal, a throttle
+    included, leaves it False.
+    """
+
+    def __init__(self, message: str = "", *, not_found: bool = False):
+        super().__init__(message)
+        self.not_found = not_found
 
 
 @dataclass(frozen=True)
@@ -242,6 +273,13 @@ def _sentence(subject: str, state: str, age_hours: float | None,
                 f"disabled after 60 days of repo inactivity, or a workflow that "
                 f"errors before any job starts all look exactly like this.")
     when = elapsed(age_hours) if age_hours is not None else "an unknown time"
+    if state == WAITING:
+        # `age_hours` here is the FILE's age, not a run's: there is no run.
+        return (f"{subject}: no scheduled run yet, and the workflow file last "
+                f"changed on the default branch {when} ago — a new nightly "
+                f"waiting for its first run, not one that stopped. It has run "
+                f"nothing, and it alarms if no run has happened "
+                f"{STALE_AFTER_HOURS:.0f}h after that change.")
     if state == LATE:
         return (f"{subject}: the newest scheduled run is {when} old. Every "
                 f"suite a pull request skipped in that time has not been run "
@@ -341,6 +379,14 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
     try:
         blob = api(f"repos/{repo}/contents/{path}?ref={branch}")
     except Unreadable as refusal:
+        if refusal.not_found:
+            # The Actions API lists a workflow that has EVER run, on any
+            # branch: a probe that ran once on a branch since deleted stays
+            # `active` forever. GitHub's 404 for the file at the default
+            # branch says it is not there, so it is not a nightly on main.
+            # The repository itself answered a moment ago, so this 404 is
+            # about the file, not about a token that cannot see the repo.
+            return []
         return [Reading(subject, UNKNOWN, _unreadable_file(subject, path, refusal))]
     text = _decode(blob)
     nightly = is_nightly(text) if text is not None else None
@@ -354,19 +400,65 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
         runs = api(
             f"repos/{repo}/actions/workflows/{filename}/runs"
             f"?branch={branch}&event=schedule&per_page=1"
-        ) or {}
+        )
     except Unreadable as refusal:
-        return [Reading(subject, UNKNOWN, (
-            f"{subject}: UNKNOWN — this workflow declares a nightly, and "
-            f"GitHub would not say whether it has run. That is not the same as "
-            f"a nightly that ran. GitHub said: {refusal}"))]
-    record = (runs.get("workflow_runs") or [None])[0] or {}
+        return [Reading(subject, UNKNOWN, _unanswered_runs(subject, refusal))]
+    listed = runs.get("workflow_runs") if isinstance(runs, dict) else None
+    if not isinstance(listed, list):
+        # Only a real, empty list is "no schedule run yet". An answer with no
+        # list in it is an answer we could not read, and reading it as an
+        # empty history is how a nightly that ran gets called "never ran"
+        # (DRE-4867).
+        return [Reading(subject, UNKNOWN, _unanswered_runs(
+            subject, "the answer carried no list of runs"))]
+    record = (listed or [None])[0] or {}
     status = record.get("status")
     conclusion = record.get("conclusion")
     age = hours_since(record.get("created_at"), now=now)
     state = read_run(status, conclusion, age)
+    if state == NEVER:
+        return [_first_night(api, repo, branch, path, subject, now)]
     return [Reading(subject, state,
                     _sentence(subject, state, age, status, conclusion))]
+
+
+def _first_night(api, repo: str, branch: str, path: str, subject: str,
+                 now: str | None) -> Reading:
+    """A nightly with no schedule run yet: new, or never started?
+
+    `read_run` cannot tell — it sees no run either way. When the file last
+    changed on the default branch can: inside `STALE_AFTER_HOURS` the cron may
+    simply not have come round yet. A change GitHub will not date leaves the
+    question unanswered, which is UNKNOWN, never ok.
+    """
+    try:
+        commits = api(f"repos/{repo}/commits?path={path}&sha={branch}&per_page=1")
+    except Unreadable as refusal:
+        return Reading(subject, UNKNOWN, _undated_file(subject, path, refusal))
+    newest = (commits[0] if isinstance(commits, list) and commits
+              and isinstance(commits[0], dict) else None)
+    committer = ((newest or {}).get("commit") or {}).get("committer") or {}
+    changed = hours_since(committer.get("date"), now=now) if newest else None
+    if changed is None:
+        return Reading(subject, UNKNOWN, _undated_file(
+            subject, path, "no dated commit for the file came back"))
+    if changed > STALE_AFTER_HOURS:
+        return Reading(subject, NEVER, _sentence(subject, NEVER, None, None, None))
+    return Reading(subject, WAITING, _sentence(subject, WAITING, changed, None, None))
+
+
+def _unanswered_runs(subject: str, why) -> str:
+    return (f"{subject}: UNKNOWN — this workflow declares a nightly, and "
+            f"GitHub would not say whether it has run. That is not the same as "
+            f"a nightly that ran. GitHub said: {why}")
+
+
+def _undated_file(subject: str, path: str, why) -> str:
+    return (f"{subject}: UNKNOWN — this workflow declares a nightly and has no "
+            f"scheduled run yet, and GitHub would not say when `{path}` last "
+            f"changed on the default branch, so whether it is a new nightly "
+            f"waiting for its first run or one that never started is "
+            f"unanswered. Never reported as ok. GitHub said: {why}")
 
 
 def _unreadable_file(subject: str, path: str, why) -> str:
@@ -412,11 +504,14 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
          card, however many repos we also could not read;
       2. what we could not read is UNKNOWN, never a reassuring silence;
       3. otherwise every nightly we can see has run, and nobody is told
-         anything. Silence is the ordinary outcome.
+         anything. Silence is the ordinary outcome. A new nightly still
+         waiting for its first run is silent too, and named apart from the
+         ones that ran — it has run nothing.
     """
     missing = [r for r in readings if r.state in ALARMING]
     unknown = [r for r in readings if r.state == UNKNOWN]
     fine = [r for r in readings if r.state == OK]
+    waiting = [r for r in readings if r.state == WAITING]
 
     def _detail(head: str, *blocks: str) -> str:
         parts = [head]
@@ -424,6 +519,7 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
             ("Did not run:", missing),
             ("Could not be read:", unknown),
             ("Ran:", fine),
+            ("Waiting for a first run:", waiting),
         ):
             if lines:
                 parts.append(block + "\n" + "\n".join(f"  - {r.detail}" for r in lines))
@@ -472,13 +568,17 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
             ),
         )
 
-    head = (
-        f"Every nightly this watcher can see has run: {len(fine)} watched "
-        f"workflow(s) across the roster."
-        if fine else
-        "No workflow in the roster declares a nightly, so there is nothing to "
-        "watch."
-    )
+    if fine:
+        head = (f"Every nightly this watcher can see has run: {len(fine)} "
+                f"watched workflow(s) across the roster.")
+    elif waiting:
+        head = "No nightly this watcher can see is overdue."
+    else:
+        head = ("No workflow in the roster declares a nightly, so there is "
+                "nothing to watch.")
+    if waiting:
+        head += (f" {len(waiting)} new nightly(s) waiting for a first "
+                 f"scheduled run.")
     return Verdict(state=OK, alarm=False, title="", headline=head,
                    detail=_detail(head))
 
@@ -488,19 +588,35 @@ def evaluate(readings: list, *, owner: str = "") -> Verdict:
 # --------------------------------------------------------------------------- #
 
 
+#: How the gh CLI reports GitHub's 404 on stderr: `gh: Not Found (HTTP 404)`.
+NOT_FOUND_STATUS = re.compile(r"\(HTTP 404\)")
+
+
 def _gh_api(path: str):
     """One GitHub read, retried through the shared read seam.
 
     Every refusal — a throttle that outlasted its retries, a 404, a token that
     cannot see the repository — arrives here as `Unreadable`, which `collect`
-    renders as UNKNOWN. Nothing is ever substituted for an answer.
+    renders as UNKNOWN. Nothing is ever substituted for an answer, and an empty
+    answer is not read as an empty record.
+
+    A 404 is marked `not_found`, because for a file it IS an answer (DRE-4851).
+    `GhReadError` carries no HTTP status, and `gh` says it only on stderr, as
+    `Not Found (HTTP 404)`; the match is on that exact status, so a throttle or
+    a 5xx whose message merely contains the digits 404 is never mistaken for it.
     """
     try:
         answer = gh_read(["api", path], log=lambda line: print(line, file=sys.stderr))
     except GhReadError as refusal:
-        raise Unreadable(str(refusal)) from refusal
+        raise Unreadable(
+            str(refusal),
+            not_found=(not refusal.rate_limited
+                       and bool(NOT_FOUND_STATUS.search(refusal.stderr or ""))),
+        ) from refusal
+    if not answer:
+        raise Unreadable(f"the answer to {path} was empty")
     try:
-        return json.loads(answer or "{}")
+        return json.loads(answer)
     except json.JSONDecodeError as broken:
         raise Unreadable(f"the answer to {path} was not JSON") from broken
 

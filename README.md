@@ -1383,6 +1383,18 @@ deduplicated Linear card through the same `linear_ops.py` mechanism
   **queued or in progress for 3 hours**, or has **never happened at all** —
   the shape of a schedule GitHub disabled after 60 days of repo inactivity, a
   cron typo, or a workflow that errors before any job starts.
+- **A new schedule gets a night's grace** (DRE-4851). A workflow with no
+  schedule run yet counts as "never ran" only once its file last changed on
+  the default branch more than 26 hours ago. Until then it is a new nightly
+  waiting for its first run: it does not alarm, and it is not reported as
+  having run. If GitHub will not say when the file last changed, the workflow
+  is UNKNOWN.
+- **A workflow file that is not on the default branch is not read.** The
+  Actions API lists any workflow that has ever run, on any branch, so a probe
+  that ran once on a deleted branch stays listed. GitHub's 404 for that file on
+  the default branch means it is not a nightly on main, and it produces no
+  reading. Only a 404 counts: a 403, a 5xx, a throttle or an answer that will
+  not parse stays UNKNOWN.
 - **A red nightly is not this alarm's business.** Red-Main Repair already
   fires on any failed run whose head branch is the default branch — it keys on
   the branch, never on the event — so a scheduled run that goes red is
