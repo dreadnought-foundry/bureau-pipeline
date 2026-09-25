@@ -1,0 +1,1276 @@
+[
+ [
+  {
+   "_note": "A RECONSTRUCTION of Portico PR #687's comment thread (DRE-4146), in the array-of-pages shape `gh api --paginate --slurp ...?per_page=100` emits, built from the account on DRE-4848. The real thread is in a private repo the build run's token cannot read (HTTP 404), so this is the SHAPE the defect keys on, not a byte-for-byte capture: more than 100 comments so every halt falls on page 2; two fix runs that pushed nothing at e719f03e; the operator's decision at 20:52 PT and the sweep's acknowledgement; then 40 identical halts one sweep apart, 20:55 PT to 07:20 PT, posted by the dispatch-pool bots whose reader token the Resolve step posted them with (DRE-4282). Earlier review and gate traffic is abridged filler at older commits.",
+   "id": 687001,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:05:00Z",
+   "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @3fa1c07b9e2d4a6c8b1f0e3d5a7c9b2e4f6a8c1d\n\n## For the fixing agent\nRound 1: a finding at 3fa1c07b."
+  },
+  {
+   "id": 687002,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:08:00Z",
+   "body": "📊 fix-convergence: round 1 is CONVERGING — the finding is new."
+  },
+  {
+   "id": 687003,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:11:00Z",
+   "body": "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+  },
+  {
+   "id": 687004,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:14:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 1)."
+  },
+  {
+   "id": 687005,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:17:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 2)."
+  },
+  {
+   "id": 687006,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:20:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 3)."
+  },
+  {
+   "id": 687007,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:23:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 4)."
+  },
+  {
+   "id": 687008,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:26:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 5)."
+  },
+  {
+   "id": 687009,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:29:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 6)."
+  },
+  {
+   "id": 687010,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:32:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 7)."
+  },
+  {
+   "id": 687011,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:35:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 8)."
+  },
+  {
+   "id": 687012,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:38:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 9)."
+  },
+  {
+   "id": 687013,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:41:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 10)."
+  },
+  {
+   "id": 687014,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:44:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 11)."
+  },
+  {
+   "id": 687015,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:47:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 12)."
+  },
+  {
+   "id": 687016,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:50:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 13)."
+  },
+  {
+   "id": 687017,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:53:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 14)."
+  },
+  {
+   "id": 687018,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:56:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 15)."
+  },
+  {
+   "id": 687019,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T16:59:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 16)."
+  },
+  {
+   "id": 687020,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:02:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 17)."
+  },
+  {
+   "id": 687021,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:05:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 18)."
+  },
+  {
+   "id": 687022,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:08:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 19)."
+  },
+  {
+   "id": 687023,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:11:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 20)."
+  },
+  {
+   "id": 687024,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:14:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 21)."
+  },
+  {
+   "id": 687025,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:17:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 22)."
+  },
+  {
+   "id": 687026,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:20:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 23)."
+  },
+  {
+   "id": 687027,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:23:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 24)."
+  },
+  {
+   "id": 687028,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:26:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 25)."
+  },
+  {
+   "id": 687029,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:29:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 3fa1c07b (poll 26)."
+  },
+  {
+   "id": 687030,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:32:00Z",
+   "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @8b24d6e10c3a5f7e9d1b2c4e6a8f0b3d5c7e9a1f\n\n## For the fixing agent\nRound 2: a finding at 8b24d6e1."
+  },
+  {
+   "id": 687031,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:35:00Z",
+   "body": "📊 fix-convergence: round 2 is CONVERGING — the finding is new."
+  },
+  {
+   "id": 687032,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:38:00Z",
+   "body": "🔧 Fix attempt 2 pushed — CI and critic review re-running."
+  },
+  {
+   "id": 687033,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:41:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 1)."
+  },
+  {
+   "id": 687034,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:44:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 2)."
+  },
+  {
+   "id": 687035,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:47:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 3)."
+  },
+  {
+   "id": 687036,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:50:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 4)."
+  },
+  {
+   "id": 687037,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:53:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 5)."
+  },
+  {
+   "id": 687038,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:56:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 6)."
+  },
+  {
+   "id": 687039,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T17:59:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 7)."
+  },
+  {
+   "id": 687040,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:02:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 8)."
+  },
+  {
+   "id": 687041,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:05:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 9)."
+  },
+  {
+   "id": 687042,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:08:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 10)."
+  },
+  {
+   "id": 687043,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:11:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 11)."
+  },
+  {
+   "id": 687044,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:14:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 12)."
+  },
+  {
+   "id": 687045,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:17:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 13)."
+  },
+  {
+   "id": 687046,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:20:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 14)."
+  },
+  {
+   "id": 687047,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:23:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 15)."
+  },
+  {
+   "id": 687048,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:26:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 16)."
+  },
+  {
+   "id": 687049,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:29:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 17)."
+  },
+  {
+   "id": 687050,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:32:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 18)."
+  },
+  {
+   "id": 687051,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:35:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 19)."
+  },
+  {
+   "id": 687052,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:38:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 20)."
+  },
+  {
+   "id": 687053,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:41:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 21)."
+  },
+  {
+   "id": 687054,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:44:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 22)."
+  },
+  {
+   "id": 687055,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:47:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 23)."
+  },
+  {
+   "id": 687056,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:50:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 24)."
+  },
+  {
+   "id": 687057,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:53:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 25)."
+  },
+  {
+   "id": 687058,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:56:00Z",
+   "body": "⏳ merge-gate: waiting on checks at 8b24d6e1 (poll 26)."
+  },
+  {
+   "id": 687059,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T18:59:00Z",
+   "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @c05e9a724d6f8b0a2c4e6d8f1a3b5c7e9f0a2b4d\n\n## For the fixing agent\nRound 3: a finding at c05e9a72."
+  },
+  {
+   "id": 687060,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:02:00Z",
+   "body": "📊 fix-convergence: round 3 is CONVERGING — the finding is new."
+  },
+  {
+   "id": 687061,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:05:00Z",
+   "body": "🔧 Fix attempt 3 pushed — CI and critic review re-running."
+  },
+  {
+   "id": 687062,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:08:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 1)."
+  },
+  {
+   "id": 687063,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:11:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 2)."
+  },
+  {
+   "id": 687064,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:14:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 3)."
+  },
+  {
+   "id": 687065,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:17:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 4)."
+  },
+  {
+   "id": 687066,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:20:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 5)."
+  },
+  {
+   "id": 687067,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:23:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 6)."
+  },
+  {
+   "id": 687068,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:26:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 7)."
+  },
+  {
+   "id": 687069,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:29:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 8)."
+  },
+  {
+   "id": 687070,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:32:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 9)."
+  },
+  {
+   "id": 687071,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:35:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 10)."
+  },
+  {
+   "id": 687072,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:38:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 11)."
+  },
+  {
+   "id": 687073,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:41:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 12)."
+  },
+  {
+   "id": 687074,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:44:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 13)."
+  },
+  {
+   "id": 687075,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:47:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 14)."
+  },
+  {
+   "id": 687076,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:50:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 15)."
+  },
+  {
+   "id": 687077,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:53:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 16)."
+  },
+  {
+   "id": 687078,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:56:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 17)."
+  },
+  {
+   "id": 687079,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T19:59:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 18)."
+  },
+  {
+   "id": 687080,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:02:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 19)."
+  },
+  {
+   "id": 687081,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:05:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 20)."
+  },
+  {
+   "id": 687082,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:08:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 21)."
+  },
+  {
+   "id": 687083,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:11:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 22)."
+  },
+  {
+   "id": 687084,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:14:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 23)."
+  },
+  {
+   "id": 687085,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:17:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 24)."
+  },
+  {
+   "id": 687086,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:20:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 25)."
+  },
+  {
+   "id": 687087,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:23:00Z",
+   "body": "⏳ merge-gate: waiting on checks at c05e9a72 (poll 26)."
+  },
+  {
+   "id": 687088,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:26:00Z",
+   "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @e719f03e5b2c94d1a07e3f68c1d2b9a04e57f1c3\n\n## For the fixing agent\nRound 4: the branding GET still answers a non-foundry tenant."
+  },
+  {
+   "id": 687089,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:29:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 1)."
+  },
+  {
+   "id": 687090,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:32:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 2)."
+  },
+  {
+   "id": 687091,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:35:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 3)."
+  },
+  {
+   "id": 687092,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:38:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 4)."
+  },
+  {
+   "id": 687093,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:41:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 5)."
+  },
+  {
+   "id": 687094,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:44:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 6)."
+  },
+  {
+   "id": 687095,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:47:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 7)."
+  },
+  {
+   "id": 687096,
+   "user": {
+    "login": "agent-bureau-qa-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:50:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 8)."
+  },
+  {
+   "id": 687097,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:53:00Z",
+   "body": "⏳ merge-gate: waiting on checks at e719f03e (poll 9)."
+  },
+  {
+   "id": 687098,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:56:00Z",
+   "body": "🛑 Fix attempt 4 pushed no new commit (branch still at `e719f03e`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck."
+  },
+  {
+   "id": 687099,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-24T20:59:00Z",
+   "body": "🛑 Fix attempt 5 pushed no new commit (branch still at `e719f03e`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck."
+  },
+  {
+   "id": 687100,
+   "user": {
+    "login": "smeed652",
+    "type": "User"
+   },
+   "created_at": "2026-09-25T03:52:00Z",
+   "body": "**Operator decision** — the foundry-only default is right; keep it and answer the remaining finding."
+  }
+ ],
+ [
+  {
+   "id": 687101,
+   "user": {
+    "login": "agent-bureau-bot[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T03:53:30Z",
+   "body": "🔓 decision-restart: your decision was picked up. This pull request's fix loop is restarting on it."
+  },
+  {
+   "id": 687102,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T03:55:00Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687103,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T04:11:01Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687104,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T04:27:03Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687105,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T04:43:04Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687106,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T04:59:06Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687107,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T05:15:07Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687108,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T05:31:09Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687109,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T05:47:10Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687110,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T06:03:12Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687111,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T06:19:13Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687112,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T06:35:15Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687113,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T06:51:16Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687114,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T07:07:18Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687115,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T07:23:20Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687116,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T07:39:21Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687117,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T07:55:23Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687118,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T08:11:24Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687119,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T08:27:26Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687120,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T08:43:27Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687121,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T08:59:29Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687122,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T09:15:30Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687123,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T09:31:32Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687124,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T09:47:33Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687125,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T10:03:35Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687126,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T10:19:36Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687127,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T10:35:38Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687128,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T10:51:40Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687129,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T11:07:41Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687130,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T11:23:43Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687131,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T11:39:44Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687132,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T11:55:46Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687133,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T12:11:47Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687134,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T12:27:49Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687135,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T12:43:50Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687136,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T12:59:52Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687137,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T13:15:53Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687138,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T13:31:55Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687139,
+   "user": {
+    "login": "agent-bureau-bot-3[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T13:47:56Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687140,
+   "user": {
+    "login": "agent-bureau-bot-4[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T14:03:58Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  },
+  {
+   "id": 687141,
+   "user": {
+    "login": "agent-bureau-bot-2[bot]",
+    "type": "Bot"
+   },
+   "created_at": "2026-09-25T14:20:00Z",
+   "body": "🧯 fix-convergence-halt @e719f03e: 2 fix runs on this exact commit already ended with nothing to show — the loop is not converging, so the pipeline refuses to dispatch another identical run. A human decision (or a new commit on the branch) is needed to move this PR."
+  }
+ ]
+]
