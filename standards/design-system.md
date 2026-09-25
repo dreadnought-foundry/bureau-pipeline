@@ -45,6 +45,36 @@ is **recorded in `LOCK.json`** — the locked token set, the locked atom set, an
 the date agreed. `LOCK.json` IS the record, so a token or atom
 that is not in it is not locked, and a design that uses one is not done.
 
+**What counts as his agreement, and who writes it down**, the CEO settled on
+**2026-09-24**: *"let's remove this restriction going forward, if I approve the
+design that is all I need to do."* (DRE-4833.) Five points, and they are the
+rule:
+
+1. **Approving a design IS the agreement.** When the CEO approves a design — a
+   mockup, an artifact, a screenshot, or his answer on one in a session — that
+   approval covers **every token and atom addition or change the design shows**.
+   Nobody asks him again per atom, and no operator decision is brought to him
+   for one.
+2. **The builder records it, in the same PR.** The builder writes the entry —
+   his words, the date, and where he said it — citing the design approval: in
+   `LOCK.json` for the fleet shape above, or in the repo's own approval record
+   (Portico's `atoms.approved.test.ts`). Recording is the builder's
+   bookkeeping, not a step the CEO takes.
+3. **The critic accepts a recorded design approval.** A PR is not held because
+   the approval was recorded by its own builder. The critic checks that the
+   atom change **is what the approved design shows**; it does not check who
+   typed the record.
+4. **A card cannot forbid what an approved design needs.** A card's "no file in
+   `atoms/` changes" criterion yields to an approved design that changes one,
+   and card authors do not write that criterion where a design is approved.
+5. **What stays gated:** a token or atom change **no approved design shows**.
+   The remedy is to show him the design, which is still the one step.
+
+Origin: Portico PR #697 (DRE-4757) was held twice over an atom change the CEO
+had asked for, because the card said no atom changes and the only record of his
+OK was the builder's commit message. He had to be asked again, and an operator
+decision posted, before it could move. Points 1-4 remove that second step.
+
 Everything above atoms moves freely: molecules, organisms, templates and screens
 are composed out of the locked set and need no fresh agreement.
 
