@@ -15,9 +15,14 @@ FIX UNDER TEST (defense at the consumer — wins fleet-wide):
     Skip when EITHER (a) the card's newest 🧠 model-attempt heartbeat maps
     to a run that GitHub says is still queued/in_progress and is NOT this
     run (the DRE-2032 card→run mapping), or (b) an OPEN agent PR for the
-    card already exists. A re-dispatch after the PR closed/merged still
-    builds (the rebuild case); unreadable answers PROCEED (fail-open — a
-    missed skip is exactly the status quo, a false skip strands the card).
+    card already exists. A re-dispatch after the PR closed still builds
+    (the rebuild case); unreadable answers PROCEED (fail-open — a missed
+    skip is exactly the status quo, a false skip strands the card).
+
+    DRE-4830 added two more refusals — a MERGED agent PR, and a card whose
+    lane is past building — and the tests for those live in
+    tests/test_queued_run_not_redispatched.py beside the writer that
+    produced the duplicate. What the file below still pins is unchanged.
   - agent-task.yml runs the guard right after the card-validation gate and
     every downstream step skips on `steps.dedupe.outputs.skip == 'true'`,
     so a dup run exits clean: no branch, no PR, no dead-run requeue.
@@ -65,7 +70,7 @@ def test_open_agent_pr_skips():
     means the dup must not build a second one."""
     d = dedupe_dispatch.decide(
         "DRE-2053", "222", [], _no_status_calls,
-        [{"number": 102, "headRefName": "agent/DRE-2053-allowed-bots-github-actions"}],
+        [{"number": 102, "headRefName": "agent/DRE-2053-allowed-bots-github-actions", "state": "OPEN"}],
     )
     assert d.skip is True
     assert "#102" in d.reason
@@ -134,13 +139,14 @@ def test_newest_heartbeat_wins():
     assert asked == ["111"]
 
 
-def test_closed_pr_is_invisible():
-    """Only OPEN PRs gate — the caller feeds `gh pr list --state open`, so a
-    merged/closed twin never appears here; pin that an unrelated open PR for
-    ANOTHER card does not skip this one."""
+def test_another_cards_pr_is_invisible():
+    """Only THIS card's agent PR gates: an unrelated open PR for another card
+    does not skip this one. (Which STATES gate is a separate question, and since
+    DRE-4830 the list carries every state — see
+    tests/test_queued_run_not_redispatched.py.)"""
     d = dedupe_dispatch.decide(
         "DRE-2053", "222", [], _no_status_calls,
-        [{"number": 104, "headRefName": "agent/DRE-2056-self-stub-dispatch-parity"}],
+        [{"number": 104, "headRefName": "agent/DRE-2056-self-stub-dispatch-parity", "state": "OPEN"}],
     )
     assert d.skip is False
 
@@ -150,7 +156,7 @@ def test_near_miss_identifier_does_not_match():
     class reconcile.pr_for anchors against)."""
     d = dedupe_dispatch.decide(
         "DRE-205", "222", [], _no_status_calls,
-        [{"number": 102, "headRefName": "agent/DRE-2053-allowed-bots"}],
+        [{"number": 102, "headRefName": "agent/DRE-2053-allowed-bots", "state": "OPEN"}],
     )
     assert d.skip is False
 
@@ -160,7 +166,7 @@ def test_non_agent_branch_does_not_match():
     card's agent PR."""
     d = dedupe_dispatch.decide(
         "DRE-2053", "222", [], _no_status_calls,
-        [{"number": 50, "headRefName": "repair/DRE-2053-red-main"}],
+        [{"number": 50, "headRefName": "repair/DRE-2053-red-main", "state": "OPEN"}],
     )
     assert d.skip is False
 
@@ -193,6 +199,11 @@ def _gh_output(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_RUN_ID", "222")
     monkeypatch.setenv("GITHUB_REPOSITORY", "dreadnought-foundry/bureau-pipeline")
+    # The lane a card being dispatched is actually in (DRE-4830 added the read).
+    # Pinned here so each test below stays about its own subject — the shipped-
+    # lane condition has its own coverage in
+    # tests/test_queued_run_not_redispatched.py.
+    monkeypatch.setattr(dedupe_dispatch, "_current_lane", lambda ident: "Todo")
     return out
 
 
@@ -204,7 +215,7 @@ def test_cmd_gate_skip_emits_output_and_receipt(_gh_output):
     ), patch.object(
         dedupe_dispatch, "_run_status", return_value="in_progress"
     ), patch.object(
-        dedupe_dispatch, "_open_prs", return_value=[]
+        dedupe_dispatch, "_card_prs", return_value=[]
     ), patch.object(
         dedupe_dispatch.linear_ops, "cmd_comment"
     ) as receipt:
@@ -222,7 +233,7 @@ def test_cmd_gate_clean_emits_skip_false(_gh_output):
     with patch.object(
         dedupe_dispatch.linear_ops, "comment_bodies", return_value=[]
     ), patch.object(
-        dedupe_dispatch, "_open_prs", return_value=[]
+        dedupe_dispatch, "_card_prs", return_value=[]
     ), patch.object(
         dedupe_dispatch.linear_ops, "cmd_comment"
     ) as receipt:
@@ -237,7 +248,7 @@ def test_cmd_gate_fails_open_on_linear_error(_gh_output):
         dedupe_dispatch.linear_ops, "comment_bodies",
         side_effect=RuntimeError("linear 500"),
     ), patch.object(
-        dedupe_dispatch, "_open_prs", return_value=[]
+        dedupe_dispatch, "_card_prs", return_value=[]
     ):
         dedupe_dispatch.cmd_gate("DRE-2053")
     assert "skip=false" in _gh_output.read_text()
@@ -249,8 +260,8 @@ def test_cmd_gate_receipt_failure_still_skips(_gh_output):
     with patch.object(
         dedupe_dispatch.linear_ops, "comment_bodies", return_value=[]
     ), patch.object(
-        dedupe_dispatch, "_open_prs",
-        return_value=[{"number": 102, "headRefName": "agent/DRE-2053-x"}],
+        dedupe_dispatch, "_card_prs",
+        return_value=[{"number": 102, "headRefName": "agent/DRE-2053-x", "state": "OPEN"}],
     ), patch.object(
         dedupe_dispatch.linear_ops, "cmd_comment",
         side_effect=RuntimeError("linear 500"),

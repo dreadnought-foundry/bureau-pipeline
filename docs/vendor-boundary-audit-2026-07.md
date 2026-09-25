@@ -737,19 +737,29 @@ no partial state.
 ## Duplicate-dispatch guard — scripts/dedupe_dispatch.py
 
 **Q1 — actor.** Runs inside agent-task before any state mutation; reads only
-worker-authored heartbeats and open `agent/<DRE-N>` PRs (`\b`-anchored so
-DRE-205 never matches DRE-2053).
+worker-authored heartbeats, the card's own lane, and `agent/<DRE-N>` PRs
+(`\b`-anchored so DRE-205 never matches DRE-2053).
 
 **Q2 — secrets.** Uses the run's own worker token + LINEAR_API_KEY; no
 separate event context.
 
 **Q3 — vendor behavior.** Liveness is GitHub's own run status, not a
 timestamped marker: a heartbeat whose run is `completed` (crashed or finished)
-does NOT block — the rebuild proceeds (DRE-2057). Closed/merged twin PRs are
-invisible by design.
+does NOT block — the rebuild proceeds (DRE-2057). ~~Closed/merged twin PRs are
+invisible by design.~~ **Superseded 2026-09-25 (DRE-4830):** a MERGED agent PR
+now refuses the build, and so does a card whose lane is the review lane or Done.
+Only a CLOSED-unmerged PR is still invisible — that is an abandoned attempt and
+the card still owes work, which is the OPEN-or-MERGED line `card_pr.has_work_pr`
+draws. The merged half was not hypothetical: on 2026-09-24 DRE-4518's duplicate
+run started twenty minutes after its own PR #700 merged and pushed a
+from-scratch second build onto the merged branch (DRE-4828).
 
-**Q4 — command limitations.** `gh pr list` (full list, not search) because the
-search index lags seconds behind — exactly the window a twin dispatch lives in.
+**Q4 — command limitations.** `gh pr list` plain list FIRST, not search,
+because the search index lags seconds behind — exactly the window a twin
+dispatch lives in; the `head:agent/<DRE-N>` search is the second read, for a
+merged PR that has fallen off the newest-100 window. `--state all` since
+DRE-4830: gh's open-only default is the DRE-2316 blindness, and it is what made
+a merged PR invisible here.
 
 **Q5 — crash mid-flow.** FAIL-OPEN by design (it gates a build, not a merge):
 any unreadable input proceeds, worst case a twin PR. The skip receipt carries

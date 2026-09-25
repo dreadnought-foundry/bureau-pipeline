@@ -71,6 +71,11 @@ def _dispatch_run_factory(rc: int, calls: list):
         # unlanded-work watchdog, which lists branches and compares them.)
         if argv[:2] == ["gh", "pr"]:
             return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        if argv[:2] == ["gh", "run"]:
+            # DRE-4830 made the Todo branch ask GitHub whether a build run for
+            # the card is already in flight. An empty listing is "none", which
+            # is the case this test is about.
+            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
         if (
             argv[:2] == ["gh", "api"]
             and "-X" not in argv

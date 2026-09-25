@@ -10,7 +10,7 @@ twin PRs, one hand-closed after the other merges. Five known occurrences
 (bureau-pipeline PRs #76, #83, #90, #97, #103); the pipeline must be
 idempotent at the consumer regardless of the dup's source.
 
-The decision (either condition skips; both unreadable → proceed):
+The decision (any condition skips; all unreadable → proceed):
 
 (a) LIVE RUN — the card's newest 🧠 model-attempt heartbeat maps the card
     to its Actions run (the DRE-2032 contract reconcile.agent_run_alive
@@ -19,12 +19,41 @@ The decision (either condition skips; both unreadable → proceed):
     waiting / …), another attempt is live — skip. Our own run id never
     counts: a job re-run reuses its id and must not skip on its own
     earlier heartbeat.
-(b) OPEN AGENT PR — an open PR whose head branch is agent/<DRE-N>-* (the
-    identifier \\b-anchored, the DRE-1034 vs DRE-10345 near-miss guard from
-    reconcile.pr_for) means the card is already built and in review — a
-    second build could only produce the twin. Only OPEN PRs gate: a
-    re-dispatch after the PR closed/merged is the legitimate rebuild case
-    and proceeds.
+(b) THE WORK ALREADY SHIPPED — the card's agent PR (head branch
+    agent/<DRE-N>-*, the identifier \\b-anchored, the DRE-1034 vs DRE-10345
+    near-miss guard from reconcile.pr_for) is OPEN or MERGED. Open means
+    the card is built and in review and a second build could only produce
+    the twin. MERGED means it is built and landed, and a second build is
+    strictly worse than the twin: the branch it pushes to is a merged
+    branch, so the work goes nowhere anybody will read it (DRE-4830, below).
+    A CLOSED-unmerged PR is an abandoned attempt and still rebuilds — the
+    same OPEN-or-MERGED line card_pr.has_work_pr draws for DRE-2316.
+(c) THE CARD IS PAST BUILDING — the card's own lane is the review lane or
+    Done. The lanes are sliced from the flow at the review lane rather than
+    listed, so a board rename is a change to the contract file and not to
+    this guard (DRE-2726).
+
+## WHY (b) GREW A SECOND HALF (DRE-4830, portico, 2026-09-24)
+
+Seven portico cards were promoted to Todo at 14:59 PT and dispatched. The
+mini was saturated — 78 jobs waiting at 17:00 — so every run sat `queued`,
+posted no heartbeat, and the reconcile sweep's Todo branch read "no run
+receipt" as "no run" and re-dispatched six of them sixteen minutes later.
+That writer is fixed at its own end (`reconcile.build_run_refusal`); this
+is the consumer's half, and it is what catches whatever produces the next
+duplicate.
+
+Five of those duplicates skipped here on the OPEN half, hours later. The
+sixth did not: DRE-4518's run 36066445856 started at 17:44, after
+DRE-4518's PR #700 had merged at 17:24, and this guard's only PR condition
+was "is one OPEN" — so it proceeded and rebuilt the same three tools from
+scratch onto the merged branch, commits 31eda89a and e4bcd37b. That is the
+stranded-commit card DRE-4828, cancelled as a duplicate.
+
+"Closed/merged twin PRs are invisible by design" was the rule until that
+happened, and the reasoning was sound for CLOSED and wrong for MERGED: a
+closed PR means the attempt was abandoned and the card still owes work,
+while a merged one means the card owes nothing at all.
 
 FAIL-OPEN by design, the opposite of the merge gate: this guard gates a
 BUILD, not a merge. A missed skip (unreadable status, PR-list blip) is
@@ -101,6 +130,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 
+import card_pr  # ONE line between "abandoned" and "shipped" (DRE-2316)
+import lane_contract
 import lane_scope
 import linear_ops
 
@@ -109,6 +140,14 @@ import linear_ops
 # reader.
 RUN_MARKER = "🧠 model-attempt:"
 _RUN_ID = re.compile(r"/actions/runs/(\d+)\b")
+
+#: The lanes whose occupancy means this card is past being built: the review
+#: lane and everything after it. SLICED from the flow at the review lane, never
+#: enumerated — a lane's position is part of what the lane IS (DRE-2726), so a
+#: board rename is one edit in `config/lane-contract.json` and none here.
+SHIPPED_LANES = lane_scope.LANE_FLOW[
+    lane_scope.LANE_FLOW.index(lane_contract.lane("In Review")["name"]):
+]
 
 
 @dataclass
@@ -131,13 +170,26 @@ def heartbeat_run_id(comment_bodies: list) -> Optional[str]:
     return None
 
 
-def open_agent_pr(open_prs: list, identifier: str) -> Optional[dict]:
-    """The card's open agent PR: head branch agent/<DRE-N>… with the
-    identifier \\b-anchored so DRE-205 never matches agent/DRE-2053-*.
-    Repair/* and other non-agent branches never gate a build."""
+def agent_pr(prs: list, identifier: str) -> Optional[dict]:
+    """The card's newest agent PR, WHATEVER its state: head branch
+    agent/<DRE-N>… with the identifier \\b-anchored so DRE-205 never matches
+    agent/DRE-2053-*. Repair/* and other non-agent branches never gate a build.
+
+    The state is the caller's to read (`card_pr.pr_state`): since DRE-4830 OPEN
+    and MERGED both refuse and CLOSED still rebuilds, so a list filtered to open
+    PRs before it got here would hide half the answer."""
     rx = re.compile(rf"^agent/{re.escape(identifier)}\b")
-    matches = [pr for pr in open_prs if rx.match(pr.get("headRefName") or "")]
+    matches = [pr for pr in prs if rx.match(pr.get("headRefName") or "")]
     return max(matches, key=lambda pr: pr["number"]) if matches else None
+
+
+def shipped_lane(card_lane: str) -> str:
+    """The contract's name for `card_lane` when the card is past being built —
+    the review lane or Done — else ''. An unreadable lane is '' (fail-open), and
+    the name is resolved through the contract's rename aliases so a board
+    mid-rename does not read as a card still in Todo."""
+    name = _canonical_lane(card_lane)
+    return name if name in SHIPPED_LANES else ""
 
 
 def decide(
@@ -145,19 +197,40 @@ def decide(
     own_run_id: str,
     comment_bodies: list,
     run_status: Callable[[str], str],
-    open_prs: list,
+    prs: list,
+    card_lane: str = "",
 ) -> Decision:
     """The skip decision. `run_status` answers a run id with GitHub's
     .status ('' when unreadable — proceeds, fail-open); it is consulted only
-    when the newest heartbeat names a run that is not this one. The PR check
-    runs first: an open agent PR is the twin vector itself, no API status
-    needed."""
-    pr = open_agent_pr(open_prs, identifier)
-    if pr:
+    when the newest heartbeat names a run that is not this one.
+
+    `prs` is the card's pull requests in EVERY state (`_card_prs`), and
+    `card_lane` the card's lane as it is now ('' when unreadable). Both of the
+    cheap, already-read conditions run before the API status: a card whose work
+    has shipped needs no run status to be refused.
+    """
+    lane = shipped_lane(card_lane)
+    if lane:
+        return Decision(
+            True,
+            f"{identifier} is in {lane} — this card is past being built, so a "
+            "build run could only rebuild work that has already shipped — "
+            "duplicate dispatch",
+        )
+    pr = agent_pr(prs, identifier)
+    state = card_pr.pr_state(pr)
+    if state == card_pr.OPEN:
         return Decision(
             True,
             f"open agent PR #{pr['number']} ({pr['headRefName']}) already "
             f"exists for {identifier} — duplicate dispatch",
+        )
+    if state == card_pr.MERGED:
+        return Decision(
+            True,
+            f"agent PR #{pr['number']} ({pr['headRefName']}) for {identifier} "
+            "has already MERGED — a second build would push to a merged branch "
+            "and strand there (DRE-4828) — duplicate dispatch",
         )
     run_id = heartbeat_run_id(comment_bodies)
     if run_id and run_id != str(own_run_id):
@@ -169,15 +242,20 @@ def decide(
                 "duplicate dispatch",
             )
     return Decision(
-        False, f"no live run or open agent PR for {identifier} — proceeding"
+        False,
+        f"no live run, no open or merged agent PR, and {identifier} is not past "
+        "being built — proceeding",
     )
 
 
 # --- the planner's duplicate guard (DRE-3409; pure core) ----------------------
 
-# plan.yml names its job after the card (DRE-3223). Through a stub the jobs API
-# reports it as `call / bureau-card: DRE-3244`, so the identifier is matched
-# \\b-anchored inside the name — the DRE-1034 vs DRE-10345 near-miss guard again.
+# plan.yml names its job after the card (DRE-3223), and agent-task.yml does too
+# since DRE-4830. Through a stub the jobs API reports it as
+# `call / bureau-card: DRE-3244`, so the identifier is matched \\b-anchored
+# inside the name — the DRE-1034 vs DRE-10345 near-miss guard again. ONE parse of
+# the convention, for every reader of it: `reconcile.build_run_refusal` asks this
+# module rather than growing a regex of its own.
 PLAN_JOB_MARKER = "bureau-card:"
 
 
@@ -287,15 +365,18 @@ _MAX_JOB_READS = _RUNS_PAGE
 
 def sibling_on_this_card(candidates: list, identifier: str,
                          job_names_of) -> list:
-    """The first candidate whose jobs say it is THIS card's planner run, as a
-    0-or-1 list. One sibling is the whole of what `plan_decide` needs, so the
-    scan short-circuits on it and the read budget is only ever spent in full
-    when this card has no duplicate at all.
+    """The first candidate whose jobs say it is THIS card's run, as a 0-or-1
+    list. One sibling is the whole of what `plan_decide` needs — and the whole of
+    what `reconcile.build_run_refusal` needs of the build workflow (DRE-4830) —
+    so the scan short-circuits on it and the read budget is only ever spent in
+    full when this card has no duplicate at all.
 
-    `candidates` is every in-flight run of the shared planner workflow, across
-    every card, newest first. `job_names_of` takes a run id and returns its job
+    `candidates` is every in-flight run of the shared workflow, across every
+    card, newest first. `job_names_of` takes a run id and returns its job
     names — injected so the ordering this function fixes is testable without
-    GitHub. A truncated scan says so on stderr rather than reading as a clean
+    GitHub, and so each caller can bring its own token (reconcile's Actions
+    reads need the dispatch token; this module's do not). A truncated scan says
+    so on stderr rather than reading as a clean
     'no duplicate': "the read ran out" and "there is no duplicate" are
     different facts and get different output (`standards/console-honesty.md`
     rule 2).
@@ -388,25 +469,49 @@ def _run_status(run_id: str) -> str:
     return p.stdout.strip()
 
 
-def _open_prs() -> list:
-    """All open PRs (number + head branch). A plain list, not a search query:
-    the twin PR may be seconds old and search-index lag would hide exactly
-    the PR this guard exists to see. [] on any failure (fail-open — a blip
-    parsed as no-PR reproduces the status quo, never strands the card)."""
+#: The fields `decide` reads off a pull request. `state` is not optional since
+#: DRE-4830: OPEN and MERGED are different decisions, and `gh pr list` defaults
+#: to open-only — the DRE-2316 blindness, which is exactly how a merged PR came
+#: to be invisible to this guard.
+_PR_FIELDS = "number,headRefName,state"
+
+
+def _pr_list(*args: str) -> list:
+    """One `gh pr list --state all` read; [] on any failure (fail-open)."""
     p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-        ["gh", "pr", "list", "--repo", _repo(), "--state", "open",
-         "--limit", "100", "--json", "number,headRefName"],
+        ["gh", "pr", "list", "--repo", _repo(), "--state", "all",
+         "--json", _PR_FIELDS, *args],
         capture_output=True, text=True, check=False,
     )
     if p.returncode != 0:
-        print(f"open-PR read failed (rc={p.returncode}) — proceeding "
-              "on fail-open", file=sys.stderr)
+        print(f"PR read failed (rc={p.returncode}: gh pr list "
+              f"{' '.join(args)}) — proceeding on fail-open", file=sys.stderr)
         return []
     try:
         prs = json.loads(p.stdout or "[]")
     except json.JSONDecodeError:
         return []
     return prs if isinstance(prs, list) else []
+
+
+def _card_prs(identifier: str) -> list:
+    """The card's pull requests in EVERY state (number, head branch, state).
+
+    A PLAIN LIST FIRST, not a search query: the twin PR may be seconds old and
+    search-index lag would hide exactly the PR this guard exists to see. The
+    `head:agent/<DRE-N>` search is the second read, and only when the plain list
+    carried nothing for this card — a merged PR for an old card can fall off the
+    newest-100 window, which is the half `reconcile.pr_for` covers with the same
+    two queries in the other order.
+
+    [] on any failure (fail-open — a blip parsed as no-PR reproduces the status
+    quo, never strands the card).
+    """
+    prs = _pr_list("--limit", "100")
+    if any(card_pr.matches_card(pr.get("headRefName"), identifier)
+           for pr in prs):
+        return prs
+    return prs + _pr_list("--limit", "30", "--search", f"head:agent/{identifier}")
 
 
 def _gh_json(*args: str):
@@ -523,18 +628,28 @@ def _receipt(identifier: str, decision: Decision, did_nothing: str) -> None:
 
 
 def cmd_gate(identifier: str) -> None:
+    """The build guard. Every read fails open on its own, so a Linear blip costs
+    the comment half or the lane half and a GitHub blip costs the PR half, and
+    none of them costs a healthy card its build."""
     try:
         bodies = linear_ops.comment_bodies(identifier)
     except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
         print(f"comment read failed ({e}) — proceeding on fail-open",
               file=sys.stderr)
         bodies = []
+    try:
+        lane = _current_lane(identifier)
+    except Exception as e:  # noqa: BLE001 — an unreadable lane proceeds
+        print(f"lane read failed ({e}) — proceeding on fail-open",
+              file=sys.stderr)
+        lane = ""
     decision = decide(
         identifier,
         os.environ.get("GITHUB_RUN_ID", ""),
         bodies,
         _run_status,
-        _open_prs(),
+        _card_prs(identifier),
+        card_lane=lane,
     )
     if decision.skip:
         _receipt(identifier, decision, "This run created no branch or PR.")
