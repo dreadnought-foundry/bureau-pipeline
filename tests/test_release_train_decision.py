@@ -653,11 +653,10 @@ def _reference_stub():
 def test_the_published_stub_grants_deployments_write_and_says_what_for():
     assert _reference_stub()["permissions"]["deployments"] == "write"
     body = STANDARD.read_text()
-    sentence = next((line for line in body.splitlines()
-                     if "deployments: write" in line and not
-                     line.strip().startswith("deployments:")), "")
-    assert sentence, "the standard never says what `deployments: write` is for"
-    assert "decision" in sentence.lower()
+    assert ("**`deployments: write` is what the train records its decision "
+            "with**") in body, (
+        "standards/release-train.md never says what the grant is for")
+    assert "decision not recorded: caller stub lacks deployments: write" in body
 
 
 def test_the_workflow_header_answers_the_premortem_for_the_message():

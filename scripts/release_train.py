@@ -20,8 +20,18 @@ the COMMIT it releases, see the next paragraph — and where the decision is
 `release` it runs the surface's own script under the caller's own identity
 at that commit and verifies the tag the script cut. **The tag IS the
 receipt** — deploy-lag reads the newest tag in each surface's series and the
-console's Shipped-today panel reads commit ancestry against it, so nothing
-here writes a second record.
+console's Shipped-today panel reads commit ancestry against it, so nothing a
+release DEPENDS on is written twice.
+
+AND THE DECISION IS SENT (DRE-4771). Every surface the train decides about
+also gets ONE message per run — the GitHub deployment plus status
+`scripts/release_decision.py` builds, the decision as its payload: written by
+`_cmd_plan` for every surface it does NOT release, and by the surface's own
+job (`release()`'s `on_decided` hook) for the one it does, with `phase`
+saying which wrote it. It is a REPORT and never a dependency: `write` never
+raises, a refused write is one clause on its own line, the receipt line is
+byte for byte what it was, and the tag remains the only record a release or
+its recovery reads. `docs/release-decision.md` is the message's shape.
 
 READY IS A COMMIT, NOT THE HEAD (DRE-3266, the CEO's amendment of 2026-09-06
 13:55 PT, after watching run 34058913763). The train releases the newest
@@ -207,6 +217,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import intake_controls  # noqa: E402
 import merge_gate  # noqa: E402
+import release_decision  # noqa: E402 — the decision, as a message GitHub delivers (DRE-4768)
 import release_linear  # noqa: E402 — the Linear release every declared surface gets (DRE-3854)
 
 #: The clock every window is read on. GitHub's `schedule:` takes UTC only and
@@ -1937,7 +1948,8 @@ def run_surface(surface, *, repo_root, sha, before=None, env=None,
 
 
 def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
-            dispatched=False, env=None, out=print, on_released=None) -> Decision:
+            dispatched=False, env=None, out=print, on_released=None,
+            on_decided=None) -> Decision:
     """Decide about ONE surface with the real checks, then act — and print the
     one receipt line either way.
 
@@ -1951,6 +1963,14 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     before the receipt, so the receipt stays the run's last line. It is how
     the Linear release is written (release_linear.py). It can never change
     the decision: whatever it raises is one warning line.
+
+    `on_decided(decision)` is the same slot for EVERY decision, released or
+    not (DRE-4771): called once the decision is final — after the tag is
+    verified on a release, after the script's exit otherwise — and before the
+    receipt, so the receipt stays the run's last line for this surface. It is
+    how the decision message is written (release_decision.py), and it is
+    guarded the same way: nothing it does can change the decision or fail the
+    run.
     """
     tag, tag_at = newest_tag(repo_root, surface.tag_series)
     lag = lag_state(repo_root, tag, sha, surface.paths)
@@ -1969,6 +1989,12 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
         except Exception as error:  # noqa: BLE001 — the surface is already live
             out(f"{TAG}: [{surface.name}] WARNING the after-release step failed "
                 f"({error}) — the release itself is unaffected")
+    if on_decided is not None:
+        try:
+            on_decided(decision)
+        except Exception as error:  # noqa: BLE001 — a report never fails a run
+            out(f"{TAG}: [{surface.name}] WARNING the decision message failed "
+                f"({error}) — the decision itself is unaffected")
     out(decision.receipt(repo, surface.name, sha))
     return decision
 
@@ -2167,6 +2193,45 @@ def render_markdown() -> str:
         f"The brake is the repository variable `{ENV_HOLD}`, read the way "
         "`INTAKE_HOLD` is read — see `standards/release-train.md` for where to "
         "set it and what the surface script owes."
+    )
+    w("")
+    w("## The decision, as a message GitHub delivers")
+    w("")
+    w(
+        "**DRE-4771.** Every run records ONE message per surface it decides "
+        "about: a GitHub deployment plus its status, whose payload is the "
+        "decision as data. The `plan` job writes it for every surface it does "
+        "NOT release — held, every no-op, every refusal, all final for the run "
+        "— and the `Release <surface>` job writes it for the one it does, "
+        "whatever that job's own decision turns out to be; the record's "
+        "`phase` says which of the two wrote it. **The shape is not restated "
+        "here:** `docs/release-decision.md` is its document, rendered from "
+        "`scripts/release_decision.py`, and it carries the payload field by "
+        "field, the state each act maps to and the command a person's hand "
+        "clears each code with."
+    )
+    w("")
+    w(
+        "It is a REPORT, and the train is not made less reliable by it. The "
+        "receipt line above is byte for byte what it was — the outcome is its "
+        "own line, `release-train: [<surface>] decision recorded: …`, never "
+        "appended to the line the console parses. The write never raises and "
+        "never retries, so a refused one is a `decision not recorded: …` "
+        "clause and the run is as green as it was. The caller's stub grants "
+        "`deployments: write` for it (`standards/release-train.md`); a stub "
+        "that has not been updated gets `decision not recorded: caller stub "
+        "lacks deployments: write` on every run, and the tag stays the only "
+        "record a release or its recovery depends on."
+    )
+    w("")
+    w(
+        "**Two runs are deliberately not recorded**, because neither decides "
+        "anything per surface. The first is a run whose triggering CI run did "
+        "not conclude `success`: the train no-ops in the plan job's own shell "
+        "with an empty matrix, before any surface is read, and the Record "
+        "already holds that CI run's own failure. The second is the `channel` "
+        "command `promote-channel.yml` runs — it prints where the channel "
+        "stands and promotes it, and it is not a train run."
     )
     w("")
     w("## The trigger, and what the stub must declare")
@@ -2392,6 +2457,33 @@ def _announce_channel(decision: Decision, out=print) -> None:
     _step_summary(heading, [decision.reason, "", f"`{channel.receipt()}`"])
 
 
+def _record_decision(decision: Decision, *, entry, repo: str, phase: str,
+                     sha: str, head: str, deployed, now: datetime,
+                     out=print) -> str:
+    """Send this surface's ONE decision message for the run (DRE-4771), and
+    print the outcome as its own line.
+
+    Its own line, `release-train: [<surface>] <clause>`, and never appended to
+    the receipt: the receipt is the line agent-bureau's console parses
+    (`release_train_health.py`), and every test that pins one pins it byte for
+    byte. The caller prints the receipt AFTER this, so the receipt stays the
+    run's last line for the surface.
+
+    Nothing here can change a decision or fail a run. `release_decision.write`
+    never raises and returns the clause either way — a refused write is
+    `decision not recorded: …`, with the full text logged behind it under
+    `release_decision`'s own tag.
+    """
+    record = release_decision.record(
+        decision, repo=repo, surface=entry, phase=phase, sha=sha, head=head,
+        deployed=deployed, now=now, env=os.environ)
+    clause = release_decision.write(
+        record, repo=repo,
+        out=lambda line: out(f"{TAG}: [{entry.name}] {line}"))
+    out(f"{TAG}: [{entry.name}] {clause}")
+    return clause
+
+
 def _now() -> datetime:
     """The clock the CLI reads — one seam, so a test can set it."""
     return datetime.now(tz=PT)
@@ -2499,6 +2591,17 @@ def _cmd_plan(args) -> int:
             # console's release row reads its code from (DRE-3336), so the row
             # still reads the spacing or window hold — now with its re-arm.
             shown = decision._replace(reason=f"{decision.reason} — {note}")
+        if not decision.releases:
+            # The plan's decision is FINAL for every surface it does not send
+            # to a `Release <surface>` job — held, every no-op, every refusal
+            # — so this run records it, from `shown`: the re-arm clause is
+            # part of the sentence the receipt prints, so it is part of the
+            # sentence the record carries. A surface that IS releasing is
+            # recorded by its own job, whose decision is not made yet.
+            _record_decision(shown, entry=entry, repo=args.repo, phase="plan",
+                             sha=head, head=head, now=now,
+                             deployed=newest_tag(args.repo_root,
+                                                 entry.tag_series)[0])
         print(shown.receipt(args.repo, entry.name, decision.sha))
         _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))
@@ -2550,21 +2653,43 @@ def _cmd_release(args) -> int:
     if entry is None:
         print(f"{TAG}: {args.file} declares no surface {args.surface!r}")
         return 1
+    now = datetime.now(tz=PT)
+    # What the surface stands at BEFORE this job decides anything — the same
+    # value `release()` reads at its own first line, read here because the
+    # record needs it whatever the decision turns out to be.
+    deployed, _ = newest_tag(args.repo_root, entry.tag_series)
+    # The head the plan walked from (DRE-4771). This job carries no `--head`
+    # — the workflow passes the plan's CHOSEN commit and nothing else — so it
+    # is read off the runner: `GITHUB_SHA` on a `workflow_run`, a `schedule`
+    # and a hand dispatch IS the commit the plan's checkout landed on and
+    # walked from. On a re-armed run the plan re-read the branch's tip when it
+    # woke (DRE-3791) and this is the commit it was dispatched at; outside CI
+    # there is none, and the chosen commit stands in rather than a null.
+    head = os.environ.get("GITHUB_SHA") or args.sha
+
+    def write_decision(decided: Decision) -> None:
+        _record_decision(decided, entry=entry, repo=args.repo, phase="release",
+                         sha=args.sha, head=head, deployed=deployed, now=now)
+
     try:
         decision = release(
             entry, repo=args.repo, repo_root=args.repo_root, sha=args.sha,
-            now=datetime.now(tz=PT), brake=brake(), dispatched=args.dispatched,
+            now=now, brake=brake(), dispatched=args.dispatched,
             checks=lambda: fetch_checks(args.repo, args.sha),
             on_released=lambda previous, decided: release_linear.write(
                 data=data, surface_name=args.surface, repo=args.repo,
                 repo_root=args.repo_root, version=decided.tag, sha=args.sha,
                 previous_tag=previous,
                 out=lambda line: print(f"{TAG}: [{args.surface}] {line}")),
+            on_decided=write_decision,
         )
     except RuntimeError as err:
         # FAIL CLOSED. An unreadable answer is not a green one — the same rule
-        # `check_train_in_flight.py` states as "UNKNOWN is never clear".
+        # `check_train_in_flight.py` states as "UNKNOWN is never clear". It is
+        # a decision like any other, and it is made out here, past the hook —
+        # so it is recorded here, before the receipt.
         decision = Decision(REFUSE, "unreadable", str(err))
+        write_decision(decision)
         print(decision.receipt(args.repo, args.surface, args.sha))
     return 0 if decision.ok else 1
 

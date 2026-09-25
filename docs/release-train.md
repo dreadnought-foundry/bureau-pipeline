@@ -89,6 +89,14 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 
 The brake is the repository variable `RELEASE_HOLD`, read the way `INTAKE_HOLD` is read — see `standards/release-train.md` for where to set it and what the surface script owes.
 
+## The decision, as a message GitHub delivers
+
+**DRE-4771.** Every run records ONE message per surface it decides about: a GitHub deployment plus its status, whose payload is the decision as data. The `plan` job writes it for every surface it does NOT release — held, every no-op, every refusal, all final for the run — and the `Release <surface>` job writes it for the one it does, whatever that job's own decision turns out to be; the record's `phase` says which of the two wrote it. **The shape is not restated here:** `docs/release-decision.md` is its document, rendered from `scripts/release_decision.py`, and it carries the payload field by field, the state each act maps to and the command a person's hand clears each code with.
+
+It is a REPORT, and the train is not made less reliable by it. The receipt line above is byte for byte what it was — the outcome is its own line, `release-train: [<surface>] decision recorded: …`, never appended to the line the console parses. The write never raises and never retries, so a refused one is a `decision not recorded: …` clause and the run is as green as it was. The caller's stub grants `deployments: write` for it (`standards/release-train.md`); a stub that has not been updated gets `decision not recorded: caller stub lacks deployments: write` on every run, and the tag stays the only record a release or its recovery depends on.
+
+**Two runs are deliberately not recorded**, because neither decides anything per surface. The first is a run whose triggering CI run did not conclude `success`: the train no-ops in the plan job's own shell with an empty matrix, before any surface is read, and the Record already holds that CI run's own failure. The second is the `channel` command `promote-channel.yml` runs — it prints where the channel stands and promotes it, and it is not a train run.
+
 ## The trigger, and what the stub must declare
 
 **The train is never stopped** (DRE-3263, the CEO's rule of 2026-09-06). If the commit is ready it goes; if it is not, the train leaves without it and the next train picks it up. A gating check still running is therefore a `no-op` that names it — never a wait, never a refusal — and the run that picks the commit up is the one fired by CI completing on the default branch. A `push` fires BEFORE that commit's CI has started, so a push-triggered stub would find CI pending on every run and release only from the schedule. The stub in every caller (`.github/workflows/release-train.yml`) must declare exactly this:

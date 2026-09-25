@@ -69,11 +69,62 @@
 #   Q4 COMMAND LIMITS. GitHub's `schedule:` takes UTC only and has no timezone
 #      field, which is why the stub carries two cron lines and the TRAIN reads
 #      the clock in America/Los_Angeles.
-#   Q5 CRASH MID-FLOW. The tag is the only record, and it is written by the
-#      surface script at the end. A crash before it leaves the surface BEHIND,
-#      which the next trigger reads and releases; a crash after it leaves the
-#      surface CURRENT, which the next trigger reads as a no-op. Nothing here
-#      writes a marker that could block its own recovery.
+#   Q5 CRASH MID-FLOW. The tag is the only record a release or its recovery
+#      DEPENDS on, and it is written by the surface script at the end. A crash
+#      before it leaves the surface BEHIND, which the next trigger reads and
+#      releases; a crash after it leaves the surface CURRENT, which the next
+#      trigger reads as a no-op. Nothing here writes a marker that could block
+#      its own recovery — the decision message below is a report, and a crash
+#      before it simply leaves none.
+#
+# THE DECISION IS RECORDED, ONCE PER SURFACE PER RUN (DRE-4771). Every surface
+# this train decides about gets one GitHub deployment plus one status, whose
+# payload is the decision as data (`scripts/release_decision.py`,
+# `docs/release-decision.md`): the `plan` job writes for every surface it does
+# NOT release, the `Release <surface>` job writes for the one it does, and
+# `phase` says which. The receipt line is unchanged — the outcome is printed
+# as its own `release-train: [<surface>] decision recorded: …` line, never
+# appended to the line agent-bureau's console parses. Nothing about it can
+# change a decision or fail a run. Two runs are deliberately NOT recorded: the
+# shell no-op below when the CI run that triggered this train did not conclude
+# `success` (the matrix is `[]` before the plan runs, and the Record already
+# holds that CI run's own `workflow_run` failure), and the `channel` command
+# `promote-channel.yml` runs, which is not a train run.
+#
+# THE PREMORTEM FOR THAT MESSAGE (standards/vendor-boundaries.md), because it
+# crosses the same boundary:
+#
+#   Q1 WHO INITIATES. The deployment is created by the run's own
+#      `github.token`, so its `creator` is `github-actions[bot]`. GitHub
+#      delivers `deployment` and `deployment_status` to the Record's App like
+#      any other event — only NEW WORKFLOW RUNS are suppressed for
+#      token-caused events, which is exactly what keeps the train from
+#      triggering itself or any `on: deployment` workflow in a caller.
+#   Q2 WHICH PERMISSION, AND WHOSE. `deployments: write` must come from the
+#      CALLER's stub: this workflow declares no job-level `permissions:` (see
+#      the note above — a called job asking for more than its caller granted
+#      fails the WHOLE run at startup), so an un-updated stub is a
+#      `decision not recorded: caller stub lacks deployments: write` clause on
+#      every run and never a failure. agent-bureau's stub and the scaffold
+#      template have granted it since DRE-3519; `standards/release-train.md`
+#      publishes it.
+#   Q3 RETRY / RE-RUN. A re-run writes a FRESH deployment carrying its own
+#      `run_attempt`; nothing is updated in place. `auto_inactive: false` plus
+#      the separate `release-train` environment mean no real stage deployment
+#      (agent-bureau DRE-3519 posts those in the surface's own environment) is
+#      ever marked inactive by a decision.
+#   Q4 COMMAND LIMITS. GitHub caps a deployment / status `description` at 140
+#      characters, and the module cuts the line to it. `auto_merge: false` and
+#      `required_contexts: []` are set on every deployment because GitHub's
+#      defaults would otherwise try to merge the default branch into the ref
+#      and refuse the write on any red status of the commit — and a refusal is
+#      exactly the decision the message exists to carry. `environment` names
+#      are auto-created, so `release-train` appears on each caller's
+#      Environments page once.
+#   Q5 CRASH MID-FLOW. A crash before the write leaves no message, and the
+#      run's own `workflow_job` failure is already in the Record. Nothing
+#      retries; the tag remains the only record a release or its recovery
+#      depends on.
 #
 # A NO-OP THAT NAMES A MINUTE RE-ARMS ITSELF (DRE-3559). A run that no-ops on
 # the spacing names the minute the next release may be cut, and one that
