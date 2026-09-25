@@ -53,23 +53,34 @@ inputs:
       Version argument handed to the native installer (an exact version,
       "stable", or "latest").
     required: false
-    # 2.1.263 — EXACTLY what the vendor action installs at the sha every
-    # workflow here pins (`anthropics/claude-code-action@9c5ddab…`, v1.0.217:
-    # `base-action/action.yml` sets `CLAUDE_CODE_VERSION="2.1.263"` and pipes
+    # 2.1.282 — EXACTLY what the vendor action installs at the sha every
+    # workflow here pins (`anthropics/claude-code-action@9171db3…`, v1.0.234:
+    # `base-action/action.yml` sets `CLAUDE_CODE_VERSION="2.1.282"` and pipes
     # it into https://claude.ai/install.sh). Passing the proved path to that
     # action makes it skip its own install, so this line — not the vendor's —
     # now decides which Claude Code the fleet runs. Taking the install over
     # must not also change the version it installs.
     #
-    # It is deliberately NOT "stable": the vendor is pinned at v1.0.217
-    # because v1.0.218's Claude Code 2.1.265 is the installer that leaves no
-    # launcher (DRE-3416), so a floating channel could hand the whole fleet
-    # exactly the build this action exists to catch — loudly, but everywhere.
+    # It is deliberately NOT "stable": v1.0.218's Claude Code 2.1.265 is the
+    # installer that left no launcher (DRE-3416), so a floating channel could
+    # hand the whole fleet exactly the build this action exists to catch —
+    # loudly, but everywhere.
     #
-    # MOVE THIS WITH THE VENDOR PIN. DRE-3417 unpins claude-code-action; the
-    # version that release installs is the version this line takes, and
-    # `tests/test_check_action_pins.py` holds the other half of the pair.
-    default: "2.1.263"
+    # History: 2.1.263 (v1.0.217) from DRE-3416 until 2026-09-25, when DRE-3417
+    # moved both halves to 2.1.282 / v1.0.234 without waiting for upstream
+    # anthropics/claude-code-action#1817 to close (the CEO's decision). The
+    # reason was the model, not the installer: the API refuses Claude Opus 5.5
+    # from anything older than 2.1.280 (DRE-4852), and the fleet builds on it
+    # (DRE-4836). The assert below is what makes not waiting safe — a 2.1.282
+    # launcher that does not answer `--version` fails this job as an install
+    # failure, never as a dead model run — and the PR was proved on a live
+    # Opus 5.5 run from its own branch before it merged.
+    #
+    # MOVE THIS WITH THE VENDOR PIN. The version the pinned release installs
+    # is the version this line takes; `tests/test_check_action_pins.py` holds
+    # the other half of the pair, and `tests/test_model_cli_support.py` fails
+    # when a model on a ladder needs a newer Claude Code than this line.
+    default: "2.1.282"
   installer-url:
     description: >-
       Where the native installer is fetched from. A seam for tests, which

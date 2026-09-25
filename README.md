@@ -915,7 +915,7 @@ pinned pipeline checkout, and hands the proved path on to the vendor action:
   id: install_claude
   uses: ./.bureau-pipeline/.github/actions/install-claude-code
 - name: Critic review
-  uses: anthropics/claude-code-action@<sha> # v1.0.217
+  uses: anthropics/claude-code-action@<sha> # v1.0.234
   with:
     path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
 ```
@@ -928,13 +928,16 @@ runs.
 **The version pin moved here, and it moves with the vendor pin.** Handing the
 vendor action a path makes it skip its own install, so this action's `version`
 input — not the vendor's — now decides which Claude Code the fleet runs. It
-defaults to **2.1.263**, which is exactly what `claude-code-action` v1.0.217
-installs, so taking the install over changed nothing about what gets
-installed. It is deliberately not a floating channel: the vendor is pinned at
-v1.0.217 precisely because v1.0.218's Claude Code 2.1.265 is the installer
-that leaves no launcher, and `stable` could hand the whole fleet that build.
-When DRE-3417 unpins the vendor action, this default takes the version that
-release installs.
+defaults to **2.1.282**, which is exactly what `claude-code-action` v1.0.234
+installs, so taking the install over changes nothing about what gets
+installed. It is deliberately not a floating channel: v1.0.218's Claude Code
+2.1.265 is the installer that left no launcher, and `stable` could hand the
+whole fleet a build like that. Until 2026-09-25 both halves sat at v1.0.217 /
+2.1.263 (DRE-3416); DRE-3417 moved them together, because the API refuses
+Claude Opus 5.5 from any Claude Code older than 2.1.280 (DRE-4852) and the
+fleet builds on it. The next move is a Dependabot PR for the vendor release
+plus this default, in one PR — `tests/test_check_action_pins.py` and
+`tests/test_model_cli_support.py` hold the pair.
 
 **Why it exists.** On 2026-09-08 the vendor's own installer exited clean and
 left no launcher. Nothing checked, so nothing failed at install time: every

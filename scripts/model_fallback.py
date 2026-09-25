@@ -192,9 +192,9 @@ _FALLBACK_MODEL_CONFIG = {
         "judgement": "judgement",
     },
     "ladders": {
-        "workhorse": ["claude-opus-5", "claude-sonnet-5"],
-        "advisory": ["claude-sonnet-5", "claude-opus-5"],
-        "judgement": ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"],
+        "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5"],
+        "advisory": ["claude-sonnet-5", "claude-opus-5-5"],
+        "judgement": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -211,16 +211,17 @@ _FALLBACK_MODEL_CONFIG = {
         "plan-critic-post": "advisory",
     },
     "effort": {
+        "claude-opus-5-5": "high",
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "review_separation": {
         "roles": ["critic", "verifier"],
         "rules": {
-            "claude-sonnet-5": "claude-opus-5",
+            "claude-sonnet-5": "claude-opus-5-5",
         },
     },
     "retired": ["claude-opus-4-8"],
-    "excluded": ["claude-fable-5", "claude-opus-5-5"],
+    "excluded": ["claude-fable-5"],
 }
 # --- END generated model config ---
 

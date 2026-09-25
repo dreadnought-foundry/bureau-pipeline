@@ -99,7 +99,7 @@ agents:
     # runtime and uses the first AVAILABLE entry.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
     # DRE-2785 granted the web and left this budget alone, on the reasoning
@@ -129,7 +129,7 @@ agents:
     # label; runs on the shared agent-task.yml like the engineer.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785; turn budget moves with the engineer's for the
@@ -158,7 +158,7 @@ agents:
     # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
     # Web tools since DRE-2785 — it is in the roster and the card grants ALL
@@ -180,7 +180,7 @@ agents:
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785 — the role with the most to gain from them,
@@ -207,7 +207,7 @@ agents:
     # workflow now selects from config/models.yaml like every other agent.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
     # Mirrors agent-fix.yml's --max-turns (DRE-2533); the roster is the
@@ -459,7 +459,7 @@ agents:
     # Engineer ladder (DRE-1490): the repair agent is an engineer-tier fixer.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: workhorse
-    model: claude-opus-5  # top of the `workhorse` ladder
+    model: claude-opus-5-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
     # Web tools since DRE-2785; ceiling unchanged at 100. A red main is
