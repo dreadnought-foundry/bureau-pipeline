@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import json
 import os
 import sys
@@ -108,6 +109,19 @@ STUCK_AFTER_HOURS = 3.0
 #: together. Hourly, on a schedule of its own: this must not depend on the
 #: repos it watches running anything.
 INTERVAL_HOURS = 1.0
+
+#: How often a STANDING alarm says it again. Deliberately not the interval
+#: above: running hourly is how a missing nightly is FOUND within the hour, and
+#: re-confirming hourly is how the card becomes 24 comments a day that nobody
+#: reads. `channel-watch.yml` re-confirms daily and that is the rate that reads
+#: as deliberate rather than as a stuck process. Only the re-confirmation waits
+#: — the card itself is filed on whichever hour the alarm first fires.
+RECONFIRM_AFTER_HOURS = 24.0
+
+#: …and the hour it speaks on, in UTC. 07:00 UTC, beside Channel Watch's 07:41,
+#: so the two standing alarms land in one morning rather than at two unrelated
+#: times of night.
+RECONFIRM_HOUR_UTC = 7
 
 #: Per-nightly readings.
 OK = "ok"
@@ -355,6 +369,26 @@ def _unreadable_file(subject: str, path: str, why) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def should_reconfirm(now: str | None = None) -> bool:
+    """Is this the hourly tick that re-confirms a standing alarm?
+
+    One tick in `RECONFIRM_AFTER_HOURS` — read off the clock rather than from
+    the card's own comments, because a watcher that has to read a thread to
+    decide whether to write to it is a second thing that can fail, and the
+    thing it protects is one comment a day.
+    """
+    moment = dt.datetime.now(dt.timezone.utc)
+    if now:
+        try:
+            moment = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+        except ValueError:
+            return True  # an unreadable clock must not silence a real alarm
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=dt.timezone.utc)
+    ticks = int(RECONFIRM_AFTER_HOURS / INTERVAL_HOURS)
+    return moment.hour % ticks == RECONFIRM_HOUR_UTC % ticks
+
+
 def title_for(base: str, owner: str) -> str:
     return f"{base} — {owner}" if owner else base
 
@@ -495,6 +529,9 @@ def _cmd_watch(args) -> int:
             fh.write(f"alarm={'true' if verdict.alarm else 'false'}\n")
             fh.write(f"state={verdict.state}\n")
             fh.write(f"headline={verdict.headline}\n")
+            fh.write(
+                f"reconfirm={'true' if should_reconfirm(args.now or None) else 'false'}\n"
+            )
     # A fleet whose nightlies all ran is the ordinary outcome, not a failure:
     # the caller branches on `alarm`, never on an exit code (channel_watch's
     # rule, and promote_channel's before it).

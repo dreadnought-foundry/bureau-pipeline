@@ -1419,7 +1419,7 @@
     },
     {
       "file": ".github/workflows/nightly-watch.yml",
-      "anchor": "🌙 Still true this hour:",
+      "anchor": "🌙 Still true today:",
       "step": "Raise the alarm where a human will see it",
       "kind": "not-an-act",
       "means": "A standing alarm — a repo's nightly full CI run on main did not run — is re-confirmed on its existing card rather than filed again.",

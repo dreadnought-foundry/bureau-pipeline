@@ -163,12 +163,20 @@ jobs:
       # a constant, so next hour's identical finding comments on this hour's
       # card instead of minting a second — an alarm that mints a card an hour
       # is the inbox this programme exists to escape.
+      #
+      # Two cadences, and the difference is the whole reason this runs hourly.
+      # The card is FILED on whichever hour the alarm first fires, so a nightly
+      # that stopped is found within the hour. RE-CONFIRMING it is daily
+      # (`nightly_watch.RECONFIRM_AFTER_HOURS`, beside Channel Watch's own
+      # morning tick): twenty-four "still true" comments a day on one standing
+      # card is the same noise as a card a day, arriving somewhere else.
       - name: Raise the alarm where a human will see it
         if: steps.decide.outputs.alarm == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEADLINE: ${{ steps.decide.outputs.headline }}
+          RECONFIRM: ${{ steps.decide.outputs.reconfirm }}
         run: |
           # The repo the CARD is filed against — this one, which owns the
           # watcher; the repos the alarm is ABOUT are named in its body.
@@ -178,8 +186,13 @@ jobs:
           TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
           EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
           if [ -n "$EXISTING" ]; then
+            if [ "$RECONFIRM" != "true" ]; then
+              echo "$EXISTING is open and this is not the daily re-confirm" \
+                   "tick — the finding already stands, so nothing is posted"
+              exit 0
+            fi
             python3 scripts/linear_ops.py comment "$EXISTING" \
-              "🌙 Still true this hour: $HEADLINE  Watch run: $RUN_URL"
+              "🌙 Still true today: $HEADLINE  Watch run: $RUN_URL"
           else
             {
               cat "$RUNNER_TEMP/alarm-body.md"
