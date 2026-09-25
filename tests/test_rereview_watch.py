@@ -538,30 +538,43 @@ def _move(at: str | None, frm: str | None, to: str | None) -> dict:
 
 
 def lane_history() -> list[dict]:
-    """DRE-4025's state history: green-lit into In Progress before the
-    send-back, moved to Done six days after it."""
+    """DRE-4025's state history as Linear serves it: green-lit into In Progress
+    before the send-back, moved to Done six days after it."""
     return [
         _move("2026-09-15T17:20:31Z", "Green Light", pc.APPROVAL_LANE),
         _move(MOVED_TO_DONE_AT, pc.APPROVAL_LANE, "Done"),
     ]
 
 
+def _moved(at: str | None, frm: str | None, to: str | None) -> dict:
+    """One lane move as `_state_history` normalises it, which is what
+    `lane_at` reads."""
+    return {"at": at, "from": frm, "to": to}
+
+
+def lane_moves() -> list[dict]:
+    """`lane_history()` after `_state_history`."""
+    return [_moved(n["createdAt"],
+                   (n["fromState"] or {}).get("name"),
+                   (n["toState"] or {}).get("name")) for n in lane_history()]
+
+
 class TheLaneAtAnInstant(unittest.TestCase):
     """`lane_at` — the lane off the epic's own history, never today's."""
 
     def test_it_is_where_the_last_move_before_the_instant_put_it(self):
-        self.assertEqual(rw.lane_at(lane_history(), LATER, "Done"),
+        self.assertEqual(rw.lane_at(lane_moves(), LATER, "Done"),
                          pc.APPROVAL_LANE)
 
     def test_at_the_instant_of_a_move_the_move_has_happened(self):
-        self.assertEqual(rw.lane_at(lane_history(), MOVED_TO_DONE_AT, "Done"),
+        self.assertEqual(rw.lane_at(lane_moves(), MOVED_TO_DONE_AT, "Done"),
                          "Done")
 
     def test_before_the_first_move_it_is_the_lane_that_move_left(self):
         """Nothing moved the epic before this instant, so what it was moved
         OUT of next is where it was."""
         self.assertEqual(
-            rw.lane_at(lane_history(), "2026-09-15T09:00:00Z", "Done"),
+            rw.lane_at(lane_moves(), "2026-09-15T09:00:00Z", "Done"),
             "Green Light")
 
     def test_an_epic_that_never_moved_is_where_it_is_today(self):
@@ -570,22 +583,26 @@ class TheLaneAtAnInstant(unittest.TestCase):
 
     def test_the_history_is_read_in_time_order_not_arrival_order(self):
         self.assertEqual(
-            rw.lane_at(list(reversed(lane_history())), LATER, "Done"),
+            rw.lane_at(list(reversed(lane_moves())), LATER, "Done"),
             pc.APPROVAL_LANE)
 
     def test_a_move_linear_named_no_time_for_is_on_neither_side(self):
         """Unknown is unknown (console-honesty rule 2): a stamp that cannot be
         placed in time cannot be read as before or after the instant. Read as
         the newest, this would answer Canceled."""
-        history = lane_history() + [_move(None, pc.APPROVAL_LANE, "Canceled")]
-        self.assertEqual(rw.lane_at(history, LATER, "Done"), pc.APPROVAL_LANE)
+        for stamp in (None, "", "not-a-time"):
+            with self.subTest(stamp=stamp):
+                moves = lane_moves() + [
+                    _moved(stamp, pc.APPROVAL_LANE, "Canceled")]
+                self.assertEqual(rw.lane_at(moves, LATER, "Done"),
+                                 pc.APPROVAL_LANE)
 
     def test_an_instant_before_the_epic_had_a_lane_is_unknown(self):
-        """The oldest move names no `fromState` — the epic was created into
-        that lane. Earlier than that there is no lane to name, and `read`
-        says nothing on a lane it was not given."""
-        history = [_move("2026-09-15T17:20:31Z", None, "Intake")]
-        self.assertIsNone(rw.lane_at(history, "2026-09-14T00:00:00Z", "Done"))
+        """The oldest move names no `from` — the epic was created into that
+        lane. Earlier than that there is no lane to name, and `read` says
+        nothing on a lane it was not given."""
+        moves = [_moved("2026-09-15T17:20:31Z", None, "Intake")]
+        self.assertIsNone(rw.lane_at(moves, "2026-09-14T00:00:00Z", "Done"))
 
 
 class TheThreadAtAnInstant(unittest.TestCase):
