@@ -114,7 +114,19 @@ jobs:
     # are never attached to a dependabot-triggered event.
     if: >
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The BUILD lane (DRE-4846): the caller's own CI variable in front of the
+    # long chain. The critic was called "API-bound" until a read of 129 QA
+    # Review runs over 09-23 → 09-25 showed it SIGKILLed (exit 137) on a
+    # `bureau-mini-light-*` runner — 1 CPU, 2 GB, no swap — three times, on both
+    # attempts each time: portico #687 (run 35932479611), #699 (36089623608) and
+    # #717 (36161433688, after eighteen minutes of real review). It runs the
+    # product's suite itself, because the DRE-3005 evidence rule makes it paste
+    # the command and output for any claim about a run, which is the same
+    # boundedness that killed the four build and fix runs on 2026-09-24.
+    # `BUREAU_CI_RUNS_ON` is the variable the repo's own `ci.yml` already reads,
+    # so the console's pool fail-back covers this lane and a repo that sets
+    # neither variable renders what it rendered before.
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 65, raised from 25 with the file-list strategy (DRE-2466). A large
     # review deliberately takes more, smaller steps, and the budget has to
     # hold the WHOLE cycle this job can run — not just the first attempt:

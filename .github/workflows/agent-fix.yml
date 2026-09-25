@@ -121,7 +121,16 @@ jobs:
        contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES')) ||
       (github.event.issue.pull_request &&
        github.event.comment.user.type == 'User')
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The BUILD lane (DRE-4846): the caller's own CI variable in front of the
+    # long chain, because a fix run re-runs the product's test suite and is
+    # bounded by it. Portico's fix run 35954619710 was SIGKILLed (exit 137) on a
+    # `bureau-mini-light-*` runner — 1 CPU, 2 GB, no swap — one of four such
+    # deaths on 2026-09-24 (the others: portico run 35950845844 attempts 1 and
+    # 2, agent-bureau run 36093192182). `BUREAU_CI_RUNS_ON` is the variable the
+    # repo's own `ci.yml` already reads, so the console's pool fail-back covers
+    # this lane, and a repo that sets neither variable renders what it rendered
+    # before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap, raised with the turn budget below (DRE-2533). A
     # job dies at whichever cap it reaches first, so the turn budget behind a
     # 45-minute wall is a raise on paper only: the long repair this card
