@@ -109,6 +109,58 @@ passes against the unmodified codebase proves nothing and the critic rejects it.
 - **Repro a CI failure before claiming a fix** — local `gh`/tooling is authed
   and gives a false green; stub the live tool to fail and run the WHOLE suite.
 
+## CI: narrow per change, whole every night
+The CEO's decision, 2026-09-24. Over 2026-09-17 to 09-24, counting only jobs
+that got a runner, the fleet spent about 16,800 CI minutes — roughly 40% of all
+its runner time. Portico spent 8,850 of those running every suite on every
+change, although 83% of its pull requests touched only one side or only docs.
+The ask was at least 10% off with no coverage traded away. These five rules are
+the shape that buys it, and they apply to every repo in the fleet.
+
+1. **Per change, run only the suites the diff can reach.** A pull request, or a
+   push to `main`, runs the suites its changed files can affect and skips the
+   rest. The narrowing is a **script the repo's own tests execute against
+   throwaway repositories** — Portico's `visual-paths-gate.sh`, agent-bureau's
+   `ci_suite_filters.py` — and it **fails open**: any input it cannot read (a
+   compare API that errors, a file list it cannot parse) runs everything.
+
+   **A workflow `on: paths:` filter is NOT an acceptable narrowing**, and the
+   reason is mechanical rather than stylistic: when the filter excludes a
+   change GitHub **creates no check run at all** — the job is not skipped, it
+   never exists — so a required check on that job never reports and the merge
+   gate waits forever on a result nothing will post. A script that runs and
+   decides to skip produces a check run concluding `skipped`, which rule 5
+   admits. The filter produces nothing to admit.
+
+2. **Every repo whose PR CI narrows carries a nightly `schedule:` run on
+   `main` that runs every suite.** Narrowing is only safe where something still
+   runs the whole thing: agent-bureau (DRE-3656), Portico (DRE-4804), and
+   bureau-pipeline in `.github/workflows/tests.yml` under its own card. Crons
+   stay off the hour and apart from each other, and outside the release window
+   (`FLEET_WINDOW` in `scripts/release_train.py`, `standards/release-train.md`)
+   — a nightly competing with a train for runners delays both.
+
+3. **A red nightly is repaired.** The repo's Red-Main Repair stub
+   (`.github/workflows/red-main-repair.yml`) is the rail, and it **must not
+   filter `schedule` runs out**: it keys on `workflow_run.conclusion ==
+   'failure'` and the head branch being the default branch, never on the event
+   that started the run. A nightly nobody repairs is a nightly nobody reads.
+
+4. **A missing nightly alarms.** The fleet watcher (DRE-4805) raises when a
+   repo's nightly full run on `main` did not happen. It finds the nightlies by
+   reading the workflow files, so **no list of repos is kept anywhere** — a
+   repo that narrows its PR CI and forgets the nightly is caught by its own
+   workflow file, not by somebody remembering to add it to a list.
+
+5. **Skipped is green, and every narrowing depends on it.** The merge gate and
+   the release train already count a `skipped` job as green —
+   `GREEN_CONCLUSIONS` in `scripts/merge_gate.py`, which
+   `scripts/release_train.py` imports rather than restates. Rule 1's narrowing
+   relies on exactly that: the job runs, decides the diff cannot reach its
+   suite, and concludes `skipped`. Drop `skipped` from that set and every
+   narrowed pull request in the fleet stops merging — change it only with that
+   consequence in hand.
+
 ## Don't fight over shared files
 - **Each card/agent owns DISJOINT files, and that is checked at PLAN TIME.** It
   is not a request made of the builder — by the time a builder could honour it

@@ -53,7 +53,7 @@ commit (the channel note above). The per-role mapping:
 
 | File | Covers |
 |---|---|
-| `engineering.md` | TDD, split commits, scope, migrations, blockers, heartbeats, copy-not-rebuild, the self-hosting convention (which retired the operator-card one). |
+| `engineering.md` | TDD, split commits, scope, migrations, blockers, heartbeats, copy-not-rebuild, the self-hosting convention (which retired the operator-card one), and the fleet CI rule — a change runs only the suites its diff can reach via a tested script and never an `on: paths:` filter, `main` runs every suite nightly, a red nightly is repaired and a missing one alarms, and a skipped job stays green. |
 | `design.md` | Brand-from-concept, design tokens, the `**Design:**` card convention, design-fidelity. |
 | `design-parity.md` | Cards must sum to the design — planner surfaces accounting, deferred lines, verifier shipped-vs-design lens, epic-close ledger. |
 | `design-system.md` | One `design/` folder in the same shape in every repo, atomic composition, tokens and atoms locked on the CEO's agreement and recorded in `LOCK.json`, multi-brand as shared components plus per-product config, everything starting from the master template — and the seven-item design-critic checklist that gates "done", each item answerable from the files alone. Records why the published-Claude-Design check is deliberately NOT one of them. |
