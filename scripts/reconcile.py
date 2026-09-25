@@ -2588,6 +2588,12 @@ def _build_runs_in_flight() -> list | None:
             f"unparseable run listing for {workflow}: {out[:200]!r}")
         _read_failures.append(_build_runs_unreadable)
         return None
+    # A POSITIVE set, not `!= "completed"`. `agent_run_alive` may use the
+    # negative form because it reads `gh api .../runs/<id> --jq .status`, where
+    # the value is unambiguously the REST status. This reads `gh run list --json
+    # status`, the same payload `_actions_runs_busy` filters positively, and a
+    # positive set cannot mistake a CONCLUSION that arrived in that field for a
+    # live run — which would refuse the card's re-dispatch forever.
     _build_runs = [
         {"id": str(r.get("databaseId")), "status": str(r.get("status") or "")}
         for r in runs

@@ -234,11 +234,15 @@ jobs:
       # concurrency group only SERIALIZES them (cancel-in-progress stays
       # false — DRE-2032), so the dup builds the card again LATER. Skip —
       # clean exit, 🤖 receipt on the card — when another run for this card
-      # is still queued/in_progress (via the 🧠 heartbeat's run URL) or an
-      # OPEN agent PR already exists; a re-dispatch after the PR closed or
-      # merged still builds (the rebuild case). Fail-open: unreadable
-      # answers proceed. EVERY step below honors the skip — the Report step
-      # especially, or a skipped dup would read as a dead run and requeue.
+      # is still queued/in_progress (via the 🧠 heartbeat's run URL), when the
+      # card's agent PR is OPEN or MERGED, or when the card's own lane is
+      # already past building. A re-dispatch after the PR CLOSED unmerged
+      # still builds: that attempt was abandoned and the card still owes
+      # work, which the merged case does not (DRE-4830 — DRE-4518's duplicate
+      # ran twenty minutes after its own PR #700 merged and rebuilt the card
+      # onto the merged branch). Fail-open: unreadable answers proceed.
+      # EVERY step below honors the skip — the Report step especially, or a
+      # skipped dup would read as a dead run and requeue.
       - name: Duplicate-dispatch guard
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
