@@ -32,6 +32,9 @@ One section per acceptance criterion:
      identifier for.
   7. The wiring: the sweep calls `report` inside a `_phase(` block, and the
      grace constant stays out of `reconcile.REQUIRED_ENV`.
+  8. The replay (DRE-4758): `check --now` reads the lane off the epic's state
+     history and the thread as it stood, so an epic that has since moved to
+     Done — or whose later rounds settled the question — replays as it was.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_rereview_watch.py -v
 """
@@ -44,7 +47,7 @@ import json
 import os
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -506,6 +509,280 @@ class TheWiring(unittest.TestCase):
         sites = [s for s in check_act_receipts.sites()
                  if s.path == "scripts/rereview_watch.py"]
         self.assertEqual(len(sites), 1, sites)
+
+
+# --- 8. The replay (DRE-4758) ------------------------------------------------
+
+#: DRE-4025 as Linear serves it TODAY, days after the instant the proof record
+#: replays: the promise was eventually kept — round 2 PASSed on 2026-09-21 —
+#: and the epic has been in Done since 11:50 PT that day. Neither fact was true
+#: at `LATER`, and `check --now LATER` read both of them anyway: the lane check
+#: refused before it reached a comment, and the thread behind it carried round
+#: 2 (docs/rereview-continuation-proof-2026-09.md §2b).
+ROUND_2_AT = "2026-09-21T15:05:23Z"
+MOVED_TO_DONE_AT = "2026-09-21T18:50:00Z"
+
+
+def settled_thread() -> list[dict]:
+    """The whole thread as it stands today — round 2's PASS included."""
+    return thread(_rec(_round(2, pc.PASS, ""), ROUND_2_AT))
+
+
+def _move(at: str | None, frm: str | None, to: str | None) -> dict:
+    """One `issue.history` node as Linear serves it."""
+    return {
+        "createdAt": at,
+        "fromState": {"name": frm} if frm else None,
+        "toState": {"name": to} if to else None,
+    }
+
+
+def lane_history() -> list[dict]:
+    """DRE-4025's state history as Linear serves it: green-lit into In Progress
+    before the send-back, moved to Done six days after it."""
+    return [
+        _move("2026-09-15T17:20:31Z", "Green Light", pc.APPROVAL_LANE),
+        _move(MOVED_TO_DONE_AT, pc.APPROVAL_LANE, "Done"),
+    ]
+
+
+def _moved(at: str | None, frm: str | None, to: str | None) -> dict:
+    """One lane move as `_state_history` normalises it, which is what
+    `lane_at` reads."""
+    return {"at": at, "from": frm, "to": to}
+
+
+def lane_moves() -> list[dict]:
+    """`lane_history()` after `_state_history`."""
+    return [_moved(n["createdAt"],
+                   (n["fromState"] or {}).get("name"),
+                   (n["toState"] or {}).get("name")) for n in lane_history()]
+
+
+class TheLaneAtAnInstant(unittest.TestCase):
+    """`lane_at` — the lane off the epic's own history, never today's."""
+
+    def test_it_is_where_the_last_move_before_the_instant_put_it(self):
+        self.assertEqual(rw.lane_at(lane_moves(), LATER, "Done"),
+                         pc.APPROVAL_LANE)
+
+    def test_at_the_instant_of_a_move_the_move_has_happened(self):
+        self.assertEqual(rw.lane_at(lane_moves(), MOVED_TO_DONE_AT, "Done"),
+                         "Done")
+
+    def test_before_the_first_move_it_is_the_lane_that_move_left(self):
+        """Nothing moved the epic before this instant, so what it was moved
+        OUT of next is where it was."""
+        self.assertEqual(
+            rw.lane_at(lane_moves(), "2026-09-15T09:00:00Z", "Done"),
+            "Green Light")
+
+    def test_an_epic_that_never_moved_is_where_it_is_today(self):
+        self.assertEqual(rw.lane_at([], LATER, pc.APPROVAL_LANE),
+                         pc.APPROVAL_LANE)
+
+    def test_the_history_is_read_in_time_order_not_arrival_order(self):
+        self.assertEqual(
+            rw.lane_at(list(reversed(lane_moves())), LATER, "Done"),
+            pc.APPROVAL_LANE)
+
+    def test_a_move_linear_named_no_time_for_is_on_neither_side(self):
+        """Unknown is unknown (console-honesty rule 2): a stamp that cannot be
+        placed in time cannot be read as before or after the instant. Read as
+        the newest, this would answer Canceled."""
+        for stamp in (None, "", "not-a-time"):
+            with self.subTest(stamp=stamp):
+                moves = lane_moves() + [
+                    _moved(stamp, pc.APPROVAL_LANE, "Canceled")]
+                self.assertEqual(rw.lane_at(moves, LATER, "Done"),
+                                 pc.APPROVAL_LANE)
+
+    def test_an_instant_before_the_epic_had_a_lane_is_unknown(self):
+        """The oldest move names no `from` — the epic was created into that
+        lane. Earlier than that there is no lane to name, and `read` says
+        nothing on a lane it was not given."""
+        moves = [_moved("2026-09-15T17:20:31Z", None, "Intake")]
+        self.assertIsNone(rw.lane_at(moves, "2026-09-14T00:00:00Z", "Done"))
+
+
+class TheThreadAtAnInstant(unittest.TestCase):
+    """`at_or_before` — the thread as it stood, not as it stands."""
+
+    def test_a_comment_posted_after_the_instant_is_not_in_it(self):
+        kept = rw.at_or_before(settled_thread(), LATER)
+        self.assertEqual(len(kept), len(thread()))
+        self.assertNotIn(ROUND_2_AT, [r["created_at"] for r in kept])
+
+    def test_a_comment_posted_at_the_instant_is_in_it(self):
+        kept = rw.at_or_before(thread(), SENT_BACK_AT)
+        self.assertEqual(kept[-1]["created_at"], SENT_BACK_AT)
+
+    def test_a_comment_linear_stamped_nothing_is_kept(self):
+        """Dropping it would assert it did not exist yet, which nothing here
+        knows. Unknown stays unknown, and `read` already refuses to do
+        arithmetic on an unknown stamp."""
+        stampless = _rec(_round(2, pc.PASS, ""), None)
+        self.assertIn(stampless, rw.at_or_before(thread(stampless), LATER))
+
+
+class TheHistoryRead(unittest.TestCase):
+    """`_state_history` — what is kept out of Linear's history, and paging."""
+
+    def _history(self, pages):
+        linear = mock.MagicMock()
+        linear.gql.side_effect = list(pages)
+        with mock.patch.object(rw, "linear_ops", linear), \
+                redirect_stderr(io.StringIO()):
+            return rw._state_history(EPIC), linear
+
+    def test_an_entry_that_changed_no_state_is_not_a_lane_move(self):
+        """Linear's history carries every change — a label, an assignee, an
+        estimate. Only the entries naming a `toState` moved the lane."""
+        nodes = [
+            _move("2026-09-15T17:20:31Z", "Green Light", pc.APPROVAL_LANE),
+            {"createdAt": "2026-09-15T17:22:00Z", "fromState": None,
+             "toState": None},
+        ]
+        rows, _ = self._history([
+            {"issue": {"history": {"nodes": nodes,
+                                   "pageInfo": {"hasNextPage": False}}}}])
+        self.assertEqual(rows, [{"at": "2026-09-15T17:20:31Z",
+                                 "from": "Green Light",
+                                 "to": pc.APPROVAL_LANE}])
+
+    def test_it_follows_the_pages_to_exhaustion(self):
+        """A nested connection read to page one only is the DRE-2681 failure
+        again: the lane would come off the OLDEST hundred entries."""
+        pages = [
+            {"issue": {"history": {
+                "nodes": [_move("2026-09-15T17:20:31Z", "Green Light",
+                                pc.APPROVAL_LANE)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}}},
+            {"issue": {"history": {
+                "nodes": [_move(MOVED_TO_DONE_AT, pc.APPROVAL_LANE, "Done")],
+                "pageInfo": {"hasNextPage": False}}}},
+        ]
+        rows, linear = self._history(pages)
+        self.assertEqual([r["to"] for r in rows], [pc.APPROVAL_LANE, "Done"])
+        self.assertEqual(
+            [c.args[1]["after"] for c in linear.gql.call_args_list],
+            [None, "c1"])
+
+    def test_a_page_claiming_another_with_no_usable_cursor_stops(self):
+        """A server that keeps claiming another page must not hang the read."""
+        for cursor, calls in ((None, 1), ("c1", 2)):
+            page = {"issue": {"history": {
+                "nodes": [_move(MOVED_TO_DONE_AT, pc.APPROVAL_LANE, "Done")],
+                "pageInfo": {"hasNextPage": True, "endCursor": cursor}}}}
+            with self.subTest(cursor=cursor):
+                _, linear = self._history([page] * 5)
+                self.assertEqual(linear.gql.call_count, calls)
+
+
+class TheReplay(unittest.TestCase):
+    """`check --now` against DRE-4025 as Linear serves it today.
+
+    All three of the proof card's replays printed `quiet` on 2026-09-24. The
+    tool moved the clock and read everything else as it stands, so it answered
+    a question about today and called the answer a replay.
+    """
+
+    def _check(self, now=None, records=None, history=None, lane="Done"):
+        linear = mock.MagicMock()
+        linear.comment_records.return_value = (
+            settled_thread() if records is None else records)
+
+        def gql(query, variables=None):
+            if "history" in query:
+                return {"issue": {"history": {
+                    "nodes": lane_history() if history is None else history,
+                    "pageInfo": {"hasNextPage": False}}}}
+            return {"issue": {"state": {"name": lane}}}
+
+        linear.gql.side_effect = gql
+        buf = io.StringIO()
+        argv = ["check", EPIC] + (["--now", now] if now else [])
+        with mock.patch.object(rw, "linear_ops", linear), redirect_stdout(buf):
+            code = rw.main(argv)
+        self.assertEqual(code, 0)
+        linear.cmd_comment.assert_not_called()
+        return buf.getvalue().strip(), linear
+
+    def test_an_epic_that_has_since_reached_done_replays_as_it_was(self):
+        """At 18:45Z DRE-4025 was In Progress with round 1 unanswered for an
+        hour. It has been in Done since 2026-09-21, and that is the only thing
+        `check --now` used to see."""
+        out, _ = self._check(now=LATER)
+        self.assertTrue(out.startswith("overdue:"), out)
+        self.assertIn("round 1 sent back 61 min ago", out)
+        self.assertIn("console/backend/receipts.py", out)
+        self.assertNotIn("Done", out)
+
+    def test_the_round_two_that_ran_later_does_not_settle_an_earlier_instant(self):
+        """A comment created after `--now` does not change the answer: the
+        reading is identical with round 2's PASS on the thread and without it."""
+        with_it, _ = self._check(now=LATER)
+        without_it, _ = self._check(now=LATER, records=thread())
+        self.assertEqual(with_it, without_it)
+        self.assertTrue(with_it.startswith("overdue:"), with_it)
+
+    def test_an_instant_inside_the_forty_five_minute_grace_window_is_quiet(self):
+        """SOON is six minutes after the send-back, so the promised review
+        could still be running. Quiet for the GRACE WINDOW — not for the lane
+        and not for a round 2 that had not happened yet."""
+        out, _ = self._check(now=SOON)
+        self.assertTrue(out.startswith("quiet:"), out)
+        self.assertIn("sent back 6 min ago", out)
+        self.assertIn(f"has {rw.REREVIEW_GRACE_MINUTES} minutes to run", out)
+        self.assertNotIn("Done", out)
+
+    def test_without_now_it_reads_today_and_asks_for_no_history(self):
+        """The pinned fixture: bare `check` prints exactly what it printed on
+        2026-09-24 (docs/rereview-continuation-proof-2026-09.md §2b), and reads
+        no state history at all — there is no past to derive."""
+        out, linear = self._check()
+        self.assertEqual(out, (
+            "quiet: DRE-4025 — the epic is in Done, not In Progress — "
+            "nothing here is waiting on a re-review"))
+        self.assertEqual(
+            [c.args[0] for c in linear.gql.call_args_list
+             if "history" in c.args[0]], [])
+
+
+class TheClaimMatchesTheCode(unittest.TestCase):
+    """The docstring promises a replay, and the sweep path is untouched."""
+
+    @staticmethod
+    def _names(fn_name: str) -> set[str]:
+        source = open(rw.__file__, encoding="utf-8").read()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.FunctionDef) and node.name == fn_name:
+                return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        raise AssertionError(f"{fn_name} not found")
+
+    def test_the_docstring_promises_the_lane_and_the_thread_not_the_clock(self):
+        claim = rw.__doc__ or ""
+        self.assertIn("--now", claim)
+        for word in ("lane", "thread", "state history"):
+            self.assertIn(word, claim, claim)
+
+    def test_the_flag_says_what_it_moves(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            rw.main(["check", "--help"])
+        self.assertIn("lane", buf.getvalue())
+
+    def test_check_reads_both_of_them_at_the_instant(self):
+        names = self._names("_cmd_check")
+        self.assertIn("at_or_before", names)
+        self.assertIn("lane_at", names)
+
+    def test_the_sweep_path_is_untouched(self):
+        """`report` is what reconcile calls and what prints `rereview-missing:`.
+        It reads live state and replays nothing."""
+        names = self._names("report")
+        for helper in ("at_or_before", "lane_at", "_state_history"):
+            self.assertNotIn(helper, names)
 
 
 if __name__ == "__main__":
