@@ -130,6 +130,7 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 # marker from the module that writes it.
 import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import dedupe_dispatch  # noqa: E402 — ONE parse of the `bureau-card:` job name (DRE-4830)
 import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and its card (DRE-3665)
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
@@ -1250,6 +1251,19 @@ def fix_workflow() -> str:
     return "self-agent-fix.yml" if REPO_SLUG == "bureau-pipeline" else "agent-fix.yml"
 
 
+def build_workflow() -> str:
+    """The BUILD stub's filename for this sweep's repo (DRE-4830).
+
+    Same resolution as review_workflow()/fix_workflow(), same reason: in
+    bureau-pipeline `agent-task.yml` IS the reusable definition (workflow_call
+    only), so its runs exist under `self-agent-task.yml`. Nothing here
+    DISPATCHES the build — the Todo branch fires a repository_dispatch, which
+    the relay and `plan_run.fire` own — this is the name the `run list` below
+    resolves, and a guard watching the reusable would read permanently idle.
+    """
+    return "self-agent-task.yml" if REPO_SLUG == "bureau-pipeline" else "agent-task.yml"
+
+
 #: The hold a pull request gets when this repo has no fix agent to hand it to
 #: (DRE-4378). An idempotency key like every other tag in this file: the notice
 #: carries it beside the head sha, and `_worker_receipt_count` counts the pair.
@@ -1523,12 +1537,16 @@ _epic_record_gaps: dict[str, str] = {}
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
-    records (DRE-3642) and its workflows listing (DRE-4378). Called once at the
-    top of main()."""
+    records (DRE-3642), its workflows listing (DRE-4378) and its in-flight build
+    runs (DRE-4830). Called once at the top of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
+    global _build_runs, _build_runs_unreadable
     _swept_cards = None
     _pr_listing = None
     _workflows_listing = None
+    _build_runs = None
+    _build_runs_unreadable = None
+    _build_job_names.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
     linear_ops.reset_pass_cache()
@@ -2477,6 +2495,167 @@ def agent_run_alive(identifier: str) -> bool:
         ):
             return True
     return False
+
+
+# ── The card's build run, BEFORE it has said anything (DRE-4830) ─────────────
+# `agent_run_alive` above answers off the card's own `🧠 model-attempt`
+# heartbeat, and already counts a `queued` run exactly as it counts an
+# `in_progress` one. What it cannot see is a run that has posted NOTHING,
+# because agent-task posts that heartbeat at "Card → In Progress" — after the
+# runner is allocated. A run waiting for a runner is therefore indistinguishable
+# from no run at all on the evidence the card carries.
+#
+# THE INCIDENT. On 2026-09-24 seven portico cards were promoted to Todo at
+# 14:59 PT and dispatched; the mini was saturated all afternoon (78 jobs waiting
+# at 17:00) and every run sat queued. Sixteen minutes later — the lane
+# contract's Todo stall window — the nudge loop's Todo branch found each card
+# still in Todo with no pull request, read that as no run, and re-dispatched six
+# of them (`🧹 Reconcile: card sat in Todo with no run — re-dispatched.` on
+# DRE-4518 and DRE-4519 at 22:15:5xZ, on DRE-4526 at 22:29:19Z). Five duplicates
+# later skipped on the open-PR half of the duplicate guard, each having held a
+# queue place and a runner slot; DRE-4518's started at 17:44, after its own
+# PR #700 had merged at 17:24, and pushed a from-scratch second build onto the
+# merged branch (the stranded commits of DRE-4828).
+#
+# So the question is asked of GITHUB instead, and the run is bound to the card
+# by the one thing a queued run does carry: its job NAME, `bureau-card: <DRE-N>`
+# (agent-task.yml, plan.yml's DRE-3223 convention). The match itself is
+# `dedupe_dispatch`'s, not a second parse of the same string.
+
+#: GitHub's statuses for a run that has not finished, from the ONE declaration
+#: (`stranded_fix.IN_FLIGHT_STATUSES`). Listed rather than inverted off
+#: `completed` for the reason declared there, and shared rather than restated so
+#: `queued` can never come to mean one thing to the merge gate and another here.
+IN_FLIGHT_STATUSES = stranded_fix.IN_FLIGHT_STATUSES
+
+#: How many of the build workflow's recent runs the listing covers. One
+#: workflow serves every card, so the window is repo-wide; the newest page is
+#: where a run dispatched minutes ago lives, and `sibling_on_this_card` stops at
+#: the first match so a busy repo cannot turn this into a jobs-API storm.
+_BUILD_RUNS_PAGE = "50"
+
+#: This sweep's unfinished build runs and their job names, memoised — the
+#: question is about the WORKFLOW, so one listing answers every Todo card in the
+#: pass (`_workflows_listing`'s rule, for the DRE-2929 reason). A FAILED read is
+#: never memoised as data: `_build_runs_unreadable` remembers only that the
+#: answer is unknown, so no later reader in the pass mistakes it for emptiness.
+_build_runs: list | None = None
+_build_runs_unreadable: str | None = None
+_build_job_names: dict[str, list] = {}
+
+
+def _build_runs_in_flight() -> list | None:
+    """The build stub's runs GitHub says have NOT finished, newest first.
+
+    `[{"id": "...", "status": "queued"}, ...]`, or **None when the answer could
+    not be read** — which is not an empty list, and the caller fails closed on
+    it exactly as every other Actions reader in this file does.
+
+    A workflow that is provably ABSENT from the target repo is the third answer
+    (DRE-2525/DRE-4378, `_actions_runs_busy`'s adjudication): no run of a file
+    that does not exist can be in flight, so the sweep answers "none" and stays
+    green rather than going red every fifteen minutes forever.
+    """
+    global _build_runs, _build_runs_unreadable
+    if _build_runs is not None:
+        return _build_runs
+    if _build_runs_unreadable is not None:
+        return None
+    workflow = build_workflow()
+    args = ("run", "list", "--repo", REPO, "--workflow", workflow,
+            "--limit", _BUILD_RUNS_PAGE, "--json", "databaseId,status")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        if workflow_on_default_branch(workflow) is False:
+            print(
+                f"build-run guard: {workflow} is not on {REPO}'s default branch "
+                "— this repo has no build stub, so no build run can be in "
+                "flight. Nothing to check, and nothing to report."
+            )
+            _build_runs = []
+            return _build_runs
+        _note_actions_read_failure(args, detail)
+        _build_runs_unreadable = detail
+        return None
+    if out is None:
+        _build_runs_unreadable = f"gh run list --workflow {workflow} answered nothing"
+        _read_failures.append(_build_runs_unreadable)
+        return None
+    try:
+        runs = json.loads(out or "[]")
+    except ValueError:
+        _build_runs_unreadable = (
+            f"unparseable run listing for {workflow}: {out[:200]!r}")
+        _read_failures.append(_build_runs_unreadable)
+        return None
+    _build_runs = [
+        {"id": str(r.get("databaseId")), "status": str(r.get("status") or "")}
+        for r in runs
+        if isinstance(r, dict)
+        and r.get("databaseId")
+        and str(r.get("status") or "") in IN_FLIGHT_STATUSES
+    ]
+    return _build_runs
+
+
+def _build_run_job_names(run_id: str) -> list:
+    """One build run's job names, memoised for the pass.
+
+    Unreadable reads as no names, which makes the run UNATTRIBUTED rather than
+    "not this card's" — the distinction matters only for the log, because an
+    unattributed run cannot refuse anything, and that is the fail-open half the
+    Todo branch needs: a run this guard could not attribute must never strand a
+    card whose work has genuinely not started.
+    """
+    if run_id in _build_job_names:
+        return _build_job_names[run_id]
+    raw = gh_actions_read("api", f"repos/{REPO}/actions/runs/{run_id}/jobs")
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        data = None
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    names = [j.get("name") or "" for j in (jobs or []) if isinstance(j, dict)]
+    _build_job_names[run_id] = names
+    return names
+
+
+def build_run_refusal(identifier: str) -> str:
+    """Why this card must NOT be dispatched a second time right now, or ''.
+
+    A log-ready sentence, in the shape `stranded_fix.lane_refusal` and
+    `fix_agent_absent_hold` already use: the caller prints it and does nothing
+    else. Empty means nothing GitHub knows about stops the dispatch — no run of
+    this card's build workflow is queued, waiting, pending or in progress — and
+    that emptiness is what keeps a genuinely stalled card moving.
+
+    An UNREADABLE listing refuses, and the failure is already recorded, so the
+    sweep exits red for the medic. Deferring one dispatch costs fifteen minutes
+    and the next sweep asks again; dispatching off a fabricated empty listing is
+    the incident this function exists to end.
+    """
+    runs = _build_runs_in_flight()
+    if runs is None:
+        return (
+            f"whether a build run for {identifier} is already in flight could "
+            f"not be read from GitHub ({build_workflow()}), so this sweep is not "
+            "dispatching a second one — the next sweep asks again"
+        )
+    if not runs:
+        return ""
+    # The listing arrives mixed across every card the repo is building, so the
+    # job names are what narrow it — and the scan short-circuits on the first
+    # match, so the read budget is only ever spent in full when this card has no
+    # run at all.
+    found = dedupe_dispatch.sibling_on_this_card(
+        runs, identifier, _build_run_job_names)
+    if not found:
+        return ""
+    run = found[0]
+    return (
+        f"Agent Task run {run['id']} for {identifier} is {run['status']} — "
+        f"https://github.com/{REPO}/actions/runs/{run['id']}"
+    )
 
 
 QA_BOT_LOGIN = "agent-bureau-qa-bot"
@@ -8437,6 +8616,22 @@ def main(
                 linear_ops.cmd_state(ident, "Done")
                 linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
             elif state == "Todo" and not is_open:
+                # LIVENESS FIRST, exactly as the In Progress branch below does it
+                # (DRE-4830). A card whose first run is still QUEUED has posted
+                # no heartbeat, so "no run receipt" and "no run" look identical
+                # from here — and on 2026-09-24 this branch re-dispatched six
+                # portico cards sixteen minutes after their dispatch, while all
+                # seven runs sat behind a saturated runner pool. The duplicate
+                # queues behind the original, holds a queue place and a runner
+                # slot, and if the original's pull request merges first it builds
+                # the card a second time onto the merged branch (DRE-4828).
+                # No receipt: this is a quiet wait, and a comment every fifteen
+                # minutes for the hours a run can sit queued is noise on the
+                # card. flag_stranded still says it once, in plain English.
+                refusal = build_run_refusal(ident)
+                if refusal:
+                    print(f"live: {ident} — {refusal}; not re-dispatching")
+                    continue
                 # The receipt follows the dispatch's REAL outcome: a 🧹 success
                 # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
                 # The success note is _TODO_REDISPATCH_NOTE so the watchdog's

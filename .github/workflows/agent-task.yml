@@ -57,6 +57,19 @@ on:
 
 jobs:
   execute:
+    # The card, in the job NAME — plan.yml's convention since DRE-3223, and the
+    # only place a card identifier survives into the Actions API for a run that
+    # has not started yet. A queued run has posted no `🧠 model-attempt`
+    # heartbeat (that step is below, after the runner is allocated), so the
+    # heartbeat cannot answer "does this card already have a run in flight" for
+    # exactly the runs that matter. On 2026-09-24 the reconcile sweep asked that
+    # question of a saturated runner pool, got "no run" for six portico cards
+    # whose first runs were sitting queued, and re-dispatched all six sixteen
+    # minutes later (DRE-4830); one duplicate rebuilt a card whose pull request
+    # had already merged. `reconcile.build_run_refusal` reads this name through
+    # `dedupe_dispatch.job_names_this_card` — the same matcher plan.yml's own
+    # duplicate guard uses, so there is one parse of the convention, not two.
+    name: "bureau-card: ${{ github.event.client_payload.identifier }}"
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap. 45 murdered legitimately long builds mid-work
     # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
