@@ -53,6 +53,9 @@ FABLE = "claude-fable-5"
 # the planner's, and no build role's. A different model from the id above.
 FABLE51 = "claude-fable-5-1"
 OPUS = "claude-opus-5"
+# The workhorse ladder's top rung since DRE-4836 (2026-09-25); OPUS is the
+# rung below it, and the planner's Opus rung is this one too.
+OPUS55 = "claude-opus-5-5"
 # The WORKHORSE ladder's backup rung since 2026-09-16 (DRE-3880). It is also
 # the top of the advisory ladder — the one model on two ladders in this config
 # — and the fence that used to be bought by keeping those lists disjoint is
@@ -80,7 +83,7 @@ class LadderShapeTest(unittest.TestCase):
     def test_ladder_is_best_first(self):
         # Best → worst. The ladder is the contract; every build role shares it.
         # Fable is deliberately absent — see FableIsNotABuildModelTest.
-        self.assertEqual(mf.LADDER, [OPUS, SONNET5])
+        self.assertEqual(mf.LADDER, [OPUS55, OPUS, SONNET5])
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(mf.LADDER) <= mf.KNOWN_MODELS)
@@ -174,7 +177,7 @@ class SelectLadderTest(unittest.TestCase):
         # and must not return a model just confirmed 404. Here Opus raises
         # (inconclusive → skip) and Sonnet is available → Sonnet.
         def probe(m):
-            if m == OPUS:
+            if m in (OPUS55, OPUS):
                 raise TimeoutError("probe network error")
             return True
         self.assertEqual(mf.select("engineer", probe=probe), SONNET5)
@@ -196,7 +199,7 @@ class CachingTest(unittest.TestCase):
 
         def probe(m):
             calls.append(m)
-            return {OPUS: False, SONNET5: True}[m]
+            return {OPUS55: False, OPUS: False, SONNET5: True}[m]
 
         t = [1000.0]
         # First select: Opus probed (False) then Sonnet probed (True) → 2 calls.
@@ -314,26 +317,26 @@ class CliTest(unittest.TestCase):
 
     def test_cli_select_skips_an_unavailable_top_of_ladder(self):
         self.assertEqual(
-            self._select("engineer", {OPUS: False, SONNET5: True}),
+            self._select("engineer", {OPUS55: False, OPUS: False, SONNET5: True}),
             SONNET5,
         )
 
     def test_cli_select_returns_top_of_ladder_when_available(self):
         self.assertEqual(
-            self._select("devops", {FABLE: True, OPUS: True, SONNET: True}),
-            OPUS,
+            self._select("devops", {FABLE: True, OPUS55: True, SONNET: True}),
+            OPUS55,
         )
 
     def test_cli_select_walks_the_planners_own_ladder(self):
         # The planner is `judgement` (DRE-3015): its top rung is the current
         # Fable, and the CLI is the entry point plan.yml actually calls.
         self.assertEqual(
-            self._select("planner", {FABLE51: True, OPUS: True, SONNET: True}),
+            self._select("planner", {FABLE51: True, OPUS55: True, SONNET: True}),
             FABLE51,
         )
         self.assertEqual(
-            self._select("planner", {FABLE51: False, OPUS: True, SONNET: True}),
-            OPUS,
+            self._select("planner", {FABLE51: False, OPUS55: True, SONNET: True}),
+            OPUS55,
         )
 
     def test_cli_role_of_labels(self):
@@ -370,7 +373,7 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
 
     def test_avoiding_the_top_rung_walks_to_the_next(self):
         self.assertEqual(
-            mf.select("planner", probe=self.ALL_UP, avoid=[FABLE51]), OPUS
+            mf.select("planner", probe=self.ALL_UP, avoid=[FABLE51]), OPUS55
         )
 
     def test_without_avoid_the_top_rung_is_still_chosen(self):
@@ -409,7 +412,7 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
 
     def test_avoiding_every_rung_still_never_blocks(self):
         chosen = mf.select("planner", probe=self.ALL_UP,
-                           avoid=[FABLE51, OPUS, SONNET])
+                           avoid=[FABLE51, OPUS55, SONNET])
         self.assertEqual(chosen, SONNET)
 
     def test_an_unknown_or_empty_avoid_changes_nothing(self):
@@ -429,7 +432,7 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
                  "--avoid", FABLE51, "--explain-file", why],
                 capture_output=True, text=True, env=env,
             )
-            self.assertEqual(out.stdout.strip(), OPUS, out.stderr)
+            self.assertEqual(out.stdout.strip(), OPUS55, out.stderr)
             self.assertTrue(open(why).read().startswith("DEGRADED"))
 
 
@@ -698,7 +701,7 @@ class FableIsNotABuildModelTest(unittest.TestCase):
     def test_ladder_starts_at_opus(self):
         # The workhorse ladder is Opus-first: the model a healthy build agent
         # gets when everything is up.
-        self.assertEqual(mf.LADDER[0], OPUS)
+        self.assertEqual(mf.LADDER[0], OPUS55)
 
     def test_ladder_does_not_contain_fable(self):
         # Not "Fable last" — absent. Anything still in the ladder is one
@@ -719,7 +722,7 @@ class FableIsNotABuildModelTest(unittest.TestCase):
         for role in self.BUILD_ROLES:
             with self.subTest(role=role):
                 mf.clear_availability_cache()
-                self.assertEqual(mf.select(role, probe=lambda m: True), OPUS)
+                self.assertEqual(mf.select(role, probe=lambda m: True), OPUS55)
 
     def test_fable_is_not_reachable_at_any_availability(self):
         # Whatever the probe says about the ladder's own models — all up, all
@@ -766,7 +769,7 @@ class FableIsNotABuildModelTest(unittest.TestCase):
                     [sys.executable, script, "select", role],
                     capture_output=True, text=True, env=env,
                 ).stdout.strip()
-                self.assertEqual(out, OPUS)
+                self.assertEqual(out, OPUS55)
 
 
 if __name__ == "__main__":
