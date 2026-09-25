@@ -29,6 +29,14 @@ this module is where the medic asks them:
      nowhere else. Exactly the rule DRE-1921 wrote for a rate-limited critic —
      do not retry into the same wall.
 
+  3. **THE MACHINE RAN OUT OF MEMORY** (DRE-4847). A run the kernel killed at
+     the runner's memory limit — `##[error]Process completed with exit code
+     137.`, read by `out_of_memory.from_log` off the same log — is refused a
+     rerun on any machine that cannot be made bigger: a `heavy`, `hosted` or
+     `unknown` runner, or the SECOND kill on a `light` one. A light runner's
+     FIRST kill keeps the ordinary retry, because 2 GB can be one turn short
+     on one card and ample on the next. The same wall, a fourth time.
+
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
 those are what the one retry is FOR, and this module must not take it away.
@@ -91,6 +99,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
 import execution_result  # noqa: E402
+import out_of_memory  # noqa: E402
 import pipeline_act  # noqa: E402
 import stream_watchdog  # noqa: E402
 
@@ -114,6 +123,13 @@ RULE_TURN_EXHAUSTION = "turn-exhaustion"
 # can be a passing blip in the network path — but a second in a row is not a
 # blip, and a third build would be DRE-1921's loop wearing a new name.
 RULE_STALLED_REPEAT = "stalled-no-stream-repeat"
+# DRE-4847. The FOURTH rule: the machine ran out of memory. A light runner's
+# first kill keeps the ordinary retry — 2 GB can be one turn short on one card
+# and fine on the next — but a heavy, GitHub-hosted or unrecognized machine is
+# already as big as it gets here, and the second kill on a light one has spent
+# the retry. Re-running the same work on the same size of machine dies the same
+# way; it needs a bigger machine or a smaller card, and neither is a rerun.
+RULE_OUT_OF_MEMORY = "out-of-memory"
 
 # The park receipt's own marker — `dead_run.decide()`'s hold sentence, which
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
@@ -184,12 +200,72 @@ def is_turn_exhaustion(execution: dict | None) -> bool:
     return check_agent_result.is_turn_exhaustion(execution)
 
 
+#: Why a rerun cannot help THIS class of machine — the second half of the
+#: refusal sentence, one per class that never gets the retry. `light` has no
+#: row because a light runner's first kill is the one case that keeps it.
+_NO_BIGGER_MACHINE = {
+    out_of_memory.HEAVY: (
+        "a heavy runner is already the biggest machine this pipeline asks "
+        "for, so the same work meets the same limit"
+    ),
+    out_of_memory.HOSTED: (
+        "a GitHub-hosted runner's size is not ours to raise, so the same work "
+        "meets the same limit"
+    ),
+    out_of_memory.UNKNOWN: (
+        "the run's log never named the machine, so there is no reason to "
+        "believe a rerun lands on a bigger one"
+    ),
+}
+
+
+def _attempt(value) -> int:
+    """Which attempt of the failed run this is; 1 when it cannot be read.
+
+    Unreadable reads as the FIRST attempt on purpose: the rule below would
+    otherwise refuse a light runner's one retry on a missing workflow input,
+    and `medic.yml`'s `retry` job is gated to attempt 1 anyway, so an
+    unreadable attempt can never spend a second build.
+    """
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 1
+
+
+def out_of_memory_refusal(kill, *, attempt) -> str:
+    """Why this out-of-memory kill gets no retry, or "" when it keeps its one.
+
+    The kill is read from the RUN (`out_of_memory.from_log`, off the log the
+    medic already fetched) and the rule is about the MACHINE: only a light
+    runner's FIRST kill keeps the ordinary retry, because 2 GB can be one turn
+    short on one card and ample on the next. A heavy, GitHub-hosted or
+    unrecognized runner is already as big as this pipeline can ask for, and a
+    second kill on a light one has spent the retry — in both cases the same
+    work on the same size of machine dies the same way, which is DRE-1921's
+    rule ("do not retry into the same wall") wearing a fourth name.
+    """
+    if kill is None:
+        return ""
+    number = _attempt(attempt)
+    said = out_of_memory.describe(kill)
+    if kill.runner_class == out_of_memory.LIGHT:
+        if number <= 1:
+            return ""
+        return (
+            f"{said}, and this is attempt {number}: the one retry a light "
+            f"runner's kill is entitled to is already spent"
+        )
+    return f"{said}, and {_NO_BIGGER_MACHINE[kill.runner_class]}"
+
+
 def decide(
     *,
     parked_because: str = "",
     execution: dict | None = None,
     turn_receipt: str = "",
     repeat_stall: str = "",
+    out_of_memory: str = "",
 ) -> Decision:
     """Retry this failed run, or decline and say why.
 
@@ -206,6 +282,11 @@ def decide(
         )
     if repeat_stall:
         return Decision(DECLINE, RULE_STALLED_REPEAT, repeat_stall)
+    # `out_of_memory` here is the REFUSAL SENTENCE (empty when the kill still
+    # has its retry), not the module of that name — `out_of_memory_refusal`
+    # below is what reads the log and decides which it is.
+    if out_of_memory:
+        return Decision(DECLINE, RULE_OUT_OF_MEMORY, out_of_memory)
     if is_turn_exhaustion(execution):
         facts = check_agent_result.turn_exhaustion_facts(execution)
         return Decision(
@@ -266,6 +347,15 @@ _WHY_NOT = {
         "with the work — the agent never got as far as reading the code — "
         "and nothing else is coming until someone looks at why the runs are "
         "going silent."
+    ),
+    RULE_OUT_OF_MEMORY: (
+        "The medic re-runs a failed run once, for a transient infrastructure "
+        "flake; a machine that ran out of memory is not one. Nothing is wrong "
+        "with the work — the system killed it, nothing was rejected — and "
+        "running it again on the same size of machine dies the same way, so "
+        "no second build was started and nothing more was charged to this "
+        "card. What moves it is a bigger machine or a smaller card, and "
+        "neither of those is a retry."
     ),
 }
 
@@ -582,6 +672,11 @@ def _decide_cli(args) -> int:
         execution=execution_from_log(log_text),
         turn_receipt=witness,
         repeat_stall=repeat,
+        # DRE-4847: read off the SAME log, no second fetch and no card read —
+        # the machine and its class are in the run's own set-up lines.
+        out_of_memory=out_of_memory_refusal(
+            out_of_memory.from_log(log_text), attempt=args.run_attempt
+        ),
     )
     print(f"retry={'true' if decision.retry else 'false'}")
     print(f"rule={decision.rule}")

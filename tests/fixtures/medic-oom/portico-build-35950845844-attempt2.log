@@ -1,0 +1,5 @@
+build	UNKNOWN STEP	2026-09-24T19:14:52.1234567Z Runner name: 'bureau-mini-light-4'
+build	UNKNOWN STEP	2026-09-24T19:14:52.1244567Z Runner group name: 'Default'
+build	UNKNOWN STEP	2026-09-24T19:14:52.1254567Z Machine name: 'bureau-mini-light-4'
+build	UNKNOWN STEP	2026-09-24T19:52:31.4412345Z ##[error]Process completed with exit code 137.
+build	UNKNOWN STEP	2026-09-24T19:52:33.9912345Z ##[error]Process completed with exit code 1.

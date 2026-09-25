@@ -1,0 +1,6 @@
+fix	UNKNOWN STEP	2026-09-24T21:06:44.1234567Z Runner name: 'bureau-mini-light-2'
+fix	UNKNOWN STEP	2026-09-24T21:06:44.1244567Z Runner group name: 'Default'
+fix	UNKNOWN STEP	2026-09-24T21:06:44.1254567Z Machine name: 'bureau-mini-light-2'
+fix	UNKNOWN STEP	2026-09-24T21:33:18.5512345Z ##[error]Process completed with exit code 137.
+fix	UNKNOWN STEP	2026-09-24T21:33:20.0012345Z ##[group]Run # Deliver the branch if the agent could not
+fix	UNKNOWN STEP	2026-09-24T21:33:21.6612345Z ##[error]Process completed with exit code 137.

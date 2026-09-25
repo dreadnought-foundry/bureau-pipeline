@@ -58,6 +58,25 @@
 # deliberately UNCHANGED: a transient blip deserves it, and the second
 # identical death is the proof that the environment is the cause.
 #
+# FIFTH EXCEPTION (DRE-4847): THE MACHINE RAN OUT OF MEMORY. On 2026-09-24
+# four build and fix runs were SIGKILLed on 2 GB light runners — `##[error]
+# Process completed with exit code 137.` on the agent step, and on every later
+# step within seconds — and every instrument misread them: the in-job death
+# receipt said `died: false, cause: none`, this medic said "incomplete work …
+# no action needed on infrastructure", and a pipeline-failure card blamed the
+# stream watchdog for silence 80 seconds after the agent last spoke. The
+# critic was killed the same way three times and got the rate-limit sentence,
+# because a critic killed mid-review writes no execution file and qa-review
+# posts its neutral marker into the same log. `class=out_of_memory` names it,
+# and the medic acts on it in two places: `diagnose` is gated off it (the
+# diagnosis agent would spend a Claude run to report what the log already
+# says), and `retry_declined`'s attempt clause admits the rule so the second
+# kill is said once on the card. The one automatic retry on attempt 1 is
+# deliberately UNCHANGED for a LIGHT runner — 2 GB can be one turn short on
+# one card and ample on the next — while a heavy, GitHub-hosted or
+# unrecognized machine is refused by the retry gate itself (medic_retry.py):
+# the same work on the same size of machine dies the same way.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -112,10 +131,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
-      # DRE-2488/DRE-2923: the failure's class — critic_infra_crash |
-      # upstream_5xx | linear_ratelimited | normal. The classifier prints both
-      # lines; infra_crash stays as-is so the DRE-1921 gates below are
-      # untouched.
+      # DRE-2488/DRE-2923: the failure's class — environment_crash |
+      # stalled_no_stream | out_of_memory | critic_infra_crash | upstream_5xx |
+      # linear_ratelimited | normal. The classifier prints both lines;
+      # infra_crash stays as-is so the DRE-1921 gates below are untouched.
       class: ${{ steps.c.outputs.class }}
       # DRE-2954: the retry gate — is this failure one the medic's single
       # automatic retry can help with at all? `retry` is the branch, `rule` /
@@ -329,6 +348,12 @@ jobs:
   # pipeline made on purpose, not a failure, and a red medic run is an operator
   # email about it. `run_attempt == 1` so it says it once per failed run.
   #
+  # …and EXCEPT for an out-of-memory kill (DRE-4847), for the same reason: a
+  # light runner's first kill takes the retry, so its SECOND kill is attempt 2
+  # of the same run and the attempt-1 clause alone would say nothing about it.
+  # A kill on a heavy, GitHub-hosted or unrecognized machine is refused on
+  # attempt 1 and is covered by that clause already.
+  #
   # …EXCEPT for a repeat stall (DRE-3991), which can only BE on attempt 2. The
   # medic's one retry is `gh run rerun --failed`, which reuses the run id, so
   # the second stall in a row is by construction the second attempt of the
@@ -341,7 +366,8 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       (github.event.workflow_run.run_attempt == 1 ||
-       needs.classify.outputs.rule == 'stalled-no-stream-repeat') &&
+       needs.classify.outputs.rule == 'stalled-no-stream-repeat' ||
+       needs.classify.outputs.rule == 'out-of-memory') &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.card != ''
     # The short lane, same as `classify` above (DRE-4276).
@@ -650,6 +676,7 @@ jobs:
       github.event.workflow_run.run_attempt >= 2 &&
       needs.classify.outputs.infra_crash != 'true' &&
       needs.classify.outputs.class != 'environment_crash' &&
+      needs.classify.outputs.class != 'out_of_memory' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true'

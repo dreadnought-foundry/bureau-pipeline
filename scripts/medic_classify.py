@@ -106,10 +106,29 @@ The stall keeps `infra_crash=false`, which is deliberate — it is the medic's
 ONE automatic retry that a stall is entitled to. The second one in a row is
 refused by `medic_retry`, not here.
 
+SIXTH CLASS — THE MACHINE RAN OUT OF MEMORY (DRE-4847). On 2026-09-24 four
+build and fix runs were SIGKILLed on 2 GB light runners and every instrument
+misread them, so a person diagnosed each one by hand. The tell was in the log
+this classifier already fetches: `##[error]Process completed with exit code
+137.` on a step, which is a container at its memory limit and the kernel's
+out-of-memory killer ending the process. `scripts/out_of_memory.py` owns that
+reading — one kill line is the rule, the `Runner name:` line says which class
+of machine it was, and a log carrying the watchdog's stall line is a stall and
+not this.
+
+It is checked after `environment_crash` and `stalled_no_stream` and BEFORE
+`critic_infra_crash`, for the third repetition of the same lesson: a critic
+killed mid-review writes no execution file, so qa-review posts its neutral
+marker into the same log, and on three of portico's runs that made
+`critic_infra_crash` win and the medic told the card "an infrastructure
+rate-limit … deliberately NOT retrying". The kill keeps `infra_crash=false`,
+which is deliberate — a first kill on a LIGHT runner is entitled to the medic's
+one automatic retry. Every other case is refused by `medic_retry`, not here.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
 prints `infra_crash=true|false` (the DRE-1921 gate, unchanged),
-`class=environment_crash|stalled_no_stream|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
+`class=environment_crash|stalled_no_stream|out_of_memory|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
 then `signature=`, `check=` and `meaning=` (empty unless the class is
 `environment_crash`) and `stall_step=`, `stall_last_event=` and
 `stall_silence=` (empty unless the class is `stalled_no_stream`), plus a human
@@ -125,6 +144,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import out_of_memory  # noqa: E402
 import reviewer_environment  # noqa: E402
 import stream_watchdog  # noqa: E402
 
@@ -219,10 +239,11 @@ def is_linear_rate_limited(log_text: str) -> bool:
 def classify(workflow_name: str, log_text: str) -> str:
     """The failed run's class: `environment_crash` (DRE-3428 — this runner
     cannot run Claude at all), `stalled_no_stream` (DRE-3991 — the run went
-    quiet and the watchdog stopped it), `critic_infra_crash` (DRE-1921 — back
-    off, the reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down,
-    back off), `linear_ratelimited` (DRE-2923 — the workspace quota is
-    exhausted, back off), or `normal` (retry once, then diagnose).
+    quiet and the watchdog stopped it), `out_of_memory` (DRE-4847 — the machine
+    hit its memory limit and the kernel killed the job), `critic_infra_crash`
+    (DRE-1921 — back off, the reviewer was down), `upstream_5xx` (DRE-2488 —
+    GitHub is down, back off), `linear_ratelimited` (DRE-2923 — the workspace
+    quota is exhausted, back off), or `normal` (retry once, then diagnose).
 
     The environment crash is checked FIRST and that ordering is the whole
     point of DRE-3428: the crashed review posts the neutral marker into the
@@ -234,11 +255,19 @@ def classify(workflow_name: str, log_text: str) -> str:
     that reason a second time: a review that went quiet posts the neutral
     marker into the same log too, and the cause the next reader needs is the
     silence, not the reviewer's rate limit.
+
+    AND THE KILL IS CHECKED NEXT, a third time for the same reason: a critic
+    killed mid-review writes no execution file, so qa-review always falls into
+    the neutral branch and the marker is in that log too. It sits after the
+    stall because the watchdog's own line says which of the two happened
+    (`out_of_memory.from_log` reads the stall and stands down).
     """
     if reviewer_environment.detect(log_text) is not None:
         return "environment_crash"
     if stream_watchdog.stall_from_log(log_text) is not None:
         return "stalled_no_stream"
+    if out_of_memory.from_log(log_text) is not None:
+        return "out_of_memory"
     if is_critic_infra_crash(workflow_name, log_text):
         return "critic_infra_crash"
     if is_upstream_5xx(log_text):
@@ -315,6 +344,21 @@ def main(argv: list[str]) -> int:
             f"failure, not a credential failure, not a usage limit. The "
             f"medic retries a stall once; a second one in a row gets a "
             f"notice instead.",
+            file=sys.stderr,
+        )
+    elif kind == "out_of_memory":
+        # The plain-English line the 2026-09-24 operator did not have: WHICH
+        # machine, and what size it is — because that is what decides whether
+        # running it again can help.
+        kill = out_of_memory.from_log(log_text)
+        print(
+            f"medic classify: OUT OF MEMORY — {out_of_memory.describe(kill)}. "
+            f"Not a code failure, not a credential failure, and not the "
+            f"watchdog (it stops a silent run with exit "
+            f"{stream_watchdog.STALL_EXIT} and writes a line saying so). A "
+            f"first kill on a light runner keeps the medic's one retry; a "
+            f"heavier or GitHub-hosted machine gets none, because the same "
+            f"work on the same size of machine dies the same way.",
             file=sys.stderr,
         )
     elif environment is not None:
