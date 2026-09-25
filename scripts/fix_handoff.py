@@ -75,9 +75,12 @@ STAMP = "handoff.stamp"
 VERDICT_STAMP = "verdict.stamp"
 DIR_PREFIX = "fix-handoff-"
 
-# The two escalations the fixing agent can write. Named here once: the open
-# step clears both, the Report step reads both, and neither knows the spelling.
-KINDS = ("blocker", "refutation")
+# What the fixing agent can hand back. Named here once: the open step clears
+# every kind, the Report step reads every kind, and neither knows the spelling.
+# The two escalations, plus `reason` (DRE-4849): the conflict agent's paragraph
+# on why it ended without a push, quoted on the "pushed no new commit"
+# escalation so a person does not redo the diagnosis from scratch.
+KINDS = ("blocker", "refutation", "reason")
 
 # The machine-wide directory the fault travelled through. Cleared on open and
 # never read as a handoff afterwards.
