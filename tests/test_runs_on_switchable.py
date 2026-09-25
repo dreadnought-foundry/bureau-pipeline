@@ -28,6 +28,28 @@ The rule this file pins:
   the long chain. So the lane is a set of JOBS, not of files: `SHORT_LANE`
   names the files that read the short variable and `LONG_JOBS` names the jobs
   inside them that do not.
+* …and except the BUILD lane (DRE-4846): the three jobs that run a product's
+  own test suite — `agent-task.yml`'s `execute`, `agent-fix.yml`'s `fix` and
+  `qa-review.yml`'s `review` — put `vars.BUREAU_CI_RUNS_ON`, the variable each
+  product repo's own CI already reads, in front of that same chain. On
+  2026-09-24 a build or fix agent running a product suite was SIGKILLed
+  (exit 137) on a `bureau-mini-light-*` runner (1 CPU, 2 GB, no swap) FOUR
+  times at 17-26 minutes — portico run 35950845844 attempts 1 and 2, portico
+  fix run 35954619710, agent-bureau run 36093192182 — and portico's first
+  attempt had reached `3/5 implementation green` when it died, work that was
+  lost. A fleet read of 129 QA Review runs added the critic on 2026-09-25: it
+  died the same way three times, on both attempts each time (portico runs
+  35932479611, 36089623608, 36161433688), because the DRE-3005 evidence rule
+  makes it run the product's suite itself. agent-bureau's
+  `architecture/decisions/adr-owned-runner-fleet.md` named the trigger in
+  advance — "a light job over 1.5 GiB" under "What would change this record",
+  and "The heavy class is where suites run". No NEW variable is introduced, on
+  purpose: the console's pool fail-back deletes exactly `BUREAU_RUNS_ON`,
+  `BUREAU_CI_RUNS_ON` and `BUREAU_SHORT_RUNS_ON` when no runner is online, so a
+  fourth would keep builds pinned to a dead pool. Verify, plan, the sweeps, the
+  merge gate and the medic's `diagnose` keep their chains unchanged, and a repo
+  that sets neither variable renders exactly what it renders today —
+  `tests/test_build_runs_on_lane.py` is where that lane is pinned.
 * Every job in a workflow that runs only in THIS repo stays on the literal
   `ubuntu-latest`. bureau-pipeline is public, its minutes bill at $0, and the
   org's Default runner group refuses public repos — a public-repo job pointed
@@ -70,11 +92,29 @@ SHORT_LANE = {
 # is the job that does the real deploy work (DRE-4606).
 LONG_JOBS = {"medic.yml": {"diagnose"}, "release-train.yml": {"release"}}
 SHORT_VAR_HINT = "vars.BUREAU_SHORT_RUNS_ON"
+# The build lane (DRE-4846): the same chain again, with the product repo's own
+# CI variable in front — the chain `ci.yml` already reads in the fleet, byte
+# for byte, so the console's pool fail-back covers it with no fourth variable.
+BUILD_SWITCHABLE = (
+    "${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON"
+    " || '[\"ubuntu-latest\"]') }}"
+)
+# The jobs on the build lane, by name and by file: exactly the three that run
+# the product's own test suite. Exactly these — widening the lane is a
+# decision, not a tidy-up.
+BUILD_JOBS = {
+    "agent-task.yml": {"execute"},
+    "agent-fix.yml": {"fix"},
+    "qa-review.yml": {"review"},
+}
+BUILD_VAR_HINT = "vars.BUREAU_CI_RUNS_ON"
 HOSTED = "ubuntu-latest"
 
 
 def expected_runs_on(name: str, job_id: str) -> str:
     """The one expression a reusable job's `runs-on` must be, by file and job."""
+    if job_id in BUILD_JOBS.get(name, set()):
+        return BUILD_SWITCHABLE
     if name in SHORT_LANE and job_id not in LONG_JOBS.get(name, set()):
         return SHORT_SWITCHABLE
     return SWITCHABLE
@@ -132,8 +172,9 @@ def test_reusable_jobs_read_the_callers_runner_variable(path: Path) -> None:
     ]
     assert not wrong, (
         f"{path.name} is a workflow_call reusable; every job must read the "
-        f"caller's runner variable, short-lane jobs with {SHORT_VAR_HINT} in "
-        f"front. Not switchable: {wrong}"
+        f"caller's runner variable on one of the three lanes: the long chain, "
+        f"the short lane with {SHORT_VAR_HINT} in front, or the build lane "
+        f"with {BUILD_VAR_HINT} in front. Not switchable: {wrong}"
     )
 
 

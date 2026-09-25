@@ -508,7 +508,7 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
-## The two runner lanes: short jobs and long jobs (DRE-3887, DRE-4276, DRE-4606)
+## The three runner lanes: short jobs, long jobs and builds (DRE-3887, DRE-4276, DRE-4606, DRE-4846)
 
 Every job in a reusable reads the CALLER's repository variable
 `BUREAU_RUNS_ON` and runs on `ubuntu-latest` when it is unset (DRE-3350). The
@@ -518,12 +518,16 @@ so a repo whose long-job runners are busy can route its bookkeeping elsewhere
 by setting one more variable — and with it unset every job renders exactly
 what it rendered before. The expression is one exact string,
 `fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON ||
-'["ubuntu-latest"]')`, so a grep finds every site.
+'["ubuntu-latest"]')`, so a grep finds every site. The three jobs that run a
+product's own test suite read `BUREAU_CI_RUNS_ON` in front of it the same way
+(DRE-4846), which is the variable the repo's CI already reads — so those jobs
+land wherever that repo's CI lands.
 
 | lane | variable | what rides it | how long a job takes |
 |---|---|---|---|
 | short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276); and release-train's `wait` and `plan` (DRE-4606) | seconds to a couple of minutes, and no model call at all — except release-train's `wait`, which is a SLEEP of up to seventy minutes and is on this lane for that very reason; see the rule below |
-| long | `BUREAU_RUNS_ON` | the default: **every reusable job the short row does not name.** Not enumerated here on purpose — a list would be wrong the day the next reusable lands; `test_reusable_jobs_read_the_callers_runner_variable` is the live enumeration and it fails on any job that reads neither variable | the Claude jobs run minutes to an hour; the rest are scripts, and they sit on this lane because nothing has moved them, not because they are slow |
+| build | `BUREAU_CI_RUNS_ON` | exactly these three, by name: agent-task's `execute`, agent-fix's `fix` and qa-review's `review` (DRE-4846) — the jobs that run the product's own test suite, so they are bounded by that suite and belong on whatever class the repo runs CI on | up to 120 minutes each, and the memory is the binding limit rather than the clock: seven of these were SIGKILLed on a 2 GB runner at 17-26 minutes |
+| long | `BUREAU_RUNS_ON` | the default: **every reusable job the two rows above do not name.** Not enumerated here on purpose — a list would be wrong the day the next reusable lands; `test_reusable_jobs_read_the_callers_runner_variable` is the live enumeration and it fails on any job that reads none of the variables | the Claude jobs run minutes to an hour; the rest are scripts, and they sit on this lane because nothing has moved them, not because they are slow |
 
 **Why.** On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued for
 about an hour behind 20-minute Claude jobs while three heavy runners sat idle
@@ -539,6 +543,23 @@ heavy runners sat idle and ineligible, and over 2026-09-18 22:00 PT →
 2026-09-22 13:00 PT that job's queue wait was **p90 44 minutes, max 81 minutes
 across 109 jobs**. Portico was 17 commits behind its last portal release: a
 train that cannot start is a train that does not ship.
+
+**And why the build lane** (DRE-4846). The queueing above is a lane too narrow;
+this is a lane too small. On 2026-09-24 a build or fix agent running a
+product's suite was SIGKILLed — exit 137, the kernel OOM killer — on a
+`bureau-mini-light-*` runner (1 CPU, **2 GB**, no swap) **four times** at 17-26
+minutes: portico run 35950845844 attempts 1 and 2, portico fix run 35954619710,
+agent-bureau run 36093192182. The first of those had reached `⏳ 3/5
+implementation green` and **that work was lost**; both pull requests arrived
+carrying only their RED tests. A read of 129 QA Review runs over 09-23 → 09-25
+added the critic: killed the same way **three times**, on both attempts each
+time (portico runs 35932479611, 36089623608, 36161433688), because the DRE-3005
+evidence rule makes it run the product's suite itself. Both lanes read
+`BUREAU_RUNS_ON`, which in both repos is the bare `bureau-mini` set, so a
+suite-running agent landed on a light runner about half the time.
+agent-bureau's `architecture/decisions/adr-owned-runner-fleet.md` named the
+trigger in advance — "a light job over 1.5 GiB" under "What would change this
+record", and "The heavy class is where suites run".
 
 **The rule to keep.** A job belongs on the short lane only if it makes **no
 Claude call, runs no product test suite and runs no build**. That criterion is
@@ -561,6 +582,17 @@ added to one of these five files without a runner decision fails the build
 rather than inheriting one, and widening the lane to a sixth file is a card,
 not a tidy-up.
 
+**The build lane is that rule read the other way**: a job belongs on it exactly
+when it **runs a product's own test suite**, because then it is bounded by that
+suite's memory rather than by its own work. That is three jobs by name —
+agent-task's `execute`, agent-fix's `fix`, qa-review's `review` — pinned in
+`tests/test_build_runs_on_lane.py`, and it is deliberately **not** a fourth
+variable: the console's runner-pool fail-back deletes exactly `BUREAU_RUNS_ON`,
+`BUREAU_CI_RUNS_ON` and `BUREAU_SHORT_RUNS_ON` when no runner is online, so a
+`BUREAU_BUILD_RUNS_ON` nobody sets would have kept builds pinned to a dead
+pool. Reading the chain the fleet's CI already reads, byte for byte, is what
+makes the fail-back cover this lane too. Widening it to a fourth job is a card.
+
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.
@@ -576,6 +608,20 @@ repo, and deleting the variable puts the sweeps straight back. The train adds
 a second shape of that bill: a re-armed `wait` can burn up to seventy hosted
 minutes sleeping, where on the mini it burned nothing but a slot everything
 else wanted.
+
+The build lane needs **nobody to set anything**. Read on 2026-09-24 at about
+22:40 PT, `BUREAU_CI_RUNS_ON` was already set on portico and agent-bureau (both
+naming `bureau-heavy`) and on agent-bureau-demo (the bare `bureau-mini` set, so
+the demo can still land on light); atlas and deltasolv set neither variable and
+stay on `ubuntu-latest`. So the two repos that lost work move the moment this
+reaches their channel, and every other repo renders exactly what it rendered
+before. **The trade, stated:** in those two repos the build, fix and review jobs
+— up to 120 minutes each — now share the three heavy runners with CI, so a
+review can queue behind CI (Portico ran 63 reviews and agent-bureau 40 over
+09-23 → 09-25). The ADR's own "heavy queueing" line is the trigger to revisit
+that; the lighter path for the critic is a separate card — have it cite CI's own
+run instead of re-running the suite, which would let it return to the light
+class.
 
 ## A dependabot pull request gets a card of its own (DRE-3665)
 

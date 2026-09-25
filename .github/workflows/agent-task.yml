@@ -70,7 +70,19 @@ jobs:
     # `dedupe_dispatch.job_names_this_card` — the same matcher plan.yml's own
     # duplicate guard uses, so there is one parse of the convention, not two.
     name: "bureau-card: ${{ github.event.client_payload.identifier }}"
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The BUILD lane (DRE-4846): the caller's own CI variable in front of the
+    # long chain, because this job runs the product's test suite and is bounded
+    # by it. On 2026-09-24 four of these runs were SIGKILLed (exit 137) on a
+    # `bureau-mini-light-*` runner — 1 CPU, 2 GB, no swap — at 17-26 minutes:
+    # portico run 35950845844 attempts 1 and 2, portico fix run 35954619710 and
+    # agent-bureau run 36093192182. The first of those had reached
+    # `⏳ 3/5 implementation green` and that work was lost. `BUREAU_CI_RUNS_ON`
+    # is not a new variable: it is the one each repo's own `ci.yml` already
+    # reads (portico and agent-bureau both name `bureau-heavy`), so the
+    # console's pool fail-back — which deletes exactly the three BUREAU_*_RUNS_ON
+    # variables when no runner is online — already covers this lane. A repo that
+    # sets neither variable renders exactly what it rendered before.
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap. 45 murdered legitimately long builds mid-work
     # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
     # 4× while in_progress with fresh ⏳ receipts, and the Report step then

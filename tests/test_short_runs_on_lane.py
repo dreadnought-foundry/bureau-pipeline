@@ -222,12 +222,21 @@ def test_long_claude_jobs_never_read_the_short_variable(name: str) -> None:
         f"{name} runs Claude for minutes at a time; routing it to the short "
         f"pool recreates DRE-3875 with the lanes swapped"
     )
+    # Per JOB, off `expected_runs_on` rather than off `SWITCHABLE` flat
+    # (DRE-4846): `agent-task.yml`'s `execute` and `qa-review.yml`'s `review`
+    # read the build lane, which is the long chain with the product repo's own
+    # CI variable in front, while `verify.yml`, `plan.yml` and every other job
+    # of these files still read `SWITCHABLE` exactly. The short variable is
+    # still barred from all four files by the assertion above.
     wrong = {
         job_id: runs_on
         for job_id, runs_on in _jobs(name).items()
-        if runs_on != SWITCHABLE
+        if runs_on != expected_runs_on(name, job_id)
     }
-    assert not wrong, f"{name} must keep reading {SWITCHABLE}. Wrong: {wrong}"
+    assert not wrong, (
+        f"{name} must keep reading the long chain, build-lane jobs with the "
+        f"caller's CI variable in front. Wrong: {wrong}"
+    )
 
 
 # --------------------------------------------------------------------------
