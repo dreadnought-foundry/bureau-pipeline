@@ -2,13 +2,14 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
-# ON DEMAND, NEVER ON A SCHEDULE — two decisions, in order.
+# WHEN THE GROOMER RUNS — three decisions, in order, and the one rule they
+# leave standing: a clock may reach `propose`, and nothing but an approval
+# reaches `drain`.
 #
 # D5 (DRE-2683, approved 2026-08-23): the groomer runs on demand until its
-# judgement has been audited, and never on a schedule. The cost is stated
-# rather than hidden — on demand means it runs when someone remembers — and the
-# cadence is revisited once its calls have been checked against a real batch,
-# not by adding a cron here.
+# judgement has been audited. The cost was stated rather than hidden — on
+# demand means it runs when someone remembers — and the cadence was to be
+# revisited once its calls had been checked against a real batch.
 #
 # THE AMENDMENT (DRE-3337, green-lit 2026-09-08): the DRAIN may also be fired by
 # the CEO's Approve on the console, as a `repository_dispatch` of type
@@ -16,18 +17,33 @@
 # dispatches with holds `contents: write` and nothing in Actions, which is why
 # this is a repository_dispatch and not a workflow_dispatch (the bureau Apps
 # were granted `actions: read` on 2026-09-03, DRE-3001); it is the same path the
-# relay already fires `agent-execute` down.
+# relay already fires `agent-execute` down. That dispatch is one person's
+# Approve, not a clock, and it reaches DRAIN ONLY — `mode` is a literal in the
+# `drain` job below, so nothing in the payload can reach it, and a drain makes
+# no model call (DRE-3338).
 #
-# D5 IS NARROWED, NOT REVERSED, and the narrowing is the whole of the change:
-#   * still ON DEMAND — that dispatch is one person's Approve, not a clock, and
-#     there is still no `schedule:` in this file;
-#   * DRAIN ONLY — `mode` is a literal in the second job below, so nothing in
-#     the payload can reach it, and a drain makes no model call (DRE-3338). The
-#     judgement D5 wanted audited before it ran unattended is never run by this
-#     trigger. `propose` stays `workflow_dispatch`-only.
+# THE MORNING PROPOSAL (DRE-3586's signed answer, 2026-09-21, absorbed by
+# DRE-4677): D5 is reopened for exactly one thing — "a scheduled 06:30 PT run
+# of propose only. It writes one proposal comment and moves nothing; the drain
+# still needs my Approve. The rest of D5 stands." The run takes about eight
+# minutes, so DRE-4677 moved it to 06:15 PT: the proposal has to be on the
+# card before the 06:30 briefing is assembled. So this file carries a
+# `schedule:` of two UTC cron lines, a `gate` job that decides whether this
+# run is the morning's (DRE-4688), and a `schedule` job that calls the reusable
+# with `mode` the literal `propose`.
 #
-# tests/test_groomer_wiring.py fails the build if a cron appears, if the trigger
-# set widens, or if `propose` becomes reachable from the dispatch.
+# What each trigger can reach:
+#   * `workflow_dispatch` — a person at Actions; `propose` or `drain`, every
+#     input offered (`call`).
+#   * `repository_dispatch` `groom-drain` — the CEO's Approve; `drain` only
+#     (`drain`).
+#   * `schedule` — the clock; `propose` only, and only when the gate says go
+#     (`gate` → `schedule`).
+#
+# tests/test_groomer_wiring.py fails the build if the trigger set widens, if a
+# third cron line appears, if the scheduled job's `mode` is anything but the
+# literal `propose`, if `propose` becomes reachable from the approval dispatch,
+# or if any other scheduled job in this repo calls `groomer.yml`.
 name: Groomer
 
 on:
@@ -41,6 +57,15 @@ on:
   # a second answer to "which batch moved" that nothing checks against the card.
   repository_dispatch:
     types: [groom-drain]
+
+  # The morning proposal (DRE-3586, absorbed by DRE-4677): 06:15 PT, every day.
+  # GitHub's cron is UTC and has no timezone field, so hitting one LOCAL time
+  # all year takes two lines. Every day both fire; exactly one of them is 06:15
+  # on the `America/Los_Angeles` clock, and which one flips at each DST change.
+  # The `gate` job below decides which — never an offset written down here.
+  schedule:
+    - cron: "15 13 * * *"
+    - cron: "15 14 * * *"
 
   workflow_dispatch:
     inputs:
@@ -93,7 +118,8 @@ jobs:
   # trigger the file carries: on a `repository_dispatch` there is no `inputs`
   # context at all, so each `${{ inputs.* }}` below would render the empty
   # string and this job would call the reusable in propose mode with an empty
-  # lane. This is also the only route to `propose`.
+  # lane. It is the only route by which a PERSON reaches `propose`; the other
+  # is the gated `schedule` job at the foot of this file (DRE-4677).
   call:
     if: github.event_name == 'workflow_dispatch'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
@@ -155,5 +181,78 @@ jobs:
       # hand dispatch reads (DRE-3035/DRE-3285). A drain the operator's hold
       # cannot stop is a pen with a hole in it, and this trigger is the one that
       # fires without anybody opening Actions.
+      intake_hold: ${{ vars.INTAKE_HOLD }}
+    secrets: inherit
+
+  # The gate (DRE-4688): is this run the morning's, and is there an open card
+  # to post the proposal to? The ONE job in this file with steps of its own,
+  # because a job with `uses:` has none, and those two questions have to be
+  # asked before the scheduled job spends a model call. No model call and no
+  # write: one card read, a clock, and two output lines.
+  #
+  #   * The off-hour cron of the pair exits 0 with `go=false`, and the run
+  #     stays green.
+  #   * Inside the 06:xx PT hour with no open card to post to — the
+  #     `GROOM_PROPOSAL_CARD` variable empty, or naming a card that is Done or
+  #     Canceled, or unreadable — it exits 1: a red run the medic sees, whose
+  #     log names the card and the state it found.
+  #
+  # GUARDED on `schedule`, so on the two on-demand triggers this job is skipped
+  # and the `schedule` job that needs it is skipped with it.
+  gate:
+    if: github.event_name == 'schedule'
+    # GitHub-hosted, like every job this repo runs for itself: bureau-pipeline
+    # is public and bills $0, and the runner variables are the reusables'
+    # business (DRE-3350, tests/test_runs_on_switchable.py). A sub-minute
+    # script, no Claude call, no suite.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+      why: ${{ steps.gate.outputs.why }}
+    steps:
+      # This repo IS the pipeline, so it is checked out at `.bureau-pipeline`
+      # exactly where a product repo's stub would place it, and the command
+      # below is the contract as DRE-4688 wrote it, byte for byte.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .bureau-pipeline
+
+      - name: Is it 06:15 PT, and is the standing card open?
+        id: gate
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 .bureau-pipeline/scripts/groom_schedule_gate.py --card "${{ vars.GROOM_PROPOSAL_CARD }}"
+
+  # The scheduled propose (DRE-4677). Keyed on the gate's `go` and nothing
+  # else. Every input is a LITERAL or a repository variable, so nothing a
+  # person or a payload can set reaches this job — and `mode` above all is the
+  # literal `propose`: a clock that could reach `drain` would be the CEO's
+  # Approve bypassed. `lane`, `batch_cycles` and `dry_run` are OMITTED, not
+  # passed empty, so the reusable's own defaults apply, the way the `drain` job
+  # omits them.
+  schedule:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
+    with:
+      pipeline_ref: main
+      mode: propose
+      # QUOTED, both: YAML 1.1 reads a bare `on` as the boolean True, and the
+      # reusable compares against strings.
+      judgement: "on"
+      capacity: "20"
+      # The repo order of the CEO's second signed answer on DRE-3586
+      # (2026-09-21 16:35 PT). A tie-break inside a band, never the master key
+      # (DRE-3096).
+      priority: agent-bureau,bureau-pipeline,portico
+      # The ONE standing card every morning's proposal is posted to, named by a
+      # repository variable. The gate has already refused if it is empty or
+      # closed, so it is never empty here.
+      card: ${{ vars.GROOM_PROPOSAL_CARD }}
+      # The pen's switch, the same repository variable the other two jobs read
+      # (DRE-3035/DRE-3285). Only the drain reads the hold today and a propose
+      # moves nothing, so it changes nothing here; it is passed so every job
+      # that calls the reusable reads the pen the same way.
       intake_hold: ${{ vars.INTAKE_HOLD }}
     secrets: inherit
