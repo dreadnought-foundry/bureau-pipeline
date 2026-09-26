@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->
 
-Generated **2026-09-25T04:50:48Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
+Generated **2026-09-26T04:48:23Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards.
 
 Every card here did not fit one run: it died at the turn cap, it was split, or a build run handed it back as an epic. The point of writing it down is DRE-3022's: the planner has been sizing cards against nothing.
 
@@ -13,16 +13,16 @@ Every card here did not fit one run: it died at the turn cap, it was split, or a
 
 ## The rates
 
-45 card(s) in the ledger, 33 of which died at the turn cap at least once. They cost **$1223.23** in dead runs.
+46 card(s) in the ledger, 33 of which died at the turn cap at least once. They cost **$1223.23** in dead runs.
 
 31 card(s) declared no footprint at all. They are counted apart from every band below, never into one — an unread card in a denominator is a rate nobody can check.
 
 | Declared footprint | Cards | Died | Rate |
 | --- | --- | --- | --- |
-| more than 1 file | 13 | 9 | 69% |
-| more than 2 files | 10 | 6 | 60% |
-| more than 3 files | 8 | 5 | 62% |
-| more than 4 files | 7 | 4 | 57% |
+| more than 1 file | 14 | 9 | 64% |
+| more than 2 files | 11 | 6 | 55% |
+| more than 3 files | 9 | 5 | 56% |
+| more than 4 files | 8 | 4 | 50% |
 | more than 5 files | 6 | 3 | 50% |
 | more than 6 files | 5 | 2 | 40% |
 | more than 7 files | 2 | 1 | 50% |
@@ -32,10 +32,10 @@ Every card here did not fit one run: it died at the turn cap, it was split, or a
 | more than 11 files | 1 | 0 | 0% |
 | more than 12 files | 1 | 0 | 0% |
 
-- cards declaring more than 1 file died 9 of 13 times
-- cards declaring more than 2 files died 6 of 10 times
-- cards declaring more than 3 files died 5 of 8 times
-- cards declaring more than 4 files died 4 of 7 times
+- cards declaring more than 1 file died 9 of 14 times
+- cards declaring more than 2 files died 6 of 11 times
+- cards declaring more than 3 files died 5 of 9 times
+- cards declaring more than 4 files died 4 of 8 times
 - cards declaring more than 5 files died 3 of 6 times
 - cards declaring more than 6 files died 2 of 5 times
 - cards declaring more than 7 files died 1 of 2 times
@@ -56,7 +56,7 @@ A month is **complete** when the window covers all of it and it ended before thi
 | 2026-06 | 19 | 0 | 0 | no — a partial count |
 | 2026-07 | 228 | 0 | 0 | yes |
 | 2026-08 | 282 | 7 | 17 | yes |
-| 2026-09 | 1025 | 7 | 16 | no — a partial count |
+| 2026-09 | 1063 | 8 | 16 | no — a partial count |
 
 ## The tells, in hindsight
 
@@ -118,6 +118,7 @@ DRE-2893's four tells, read back over each card's own body by `split_ledger.tell
 | [DRE-4297](https://linear.app/dreadnoughtfoundry/issue/DRE-4297/the-record-contract-declares-the-heartbeat-its-event-name-and-delivery) | 2026-09-19T05:55:12Z | `UNKNOWN` | engineer | 7 files | `UNKNOWN` | 1 | 0 | $0.00 | — | `split` |
 | [DRE-4322](https://linear.app/dreadnoughtfoundry/issue/DRE-4322/bureau-pipeline-a-repo-with-no-fix-agent-and-a-held-pull-request-is) | 2026-09-19T17:11:26Z | `UNKNOWN` | engineer | `UNKNOWN` | 16 files | 2 | 0 | $0.00 | `two-languages-or-tiers`, `unenumerated-count`, `unbounded-quantifier` | `split`, `handed-back` |
 | [DRE-4401](https://linear.app/dreadnoughtfoundry/issue/DRE-4401/agent-bureau-every-pool-membership-change-lands-in-the-record) | 2026-09-20T19:36:00Z | `UNKNOWN` | planner | `UNKNOWN` | `UNKNOWN` | 0 | 0 | $0.00 | `two-languages-or-tiers`, `unbounded-quantifier` | `handed-back` |
+| [DRE-4890](https://linear.app/dreadnoughtfoundry/issue/DRE-4890/portico-a-project-moderators-add-document-upload-can-be-published) | 2026-09-25T19:29:49Z | `UNKNOWN` | engineer | 5 files | `UNKNOWN` | 2 | 0 | $0.00 | — | `split` |
 
 ## The footprints
 
@@ -348,6 +349,11 @@ What each card SAID it would touch, against what its pieces actually touched. Th
 - declared: `UNKNOWN`
 - pieces touched: `UNKNOWN`
 
+### DRE-4890
+
+- declared: `infra/lambda/ingest_lib.ts`, `infra/lambda/routes/content.ts`, `infra/test/ingest_lib.test.ts`, `docs/folder-access/ADR-0008-mcp-tool-surface.md`, `docs/runbooks/app-frames.md`
+- pieces touched: `UNKNOWN`
+
 ## What could not be read
 
 Named rather than counted, because the absence of evidence is not evidence that a card was well sized.
@@ -387,3 +393,4 @@ Named rather than counted, because the absence of evidence is not evidence that 
 - **DRE-4297** — DRE-4298: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
 - **DRE-4322** — the card declares no `Files:` line, so it made no footprint claim to compare against; DRE-4377: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one
 - **DRE-4401** — the card declares no `Files:` line, so it made no footprint claim to compare against
+- **DRE-4890** — DRE-4922: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one; DRE-4917: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one
