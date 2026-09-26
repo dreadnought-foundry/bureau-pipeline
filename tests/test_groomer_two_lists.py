@@ -24,6 +24,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer_two_lists.py -v
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sys
@@ -362,18 +363,23 @@ def fixture_proposal() -> dict:
              card("DRE-4104", days=37, title="write the cancel reason on the card"),
              card("DRE-4105", days=36, repo="agent-bureau",
                   title="a probe of the old board cutover")]
-    verdicts = {
-        "DRE-4101": groom_judgement.Verdict("now", "the pile is only drained "
-                                                   "oldest first if nothing ages out"),
-        "DRE-4103": groom_judgement.Verdict("now", "the CEO reads both lists there"),
-        "DRE-4104": groom_judgement.Verdict("now", "the drain needs somewhere "
-                                                   "to put the reason"),
+    answer = "\n".join([
+        "DRE-4101 | now | the pile is only drained oldest first if nothing ages out",
+        "DRE-4102 | now | the census is still wanted",
+        "DRE-4103 | now | the CEO reads both lists there",
+        "DRE-4104 | now | the drain needs somewhere to put the reason",
+        "DRE-4105 | likely-done | the cutover already ran | the cutover ran on 2026-09-07",
+    ])
+    judgement = judged(cards, answer)
+    # The line format splits on `|`, so no answer can carry one in its
+    # evidence; the wire contract still has to, so the verdict is set whole.
+    judgement = dataclasses.replace(judgement, verdicts={
+        **judgement.verdicts,
         "DRE-4105": groom_judgement.Verdict(
             "likely-done", "the cutover already ran",
-            "the cutover ran on 2026-09-07 | the probe is the proof"),
-    }
+            "the cutover ran on 2026-09-07 | the probe is the proof")})
     return groomer.propose(cards, cycles=CYCLES, capacity=20, now=NOW,
-                           judgement=verdicts)
+                           judgement=judgement)
 
 
 def test_the_two_lists_fixture_is_the_render_byte_for_byte():

@@ -38,10 +38,12 @@ only then does anything leave Intake.
    to place.
    `--no-judgement` makes no call at all and is exactly the groomer that ran
    before DRE-3150.
-7. **Proposes**, in plain English: the batch and its order with the **why** on
-   every row, what is deferred and what brings each one back, what is
-   recommended dead and on whose word, what could not be ranked at all, and
-   which repos are waiting and roughly how long.
+7. **Proposes**, in plain English, as **two lists drawn from the same
+   twenty** (DRE-4727): the **Planning** list and its order with the **why** on
+   every row, and the **Cancel** list — the cards in that twenty that no
+   longer apply — with a one-line **reason** on every row. Then what is
+   deferred and what brings each one back, what could not be ranked at all,
+   and which repos are waiting and roughly how long.
 
 ## The one ranked read
 
@@ -132,8 +134,35 @@ line per card, before anything moves.
 | -- | -- | -- |
 | `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "oldest first") — and, on a judged run, the five **labelled reasons** below. |
 | `not-now` | **Wanted, and deliberately not this batch** — the batch is full, and it names the cycle it is reconsidered in. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
-| `dead` (the read calls it `likely-done`) | **Recommended for cancellation, and never cancelled here**. Two readers propose one and the proposal says which: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | **evidence** — the card, merged PR or decision it points at. A recommendation nobody can check is one nobody should act on. |
+| `dead` (the read calls it `likely-done`) | **Proposed for cancellation, on the Cancel list beside the batch**. It is one of the morning's twenty, and the drain cancels it once the CEO agrees, with the reason on the card. Two readers propose one: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | a one-line **reason** — `superseded by DRE-N` off the card's own line, or the **evidence** the read named: the superseding card, merged PR or decision. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |
+
+**The morning's twenty are Planning plus Cancel together** (DRE-4727, the
+CEO's decision on DRE-4669). `propose` walks the rules' order and places each
+card on one of the two lists until `capacity` cards are placed, epics never
+split: a card whose description carries a `Superseded by:` line, or that the
+read called `likely-done`, goes on the Cancel list; every other card goes on
+the Planning list. A card the read left unranked takes no slot, as before. A
+card outside the twenty is `not-now` with its cycle whatever its description
+or the read says — it waits its turn, and it is neither cancelled early nor
+shown as dead. Each list is numbered from 1, and the proposal id digests both
+lists' cards and positions (never a reason), so an approval binds to the
+cancellations as well as to the batch. A proposal is empty only when both lists
+are.
+
+**The Cancel list's grammar is not ours.** The console's reader of the
+proposal comment — DRE-4682 in agent-bureau — is written against it, and so is
+the drain that will cancel an agreed card (DRE-4733). It is a table under
+`## Cancel, with reasons` (`CANCEL_HEADING`) with the batch table's seven
+columns, the last one `Reason` (`CANCEL_COLUMNS`,
+`| # | Card | Pri | Repo | Epic | Title | Reason |`), positions from 1, the
+reason pipe-escaped and never cut; the section ends at the next `## ` heading,
+and it is **absent** when nothing is proposed for cancellation, because the
+reader takes no section to mean no cancellation. `tests/fixtures/groom_two_lists_render.md`
+is this repo's copy of that contract, and it names the console's twin. The
+drain cancels an agreed card only once DRE-4733 teaches it the Cancel list;
+until then it moves the Planning list alone and still refuses `Canceled`.
+`🧺 groom-excluded: <id> DRE-N` keeps a card on either list in Intake.
 
 `not-now` is first-class on purpose. A card can be well-formed, wanted, and
 correctly left alone for a month — without a "later", Intake is a pass/fail
@@ -191,16 +220,17 @@ section not at all: the rules place a card by priority and age and have nothing
 labelled to say about it, and that page still renders byte for byte as it did
 before this card.
 
-A dead recommendation always names what replaced it, and the proposal keeps the
-two sources apart — **declared on the card** (a person wrote the line) and
-**judged by the ranked read** (a call, with what it points at) — so the CEO
-knows which of the two is being read before deciding. A `Superseded by:` line
-that names nothing checkable is reported as a gap and the card is sequenced
-normally: a recommendation nobody can check is one nobody should act on. The
-groomer never cancels — in the 2026-08-22 sweep the recommendation, the decision
-and the execution were three separate steps, and the executing agent caught an
-error in its own brief precisely because it was working from an explicit list
-rather than its own judgement.
+A card on the Cancel list always says what it came from, in its reason:
+`superseded by DRE-N` is a declaration a person wrote on the card, and anything
+else is the evidence the ranked read named — or, when the plain-English guard
+refused that evidence, the withheld sentence, never an empty cell. A
+`Superseded by:` line that names nothing checkable is reported as a gap and the
+card is sequenced normally: a recommendation nobody can check is one nobody
+should act on. The recommendation, the decision and the execution stay three
+separate steps — the groomer proposes, the CEO agrees or excludes, the drain
+cancels — because in the 2026-08-22 sweep the executing agent caught an error
+in its own brief precisely because it was working from an explicit list rather
+than its own judgement.
 
 ## The approval gate
 
@@ -221,7 +251,9 @@ posted on 2026-09-04 while Intake was empty — sat in the CEO's Green Light as
 "waiting 196.9 h" until he asked about it eight days later. The lane is still
 sequenced, still written to `proposal.json` and still printed; it is the
 comment that is not written. (The console half of the same incident, DRE-3708,
-stops SHOWING such a row.)
+stops SHOWING such a row.) Since DRE-4727 empty means **neither list**: a
+morning with nothing for Planning and one card to cancel still asks the CEO
+something, and it is posted.
 
 **A demonstration is a `--dry-run`, and posts no marker of any kind.**
 

@@ -36,10 +36,12 @@ that. This module is the reader that sees the set.
   5. **Assigns cycles.** Linear's own primitive — cycles are enabled and cycle
      11 is running, so "which cycle" is expressible today without inventing a
      container.
-  6. **Proposes.** The batch, its order and the WHY on every row, what is
-     deferred and what brings each one back, what is recommended dead and on
-     whose word, what could not be ranked at all, and — said out loud rather
-     than discovered — which repos wait and roughly how long (DRE-3152).
+  6. **Proposes.** Two lists drawn from the same twenty (DRE-4727): the
+     Planning list, its order and the WHY on every row, and the Cancel list,
+     a one-line reason on every row. Then what is deferred and what brings
+     each one back, what could not be ranked at all, and — said out loud
+     rather than discovered — which repos wait and roughly how long
+     (DRE-3152).
 
 ## The order, top to bottom (DRE-3096, reversed by DRE-4725)
 
@@ -74,13 +76,21 @@ send an old epic to the back of the pile.
 
 `now`, `not-now`, `dead`. **"Not now" is first-class**: a card can be
 well-formed, wanted, and correctly left alone for a month, and without a "later"
-the only way to say it is to say "no". **"Dead" is a recommendation and never an
-action** — cancelling is destructive and belongs to the operator. Every dead
-recommendation names the card or merged PR that replaced it, because a
-recommendation nobody can check is one nobody should act on. In the 2026-08-22
-sweep the recommendation, the decision and the execution were three separate
-steps, and the executing agent caught an error in its own brief precisely
-because it was working from an explicit list rather than its own judgement.
+the only way to say it is to say "no". **"Dead" is the Cancel list, and never
+an action here** (DRE-4727). The CEO's decision on DRE-4669 (2026-09-23): when
+the groomer looks at the twenty oldest cards it also decides whether each one
+still applies. So the morning's `capacity` cards are Planning plus Cancel
+together, walked in the rules' order: a card whose description carries a
+`Superseded by:` line, or that the read called `likely-done`, goes on the
+Cancel list; the rest go on the Planning list. A card outside the twenty waits
+its turn whatever it says — it is not cancelled early. Every Cancel row carries
+a one-line reason naming the card or merged PR that replaced it, because a
+recommendation nobody can check is one nobody should act on; the drain cancels
+it once the CEO agrees, with that reason on the card. In the 2026-08-22 sweep
+the recommendation, the decision and the execution were three separate steps,
+and the executing agent caught an error in its own brief precisely because it
+was working from an explicit list rather than its own judgement — and they
+still are: `propose` proposes, the CEO agrees, the drain executes.
 
 ## The approval gate
 
@@ -196,9 +206,10 @@ above, `capacity` at a time; the model's `now` set no longer fills it, its
 What the read still does is per card: a card the answer omits or garbles is
 `unranked` and comes OUT of the batch, and the next card in order takes its
 slot — the proposed cards and the unranked ones are disjoint, asserted where
-the proposal is written (DRE-3544); a card the read calls `likely-done` joins
-the dead recommendations with its evidence beside the regex's; and every
-card carries the read's reason. Every reason passes
+the proposal is written (DRE-3544); a card the read calls `likely-done` goes on
+the Cancel list when it is in the morning's twenty, with its evidence as the
+reason beside the regex's `superseded by DRE-N`; and every card carries the
+read's reason. Every reason passes
 `planning_escalation.refusal` before it is written, because the CEO reads
 outcomes and never code.
 
@@ -249,9 +260,9 @@ OUTCOMES = {
         "not 'no'."
     ),
     "dead": (
-        "Recommended for cancellation, and never cancelled here. Names the "
-        "card or merged PR that superseded it; the operator decides and the "
-        "operator executes."
+        "Proposed for cancellation, on the Cancel list beside the batch. Names "
+        "the card or merged PR that superseded it in a one-line reason; the "
+        "drain cancels it once the CEO agrees, with the reason on the card."
     ),
 }
 
@@ -272,6 +283,16 @@ WITHHELD_REASON = groom_judgement.WITHHELD_REASON
 # exported, because the console's reader finds the section by it — the same
 # render-and-read-back contract `_BATCH_HEADING` carries for the table.
 BATCH_REASONS_HEADING = "## Why each card is in the batch"
+
+# The Cancel list's heading and header row (DRE-4727). Not ours to choose: the
+# console's reader of the proposal comment (DRE-4682 in agent-bureau) is
+# written against exactly these strings, and so is the drain that cancels an
+# agreed card (DRE-4733). Exported so the console's mirroring tests can read
+# them off the pipeline checkout. The section ends at the next `## ` heading,
+# and it is ABSENT when nothing is proposed for cancellation — that absence is
+# how the reader knows there is none.
+CANCEL_HEADING = "## Cancel, with reasons"
+CANCEL_COLUMNS = "| # | Card | Pri | Repo | Epic | Title | Reason |"
 
 # The lane the drain writes into: Intake's exit is a classification, and
 # Planning is what produces one (DRE-2719).
@@ -1164,35 +1185,34 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     holds = held_repo_rows(in_lane, held_repos)
     cards = offered(in_lane, held_repos)
     verdicts = _verdicts_of(judgement)
-    dead, live = [], []
+    # Which cards would go on the Cancel list, and on whose word (DRE-4727).
+    # Decided per card here and ACTED ON only for a card the walk below places
+    # in the morning's set: a card outside it waits its turn like any other —
+    # it is not cancelled early, and it is not shown as dead. So every card is
+    # sequenced, and the Cancel list is drawn from the same twenty as the
+    # Planning list rather than from the whole lane.
+    to_cancel: dict = {}
     unstated = []
     for card in sorted(cards, key=lambda c: _card_sort_key(c["identifier"])):
         target = superseded_by(card.get("description"))
         if target:
-            dead.append({"identifier": card["identifier"],
-                         "title": card.get("title") or "",
-                         "repo": repo_of(card), "superseded_by": target,
-                         "source": DEAD_FROM_LINE})
+            to_cancel[card["identifier"]] = (DEAD_FROM_LINE, target)
             continue
-        # The model's dead recommendation lands in the SAME list as the
-        # regex's, with its evidence beside the other's `Superseded by:` line.
-        # A card the description already condemned is not re-judged: the
+        # The model's call lands in the SAME list as the regex's, with its
+        # evidence as the reason beside the other's `Superseded by:` line. A
+        # card the description already condemned is not re-judged: the
         # declaration on the card is the stronger of the two, because a person
         # wrote it.
         verdict = verdicts.get(card["identifier"]) if verdicts else None
         if verdict is not None and verdict.outcome == "likely-done":
-            dead.append({"identifier": card["identifier"],
-                         "title": card.get("title") or "",
-                         "repo": repo_of(card), "superseded_by": None,
-                         "source": DEAD_FROM_JUDGEMENT})
+            to_cancel[card["identifier"]] = (DEAD_FROM_JUDGEMENT, None)
             continue
         if supersession_gap(card.get("description")):
             unstated.append(card["identifier"])
-        live.append(card)
 
-    collisions = collision_report(live)
+    collisions = collision_report(cards)
     broken: list = []
-    ordered = sequence(live, collisions=collisions, broken=broken,
+    ordered = sequence(cards, collisions=collisions, broken=broken,
                        repo_priority=repo_priority)
     # A card the read DECLINED is not in the batch (DRE-3544). The rules put
     # DRE-3020 at position 32 of `f673bfefa340` — under the capacity — and the
@@ -1211,13 +1231,23 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # without it: the declined card takes no slot, so the next card in order
     # fills it (DRE-4725). It is the ONLY thing the read removes — a `not-now`
     # verdict keeps its card in the order like any other.
-    declined = declined_cards(verdicts, getattr(judgement, "problem", None))
+    #
+    # Except a card its own description condemned: the read never judged it
+    # (the declaration a person wrote outranks it, `_mark`), so its answer —
+    # or its silence — about that card cannot take it off the Cancel list.
+    declined = declined_cards(verdicts, getattr(judgement, "problem", None)) \
+        - {cid for cid, (source, _) in to_cancel.items()
+           if source == DEAD_FROM_LINE}
     planned = {row["identifier"]: row for row in cycle_plan(
         [r for r in ordered if r["identifier"] not in declined], cycles,
         capacity)}
 
     batch_numbers = sorted({r["cycle"] for r in planned.values()})[:batch_cycles]
-    now_rows, later_rows = [], []
+    # The morning's set is the batch cycle(s) — `capacity` cards, Planning
+    # plus Cancel together, units never split — and each card in it goes on
+    # exactly one of the two lists. Each list is numbered from 1 in the rules'
+    # order, so the page reads as two lists and not as one with holes in it.
+    now_rows, later_rows, dead = [], [], []
     for row in ordered:
         if row["identifier"] in declined:
             later_rows.append({"identifier": row["identifier"],
@@ -1226,11 +1256,19 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                "older_than_window": False})
             continue
         row = planned[row["identifier"]]
-        if row["cycle"] in batch_numbers:
-            now_rows.append({k: row[k] for k in
-                             ("identifier", "title", "position", "cycle",
-                              "cycle_id", "unit", "epic", "repo", "projected",
-                              "band")})
+        if row["cycle"] in batch_numbers and row["identifier"] in to_cancel:
+            source, target = to_cancel[row["identifier"]]
+            dead.append({"identifier": row["identifier"],
+                         "title": row["title"], "repo": row["repo"],
+                         "superseded_by": target, "source": source,
+                         "position": len(dead) + 1, "epic": row["epic"],
+                         "band": row["band"]})
+        elif row["cycle"] in batch_numbers:
+            now_rows.append({**{k: row[k] for k in
+                                ("identifier", "title", "position", "cycle",
+                                 "cycle_id", "unit", "epic", "repo",
+                                 "projected", "band")},
+                             "position": len(now_rows) + 1})
         else:
             # Outside the batch is `not-now` with the cycle it is projected
             # into, whatever the card's age — nothing is held back unscheduled
@@ -1244,18 +1282,18 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # The declined rows carry no cycle here either: the sequence is what the
     # console and the audit read, and a row that says `not-now` beside a cycle
     # it was going to be batched in is the same contradiction one layer down.
+    # A card on the Cancel list keeps its place in the order and carries no
+    # cycle either: it is proposed for cancellation, not scheduled.
+    cancelled = {d["identifier"] for d in dead}
     sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
                       "outcome": "not-now"} if r["identifier"] in declined
+                     else {**planned[r["identifier"]], "cycle": None,
+                           "cycle_id": None, "projected": False,
+                           "outcome": "dead"} if r["identifier"] in cancelled
                      else {**planned[r["identifier"]],
                            "outcome": ("now" if planned[r["identifier"]]["cycle"]
                                        in batch_numbers else "not-now")}
                      for r in ordered]
-    sequence_rows += [{"identifier": d["identifier"], "title": d["title"],
-                       "position": None, "unit": None, "epic": None,
-                       "repo": d["repo"], "project": None, "cycle": None,
-                       "cycle_id": None, "projected": False,
-                       "band": None, "deferred": False, "outcome": "dead"}
-                      for d in dead]
 
     in_batch = {row["identifier"] for row in now_rows}
     proposal = {
@@ -1268,7 +1306,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         # …and what was actually put in front of the reader (DRE-3403).
         "held_repos": holds,
         "offered": len(cards),
-        "held_blockers": [row for row in blocked_by_held(live, in_lane,
+        "held_blockers": [row for row in blocked_by_held(cards, in_lane,
                                                          held_repos)
                           if row["identifier"] in in_batch],
         "capacity": capacity,
@@ -1279,7 +1317,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         "window_days": window_days,
         "older_than_window": {"days": window_days, "cards": 0, "line": ""},
         "batch": {"cycles": batch_numbers, "cards": len(now_rows)},
-        "repo_order": [r for r in _repo_rank(live, repo_priority)],
+        "repo_order": [r for r in _repo_rank(cards, repo_priority)],
         "sequence": sequence_rows,
         "outcomes": {"now": now_rows, "not-now": later_rows, "dead": dead},
         "collisions": collisions,
@@ -1293,9 +1331,10 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # rather than trusted from the filter above (DRE-3544).
     assert_disjoint(proposal)
     # LAST, and deliberately after the annotation: `proposal_id` digests the
-    # batch's cards, positions and cycles and NOTHING else, so a reason that
-    # reads differently on a re-run cannot retire a CEO approval of the same
-    # batch (DRE-3150's contract; the same sha-binding idea the merge gate uses).
+    # two lists' cards, positions and (Planning's) cycles and NOTHING else, so
+    # a reason that reads differently on a re-run cannot retire a CEO approval
+    # of the same lists (DRE-3150's contract, DRE-4727's second list; the same
+    # sha-binding idea the merge gate uses).
     proposal["id"] = proposal_id(proposal)
     return proposal
 
@@ -1381,8 +1420,7 @@ def _showable(text: str | None) -> bool:
 def _rules_reason(outcome: str, row: dict) -> str:
     """Why the RULES put this card where they put it. Plain English, ours."""
     if outcome == "dead":
-        return (f"its own description says it was superseded by "
-                f"{row.get('superseded_by')}")
+        return f"superseded by {row.get('superseded_by')}"
     if outcome == "now":
         band = BAND_LABELS.get(row.get("band"))
         opened = f"marked {band}" if band else "oldest first"
@@ -1405,9 +1443,10 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
     Every one of them that a model wrote passes `_showable` first. A refused
     REASON is replaced with the contract's exact sentence and the card is
     listed in `withheld`; a refused trigger falls back to the rules' own, and
-    refused evidence is dropped to None — a dead recommendation whose evidence
-    cannot be shown is still reported as judged, and the run log holds the text
-    nobody could put on the page. A refused LABELLED reason is dropped and the
+    refused evidence is dropped to None — a Cancel row whose evidence cannot be
+    shown is still reported as judged, its reason is the withheld sentence
+    (`_cancel_mark`), and the run log holds the text nobody could put on the
+    page. A refused LABELLED reason is dropped and the
     card is listed in `withheld` too, and nothing stands in for it: a label
     with a sentence about the guard under it reads as an answer, and the whole
     point of the five is that the reader can tell what was said from what was
@@ -1424,6 +1463,8 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
     if outcome == "dead" and row.get("source") == DEAD_FROM_LINE:
         verdict = None
     judged = verdict is not None and verdict.outcome != "unranked"
+    if outcome == "dead":
+        return _cancel_mark(row, verdict, judged, withheld=withheld)
     reason = (verdict.reason if verdict is not None
               else _rules_reason(outcome, row))
     if not _showable(reason):
@@ -1450,13 +1491,6 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
             trigger = None
         trigger = trigger or _rules_trigger(row)
 
-    evidence = None
-    if outcome == "dead" and judged and verdict.outcome == "likely-done":
-        evidence = verdict.pointer
-        if not _showable(evidence):
-            withheld.append(identifier)
-            evidence = None
-
     # The labelled reasons, and only on a card that is actually IN the batch —
     # a `now` the cap moved to `not-now` is not a card the section renders, so
     # its labels are not shown and not guarded (DRE-3764).
@@ -1468,8 +1502,32 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
             else:
                 withheld.append(identifier)
 
-    return {"reason": reason, "trigger": trigger, "evidence": evidence,
+    return {"reason": reason, "trigger": trigger, "evidence": None,
             "judged": judged, "reasons": reasons}
+
+
+def _cancel_mark(row: dict, verdict, judged: bool, *, withheld: list) -> dict:
+    """The marks on a Cancel row, whose reason is ONE line (DRE-4727).
+
+    The line the CEO reads in the Cancel table and the drain later writes onto
+    the card when he agrees, so it is the thing that makes the call checkable:
+    `superseded by DRE-N` off the description's own line, or the evidence the
+    ranked read named — the superseding card, the merged pull request, the
+    decision. The model's `reason` field is not it: "the work already
+    happened" names nothing anyone can check. Evidence the plain-English guard
+    refuses is replaced with the contract's exact sentence and counted in
+    `withheld`, so the reason is never empty.
+    """
+    if row.get("source") == DEAD_FROM_LINE:
+        return {"reason": _rules_reason("dead", row), "trigger": None,
+                "evidence": None, "judged": False, "reasons": {}}
+    evidence = (verdict.pointer
+                if judged and verdict.outcome == "likely-done" else None)
+    if evidence is not None and not _showable(evidence):
+        withheld.append(row.get("identifier"))
+        evidence = None
+    return {"reason": evidence or WITHHELD_REASON, "trigger": None,
+            "evidence": evidence, "judged": judged, "reasons": {}}
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
@@ -1583,19 +1641,31 @@ def _deprioritised(proposal: dict) -> list[dict]:
 
 
 def proposal_id(proposal: dict) -> str:
-    """A digest of the BATCH — its cards, their order and their cycles.
+    """A digest of BOTH LISTS — their cards, their order and the batch's cycles.
 
     The id is what an approval names, so an approval binds to a batch the way a
     critic verdict binds to a head sha: re-run the groomer after the population
     moves and the id changes, which retires the old approval instead of letting
     it authorise a batch nobody read.
+
+    Since DRE-4727 an approval also cancels the Cancel list, so the list is in
+    the digest — identifier and position, never the reason, for the same
+    reason no `Why` cell ever was: a reason that reads differently on a re-run
+    must not retire an approval of the same lists. Written only when there is
+    a Cancel list, so a proposal with none keeps the id it always had.
     """
-    payload = json.dumps({
+    body = {
         "lane": proposal["lane"],
         "batch": [[r["identifier"], r["position"], r["cycle"]]
                   for r in sorted(proposal["outcomes"]["now"],
                                   key=lambda r: r["position"])],
-    }, sort_keys=True)
+    }
+    cancel = [[r["identifier"], r.get("position")]
+              for r in sorted(proposal["outcomes"].get("dead") or [],
+                              key=lambda r: r.get("position") or 0)]
+    if cancel:
+        body["cancel"] = cancel
+    payload = json.dumps(body, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
@@ -1679,9 +1749,12 @@ def post_proposal(lops, card: str, proposal: dict,
     every retry. The lane is still sequenced, still written to `--out` and
     still printed — an empty Intake is a fact worth reporting, just not a
     decision worth queueing.
+
+    Empty means NEITHER list (DRE-4727): a morning with nothing for Planning
+    and one card to cancel still asks the CEO something, so it is posted.
     """
-    if not proposal["batch"]["cards"]:
-        print(f"the batch is empty — no proposal posted to {card} "
+    if not proposal["batch"]["cards"] and not proposal["outcomes"]["dead"]:
+        print(f"the proposal is empty — no proposal posted to {card} "
               "(a proposal of 0 cards is not a decision)")
         return False
     if records is None:
@@ -1914,6 +1987,7 @@ def title_line(proposal: dict) -> str:
 
 def render_proposal(proposal: dict) -> str:
     batch = proposal["outcomes"]["now"]
+    cancel = proposal["outcomes"]["dead"]
     cycles = cycles_named(proposal)
     w = []
     add = w.append
@@ -1928,8 +2002,15 @@ def render_proposal(proposal: dict) -> str:
     # what the runaway title actually quoted, and "proposed for cycle ," reads
     # as broken to the person deciding even when nothing parses it.
     proposed = "are proposed" + (f" for cycle {cycles}" if cycles else "")
-    add(f"{len(batch)} cards of {proposal['population']} in {proposal['lane']} "
-        f"{proposed}, in the order below. Nothing moves "
+    # Both lists, named in the sentence both readers take the lane from
+    # (DRE-4727): `<N> cards of <M> in <lane> are proposed` stays the opening
+    # `_LANE_LINE` and the console's copy of it read. Nothing to split, nothing
+    # said — the empty page reads as it always did.
+    total = len(batch) + len(cancel)
+    split = (f" Of those, {len(batch)} for Planning and {len(cancel)} for "
+             f"Cancel." if total else "")
+    add(f"{total} cards of {proposal['population']} in {proposal['lane']} "
+        f"{proposed}, in the order below.{split} Nothing moves "
         f"until you approve it.")
     add("")
     # One line, before anything else, saying what did the ranking and what it
@@ -1939,14 +2020,16 @@ def render_proposal(proposal: dict) -> str:
     add(_receipt_line(proposal))
     add("")
     add("**To approve:** comment `" + approval_comment(proposal["id"])
-        + "` on this card. Anything else — including a comment that mentions "
-          "the marker — leaves the batch where it is.")
+        + "` on this card. Approval moves the Planning list to Planning and "
+          "the Cancel list to Canceled. Anything else — including a comment "
+          "that mentions the marker — leaves both lists where they are.")
     add("")
     # The rest of the vocabulary, at the one place the CEO is deciding
     # (DRE-3370). A marker nobody is told about is a marker nobody writes.
     add(f"**To say more than yes:** `{MARK} {DECLINE_TAG}: {proposal['id']} — "
         f"<reason>` declines the batch (the reason is required); "
-        f"`{MARK} {EXCLUDE_TAG}: {proposal['id']} DRE-N` holds one card back; "
+        f"`{MARK} {EXCLUDE_TAG}: {proposal['id']} DRE-N` keeps a card on "
+        f"either list in Intake; "
         f"`{MARK} {ADD_TAG}: {proposal['id']} DRE-N` pulls one in, after the "
         f"batch. One comment each, and the newest one about a card wins.")
     add("")
@@ -1959,7 +2042,8 @@ def render_proposal(proposal: dict) -> str:
     add("")
     add("## The batch, in order")
     add("")
-    add(f"Urgent first, then High, then everything else — oldest first, "
+    add(f"The Planning list — approving moves these cards to Planning. "
+        f"Urgent first, then High, then everything else — oldest first, "
         f"whatever repo it is in, and no card is left out for its age. Repo "
         f"order ("
         + " → ".join(proposal.get("repo_order") or [])
@@ -1983,6 +2067,10 @@ def render_proposal(proposal: dict) -> str:
     # unchanged, because the console and the drain both read it back
     # (DRE-3764).
     w.extend(_render_batch_reasons(proposal))
+    # The other half of the morning's set, and absent when it is empty
+    # (DRE-4727) — the console's reader takes no section to mean no
+    # cancellation, which is what most mornings are.
+    w.extend(_render_cancel(proposal))
     # Only when a judgement ran. `--no-judgement` renders exactly what it
     # rendered before this card, so the audit (DRE-3151) compares two readings
     # of one population rather than two documents.
@@ -2038,22 +2126,12 @@ def render_proposal(proposal: dict) -> str:
            f"in." if scheduled else ""))
     add("")
     w.extend(_render_not_now(proposal))
-    add("## Recommended dead — your call, not ours")
-    add("")
-    if proposal["outcomes"]["dead"]:
-        w.extend(_render_dead(proposal))
-        add("")
-        add("The groomer never cancels. Cancelling is destructive and stays "
-            "yours, as a separate step.")
-    else:
-        add("- None.")
     if proposal["unstated_supersessions"]:
-        add("")
         add("Named nothing: "
             + ", ".join(proposal["unstated_supersessions"])
             + " say they are superseded without naming what replaced them, so "
-              "they are sequenced normally rather than recommended dead.")
-    add("")
+              "they are sequenced normally rather than proposed for Cancel.")
+        add("")
     w.extend(_render_unranked(proposal))
     w.extend(_render_held(proposal))
     add("## On cycles")
@@ -2252,35 +2330,39 @@ def _render_not_now(proposal: dict) -> list:
     return w
 
 
-def _render_dead(proposal: dict) -> list:
-    """The dead recommendations, split by WHERE each one came from.
+def _render_cancel(proposal: dict) -> list:
+    """The Cancel list, as the table DRE-4682's reader parses (DRE-4727).
 
-    Two readers propose a cancellation and they are not the same claim: a
-    `Superseded by:` line is a declaration a person wrote on the card, and the
-    ranked read's is a judgement with the evidence it named beside it. The CEO
-    decides either way, so the page says which one is being read.
+    `CANCEL_HEADING`, then `CANCEL_COLUMNS` — the batch table's seven columns
+    with `Reason` last — one row per card in position order, positions from 1.
+    The first six cells are the batch table's own, except that the title is
+    pipe-escaped: the reader splits on an unescaped pipe and takes the reason
+    from the seventh cell, so a `|` in a title must not move it. The reason is
+    escaped the same way and never cut, because it is the line the drain
+    writes onto the card when the CEO agrees.
+
+    Nothing at all when the list is empty — no heading, no `- None.` — since
+    the reader takes an absent section to mean no cancellation proposed.
     """
-    rows = proposal["outcomes"]["dead"]
-    declared = [r for r in rows if r.get("source") != DEAD_FROM_JUDGEMENT]
-    judged = [r for r in rows if r.get("source") == DEAD_FROM_JUDGEMENT]
-    w: list = []
-    if declared:
-        w += ["**Declared on the card** — its own description says so:", ""]
-        for row in declared:
-            w.append(f"- {row['identifier']} — superseded by "
-                     f"{row['superseded_by']} · {_trim(row['title'])}")
-        w.append("")
-    if judged:
-        w += ["**Judged by the ranked read** — a call, with what it points "
-              "at:", ""]
-        for row in judged:
-            w.append(f"- {row['identifier']} — likely done or obsolete — "
-                     + (f"{row['evidence']}" if row.get("evidence")
-                        else "the evidence it named was not fit to show; it "
-                             "is in the run log")
-                     + f" · {_trim(row['title'])}")
-        w.append("")
-    return w[:-1] if w else w
+    rows = sorted(proposal["outcomes"]["dead"],
+                  key=lambda r: r.get("position") or 0)
+    if not rows:
+        return []
+    w = [CANCEL_HEADING, ""]
+    w.append(f"The rest of the same set: cards that no longer apply — "
+             f"replaced, superseded or already done. Approving cancels each "
+             f"one with its reason written on the card; `{MARK} {EXCLUDE_TAG}: "
+             f"{proposal['id']} DRE-N` keeps one in {proposal['lane']}.")
+    w.append("")
+    w.append(CANCEL_COLUMNS)
+    w.append("| -- | -- | -- | -- | -- | -- | -- |")
+    for row in rows:
+        w.append(f"| {row.get('position')} | {row['identifier']} | "
+                 f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
+                 f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
+                 f"{_whole_cell(row.get('reason'))} |")
+    w.append("")
+    return w
 
 
 def _render_held(proposal: dict) -> list:
@@ -3232,6 +3314,13 @@ def _cell(text: str | None, width: int = 60) -> str:
     """One markdown table cell. A pipe inside it would end the column early and
     silently shift every cell after it, and this text is written by a model."""
     return _trim((text or "—").replace("|", "\\|"), width)
+
+
+def _whole_cell(text: str | None) -> str:
+    """`_cell` with no width: one line, pipes escaped, nothing cut. The Cancel
+    table's reason is the line written onto the card, so it is never
+    truncated (DRE-4727)."""
+    return _line(text).replace("|", "\\|")
 
 
 # --------------------------------------------------------------------------- #

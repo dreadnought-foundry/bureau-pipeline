@@ -40,10 +40,14 @@ Four answers, and nothing else is a valid one:
 * `not-now` — it is wanted and this is not its batch. Name the **trigger**: the
   thing that has to happen before it is reconsidered. "Later" with no trigger is
   just "no" wearing a softer word.
-* `likely-done` — the work already happened. Name the **evidence**: the card,
-  the pull request or the decision it points at. A recommendation nobody can
-  check is one nobody should act on, and this one ends up in front of the CEO as
-  a cancellation to approve.
+* `likely-done` — the work already happened, or the card no longer applies.
+  This is the **Cancel recommendation**: when the card is among the morning's
+  twenty it goes on the Cancel list the CEO reads beside the Planning list, and
+  he agrees with it or not. Name the **evidence** in plain words — the
+  superseding card, the merged pull request or the decision it points at —
+  because that field is shown as the card's reason on the Cancel list and
+  written onto the card when he agrees. A recommendation nobody can check is
+  one nobody should act on.
 * `unranked` — you cannot tell. A normal answer, not a failure.
 
 Four rules decide it, in this order:
@@ -55,8 +59,8 @@ Four rules decide it, in this order:
 2. **What you owe on every card is the reason.** The rules fill the batch
    oldest first, whatever you answer, so ranking a card `now` does not put it
    in and `not-now` does not keep it out. The reason is what the CEO reads
-   when he approves the batch — and on `likely-done`, the evidence is what he
-   reads when he decides a cancellation.
+   when he approves the batch — and on `likely-done`, the evidence is the
+   reason he reads on the Cancel list when he decides a cancellation.
 3. **Prefer `not-now` to `likely-done`.** "Not now" is reversible and costs a
    fortnight. "Likely done" is a cancellation recommendation, and a wrong one
    spends the CEO's attention arguing with you. When you are between the two,
