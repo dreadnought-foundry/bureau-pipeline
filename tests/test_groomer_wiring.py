@@ -1,26 +1,38 @@
-"""The groomer runs on demand, and never on a schedule — two decisions.
+"""When the groomer runs — three decisions, in order, and the one rule they
+leave standing: a clock may reach `propose`, and nothing but an approval
+reaches `drain`.
 
 **D5 (DRE-2683, approved by the operator on 2026-08-23):** on demand, until the
-groomer's judgement has been audited. Not on a schedule. A groomer running
-unattended over two hundred cards before anyone has checked its calls is the
-same mistake as trusting a critic's verdicts before comparing them to a
-held-back set.
+groomer's judgement has been audited. A groomer running unattended over two
+hundred cards before anyone has checked its calls is the same mistake as
+trusting a critic's verdicts before comparing them to a held-back set.
 
 **The amendment (DRE-3337, green-lit 2026-09-08):** the DRAIN may also be fired
 by the CEO's Approve on the console, as a `repository_dispatch` of type
-`groom-drain` — "no hand dispatch, no operator script". D5 is narrowed, not
-reversed, and the narrowing is what this file asserts: that trigger is still ON
-DEMAND (one person's Approve, not a clock — there is still no `schedule:`), and
-it reaches DRAIN ONLY. `mode` is a literal on that event, so nothing in the
-payload can reach it; a drain makes no model call (DRE-3338), so the judgement
-D5 wanted audited before it ran unattended is never run by this trigger; and
-`propose` stays `workflow_dispatch`-only.
+`groom-drain` — "no hand dispatch, no operator script". That trigger is one
+person's Approve, not a clock, and it reaches DRAIN ONLY: `mode` is a literal on
+that event, so nothing in the payload can reach it, and a drain makes no model
+call (DRE-3338).
+
+**The morning proposal (DRE-3586's signed answer, 2026-09-21, absorbed by
+DRE-4677):** D5 is reopened for exactly one thing — "a scheduled 06:30 PT run of
+propose only. It writes one proposal comment and moves nothing; the drain still
+needs my Approve. The rest of D5 stands." The run takes about eight minutes, so
+DRE-4677 moved it to 06:15 PT to have the proposal on the card before the 06:30
+briefing is assembled. `self-groomer.yml` carries a `schedule:` of two UTC cron
+lines, `15 13 * * *` and `15 14 * * *`; a `gate` job running
+`scripts/groom_schedule_gate.py` (DRE-4688) decides which of the pair is 06:15
+on the PT clock and whether the standing card in `GROOM_PROPOSAL_CARD` is open;
+and a `schedule` job keyed on the gate's `go` calls the reusable with `mode` the
+literal `propose`.
 
 So the trigger shape is part of the contract and is asserted here against the
-LIVE workflow files (the pattern tests/test_self_host_stubs.py uses): a
-`schedule:` added later turns this red rather than quietly starting a sweep
-nobody asked for, and a `propose` reachable from the dispatch turns it red
-rather than putting an unaudited model call on a trigger nobody watches.
+LIVE workflow files (the pattern tests/test_self_host_stubs.py uses). A fourth
+trigger, a third cron line, a `mode` on the scheduled job that could be anything
+but `propose`, or ANY other scheduled job anywhere in this repo calling
+`groomer.yml` turns this red: a clock that could reach `drain` is the CEO's
+Approve being bypassed, and a `propose` reachable from the approval dispatch is
+an unaudited model call on a trigger nobody watches.
 
 The rest is the wiring every workflow in this repo owes: the reusable threads
 `pipeline_ref` (DRE-2026/DRE-2689), the runnable stub is watched by the medic
@@ -67,6 +79,47 @@ PLAN_CLASSIFY_STEP = "Classify the card — one-off, epic or wave"
 #: The two steps this card's assertions are about.
 GROOM_STEP = "Groom"
 RECEIPT_STEP = "Judgement receipt — the model that answered"
+
+#: The two UTC cron lines of the morning proposal (DRE-4677). Every day both
+#: fire and exactly one of them is 06:15 on the `America/Los_Angeles` clock;
+#: the gate script decides which, never an offset written down here.
+MORNING_CRONS = ["15 13 * * *", "15 14 * * *"]
+
+#: The gate's contract with DRE-4688, verbatim: the command the gate step runs.
+GATE_COMMAND = (
+    'python3 .bureau-pipeline/scripts/groom_schedule_gate.py '
+    '--card "${{ vars.GROOM_PROPOSAL_CARD }}"'
+)
+
+#: Every input the scheduled job passes, and each one a literal or a repository
+#: variable — nothing a person or a payload can set. `lane`, `batch_cycles` and
+#: `dry_run` are ABSENT on purpose, so the reusable's own defaults apply, the
+#: way the `drain` job already omits them.
+SCHEDULE_WITH = {
+    "pipeline_ref": "main",
+    "mode": "propose",
+    "judgement": "on",
+    "capacity": "20",
+    "priority": "agent-bureau,bureau-pipeline,portico",
+    "card": "${{ vars.GROOM_PROPOSAL_CARD }}",
+    "intake_hold": "${{ vars.INTAKE_HOLD }}",
+}
+
+#: The jobs of the stub that call the reusable, and the one that does not.
+CALLING_JOBS = {"call", "drain", "schedule"}
+STEP_JOBS = {"gate"}
+
+#: What the three superseded records said, in the spellings they used. None of
+#: them may survive anywhere the cadence is recorded (DRE-4724).
+RETIRED_CADENCE = (
+    "never on a schedule",
+    "never a schedule",
+    "there is still no `schedule:`",
+    "nothing here runs on a clock",
+)
+
+#: The third decision, in every place the first two are recorded.
+THIRD_DECISION = ("DRE-3586", "2026-09-21", "DRE-4677", "schedule")
 
 
 def _load(name: str) -> dict:
@@ -128,25 +181,182 @@ def _expression(value: str) -> str:
     return text.strip()
 
 
-class OnDemandOnlyTest(unittest.TestCase):
-    def test_the_stub_takes_exactly_the_two_on_demand_triggers(self):
+def _calling_jobs(doc: dict) -> dict:
+    """The jobs that carry `uses:` — the stub's calls to the reusable. The
+    `gate` job has steps and no `uses:`, and is asserted on its own."""
+    return {name: job for name, job in (doc.get("jobs") or {}).items()
+            if "uses" in job}
+
+
+def _reaches_schedule(job: dict) -> bool:
+    """Can this job run on a `schedule` event?
+
+    Only a guard that is EXACTLY `github.event_name == '<another event>'` keeps
+    a job off the clock. Anything else — no guard, a guard on `needs`, a guard
+    with an `||` in it — is treated as reachable, because a reading that
+    guesses in the job's favor is how a scheduled drain would get through.
+    """
+    cond = _expression(job.get("if"))
+    for event in ("workflow_dispatch", "repository_dispatch", "push",
+                  "pull_request", "workflow_run", "workflow_call",
+                  "issue_comment"):
+        if cond == f"github.event_name == '{event}'":
+            return False
+    return True
+
+
+def _crons(on: dict) -> list:
+    return [entry.get("cron") for entry in (on.get("schedule") or [])]
+
+
+class TriggerContractTest(unittest.TestCase):
+    """Three triggers, and which job each of them can reach."""
+
+    def test_the_stub_takes_exactly_three_triggers(self):
         on = _on(_load("self-groomer.yml"))
-        self.assertIn("workflow_dispatch", on)
-        self.assertNotIn(
-            "schedule", on,
-            "D5: the groomer runs on demand until its judgement has been "
-            "audited — a cron here is the decision being reversed silently",
-        )
         self.assertEqual(
-            set(on), {"workflow_dispatch", "repository_dispatch"},
-            "on demand means two triggers and no more: a person dispatching "
-            "it, and the CEO's Approve on the console (DRE-3337)",
+            set(on), {"workflow_dispatch", "repository_dispatch", "schedule"},
+            "three triggers and no more: a person dispatching it, the CEO's "
+            "Approve on the console (DRE-3337), and the 06:15 PT morning "
+            "proposal (DRE-3586, absorbed by DRE-4677)",
         )
         self.assertEqual(
             (on["repository_dispatch"] or {}).get("types"), ["groom-drain"],
             "the contract with the console's approve mutation is ONE event "
             "type — a wider `types:` is a wider trigger than D5 was amended for",
         )
+
+    def test_the_schedule_is_exactly_the_two_morning_crons(self):
+        """Two UTC lines because GitHub's cron has no timezone field. A third
+        line is a second groom a day nobody decided on."""
+        self.assertEqual(_crons(_on(_load("self-groomer.yml"))), MORNING_CRONS)
+
+    def test_the_call_and_drain_jobs_keep_their_event_guards(self):
+        """Their guards are what keep the clock off them: an unguarded `call`
+        would run on the schedule with every `inputs.*` empty, and an
+        unguarded `drain` would put the approval's move on a cron."""
+        jobs = _load("self-groomer.yml")["jobs"]
+        self.assertEqual(_expression(jobs["call"].get("if")),
+                         "github.event_name == 'workflow_dispatch'")
+        self.assertEqual(_expression(jobs["drain"].get("if")),
+                         "github.event_name == 'repository_dispatch'")
+        for name in ("call", "drain"):
+            self.assertFalse(_reaches_schedule(jobs[name]),
+                             f"job {name!r} can run on the schedule")
+
+
+class ScheduleGateTest(unittest.TestCase):
+    """The `gate` job: the one job in the stub with steps of its own, because
+    a job with `uses:` has none, and the two questions a scheduled groom must
+    answer first — is it 06:xx PT, is the standing card open — have to be
+    asked somewhere (DRE-4688)."""
+
+    def setUp(self):
+        self.job = _load("self-groomer.yml")["jobs"].get("gate")
+        self.assertIsNotNone(self.job, "the stub has no `gate` job")
+        self.steps = self.job.get("steps") or []
+
+    def _gate_step(self) -> dict:
+        for step in self.steps:
+            if "groom_schedule_gate.py" in str(step.get("run") or ""):
+                return step
+        raise AssertionError("no step of the gate job runs groom_schedule_gate.py")
+
+    def test_the_gate_runs_only_on_the_schedule(self):
+        self.assertEqual(_expression(self.job.get("if")),
+                         "github.event_name == 'schedule'")
+
+    def test_the_gate_is_steps_and_calls_nothing(self):
+        self.assertNotIn("uses", self.job,
+                         "the gate calls a workflow — it is a script and a clock")
+        self.assertNotIn("secrets", self.job,
+                         "`secrets: inherit` belongs to a job with `uses:`")
+        self.assertTrue(self.steps, "the gate job has no steps")
+
+    def test_the_gate_runs_the_contract_command_with_the_standing_card(self):
+        step = self._gate_step()
+        self.assertIn(GATE_COMMAND, step.get("run") or "",
+                      "the command is the contract shared with DRE-4688")
+        self.assertTrue((ROOT / "scripts" / "groom_schedule_gate.py").is_file())
+
+    def test_the_gate_step_holds_the_linear_key_and_no_model_credential(self):
+        env = self._gate_step().get("env") or {}
+        self.assertEqual(_expression(env.get("LINEAR_API_KEY")),
+                         "secrets.LINEAR_API_KEY")
+        for name in MODEL_SECRETS:
+            self.assertNotIn(name, env, "the gate makes no model call")
+
+    def test_the_pipeline_is_checked_out_where_the_command_looks(self):
+        """This repo IS the pipeline, so the checkout is placed at
+        `.bureau-pipeline` exactly as a product-repo stub would place it."""
+        paths = [(s.get("with") or {}).get("path") for s in self.steps
+                 if str(s.get("uses") or "").startswith("actions/checkout@")]
+        self.assertIn(".bureau-pipeline", paths)
+
+    def test_the_job_outputs_are_the_ones_the_script_writes(self):
+        """READ off the script, not restated: run it outside the 06:xx hour
+        (no Linear read happens there) and compare the keys it writes with
+        the outputs the job declares."""
+        import tempfile
+
+        import groom_schedule_gate
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            code = groom_schedule_gate.main(
+                ["--card", "", "--now", "2026-09-25T20:00:00Z",
+                 "--github-output", str(out)])
+            written = {line.split("=", 1)[0]
+                       for line in out.read_text().splitlines()}
+        self.assertEqual(code, 0, "the off-hour run must stay green")
+        outputs = self.job.get("outputs") or {}
+        self.assertEqual(set(outputs), written)
+        step_id = self._gate_step().get("id")
+        self.assertTrue(step_id, "the gate step needs an `id` to read from")
+        for key in written:
+            self.assertEqual(_expression(outputs[key]),
+                             f"steps.{step_id}.outputs.{key}")
+
+
+class ScheduledProposeTest(unittest.TestCase):
+    """The `schedule` job: the morning proposal, and nothing a clock could
+    turn into a drain."""
+
+    def setUp(self):
+        self.job = _load("self-groomer.yml")["jobs"].get("schedule")
+        self.assertIsNotNone(self.job, "the stub has no `schedule` job")
+        self.with_ = self.job.get("with") or {}
+
+    def test_it_needs_the_gate_and_keys_on_go_and_nothing_else(self):
+        needs = self.job.get("needs")
+        self.assertIn(needs, ("gate", ["gate"]))
+        self.assertEqual(_expression(self.job.get("if")),
+                         "needs.gate.outputs.go == 'true'")
+
+    def test_its_mode_is_the_literal_propose(self):
+        mode = self.with_.get("mode")
+        self.assertEqual(mode, "propose")
+        self.assertNotIn(
+            "${{", str(mode),
+            "a computed `mode` on a clock is a route to `drain` — the "
+            "decision the CEO kept for his Approve",
+        )
+
+    def test_it_passes_the_literals_and_nothing_else(self):
+        """QUOTED `on` and `20`: YAML 1.1 reads a bare `on` as the boolean
+        True, and the reusable compares against the string."""
+        self.assertEqual(self.with_, SCHEDULE_WITH)
+        for key in ("judgement", "capacity"):
+            self.assertIsInstance(self.with_[key], str, f"{key} is not quoted")
+
+    def test_it_calls_the_reusable_at_main_with_the_secrets(self):
+        self.assertEqual(self.job.get("uses"),
+                         f"{PIPELINE}/.github/workflows/groomer.yml@main")
+        self.assertEqual(self.job.get("secrets"), "inherit")
+
+
+class OnDemandTriggersTest(unittest.TestCase):
+    """The two on-demand triggers, unchanged by the schedule."""
 
     def test_the_approval_dispatch_can_only_reach_the_drain(self):
         """The narrowing D5 was amended on. Whatever the payload carries,
@@ -167,9 +377,10 @@ class OnDemandOnlyTest(unittest.TestCase):
                 f"for `drain` regardless of any input",
             )
 
-    def test_propose_stays_workflow_dispatch_only(self):
-        """`propose` makes the model call D5 wanted audited before it ran
-        unattended. It keeps the trigger a person has to open Actions for."""
+    def test_the_approval_dispatch_never_proposes(self):
+        """`propose` makes the model call. It is reachable from a person at
+        Actions and from the morning clock behind the gate — never from the
+        approval dispatch, which exists to move an approved batch."""
         doc = _load("self-groomer.yml")
         for name, job in _jobs_on(doc, "repository_dispatch").items():
             self.assertNotIn(
@@ -236,34 +447,61 @@ class OnDemandOnlyTest(unittest.TestCase):
             {"pipeline_ref", "mode", "card", "judgement", "intake_hold"},
         )
 
-    def test_the_pen_switch_is_read_on_both_triggers(self):
+    def test_the_pen_switch_is_read_on_every_trigger(self):
         """DRE-3035/DRE-3285: the hold is a repository variable, and a drain
-        that cannot see it is a pen with a hole in it — on either trigger."""
-        for name, job in (_load("self-groomer.yml").get("jobs") or {}).items():
+        that cannot see it is a pen with a hole in it — on any trigger. Every
+        job that carries `uses:`; the gate job calls nothing, so it has no
+        `with:` to carry it."""
+        jobs = _calling_jobs(_load("self-groomer.yml"))
+        self.assertEqual(set(jobs), CALLING_JOBS)
+        for name, job in jobs.items():
             self.assertEqual(
                 _expression((job.get("with") or {}).get("intake_hold")),
                 "vars.INTAKE_HOLD",
                 f"job {name!r} does not read the pen's switch",
             )
 
-    def test_no_workflow_in_this_repo_schedules_the_groomer(self):
+    def test_the_only_scheduled_groomer_call_is_this_stubs_propose(self):
+        """EVERY scheduled workflow in the repo, and EVERY job in each — not
+        only the first. A job that can run on a `schedule` event and calls
+        `groomer.yml` is allowed in exactly one place: this stub's `schedule`
+        job, in mode `propose`, as a literal. A clock that could reach `drain`
+        is the CEO's Approve bypassed."""
+        found = []
         for path in sorted(WORKFLOWS.glob("*.yml")):
             doc = yaml.safe_load(path.read_text())
-            if not isinstance(doc, dict):
+            if not isinstance(doc, dict) or "schedule" not in _on(doc):
                 continue
-            if "schedule" not in _on(doc):
-                continue
-            job = next(iter((doc.get("jobs") or {}).values()), {})
-            self.assertNotIn(
-                "groomer.yml", str(job.get("uses") or ""),
-                f"{path.name} puts the groomer on a schedule",
-            )
+            for name, job in (doc.get("jobs") or {}).items():
+                if not isinstance(job, dict):
+                    continue
+                if "groomer.yml" not in str(job.get("uses") or ""):
+                    continue
+                if not _reaches_schedule(job):
+                    continue
+                found.append((path.name, name))
+                mode = (job.get("with") or {}).get("mode")
+                self.assertEqual(
+                    mode, "propose",
+                    f"{path.name}:{name} runs the groomer on a schedule in "
+                    f"mode {mode!r}",
+                )
+                self.assertNotIn("${{", str(mode),
+                                 f"{path.name}:{name} computes its mode")
+        self.assertEqual(
+            found, [("self-groomer.yml", "schedule")],
+            "the morning proposal is the only scheduled groom there is",
+        )
 
-    def test_every_job_calls_the_reusable_at_the_qualified_ref(self):
-        """One job per trigger, and both of them the same reusable at the same
-        ref with the same secrets — the stub owns the trigger and nothing else."""
-        jobs = _load("self-groomer.yml")["jobs"]
-        self.assertTrue(jobs)
+    def test_every_calling_job_calls_the_reusable_at_the_qualified_ref(self):
+        """One calling job per trigger, all three the same reusable at the same
+        ref with the same secrets. The `gate` is the one job with steps, and
+        it is the only one allowed to have them."""
+        doc = _load("self-groomer.yml")
+        jobs = _calling_jobs(doc)
+        self.assertEqual(set(jobs), CALLING_JOBS)
+        self.assertEqual(set(doc["jobs"]) - set(jobs), STEP_JOBS,
+                         "a job that neither calls the reusable nor is the gate")
         for name, job in jobs.items():
             self.assertEqual(
                 job.get("uses"),
@@ -307,8 +545,20 @@ class OnDemandOnlyTest(unittest.TestCase):
 
 class DecisionRecordTest(unittest.TestCase):
     """A header that contradicts the code is fixed in the PR that changes the
-    code (`standards/engineering.md`). Both decisions, each with its date, in
-    every place the old single-trigger sentence was written."""
+    code (`standards/engineering.md`). All three decisions, each with its date,
+    in every place the cadence is recorded — and none of the retired sentences
+    left behind to contradict them."""
+
+    DECISIONS = ("DRE-2683", "2026-08-23", "DRE-3337", "2026-09-08",
+                 *THIRD_DECISION)
+
+    def _records(self) -> dict:
+        return {
+            "self-groomer.yml header": _header("self-groomer.yml"),
+            "groomer.yml header": _header("groomer.yml"),
+            "the wiring test's docstring": __doc__ or "",
+            "scripts/groomer.py's docstring": groomer.__doc__ or "",
+        }
 
     def test_the_stub_header_no_longer_claims_one_trigger(self):
         self.assertNotIn(
@@ -316,10 +566,9 @@ class DecisionRecordTest(unittest.TestCase):
             "the header records a trigger set the file no longer carries",
         )
 
-    def test_the_stub_header_records_both_decisions_with_their_dates(self):
+    def test_the_stub_header_records_all_three_decisions_with_their_dates(self):
         header = _header("self-groomer.yml")
-        for token in ("DRE-2683", "2026-08-23", "DRE-3337", "2026-09-08",
-                      "repository_dispatch"):
+        for token in (*self.DECISIONS, "repository_dispatch"):
             self.assertIn(token, header, f"the header never names {token}")
 
     def test_the_reusables_header_no_longer_describes_the_old_stub(self):
@@ -328,13 +577,28 @@ class DecisionRecordTest(unittest.TestCase):
             "workflow_dispatch and nothing else", header,
             "groomer.yml still describes its caller as single-trigger",
         )
-        self.assertIn("DRE-3337", header)
+        for token in self.DECISIONS:
+            self.assertIn(token, header, f"groomer.yml's header never names {token}")
 
     def test_this_modules_docstring_says_the_same(self):
-        for token in ("DRE-2683", "2026-08-23", "DRE-3337", "2026-09-08",
-                      "groom-drain"):
+        for token in (*self.DECISIONS, "groom-drain"):
             self.assertIn(token, __doc__ or "",
                           f"the wiring test's docstring never names {token}")
+
+    def test_the_groomers_own_docstring_records_the_cadence(self):
+        for token in self.DECISIONS:
+            self.assertIn(token, groomer.__doc__ or "",
+                          f"scripts/groomer.py's docstring never names {token}")
+
+    def test_no_record_still_says_the_groomer_never_runs_on_a_clock(self):
+        for where, text in self._records().items():
+            folded = " ".join(text.split()).lower()
+            for sentence in RETIRED_CADENCE:
+                self.assertNotIn(
+                    sentence.lower(), folded,
+                    f"{where} still says {sentence!r} — the morning proposal "
+                    "runs on a schedule since DRE-4677",
+                )
 
 
 class DryRunSwitchTest(unittest.TestCase):
@@ -583,6 +847,26 @@ class DocumentationTest(unittest.TestCase):
                          self.doc)
         for token in ("DRE-3337", "groom-drain"):
             self.assertIn(token, self.doc)
+
+    def test_the_cadence_section_records_all_three_triggers(self):
+        """The hand dispatch, the Approve-fired drain, and the 06:15 PT gated
+        propose — each decision with its date, and the gate named so the
+        operator knows what a quiet morning means."""
+        section = self.doc.split("## The cadence", 1)[1].split("\n## ", 1)[0]
+        for token in ("DRE-2683", "2026-08-23", "DRE-3337", "2026-09-08",
+                      *THIRD_DECISION, "06:15 PT", "groom_schedule_gate.py",
+                      "GROOM_PROPOSAL_CARD", "workflow_dispatch",
+                      "repository_dispatch"):
+            self.assertIn(token, section, f"the cadence section never names {token}")
+
+    def test_the_doc_no_longer_says_the_groomer_never_runs_on_a_clock(self):
+        folded = " ".join(self.doc.split()).lower()
+        for sentence in (*RETIRED_CADENCE, "on demand, never a schedule",
+                         "it still means it runs when someone remembers"):
+            self.assertNotIn(
+                sentence.lower(), folded,
+                f"docs/groomer.md still says {sentence!r}",
+            )
 
     def test_the_doc_says_why_a_cycle_is_not_sprint_planning(self):
         self.assertIn(groomer.CYCLE_IS_NOT_SPRINT_PLANNING, self.doc)

@@ -3,15 +3,21 @@
 # nothing but a comment; `drain` moves the approved batch to Planning and
 # refuses without an approval naming that exact batch.
 #
-# ON DEMAND, NEVER ON A SCHEDULE (decision D5, approved 2026-08-23): a groomer
-# running unattended over two hundred cards before anyone has checked its calls
-# is the same mistake as trusting a critic's verdicts before comparing them to a
-# held-back set. Since DRE-3337 (green-lit 2026-09-08) the calling stub carries
-# two on-demand triggers and no cron: a `workflow_dispatch` — the only route to
-# `propose` — and a `groom-drain` `repository_dispatch` fired by the CEO's
-# Approve on the console, which reaches `drain` and nothing else.
-# tests/test_groomer_wiring.py fails the build if a cron appears, if that
-# trigger set widens, or if `propose` becomes reachable from the dispatch.
+# WHEN IT RUNS — three decisions, in order. D5 (DRE-2683, approved 2026-08-23):
+# on demand, until the groomer's judgement has been audited — a groomer running
+# unattended over two hundred cards before anyone has checked its calls is the
+# same mistake as trusting a critic's verdicts before comparing them to a
+# held-back set. The amendment (DRE-3337, green-lit 2026-09-08): the drain may
+# also be fired by the CEO's Approve on the console, as a `groom-drain`
+# `repository_dispatch` that reaches `drain` and nothing else. The morning
+# proposal (DRE-3586's signed answer, 2026-09-21, absorbed by DRE-4677): a
+# `schedule` at 06:15 PT runs `propose` and only `propose`, behind a gate job
+# that checks the PT clock and the standing card (DRE-4688); the drain still
+# needs the CEO's Approve. So the calling stub carries three triggers — a
+# `workflow_dispatch`, the `groom-drain` dispatch, and the gated schedule — and
+# tests/test_groomer_wiring.py fails the build if that trigger set widens, if
+# the scheduled job's `mode` is anything but the literal `propose`, or if
+# `propose` becomes reachable from the approval dispatch.
 #
 # Reusable workflow: permissions live in the calling stub (contents: read).
 name: Groomer (reusable)

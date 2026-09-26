@@ -142,11 +142,17 @@ threw away an approval for a reason that had nothing to do with the batch. The
 property is kept where it belongs: the drain reads the list the CEO saw, and
 refuses if any card on it has moved since.
 
-The cadence is D5, approved 2026-08-23: **on demand, until the groomer's
-judgement has been audited.** The cost is stated rather than hidden — on demand
-means it runs when someone remembers, and this programme's thesis is that
-anything relying on remembering eventually does not happen. Revisit once the
-calls have been checked against a real batch.
+The cadence is three decisions, in order. D5 (DRE-2683, approved 2026-08-23):
+**on demand, until the groomer's judgement has been audited.** The amendment
+(DRE-3337, green-lit 2026-09-08): the drain may also be fired by the CEO's
+Approve on the console, as a `groom-drain` `repository_dispatch` that reaches
+`drain` and nothing else. The morning proposal (DRE-3586's signed answer,
+2026-09-21, absorbed by DRE-4677): a `schedule` in `self-groomer.yml` runs
+`propose` — and only `propose` — at 06:15 PT, behind a gate job that reads the
+PT clock and the standing card (`groom_schedule_gate.py`, DRE-4688), so the
+proposal is on the card before the 06:30 briefing. D5's stated cost — on demand
+means it runs when someone remembers — no longer applies to the proposal; the
+drain still waits for the CEO's Approve, and a proposal moves nothing.
 
 CLI:
 

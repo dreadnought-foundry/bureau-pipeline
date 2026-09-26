@@ -1,6 +1,7 @@
 # The groomer — one batch at a time, and you approve it
 
-`scripts/groomer.py`, run on demand by `.github/workflows/self-groomer.yml`.
+`scripts/groomer.py`, run by `.github/workflows/self-groomer.yml` — on demand,
+on the CEO's Approve, and every morning at 06:15 PT (see the cadence below).
 DRE-2683.
 
 The critic answers whether one card can be built. Planning answers whether one
@@ -525,41 +526,70 @@ digests the batch alone, so answering a decline never retires an approval.
 
 ## The cadence, and its stated cost
 
-**On demand, never a schedule** (decision D5, approved 2026-08-23, until the
-groomer's judgement has been audited). A groomer running unattended over two
-hundred cards before anyone has checked its calls is the same mistake as
-trusting a critic's verdicts before comparing them to a held-back set.
+Three decisions, in order, and the one rule they leave standing: **a clock may
+reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
 
-Two triggers, both on demand, no cron:
+- **D5 (DRE-2683, approved 2026-08-23):** on demand, until the groomer's
+  judgement has been audited. A groomer running unattended over two hundred
+  cards before anyone has checked its calls is the same mistake as trusting a
+  critic's verdicts before comparing them to a held-back set.
+- **The amendment (DRE-3337, green-lit 2026-09-08):** the drain may also be
+  fired by the CEO's Approve on the console, so an approval starts the drain
+  without anyone opening Actions.
+- **The morning proposal (DRE-3586's signed answer, 2026-09-21, absorbed by
+  DRE-4677):** D5 is reopened for exactly one thing — "a scheduled 06:30 PT run
+  of propose only. It writes one proposal comment and moves nothing; the drain
+  still needs my Approve. The rest of D5 stands." The run takes about eight
+  minutes, so DRE-4677 moved it to 06:15 PT: the proposal has to be on the card
+  before the 06:30 briefing is assembled.
 
-- **`workflow_dispatch`** — a person at Actions. The only route to `propose`,
-  and the only one that offers the lane, capacity, priority and `judgement`
-  inputs.
+So `.github/workflows/self-groomer.yml` carries three triggers:
+
+- **`workflow_dispatch`** — a person at Actions. It offers every input — lane,
+  capacity, priority, `judgement`, `dry_run` — and either mode.
 - **`repository_dispatch`, type `groom-drain`** — the CEO's Approve on the
-  console (DRE-3337, green-lit 2026-09-08), so an approval starts the drain
-  without anyone opening Actions. `client_payload` is
-  `{"card": "DRE-N", "proposal": "<12-hex id>"}` and only `card` is read. On
-  this event `mode` is the literal `drain` whatever the payload carries, and
-  `judgement` is `off` — a drain makes no model call, so the judgement D5 wants
-  audited is never run by this trigger. It is a `repository_dispatch` rather
-  than a `workflow_dispatch` because the dispatching App holds `contents: write`
-  and no Actions permission (DRE-3001), which is the same path the relay already
-  fires `agent-execute` down.
+  console. `client_payload` is `{"card": "DRE-N", "proposal": "<12-hex id>"}`
+  and only `card` is read. On this event `mode` is the literal `drain` whatever
+  the payload carries, and `judgement` is `off` — a drain makes no model call.
+  It is a `repository_dispatch` rather than a `workflow_dispatch` because the
+  dispatching App holds `contents: write` and no Actions permission
+  (DRE-3001), which is the same path the relay already fires `agent-execute`
+  down.
+- **`schedule`, 06:15 PT every day, behind a gate** — `propose` only. GitHub's
+  cron is UTC with no timezone field, so the file carries two lines,
+  `15 13 * * *` and `15 14 * * *`; every day both fire and exactly one is 06:15
+  on the Pacific clock. A `gate` job runs `scripts/groom_schedule_gate.py`
+  (DRE-4688), which reads the PT clock and the standing card named by the
+  `GROOM_PROPOSAL_CARD` repository variable:
+  - outside the 06:00–06:59 PT hour — the other cron of the pair — it answers
+    `go=false`, and the run stays green;
+  - inside that hour with the card open, it answers `go=true`, and the
+    `schedule` job calls the groomer with `mode: propose`,
+    `judgement: "on"`, `capacity: "20"`, priority
+    `agent-bureau,bureau-pipeline,portico`, and the standing card;
+  - inside that hour with no card to post to — the variable empty, or naming a
+    card that is Done or Canceled, or unreadable — it exits 1. That red run is
+    the designed loud refusal: its log names the card and the state it found.
 
-The cost of "on demand" is stated rather than hidden: for `propose` it still
-means it runs when someone remembers, and this programme's whole thesis is that
-anything relying on remembering eventually does not happen. Revisit the cadence
-once the calls have been checked against a real batch — the first one is written
-up in [groomer-first-batch.md](groomer-first-batch.md).
+  Every input of the scheduled job is a literal or a repository variable, so
+  nothing a person or a payload sets can reach it, and `mode` is the literal
+  `propose`. `tests/test_groomer_wiring.py` walks every scheduled workflow in
+  the repo and fails if any other scheduled job calls `groomer.yml`.
 
-**The audit D5 was waiting for is DRE-3151.** It runs the two readings —
-`--no-judgement` and the ranked read — over one population and compares them
-card by card, which is the check that decides whether this ever runs on a
-schedule. Until it has, nothing here runs on a clock: a groomer ranking two
-hundred cards unattended before anyone has read its calls is the same mistake as
-trusting a critic's verdicts before comparing them to a held-back set. The
-`groom-drain` dispatch above is not an exception to that — it carries no
-judgement, and it fires on a person's Approve.
+The cost D5 stated — on demand means it runs when someone remembers, and
+anything relying on remembering eventually does not happen — no longer applies
+to the proposal: it is on the standing card every morning without anyone
+remembering to ask for it. What still waits for a person is the decision: a
+proposal moves nothing until the CEO approves it, and the drain it starts is
+the same Approve-fired `groom-drain` as before.
+
+**The audit D5 was waiting for is DRE-3151**: the two readings —
+`--no-judgement` and the ranked read — over one population, compared card by
+card. Its scored record is [groomer-judged-batch.md](groomer-judged-batch.md),
+and the first batch is written up in
+[groomer-first-batch.md](groomer-first-batch.md). What runs on the clock is the
+proposal alone: the ranked read's calls are still read by the CEO before any
+card moves, because the only thing that moves a card is his Approve.
 
 ## On cycles
 
