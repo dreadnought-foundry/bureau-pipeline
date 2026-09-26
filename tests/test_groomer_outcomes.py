@@ -122,9 +122,9 @@ def test_the_render_names_the_superseder_on_every_dead_line():
     cards = [card("DRE-1", description="**Superseded by:** DRE-2719"),
              card("DRE-2")]
     text = groomer.render_proposal(groomer.propose(cards, cycles=CYCLES))
-    for line in text.splitlines():
-        if line.startswith("- DRE-1"):
-            assert "DRE-2719" in line
+    for line in text.split(groomer.CANCEL_HEADING, 1)[-1].splitlines():
+        if line.startswith("| 1 | DRE-1 |"):
+            assert line.endswith("| superseded by DRE-2719 |")
             break
     else:                                       # pragma: no cover - guard
         raise AssertionError("the dead recommendation is not in the proposal")
