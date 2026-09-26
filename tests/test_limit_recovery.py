@@ -571,3 +571,76 @@ def test_a_full_sweep_reenters_a_reset_card_exactly_once():
     bodies = [c.args[1] for c in cmd_comment.call_args_list]
     assert len(bodies) == 1 and bodies[0].startswith(limit_recovery.RECOVERY_MARK)
     assert reconcile._write_failures == []
+
+
+# --------------------------------------------------------------------------
+# the WIP room is promotion's own (DRE-4934)
+# --------------------------------------------------------------------------
+def _dre_4811_board():
+    """agent-bureau on 2026-09-25, in miniature: a promotion base of 3 of 12
+    (two ordinary builds plus the dead card itself, in Todo), and a repo that
+    holds far more than 12 active cards once epics, hand-built cards and
+    automation cards are counted. Promotion said `WIP 3+0/12`; recovery said
+    the room was spent."""
+    dead = card(ident="DRE-4811", lane="Todo",
+                bodies=[marker(kind="linear", reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    work = [card(ident=f"DRE-{n}") for n in (101, 102)]
+    epics = [
+        {**card(ident=f"DRE-{200 + n}"), "title": f"[EPIC] epic {n}"}
+        for n in range(10)
+    ]
+    by_hand = [card(ident=f"DRE-{300 + n}", labels=("repo:agent-bureau", "hand-built"))
+               for n in range(4)]
+    bots = [card(ident=f"DRE-{400 + n}",
+                 labels=("repo:agent-bureau", reconcile.dependabot_card.LABEL))
+            for n in range(3)]
+    return dead, [dead, *work, *epics, *by_hand, *bots]
+
+
+def test_a_limit_death_is_redispatched_when_promotion_has_room(monkeypatch, capsys):
+    """RED on `main`: recovery counted every active card of the repo — the ten
+    epics and the three automation cards included — so 15 of 12 read as no
+    room, and DRE-4811 sat in Todo for twenty hours printing "WIP room is
+    spent" beside a promotion step reading 3 of 12."""
+    monkeypatch.setattr(reconcile, "MAX_WIP", 12)
+    dead, board = _dre_4811_board()
+    assert reconcile.wip_count(
+        [c for c in board if reconcile.card_repo(c) == "agent-bureau"]
+    ) >= 12, "the fixture must be a board the wide count calls full"
+    dispatched = []
+    with patch.object(reconcile, "active_cards", return_value=board), \
+         patch.object(reconcile, "redispatch",
+                      side_effect=lambda c: dispatched.append(c["identifier"]) or True), \
+         patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile.recover_limit_deaths()
+    out = capsys.readouterr().out
+    assert "WIP room is spent" not in out, out
+    assert dispatched == ["DRE-4811"]
+
+
+def test_recovery_and_promotion_read_one_wip_room(monkeypatch):
+    """The two paths are handed the same number: whatever promotion is told the
+    base is, recovery's room is the cap minus exactly that. MUTATION CHECK:
+    widen either side's base and the two disagree."""
+    monkeypatch.setattr(reconcile, "MAX_WIP", 12)
+    _, board = _dre_4811_board()
+    seen = {}
+
+    def fake_recover(lops, now, active_account, wip_room, **kw):
+        seen["wip_room"] = wip_room
+        return []
+
+    # The board carries epics, so the sweep's epic-growth refresh has work to
+    # do; it writes descriptions, and nothing here is about it.
+    mocks = {**_full_sweep_mocks(board), "report_epic_growth": MagicMock(return_value=[])}
+    with patch.multiple(reconcile, **mocks), \
+         patch.object(reconcile.limit_recovery, "recover", side_effect=fake_recover), \
+         patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+         patch.object(reconcile.linear_ops, "cmd_state"), \
+         patch.object(reconcile.linear_ops, "cmd_comment"), \
+         patch.object(reconcile.linear_ops, "add_label"), \
+         patch.object(reconcile, "redispatch", return_value=True):
+        reconcile.main()
+    active_count = mocks["promote_ready"].call_args.kwargs["active_count"]
+    assert active_count == 3
+    assert seen["wip_room"] == reconcile.MAX_WIP - active_count
