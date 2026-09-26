@@ -48,18 +48,37 @@ def _all_workflows() -> dict[str, dict]:
     return {p.name: yaml.safe_load(p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))}
 
 
-def _call_jobs(doc: dict) -> list[dict]:
-    """Every job in a stub — and every one of them calls the reusable.
+#: stub file -> the jobs in it that are allowed to run steps instead of calling
+#: the reusable. Declared by name, so a job that "does something else" is
+#: still a failure everywhere it is not written down here.
+#:
+#: DRE-4724: self-groomer.yml's `gate` answers the two questions a scheduled
+#: groom must ask before it spends a model call — is it 06:xx PT, is the
+#: standing card open — by running `groom_schedule_gate.py` (DRE-4688). It has
+#: to be a job of its own because a job with `uses:` has no steps; the
+#: `schedule` job that then calls the reusable is asserted like every other.
+STEP_JOBS = {
+    "self-groomer.yml": {"gate"},
+}
+
+
+def _call_jobs(doc: dict, stub: str | None = None) -> list[dict]:
+    """Every job in a stub that calls the reusable — which is every job but
+    the step jobs `STEP_JOBS` declares for that stub.
 
     It used to be "a stub has exactly one job", which stopped being true in
     DRE-3366: self-groomer.yml carries a second job for its `repository_dispatch`
     drain so that `mode: drain` can be a LITERAL, out of reach of the payload.
     One job per trigger, never a job that does something else — which is the
-    property these assertions actually want, and the count never was.
+    property these assertions actually want, and the count never was. Since
+    DRE-4724 the one declared exception is the groomer's schedule gate.
     """
     jobs = doc.get("jobs") or {}
     assert jobs, "a stub has at least one job"
-    return list(jobs.values())
+    allowed = STEP_JOBS.get(stub or "", set())
+    calling = [job for name, job in jobs.items() if name not in allowed]
+    assert calling, "a stub has at least one job that calls its reusable"
+    return calling
 
 
 # stub file -> (reusable workflow file it must call, required workflow name)
@@ -73,10 +92,11 @@ EXPECTED_STUBS = {
     "self-agent-fix.yml": ("agent-fix.yml", "Agent Fix"),
     "self-red-main-repair.yml": ("red-main-repair.yml", "Red-Main Repair"),
     "pr-review.yml": ("qa-review.yml", "QA Review"),
-    # DRE-2683, amended by DRE-3337. On demand, never on a schedule: a manual
-    # dispatch, plus a `groom-drain` repository_dispatch that reaches the drain
-    # and only the drain. The trigger shape is asserted in
-    # tests/test_groomer_wiring.py, which fails if a cron appears.
+    # DRE-2683, amended by DRE-3337 and by DRE-3586 (absorbed by DRE-4677): a
+    # manual dispatch, a `groom-drain` repository_dispatch that reaches the
+    # drain and only the drain, and a 06:15 PT schedule that reaches `propose`
+    # and only `propose`, behind the `gate` job declared in STEP_JOBS. The
+    # trigger shape is asserted in tests/test_groomer_wiring.py.
     "self-groomer.yml": ("groomer.yml", "Groomer"),
     # DRE-3016. Manual dispatch only, following the same D5 reasoning — the
     # trigger shape is asserted in tests/test_planner_score.py.
@@ -91,7 +111,7 @@ class StubCallsReusableTest(unittest.TestCase):
     def test_every_stub_calls_its_reusable_at_qualified_main(self):
         for stub, (reusable, _) in EXPECTED_STUBS.items():
             doc = _load(stub)
-            for job in _call_jobs(doc):
+            for job in _call_jobs(doc, stub):
                 self.assertEqual(
                     job.get("uses"),
                     f"{PIPELINE}/.github/workflows/{reusable}@main",
@@ -101,13 +121,26 @@ class StubCallsReusableTest(unittest.TestCase):
 
     def test_every_stub_inherits_secrets(self):
         for stub in EXPECTED_STUBS:
-            for job in _call_jobs(_load(stub)):
+            for job in _call_jobs(_load(stub), stub):
                 self.assertEqual(
                     job.get("secrets"), "inherit",
                     f"{stub} must carry `secrets: inherit` — the reusable "
                     f"workflows read LINEAR_API_KEY / bot app keys from the "
                     f"caller's secrets",
                 )
+
+    def test_a_declared_step_job_exists_runs_steps_and_calls_nothing(self):
+        """The exception is exactly as wide as its declaration: each job named
+        in STEP_JOBS is present, has steps, and has no `uses:` — so the
+        declaration cannot quietly outlive the job, or turn into a second
+        route to a reusable nothing asserts."""
+        for stub, names in STEP_JOBS.items():
+            self.assertIn(stub, EXPECTED_STUBS)
+            jobs = _load(stub).get("jobs") or {}
+            for name in names:
+                self.assertIn(name, jobs, f"{stub} declares a step job {name!r} it does not have")
+                self.assertTrue(jobs[name].get("steps"), f"{stub}:{name} has no steps")
+                self.assertNotIn("uses", jobs[name], f"{stub}:{name} calls a workflow")
 
     def test_stub_names_match_the_fleet_reference(self):
         for stub, (_, name) in EXPECTED_STUBS.items():
