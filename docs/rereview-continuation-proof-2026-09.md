@@ -387,3 +387,86 @@ repo in `config/repo-map.json`.
 
 Written 2026-09-24 13:00 PT, from live traffic between 2026-09-15 10:39 PT and
 2026-09-24 12:55 PT.
+
+---
+
+## Follow-up readings, 2026-09-26
+
+**The replay half of Observation 2 still does not hold, and this reading cannot
+settle it.** The fixed tool now replays the lane: DRE-4025 at its past instant
+no longer stops at "the epic is in Done". But under the key the operator's
+tools use, every replay stops one step later, at the round-trust rule, and
+prints `quiet` for a reason that has nothing to do with `--now`. The reading
+that would decide it has to run under the fleet key, and it has not been taken.
+
+**The tool.** bureau-pipeline `stable` = `main` =
+`35b74b383fcb81633ff1660c1611f5f0532fce61` when read on 2026-09-26 08:26 PT.
+DRE-4758 merged as PR #499 at 2026-09-24 18:20 PT, merge commit
+`12c5fa12dafa45c55a7841f6bc81d8a33ab92bc2`. The compare from that commit to
+`stable` reads `ahead`, `behind_by 0`, so `stable` carries it. Its fix commit
+`9b9c7e96` is the newest commit on `scripts/rereview_watch.py` at that sha. The
+commands ran from a read-only download of that sha, not a checkout.
+
+**The key.** Nothing set `LINEAR_API_KEY`, so the tool read the operator-tools
+key from Secrets Manager (`bureau/operator-tools/linear-api-key`), the same way
+agent-bureau's `scripts/linear-api.py` does. Linear's `viewer` for that key is
+`bureau-tools`. `check` writes nothing: it reads the thread, the lane and the
+lane history.
+
+**The instant.** The card's DRE-4425 instant, `2026-09-21T06:00:00Z`
+(2026-09-20 23:00 PT), is 26 minutes after the send-back and inside the
+45-minute grace window (§2b, ii). The corrected instant is
+`2026-09-21T10:00:00Z` (2026-09-21 03:00 PT), 266 minutes into the 8h43m gap.
+The old instant is run too, as a control.
+
+Run 2026-09-26 08:26:55 to 08:27:05 PT. Each command's `linear-budget:` line
+(stderr) is trimmed; nothing else is.
+
+```
+$ python3 scripts/rereview_watch.py check DRE-4025 --now 2026-09-15T18:45:00Z
+quiet: DRE-4025 — the second critic's state on this plan is `not-run`, not `held` — no send-back is waiting on a re-review
+$ python3 scripts/rereview_watch.py check DRE-4025
+quiet: DRE-4025 — the epic is in Done, not In Progress — nothing here is waiting on a re-review
+$ python3 scripts/rereview_watch.py check DRE-4425 --now 2026-09-21T10:00:00Z
+quiet: DRE-4425 — the second critic's state on this plan is `not-run`, not `held` — no send-back is waiting on a re-review
+$ python3 scripts/rereview_watch.py check DRE-4425 --now 2026-09-21T06:00:00Z
+quiet: DRE-4425 — the second critic's state on this plan is `not-run`, not `held` — no send-back is waiting on a re-review
+```
+
+**What changed since 2026-09-24.** The first line is the evidence that the lane
+replay works. On 2026-09-24 the same command, under the same key, said "the
+epic is in Done". Now the tool placed DRE-4025 in In Progress at
+2026-09-15 11:45 PT, off the epic's own history, and read on into the thread.
+The bare `check DRE-4025` still says Done, which is right: it asks about today.
+
+**Why every replay still says `quiet`.** It is §2b reason (iii), unchanged by
+DRE-4758. `linear_ops.comment_records` counts a comment as the pipeline's only
+when the key's own user wrote it. Under `bureau-tools`, every `plan-critic:`
+round the fleet user `Agent-Bureau` wrote reads as someone else's, so
+`plan_critic.post_release` finds no round at all and answers `not-run`. That
+happens before the grace window or the clock is consulted, so the corrected
+instant and the old one print the same line. That is the rule working as
+designed. It is not a defect in the replay.
+
+**What these readings do not show.** They do not show the replay printing
+`overdue`. They also do not show the thread trim working, because the reading
+stops before the trim matters. Neither half is disproved; neither is observed.
+A replay only means something under the fleet key, and the operator's tools
+never use that key (DRE-3168, `scripts/linear_key.py`). This session did not
+take that reading.
+
+**The reading that would settle it.** The same three commands run under the
+fleet key, the `Agent-Bureau` user the Reconcile sweep uses. They are read-only
+and cost about five Linear requests:
+
+```
+python3 scripts/rereview_watch.py check DRE-4025 --now 2026-09-15T18:45:00Z   # expect overdue, round 1
+python3 scripts/rereview_watch.py check DRE-4025                              # expect quiet, epic in Done
+python3 scripts/rereview_watch.py check DRE-4425 --now 2026-09-21T10:00:00Z   # expect overdue, round 1
+```
+
+**Verdict on criterion 2 as of 2026-09-26.** The live sweep half holds (§2a).
+The replay half is still not observed. DRE-4758 fixed the defect that made
+every replay read today's lane, and the first reading above shows that fix at
+work. Whether the replay prints `overdue` for a real silence is owed one
+fleet-key reading.
