@@ -1014,9 +1014,12 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
         # the day: Portico separates two cards of the same priority created on
         # the same day, and decides nothing else. The day is the granularity
         # the tie-break is defined at, so the timestamp only orders cards the
-        # day cannot separate.
+        # day cannot separate. A unit with no readable creation date is not
+        # the oldest in the pile: it goes to the back of its band, the
+        # reversible answer.
         unit = unit_index[key]
-        return (unit["band"], _day_ordinal(unit["created"]), ranks[unit["repo"]],
+        day = _day_ordinal(unit["created"]) or float("inf")
+        return (unit["band"], day, ranks[unit["repo"]],
                 _epoch(unit["created"]), _card_sort_key(key))
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
