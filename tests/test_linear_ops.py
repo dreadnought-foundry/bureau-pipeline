@@ -255,7 +255,10 @@ def test_the_sweep_drops_epics_before_its_merged_backstop():
     refused. Delete that exclusion and this says so."""
     source = inspect.getsource(reconcile.main)
     assert "repo_epics(mine)" in source
-    assert 'c["identifier"] not in epics' in source
+    # The exclusion lives in `wip_base` since DRE-4934, the one helper the
+    # nudge list and every WIP count read.
+    assert "mine = wip_base(mine)" in source
+    assert 'c["identifier"] not in epics' in inspect.getsource(reconcile.wip_base)
 
 
 if __name__ == "__main__":
