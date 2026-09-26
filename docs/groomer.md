@@ -26,14 +26,16 @@ only then does anything leave Intake.
    card, is the atom of cycle assignment.
 3. **Finds the collisions.** Two cards citing the same file become an explicit
    order between those two cards, reported with the file that caused it.
-4. **Sequences.** Urgent, then High, then the last 14 days newest first —
+4. **Sequences.** Urgent, then High, then everything else oldest first —
    subject to those constraints, deterministically. The rules are below.
 5. **Assigns cycles**, using Linear's own primitive.
 6. **Reads once, ranked.** One model call over the whole population and the
    context pack — what is in flight, what merged, what closed — asking the one
    question the cards cannot answer between them: given what we are already
-   doing, does this card belong in the next batch? The read fills the batch; it
-   never breaks it, because every rule above still constrains the order.
+   doing, does this card belong in the next batch? Since DRE-4725 the read
+   decides neither the batch's membership nor its order: it gives every card
+   its reason, and the one card it takes out of the batch is one it declined
+   to place.
    `--no-judgement` makes no call at all and is exactly the groomer that ran
    before DRE-3150.
 7. **Proposes**, in plain English: the batch and its order with the **why** on
@@ -75,42 +77,49 @@ keeps as an artifact either way.
 
 ## The order, applied top to bottom
 
-CEO decision, 2026-09-04: **14 days, creation date** (DRE-3096). The batch is
-this week's work, not the oldest work.
+CEO decision on DRE-4669, 2026-09-23: **"work through the old Intake pile, 20
+cards at a time, oldest first, until the pile is gone"** (DRE-4725). It
+reverses DRE-3096's newest-first window: measured that day, the window had left
+74 of the 117 Intake cards older than 14 days out of every batch — out of 254
+in the lane, the oldest 83 days old — and nothing would ever have brought them
+back.
 
 1. **Urgent first, every repo.** Linear priority `Urgent` opens the batch,
-   newest created first among them. This is the production-issue lane: a card
+   oldest created first among them. This is the production-issue lane: a card
    raised while debugging goes ahead of everything.
-2. **High next**, newest first. Otherwise High means nothing.
-3. **Then the window**: created in the last 14 days, newest first.
-   `WINDOW_DAYS` is a constant and `--window-days` is a flag, so the drain of
-   the old Backlog runs at 14 and the steady state widens to 30 without a code
-   change.
-4. **Repo order is a tie-break inside a band, never the master key.** Portico
-   first only among cards of equal priority created on the same day. It used to
-   be the first element of the key, which put months-old Portico work at the
-   head of a 200-card Intake and made a card raised Urgent this morning wait its
-   turn.
-5. **Older than the window is "not now" by default.** Those cards stay in
-   Intake, ungroomed, and the proposal reports them as one line: *"N cards older
-   than 14 days, not batched — raise a card's priority to High or Urgent to pull
-   it in."* They are not cancelled and not moved — and nothing else moves them
-   either, since DRE-4141 removed the sweep's age-out: no card leaves Intake
-   for being old. The operator's Intake hold (DRE-3035) is untouched by any of
-   this, and the drain is now its one reader.
-6. **Two things still pull an old card forward**, whatever its age: a file
-   collision with a batched card — the old card is ordered *before* it — and
-   being a Linear blocker of a batched card. Both are constraints the sequence
-   already carries, and the pull is transitive.
+2. **High next**, oldest first. Otherwise High means nothing.
+3. **Then everything else, oldest first** — by creation day, with no window.
+   No card is left out of the batch for being old; the batch is the first
+   `--capacity` cards of this order. `--window-days` is still accepted, and
+   excludes and orders nothing.
+4. **Repo order is a tie-break inside a day, never the master key.** Portico
+   first only among cards of equal priority created on the same day; then the
+   exact time, then the identifier.
+5. **Collisions and blockers are ordering constraints, never a membership
+   filter.** Two cards naming the same file go older first, and a card that
+   formally blocks another goes before it. Under oldest first the two mostly
+   agree, because the older card is already ahead. Where they differ — an
+   Urgent or High card that collides with, or is blocked by, an older
+   unprioritised card — the constraint pulls the older card forward into the
+   batch ahead of it, transitively, and the pair is reported with the file that
+   caused it. The rule never filters on the model's picks: the read no longer
+   chooses the batch, so there is no "set the model picked" to keep a card out
+   of. (DRE-3737 proposed exactly that filter; this rule replaces it.)
+6. **The read neither reorders nor removes, except for one thing.** The
+   model's `now` order does not change the batch's order and a `not-now` does
+   not take a card out. A card the read declined — `unranked` — comes out of
+   the batch, per card, and the next card in order takes its slot.
 7. **The date is the creation date**, never the last update. A stray agent
-   comment must not bump a card up the batch; the population query does not even
-   read `updatedAt`. The way to resurrect an old card is to raise its
-   priority — rules 1 and 2 — which is a deliberate human act.
+   comment must not move a card; the population query does not even read
+   `updatedAt`.
 
-The epic is still the unit, so an epic's band is the highest priority and the
-newest creation among the epic and its children: one Urgent child pulls the
-whole unit into the batch. Inside a unit the order is unchanged — oldest child
-first, with collisions and blocks relations on top.
+The epic is still the unit, so an epic's band is the highest priority among the
+epic and its children — one Urgent child pulls the whole unit into the batch —
+and its age for the order is its **oldest** card, so one new child does not send
+an old epic to the back of the pile. Inside a unit the order is unchanged —
+oldest child first, with collisions and blocks relations on top. Nothing
+leaves Intake for being old either way: DRE-4141 removed the sweep's age-out,
+and the operator's Intake hold (DRE-3035) is untouched by any of this.
 
 ## The outcomes, and what each one owes the reader
 
@@ -121,8 +130,8 @@ line per card, before anything moves.
 
 | Outcome | Means | What it must name |
 | -- | -- | -- |
-| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "created inside the window") — and, on a judged run, the five **labelled reasons** below. |
-| `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
+| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "oldest first") — and, on a judged run, the five **labelled reasons** below. |
+| `not-now` | **Wanted, and deliberately not this batch** — the batch is full, and it names the cycle it is reconsidered in. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
 | `dead` (the read calls it `likely-done`) | **Recommended for cancellation, and never cancelled here**. Two readers propose one and the proposal says which: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | **evidence** — the card, merged PR or decision it points at. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |
 
@@ -598,9 +607,9 @@ Assigning cards to cycles is not a return to sprint planning. The cycle is the O
 `--capacity` is how much is proposed at a time, not a velocity estimate. A unit
 larger than the capacity gets a cycle to itself rather than being cut in half.
 
-A card older than the window is given no cycle at all. "Not now" for those means
-ungroomed and still in Intake — inventing a cycle for one would say the groomer
-had made a plan for a card it deliberately did not look at.
+Every card is given a cycle except one the read declined to place: what that
+card is owed is a person, not a fortnight, so it carries no cycle and is listed
+under "Could not rank". No card is left unscheduled for its age (DRE-4725).
 
 ## What it cannot see
 
