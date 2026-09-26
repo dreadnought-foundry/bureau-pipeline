@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-25T04:50:48Z",
+  "generated_at": "2026-09-26T04:48:23Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -1508,6 +1508,40 @@
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
+    },
+    {
+      "card": "DRE-4890",
+      "title": "portico: a project moderator's Add-document upload can be published interactive (DRE-2355's \"never an upload\" relaxed for the web, extending D9) \u2014 and an interactive upload over 4 MB is refused before any bytes move",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-4890/portico-a-project-moderators-add-document-upload-can-be-published",
+      "state": "Backlog",
+      "created_at": "2026-09-25T19:29:49Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": [
+        "infra/lambda/ingest_lib.ts",
+        "infra/lambda/routes/content.ts",
+        "infra/test/ingest_lib.test.ts",
+        "docs/folder-access/ADR-0008-mcp-tool-surface.md",
+        "docs/runbooks/app-frames.md"
+      ],
+      "declared_file_count": 5,
+      "piece_files": "UNKNOWN",
+      "pieces": 2,
+      "pieces_named": [
+        "DRE-4922",
+        "DRE-4917"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "DRE-4922: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-4917: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
     }
   ],
   "monthly": [
@@ -1534,19 +1568,19 @@
     },
     {
       "month": "2026-09",
-      "planner_children": 1025,
-      "split": 7,
+      "planner_children": 1063,
+      "split": 8,
       "died": 16,
       "complete": false
     }
   ],
   "rates": {
-    "cards": 45,
+    "cards": 46,
     "died": 33,
     "by_declared_files": [
       {
         "more_than": 1,
-        "of": 13,
+        "of": 14,
         "died": 9,
         "cards": [
           "DRE-3016",
@@ -1559,11 +1593,11 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 1 file died 9 of 13 times"
+        "sentence": "cards declaring more than 1 file died 9 of 14 times"
       },
       {
         "more_than": 2,
-        "of": 10,
+        "of": 11,
         "died": 6,
         "cards": [
           "DRE-3016",
@@ -1573,11 +1607,11 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 2 files died 6 of 10 times"
+        "sentence": "cards declaring more than 2 files died 6 of 11 times"
       },
       {
         "more_than": 3,
-        "of": 8,
+        "of": 9,
         "died": 5,
         "cards": [
           "DRE-3016",
@@ -1586,11 +1620,11 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 3 files died 5 of 8 times"
+        "sentence": "cards declaring more than 3 files died 5 of 9 times"
       },
       {
         "more_than": 4,
-        "of": 7,
+        "of": 8,
         "died": 4,
         "cards": [
           "DRE-3016",
@@ -1598,7 +1632,7 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 4 files died 4 of 7 times"
+        "sentence": "cards declaring more than 4 files died 4 of 8 times"
       },
       {
         "more_than": 5,
