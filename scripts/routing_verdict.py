@@ -856,10 +856,11 @@ def stale_verdict_refusal(
     if not lanes:
         return None
     name = verdict_on([n.get("body") or "" for n in comment_nodes or ()], doc)
+    passed = lanes[0] if len(lanes) == 1 else f"{', '.join(lanes[:-1])} and {lanes[-1]}"
     return (
         f"{STALE_VERDICT_NEEDLE} {identifier} is not being promoted — its "
         f"{name} routing verdict was written on {verdict_at[:10]} (UTC), and "
-        f"since then the card has been in {' and '.join(lanes)}.\n\n"
+        f"since then the card has been in {passed}.\n\n"
         "A routing verdict approves one trip through Planning. Moving a card "
         "back to Backlog — sending it back from Green Light, or by hand — is "
         "not an approval to build it, so it stays here and nothing is built.\n\n"
