@@ -734,9 +734,236 @@ class TestThePromoterRoutesOnTheVerdict:
 
 
 # ===========================================================================
+# A verdict approves one trip through Planning (DRE-4962)
+# ===========================================================================
+#: When the verdict was written, and the moments either side of it. DRE-2897's
+#: real shape: one FLEET verdict at its Planning exit on 2026-09-04, then weeks
+#: in Intake, a night in Green Light, and a console move back to Backlog.
+VERDICT_AT = "2026-09-04T16:00:00.000Z"
+EXIT_AT = "2026-09-04T16:00:05.000Z"
+
+
+def _move(at, frm, to):
+    return {"at": at, "from": frm, "to": to}
+
+
+#: The history the first criterion names, all of it AFTER the verdict.
+SENT_BACK = [
+    _move(EXIT_AT, "Planning", "Backlog"),
+    _move("2026-09-05T10:00:00.000Z", "Backlog", "Intake"),
+    _move("2026-09-25T22:00:00.000Z", "Intake", "Green Light"),
+    _move("2026-09-26T08:00:00.000Z", "Green Light", "Intake"),
+    _move("2026-09-26T15:35:34.000Z", "Intake", "Backlog"),
+]
+
+
+class TestAStaleVerdictIsNotAnApproval:
+    """The sweep promoted DRE-2897 on a 22-day-old verdict five minutes after
+    the console moved it to Backlog. A card that has been back in Intake,
+    Green Light, Triage or a closed lane since its newest verdict stays in
+    Backlog, says why once, and nothing is built."""
+
+    def test_the_lanes_it_names_are_lanes_the_contract_carries(self):
+        lanes = set(lane_contract.lane_names(contract=lane_contract.load()))
+        assert set(routing_verdict.STALE_VERDICT_LANES) <= lanes
+        assert set(routing_verdict.STALE_VERDICT_LANES) == {
+            "Intake", "Green Light", "Triage", "Canceled", "Duplicate", "Done",
+        }
+
+    def test_the_verdict_time_is_the_newest_verdict_comment(self):
+        nodes = [
+            {"body": "a note", "createdAt": "2026-09-10T00:00:00.000Z"},
+            {"body": routing_verdict.verdict_comment("FLEET", "one PR"),
+             "createdAt": "2026-09-04T16:00:00.000Z"},
+            {"body": routing_verdict.verdict_comment("FLEET", "again"),
+             "createdAt": "2026-09-06T16:00:00.000Z"},
+            {"body": "🚨 routing-not-fleet: quotes 🧭 routing-verdict: **FLEET**",
+             "createdAt": "2026-09-09T00:00:00.000Z"},
+        ]
+        assert routing_verdict.newest_verdict_at(nodes) == "2026-09-06T16:00:00.000Z"
+        assert routing_verdict.newest_verdict_at(nodes[:1]) is None
+
+    def test_entering_a_listed_lane_after_the_verdict_is_stale(self):
+        assert routing_verdict.lanes_entered_since(SENT_BACK, VERDICT_AT) == (
+            "Intake", "Green Light",
+        )
+
+    def test_a_listed_lane_entered_before_the_verdict_is_not(self):
+        """An epic child adopted from Intake: the verdict is written while it
+        is already there, and its next move enters Backlog."""
+        moves = [
+            _move("2026-09-01T00:00:00.000Z", None, "Intake"),
+            _move("2026-09-04T16:00:09.000Z", "Intake", "Backlog"),
+        ]
+        assert routing_verdict.lanes_entered_since(moves, VERDICT_AT) == ()
+
+    def test_a_second_planning_exit_is_a_fresh_approval(self):
+        """The planning exit does not re-stamp a verdict the card already
+        carries (`stamp_refusal`: "nothing to add"), so the exit itself is
+        what a second trip leaves behind. Without this a re-planned card
+        would be refused forever, and the notice's own remedy would be a lie."""
+        moves = SENT_BACK + [
+            _move("2026-09-26T16:00:00.000Z", "Backlog", "Planning"),
+            _move("2026-09-26T16:30:00.000Z", "Planning", "Backlog"),
+        ]
+        assert routing_verdict.lanes_entered_since(moves, VERDICT_AT) == ()
+
+    def test_a_planning_exit_into_a_listed_lane_approves_nothing(self):
+        moves = SENT_BACK[:-1] + [
+            _move("2026-09-26T09:00:00.000Z", "Intake", "Planning"),
+            _move("2026-09-26T09:30:00.000Z", "Planning", "Green Light"),
+            _move("2026-09-26T10:00:00.000Z", "Green Light", "Backlog"),
+        ]
+        assert "Green Light" in routing_verdict.lanes_entered_since(moves, VERDICT_AT)
+
+    def test_an_epic_green_light_after_the_lane_is_a_fresh_approval(self):
+        """A child cut over to Intake and adopted under an epic keeps the
+        verdict it already had; the epic's green light is its approval."""
+        assert routing_verdict.lanes_entered_since(
+            SENT_BACK, VERDICT_AT, approved_at="2026-09-26T16:00:00.000Z"
+        ) == ()
+
+    def test_the_refusal_opens_with_its_own_tag(self):
+        notice = routing_verdict.stale_verdict_refusal(
+            "DRE-2897", _nodes_with_verdict("FLEET"), SENT_BACK)
+        assert notice.startswith(f"🚨 {routing_verdict.STALE_VERDICT_TAG}: DRE-2897")
+        assert routing_verdict.refusal_tag(notice) == "stale-verdict"
+        assert "2026-09-04" in notice
+        assert "Intake" in notice and "Green Light" in notice
+        assert "Planning" in notice
+
+    def test_its_needle_cannot_match_the_critic_verdict_watchdog(self):
+        """The sweep already posts `stale-verdict-watchdog` on cards whose PR
+        verdict is behind its head, and the once-only check counts by
+        substring. A bare `stale-verdict` needle would read that comment as
+        this notice and never post it."""
+        needle = routing_verdict.STALE_VERDICT_NEEDLE
+        assert needle not in f"🚨 {reconcile.STALE_VERDICT_TAG} PR #1 @abc: x"
+        assert reconcile.STALE_VERDICT_TAG not in needle
+
+    # --- the sweep ---------------------------------------------------------
+
+    def test_a_parentless_card_sent_back_is_refused_and_not_moved(self):
+        board = _StaleBoard("FLEET", SENT_BACK, parent=None)
+        assert board.promote() == 0
+        assert board.advanced == []
+        assert board.surfaced_once(routing_verdict.STALE_VERDICT_NEEDLE)
+
+    def test_a_child_escalated_after_its_verdict_and_sent_back_is_refused(self):
+        moves = [
+            _move(EXIT_AT, "Planning", "Backlog"),
+            _move("2026-09-10T00:00:00.000Z", "Backlog", "Todo"),
+            _move("2026-09-10T00:05:00.000Z", "Todo", "In Progress"),
+            _move("2026-09-10T00:40:00.000Z", "In Progress", "Green Light"),
+            _move("2026-09-11T09:00:00.000Z", "Green Light", "Backlog"),
+        ]
+        board = _StaleBoard(
+            "FLEET", moves,
+            parent={"identifier": "DRE-2700", "state": {"name": "In Progress"}},
+            green_light="2026-09-01T00:00:00.000Z",
+        )
+        assert board.promote() == 0
+        assert board.advanced == []
+        assert board.surfaced_once(routing_verdict.STALE_VERDICT_NEEDLE)
+
+    def test_a_planning_exit_promotes_as_today(self):
+        board = _StaleBoard("FLEET", [_move(EXIT_AT, "Planning", "Backlog")], parent=None)
+        assert board.promote() == 1
+        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.reads == ["DRE-2799"]
+
+    def test_a_build_run_s_park_promotes_once_its_blockers_clear(self):
+        moves = [
+            _move(EXIT_AT, "Planning", "Backlog"),
+            _move("2026-09-10T00:00:00.000Z", "Backlog", "Todo"),
+            _move("2026-09-10T00:05:00.000Z", "Todo", "In Progress"),
+            _move("2026-09-10T00:50:00.000Z", "In Progress", "Backlog"),
+        ]
+        board = _StaleBoard("FLEET", moves, parent=None, blocker_state="In Progress")
+        assert board.promote() == 0
+        assert board.advanced == []
+        board.card["inverseRelations"]["nodes"][0]["issue"]["state"]["name"] = "Done"
+        assert board.promote() == 1
+        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert not any(routing_verdict.STALE_VERDICT_NEEDLE in b for _, b in board.posted)
+
+    def test_the_history_is_read_only_for_a_card_that_passed_every_other_gate(self):
+        """The read costs the quota every sweep shares, so it is the LAST gate:
+        a card any other gate holds never buys it."""
+        held = {
+            "DRE-2801": _stale_card("DRE-2801", [], parent=None),  # no verdict
+            "DRE-2802": _stale_card("DRE-2802", _nodes_with_verdict("PARKED"), parent=None),
+            "DRE-2803": _stale_card("DRE-2803", _nodes_with_verdict("FLEET"), parent=None,
+                                    labels=[reconcile.HOLD_LABEL]),
+            "DRE-2804": _stale_card("DRE-2804", _nodes_with_verdict("FLEET"), parent=None,
+                                    blocker_state="In Progress"),
+            "DRE-2805": _stale_card(
+                "DRE-2805", _nodes_with_verdict("FLEET"),
+                parent={"identifier": "DRE-2700", "state": {"name": "Planning"}}),
+        }
+        passing = _stale_card("DRE-2806", _nodes_with_verdict("FLEET"), parent=None)
+        board = _StaleBoard("FLEET", SENT_BACK, parent=None,
+                            cards=[*held.values(), passing])
+        assert board.promote() == 0
+        assert board.reads == ["DRE-2806"]
+
+    def test_a_card_the_wip_cap_holds_never_buys_the_read(self):
+        board = _StaleBoard("FLEET", SENT_BACK, parent=None)
+        assert board.promote(active_count=reconcile.MAX_WIP) == 0
+        assert board.reads == []
+
+    def test_the_refusal_is_posted_once_across_sweeps(self):
+        board = _StaleBoard("FLEET", SENT_BACK, parent=None)
+        board.promote()
+        board.promote()
+        board.promote()
+        notices = [b for _, b in board.posted if routing_verdict.STALE_VERDICT_NEEDLE in b]
+        assert len(notices) == 1
+        assert "2026-09-04" in notices[0]
+        assert "Intake" in notices[0] and "Green Light" in notices[0]
+
+    def test_a_card_carrying_a_watchdog_comment_still_hears_it(self):
+        board = _StaleBoard("FLEET", SENT_BACK, parent=None)
+        board.card["comments"]["nodes"].append({
+            "body": f"🚨 {reconcile.STALE_VERDICT_TAG} PR #9 @abc: behind its head",
+            "createdAt": "2026-09-12T00:00:00.000Z",
+        })
+        board.posted.append(("DRE-2799", board.card["comments"]["nodes"][-1]["body"]))
+        board.promote()
+        assert board.surfaced_once(routing_verdict.STALE_VERDICT_NEEDLE)
+
+    def test_a_person_s_card_sent_back_is_refused_too(self):
+        board = _StaleBoard("WORKBENCH", SENT_BACK, parent=None)
+        assert board.promote() == 0
+        assert board.advanced == []
+
+    def test_an_unreadable_history_holds_the_card_and_says_nothing_on_it(self):
+        """Unknown is not "not stale". The card waits one sweep; a notice
+        claiming a lane it may never have entered would be a confident wrong
+        answer (standards/console-honesty.md)."""
+        board = _StaleBoard("FLEET", None, parent=None)
+        assert board.promote() == 0
+        assert board.advanced == []
+        assert board.posted == []
+
+    def test_the_history_reader_never_raises(self):
+        with patch.object(routing_verdict, "_read_state_history",
+                          side_effect=RuntimeError("linear down")):
+            assert routing_verdict.lane_moves("DRE-2799") is None
+
+
+# ===========================================================================
 # The route is written down
 # ===========================================================================
 class TestTheRouteIsWrittenDown:
+    def test_the_backlog_clauses_state_the_stale_verdict_rule(self):
+        backlog = lane_contract.lane("Backlog", contract=lane_contract.load())
+        assert "`stale-verdict`" in backlog["clauses"]["exit"]["text"]
+        assert "Green Light" in backlog["clauses"]["writers"]["text"]
+        assert "send" in backlog["clauses"]["writers"]["text"].lower()
+        rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
+        assert "`stale-verdict`" in rendered
+
     def test_the_standard_names_the_five_routes(self):
         text = (ROOT / "standards" / "card-quality.md").read_text(encoding="utf-8")
         for name in THE_FIVE:
@@ -879,6 +1106,84 @@ class _PromotionBoard:
 
     def surfaced_once(self, tag):
         return len([b for i, b in self.posted if tag in b]) == 1
+
+
+def _nodes_with_verdict(name):
+    return [
+        {"body": "filed", "createdAt": "2026-09-01T00:00:00.000Z"},
+        {"body": routing_verdict.verdict_comment(name, "because"), "createdAt": VERDICT_AT},
+    ]
+
+
+def _stale_card(identifier, nodes, *, parent, labels=(), blocker_state=None):
+    card = _card("Backlog", [])
+    card["identifier"] = identifier
+    card["parent"] = parent
+    card["comments"] = {"nodes": [dict(n) for n in nodes]}
+    card["labels"]["nodes"] += [{"name": label} for label in labels]
+    if blocker_state is not None:
+        card["inverseRelations"]["nodes"] = [{
+            "type": "blocks",
+            "issue": {"identifier": "DRE-2798", "state": {"name": blocker_state}},
+        }]
+    return card
+
+
+class _StaleBoard:
+    """`reconcile.promote_ready` with every other gate open and the card's lane
+    history served from `moves` — None is a history Linear could not return.
+    `reads` records every card the history was bought for."""
+
+    def __init__(self, verdict, moves, *, parent, green_light=None,
+                 blocker_state=None, cards=None):
+        self.card = _stale_card("DRE-2799", _nodes_with_verdict(verdict),
+                                parent=parent, blocker_state=blocker_state)
+        self.cards = cards if cards is not None else [self.card]
+        self.moves = moves
+        self.green_light = green_light
+        self.reads: list[str] = []
+        self.advanced: list[tuple[str, str, str]] = []
+        self.posted: list[tuple[str, str]] = []
+
+    def _read(self, identifier):
+        self.reads.append(identifier)
+        return None if self.moves is None else list(self.moves)
+
+    def promote(self, active_count=0) -> int:
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
+            reconcile, "backlog_children", return_value=self.cards
+        ), patch.object(
+            reconcile, "epic_blockers_unmet", return_value=False
+        ), patch.object(
+            reconcile.mid_epic, "last_green_light", return_value=self.green_light
+        ), patch.object(
+            # The epic's own gates are not under test here; the green light is
+            # only what the stale check reads as the epic's approval.
+            reconcile.plan_critic, "promotion_refusal", return_value=None
+        ), patch.object(
+            reconcile.mid_epic, "promotion_refusal", return_value=None
+        ), patch.object(
+            reconcile, "epic_thread", return_value=[]
+        ), patch.object(
+            reconcile.routing_verdict, "lane_moves", side_effect=self._read
+        ), patch.object(
+            reconcile.linear_ops, "add_label", return_value=None
+        ), patch.object(
+            reconcile.linear_ops, "cmd_advance",
+            side_effect=lambda i, to, frm: self.advanced.append((i, to, frm)),
+        ), patch.object(
+            reconcile.linear_ops, "cmd_comment",
+            side_effect=lambda i, b: self.posted.append((i, b)),
+        ), patch.object(
+            reconcile.linear_ops, "count_comments",
+            side_effect=lambda i, needle, **kw: sum(
+                1 for pi, pb in self.posted if pi == i and needle in pb
+            ),
+        ):
+            return reconcile.promote_ready(active_count=active_count)
+
+    def surfaced_once(self, needle):
+        return len([b for i, b in self.posted if needle in b]) == 1
 
 
 if __name__ == "__main__":

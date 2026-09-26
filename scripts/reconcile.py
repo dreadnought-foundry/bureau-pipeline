@@ -3916,6 +3916,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             if surface_refusal:
                 _surface_once(card["identifier"], refusal_tag, refusal)
             continue
+        # Stale verdict (DRE-4962), asked LAST: it is the one gate that buys a
+        # read per card — the lane history, on the quota every sweep shares —
+        # so only a card every other gate has passed pays for it. A verdict
+        # approves one trip through Planning; a card back in Intake, Green
+        # Light, Triage or a closed lane since is one somebody took out of the
+        # build path, and on 2026-09-26 the sweep built DRE-2897 five minutes
+        # after the console sent it back. The history reader never raises, and
+        # None is UNKNOWN: held this sweep, logged, nothing said on the card.
+        # The epic's green light is the approval an adopted child carries.
+        nodes = linear_ops.window_nodes(card.get("comments"))
+        if routing_verdict.newest_verdict_at(nodes) is not None:
+            moves = routing_verdict.lane_moves(card["identifier"])
+            if moves is None:
+                print(
+                    f"promotion: {card['identifier']}'s lane history could not "
+                    "be read, so whether its verdict is still an approval is "
+                    "unknown — not promoted this sweep"
+                )
+                continue
+            stale = routing_verdict.stale_verdict_refusal(
+                card["identifier"], nodes, moves,
+                approved_at=green_light.get(epic_id) if epic_id else None,
+            )
+            if stale is not None:
+                print(
+                    f"promotion: {card['identifier']} is not being promoted — "
+                    f"{stale.splitlines()[0]}"
+                )
+                _surface_once(card["identifier"], routing_verdict.STALE_VERDICT_NEEDLE, stale)
+                continue
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
         # the run red for medic) instead of the bad-reference diagnostic.
