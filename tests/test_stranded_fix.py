@@ -248,6 +248,85 @@ class LaneRecordReading(unittest.TestCase):
         self.assertEqual(lane.by_pr[611], 10)
 
 
+# --------------------------------------------------------------------------- #
+# DRE-4845: the run-name attributes a run GitHub lists no job for yet.         #
+# Live on Portico, 2026-09-24: #697, #702, #703 and #708 sat approved, CLEAN   #
+# and green for over an hour, because one queued workflow_dispatch fix run —   #
+# for #713 — had no resolved job name, read as "could be any pull request",    #
+# and held every one of them (gate run 36095010658).                           #
+# --------------------------------------------------------------------------- #
+
+
+def titled(run_id: int, status: str, display_title: str, *jobs: str) -> dict:
+    return {"id": run_id, "status": status, "display_title": display_title,
+            "jobs": list(jobs)}
+
+
+class TheRunNameAttributesTheRun(unittest.TestCase):
+
+    def gate(self, lane, pr_number=708):
+        return merge_gate.decide(
+            head_sha=HEAD, qa_login=QA, check_runs=green_checks(),
+            comments=[approve()], fix_lane=lane, pr_number=pr_number,
+        )
+
+    def test_a_queued_dispatch_fix_for_713_does_not_hold_708(self):
+        """THE PORTICO EVENING. A queued workflow_dispatch run lists no jobs;
+        its run-name is the only thing that says which PR it is fixing."""
+        lane = sf.read_lane(lane_payload(
+            runs=[titled(36094354579, "queued", "Agent Fix #713")]))
+        self.assertEqual(self.gate(lane).action, "merge")
+        self.assertEqual(lane.by_pr, {713: 36094354579})
+        self.assertEqual(lane.unattributed, ())
+
+    def test_a_run_named_for_708_holds_708(self):
+        lane = sf.read_lane(lane_payload(
+            runs=[titled(36095868349, "pending", "Agent Fix #708")]))
+        decision = self.gate(lane)
+        self.assertEqual(decision.action, "wait")
+        self.assertIn("36095868349", decision.reason)
+        self.assertIn("#708", decision.reason)
+
+    def test_the_run_name_wins_over_the_job_name(self):
+        """Both are written from the same expression; if they ever disagree
+        the run-name, resolved at creation, is the one read."""
+        lane = sf.read_lane(lane_payload(
+            runs=[titled(1, "in_progress", "Agent Fix #713", "call / fix PR #708")]))
+        self.assertEqual(lane.by_pr, {713: 1})
+
+    def test_a_title_that_names_no_pr_still_holds_every_pr(self):
+        """DRE-4486 unchanged for the unattributable case: a stub without the
+        run-name (the bare "Agent Fix" of a dispatch, or a PR title on an
+        issue_comment run) and no readable job name waits."""
+        for title in ("Agent Fix", "feat(DRE-4702): the gallery grid",
+                      "Agent Fix #", ""):
+            with self.subTest(title=title):
+                lane = sf.read_lane(lane_payload(
+                    runs=[titled(36095204333, "queued", title)]))
+                decision = self.gate(lane)
+                self.assertEqual(decision.action, "wait")
+                self.assertIn("unattributed", decision.reason.lower())
+
+    def test_a_title_that_names_no_pr_falls_back_to_the_job_name(self):
+        """Until a repo's stub carries the run-name, nothing changes for it."""
+        lane = sf.read_lane(lane_payload(
+            runs=[titled(2, "in_progress", "Agent Fix", "call / fix PR #713")]))
+        self.assertEqual(lane.by_pr, {713: 2})
+        self.assertEqual(self.gate(lane).action, "merge")
+
+    def test_the_run_name_is_read_through_the_one_parser(self):
+        """The written-out mutation check: blind the one parser and the
+        Portico run falls back to unattributed and holds #708 again —
+        so the test above is proving the run-name branch, nothing else."""
+        import fix_concurrency
+
+        with mock.patch.object(fix_concurrency, "pr_of_run_name",
+                               return_value=None):
+            lane = sf.read_lane(lane_payload(
+                runs=[titled(36094354579, "queued", "Agent Fix #713")]))
+        self.assertEqual(self.gate(lane).action, "wait")
+
+
 class GateCliThreadsTheRecord(unittest.TestCase):
     def _files(self, tmp: Path, lane: dict) -> list:
         (tmp / "checks.json").write_text(json.dumps({"check_runs": green_checks()}))
@@ -752,3 +831,84 @@ class AnAbsentStubIsAnIdleLane(unittest.TestCase):
             record = sf.gather_lane(sf.SELF_HOST_REPO, sf.fix_workflow(sf.SELF_HOST_REPO))
         self.assertEqual(record, {"readable": True, "runs": []})
         self.assertEqual(len(calls), 1)
+
+
+# --------------------------------------------------------------------------- #
+# DRE-4845: the gatherer asks for the run-name, and skips the jobs call for a  #
+# run it already attributes.                                                   #
+# --------------------------------------------------------------------------- #
+
+PORTICO = "dreadnought-foundry/portico"
+
+
+def _lane_gh(listing, jobs=None, calls=None):
+    """A `stranded_fix._gh` answering the run listing with `listing` and each
+    run's jobs read from `jobs` ({run_id: [job names]}), recording argv."""
+    if calls is None:
+        calls = []
+    jobs = jobs or {}
+
+    def fake(args):
+        calls.append(list(args))
+        if args[:2] == ["run", "list"]:
+            return json.dumps(listing), None
+        for run_id, names in jobs.items():
+            if f"/actions/runs/{run_id}/jobs" in " ".join(args):
+                return json.dumps(names), None
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    return fake, calls
+
+
+class TheGathererReadsTheRunName(unittest.TestCase):
+
+    def _gather(self, listing, jobs=None):
+        fake, calls = _lane_gh(listing, jobs)
+        with mock.patch.object(sf, "_gh", side_effect=fake):
+            return sf.gather_lane(PORTICO, "agent-fix.yml"), calls
+
+    def test_the_listing_asks_for_the_display_title(self):
+        _, calls = self._gather([])
+        listing = calls[0]
+        fields = listing[listing.index("--json") + 1].split(",")
+        self.assertIn("displayTitle", fields)
+        self.assertIn("status", fields)
+        self.assertIn("databaseId", fields)
+
+    def test_a_run_its_run_name_attributes_costs_no_jobs_call(self):
+        record, calls = self._gather([
+            {"status": "queued", "databaseId": 36094354579,
+             "displayTitle": "Agent Fix #713"},
+        ])
+        self.assertEqual([c[:2] for c in calls], [["run", "list"]], calls)
+        self.assertEqual(record["runs"][0]["display_title"], "Agent Fix #713")
+        lane = sf.read_lane(record)
+        self.assertEqual(lane.by_pr, {713: 36094354579})
+        self.assertIsNone(sf.lane_refusal(lane, 708))
+
+    def test_a_run_its_run_name_cannot_attribute_still_reads_its_jobs(self):
+        record, calls = self._gather(
+            [{"status": "in_progress", "databaseId": 5,
+              "displayTitle": "Agent Fix"},
+             {"status": "completed", "databaseId": 6,
+              "displayTitle": "Agent Fix"}],
+            jobs={5: ["call / fix PR #713"]},
+        )
+        jobs_calls = [c for c in calls if c[:1] == ["api"]]
+        self.assertEqual(len(jobs_calls), 1, calls)
+        self.assertIn("/actions/runs/5/jobs", " ".join(jobs_calls[0]))
+        self.assertEqual(record["runs"],
+                         [{"id": 5, "status": "in_progress",
+                           "display_title": "Agent Fix",
+                           "jobs": ["call / fix PR #713"]}])
+        self.assertEqual(sf.read_lane(record).by_pr, {713: 5})
+
+    def test_a_pending_run_with_no_run_name_and_no_jobs_still_holds_every_pr(self):
+        record, _ = self._gather(
+            [{"status": "pending", "databaseId": 36095868349,
+              "displayTitle": "Agent Fix"}],
+            jobs={36095868349: []},
+        )
+        refusal = sf.lane_refusal(sf.read_lane(record), 708)
+        self.assertIsNotNone(refusal)
+        self.assertIn("36095868349", refusal)
