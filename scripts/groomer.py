@@ -29,9 +29,9 @@ that. This module is the reader that sees the set.
      card — is the atom of cycle assignment.
   3. **Finds the collisions.** Two cards citing the same file become an ORDER
      between those two cards, reported with the file that caused it.
-  4. **Sequences.** Urgent first, then High, then everything created inside the
-     window — newest first — subject to the constraints above, deterministically.
-     Repo order is a tie-break inside a band and never the master key
+  4. **Sequences.** Urgent first, then High, then everything else — OLDEST
+     first — subject to the constraints above, deterministically (DRE-4725).
+     Repo order is a tie-break inside a day and never the master key
      (DRE-3096).
   5. **Assigns cycles.** Linear's own primitive — cycles are enabled and cycle
      11 is running, so "which cycle" is expressible today without inventing a
@@ -41,28 +41,34 @@ that. This module is the reader that sees the set.
      whose word, what could not be ranked at all, and — said out loud rather
      than discovered — which repos wait and roughly how long (DRE-3152).
 
-## The order, top to bottom (DRE-3096)
+## The order, top to bottom (DRE-3096, reversed by DRE-4725)
 
-  1. **Urgent** (Linear priority 1) opens the batch, every repo, newest first.
+The CEO's decision on DRE-4669 (2026-09-23): "work through the old Intake
+pile, 20 cards at a time, oldest first, until the pile is gone." Measured that
+day, the 14-day window had left 74 of the 117 cards older than 14 days out of
+every batch, for ever, and ordered the rest newest first.
+
+  1. **Urgent** (Linear priority 1) opens the batch, every repo, oldest first.
      The production-issue lane: a card raised while debugging goes ahead of
      everything.
-  2. **High** (2) next, newest first — otherwise High means nothing.
-  3. **Then the window**: created in the last `WINDOW_DAYS` days, newest first.
-  4. **Repo order is a tie-break inside a band** — Portico first only among
-     cards of equal priority created on the same day.
-  5. **Older than the window is "not now" by default.** Those cards stay in
-     Intake ungroomed, reported as one line rather than cancelled or moved —
-     and nothing else moves them either, since DRE-4141 removed the sweep's
-     age-out. `INTAKE_HOLD` semantics (DRE-3035) are untouched.
-  6. **Two things still pull an old card forward**: a file collision with a
-     batched card, and being a Linear blocker of one.
-  7. **The date is the CREATION date**, never the last update. A stray agent
-     comment must not bump a card; the way to resurrect an old one is to raise
-     its priority, which is a deliberate human act.
+  2. **High** (2) next, oldest first — otherwise High means nothing.
+  3. **Then everything else, OLDEST creation day first.** There is no window:
+     no card is left out of the batch for being old, and `--window-days` is
+     still accepted but excludes and orders nothing.
+  4. **Repo order is a tie-break inside a day** — Portico first only among
+     cards of equal priority created on the same day; then the exact
+     timestamp, then the identifier.
+  5. **Collisions and blockers are ordering constraints**: the older card of
+     two naming one file goes first, a blocker goes before what it blocks, and
+     an Urgent or High card waiting on an older unprioritised card pulls that
+     card forward ahead of itself. Never a membership filter.
+  6. **The date is the CREATION date**, never the last update. A stray agent
+     comment must not move a card.
 
-The epic is still the unit, so an epic's band is the highest priority and the
-newest creation among the epic and its children — one Urgent child pulls the
-whole unit into the batch.
+The epic is still the unit, so an epic's band is the highest priority among
+the epic and its children — one Urgent child pulls the whole unit into the
+batch — and its age for ordering is its OLDEST card, so one new child does not
+send an old epic to the back of the pile.
 
 ## Three outcomes, and only the first one moves
 
@@ -181,16 +187,18 @@ It makes no model call — a drain is a move, not a judgement.
 Everything above is the RULES, and they are all this module had. `propose` now
 also makes ONE bounded model call — the whole population as a census, against a
 context pack of what is already in flight (`groom_context.py`), read once
-through `groom_judgement.py` — and the model's `now` set fills the batch in the
-model's order.
+through `groom_judgement.py` — and since DRE-4725 the read decides neither
+the batch's membership nor its order.
 
-**The rules constrain that read; they do not re-rank it.** A collision still
-re-orders it, a blocker still holds, an epic is still one unit, and capacity
-still caps. A card the answer omits or garbles is `unranked` and comes OUT of
-the batch, whatever the rules did with it — the proposed cards and the
-unranked ones are disjoint, asserted where the proposal is written
-(DRE-3544); a card the read calls `likely-done` joins the dead
-recommendations with its evidence beside the regex's. Every reason passes
+**The rules' order is the order.** The batch is the oldest cards by the rules
+above, `capacity` at a time; the model's `now` set no longer fills it, its
+`now` order no longer reorders it, and a `not-now` no longer takes a card out.
+What the read still does is per card: a card the answer omits or garbles is
+`unranked` and comes OUT of the batch, and the next card in order takes its
+slot — the proposed cards and the unranked ones are disjoint, asserted where
+the proposal is written (DRE-3544); a card the read calls `likely-done` joins
+the dead recommendations with its evidence beside the regex's; and every
+card carries the read's reason. Every reason passes
 `planning_escalation.refusal` before it is written, because the CEO reads
 outcomes and never code.
 
@@ -209,7 +217,7 @@ import os
 import re
 import sys
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
@@ -236,9 +244,9 @@ OUTCOMES = {
         "is the only outcome that moves a card."
     ),
     "not-now": (
-        "Wanted, and deliberately not this batch. Either it names the cycle it "
-        "is reconsidered in, or it is older than the window and stays in Intake "
-        "ungroomed — this is 'later', and it is not 'no'."
+        "Wanted, and deliberately not this batch. The batch is full, and it "
+        "names the cycle it is reconsidered in — this is 'later', and it is "
+        "not 'no'."
     ),
     "dead": (
         "Recommended for cancellation, and never cancelled here. Names the "
@@ -379,10 +387,12 @@ DEFAULT_CAPACITY = 20
 DEFAULT_CYCLE_DAYS = 14
 NO_REPO = "(no repo label)"
 
-# How far back the batch reaches, in days of CREATION age (CEO decision,
-# 2026-09-04: "14 days, creation date"). A constant and a flag, because the
-# drain of the old Backlog runs at 14 and the steady state widens to 30 — that
-# is a dial, not a code change.
+# The default of `--window-days`, which since DRE-4725 excludes and orders
+# nothing. It was how far back the batch reached (CEO decision, 2026-09-04:
+# "14 days, creation date"); the CEO's decision on DRE-4669 (2026-09-23)
+# replaced it with oldest first and nothing hidden. Still accepted by
+# `propose` and the CLI, and still written into the proposal as
+# `window_days`, so every caller that passes it keeps running.
 WINDOW_DAYS = 14
 
 # Linear's own priority numbers. Only these two are lanes: Medium (3) and Low
@@ -392,12 +402,12 @@ URGENT = 1
 HIGH = 2
 
 # The bands, in the order they are applied. A unit's band is the whole of its
-# rank's first element, so a band is never mixed with another one — the window
-# cannot outrank Urgent however fresh it is.
+# rank's first element, so a band is never mixed with another one — the oldest
+# card in the pile cannot outrank Urgent however old it is. Everything that is
+# neither Urgent nor High is ONE band, worked oldest first (DRE-4725).
 BAND_URGENT = 0
 BAND_HIGH = 1
-BAND_WINDOW = 2
-BAND_OLDER = 3
+BAND_OLDER = 2
 BAND_LABELS = {BAND_URGENT: "Urgent", BAND_HIGH: "High"}
 
 # A path cited by more than this many cards is REFERENCE, not ownership: a
@@ -745,17 +755,17 @@ def _collision_why(before: dict, after: dict, shared: set[str]) -> str:
 # units — the epic is the atom                                                 #
 # --------------------------------------------------------------------------- #
 
-def units(cards: list[dict], *, now: str | None = None,
-          window_days: int = WINDOW_DAYS) -> list[dict]:
+def units(cards: list[dict]) -> list[dict]:
     """Cards grouped into the things a cycle is filled with: an epic with all
     of its children present, or a single parentless card.
 
-    Each unit carries the band it is sequenced in. The epic is the atom, so the
-    band is read across the whole unit — the highest priority and the newest
-    creation among the epic and its children — and one Urgent child therefore
-    pulls its epic's unit into the batch (DRE-3096).
+    Each unit carries the band it is sequenced in and the age it is ordered
+    by. The epic is the atom, so both are read across the whole unit: the band
+    is the highest priority among the epic and its children — one Urgent child
+    pulls its epic's unit into the batch (DRE-3096) — and the age is its OLDEST
+    card, `created`, so one new child does not send an old epic to the back of
+    the pile (DRE-4725).
     """
-    now = now or _now()
     grouped: dict[str, list[dict]] = {}
     for card in sorted(cards, key=lambda c: _card_sort_key(c["identifier"])):
         parent = (card.get("parent") or {}).get("identifier")
@@ -773,15 +783,13 @@ def units(cards: list[dict], *, now: str | None = None,
         repo = sorted(repos.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
         priority = min((p for p in (_priority(c) for c in members) if p),
                        default=0)
-        newest = max(_created(c) for c in members)
         out.append({
             "key": key,
             "epic": epic,
             "repo": repo,
             "created": min(_created(c) for c in members),
-            "newest": newest,
             "priority": priority,
-            "band": _band(priority, newest, now, window_days),
+            "band": _band(priority),
             "cards": [c["identifier"] for c in members],
         })
     return sorted(out, key=lambda u: (u["created"], u["key"]))
@@ -801,13 +809,18 @@ def _priority(card: dict) -> int:
     return value if value in (URGENT, HIGH) else 0
 
 
-def _band(priority: int, newest: str, now: str, window_days: int) -> int:
-    """Which of the four bands a unit sequences in."""
+def _band(priority: int) -> int:
+    """Which of the three bands a unit sequences in: Urgent, High, or the rest.
+
+    Priority alone. Age orders cards INSIDE a band and never decides which
+    band a card is in, so no card is left out of the batch for being old
+    (DRE-4725).
+    """
     if priority == URGENT:
         return BAND_URGENT
     if priority == HIGH:
         return BAND_HIGH
-    return BAND_WINDOW if _within_window(newest, now, window_days) else BAND_OLDER
+    return BAND_OLDER
 
 
 # --------------------------------------------------------------------------- #
@@ -875,6 +888,14 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
     """Kahn's algorithm with a priority heap: the constraints decide what is
     POSSIBLE, the rank decides what happens first among the possible.
 
+    Among the possible, a card is ranked by the best rank among ITSELF AND
+    EVERYTHING IT MUST PRECEDE (`_pulled_forward`), so the card a constraint
+    puts first is pulled forward to where the card it holds would have gone.
+    Under oldest first the older card of a colliding pair is already ahead;
+    where the two disagree — an Urgent or High card that collides with, or is
+    blocked by, an older unprioritised card — the older card goes ahead of it
+    rather than the Urgent card waiting behind the whole pile (DRE-4725).
+
     A cycle in the graph — A must precede B and B must precede A, which happens
     when a collision and a recorded relation disagree — is broken by rank and
     RECORDED. An order that silently drops a constraint is worse than one that
@@ -887,7 +908,8 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
         if before in incoming and after in incoming and before != after:
             incoming[after].add(before)
             outgoing[before].add(after)
-    heap = [(rank(k), k) for k in keys if not incoming[k]]
+    pull = _pulled_forward(keys, outgoing, rank)
+    heap = [(pull[k], rank(k), k) for k in keys if not incoming[k]]
     heapq.heapify(heap)
     order = []
     remaining = set(keys)
@@ -900,9 +922,9 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
                 if broken is not None:
                     broken.append({"dropped": [before, stuck],
                                    "why": "mutual constraints; ranked order wins"})
-            heapq.heappush(heap, (rank(stuck), stuck))
+            heapq.heappush(heap, (pull[stuck], rank(stuck), stuck))
             continue
-        _, key = heapq.heappop(heap)
+        *_, key = heapq.heappop(heap)
         if key not in remaining:
             continue
         remaining.discard(key)
@@ -910,37 +932,69 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
         for nxt in sorted(outgoing[key]):
             incoming[nxt].discard(key)
             if not incoming[nxt] and nxt in remaining:
-                heapq.heappush(heap, (rank(nxt), nxt))
+                heapq.heappush(heap, (pull[nxt], rank(nxt), nxt))
     return order
 
 
+def _pulled_forward(keys: list[str], outgoing: dict, rank) -> dict:
+    """`{key: the best rank among the key and everything after it}`.
+
+    "After it" is every card the constraints make wait on this one,
+    transitively: a blocker of a card that collides with an Urgent card is
+    pulled forward as far as the Urgent card, which is the only order that
+    leaves neither the conflict nor the wait behind. Walked depth-first and
+    without recursion; the edges arrive with their cycles already broken, and
+    a node met again while still on the walk is skipped rather than trusted.
+    """
+    best: dict = {}
+    for root in sorted(keys, key=lambda k: (rank(k), k)):
+        if root in best:
+            continue
+        on_walk = {root}
+        stack = [(root, iter(sorted(outgoing[root])))]
+        while stack:
+            node, children = stack[-1]
+            nxt = next(children, None)
+            if nxt is None:
+                stack.pop()
+                on_walk.discard(node)
+                best[node] = min([rank(node)] + [best[c] for c in outgoing[node]
+                                                 if c in best])
+                continue
+            if nxt in best or nxt in on_walk:
+                continue
+            on_walk.add(nxt)
+            stack.append((nxt, iter(sorted(outgoing[nxt]))))
+    return best
+
+
 def sequence(cards: list[dict], *, collisions: dict | None = None,
-             repo_priority=REPO_PRIORITY, broken: list | None = None,
-             now: str | None = None, window_days: int = WINDOW_DAYS,
-             verdicts: dict | None = None) -> list[dict]:
+             repo_priority=REPO_PRIORITY,
+             broken: list | None = None) -> list[dict]:
     """The population as ONE order: unit before unit, card before card.
 
-    Urgent first, then High, then the last `window_days` of creation — newest
-    first, and the repo only breaks a tie within a band (DRE-3096). Subject to
-    the constraints throughout, so a card another card's work collides with is
-    pulled forward rather than silently scheduled beside it.
+    Urgent first, then High, then everything else — OLDEST creation day first,
+    then the repo priority as the tie-break within a day, then the exact
+    timestamp, then the identifier (DRE-4725, reversing DRE-3096's newest
+    first). A unit's age is its OLDEST card. Subject to the constraints
+    throughout: a file collision (the older card before the newer one that
+    names the same file) and a `blockedBy` relation are the edges `_topo`
+    honours, at unit level and inside a unit, and the key above decides the
+    order among what the edges leave possible — pulling the card a constraint
+    puts first forward to where the card it holds would have gone.
 
-    Every card comes out with a position, including the ones older than the
-    window: the order is over the whole population. Those rows carry
-    `deferred: True`, which is what keeps them out of the batch and out of the
-    cycle assignment — they stay in Intake, ungroomed.
-
-    With `verdicts` (DRE-3150) the model's `now` set fills the batch **in the
-    model's order** and the bands become the tie-break beneath it. Everything
-    below this line is unchanged, and that is the point: the constraints decide
-    what is POSSIBLE and the ranking decides what happens first among the
-    possible — so a collision still re-orders the model, a blocker still holds,
-    an epic is still one unit, and capacity still caps. **The rules constrain
-    the read; they do not re-rank it.**
+    Every card comes out with a position and every row is batchable: nothing
+    is left out for its age, so `deferred` is always False and kept only so
+    the row keeps its shape. The batch is the first `capacity` of this order
+    (`propose`), and the ranked read decides neither membership nor order —
+    the model's `now` set no longer fills the batch, its `now` order no longer
+    reorders it, and there is no "set the model picked" for a constraint to be
+    filtered by. What the read still removes is per card, in `propose`: a card
+    it declined.
     """
     collisions = collisions if collisions is not None else collision_report(cards)
     by_id = {c["identifier"]: c for c in cards}
-    unit_list = units(cards, now=now, window_days=window_days)
+    unit_list = units(cards)
     unit_of = {cid: u["key"] for u in unit_list for cid in u["cards"]}
     ranks = _repo_rank(cards, repo_priority)
 
@@ -953,23 +1007,20 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     unit_edges = {(unit_of[b], unit_of[a]) for b, a in constraints
                   if unit_of[b] != unit_of[a]}
     unit_index = {u["key"]: u for u in unit_list}
-    model_index = _model_index(verdicts, unit_of)
-    batchable = _batchable(unit_list, unit_edges, verdicts=verdicts)
+    batchable = _batchable(unit_list)
 
     def unit_rank(key):
-        # The band first and the repo LAST: Portico separates two cards of the
-        # same priority created on the same day, and decides nothing else. The
-        # day is the granularity the tie-break is defined at, so the timestamp
-        # only orders cards the day cannot separate.
+        # The band first, then the unit's OLDEST day, and the repo only after
+        # the day: Portico separates two cards of the same priority created on
+        # the same day, and decides nothing else. The day is the granularity
+        # the tie-break is defined at, so the timestamp only orders cards the
+        # day cannot separate. A unit with no readable creation date is not
+        # the oldest in the pile: it goes to the back of its band, the
+        # reversible answer.
         unit = unit_index[key]
-        base = (unit["band"], -_day_ordinal(unit["newest"]), ranks[unit["repo"]],
-                -_epoch(unit["newest"]), _card_sort_key(key))
-        if model_index is None:
-            return base
-        # The model's position for this unit, and the bands underneath it as
-        # the tie-break for everything it did not rank `now`. A unit with no
-        # `now` card sorts after every unit that has one, in today's order.
-        return (model_index.get(key, len(model_index)),) + base
+        day = _day_ordinal(unit["created"]) or float("inf")
+        return (unit["band"], day, ranks[unit["repo"]],
+                _epoch(unit["created"]), _card_sort_key(key))
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
                           broken)
@@ -1003,68 +1054,27 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     return rows
 
 
-def _model_index(verdicts: dict | None, unit_of: dict) -> dict | None:
-    """`{unit key: the model's position for it}`, or None with no judgement.
+def _batchable(unit_list: list[dict]) -> set[str]:
+    """The units the batch may contain: every one of them (DRE-4725).
 
-    A unit's position is its EARLIEST `now` card, so an epic whose third child
-    the model ranked first goes where that child went — the epic is the atom of
-    cycle assignment and the model does not get to split it.
+    There is no window left to exclude a unit and no judgement that drops
+    one: a unit the read ranked `not-now` is in the order like any other,
+    because under oldest first "not now" is not the model's call. What keeps
+    a unit out of THIS batch is only its place in the order against
+    `capacity`.
+
+    The two things that used to pull an old unit in from outside the window —
+    a file collision with a batched card, and being a Linear blocker of one —
+    still put that unit ahead of what it constrains, and transitively: a card
+    that blocks a card that collides with a batched card goes ahead of both.
+    That is the order's doing now (`_topo`, `_pulled_forward`), because a
+    unit that is always batchable needs no pulling into the set.
+
+    The one exclusion that survives is per CARD, not per unit, and it lives in
+    `propose`: a card the read declined comes out of the batch (DRE-3544) and
+    the next card in order takes its slot.
     """
-    if verdicts is None:
-        return None
-    index: dict = {}
-    for identifier, verdict in verdicts.items():
-        if getattr(verdict, "outcome", None) != "now":
-            continue
-        key = unit_of.get(identifier)
-        if key is not None and key not in index:
-            index[key] = len(index)
-    return index
-
-
-def _batchable(unit_list: list[dict], unit_edges: set[tuple[str, str]], *,
-               verdicts: dict | None = None) -> set[str]:
-    """The units the batch may contain: everything inside the window, plus what
-    those units need to go first.
-
-    The two things that still pull an old unit forward are the two constraints
-    the sequence already carries — a file collision with a batched card, and
-    being a Linear blocker of one. Both are edges here, so the pull is
-    transitive: a card that blocks a card that collides with a batched card is
-    in the batch too, which is the only order that does not leave a conflict
-    behind.
-
-    With a judgement (DRE-3150) the model's `now` set is what the batch is made
-    of. A unit the model ranked `not-now` is out — that is the answer it gave —
-    and a unit it said nothing usable about falls back to today's window rule.
-
-    That fallback is about the UNIT's place in the order, not about the card:
-    the declined cards themselves come out of the batch in `propose`
-    (DRE-3544). Both are needed — a declined card can still be the blocker a
-    batched card is waiting on, and a unit dropped here would take its
-    neighbours' constraints with it.
-    """
-    if verdicts is None:
-        keep = {u["key"] for u in unit_list if u["band"] != BAND_OLDER}
-    else:
-        keep = set()
-        for unit in unit_list:
-            outcomes = {verdicts[c].outcome for c in unit["cards"]
-                        if c in verdicts}
-            if "now" in outcomes:
-                keep.add(unit["key"])
-            elif not (outcomes - {"unranked"}) and unit["band"] != BAND_OLDER:
-                keep.add(unit["key"])
-    predecessors: dict[str, set[str]] = {}
-    for before, after in unit_edges:
-        predecessors.setdefault(after, set()).add(before)
-    frontier = list(keep)
-    while frontier:
-        for before in predecessors.get(frontier.pop(), ()):
-            if before not in keep:
-                keep.add(before)
-                frontier.append(before)
-    return keep
+    return {u["key"] for u in unit_list}
 
 
 def cycle_plan(rows: list[dict], cycles: list[dict], capacity: int) -> list[dict]:
@@ -1137,6 +1147,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     taken — `--no-judgement`, kept byte-for-byte so the audit card can run the
     two readings over one population (DRE-3150).
 
+    `window_days` is accepted and changes nothing (DRE-4725): the batch is
+    the oldest cards first and nothing is hidden for its age.
+
     `held_repos` is the slugs the CEO has switched off (DRE-3403). Their cards
     are removed HERE, before anything else reads them, so a held card is never
     ranked, never sequenced, never given a cycle, never counted against
@@ -1180,65 +1193,63 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     collisions = collision_report(live)
     broken: list = []
     ordered = sequence(live, collisions=collisions, broken=broken,
-                       repo_priority=repo_priority, now=now,
-                       window_days=window_days, verdicts=verdicts)
-    # Only what the window admits is given a cycle. A card older than it is not
-    # scheduled at all — "not now" here means ungroomed and still in Intake, not
-    # "reconsidered in cycle 14", and inventing a cycle for it would say the
-    # groomer had made a plan for a card it deliberately did not look at.
-    rows = cycle_plan([r for r in ordered if not r["deferred"]], cycles, capacity)
-    deferred = [r for r in ordered if r["deferred"]]
-
-    batch_numbers = sorted({r["cycle"] for r in rows})[:batch_cycles]
+                       repo_priority=repo_priority)
     # A card the read DECLINED is not in the batch (DRE-3544). The rules put
-    # DRE-3020 at position 32 of `f673bfefa340` — inside the window, under the
-    # capacity — and the model had said it could not place it, so the CEO was
-    # shown a batch row whose own reason read "could not rank — needs a
-    # person" and a drain would have moved it. The removal is HERE, where the
-    # batch is made, so `outcomes["now"]` and `judgement["unranked"]` are
-    # disjoint by construction rather than by where the sequence happened to
-    # land: batch 2 was clean by one position, which is the difference between
-    # a guard and a coincidence (`docs/groomer-judged-batch.md`).
+    # DRE-3020 at position 32 of `f673bfefa340` — under the capacity — and the
+    # model had said it could not place it, so the CEO was shown a batch row
+    # whose own reason read "could not rank — needs a person" and a drain
+    # would have moved it. The removal is HERE, before the cycles are filled,
+    # so `outcomes["now"]` and `judgement["unranked"]` are disjoint by
+    # construction rather than by where the sequence happened to land: batch 2
+    # was clean by one position, which is the difference between a guard and a
+    # coincidence (`docs/groomer-judged-batch.md`).
     #
     # Per CARD, not per unit: an epic is one unit for ORDER, and that is not a
     # way into the batch for a card the read refused to place. The declined
     # card is reported as `not-now` with no cycle and no trigger — what is
-    # owed is a person — and named in its own section.
+    # owed is a person — and named in its own section. And the walk goes on
+    # without it: the declined card takes no slot, so the next card in order
+    # fills it (DRE-4725). It is the ONLY thing the read removes — a `not-now`
+    # verdict keeps its card in the order like any other.
     declined = declined_cards(verdicts, getattr(judgement, "problem", None))
+    planned = {row["identifier"]: row for row in cycle_plan(
+        [r for r in ordered if r["identifier"] not in declined], cycles,
+        capacity)}
+
+    batch_numbers = sorted({r["cycle"] for r in planned.values()})[:batch_cycles]
     now_rows, later_rows = [], []
-    for row in rows:
+    for row in ordered:
         if row["identifier"] in declined:
             later_rows.append({"identifier": row["identifier"],
                                "title": row["title"], "repo": row["repo"],
                                "reconsidered_in": None, "projected": False,
                                "older_than_window": False})
-        elif row["cycle"] in batch_numbers:
+            continue
+        row = planned[row["identifier"]]
+        if row["cycle"] in batch_numbers:
             now_rows.append({k: row[k] for k in
                              ("identifier", "title", "position", "cycle",
                               "cycle_id", "unit", "epic", "repo", "projected",
                               "band")})
         else:
+            # Outside the batch is `not-now` with the cycle it is projected
+            # into, whatever the card's age — nothing is held back unscheduled
+            # any more, so `older_than_window` is False on every row.
             later_rows.append({"identifier": row["identifier"],
                                "title": row["title"], "repo": row["repo"],
                                "reconsidered_in": row["cycle"],
                                "projected": row["projected"],
                                "older_than_window": False})
-    later_rows += [{"identifier": row["identifier"], "title": row["title"],
-                    "repo": row["repo"], "reconsidered_in": None,
-                    "projected": False, "older_than_window": True}
-                   for row in deferred]
 
-    # The declined rows lose their cycle here too: the sequence is what the
-    # console and the audit read, and a row that says `not-now` beside the
-    # cycle it was going to be batched in is the same contradiction one layer
-    # down.
+    # The declined rows carry no cycle here either: the sequence is what the
+    # console and the audit read, and a row that says `not-now` beside a cycle
+    # it was going to be batched in is the same contradiction one layer down.
     sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
                       "outcome": "not-now"} if r["identifier"] in declined
-                     else {**r, "outcome": ("now" if r["cycle"] in batch_numbers
-                                            else "not-now")} for r in rows]
-    sequence_rows += [{**r, "cycle": None, "cycle_id": None, "projected": False,
-                       "outcome": "not-now"} for r in deferred]
-    sequence_rows.sort(key=lambda r: r["position"])
+                     else {**planned[r["identifier"]],
+                           "outcome": ("now" if planned[r["identifier"]]["cycle"]
+                                       in batch_numbers else "not-now")}
+                     for r in ordered]
     sequence_rows += [{"identifier": d["identifier"], "title": d["title"],
                        "position": None, "unit": None, "epic": None,
                        "repo": d["repo"], "project": None, "cycle": None,
@@ -1262,12 +1273,11 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                           if row["identifier"] in in_batch],
         "capacity": capacity,
         "cycle_days": cycle_days(cycles),
+        # Accepted, and a receipt of nothing (DRE-4725): no card is held back
+        # for its age, so the count is always 0 and there is no line to print.
+        # Both keys stay so every reader of the proposal keeps its shape.
         "window_days": window_days,
-        "older_than_window": {
-            "days": window_days,
-            "cards": len(deferred),
-            "line": older_than_window_line(len(deferred), window_days),
-        },
+        "older_than_window": {"days": window_days, "cards": 0, "line": ""},
         "batch": {"cycles": batch_numbers, "cards": len(now_rows)},
         "repo_order": [r for r in _repo_rank(live, repo_priority)],
         "sequence": sequence_rows,
@@ -1278,7 +1288,6 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     }
     proposal["deprioritised"] = _deprioritised(proposal)
     proposal["judgement"] = _annotate(proposal, judgement, verdicts,
-                                      window_days=window_days,
                                       declined=declined)
     # `proposed ∩ unranked = ∅`, checked on the thing that was actually built
     # rather than trusted from the filter above (DRE-3544).
@@ -1369,18 +1378,15 @@ def _showable(text: str | None) -> bool:
     return bool(text) and planning_escalation.refusal(text) is None
 
 
-def _rules_reason(outcome: str, row: dict, window_days: int) -> str:
+def _rules_reason(outcome: str, row: dict) -> str:
     """Why the RULES put this card where they put it. Plain English, ours."""
     if outcome == "dead":
         return (f"its own description says it was superseded by "
                 f"{row.get('superseded_by')}")
     if outcome == "now":
         band = BAND_LABELS.get(row.get("band"))
-        opened = f"marked {band}" if band else "created inside the window"
+        opened = f"marked {band}" if band else "oldest first"
         return f"in the batch by the rules — {opened}, position {row['position']}"
-    if row.get("older_than_window"):
-        return (f"older than the {window_days}-day window, so this pass did "
-                f"not groom it")
     return (f"wanted, and this batch was full — it is reconsidered in cycle "
             f"{row.get('reconsidered_in')}")
 
@@ -1388,13 +1394,11 @@ def _rules_reason(outcome: str, row: dict, window_days: int) -> str:
 def _rules_trigger(row: dict) -> str:
     """What brings a deferred card back. Always present, because "later" with
     no trigger is "no" wearing a softer word."""
-    if row.get("older_than_window"):
-        return "when somebody raises its priority to High or Urgent"
     return f"when cycle {row.get('reconsidered_in')} opens"
 
 
-def _mark(outcome: str, row: dict, verdict, *, window_days: int,
-          withheld: list, declined: bool = False) -> dict:
+def _mark(outcome: str, row: dict, verdict, *, withheld: list,
+          declined: bool = False) -> dict:
     """The five fields DRE-3150 and DRE-3764 put on every row: reason, trigger,
     evidence, judged, reasons.
 
@@ -1421,7 +1425,7 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
         verdict = None
     judged = verdict is not None and verdict.outcome != "unranked"
     reason = (verdict.reason if verdict is not None
-              else _rules_reason(outcome, row, window_days))
+              else _rules_reason(outcome, row))
     if not _showable(reason):
         if verdict is not None and verdict.outcome == "unranked":
             # The unranked sentence is ours and always showable; anything else
@@ -1469,7 +1473,7 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
-              window_days: int, declined: set | frozenset = frozenset()) -> dict:
+              declined: set | frozenset = frozenset()) -> dict:
     """Write the reason, trigger, evidence and judged flag onto every row, and
     return the proposal's `judgement` block.
 
@@ -1488,8 +1492,7 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
     withheld: list = []
     marks = {
         identifier: _mark(outcome, row,
-                          (verdicts or {}).get(identifier),
-                          window_days=window_days, withheld=withheld,
+                          (verdicts or {}).get(identifier), withheld=withheld,
                           declined=identifier in declined)
         for identifier, (outcome, row) in context.items()
     }
@@ -1552,19 +1555,6 @@ def _EMPTY_PACK() -> dict:
     return out
 
 
-def older_than_window_line(count: int, window_days: int) -> str:
-    """The one line the held-back cards are reported as.
-
-    One line and not a list: the population outside the window is most of a
-    200-card Intake, and a proposal that prints all of it buries the batch the
-    CEO is being asked to approve. What the line has to carry is the way back
-    in — raising a card's priority is a deliberate human act, and it is the
-    only thing that pulls an old card into a batch.
-    """
-    return (f"{_plural(count, 'card')} older than {window_days} days, not "
-            f"batched — raise a card's priority to High or Urgent to pull it in.")
-
-
 def _deprioritised(proposal: dict) -> list[dict]:
     """Which repos are waiting, and roughly how long — derived from the
     sequence, not asserted by hand. Portico first means agent-bureau and
@@ -1576,8 +1566,8 @@ def _deprioritised(proposal: dict) -> list[dict]:
     rows = []
     waiting: dict[str, list[int]] = {}
     for row in proposal["outcomes"]["not-now"]:
-        # A card older than the window has no cycle to wait for — it is
-        # reported by its own one-line receipt, not as a repo that waits.
+        # A card the read declined has no cycle to wait for — it is reported
+        # under "Could not rank", not as a repo that waits.
         if row["repo"] in in_batch or row["reconsidered_in"] is None:
             continue
         waiting.setdefault(row["repo"], []).append(row["reconsidered_in"])
@@ -1969,9 +1959,9 @@ def render_proposal(proposal: dict) -> str:
     add("")
     add("## The batch, in order")
     add("")
-    add(f"Urgent first, then High, then everything created in the last "
-        f"{proposal['window_days']} days — newest first, whatever repo it is "
-        f"in. Repo order ("
+    add(f"Urgent first, then High, then everything else — oldest first, "
+        f"whatever repo it is in, and no card is left out for its age. Repo "
+        f"order ("
         + " → ".join(proposal.get("repo_order") or [])
         + ") breaks a tie between cards of equal priority created on the same "
           "day, and decides nothing else. An epic and its children are one "
@@ -2047,12 +2037,6 @@ def render_proposal(proposal: dict) -> str:
         + (f" {len(scheduled)} of them carry the cycle they are reconsidered "
            f"in." if scheduled else ""))
     add("")
-    if proposal["older_than_window"]["cards"]:
-        add(proposal["older_than_window"]["line"])
-        add("")
-        add("They stay in Intake, ungroomed. Nothing ages them out, cancels "
-            "them or moves them.")
-        add("")
     w.extend(_render_not_now(proposal))
     add("## Recommended dead — your call, not ours")
     add("")
@@ -2242,9 +2226,9 @@ def _render_not_now(proposal: dict) -> list:
 
     Grouped because four cards waiting on one card finishing is ONE fact, and
     printing it four times is how a CEO learns to skim the section. A row with
-    no trigger at all is not listed here: the window receipt above already
-    reports it, and inventing a trigger for a card nothing scheduled would say
-    the groomer had made a plan for it.
+    no trigger at all — a card the read declined — is not listed here: "Could
+    not rank" reports it, and inventing a trigger for a card nothing scheduled
+    would say the groomer had made a plan for it.
     """
     later = proposal["outcomes"]["not-now"]
     groups: dict = {}
@@ -3222,18 +3206,6 @@ def _day_ordinal(iso: str) -> int:
     return moment.date().toordinal() if moment else 0
 
 
-def _within_window(created: str, now: str, window_days: int) -> bool:
-    """Was this created in the last `window_days`?
-
-    A card with no readable creation date reads as OUTSIDE the window: the
-    consequence is that it stays in Intake, which is the reversible answer.
-    """
-    moment, anchor = _moment(created), _moment(now)
-    if moment is None or anchor is None:
-        return False
-    return moment >= anchor - timedelta(days=window_days)
-
-
 def _card_sort_key(identifier: str):
     """`DRE-9` before `DRE-11`: a lexical sort of identifiers is deterministic
     but reads as arbitrary in a proposal a human has to follow."""
@@ -3272,10 +3244,11 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--batch-cycles", type=int, default=1)
     parser.add_argument("--priority", default=",".join(REPO_PRIORITY),
                         help="comma-separated repo slugs, highest first — a "
-                             "tie-break inside a band, not the master key")
+                             "tie-break inside a day, not the master key")
     parser.add_argument("--window-days", type=int, default=WINDOW_DAYS,
-                        help="how far back the batch reaches, in days of "
-                             "creation age (default %(default)s)")
+                        help="accepted and changes nothing since DRE-4725: "
+                             "the batch is oldest first and no card is left "
+                             "out for its age (default %(default)s)")
     parser.add_argument("--hold-repo", dest="hold_repo", action="append",
                         default=[], metavar="SLUG",
                         help="switch a repo off for this run, exactly as "

@@ -109,8 +109,9 @@ def later_rows(proposal) -> dict:
 
 
 def population():
-    """The incident in three cards: the rules would batch all of them."""
-    return [card("DRE-1"), card("DRE-3020", days=2), card("DRE-2", days=3)]
+    """The incident in three cards: the rules would batch all of them, oldest
+    first (DRE-4725) — DRE-1, DRE-3020, DRE-2."""
+    return [card("DRE-1", days=3), card("DRE-3020", days=2), card("DRE-2")]
 
 
 # --------------------------------------------------------------------------

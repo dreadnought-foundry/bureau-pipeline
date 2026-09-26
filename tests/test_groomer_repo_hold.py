@@ -476,10 +476,12 @@ def test_a_proposal_with_no_hold_renders_byte_for_byte_as_today():
 def _drain_fixture(*, holds=(), by_pipeline=False):
     """An approved batch of two atlas cards and two others, with the hold
     written AFTER the proposal was posted."""
-    cards = [card("DRE-001", repo=HELD, days=1),
-             card("DRE-002", repo=HELD, days=1),
-             card("DRE-101", repo="portico", days=2),
-             card("DRE-102", repo="portico", days=2)]
+    # The atlas cards are the older ones, so the batch — oldest first since
+    # DRE-4725 — opens with them.
+    cards = [card("DRE-001", repo=HELD, days=2),
+             card("DRE-002", repo=HELD, days=2),
+             card("DRE-101", repo="portico", days=1),
+             card("DRE-102", repo="portico", days=1)]
     built = proposal(cards, holds=(), capacity=4)
     thread = [{"body": groomer.proposal_comment(built),
                "authored_by_pipeline": True},

@@ -27,6 +27,12 @@ in the last fortnight, what was closed or cancelled in the last month — and a
 **census** of every card sitting in Intake. You answer one question per card:
 **does this belong in the next batch, given what we are already doing?**
 
+Your answer is read by the CEO beside the card; it does not build the batch.
+The batch is filled by the rules — Urgent, then High, then everything else
+**oldest first**, a fixed number of cards at a time, until the old pile is gone
+(the CEO's decision, 2026-09-23). `now` and `not-now` decide neither which
+cards are in it nor their order.
+
 Four answers, and nothing else is a valid one:
 
 * `now` — it belongs in the next batch. Say what about the work in flight makes
@@ -46,9 +52,11 @@ Four rules decide it, in this order:
    progress is `now` almost by definition; a card that repeats what merged last
    week is `likely-done`; a card whose reason for existing matches one that was
    cancelled last month deserves the same question asked out loud.
-2. **`now` is the scarce answer.** The batch is capped and the cap is not yours
-   to move. Ranking forty cards `now` is the same as ranking none of them: it
-   hands the ordering back to the rules and tells the CEO nothing.
+2. **What you owe on every card is the reason.** The rules fill the batch
+   oldest first, whatever you answer, so ranking a card `now` does not put it
+   in and `not-now` does not keep it out. The reason is what the CEO reads
+   when he approves the batch — and on `likely-done`, the evidence is what he
+   reads when he decides a cancellation.
 3. **Prefer `not-now` to `likely-done`.** "Not now" is reversible and costs a
    fortnight. "Likely done" is a cancellation recommendation, and a wrong one
    spends the CEO's attention arguing with you. When you are between the two,
@@ -106,31 +114,34 @@ to fit, so a paragraph here is a paragraph the CEO has to read.
 
 **Brevity is the contract, not a style note.** One clause per reason, never a
 paragraph — including each of the five labelled lines above, which is what
-makes them affordable: `now` is the scarce answer, so the extra fields are
-spent on the handful of cards the batch holds and on none of the rest. The
+makes them affordable: the extra fields are spent on the cards you rank
+`now` and on none of the rest, so keep `now` for the cards you would actually
+start next. The
 whole answer is sized at roughly eighty tokens a card, so the
 budget you spend writing three sentences about one card is a card further down
 the census that the answer never reaches — and a card the answer never reaches
 is `unranked`, which takes it out of the batch. Say the one thing that decided
 it and move to the next line.
 
-The order of your `now` lines is the order the batch is filled in, so put the
-card you would start first at the top. A card you leave out of the answer is
-`unranked`, and an `unranked` card is **not in the batch** — it is put in front
-of a person instead. Leaving a card out is a refusal, not a way of handing it
-back to the rules.
+The order of your lines does not matter: the batch is filled oldest first by
+the rules, and the order you write in reorders nothing. A card you leave out of
+the answer is `unranked`, and an `unranked` card is **not in the batch** — it
+is put in front of a person instead, and the next card in order takes its
+place. Leaving a card out is a refusal, not a way of handing it back to the
+rules.
 
 ## What the rules do to your answer
 
-Your ranking fills the batch; it does not get to break it. After you answer,
-four constraints run over your order and they always win:
+The rules build the batch, and your answer does not reorder it. The order is
+Urgent, then High, then everything else oldest first, and four constraints
+shape it whatever you answered:
 
-* two cards that touch the same file are put in a fixed order, whatever you
-  ranked;
+* two cards that touch the same file are put in a fixed order — the older one
+  first — and a newer Urgent or High card pulls the older one forward with it;
 * a card that formally blocks another goes before it;
 * an epic and its children stay together as one unit;
-* the batch is capped, so a `now` past the cap becomes `not-now` with a trigger
-  naming the cycle it is reconsidered in.
+* the batch is capped, so a card past the cap is `not-now` with a trigger
+  naming the cycle it is reconsidered in, whatever you ranked it.
 
-None of that re-ranks you. It constrains you, and the proposal says which
-constraint moved which card.
+The one thing your answer removes from the batch is a card you mark
+`unranked`. Everything else you say is carried to the page as the reason.
