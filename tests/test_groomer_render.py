@@ -9,9 +9,9 @@ holds to:
     the model's line on a judged row, the rule's own line on a rules-only one;
   * every deferred card names the **trigger** that brings it back, grouped so
     four cards waiting on one thing read as one line and not as four;
-  * a dead recommendation says which of the two sources made it — a
-    declaration a person wrote on the card, or the ranked read's judgement with
-    the **evidence** it named;
+  * a card proposed for cancellation is a row of the Cancel table whose
+    **reason** is what it came from — the card its own description names, or
+    the **evidence** the ranked read named (DRE-4727);
   * "could not rank" is its own section and never folded into "not now" —
     refusal is not a default;
   * one **receipt line** at the top says what ranked it, over how many cards,
@@ -163,7 +163,17 @@ def test_the_window_receipt_still_reports_the_cards_no_trigger_reaches():
 # --------------------------------------------------------------------------
 # evidence on every 'likely done', and the source it came from
 # --------------------------------------------------------------------------
-def test_the_dead_list_shows_the_evidence_and_separates_the_two_sources():
+def cancel_rows(text: str) -> dict:
+    """The rows of "Cancel, with reasons", keyed by card id."""
+    rows = {}
+    for line in section(text, groomer.CANCEL_HEADING).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) > 2 and cells[1].startswith("DRE-"):
+            rows[cells[1]] = cells
+    return rows
+
+
+def test_the_cancel_table_shows_the_evidence_and_the_superseding_card():
     cards = [card("DRE-1"), card("DRE-2", description="Superseded by: DRE-9"),
              card("DRE-3")]
     answer = "\n".join([
@@ -172,21 +182,18 @@ def test_the_dead_list_shows_the_evidence_and_separates_the_two_sources():
     ])
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
                                judgement=with_pack(cards, answer))
-    body = section(groomer.render_proposal(proposal),
-                   "## Recommended dead — your call, not ours")
-    judged_line = next(l for l in body.splitlines() if l.startswith("- DRE-1"))
-    declared_line = next(l for l in body.splitlines() if l.startswith("- DRE-2"))
-    assert "likely done or obsolete — pull request 274 merged it" in judged_line
-    assert "DRE-1 does a thing" in judged_line
-    assert "superseded by DRE-9" in declared_line
-    # …and the CEO can tell which is a declaration on the card and which is a
-    # judgement, without knowing the two readers exist.
-    assert body.index("Declared on the card") < body.index(declared_line)
-    assert body.index("ranked read") < body.index(judged_line)
-    assert body.index(declared_line) != body.index(judged_line)
+    text = groomer.render_proposal(proposal)
+    assert "## Recommended dead" not in text
+    rows = cancel_rows(text)
+    assert set(rows) == {"DRE-1", "DRE-2"}
+    # The Reason is the seventh cell — what the CEO reads and the drain writes
+    # onto the card — and it says which of the two sources is being read.
+    assert rows["DRE-1"][6] == "pull request 274 merged it"
+    assert rows["DRE-1"][5] == "DRE-1 does a thing"
+    assert rows["DRE-2"][6] == "superseded by DRE-9"
 
 
-def test_a_judged_dead_row_whose_evidence_was_withheld_says_so():
+def test_a_cancel_row_whose_evidence_was_withheld_says_so():
     cards = [card("DRE-1"), card("DRE-2")]
     answer = "\n".join([
         "DRE-1 | likely-done | a merge already did it | see scripts/groomer.py",
@@ -194,12 +201,10 @@ def test_a_judged_dead_row_whose_evidence_was_withheld_says_so():
     ])
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
                                judgement=with_pack(cards, answer))
-    body = section(groomer.render_proposal(proposal),
-                   "## Recommended dead — your call, not ours")
-    line = next(l for l in body.splitlines() if l.startswith("- DRE-1"))
-    assert "run log" in line, (
-        "evidence that could not be shown is reported as absent, never as an "
-        "empty recommendation"
+    rows = cancel_rows(groomer.render_proposal(proposal))
+    assert rows["DRE-1"][6] == groomer.WITHHELD_REASON, (
+        "evidence that could not be shown is reported as withheld, never as an "
+        "empty reason"
     )
 
 
@@ -426,9 +431,11 @@ def test_every_section_the_fixture_renders_today_still_renders():
     for heading in ("## The population", "## The batch, in order",
                     "## Collisions, and what the order does about them",
                     "## What waits, and roughly how long",
-                    "## Recommended dead — your call, not ours",
                     "## On cycles"):
         assert heading in text, f"{heading} stopped rendering"
+    # The dead bullet list became the Cancel table (DRE-4727), and a page with
+    # nothing to cancel carries no Cancel section at all.
+    assert "## Recommended dead" not in text
     assert "## Not now — and when to come back" in text
     assert groomer.CYCLE_IS_NOT_SPRINT_PLANNING in text
 
