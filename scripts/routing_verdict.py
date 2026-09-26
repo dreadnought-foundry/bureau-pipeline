@@ -115,6 +115,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import checkbox_marks  # noqa: E402
@@ -144,6 +145,27 @@ NOT_FLEET_TAG = "routing-not-fleet"
 # this" have different next actions, and a sweep log that collapsed them would
 # tell a reader neither.
 NO_VERDICT_TAG = "routing-no-verdict"
+
+# The third refusal (DRE-4962): the card carries a verdict, and the verdict is
+# no longer an approval. A verdict approves ONE trip through Planning; a card
+# that has been back in one of these lanes since is a card somebody took out
+# of the build path — the CEO sending it back from Green Light, the console
+# moving it to Backlog, a reopened or canceled card moved back by hand. On
+# 2026-09-26 the sweep promoted DRE-2897 on a 22-day-old verdict five minutes
+# after the console moved it Intake → Backlog, and a build agent picked it up.
+STALE_VERDICT_TAG = "stale-verdict"
+STALE_VERDICT_LANES = ("Intake", "Green Light", "Triage", "Canceled", "Duplicate", "Done")
+
+# What the sweep counts to post the notice once. NOT the bare tag: counting is
+# by substring, and the sweep already posts `stale-verdict-watchdog` on a card
+# whose PR verdict is behind its head, so a bare `stale-verdict` would read
+# that comment as this notice and never say anything.
+STALE_VERDICT_NEEDLE = f"🚨 {STALE_VERDICT_TAG}:"
+
+# The lane a second trip leaves from. The planning exit does not re-stamp a
+# verdict the card already carries (`stamp_refusal`: "nothing to add"), so the
+# exit itself is what a re-planned card has to show for its second trip.
+PLANNING_LANE = "Planning"
 
 # The lane the sweep promotes a Backlog card INTO (DRE-3385). THREE of the five
 # verdicts name it as their destination — FLEET, WORKBENCH and OPERATOR — and
@@ -751,6 +773,125 @@ def parentless_promotion_refusal(
     )
 
 
+def _instant(iso):
+    """`iso` as an aware datetime, or None when it cannot be placed in time."""
+    try:
+        at = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
+def newest_verdict_at(comment_nodes, doc: dict | None = None) -> str | None:
+    """When the card's newest verdict comment was written, or None when it
+    carries none (or Linear reported no time for it).
+
+    Nodes, not bodies: the time is the whole question. The marker must OPEN
+    the comment, exactly as `verdicts_on` reads it, so a refusal notice that
+    quotes a verdict is not one.
+    """
+    known = verdicts(doc)
+    newest = None
+    for node in comment_nodes or ():
+        match = _VERDICT_LINE.match((node.get("body") or "").lstrip())
+        if not match or match.group(1).strip() not in known:
+            continue
+        at = _instant(node.get("createdAt"))
+        if at is not None and (newest is None or at > newest[0]):
+            newest = (at, node.get("createdAt"))
+    return newest[1] if newest else None
+
+
+def lanes_entered_since(moves, verdict_at: str, approved_at: str | None = None) -> tuple:
+    """The listed lanes the card ENTERED after its last approval, in order.
+
+    Entered, not "moved at all": the planning exit writes the verdict and then
+    moves the card to Backlog, and a build run parks a card it could not build
+    In Progress → Backlog on a stated blocker — neither enters a listed lane,
+    so both promote as they always have.
+
+    The last approval is the newest of three moments. The verdict itself. A
+    later exit from Planning into a lane that is not listed — the second trip,
+    which leaves no second verdict because the planning exit will not stamp one
+    a card already carries. And, for a child, `approved_at`: its epic's green
+    light, the approval the CEO's signed answer on DRE-4668 makes of an epic
+    for the cards filed under it — a child cut over to Intake and adopted keeps
+    the verdict it already had. An exit from Planning INTO a listed lane (an
+    escalation to Green Light) approves nothing.
+
+    Pure: `moves` are `{"at", "from", "to"}`, as `lane_moves` returns them.
+    """
+    anchors = [_instant(verdict_at), _instant(approved_at)]
+    anchors += [
+        _instant(m.get("at")) for m in moves or ()
+        if m.get("from") == PLANNING_LANE and m.get("to") not in STALE_VERDICT_LANES
+    ]
+    anchors = [a for a in anchors if a is not None]
+    if not anchors:
+        return ()
+    since = max(anchors)
+    entered: list[str] = []
+    for m in sorted(moves or (), key=lambda m: _instant(m.get("at")) or since):
+        at = _instant(m.get("at"))
+        lane = m.get("to")
+        if at is not None and at > since and lane in STALE_VERDICT_LANES and lane not in entered:
+            entered.append(lane)
+    return tuple(entered)
+
+
+def stale_verdict_refusal(
+    identifier: str, comment_nodes, moves, *, approved_at: str | None = None,
+    doc: dict | None = None,
+) -> str | None:
+    """Why the sweep must not promote a card whose verdict is no longer an
+    approval, or None to let it through (DRE-4962).
+
+    Asked LAST, for a card every other gate has passed: `moves` is the card's
+    lane history, a read the sweeps' shared Linear quota pays for.
+    """
+    verdict_at = newest_verdict_at(comment_nodes, doc)
+    if verdict_at is None:
+        return None
+    lanes = lanes_entered_since(moves, verdict_at, approved_at)
+    if not lanes:
+        return None
+    name = verdict_on([n.get("body") or "" for n in comment_nodes or ()], doc)
+    return (
+        f"{STALE_VERDICT_NEEDLE} {identifier} is not being promoted — its "
+        f"{name} routing verdict was written on {verdict_at[:10]} (UTC), and "
+        f"since then the card has been in {' and '.join(lanes)}.\n\n"
+        "A routing verdict approves one trip through Planning. Moving a card "
+        "back to Backlog — sending it back from Green Light, or by hand — is "
+        "not an approval to build it, so it stays here and nothing is built.\n\n"
+        f"**To build it:** it needs {PLANNING_LANE} again — move it to "
+        f"{PLANNING_LANE}, and the planning exit routes it afresh. "
+        "**To drop it:** leave it here, or cancel it."
+    )
+
+
+def _read_state_history(identifier: str) -> list:
+    """Every lane move on the card, paged — the one reader of that history
+    this repo already has (`rereview_watch`), not a second one."""
+    import rereview_watch
+
+    return rereview_watch._state_history(identifier)
+
+
+def lane_moves(identifier: str) -> list | None:
+    """The card's lane moves, or None when Linear cannot say.
+
+    Never raises: the promotion gate asks this per card, and a history it
+    could not read is UNKNOWN, which is neither stale nor fresh — the sweep
+    holds the card this pass and says nothing on it.
+    """
+    try:
+        return _read_state_history(identifier)
+    except Exception as exc:  # noqa: BLE001 — an unreadable history is unknown
+        print(f"stale-verdict: could not read {identifier}'s lane history ({exc})",
+              file=sys.stderr)
+        return None
+
+
 def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     """What the promotion receipt says for a verdict a PERSON acts on — None
     for the one verdict a run is dispatched at.
@@ -785,7 +926,7 @@ def refusal_tag(refusal: str | None) -> str | None:
     notice with the wrong tag and the two refusals silence each other.
     """
     first = ((refusal or "").splitlines() or [""])[0]
-    for tag in (NO_VERDICT_TAG, NOT_FLEET_TAG):
+    for tag in (NO_VERDICT_TAG, NOT_FLEET_TAG, STALE_VERDICT_TAG):
         if first.startswith(f"🚨 {tag}:"):
             return tag
     return None

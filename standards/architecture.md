@@ -47,6 +47,9 @@ Intake → Planning → Green Light → Backlog → Todo → In Progress → In 
   the sweep promotes every card whose verdict is bound for `Todo` — FLEET for a
   dispatched run, WORKBENCH and OPERATOR marked `hand-built` for a person
   (DRE-3385). PARKED stays, and a card carrying no verdict at all is refused.
+  So is a card sent back since its verdict — one that has been in Intake,
+  Green Light, Triage or a closed lane since — because a verdict approves one
+  trip through Planning (`stale-verdict`, DRE-4962).
 - **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
   lane: `In Review` means "a pull request is open and being checked". The two
   lanes that preceded it were retired by DRE-2726 and deleted from the board and
