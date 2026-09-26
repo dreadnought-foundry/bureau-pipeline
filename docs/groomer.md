@@ -291,8 +291,9 @@ batch that was right apart from two rows.
 | `🧺 groom-declined: <id> — <reason>` | the CEO | reason required |
 | `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card |
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
-| `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
+| `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
+| `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
 | `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
 | `🧺 groom-release-repo: <slug>` | the CEO (console or by hand) | same |
 
@@ -337,11 +338,14 @@ What each one does:
   batch and nobody able to fix it, so it is read as absent and reported in the
   record instead. **The next proposal opens by answering it** — see below.
 - **excluded** — the card stays in Intake and the record lists it as `held
-  back`. An exclusion naming a card that is not in the batch holds nothing back
-  and is reported.
-- **added** — the card moves *after* the batch, on the batch's own first cycle.
-  It must be in the lane already: an addition naming a card that has left the
-  lane refuses the whole drain and names the lane it is in now.
+  back`, whichever list it is on: excluding a Planning card keeps it out of
+  Planning, and excluding a Cancel card keeps it from being cancelled. An
+  exclusion naming a card on neither list holds nothing back and is reported.
+- **added** — the card moves to `Planning` *after* the batch, on the batch's
+  own first cycle. An addition only ever reaches the Planning list: one naming a
+  card on the Cancel list moves it to Planning and it is not cancelled. It must
+  be in the lane already: an addition naming a card that has left the lane is
+  an `already gone` row naming the lane it is in now, and the rest still moves.
 - A card named by both **excluded** and **added** follows the **newest
   comment** — the same "last word wins" the approval has always used, which is
   also how an approval that follows a decline still approves.
@@ -356,10 +360,12 @@ python3 scripts/groomer.py drain --card DRE-2683
 ```
 
 `drain` **reads the approved batch off the proposal comment on that card** and
-moves exactly those cards — **minus every exclusion, plus every addition** — in
-that order (DRE-3338, DRE-3370). The approval names a proposal id; the proposal
-comment carrying that id is the record; the rows of its batch table are the
-batch. It makes **no model call** and never re-reads the population — a drain is
+executes exactly what the CEO agreed — **minus every exclusion, plus every
+addition** — in that order (DRE-3338, DRE-3370, DRE-4733). The approval names a
+proposal id; the proposal comment carrying that id is the record; the rows of
+its batch table are the Planning list, and the rows under `## Cancel, with
+reasons` are the Cancel list (DRE-4727), read back with each row's reason from
+its seventh cell, an escaped `\|` unescaped. It makes **no model call** and never re-reads the population — a drain is
 a move, not a judgement — so it takes no shaping flags at all beyond `--lane`,
 which is only the fallback for a record whose own lane line cannot be read.
 
@@ -387,9 +393,14 @@ answering the same census slightly differently, which a 260-card judgement does.
 Each failure cost another model call (~$6, ~8 minutes) and another CEO approval,
 and threw the CEO's existing approval away for a reason that had nothing to do
 with the batch. The property is kept where it belongs: the drain moves the list
-the CEO saw, and refuses outright if any card on that list has moved since.
+the CEO saw. A card on either list that has left Intake since the proposal is
+not moved and is not a reason to refuse the rest (DRE-4733): it gets an
+`already gone` row naming the lane it is in now, and everything else the CEO
+agreed still moves. That used to refuse the whole batch — on 2026-09-16 two
+approved cards had moved on (DRE-3453 Done, DRE-3127 Canceled), nothing moved,
+and the CEO had to exclude both by hand and approve again.
 
-Nine refusals, all of them before any card moves — and every one of them but the
+Eight refusals, all of them before any card moves — and every one of them but the
 last is **written onto the proposal card** as
 `🧺 groom-drain-refused: <id> — <reason>`, then exits 2. A drain that refuses a
 batch and says so only in a workflow log is a stall with an alibi.
@@ -409,22 +420,24 @@ batch and says so only in a workflow log is a stall with an alibi.
 - **the batch has already been drained** — a `🧺 groom-drained: <id>` record
   stands on the card, and that record is the receipt for cards that have
   already moved, so a second dispatch moves nothing;
-- **a card the drain would move is no longer in the lane** — somebody moved it
-  by hand since the approval, or an addition names a card that has already
-  left. The refusal names the card and the lane it is in now, and the WHOLE
-  batch stays put: an approved order half-executed is an order nobody gave;
 - **a cycle Linear does not carry** — the record names a cycle number with no
   open cycle behind it. Create the cycle; the groomer will not invent one. (A
   cycle that has since STARTED is fine: the drain resolves the number the CEO
   approved, unlike `propose`, which will not schedule into a period half over.)
-- **a terminal destination** — the drain moves cards to `Planning` and refuses
-  `Canceled`, `Duplicate` and `Done` outright.
+- **a closing destination** — the drain never writes `Done` or `Duplicate`,
+  and it never sends the Planning list to `Canceled`: it writes `Canceled` only
+  for an agreed row of the Cancel table.
 
 `propose` is deliberately not held: it writes nothing but a comment, and a held
 pen still wants a batch prepared for the day it opens.
 
-An approved batch is moved to `Planning`, which is where the classification
-happens (DRE-2719), and each card is assigned its cycle.
+**What moves where.** Each agreed Planning card is assigned its cycle and moved
+to `Planning`, which is where the classification happens (DRE-2719). Each
+agreed Cancel card gets `🧺 groom-cancelled: <id> — <reason>` written on it —
+the reason from its Cancel row — and then moves to `Canceled`, never `Done`,
+and is given no cycle. Planning cards move first, in the record's order, then
+the Cancel cards. A card excluded on either list stays in Intake with nothing
+written on it.
 
 ### What the drain wrote down
 
@@ -435,25 +448,39 @@ a run log is not on the card.
 ```
 🧺 groom-drained: <proposal id>
 
-moved: 3 · held back: 2 · added: 1 · refused: 0 → Planning at 2026-09-09 16:21 PT
+moved: 2 · held back: 2 · added: 1 · cancelled: 1 · refused: 0 → Planning at 2026-09-09 16:21 PT
 
 | # | Card | Outcome | Why |
 | -- | -- | -- | -- |
 | 1 | DRE-3301 | moved | proposal `f673bfefa340` position 1 |
 | — | DRE-3302 | held back | `🧺 groom-excluded` — design is not settled |
-| 2 | DRE-3303 | moved | proposal `f673bfefa340` position 3 |
+| — | DRE-3303 | already gone | Done |
+| 2 | DRE-3304 | moved | proposal `f673bfefa340` position 4 |
 | 3 | DRE-3350 | added | `🧺 groom-added` — Ana needs it this week |
+| — | DRE-3120 | cancelled | proposal `f673bfefa340` Cancel position 1 — superseded by DRE-3301 |
+| — | DRE-3127 | held back | `🧺 groom-excluded` — still wanted |
 ```
 
-The summary line's grammar is fixed, and its four counts answer four different
-questions: **moved** is the approved batch that went, **held back** is what the
-CEO excluded and is still in Intake, **added** is what the CEO reached into the
-lane for, and **refused** counts the *decisions* the drain would not honour — a
-marker the pipeline wrote, a decline with no reason, an exclusion naming a card
-that was never in the batch. `#` is the order the cards actually moved in; a card
-that did not move carries `—`. Each of the four outcomes is one of `moved`,
-`held back`, `added`, `refused`, and no card gets two rows: a refused decision
-about a card that moved anyway is named on that card's own row.
+**The summary line is a contract with its reader**, the console's (DRE-4682 in
+agent-bureau): `moved: n · held back: n · added: n · cancelled: n · refused: n
+→ Planning at <time PT>`. It is the line as it was before DRE-4733 with one
+clause, `cancelled:`, placed before `refused:`; the reader takes that clause as
+optional and reads the other four exactly as they always read, so no clause is
+reordered, respelled or added beside it.
+
+Its five counts answer five different questions: **moved** is the approved
+Planning list that went, **held back** is what the CEO excluded on either list
+and is still in Intake, **added** is what the CEO reached into the lane for,
+**cancelled** is the agreed Cancel list that went to `Canceled`, and **refused**
+counts the *decisions* the drain would not honour — a marker the pipeline wrote,
+a decline with no reason, an exclusion naming a card on neither list. `#` is the
+order the cards moved to Planning in; a card that did not move there carries
+`—`. There is one row per card on either list, and each row's outcome is one of
+six: `moved`, `held back`, `added`, `cancelled`, `refused`, `already gone`. An
+`already gone` card had left Intake before the drain reached it; its why is the
+lane it is in now, and it is counted on no clause of the summary line. No card
+gets two rows: a refused decision about a card that moved anyway is named on
+that card's own row.
 
 A refusal is its own record, `🧺 groom-drain-refused: <id> — <reason>`, on one
 line, and it is written before the refusal exits 2.
