@@ -656,8 +656,9 @@ def automation_card(card: dict) -> bool:
     filed it for a dependabot pull request, and that pull request is
     shepherded by `card_dependabot_prs`, not by the nudge loop.
 
-    Read in exactly one place — where `main()` builds `mine` — with two
-    effects: the card is out of the WIP base (a dependabot batch of 27 would
+    Read where the WIP base is built — `wip_base`, which promotion and
+    limit-recovery both count (DRE-4934), and `main()`'s board read that
+    hands it `mine` — with two effects: the card is out of the WIP base (a dependabot batch of 27 would
     otherwise saturate MAX_WIP and stop promotion fleet-wide), and out of the
     nudge loop, whose In Review no-PR branch would requeue it into Todo after
     STALE_MINUTES and dispatch an agent onto a dependency bump (`pr_for`
@@ -7930,6 +7931,27 @@ def repo_epics(active: list[dict]) -> set[str]:
     return {c["identifier"] for c in mine if card_is_epic(c)}
 
 
+def wip_base(active: list[dict]) -> list[dict]:
+    """The cards the WIP room is counted over — ONE answer for every path that
+    asks how much room this sweep has (DRE-4934).
+
+    This repo's cards, minus the automation cards (`automation_card`) and minus
+    the epics (`repo_epics`). `wip_count` of this list is what promotion is
+    budgeted against, and it is the list main()'s nudge loop walks.
+
+    limit-recovery used to count the WIDER set — every active card of the
+    repo, epics and automation cards included — so the two disagreed about the
+    same number. DRE-4811 died on Linear's hourly quota and sat in Todo for
+    about twenty hours, every sweep printing "the WIP room is spent" beside a
+    promotion step reading `WIP 3+0/12`, with seven cards blocked behind it.
+    Both now read this helper, so a card promotion would dispatch is
+    re-dispatched too.
+    """
+    mine = [c for c in active if card_repo(c) == REPO_SLUG and not automation_card(c)]
+    epics = repo_epics(mine)
+    return [c for c in mine if c["identifier"] not in epics]
+
+
 def recover_limit_deaths() -> None:
     """DRE-3171: re-enter the stage a limit death left, once the window has
     reset or the account has switched. The decision lives in limit_recovery;
@@ -7940,12 +7962,15 @@ def recover_limit_deaths() -> None:
     fault in recovery is logged and never costs the sweep the rest of its
     pass. `CLAUDE_ACCOUNT` is the seam DRE-3170 fills; unset, only the clock
     can trigger.
+
+    The WIP room is promotion's own — the cap minus `wip_count(wip_base(...))`
+    — never a count of this repo's whole board (DRE-4934).
     """
     try:
         cards = [c for c in active_cards() if card_repo(c) in (None, REPO_SLUG)]
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
-            MAX_WIP - wip_count([c for c in cards if card_repo(c) == REPO_SLUG]),
+            MAX_WIP - wip_count(wip_base(cards)),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
             move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
@@ -8483,7 +8508,10 @@ def main(
     if not promote_only:
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
-    mine = [c for c in mine if c["identifier"] not in epics]
+    # The WIP base and the nudge list, from the helper limit-recovery counts
+    # its room from too (DRE-4934) — so the two cannot disagree. It drops the
+    # epics `repo_epics(mine)` found above, the same set on the same cards.
+    mine = wip_base(mine)
     # On the merge path the candidates are the merged card's own dependents
     # (DRE-3236) — read in one request by identifier, through the same gates.
     # A card promotable for any other reason waits for the cron, which
