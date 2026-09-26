@@ -280,22 +280,22 @@ def test_an_addition_moves_last_and_takes_the_batchs_first_cycle():
     assert groomer.ADD_TAG in _row(body, SPARE[0])
 
 
-def test_an_addition_naming_a_card_that_is_not_in_the_lane_refuses():
-    """Before any write, and the refusal names the lane the card is in now —
-    an addition is the CEO reaching into the lane, so a card that has already
-    left it is not the card they meant."""
+def test_an_addition_naming_a_card_that_is_not_in_the_lane_is_already_gone():
+    """An addition is the CEO reaching into the lane, so a card that has
+    already left it is not moved. Since DRE-4733 it no longer refuses the
+    batch: the card is an `already gone` row naming the lane it is in now, and
+    the approved batch still moves."""
     proposal = _proposal()
     ops = FakeOps(comments=_thread(
         proposal, _decision(groomer.ADD_TAG, proposal, card=SPARE[0])),
         lanes=_lanes(proposal, **{SPARE[0]: "In Progress"}))
-    with pytest.raises(groomer.NotInLane) as exc:
-        groomer.drain(ops, card=PROPOSAL_CARD)
-    assert ops.state_writes == [], "the batch moved around a bad addition"
-    assert ops.mutations == []
-    assert SPARE[0] in str(exc.value) and "In Progress" in str(exc.value)
+    result = groomer.drain(ops, card=PROPOSAL_CARD)
+    assert SPARE[0] not in {i for i, _ in ops.state_writes}
+    assert result["moved"] == _batch_ids(proposal)
     body = _sole_record(ops)
-    assert body.startswith(f"{groomer.MARK} {groomer.DRAIN_REFUSED_TAG}: ")
-    assert "In Progress" in body, "the refusal record does not name the lane"
+    assert body.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}: ")
+    assert _outcome(body, SPARE[0]) == "already gone"
+    assert "In Progress" in _row(body, SPARE[0]), "the row does not name the lane"
 
 
 def test_an_addition_of_a_card_already_in_the_batch_moves_it_once():
@@ -430,7 +430,8 @@ def test_a_pipeline_written_exclusion_does_not_hold_its_card_back():
 # the record the drain writes
 # --------------------------------------------------------------------------
 _SUMMARY = re.compile(
-    r"^moved: (\d+) · held back: (\d+) · added: (\d+) · refused: (\d+) → "
+    r"^moved: (\d+) · held back: (\d+) · added: (\d+) · cancelled: (\d+) · "
+    r"refused: (\d+) → "
     r"(\w+) at \d{4}-\d{2}-\d{2} \d{2}:\d{2} PT$", re.M)
 
 
@@ -449,7 +450,7 @@ def test_the_drained_record_opens_with_the_marker_and_the_fixed_grammar():
         f"{groomer.MARK} {groomer.DRAINED_TAG}: {proposal['id']}"
     summary = _SUMMARY.search(body)
     assert summary, f"the summary line is not in the fixed grammar:\n{body}"
-    assert summary.groups() == ("2", "1", "1", "1", "Planning")
+    assert summary.groups() == ("2", "1", "1", "0", "1", "Planning")
     assert "| # | Card | Outcome | Why |" in body
 
 
@@ -472,11 +473,13 @@ def test_the_record_carries_one_row_per_card_and_the_move_order():
     )
 
 
-def test_every_row_carries_one_of_the_four_outcomes():
+def test_every_row_carries_one_of_the_six_outcomes():
     proposal = _proposal()
     ops = FakeOps(comments=_thread(proposal), lanes=_lanes(proposal))
     groomer.drain(ops, card=PROPOSAL_CARD)
     body = _sole_record(ops)
+    assert groomer.DRAIN_OUTCOMES == ("moved", "held back", "added",
+                                      "cancelled", "refused", "already gone")
     for identifier in _batch_ids(proposal):
         assert _outcome(body, identifier) in groomer.DRAIN_OUTCOMES
 
@@ -517,15 +520,16 @@ def test_a_drained_record_for_another_batch_does_not_block_this_one():
 # every refusal is written down, and every refusal exits 2
 # --------------------------------------------------------------------------
 #: Every refusal the drain can reach AFTER it has read the card — the set that
-#: owes a written record. The terminal destination is deliberately not here:
-#: it is caught before the read, and there is no batch for it to name.
+#: owes a written record. The closing destination is deliberately not here:
+#: it is caught before the read, and there is no batch for it to name. Nor is
+#: a card that left the lane: since DRE-4733 that is an `already gone` row and
+#: the rest of the batch moves.
 REFUSALS = ("no approval", "a foreign approval", "no record",
-            "a card that left the lane", "a cycle Linear does not carry")
+            "a cycle Linear does not carry")
 
 
 def _refusals(proposal):
     """One FakeOps per refusal in REFUSALS."""
-    batch = _batch_ids(proposal)
     return {
         "no approval": FakeOps(comments=[_record(proposal)],
                                lanes=_lanes(proposal)),
@@ -539,9 +543,6 @@ def _refusals(proposal):
                            groomer.APPROVAL_TAG, "0" * 12),
                        "authored_by_pipeline": False}],
             lanes=_lanes(proposal)),
-        "a card that left the lane": FakeOps(
-            comments=_thread(proposal),
-            lanes=_lanes(proposal, **{batch[0]: "In Progress"})),
         "a cycle Linear does not carry": FakeOps(
             comments=_thread(proposal), lanes=_lanes(proposal), cycles=[]),
     }
@@ -582,13 +583,13 @@ def test_the_pen_being_held_is_refused_in_writing(monkeypatch):
     )
 
 
-def test_a_terminal_destination_is_refused_before_the_card_is_even_read():
+def test_a_closing_destination_is_refused_before_the_card_is_even_read():
     """The one refusal that writes nothing: it is a bad invocation, caught
     before the drain has read the card or knows which batch to name."""
     proposal = _proposal()
     ops = FakeOps(comments=_thread(proposal), lanes=_lanes(proposal))
-    with pytest.raises(groomer.WillNotCancel):
-        groomer.drain(ops, card=PROPOSAL_CARD, to="Canceled")
+    with pytest.raises(groomer.WillNotClose):
+        groomer.drain(ops, card=PROPOSAL_CARD, to="Done")
     assert ops.written == [] and ops.state_writes == []
 
 
@@ -677,9 +678,10 @@ def test_the_doc_carries_the_vocabulary_table():
     doc = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
     for tag in (groomer.PROPOSAL_TAG, groomer.APPROVAL_TAG, groomer.DECLINE_TAG,
                 groomer.EXCLUDE_TAG, groomer.ADD_TAG, groomer.DRAINED_TAG,
-                groomer.DRAIN_REFUSED_TAG):
+                groomer.DRAIN_REFUSED_TAG, groomer.CANCELLED_TAG):
         assert f"`{groomer.MARK} {tag}:" in doc, (
             f"docs/groomer.md does not carry {tag} in the vocabulary table"
         )
     assert "| Marker | Written by | Shape |" in doc
-    assert "moved: n · held back: n · added: n · refused: n" in doc
+    assert ("moved: n · held back: n · added: n · cancelled: n · refused: n"
+            in doc)

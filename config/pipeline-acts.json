@@ -909,6 +909,13 @@
     },
     {
       "file": "scripts/groomer.py",
+      "anchor": "cancelled_note(record[\"id\"], row[\"reason\"])",
+      "kind": "not-an-act",
+      "means": "Why a card was cancelled, on the card itself, in one line: the reason from the Cancel row of the proposal the CEO approved, and the batch that carried it (DRE-4733).",
+      "why": "The CEO decided this, not the pipeline. The drain cancels a card only because the CEO agreed to the Cancel row it came from, so the note is bookkeeping of that decision rather than something the pipeline chose — a trailer would name a next actor nobody chose, on a card that has none. One writer at one call site, so a cancelled card carries one shape of note."
+    },
+    {
+      "file": "scripts/groomer.py",
       "anchor": "drain_refused_record(refusal.batch, str(refusal))",
       "kind": "not-an-act",
       "means": "Why a drain refused the batch, on the proposal card the CEO approved on, in one line: the same fact the moved record carries from the other side (DRE-3370).",
