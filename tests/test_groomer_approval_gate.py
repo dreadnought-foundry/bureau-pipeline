@@ -305,19 +305,25 @@ def test_the_cycle_is_resolved_even_after_it_has_started():
 # --------------------------------------------------------------------------
 # a card that left the lane by hand
 # --------------------------------------------------------------------------
-def test_the_drain_refuses_a_card_that_is_no_longer_in_intake():
-    """Somebody moved a card by hand between the approval and the drain. The
-    approved list is no longer the list on the board, and the drain refuses the
-    whole batch before any write rather than moving the part that still fits."""
+def test_a_card_that_is_no_longer_in_intake_is_already_gone_and_the_rest_moves():
+    """Somebody moved a card by hand between the approval and the drain. It
+    used to refuse the WHOLE batch (DRE-3338); since DRE-4733 a card that has
+    moved on cannot be moved and the rest of the CEO's agreement still stands.
+    The card gets an `already gone` row naming the lane it is in now, it is
+    written to not at all, and every other card moves."""
     proposal = _proposal()
-    gone = _batch_ids(proposal)[1]
+    batch = _batch_ids(proposal)
+    gone = batch[1]
     ops = FakeOps(comments=_thread(proposal), lanes={gone: "In Progress"})
-    with pytest.raises(groomer.NotInLane) as exc:
-        groomer.drain(ops, card=PROPOSAL_CARD)
-    assert ops.state_writes == [], "the batch moved around a card that had left"
-    assert ops.mutations == []
-    assert gone in str(exc.value), "the refusal must name the card"
-    assert "In Progress" in str(exc.value), "the refusal must name its lane now"
+    result = groomer.drain(ops, card=PROPOSAL_CARD)
+    assert [i for i, _ in ops.state_writes] == [batch[0], batch[2]]
+    assert {v["id"] for _, v in ops.mutations} == \
+        {f"uuid-{batch[0]}", f"uuid-{batch[2]}"}
+    assert result["moved"] == [batch[0], batch[2]]
+    body = ops.written[-1][1]
+    row = next(ln for ln in body.splitlines() if f"| {gone} |" in ln)
+    assert "| already gone |" in row, "the record must name the outcome"
+    assert "In Progress" in row, "the record must name its lane now"
 
 
 # --------------------------------------------------------------------------
@@ -348,49 +354,55 @@ def test_the_drain_records_every_card_it_moved_with_its_position():
     )
 
 
-def test_the_drain_records_every_card_it_refused_and_why():
-    """A card that left the lane refuses the WHOLE batch, and since DRE-3370
-    the refusal is its own record — `groom-drain-refused: <id> — <reason>` —
-    rather than an empty half of the moved one."""
+def test_the_drain_records_a_card_that_already_left_and_where_it_is():
+    """A card already Done is not a refusal of the batch: the drained record
+    carries its row, `already gone` and the lane it is in, and no
+    `groom-drain-refused` record is written."""
     proposal = _proposal()
     gone = _batch_ids(proposal)[0]
     ops = FakeOps(comments=_thread(proposal), lanes={gone: "Done"})
-    with pytest.raises(groomer.NotInLane):
-        groomer.drain(ops, card=PROPOSAL_CARD)
-    assert len(ops.written) == 1, "a refused drain left no record"
+    groomer.drain(ops, card=PROPOSAL_CARD)
+    assert len(ops.written) == 1, "the drain wrote more than its one record"
     target, body = ops.written[0]
     assert target == PROPOSAL_CARD
-    assert body.startswith(
-        f"{groomer.MARK} {groomer.DRAIN_REFUSED_TAG}: {proposal['id']} — ")
-    assert gone in body and "Done" in body, (
-        "the record must name the refused card and the lane it is in now"
+    assert body.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}: {proposal['id']}")
+    row = next(ln for ln in body.splitlines() if f"| {gone} |" in ln)
+    assert "already gone" in row and "Done" in row, (
+        "the record must name the card and the lane it is in now"
     )
-    assert groomer.DRAINED_TAG not in body, "a refused drain recorded a move"
+    assert groomer.DRAIN_REFUSED_TAG not in body
 
 
 # --------------------------------------------------------------------------
-# the groomer recommends and never cancels
+# the drain cancels what the CEO agreed, and never closes (DRE-4733)
 # --------------------------------------------------------------------------
-def test_the_drain_refuses_a_terminal_destination():
-    """Cancelling is destructive and belongs to the operator. The drain has one
-    destination and refuses any terminal one — asserted by pointing it at
-    Canceled, which is the mistake this rule exists to make impossible."""
+def test_the_drain_refuses_a_closing_destination():
+    """The drain never writes `Done` — a card is done when its work merges, and
+    a drain that closed cards would claim delivery nobody made. Asserted by
+    pointing it at Done, which is the mistake this rule exists to make
+    impossible."""
     proposal = _proposal()
     ops = FakeOps(comments=_thread(proposal))
-    with pytest.raises(groomer.WillNotCancel):
-        groomer.drain(ops, card=PROPOSAL_CARD, to="Canceled")
+    with pytest.raises(groomer.WillNotClose):
+        groomer.drain(ops, card=PROPOSAL_CARD, to="Done")
     assert ops.state_writes == []
     assert ops.written == []
 
 
-def test_a_dead_recommendation_is_never_executed_by_the_drain():
+def test_an_agreed_cancel_row_is_executed_by_the_drain():
+    """The opposite of what this test said before DRE-4733: a card on the
+    approved Cancel list is cancelled — to `Canceled`, never `Done` — with its
+    reason written on it first."""
     cards = [card("DRE-1", description="**Superseded by:** DRE-2719")]
     cards += [card(f"DRE-{n}") for n in range(2, 5)]
     proposal = groomer.propose(cards, cycles=CYCLES)
     ops = FakeOps(comments=_thread(proposal))
     groomer.drain(ops, card=PROPOSAL_CARD)
-    assert "DRE-1" not in {i for i, _ in ops.state_writes}
-    assert {s for _, s in ops.state_writes} <= {"Planning"}
+    assert ("DRE-1", "Canceled") in ops.state_writes
+    assert {s for _, s in ops.state_writes} == {"Planning", "Canceled"}
+    notes = [b for t, b in ops.written if t == "DRE-1"]
+    assert notes == [groomer.cancelled_note(proposal["id"],
+                                            "superseded by DRE-2719")]
 
 
 def test_the_doc_describes_the_drain_as_moving_the_approved_record():
