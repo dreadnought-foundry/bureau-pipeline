@@ -276,6 +276,17 @@ def test_a_stray_update_does_not_move_a_card():
     assert _order(proposal) == ["DRE-1", "DRE-3", "DRE-2"]
 
 
+def test_a_card_with_no_readable_creation_date_goes_to_the_back():
+    """An unreadable date is not the oldest card in the pile. It is ordered
+    last, the reversible answer, rather than opening the batch."""
+    undated = card("DRE-1", created=_ago(40))
+    undated["createdAt"] = None
+    proposal = groomer.propose(
+        [undated, card("DRE-2", created=_ago(1)),
+         card("DRE-3", created=_ago(20))], cycles=CYCLES, now=NOW)
+    assert _order(proposal) == ["DRE-3", "DRE-2", "DRE-1"]
+
+
 # --------------------------------------------------------------------------
 # the epic is still the unit, and its age is its OLDEST card
 # --------------------------------------------------------------------------
