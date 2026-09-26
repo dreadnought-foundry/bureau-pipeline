@@ -1,13 +1,12 @@
 """The groomer proposes with judgement, and the rules still constrain it
 (DRE-3150).
 
-The model's ranked read fills the batch; it does not get to break the batch.
-That distinction is the whole of this file:
+Since DRE-4725 the model's ranked read neither fills nor orders the batch —
+the rules do, Urgent, High, then oldest first. What this file holds:
 
-  * the model's `now` set fills the batch **in the model's order**;
-  * then a **collision** re-orders it, a **blocker** holds a card back, an
-    **epic stays one unit**, and **capacity still caps** — the rules constrain
-    the read, they never re-rank it;
+  * the model's `now` order does **not** reorder the batch;
+  * a **collision** orders it, a **blocker** holds a card back, an **epic
+    stays one unit**, and **capacity still caps** — whatever the model ranked;
   * every row names a **reason**, a `not-now` names its **trigger**, a
     `likely-done` names its **evidence**, and a reason written in technical
     terms is refused at the write seam rather than put in front of the CEO;
@@ -146,22 +145,23 @@ def test_one_model_call_per_propose_run_over_a_250_card_population():
 
 
 # --------------------------------------------------------------------------
-# the model fills the batch, in the model's order
+# the rules fill the batch, oldest first — not the model's order (DRE-4725)
 # --------------------------------------------------------------------------
-def test_the_models_order_fills_the_batch():
+def test_the_models_order_does_not_fill_the_batch():
     cards = [card("DRE-1", days=1), card("DRE-2", days=2), card("DRE-3", days=3)]
     proposal = groomer.propose(
         cards, cycles=CYCLES, capacity=10, now=NOW,
-        judgement=judged(cards, ranked(["DRE-3", "DRE-1", "DRE-2"])))
-    assert positions(proposal) == ["DRE-3", "DRE-1", "DRE-2"]
+        judgement=judged(cards, ranked(["DRE-2", "DRE-1", "DRE-3"])))
+    assert positions(proposal) == ["DRE-3", "DRE-2", "DRE-1"]
 
 
-def test_the_rules_only_path_does_not_use_the_models_order():
-    """The same population with no judgement sequences by the rules — proof
-    the assertion above is testing the model's order and not the fixture's."""
+def test_the_rules_only_path_orders_the_same_population_the_same_way():
+    """The same population with no judgement sequences by the rules into the
+    same order — proof the assertion above is the rules' order and not an
+    accident of the model's."""
     cards = [card("DRE-1", days=1), card("DRE-2", days=2), card("DRE-3", days=3)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=10, now=NOW)
-    assert positions(proposal) == ["DRE-1", "DRE-2", "DRE-3"]
+    assert positions(proposal) == ["DRE-3", "DRE-2", "DRE-1"]
 
 
 # --------------------------------------------------------------------------
@@ -467,12 +467,14 @@ def test_the_rendered_proposal_names_no_ranked_read_without_a_judgement():
 # --------------------------------------------------------------------------
 # what the budget must NOT move (DRE-3259)
 # --------------------------------------------------------------------------
-# Computed on the fixture before this card touched anything, and pinned here:
-# `proposal_id` digests the batch's cards, positions and cycles and nothing
-# else, so neither of the two new keys may retire a CEO approval of the same
-# batch.
-FIXTURE_RULES_ONLY_ID = "45946184638e"
-FIXTURE_JUDGED_ID = "85f53ade431b"
+# Computed on the fixture and pinned here: `proposal_id` digests the batch's
+# cards, positions and cycles and nothing else, so neither of the two new keys
+# may retire a CEO approval of the same batch. Re-pinned by DRE-4725, which
+# moved the batch itself to oldest first — and since the ranked read no longer
+# orders the batch, a read that ranks every card `now` proposes the rules'
+# batch, so the two ids are one.
+FIXTURE_RULES_ONLY_ID = "f02e12cea3b8"
+FIXTURE_JUDGED_ID = "f02e12cea3b8"
 
 
 def _fixture_proposal(judgement=None):

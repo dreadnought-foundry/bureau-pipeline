@@ -457,8 +457,8 @@ def test_dre_3737s_fixture_batches_all_four_oldest_first():
              card("DRE-14", created=_ago(60))]
     answer = "\n".join([
         ranked(["DRE-11", "DRE-12"]),
-        "DRE-C | not-now | it can wait | when the forms work lands",
-        "DRE-D | not-now | it can wait | when the forms work lands"])
+        "DRE-13 | not-now | it can wait | when the forms work lands",
+        "DRE-14 | not-now | it can wait | when the forms work lands"])
     proposal = _judged(cards, answer, capacity=20)
     order = _order(proposal)
     assert set(order) == {"DRE-11", "DRE-12", "DRE-13", "DRE-14"}
@@ -538,8 +538,9 @@ def _doc_section(text: str, heading: str) -> str:
 def test_the_doc_states_urgent_high_then_oldest_first_with_no_window():
     doc = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
     order = _doc_section(doc, "## The order, applied top to bottom")
-    assert order.index("Urgent") < order.index("High") < \
-        order.index("oldest first"), "the order is documented as applied"
+    assert order.index("1. **Urgent") < order.index("2. **High") < \
+        order.index("3. **Then everything else, oldest first"), (
+            "the order is documented as applied")
     for stale in ("newest first", "Then the window", "not batched"):
         assert stale not in order, f"the order section still says {stale!r}"
     assert "no window" in order

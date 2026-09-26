@@ -161,8 +161,10 @@ def test_portico_stays_first_when_another_repo_names_the_same_basename():
     cards = [
         card("DRE-1", repo="agent-bureau", created="2026-01-01T00:00:00.000Z",
              description="edits `CLAUDE.md`"),
+        # High, so only a collision could put the older card ahead of it —
+        # oldest first would anyway (DRE-4725).
         card("DRE-2", repo="portico", created="2026-08-01T00:00:00.000Z",
-             description="edits `CLAUDE.md`"),
+             description="edits `CLAUDE.md`", priority=2),
     ]
     proposal = groomer.propose(cards, cycles=CYCLES)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
@@ -191,8 +193,10 @@ def test_a_constraint_loop_is_broken_where_it_is_found_not_at_the_end():
              description="edits `alpha.ts` and `beta.ts`"),
         card("DRE-12", repo="portico", created="2026-08-03T00:00:00.000Z",
              description="edits `beta.ts`"),
-        card("DRE-20", repo="agent-bureau", created="2026-01-01T00:00:00.000Z"),
-        card("DRE-21", repo="agent-bureau", created="2026-01-02T00:00:00.000Z"),
+        # Newer than the tangle, so oldest first puts them after it and only
+        # a loop broken late could push the Portico cards behind (DRE-4725).
+        card("DRE-20", repo="agent-bureau", created="2026-08-20T00:00:00.000Z"),
+        card("DRE-21", repo="agent-bureau", created="2026-08-21T00:00:00.000Z"),
     ]
     # alpha.ts puts 10 before 11, beta.ts puts 11 before 12, and 12 blocks 10.
     cards[0]["inverseRelations"] = {"nodes": [
