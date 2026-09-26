@@ -256,7 +256,8 @@ Out of Intake, into cycle 14, in the order proposal `b9eecae64787` was approved 
 
 The five clauses add up: 3 moved + 10 held back + 1 canceled = the 14 cards
 proposed. There is no `already gone` row. Nothing was added and nothing was
-refused.
+refused. All ten excluded cards had left Intake by then, but the drain reads an
+exclusion first, so each one is `held back` rather than `already gone` (§6).
 
 ## 5. The board, read afterwards
 
@@ -316,9 +317,11 @@ criterion can hold.
 canceled at 08:05:53 PT in the Atlas clear-out. At 08:38:18 PT it was excluded
 with "Don't do", and the console's move put it back in Backlog at 08:38:22. It
 is an open card again now. The "Don't do" button moves a card to Backlog from
-whatever lane it is in, `Canceled` included. The drain was not involved. It
-read DRE-2373 as `held back` because the exclusion was newer than the cancel,
-so it is not an `already gone` row.
+whatever lane it is in, `Canceled` included. The drain was not involved. When
+it ran at 08:38:47 the card was in Backlog, not Canceled. The drain checks an
+exclusion before it checks the lane (`kept()` runs before `left()` in
+`scripts/groomer.py` on `main`), so an excluded card is always a `held back`
+row and never an `already gone` row, whatever lane it is in.
 
 **A card the CEO declined was built on five minutes later.** DRE-2897 went to
 Backlog by "Don't do" at 08:35:34. It carried a FLEET routing verdict and no
