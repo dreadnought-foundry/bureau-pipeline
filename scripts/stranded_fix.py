@@ -93,9 +93,9 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ONE reader of "which pull request is this Agent Fix run working" (DRE-2908).
-# The job name is the only place the number survives into the Actions API, and
-# the expression that builds it lives in agent-fix.yml; re-deriving the parse
-# here is how two readers come to disagree about the same run.
+# The number survives into the Actions API in the stub's run-name (DRE-4845)
+# and in the job name agent-fix.yml builds; re-deriving either parse here is
+# how two readers come to disagree about the same run.
 import fix_concurrency  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -127,10 +127,11 @@ class Lane:
     `readable` False is the fail-closed state and carries `detail` so the run
     log says WHY the gate waited. `by_pr` is exact and suppresses a merge;
     `unattributed` is a list of run ids GitHub would not attribute to any pull
-    request and it only ever bounds — a run pending on its concurrency group
-    lists zero jobs, and a repo riding a release tag older than DRE-2908 names
-    its job without the number, so "unattributed" means "could be any pull
-    request", never "not this one".
+    request and it only ever bounds — on a stub without the DRE-4845
+    run-name, a run pending on its concurrency group lists zero jobs, and a
+    repo riding a release tag older than DRE-2908 names its job without the
+    number, so "unattributed" means "could be any pull request", never "not
+    this one".
     """
 
     readable: bool = True
@@ -144,8 +145,11 @@ def read_lane(payload) -> Lane:
 
     Anything that is not provably a lane record reads as UNREADABLE, which
     the gate treats as busy. The shape is deliberately ours rather than
-    GitHub's: attributing a run needs its JOB names, which is a second API
+    GitHub's: attributing a run can need its JOB names, which is a second API
     call per in-flight run, and the gathering belongs in one place.
+
+    A run is attributed by its run-name (`display_title`) first, then by its
+    job names; one neither names stays unattributed (DRE-4845).
     """
     if not isinstance(payload, dict):
         return Lane(readable=False, detail="the lane record is not an object")
@@ -164,9 +168,14 @@ def read_lane(payload) -> Lane:
                         detail="the lane record carries a shapeless run")
         if str(item.get("status") or "") not in IN_FLIGHT_STATUSES:
             continue
-        jobs = item.get("jobs")
-        number = fix_concurrency.pr_of_job_names(
-            jobs if isinstance(jobs, list) else [])
+        # The run-name first (DRE-4845): it is resolved when the run is
+        # created, so it names a run still pending on its concurrency group,
+        # which lists no jobs yet. A stub without one falls to the job names.
+        number = fix_concurrency.pr_of_run_name(item.get("display_title"))
+        if number is None:
+            jobs = item.get("jobs")
+            number = fix_concurrency.pr_of_job_names(
+                jobs if isinstance(jobs, list) else [])
         if number is None:
             unattributed.append(item.get("id"))
         else:
@@ -532,7 +541,8 @@ def workflow_on_default_branch(repo: str, workflow: str) -> bool | None:
 def gather_lane(repo: str, workflow: str) -> dict:
     """The lane record merge-gate.yml hands `--fix-lane-file`.
 
-    One listing, plus one job-name read per IN-FLIGHT run — so an idle lane,
+    One listing, plus one job-name read per IN-FLIGHT run whose run-name
+    does not already name its pull request (DRE-4845) — so an idle lane,
     which is the ordinary case, costs exactly one call. `readable: false` is
     a first-class answer: the gate fails closed on it, which is cheaper by
     far than the alternative this card exists to end.
@@ -552,7 +562,7 @@ def gather_lane(repo: str, workflow: str) -> dict:
     """
     out, detail = _gh([
         "run", "list", "--repo", repo, "--workflow", workflow,
-        "--limit", "20", "--json", "status,databaseId",
+        "--limit", "20", "--json", "status,databaseId,displayTitle",
     ])
     if out is None:
         if workflow_on_default_branch(repo, workflow) is False:
@@ -580,6 +590,14 @@ def gather_lane(repo: str, workflow: str) -> dict:
         if status not in IN_FLIGHT_STATUSES:
             continue
         run_id = item.get("databaseId")
+        title = item.get("displayTitle")
+        title = title if isinstance(title, str) else ""
+        if fix_concurrency.pr_of_run_name(title) is not None:
+            # The run-name already names the PR (DRE-4845); the jobs call
+            # could only repeat it, and for a pending run it has nothing.
+            runs.append({"id": run_id, "status": status,
+                         "display_title": title, "jobs": []})
+            continue
         jobs_out, jobs_detail = _gh([
             "api", f"repos/{repo}/actions/runs/{run_id}/jobs",
             "--jq", "[.jobs[].name]",
@@ -590,13 +608,14 @@ def gather_lane(repo: str, workflow: str) -> dict:
             # direction as an unreadable listing, scoped to one run.
             print(f"stranded_fix: run {run_id} job names unreadable: "
                   f"{jobs_detail}", file=sys.stderr)
-            runs.append({"id": run_id, "status": status, "jobs": []})
+            runs.append({"id": run_id, "status": status,
+                         "display_title": title, "jobs": []})
             continue
         try:
             names = json.loads(jobs_out or "[]")
         except ValueError:
             names = []
-        runs.append({"id": run_id, "status": status,
+        runs.append({"id": run_id, "status": status, "display_title": title,
                      "jobs": names if isinstance(names, list) else []})
     return {"readable": True, "runs": runs}
 

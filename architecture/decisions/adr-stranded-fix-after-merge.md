@@ -122,9 +122,11 @@ true.
   GitHub attributes to no pull request, is `wait`. A wait costs one gate
   wake; the direction that reads a blip as "no fix run running" is the
   failure itself. Attribution is exact where GitHub gives it — the PR number
-  survives into the Actions API only in the job name (`fix_concurrency.
-  JOB_PR_PREFIX`, DRE-2908) — and "unattributed" means *could be any pull
-  request*, never *not this one*.
+  survives into the Actions API in a stub's run-name (`Agent Fix #N`,
+  `fix_concurrency.RUN_NAME_PREFIX`, DRE-4845), which is read first and names
+  even a run still pending, and otherwise only in the job name
+  (`fix_concurrency.JOB_PR_PREFIX`, DRE-2908) — and "unattributed" means
+  *could be any pull request*, never *not this one*.
 - **The hook fails OPEN.** It runs on every push of every fix run, and a hook
   that refused on an API blip would break the loop it protects. It announces
   the unproven read rather than swallowing it.

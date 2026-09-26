@@ -2,6 +2,15 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 name: Agent Fix
+# DRE-4845: name every run for its PR, so the merge gate's in-flight-fix hold
+# (DRE-4486) holds that PR only. A run pending on its concurrency group lists
+# no jobs, so the reusable's `fix PR #N` job name cannot say which PR it is
+# for; the run-name is resolved when the run is created. It must live here —
+# GitHub ignores run-name in a workflow_call reusable. The quotes are
+# load-bearing: unquoted, YAML reads ` #` as a comment and the number is lost.
+# The PR half is the concurrency group's PR half; scripts/fix_concurrency.py
+# pr_of_run_name is the one reader, pinned by tests/test_fix_run_name.py.
+run-name: "Agent Fix #${{ github.event.issue.number || inputs.pr_number }}"
 
 on:
   issue_comment:

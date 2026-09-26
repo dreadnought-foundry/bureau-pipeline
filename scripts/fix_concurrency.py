@@ -576,16 +576,44 @@ RUNS_JQ = (
     "updated_at, actor: .actor.login, display_title, html_url}]"
 )
 
-#: How a run says which pull request it is working (DRE-2908). The Actions
-#: run listing carries NO PR attribution for a `workflow_dispatch` run —
-#: measured on this repo, `display_title` is the bare workflow name "Agent
-#: Fix" and `pull_requests` is empty — so the ONE place the number survives
-#: into the API is the job name, which the reusable agent-fix workflow builds
-#: from the same expression the concurrency group uses. Producer (the YAML)
-#: and consumer (this parser) are pinned together by
-#: tests/test_conflict_sweep_per_pr_busy.py.
+#: How a run says which pull request it is working (DRE-2908). `pull_requests`
+#: is empty for every Agent Fix run, and on a stub WITHOUT a `run-name:` a
+#: `workflow_dispatch` run's `display_title` is the bare workflow name "Agent
+#: Fix" (measured on this repo) — so there the number survives into the API
+#: only in the job name, which the reusable agent-fix workflow builds from the
+#: same expression the concurrency group uses. Producer (the YAML) and
+#: consumer (this parser) are pinned together by
+#: tests/test_conflict_sweep_per_pr_busy.py. A stub that carries the run-name
+#: below names the PR in `display_title` too, and that is read first.
 JOB_PR_PREFIX = "fix PR #"
 _JOB_PR = re.compile(re.escape(JOB_PR_PREFIX) + r"(\d+)")
+
+#: The run-name a stub gives every Agent Fix run (DRE-4845):
+#: `run-name: "Agent Fix #${{ github.event.issue.number || inputs.pr_number }}"`.
+#: A job name resolves only once a job STARTS, so a run pending on its
+#: concurrency group lists none and reads as "could be any PR" — on Portico,
+#: 2026-09-24, one such run held four approved pull requests for over an hour.
+#: The run-name is resolved when the run is CREATED, for both triggers the
+#: stubs declare. It must be set in the TOP-LEVEL stub: GitHub ignores it in
+#: a `workflow_call` reusable. Pinned to bureau-pipeline's own stub by
+#: tests/test_fix_run_name.py.
+RUN_NAME_PREFIX = "Agent Fix #"
+_RUN_NAME = re.compile(re.escape(RUN_NAME_PREFIX) + r"(\d+)")
+
+
+def pr_of_run_name(display_title) -> int | None:
+    """The pull request an Agent Fix run is working, read from its run-name.
+
+    A FULL match only: on a stub without the run-name an `issue_comment`
+    run's `display_title` is the PR's own title, and a title that merely
+    contains `Agent Fix #12` names no run. None means "the run-name does not
+    say" — the caller falls back to `pr_of_job_names`, and then to
+    unattributed, exactly as before the run-name existed.
+    """
+    if not isinstance(display_title, str):
+        return None
+    match = _RUN_NAME.fullmatch(display_title)
+    return int(match.group(1)) if match else None
 
 
 def pr_of_job_names(names) -> int | None:
