@@ -22,6 +22,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_context.py -v
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -283,6 +284,242 @@ def test_a_non_zero_gh_exit_is_raised_rather_than_read_as_no_merges():
         returncode, stdout, stderr = 1, "", "HTTP 503"
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GH_TOKEN", "app-token")
         mp.setattr(groom_context.subprocess, "run", lambda *a, **k: Done())
         with pytest.raises(groom_context.ContextError):
             groom_context.read_merged_prs(now=NOW)
+
+
+# --------------------------------------------------------------------------
+# the merged-PR read (DRE-4964): the App token, the real merge date, every
+# page, and an owner the token cannot read named rather than counted as zero
+# --------------------------------------------------------------------------
+FLEET_OWNERS = sorted({repo.split("/")[0] for repo in json.loads(
+    (ROOT / "config" / "repo-map.json").read_text()).values()})
+HOME = "dreadnought-foundry"
+
+
+def item(number, *, merged_days, created_days=None, owner=HOME, repo="portico",
+         card="DRE-1"):
+    """One result of the search API, in the shape `search/issues` serves it.
+    `pull_request.merged_at` is the merge date; `created_at` is when the PR
+    was OPENED, and the two differ for every PR that lived longer than a day."""
+    created = ago(merged_days if created_days is None else created_days)
+    return {
+        "number": number,
+        "title": f"feat({card}): thing {number}",
+        "html_url": f"https://github.com/{owner}/{repo}/pull/{number}",
+        "repository_url": f"https://api.github.com/repos/{owner}/{repo}",
+        "created_at": created,
+        "updated_at": ago(merged_days),
+        "pull_request": {"merged_at": ago(merged_days)},
+    }
+
+
+class FakeGitHub:
+    """The two REST reads `read_merged_prs` makes, answered from fixtures.
+
+    `installed` is the owners the App token's installation can see (the
+    `/installation/repositories` read); `pages` is each owner's search results,
+    page by page; `totals` is the search's own `total_count` per owner, which
+    is allowed to be larger than the rows it will ever hand back."""
+
+    def __init__(self, *, installed=(HOME,), pages=None, totals=None,
+                 failing=None):
+        self.installed = list(installed)
+        self.pages = pages or {}
+        self.totals = totals or {}
+        self.failing = failing or {}
+        self.calls = []
+
+    @staticmethod
+    def _field(args, name):
+        for i, arg in enumerate(args):
+            if arg in ("-f", "-F", "--raw-field", "--field") and \
+                    args[i + 1].startswith(f"{name}="):
+                return args[i + 1].split("=", 1)[1]
+        return None
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        joined = " ".join(args)
+        if "installation/repositories" in joined:
+            repos = [{"full_name": f"{owner}/repo"} for owner in self.installed]
+            return json.dumps({"total_count": len(repos), "repositories": repos})
+        assert "search/issues" in joined, f"an unexpected gh call: {args}"
+        query = self._field(args, "q") or ""
+        assert "is:pr" in query and "is:merged" in query, query
+        owner = next(o for o in FLEET_OWNERS + [HOME] if f"user:{o}" in query)
+        if owner in self.failing:
+            raise groom_context.ContextError(self.failing[owner])
+        pages = self.pages.get(owner) or [[]]
+        page = int(self._field(args, "page") or 1)
+        items = pages[page - 1] if page <= len(pages) else []
+        total = self.totals.get(owner, sum(len(p) for p in pages))
+        return json.dumps({"total_count": total, "incomplete_results": False,
+                           "items": items})
+
+    def searched(self):
+        return [c for c in self.calls if "search/issues" in " ".join(c)]
+
+
+@pytest.fixture
+def token(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "app-token")
+
+
+def test_a_pr_is_dated_by_its_merge_not_by_when_it_was_opened(token):
+    """A PR opened 30 days ago and merged yesterday shipped YESTERDAY. Dated
+    by `createdAt` it sorts a month back, and past the 14-day window it is not
+    in the pack at all — the card it did the work of looks unstarted."""
+    gh = FakeGitHub(pages={HOME: [[item(7, created_days=30, merged_days=1)]]})
+    read = groom_context.read_merged_prs(now=NOW, run=gh)
+    rows = read["rows"]
+    assert [r["url"] for r in rows] == [f"https://github.com/{HOME}/portico/pull/7"]
+    assert rows[0]["merged_at"] == ago(1), "the row carries the real merge date"
+
+    got = groom_context.pack(merged_prs=rows, now=NOW)
+    assert [r["merged_at"] for r in got["merged_prs"]] == [ago(1)], (
+        "a long-lived PR merged yesterday fell out of the fortnight's merges"
+    )
+
+
+def test_the_newest_rows_are_the_newest_by_real_merge_date(token):
+    """The 40 the model reads are the 40 newest MERGES. Here opening order is
+    the reverse of merging order, so a cut on `createdAt` keeps exactly the
+    wrong ones."""
+    cap = groom_context.CAPS["merged_prs"]
+    n = cap + 10
+    items = [item(i, merged_days=i * 0.1, created_days=13 - i * 0.1)
+             for i in range(n)]                     # 0 merged newest, opened last
+    gh = FakeGitHub(pages={HOME: [items]})
+    got = groom_context.pack(
+        merged_prs=groom_context.read_merged_prs(now=NOW, run=gh)["rows"],
+        now=NOW)
+    kept = {int(r["url"].rsplit("/", 1)[-1]) for r in got["merged_prs"]}
+    assert kept == set(range(cap))
+
+
+def test_every_page_is_read_and_the_count_is_the_searchs_total(token):
+    """1,337 merged in a fortnight; one page is 100 rows and the pack keeps 40.
+    Both pages are read, and the number the proposal reports is the search's
+    own `total_count` — not the 40 kept, and not the rows fetched."""
+    first = [item(i, merged_days=0.01 * i) for i in range(100)]
+    second = [item(100 + i, merged_days=1 + 0.01 * i) for i in range(20)]
+    gh = FakeGitHub(pages={HOME: [first, second]}, totals={HOME: 1337})
+    read = groom_context.read_merged_prs(now=NOW, run=gh, owners=[HOME])
+
+    urls = {r["url"] for r in read["rows"]}
+    assert f"https://github.com/{HOME}/portico/pull/0" in urls
+    assert f"https://github.com/{HOME}/portico/pull/119" in urls, (
+        "page two was never read"
+    )
+    assert len(read["rows"]) == 120
+    assert {self_page(c) for c in gh.searched()} >= {"1", "2"}
+    assert read["total_count"] == 1337
+
+    got = groom_context.pack(merged_prs=read["rows"],
+                             counts={"merged_prs": read["total_count"]}, now=NOW)
+    cap = groom_context.CAPS["merged_prs"]
+    assert len(got["merged_prs"]) == cap
+    assert groom_context.summary(got)["merged_prs"] == 1337, (
+        "the reported count must be the search's total_count, not the rows kept"
+    )
+    assert got["truncated"]["merged_prs"] == {"kept": cap, "of": 1337}
+    assert "newest 40 of 1337" in groom_context.render(got)
+
+
+def self_page(call):
+    return FakeGitHub._field(call, "page")
+
+
+def test_read_pack_reports_the_searchs_total_end_to_end(token):
+    gh = FakeGitHub(pages={HOME: [[item(i, merged_days=1) for i in range(3)]]},
+                    totals={HOME: 1337})
+    got = groom_context.read_pack(StubLops(), now=NOW, run=gh)
+    assert "merged_prs" not in got["unread"]
+    assert groom_context.summary(got)["merged_prs"] == 1337
+
+
+def test_the_search_stops_at_the_last_page():
+    """No page past the one that came back short — the reader follows every
+    page there IS, and does not spend the search quota on empty ones."""
+    gh = FakeGitHub(pages={HOME: [[item(i, merged_days=1) for i in range(100)],
+                                  [item(100, merged_days=2)]]})
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GH_TOKEN", "app-token")
+        groom_context.read_merged_prs(now=NOW, run=gh, owners=[HOME])
+    assert [self_page(c) for c in gh.searched()] == ["1", "2"]
+
+
+def test_an_owner_the_token_cannot_read_is_named_and_never_counted_as_zero(token):
+    """The owners come from `config/repo-map.json`. The App token reads the
+    ones its installation covers; every other owner is named unread — its
+    private repositories would answer the search with a confident, empty 0
+    (DRE-3329's rule, one level down) — while the readable owner's rows still
+    arrive."""
+    assert len(FLEET_OWNERS) > 1, "the fixture needs a fleet of several owners"
+    gh = FakeGitHub(installed=[HOME],
+                    pages={HOME: [[item(1, merged_days=1), item(2, merged_days=2)]]},
+                    totals={HOME: 2})
+    got = groom_context.read_pack(StubLops(), now=NOW, run=gh)
+
+    others = [o for o in FLEET_OWNERS if o != HOME]
+    assert sorted(got["unread_owners"]) == others
+    assert [r["url"].rsplit("/", 1)[-1] for r in got["merged_prs"]] == ["1", "2"]
+    assert "merged_prs" not in got["unread"], (
+        "one owner read fine — the section is partly known, not unknown"
+    )
+    for owner in others:
+        assert not any(f"user:{owner}" in " ".join(c) for c in gh.searched()), (
+            f"{owner} was searched with a token that cannot see it"
+        )
+
+    out = groom_context.summary(got)
+    assert out["merged_prs"] == 2, "the unread owners added nothing, not 0 each"
+    for owner in others:
+        assert f"merged_prs:{owner}" in out["unread"], (
+            f"{owner} is missing from the proposal's unread list"
+        )
+    rendered = groom_context.render(got)
+    for owner in others:
+        assert owner in rendered, f"the prompt never names {owner} as unread"
+    assert "unknown" in rendered.lower()
+
+
+def test_an_owner_whose_search_fails_is_named_with_its_error(token):
+    other = next(o for o in FLEET_OWNERS if o != HOME)
+    gh = FakeGitHub(installed=FLEET_OWNERS,
+                    pages={HOME: [[item(1, merged_days=1)]]},
+                    failing={other: "gh api search/issues failed rc=1: HTTP 403"})
+    read = groom_context.read_merged_prs(now=NOW, run=gh)
+    assert "HTTP 403" in read["unread_owners"][other]
+    assert [r["url"].rsplit("/", 1)[-1] for r in read["rows"]] == ["1"]
+
+
+def test_no_owner_readable_is_the_whole_section_unread(token):
+    """A token whose installation covers none of the fleet reads nothing, so
+    the section is unknown — and the reason names every owner it could not
+    read, rather than a search of each one answering 0."""
+    gh = FakeGitHub(installed=["someone-else"])
+    got = groom_context.read_pack(StubLops(), now=NOW, run=gh)
+    assert got["unread"] == ["merged_prs"]
+    assert groom_context.summary(got)["merged_prs"] is None
+    assert gh.searched() == [], "an owner the token cannot see was searched"
+    for owner in FLEET_OWNERS:
+        assert owner in got["unread_reasons"]["merged_prs"]
+
+
+def test_no_token_leaves_the_section_unread_with_the_error_named(monkeypatch):
+    """The failure every run since 2026-09-15 hit: the Groom step set no
+    `GH_TOKEN`, so `gh` exited rc=4. The section is unread, never zero, and
+    the pack says WHY — the name of the missing variable, not a bare gap."""
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    gh = FakeGitHub(pages={HOME: [[item(1, merged_days=1)]]})
+    got = groom_context.read_pack(StubLops(), now=NOW, run=gh)
+    assert got["unread"] == ["merged_prs"]
+    assert "GH_TOKEN" in got["unread_reasons"]["merged_prs"]
+    assert groom_context.summary(got)["merged_prs"] is None
+    assert "could not be read" in groom_context.render(got)
+    assert gh.calls == [], "a read with no token was attempted anyway"

@@ -748,6 +748,85 @@ class JudgedReadReachableTest(unittest.TestCase):
         )
 
 
+class MergedPrTokenTest(unittest.TestCase):
+    """DRE-4964: the context pack's merged-PR read has a token to read with.
+
+    The Groom step set no `GH_TOKEN`, so every `gh` call in it exited rc=4 and
+    the proposal said the merged-PR section "could not be read" on every run
+    since at least 2026-09-15. `github.token` would not do either — it cannot
+    see the fleet's private repositories — so the step is handed the Bureau
+    App's token, minted the way `reconcile.yml` mints it, under the env name
+    the per-card read reads as well.
+    """
+
+    APP_SECRETS = ("BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY")
+    ACTION = "actions/create-github-app-token@"
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.steps = self.doc["jobs"]["groom"]["steps"]
+        self.groom = _step(self.doc, GROOM_STEP)
+
+    def _mint(self) -> dict:
+        found = [s for s in self.steps
+                 if str(s.get("uses") or "").startswith(self.ACTION)]
+        self.assertEqual(len(found), 1, "the groom job mints exactly one App token")
+        return found[0]
+
+    @staticmethod
+    def _pin_line(path: Path) -> set:
+        """Every `uses: actions/create-github-app-token@<sha> # <version>` line
+        of a workflow, whitespace-normalised — the sha AND its version comment,
+        because the comment is what Dependabot reads."""
+        return {" ".join(line.split()) for line in path.read_text().splitlines()
+                if "uses: actions/create-github-app-token@" in line}
+
+    def test_the_reusable_declares_both_app_secrets_as_optional(self):
+        declared = (_on(self.doc)["workflow_call"].get("secrets") or {})
+        for name in self.APP_SECRETS:
+            self.assertIn(name, declared,
+                          f"a reusable workflow only sees the secrets it "
+                          f"declares — without {name} the mint gets nothing")
+            self.assertFalse((declared[name] or {}).get("required"),
+                             f"{name} must be optional")
+
+    def test_the_mint_uses_the_app_secrets(self):
+        with_ = self._mint().get("with") or {}
+        self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
+        self.assertEqual(_expression(with_.get("private-key")),
+                         "secrets.BUREAU_APP_PRIVATE_KEY")
+
+    def test_the_mint_is_pinned_exactly_as_reconcile_pins_it(self):
+        ours = self._pin_line(WORKFLOWS / "groomer.yml")
+        theirs = self._pin_line(WORKFLOWS / "reconcile.yml")
+        self.assertEqual(len(ours), 1)
+        self.assertTrue(theirs, "reconcile.yml no longer mints an App token")
+        self.assertLessEqual(ours, theirs,
+                             "the groomer's pin — sha and version comment — "
+                             "differs from reconcile.yml's")
+
+    def test_the_groom_step_carries_the_minted_token_as_gh_token(self):
+        mint = self._mint()
+        self.assertTrue(mint.get("id"), "the mint step needs an id to read from")
+        env = self.groom.get("env") or {}
+        self.assertEqual(_expression(env.get("GH_TOKEN")),
+                         f"steps.{mint['id']}.outputs.token",
+                         "GH_TOKEN is the contract the merged-PR read reads")
+        self.assertNotIn("github.token", str(env.get("GH_TOKEN")))
+        self.assertLess(self.steps.index(mint), self.steps.index(self.groom),
+                        "the token is minted after the step that spends it")
+
+    def test_a_failed_mint_degrades_to_an_unread_section_not_a_red_run(self):
+        """A mint that fails renders an empty token; the read then names the
+        section unread with the reason. The proposal is still the morning's
+        work, and a missing context signal must not take it down."""
+        self.assertTrue(self._mint().get("continue-on-error"))
+
+    def test_the_drain_mints_no_token(self):
+        """The drain reads the approval and moves cards; it builds no pack."""
+        self.assertIn("inputs.mode != 'drain'", _expression(self._mint().get("if")))
+
+
 class JudgementReceiptWiringTest(unittest.TestCase):
     """The one `🧠 model-attempt:` comment a judged run posts."""
 
