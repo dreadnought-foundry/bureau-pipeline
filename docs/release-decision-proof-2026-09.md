@@ -1,21 +1,256 @@
-# Release-train decisions reach GitHub as deployment messages, but held and no-op decisions never arrive as `deployment_status` — DRE-4773 (partial)
+# A released, a held and a no-op release-train decision each reach GitHub and the Record — DRE-4773
 
-**Two of the three runs are recorded, and one finding changes what the Record must read.** A real agent-bureau release (console `v1.6.149`, 2026-09-25 21:08 PT) and a real no-op (console outside its window, 2026-09-26 02:28 PT) each wrote their decision to GitHub. The code in the log equals the code in the deployment payload equals the code GitHub delivered. **GitHub delivered the `deployment_status` for the release but not for the no-op.** A status whose state is `inactive` is never delivered, and `docs/release-decision.md` maps both `held` and `no-op` to `inactive`. So the Record will only ever see held and no-op decisions through the `deployment` message, whose payload carries the whole decision. The held run was not provoked, because it needs a repository-variable write and a hand dispatch, which this read-only pass does not make. The Record step is not yet readable: agent-bureau began storing deployment messages at 08:08 PT today, and no train run has happened since. **This card stays open.**
+The proof for [DRE-4773](https://linear.app/dreadnoughtfoundry/issue/DRE-4773),
+under epic [DRE-4762](https://linear.app/dreadnoughtfoundry/issue/DRE-4762).
+Every time below is Pacific (PDT, UTC−7). UTC appears only inside commands and quoted output.
 
-Read on **2026-09-26 between 08:20 and 08:55 PT** by the operator's session: GitHub through the operator's `gh` login, App 3350400's delivery log through its own App JWT (minted locally, never printed), and agent-bureau's production database through `make db-read` (a `READ ONLY` transaction reporting `transaction_read_only = on`). Nothing was written anywhere: no variable set, no workflow dispatched, no deployment created. Every time is Pacific. UTC appears only inside commands and quoted output.
+**All three kinds of decision are now observed end to end, and the Record holds each one.** On 2026-09-27 three real agent-bureau release-train runs made the three decisions the card names. A scheduled run found nothing new to release (06:16 PT, `current`). A run released console `agent-bureau-console-v1.6.165` (07:17 PT). A run the operator provoked with the brake was held on every surface (08:04 PT). Each one wrote its decision line to the log, a deployment in environment `release-train`, and a row in the Record. The code in the log equals the code in the deployment payload equals the code in the Record, for all three. The held run's `hand_act` names the command the operator then used to clear the brake. The released run's `version` is the tag the run cut. Console's own release record stayed `success` after the four held decisions landed on top of it.
 
-| # | step | verdict |
-| --- | --- | --- |
-| 1 | three real runs: released, held, no-op | **2 of 3** — released run `36216605642`, no-op run `36232844966`. **Held: not taken** (needs `RELEASE_HOLD` set and a hand dispatch) |
-| 2 | each run's receipt line with its `decision recorded` line right before it | **proven** for both runs |
-| 3 | the deployment in `release-train` / `release-train-decision`, and the App's `deployment_status` delivery with the same payload | **released: proven.** **No-op: the deployment is proven, and GitHub made no `deployment_status` delivery** — the finding above |
-| 4 | the Record holds each as a recorded decision | **not yet readable** — read at 08:47 PT: the Record holds 2 deployment messages, both a console release's stages, and no decision |
-| — | the console's own stage deployment still `active` | **proven** — `v1.6.150` and `v1.6.151` carry no `inactive` status; 95 `inactive` decisions were written after `v1.6.150` went live |
-| — | no `decision not recorded: caller stub lacks deployments: write` line | **proven** across 100 runs, 48 of which carry decision lines |
+**One wording in the card cannot be met, and it stays named here.** The card asks for "the App's `deployment_status` delivery carrying the same payload" for all three runs. For held and no-op decisions that delivery never happens. Both are written with status `inactive`, and in the 2026-09-26 read of App 3350400's delivery log, none of the 39 status deliveries was `inactive` (details in the 2026-09-26 section below). That was observed for a no-op. For the held run it is still inferred: today's four held decisions each carry one `inactive` status, which was read from GitHub, but the App's delivery log was not re-read today (see "How it was read"). The Record does not need that delivery anyway. It reads each decision from the `deployment` message, whose payload carries the whole decision, and that is how all twelve of today's rows below reached it.
+
+## How it was read
+
+**2026-09-27, the held run and the Record.** On the CEO's explicit go ("Do the release bake 4773", about 08:03 PT), the operator's session provoked the held run in production. It set the brake at 08:03:56 PT, dispatched the train by hand, and cleared the brake at 08:04:54 PT, so the brake stood for 58 seconds. At about 08:07 PT it read the Record in agent-bureau's production database through `make db-read`, the read-only door. Between 08:08 and 08:15 PT the session writing this record re-read every GitHub object quoted below through the operator's `gh` login: the three runs' logs, the decision deployments and their statuses, console's release deployment, and the tag. It also read the card and its parent epic from Linear. Those were read-only calls. It did **not** re-read App 3350400's delivery log. That read needs an App JWT minted from the App's private key, and the session's permission guard refused the key read, so no delivery for today's runs is quoted here. Apart from the brake the CEO approved, nothing was written: no deployment was created by hand, and nothing was redelivered.
+
+**2026-09-26, the first pass.** Between 08:20 and 08:55 PT the operator's session read GitHub through the operator's `gh` login, read App 3350400's delivery log through its own App JWT (minted locally, never printed), and read agent-bureau's production database through `make db-read` (a `READ ONLY` transaction reporting `transaction_read_only = on`). Nothing was written. That pass recorded the 09-25 release and the 09-26 no-op. Its sections are kept below, apart from the edits listed at the start of that section.
+
+## Which runs satisfy which criterion
+
+| # | criterion | verdict | rests on |
+| --- | --- | --- | --- |
+| 1a | three real runs: released, held (provoked with `RELEASE_HOLD`, then cleared), no-op | **proven** | released [`36324293496`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36324293496) (09-27 07:17 PT) and [`36216605642`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36216605642) (09-25 21:08 PT); held [`36328177968`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36328177968) (09-27 08:04 PT); no-op [`36321812820`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36321812820) (09-27 06:16 PT, `current`) and [`36232844966`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36232844966) (09-26 02:28 PT, `window`) |
+| 1b | each run's receipt line with its `decision recorded: deployment <id>` line | **proven** for all five runs | the log excerpts below |
+| 1c | the deployment GitHub holds in environment `release-train` | **proven** for all five runs | today's three runs made 12 decision deployments in `release-train`, listed in the Record section. Each run's console decision is quoted in full, and so are the two 09-25/26 decisions |
+| 1d | the App's `deployment_status` delivery carrying the same payload | **released: proven** on the 09-25 run (delivery log, byte for byte). Not re-read for today's release. **Held and no-op: cannot be met.** | The status is `inactive`, and an `inactive` status was never delivered in the 09-26 read. That is observed for the 09-26 no-op and inferred for the held run. The decision reaches the Record through the `deployment` message instead |
+| 2 | the held run's `hand_act` is the command actually used; the released run's `version` is the tag the run cut | **proven** | held `36328177968`: the first clause of `hand_act` is the command used, word for word. Released `36324293496`: `version` = `agent-bureau-console-v1.6.165`, the tag the run pushed, on `03e082e39`. The 09-25 run matches the same way (`v1.6.149`) |
+| 3 | each is read from the Record in production with a PT time, the date of the read named, and any delivery the Record lacks recorded as a gap | **proven**, read **2026-09-27 at about 08:07 PT** | released `6693321502` (07:17:23 PT), held `6693834152`/`286`/`451`/`618` (08:04:23–26 PT), no-op `6692682060`/`145`/`251`/`347` (06:16:33–35 PT). The 12 newest decisions GitHub holds are exactly the 12 rows the Record returned: **no gap** |
+| 4 | console's own last stage deployment still `active` after the decisions were recorded | **proven** by the held run | console release `6693267619` (`v1.6.165`) ends on `success` at 07:17:20 PT. The four held `inactive` decisions came 47 minutes later, and it gained no `inactive` status |
+| 5 | the record is merged to `main`, and the CEO closes the card after reading it | **pending** | this pull request. The card carries `no-code`, so merging does not close it automatically |
+| — | no `decision not recorded: caller stub lacks deployments: write` line | **proven** | none in today's three logs; none in the 100 runs read on 09-26 |
 
 ---
 
-## Preconditions — the build cards are Done and on `stable`
+## 2026-09-27 — the three runs of the day
+
+All three runs executed `stable` at `5aaa5ac1de` (bureau-pipeline #535, committed 2026-09-26 23:31 PT), 105 commits ahead of DRE-4771's merge and 0 behind. Each log opens with `Uses: dreadnought-foundry/bureau-pipeline/.github/workflows/release-train.yml@refs/tags/stable (5aaa5ac1de73117528c79dfd07f98de9d0ed6ee0)`.
+
+```
+gh run view <id> -R dreadnought-foundry/agent-bureau --json databaseId,createdAt,event,conclusion,headSha,jobs
+gh run view <id> -R dreadnought-foundry/agent-bureau --log | grep 'release-train:'
+gh api repos/dreadnought-foundry/agent-bureau/deployments/<id> --jq .payload
+gh api repos/dreadnought-foundry/agent-bureau/deployments/<id>/statuses
+```
+
+| kind | run | started (PT) | event | jobs | decisions |
+| --- | --- | --- | --- | --- | --- |
+| no-op | [`36321812820`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36321812820) | 06:16:15 | `schedule` | Plan the surfaces: success. Wait and Release: skipped | 4 × `current` |
+| released | [`36324293496`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36324293496) | 06:59:23 | `workflow_run` | Plan the surfaces: success. Wait: skipped. Release console: success (07:12:08–07:17:25) | console `released` + 3 × `current` |
+| held | [`36328177968`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36328177968) | 08:03:59 | `workflow_dispatch` | Plan the surfaces: success. Wait and Release: skipped | 4 × `held` |
+
+### The held run — provoked by hand, on the CEO's go
+
+The CEO gave the go at about 08:03 PT ("Do the release bake 4773"). The operator's session then ran:
+
+```
+08:03:56 PT  gh variable set RELEASE_HOLD -R dreadnought-foundry/agent-bureau --body "2026-09-27"
+             gh workflow run release-train.yml -R dreadnought-foundry/agent-bureau      # → run 36328177968
+08:04:54 PT  gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau
+             gh variable list                                                            # repository scope only: no RELEASE_HOLD left
+```
+
+The brake stood for 58 seconds. Every surface exited `held`, and the Release job was skipped. The log's decision lines and receipts (08:04:25 PT):
+
+```
+2026-09-27T15:04:25.9861303Z release-train: [console] decision recorded: deployment 6693834152 (inactive)
+2026-09-27T15:04:25.9867100Z release-train: held dreadnought-foundry/agent-bureau console — the fleet brake RELEASE_HOLD is set (set 2026-09-27) — console releases nothing until it is cleared
+2026-09-27T15:04:25.9868674Z release-train: [website] decision recorded: deployment 6693834286 (inactive)
+2026-09-27T15:04:25.9879007Z release-train: held dreadnought-foundry/agent-bureau website — the fleet brake RELEASE_HOLD is set (set 2026-09-27) — website releases nothing until it is cleared
+2026-09-27T15:04:25.9880621Z release-train: [relay] decision recorded: deployment 6693834451 (inactive)
+2026-09-27T15:04:25.9882380Z release-train: held dreadnought-foundry/agent-bureau relay — the fleet brake RELEASE_HOLD is set (set 2026-09-27) — relay releases nothing until it is cleared
+2026-09-27T15:04:25.9883997Z release-train: [relay-gh] decision recorded: deployment 6693834618 (inactive)
+2026-09-27T15:04:25.9885835Z release-train: held dreadnought-foundry/agent-bureau relay-gh — the fleet brake RELEASE_HOLD is set (set 2026-09-27) — relay-gh releases nothing until it is cleared
+```
+
+The console decision, as GitHub holds it:
+
+```
+== deployment 6693834152  env=release-train task=release-train-decision created_at=2026-09-27T15:04:22Z sha=03e082e39 creator=github-actions[bot]
+   payload: {"act":"held","code":"held","decided_at":"2026-09-27T15:04:19Z","deployed":"agent-bureau-console-v1.6.165","event":"workflow_dispatch","hand_act":"gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau — or, when the fleet-wide brake is the one that is set, gh variable delete RELEASE_HOLD --org dreadnought-foundry","head":"03e082e399b364158c7cb087bdc5def05067c03b","phase":"plan","re_arm_at":null,"reason":"the fleet brake RELEASE_HOLD is set (set 2026-09-27) — console releases nothing until it is cleared","repo":"dreadnought-foundry/agent-bureau","run_attempt":1,"run_id":36328177968,"run_url":"https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36328177968","schema":"release-train-decision/1","sha":"03e082e399b364158c7cb087bdc5def05067c03b","surface":"console","version":null}
+   status 18908594345 inactive 2026-09-27T15:04:22Z [release-train-decision/1 held held console]
+```
+
+The other three have the same shape. Each one's `surface`, `deployed` and `reason` name its own surface, and each has one `inactive` status:
+
+```
+6693834286  created 15:04:23Z  surface=website   deployed=agent-bureau-website-v1.0.4  code=held  status 18908594720 inactive 15:04:23Z
+6693834451  created 15:04:24Z  surface=relay     deployed=agent-bureau-relay-v14       code=held  status 18908595084 inactive 15:04:24Z
+6693834618  created 15:04:25Z  surface=relay-gh  deployed=agent-bureau-relay-gh-v4     code=held  status 18908595453 inactive 15:04:25Z
+```
+
+The train decided at 08:04:19 PT (`decided_at`), inside the 58 seconds the brake stood.
+
+**The `hand_act` against the command actually used.** The recorded `hand_act` has two clauses:
+
+> `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau` — or, when the fleet-wide brake is the one that is set, `gh variable delete RELEASE_HOLD --org dreadnought-foundry`
+
+The operator cleared the brake with `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau`. That is the first clause, word for word. The second clause covers an org-level brake. The org scope was not read: `gh variable list` without `--org` lists repository variables only, and reading organization variables returns `HTTP 403: Resource not accessible by integration` to the token that checked this record. What rules out an org-level brake is the day's earlier runs. The 06:08, 06:16 and 06:59 PT runs were not held, and the released run's last decision came at 07:12:21 PT (`decided_at`). An org-level brake set before then would have held them. So the message told the reader the right command for the brake that was actually set. One case this does not exclude: an org-level brake set in the 52 minutes between 07:12 PT and the operator's brake at 08:03:56 PT. No train run after 08:04:54 PT was read for this record, so nothing here shows a run released unheld once the repository brake was gone.
+
+### The released run
+
+The plan job recorded the three surfaces it did not release (06:59:47 PT):
+
+```
+2026-09-27T13:59:47.4492076Z release-train: [website] decision recorded: deployment 6693129468 (inactive)
+2026-09-27T13:59:47.4493872Z release-train: no-op dreadnought-foundry/agent-bureau website — website reads current: nothing under website/ has changed since its newest tag
+2026-09-27T13:59:47.4508816Z release-train: [relay] decision recorded: deployment 6693129664 (inactive)
+2026-09-27T13:59:47.4511144Z release-train: no-op dreadnought-foundry/agent-bureau relay — relay reads current: nothing under cloud/relay/ has changed since its newest tag
+2026-09-27T13:59:47.4512817Z release-train: [relay-gh] decision recorded: deployment 6693129849 (inactive)
+2026-09-27T13:59:47.4515445Z release-train: no-op dreadnought-foundry/agent-bureau relay-gh — relay-gh reads current: nothing under cloud/relay-gh/ has changed since its newest tag
+```
+
+The `Release console` job cut and pushed the tag, then recorded the decision right before its receipt (07:17:22 PT):
+
+```
+2026-09-27T14:17:22.6650825Z release-train: [console] ==> release: console at 03e082e39 would become agent-bureau-console-v1.6.165 (last released: agent-bureau-console-v1.6.164)
+2026-09-27T14:17:22.6762356Z release-train: [console] ==> DONE -- version agent-bureau-console-v1.6.165 (sha 03e082e39) deployed at 2026-09-27T14:17:18Z
+2026-09-27T14:17:22.6769752Z release-train: [console]  * [new tag]             agent-bureau-console-v1.6.165 -> agent-bureau-console-v1.6.165
+2026-09-27T14:17:22.6770481Z release-train: [console] decision recorded: deployment 6693321502 (success)
+2026-09-27T14:17:22.6771395Z release-train: released dreadnought-foundry/agent-bureau console as agent-bureau-console-v1.6.165 at 03e082e
+```
+
+```
+== deployment 6693321502  env=release-train task=release-train-decision created_at=2026-09-27T14:17:22Z sha=03e082e39 creator=github-actions[bot]
+   payload: {"act":"release","code":"released","decided_at":"2026-09-27T14:12:21Z","deployed":"agent-bureau-console-v1.6.164","event":"workflow_run","hand_act":null,"head":"03e082e399b364158c7cb087bdc5def05067c03b","phase":"release","re_arm_at":null,"reason":"console released at 03e082e as agent-bureau-console-v1.6.165","repo":"dreadnought-foundry/agent-bureau","run_attempt":1,"run_id":36324293496,"run_url":"https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36324293496","schema":"release-train-decision/1","sha":"03e082e399b364158c7cb087bdc5def05067c03b","surface":"console","version":"agent-bureau-console-v1.6.165"}
+   status 18907459843 success 2026-09-27T14:17:22Z [release-train-decision/1 release released console]
+```
+
+**The `version` against the tag the run cut.** `agent-bureau-console-v1.6.165` is an annotated tag object (`7b0d55c51`). Its target is commit `03e082e39` and its tagger time is 07:17:18 PT. That matches the log's `[new tag]` line, the payload's `sha` and its `version`. The train decided at 07:12:21 PT, and the decision was recorded once the release was live, at 07:17:22 PT.
+
+```
+gh api repos/dreadnought-foundry/agent-bureau/git/ref/tags/agent-bureau-console-v1.6.165 --jq .object
+gh api repos/dreadnought-foundry/agent-bureau/git/tags/7b0d55c51a33b1167b331712d3d9bbc92ff262c4
+agent-bureau-console-v1.6.165 -> 03e082e39 commit tagger=2026-09-27T14:17:18Z
+```
+
+### The no-op run
+
+A scheduled run found nothing new on any surface (06:16:35 PT):
+
+```
+2026-09-27T13:16:35.0467693Z release-train: [console] decision recorded: deployment 6692682060 (inactive)
+2026-09-27T13:16:35.0469236Z release-train: no-op dreadnought-foundry/agent-bureau console — console reads current: nothing under console/, infra/ has changed since its newest tag
+2026-09-27T13:16:35.0470318Z release-train: [website] decision recorded: deployment 6692682145 (inactive)
+2026-09-27T13:16:35.0471428Z release-train: no-op dreadnought-foundry/agent-bureau website — website reads current: nothing under website/ has changed since its newest tag
+2026-09-27T13:16:35.0472430Z release-train: [relay] decision recorded: deployment 6692682251 (inactive)
+2026-09-27T13:16:35.0473506Z release-train: no-op dreadnought-foundry/agent-bureau relay — relay reads current: nothing under cloud/relay/ has changed since its newest tag
+2026-09-27T13:16:35.0474509Z release-train: [relay-gh] decision recorded: deployment 6692682347 (inactive)
+2026-09-27T13:16:35.0475695Z release-train: no-op dreadnought-foundry/agent-bureau relay-gh — relay-gh reads current: nothing under cloud/relay-gh/ has changed since its newest tag
+```
+
+```
+== deployment 6692682060  env=release-train task=release-train-decision created_at=2026-09-27T13:16:32Z sha=a5bf7b3ef creator=github-actions[bot]
+   payload: {"act":"no-op","code":"current","decided_at":"2026-09-27T13:16:32Z","deployed":"agent-bureau-console-v1.6.164","event":"schedule","hand_act":null,"head":"a5bf7b3efa33667cd4ea7269f500a46e50b18094","phase":"plan","re_arm_at":null,"reason":"console reads current: nothing under console/, infra/ has changed since its newest tag","repo":"dreadnought-foundry/agent-bureau","run_attempt":1,"run_id":36321812820,"run_url":"https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36321812820","schema":"release-train-decision/1","sha":"a5bf7b3efa33667cd4ea7269f500a46e50b18094","surface":"console","version":null}
+   status 18906041172 inactive 2026-09-27T13:16:32Z [release-train-decision/1 no-op current console]
+```
+
+### The Record — read 2026-09-27 at about 08:07 PT
+
+Read by the operator's session in agent-bureau (read-only):
+
+```
+AWS_PROFILE=dreadnought make db-read SQL=<file>
+```
+
+```sql
+SELECT subject_id, received_at, left(payload_trim::text, 900) AS payload
+  FROM event_record
+ WHERE source = 'github' AND event = 'deployment'
+   AND payload_trim::text LIKE '%release-train-decision%'
+   AND received_at >= '2026-09-27T13:00:00Z'
+ ORDER BY received_at DESC
+ LIMIT 12;
+```
+
+The rows, parsed (subject_id is the deployment id; received_at is UTC as stored):
+
+```
+6693834618 2026-09-27T15:04:26Z held     relay-gh  -                              36328177968  gh variable delete RELEASE_HOLD --repo dreadnought-foundry/…
+6693834451 2026-09-27T15:04:25Z held     relay     -                              36328177968  (same)
+6693834286 2026-09-27T15:04:24Z held     website   -                              36328177968  (same)
+6693834152 2026-09-27T15:04:23Z held     console   -                              36328177968  (same)
+6693321502 2026-09-27T14:17:23Z released console   agent-bureau-console-v1.6.165  36324293496  null
+6693129849 2026-09-27T13:59:47Z current  relay-gh  null                           36324293496
+6693129664 2026-09-27T13:59:46Z current  relay     null                           36324293496
+6693129468 2026-09-27T13:59:45Z current  website   null                           36324293496
+6692682347..6692682060 2026-09-27T13:16:33–35Z current (console, website, relay, relay-gh) null 36321812820
+```
+
+(The last line is a hand-written summary of four rows, not parsed output: one `current` row per surface from run `36321812820`, received between 13:16:33Z and 13:16:35Z.)
+
+| kind | run | Record row | recorded (PT) | run's own time in the log (PT) |
+| --- | --- | --- | --- | --- |
+| released | `36324293496` | `6693321502`: console, `released`, `agent-bureau-console-v1.6.165` | 07:17:23 | 07:17:22 |
+| held | `36328177968` | `6693834152`: console, `held`, `hand_act` = the clearing command | 08:04:23 | 08:04:25 |
+| no-op | `36321812820` | `6692682060`: console, `current` | 06:16:33 | 06:16:35 |
+
+(The held and no-op rows reach the Record a second or two before the log line that reports them. In the plan job, all four decision lines carry one timestamp, taken after the last of its four deployments was created: 15:04:25.98Z against deployments created 15:04:22–25Z.)
+
+GitHub's own list of decision deployments, newest first, read at about 08:10 PT:
+
+```
+gh api 'repos/dreadnought-foundry/agent-bureau/deployments?environment=release-train&per_page=16' \
+  --jq '.[]|"\(.id) \(.created_at) \(.payload.surface) \(.payload.code) \(.payload.run_id)"'
+6693834618 2026-09-27T15:04:25Z relay-gh held 36328177968
+6693834451 2026-09-27T15:04:24Z relay held 36328177968
+6693834286 2026-09-27T15:04:23Z website held 36328177968
+6693834152 2026-09-27T15:04:22Z console held 36328177968
+6693321502 2026-09-27T14:17:22Z console released 36324293496
+6693129849 2026-09-27T13:59:46Z relay-gh current 36324293496
+6693129664 2026-09-27T13:59:45Z relay current 36324293496
+6693129468 2026-09-27T13:59:44Z website current 36324293496
+6692682347 2026-09-27T13:16:34Z relay-gh current 36321812820
+6692682251 2026-09-27T13:16:34Z relay current 36321812820
+6692682145 2026-09-27T13:16:33Z website current 36321812820
+6692682060 2026-09-27T13:16:32Z console current 36321812820
+6692600849 2026-09-27T13:08:39Z relay-gh current 36321348313
+6692600689 2026-09-27T13:08:38Z relay current 36321348313
+6692600543 2026-09-27T13:08:37Z website current 36321348313
+6692600404 2026-09-27T13:08:37Z console current 36321348313
+```
+
+**Twelve created, twelve held — no gap.** GitHub's twelve newest decision deployments in `release-train` are the four held (`6693834152`, `…286`, `…451`, `…618`), the release and three `current` from the released run (`6693321502`, `6693129468`, `…664`, `…849`), and four `current` from the no-op run (`6692682060`, `…145`, `…251`, `…347`). The Record returned exactly those twelve ids. The query's time window also holds four earlier decisions, from run `36321348313` at 06:08 PT. They fall outside `LIMIT 12`, so their absence from these rows is not a gap. Whether the Record holds them was not checked.
+
+**How the rows got there.** The Record files these as `deployment` messages. They apply on Postgres since the release-history fix DRE-4976 (2026-09-26 18:14 PT). Nine earlier messages were redriven between 19:55 and 20:01 PT that evening. As the 2026-09-26 read found, held and no-op decisions produce no delivered `deployment_status`, so the Record reads each decision from the `deployment` message itself. Production's Train Yard tab, live since console `v1.6.165` (07:17 PT today), shows these decisions.
+
+### Code equals code equals code
+
+- **Released (`36324293496`):** the log says `released … as agent-bureau-console-v1.6.165`, the payload says `"code":"released"`, and the Record row says `released`. Equal.
+- **Held (`36328177968`):** the log says `held` on all four surfaces, the four payloads say `"code":"held"`, and the four Record rows say `held`. Equal.
+- **No-op (`36321812820`):** the log says `no-op … reads current` on all four surfaces, the four payloads say `"code":"current"`, and the four Record rows say `current`. Equal.
+
+### The console's own release record is still live
+
+Console's own release deployment for `v1.6.165`, in environment `console`:
+
+```
+gh api repos/dreadnought-foundry/agent-bureau/deployments/6693267619/statuses
+== deployment 6693267619  env=console task=release created_at=2026-09-27T14:12:24Z sha=03e082e39 creator=github-actions[bot]
+   status 18907459025 success 2026-09-27T14:17:20Z [live]
+   status 18907438846 in_progress 2026-09-27T14:16:30Z [verify]
+   status 18907368895 in_progress 2026-09-27T14:13:35Z [roll out]
+   status 18907341590 in_progress 2026-09-27T14:12:25Z [build]
+   status 18907341388 in_progress 2026-09-27T14:12:24Z [cut]
+```
+
+It went live at 07:17:20 PT. The four held decisions were written at 08:04:22–25 PT, and each carries an `inactive` status. When this record was written it was still the newest deployment in environment `console`, and its latest status was still `success`. **No decision inactivated it.** The held run is the one that proves this, because its decisions came after the release. The no-op run's decisions (06:16 PT) came before it.
+
+---
+
+## 2026-09-26 — the first pass (the 09-25 release and the 09-26 no-op)
+
+Kept as written on 2026-09-26, apart from three edits. The headings moved down one level. In Step 4, "about 08:08 PT on 2026-09-26" replaces an exact time, a note adds that the first stored message arrived at 08:08:33 PT, and a closing note points to the 2026-09-27 read of the Record. The old "What is not proven" list is replaced by the final section of this record.
+
+### Preconditions — the build cards are Done and on `stable`
 
 Read at **about 08:20 PT**.
 
@@ -47,7 +282,7 @@ Both runs below executed that `stable`. Their logs open with `Uses: dreadnought-
 
 ---
 
-## Step 1 — the runs
+### Step 1 — the runs
 
 ```
 gh run list -R dreadnought-foundry/agent-bureau --workflow release-train.yml --limit 100 \
@@ -65,7 +300,7 @@ The 100 runs span 2026-09-23 09:39 PT to 2026-09-26 06:15 PT. None has run since
 
 **Why no held run.** The card's method provokes one: set `RELEASE_HOLD` on agent-bureau, dispatch `release-train.yml` by hand, watch every surface exit `held`, delete the variable. That is a variable write and a workflow dispatch on production. This pass was scoped to reads, so it did neither. No held run happened on its own in the 100 runs read.
 
-## Step 2 — the receipt and decision lines
+### Step 2 — the receipt and decision lines
 
 **Released, run `36216605642`, job `Release console`** (the decision line comes right before the receipt):
 
@@ -87,9 +322,9 @@ That is 21:08:35 PT. The tag the run cut, `agent-bureau-console-v1.6.149`, point
 
 That is 02:28:07 PT. The same run also recorded `website` (`6677155878`, `current`) and `relay` (`6677155984`, `current`), one decision per surface.
 
-## Step 3 — what GitHub holds and what it delivered
+### Step 3 — what GitHub holds and what it delivered
 
-### The deployments
+#### The deployments
 
 ```
 gh api repos/dreadnought-foundry/agent-bureau/deployments/<id>
@@ -107,7 +342,7 @@ gh api repos/dreadnought-foundry/agent-bureau/deployments/<id>/statuses
 
 Released: decided 21:03:04 PT, deployment and status at 21:08:35 PT. No-op: decided 02:28:05 PT, deployment 02:28:05 PT, status 02:28:06 PT. The released payload's `version` is `agent-bureau-console-v1.6.149`, the tag the run cut.
 
-### The deliveries
+#### The deliveries
 
 App 3350400 (`agent-bureau-bot`) subscribes to both events:
 
@@ -157,15 +392,15 @@ In the same hours agent-bureau's train alone wrote 98 `inactive` decision status
 - **For DRE-4761:** a Record that files decisions from `deployment_status` will never see a held or a no-op. It has to read the decision from the `deployment` message. The `deployment` alone carries `act`, `code`, `reason`, `hand_act` and `decided_at`.
 - The card warned that a delivery GitHub made and the Record dropped must be recorded as a gap, never as "no decision". This is a third case: **a message GitHub never sends.** It is not a gap in the Record, and an operator looking for it on the Recent Deliveries page will not find it.
 
-### Code equals code equals code
+#### Code equals code equals code
 
 - **Released:** the log says `released`, the deployment payload says `"code": "released"`, and both delivered messages say `"code": "released"`. Equal.
 - **No-op:** the log says `window` ("the clock reads 02:28 PT and console's window is 05:00-00:00 PT"), the deployment payload says `"code": "window"`, and the delivered `deployment` says `"code": "window"`. Equal. There is no delivered status to compare.
 - **Held:** not taken.
 
-## Step 4 — the Record
+### Step 4 — the Record
 
-**Not yet readable.** agent-bureau's Record began accepting `deployment` and `deployment_status` with DRE-4785 (agent-bureau #2811), merged 2026-09-26 04:14 PT and live in `agent-bureau-console-v1.6.151` at **08:08:37 PT today**. The two runs above happened before that, and no train run has happened since. Read at **08:47 PT**:
+**Not yet readable.** agent-bureau's Record began accepting `deployment` and `deployment_status` with DRE-4785 (agent-bureau #2811), merged 2026-09-26 04:14 PT and live in `agent-bureau-console-v1.6.151` at **about 08:08 PT on 2026-09-26** (its first stored message arrived at 08:08:33 PT, during the rollout). The two runs above happened before that, and no train run has happened since. Read at **08:47 PT**:
 
 ```
 make db-read SQL=<file>      # agent-bureau, the read-only door
@@ -187,9 +422,9 @@ deployment_status	created	2	2026-09-26T15:08:33Z	2026-09-26T15:08:38Z
 (1 rows)
 ```
 
-Both are console `v1.6.151`'s own stage statuses ("roll out" at 08:08:32 PT and "live" at 08:08:37 PT, deployment `6680351271`). **The Record holds no decision message yet.** That is expected, not a gap: GitHub made no decision delivery after 08:08 PT. The next train run that reaches its plan job will be the first one the Record can hold. When the operator reads it, that date goes in this section.
+Both are console `v1.6.151`'s own stage statuses ("roll out" at 08:08:32 PT and "live" at 08:08:37 PT, deployment `6680351271`). **The Record holds no decision message yet.** That is expected, not a gap: GitHub made no decision delivery after 08:08 PT. The next train run that reaches its plan job will be the first one the Record can hold. When the operator reads it, that date goes in this section. **Read on 2026-09-27 at about 08:07 PT. See "The Record" in the 2026-09-27 section above.**
 
-## The console's own stage deployment is still `active`
+### The console's own stage deployment is still `active`
 
 **Proven.** After `v1.6.150` went live, the train recorded 95 `inactive` decisions, and neither release's own deployment in environment `console` gained an `inactive` status:
 
@@ -210,10 +445,12 @@ Both are console `v1.6.151`'s own stage statuses ("roll out" at 08:08:32 PT and 
 
 ---
 
-## What is not proven, and why
+## What cannot be met, and what is left
 
-- **The held run.** Not provoked. It needs `gh variable set RELEASE_HOLD` on agent-bureau and a hand `gh workflow run release-train.yml`, both writes to production, and then `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau` to clear it. The operator can run it at any time inside the console's window (05:00–00:00 PT). Three things will follow from it, and none can be taken before: its log lines, its `hand_act` compared with the clearing command actually used, and its `deployment` delivery. Given the finding above, it will produce no `deployment_status` delivery.
-- **The `deployment_status` delivery for held and no-op decisions.** It will never exist while those decisions are `inactive`. The criterion needs a decision: read the `deployment` delivery instead, or change the state.
-- **Step 4, the Record.** Not readable until a train run happens after 08:08 PT today, and until DRE-4761 files decisions as decisions. Today it only indexes them in `event_record`, and `record_releases` deliberately ignores `release-train-decision`.
-- **Both runs predate the Record's recording,** so neither can ever appear in it. Step 4 will need three new runs, or a redelivery from the App's log within its three-day window. The released run's delivery ages out of that window around 2026-09-28 21:08 PT.
-- **The working files are not in this repo.** The scan script, the 100 run logs and the delivery listing are in the operator's session scratch space. Every command is quoted so a reader can rebuild them.
+- **The App's `deployment_status` delivery for a held or a no-op decision.** It cannot exist while those decisions are written `inactive`, and `docs/release-decision.md` maps both `held` and `no-op` to `inactive`. For the no-op this was observed on 2026-09-26: the `deployment` was delivered, no status was delivered, and none of the 39 status deliveries in those hours was `inactive`. For the held run it is inferred. Today's four held decisions each carry one `inactive` status, read from GitHub, but the delivery log was not re-read today. Criterion 1 names this delivery. What proves each decision instead is the `deployment` message, which carries the whole payload and is what the Record files. Keeping or rewording that criterion is the CEO's call when he closes the card.
+- **The App's delivery log was not re-read on 2026-09-27.** Reading it needs an App JWT minted from App 3350400's private key, and this session's permission guard refused the key read. The delivery evidence for criterion 1 therefore rests on the 09-25 release (`36216605642`). Today's three runs rest on the log, the deployment GitHub holds, and the Record's row.
+- **The organization's variables were not read.** Reading them returns `HTTP 403` to the token that checked this record. That no org-level `RELEASE_HOLD` was set rests on the day's unheld runs up to 07:12 PT, as the held-run section explains.
+- **Two follow-ups this record points to, not filed as cards.** A Linear search at 08:12 PT found no card for either.
+  1. `docs/release-decision.md` says "The Record's App receives every `deployment` and `deployment_status` message the repository produces". For `inactive` statuses that is not true. The file is generated from `scripts/release_decision.py`, so correcting it is a code change for its own card.
+  2. The same file defines `re_arm_at` as "the UTC minute the run re-armed itself for". The 09-26 no-op payload carries `"re_arm_at": "2026-09-26T12:00:00Z"`, but its own `reason` says "not re-armed". In code (`Decision.re_arm_at`), the field is the minute the surface may next be released, and it is set whether or not a re-armed run was dispatched. A consumer that reads it as "a re-armed run is waiting" (DRE-4761's Record, or the Train Yard tab) will be wrong. The field's description needs a fix.
+- **The working files are not in this repository.** The run logs are in the session's scratch space. Every command is quoted, so a reader can rebuild them.
