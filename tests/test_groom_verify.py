@@ -419,6 +419,22 @@ def test_evidence_from_a_source_that_was_read_still_counts():
     assert [r["identifier"] for r in cancel(got)] == ["DRE-102"]
 
 
+def test_a_check_that_fails_outright_posts_everything_unread(monkeypatch):
+    """A bug in the check must not cost the CEO the morning's proposal: it
+    posts as it would have unchecked, with every card unread on every source
+    and nothing marked clean."""
+    def boom(*a, **k):
+        raise KeyError("identifier")
+
+    monkeypatch.setattr(groom_verify, "check", boom)
+    got = checked()
+    plain = groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW)
+    assert planning(got) == planning(plain) and got["id"] == plain["id"]
+    assert all(r["verdict"] == "unread" for r in got["verification"]["cards"])
+    assert set(got["verification"]["unread"]) == set(groom_verify.SOURCES)
+    assert "could not be read" in groomer.render_proposal(got)
+
+
 def test_a_clean_read_says_clean():
     got = checked()
     assert all(r["verdict"] == "clean" for r in got["verification"]["cards"])
