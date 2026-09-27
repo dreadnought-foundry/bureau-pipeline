@@ -20,7 +20,7 @@ Every time below is Pacific (PDT, UTC−7). UTC appears only inside commands and
 | --- | --- | --- | --- |
 | 1a | three real runs: released, held (provoked with `RELEASE_HOLD`, then cleared), no-op | **proven** | released [`36324293496`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36324293496) (09-27 07:17 PT) and [`36216605642`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36216605642) (09-25 21:08 PT); held [`36328177968`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36328177968) (09-27 08:04 PT); no-op [`36321812820`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36321812820) (09-27 06:16 PT, `current`) and [`36232844966`](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36232844966) (09-26 02:28 PT, `window`) |
 | 1b | each run's receipt line with its `decision recorded: deployment <id>` line | **proven** for all five runs | the log excerpts below |
-| 1c | the deployment GitHub holds in environment `release-train` | **proven** for all five runs | the payloads below: 12 for today's three runs, 2 for the 09-25/26 runs |
+| 1c | the deployment GitHub holds in environment `release-train` | **proven** for all five runs | today's three runs made 12 decision deployments in `release-train`, listed in the Record section. Each run's console decision is quoted in full, and so are the two 09-25/26 decisions |
 | 1d | the App's `deployment_status` delivery carrying the same payload | **released: proven** on the 09-25 run (delivery log, byte for byte). Not re-read for today's release. **Held and no-op: cannot be met.** | The status is `inactive`, and an `inactive` status was never delivered in the 09-26 read. That is observed for the 09-26 no-op and inferred for the held run. The decision reaches the Record through the `deployment` message instead |
 | 2 | the held run's `hand_act` is the command actually used; the released run's `version` is the tag the run cut | **proven** | held `36328177968`: the first clause of `hand_act` is the command used, word for word. Released `36324293496`: `version` = `agent-bureau-console-v1.6.165`, the tag the run pushed, on `03e082e39`. The 09-25 run matches the same way (`v1.6.149`) |
 | 3 | each is read from the Record in production with a PT time, the date of the read named, and any delivery the Record lacks recorded as a gap | **proven**, read **2026-09-27 at about 08:07 PT** | released `6693321502` (07:17:23 PT), held `6693834152`/`286`/`451`/`618` (08:04:23–26 PT), no-op `6692682060`/`145`/`251`/`347` (06:16:33–35 PT). The 12 newest decisions GitHub holds are exactly the 12 rows the Record returned: **no gap** |
@@ -193,6 +193,29 @@ The rows, parsed (subject_id is the deployment id; received_at is UTC as stored)
 
 (The held and no-op rows reach the Record a second or two before the log line that reports them. In the plan job, all four decision lines carry one timestamp, taken after the last of its four deployments was created: 15:04:25.98Z against deployments created 15:04:22–25Z.)
 
+GitHub's own list of decision deployments, newest first, read at about 08:10 PT:
+
+```
+gh api 'repos/dreadnought-foundry/agent-bureau/deployments?environment=release-train&per_page=16' \
+  --jq '.[]|"\(.id) \(.created_at) \(.payload.surface) \(.payload.code) \(.payload.run_id)"'
+6693834618 2026-09-27T15:04:25Z relay-gh held 36328177968
+6693834451 2026-09-27T15:04:24Z relay held 36328177968
+6693834286 2026-09-27T15:04:23Z website held 36328177968
+6693834152 2026-09-27T15:04:22Z console held 36328177968
+6693321502 2026-09-27T14:17:22Z console released 36324293496
+6693129849 2026-09-27T13:59:46Z relay-gh current 36324293496
+6693129664 2026-09-27T13:59:45Z relay current 36324293496
+6693129468 2026-09-27T13:59:44Z website current 36324293496
+6692682347 2026-09-27T13:16:34Z relay-gh current 36321812820
+6692682251 2026-09-27T13:16:34Z relay current 36321812820
+6692682145 2026-09-27T13:16:33Z website current 36321812820
+6692682060 2026-09-27T13:16:32Z console current 36321812820
+6692600849 2026-09-27T13:08:39Z relay-gh current 36321348313
+6692600689 2026-09-27T13:08:38Z relay current 36321348313
+6692600543 2026-09-27T13:08:37Z website current 36321348313
+6692600404 2026-09-27T13:08:37Z console current 36321348313
+```
+
 **Twelve created, twelve held — no gap.** GitHub's twelve newest decision deployments in `release-train` are the four held (`6693834152`, `…286`, `…451`, `…618`), the release and three `current` from the released run (`6693321502`, `6693129468`, `…664`, `…849`), and four `current` from the no-op run (`6692682060`, `…145`, `…251`, `…347`). The Record returned exactly those twelve ids. The query's time window also holds four earlier decisions, from run `36321348313` at 06:08 PT, which fell outside `LIMIT 12`. They were not read, and they are not a gap.
 
 **How the rows got there.** The Record files these as `deployment` messages. They apply on Postgres since the release-history fix DRE-4976 (2026-09-26 18:14 PT). Nine earlier messages were redriven between 19:55 and 20:01 PT that evening. As the 2026-09-26 read found, held and no-op decisions produce no delivered `deployment_status`, so the Record reads each decision from the `deployment` message itself. Production's Train Yard tab, live since console `v1.6.165` (07:17 PT today), shows these decisions.
@@ -223,7 +246,7 @@ It went live at 07:17:20 PT. The four held decisions were written at 08:04:22–
 
 ## 2026-09-26 — the first pass (the 09-25 release and the 09-26 no-op)
 
-Kept as written on 2026-09-26, with two corrections: in Step 4 below, "about 08:08 PT" replaces an exact time, and the "What is not proven" list is replaced by the final section of this record.
+Kept as written on 2026-09-26, apart from three edits. The headings moved down one level. In Step 4, "about 08:08 PT" replaces an exact time, and a note points to the 2026-09-27 read of the Record. The old "What is not proven" list is replaced by the final section of this record.
 
 ### Preconditions — the build cards are Done and on `stable`
 
