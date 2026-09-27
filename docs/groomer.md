@@ -50,6 +50,15 @@ only then does anything leave Intake.
    Cancel list with that evidence as the reason, and a Cancel whose
    replacement is not real goes back to the Planning list. No model call. The
    id is computed after, so the approval covers the checked lists. Below.
+9. **Posts, in its own step** (DRE-4971). The run is
+   compute, verify, then post. `propose --card DRE-N --out proposal.json`
+   computes the proposal, reads the card's thread and posts nothing; the
+   verify matrix
+   (`scripts/groom_verify_agent.py`) reads each card against the code on
+   main, in jobs of its own, and writes its verdicts onto the record; then
+   `post --card DRE-N --proposal proposal-verified.json` posts that record.
+   The page then carries a `## Verified against main` section after the
+   Cancel list. Below, under the approval gate.
 
 ## The one ranked read
 
@@ -81,7 +90,11 @@ and whether the answer was cut short. It is composed by
 summary as well. Not on a `dry_run`: that switch means no marker of any kind on
 the card (DRE-3712), so the step is skipped and the receipt is neither posted
 nor composed. What the run cost is still in `proposal.json`, which the run
-keeps as an artifact either way.
+keeps as an artifact either way, and what the verify step cost is on the page
+itself: the `Verify step:` line under `## Verified against main` carries its
+card count, dollars and wall clock, read off the record's `verify` block —
+`groomer_receipt.py` reads only the ranked read's own block and is unchanged
+(DRE-4971).
 
 ## The order, applied top to bottom
 
@@ -306,6 +319,40 @@ without it.
 ```
 python3 scripts/groomer.py propose --lane Intake --capacity 20 --post DRE-2683
 ```
+
+### Compute, verify, then post (DRE-4971)
+
+The verify matrix has to run between computing the proposal and posting it, in
+other jobs, so the two acts are two commands:
+
+```
+python3 scripts/groomer.py propose --lane Intake --capacity 20 \
+  --card DRE-2683 --out proposal.json
+python3 scripts/groomer.py post --card DRE-2683 \
+  --proposal proposal-verified.json [--dry-run]
+```
+
+`propose --card DRE-N` reads the card's thread exactly as `--post DRE-N` does —
+an earlier `groom-excluded` or `groom-held` is honored, a held repo is left
+out, an open decline is answered — writes `--out`, prints the page, and posts
+nothing. `--post` keeps its meaning, thread read plus post, and naming both is
+refused. `post` loads the record, reads the thread, and posts through the same
+`post_proposal` `--post` uses: at most once per id, and never for an empty
+record. `--dry-run` reads the thread and prints `dry run — nothing posted` with
+the page it would have posted. Either way the page goes to stdout, for the step
+summary.
+
+When the record carries a `verify` block — written by
+`groom_verify_agent.py apply` — the page adds `## Verified against main` after
+the Cancel list: one line per verdict count (`still-needed`, `done`,
+`obsolete`, `unverified`), one line `Verify step: <N> cards, $<X.XX>, <M> min
+<S> s wall clock`, and each unverified card by id with its reason. A Cancel
+row the verify step wrote (`source: verify-agent`) carries its `file:line`
+proof whole in the Reason cell, and a batch card's verdict is under its entry
+in `## Why each card is in the batch`. A cost or clock the step could not read
+says `unknown`, never zero. A record with no `verify` block renders byte for
+byte as before. The drain still reads the posted comment, never the artifact,
+and reads a verify-agent Cancel row exactly like any other.
 
 `propose` writes nothing but a comment carrying the proposal, and it writes that
 one at most once: before posting it reads the card and skips a proposal already

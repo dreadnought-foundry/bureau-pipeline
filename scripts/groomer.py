@@ -187,10 +187,20 @@ CLI:
     python3 scripts/groomer.py propose [--lane Intake] [--capacity 20]
                                        [--batch-cycles 1] [--priority portico]
                                        [--window-days 14] [--no-judgement]
-                                       [--out proposal.json] [--post DRE-N]
+                                       [--out proposal.json]
+                                       [--post DRE-N | --card DRE-N]
                                        [--keep-answer judgement-answer.txt]
                                        [--hold-repo atlas] [--no-verify]
+    python3 scripts/groomer.py post    --card DRE-N --proposal proposal.json
+                                       [--dry-run]
     python3 scripts/groomer.py drain   --card DRE-N [--lane Intake]
+
+`propose --card DRE-N` reads the card's thread exactly as `--post DRE-N` does
+and posts nothing; `post` posts a record read from a file (DRE-4971). The run
+is compute, verify, then post — the verify matrix (`groom_verify_agent.py`)
+runs between the two, in its own jobs, and writes its verdicts onto the record
+`post` reads. `--post` keeps its meaning, thread read plus post, and naming
+both is refused.
 
 `--keep-answer` writes the ranked read's raw answer — every piece of a
 continued one, joined — beside the proposal, for the run artifact (DRE-3331).
@@ -327,6 +337,13 @@ BATCH_REASONS_HEADING = "## Why each card is in the batch"
 # how the reader knows there is none.
 CANCEL_HEADING = "## Cancel, with reasons"
 CANCEL_COLUMNS = "| # | Card | Pri | Repo | Epic | Title | Reason |"
+
+# What the verify matrix found and spent (DRE-4971), after the Cancel table.
+# Both strings are shared with the cards that write the record and wire the
+# workflow, so they are written once. ABSENT when the record carries no
+# `verify` block, so a run without the matrix renders as it always did.
+VERIFIED_HEADING = "## Verified against main"
+VERIFY_COST_LINE = "Verify step: {cards} cards, {cost}, {clock} wall clock"
 
 # The lane the drain writes the Planning list into: Intake's exit is a
 # classification, and Planning is what produces one (DRE-2719).
@@ -2251,6 +2268,9 @@ def render_proposal(proposal: dict) -> str:
     # (DRE-4727) — the console's reader takes no section to mean no
     # cancellation, which is what most mornings are.
     w.extend(_render_cancel(proposal))
+    # What the verify matrix found and spent (DRE-4971). Absent when the record
+    # carries no `verify` block, so a run without it renders as before.
+    w.extend(_render_verified(proposal))
     # What the check before posting read, and what it could not (DRE-4966).
     # Absent when the check did not run, so `--no-verify` renders as before.
     w.extend(_render_check(proposal))
@@ -2348,11 +2368,18 @@ def _render_batch_reasons(proposal: dict) -> list:
     Absent on the `--no-judgement` path, like every other thing the ranked read
     writes: the rules place a card by priority and age and have no fifth
     labelled thing to say about it, and the audit (DRE-3151) compares two
-    readings of one population rather than two documents.
+    readings of one population rather than two documents — unless the verify
+    matrix answered for a batch card (DRE-4971), whose verdict is said here
+    on either path.
+
+    The verdict is a plain line after the labelled ones, never a `- **Label:**`
+    line: the console reads those against the five DRE-3764 labels and the
+    `Why`, and a sixth label is not in the vocabulary it knows.
     """
     block = proposal.get("judgement") or {}
     batch = sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])
-    if not block.get("enabled") or not batch:
+    verified = any(row.get("verify") for row in batch)
+    if not (block.get("enabled") or verified) or not batch:
         return []
     w = [BATCH_REASONS_HEADING, ""]
     w.append("The same reasons as the table above, in full — this is what the "
@@ -2365,8 +2392,22 @@ def _render_batch_reasons(proposal: dict) -> list:
         for label, text in (row.get("reasons") or {}).items():
             w.append(f"- **{groom_judgement.REASON_LABELS[label]}:** "
                      f"{_line(text)}")
+        if row.get("verify"):
+            w.append(_verdict_line(row["verify"]))
         w.append("")
     return w
+
+
+def _verdict_line(mark: dict) -> str:
+    """One batch card's verify verdict, with its summary or, when it went
+    unverified, the reason. Both are the agent's words about card text, so
+    they are defanged like every other reason on the page."""
+    verdict = mark.get("verdict") or "unverified"
+    said = mark.get("reason") if verdict == "unverified" else mark.get("summary")
+    line = f"Verified against main: **{_line(verdict)}**"
+    if said:
+        line += f" — {defang_reason(_line(said))[0]}"
+    return line
 
 
 def _render_judgement(proposal: dict) -> list:
@@ -2546,6 +2587,57 @@ def _render_cancel(proposal: dict) -> list:
                  f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
                  f"{_whole_cell(row.get('reason'))} |")
     w.append("")
+    return w
+
+
+def _render_verified(proposal: dict) -> list:
+    """What the verify matrix found and spent (DRE-4971) — or nothing, when
+    the record carries no `verify` block.
+
+    One line per verdict count, the cost line in the grammar the sibling cards
+    share (`VERIFY_COST_LINE`), and every unverified card by id with its
+    reason. A Cancel it proved is already in the table above, its `file:line`
+    proof in the Reason cell. A cost or a clock the step could not read says
+    `unknown` — never `$0.00` (`standards/console-honesty.md` rule 2).
+    """
+    block = proposal.get("verify")
+    if not block:
+        return []
+    counts = block.get("counts") or {}
+    cost, clock = block.get("cost_usd"), block.get("wall_clock_seconds")
+    w = [VERIFIED_HEADING, ""]
+    w.append("A read-only agent read each card on the Planning list, and "
+             "the spares behind it, against the code on main, and answered "
+             "still-needed, done or obsolete with the file and line that "
+             "proves it. A card it proved done or obsolete is on the Cancel "
+             "list with that proof as its reason; a card it could not answer "
+             "for stays where the proposal put it.")
+    w.append("")
+    for verdict in ("still-needed", "done", "obsolete", "unverified"):
+        w.append(f"- {verdict}: {int(counts.get(verdict) or 0)}")
+    w.append("")
+    w.append(VERIFY_COST_LINE.format(
+        cards=int(block.get("cards") or 0),
+        cost="cost unknown" if cost is None else f"${cost:.2f}",
+        clock=("unknown" if clock is None
+               else f"{int(clock) // 60} min {int(clock) % 60} s")))
+    w.append("")
+    if block.get("slots_unfilled"):
+        w.append(f"{_plural(int(block['slots_unfilled']), 'slot')} a Cancel "
+                 f"emptied had no still-needed card behind it to take it, so "
+                 f"the Planning list is that much shorter.")
+        w.append("")
+    unverified = block.get("unverified") or []
+    if unverified:
+        marks = {row["identifier"]: row.get("verify") or {}
+                 for row in proposal.get("sequence") or []}
+        w.append("Not verified — each stays where the proposal put it:")
+        w.append("")
+        for identifier in unverified:
+            reason = (marks.get(identifier) or {}).get("reason")
+            w.append(f"- {identifier} — "
+                     f"{defang_reason(_line(reason))[0]}")
+        w.append("")
     return w
 
 
@@ -3788,9 +3880,9 @@ def _build(args) -> dict:
     # The standing card's WHOLE thread, read once: the repo switch and the
     # CEO's per-card answers on every earlier proposal both live there, and
     # either can be the oldest comment on the card.
-    post = getattr(args, "post", None)
-    records = (decision_records(linear_ops, post, whole_thread=True)
-               if post else [])
+    thread = _thread_card(args)
+    records = (decision_records(linear_ops, thread, whole_thread=True)
+               if thread else [])
     # The repo switch, read BEFORE the census (DRE-3403). A card the model
     # never sees cannot be ranked, cannot be given a cycle and cannot fill a
     # slot in the batch — which is the difference between this and the
@@ -3894,19 +3986,25 @@ def _unread_line(source: str, entry: dict) -> str:
             f"{_plural(len(entry['cards']), 'card')}: {entry['why']}")
 
 
+def _thread_card(args) -> str | None:
+    """The standing card whose thread `propose` reads: `--post`'s, or
+    `--card`'s, which reads the same thread and posts nothing (DRE-4971)."""
+    return getattr(args, "post", None) or getattr(args, "card", None)
+
+
 def read_holds(lops, args, *, records: list[dict] | None = None) -> list[str]:
     """The repos switched off for this run (DRE-3403).
 
-    Off the `--post` card's WHOLE thread when there is a card: a hold is not
-    bound to a proposal id and outlives the proposal it was written on, so the
-    current answer can be the oldest comment on the card and the fifty-comment
-    window would lose it. `--hold-repo` supplies the same thing on a dry run
+    Off the `--post` (or `--card`) card's WHOLE thread when there is a card: a
+    hold is not bound to a proposal id and outlives the proposal it was written
+    on, so the current answer can be the oldest comment on the card and the
+    fifty-comment window would lose it. `--hold-repo` supplies the same thing on a dry run
     with no card to read, and is honoured beside a card's own markers rather
     than instead of them — a flag that silently dropped a hold standing on the
     card would be the failure this switch exists to prevent.
     """
     flags = {slug for slug in (getattr(args, "hold_repo", None) or ()) if slug}
-    card = getattr(args, "post", None)
+    card = _thread_card(args)
     if not card:
         return sorted(flags)
     if records is None:
@@ -3924,7 +4022,16 @@ def main(argv=None) -> int:
     p_propose = sub.add_parser("propose", help="sequence the lane; write nothing")
     _shaping(p_propose)
     p_propose.add_argument("--out", help="write the proposal JSON here")
-    p_propose.add_argument("--post", help="post the proposal to this card")
+    # DRE-4971. The verify matrix runs between computing the proposal and
+    # posting it, in other jobs, so `--card` reads the card's thread exactly as
+    # `--post` does and posts nothing; `post` posts the verified record later.
+    # Naming both is a contradiction, and argparse refuses it.
+    thread = p_propose.add_mutually_exclusive_group()
+    thread.add_argument("--post", help="post the proposal to this card")
+    thread.add_argument("--card",
+                        help="read this card's thread as --post does, and "
+                             "post NOTHING — `post` posts the record later "
+                             "(DRE-4971)")
     p_propose.add_argument("--keep-answer", dest="keep_answer",
                            help="write the ranked read's raw answer here, for "
                                 "the run artifact — only when a call answered "
@@ -3937,6 +4044,19 @@ def main(argv=None) -> int:
                            help="post NOTHING, whatever --post names — the "
                                 "proposal it would have posted goes to the run "
                                 "log instead (DRE-3712)")
+
+    # The second half of `propose --card` (DRE-4971): a record read from a
+    # file, posted through `post_proposal`, so the idempotence and the refusal
+    # of an empty proposal are exactly the ones `--post` has.
+    p_post = sub.add_parser("post", help="post a proposal record to the card")
+    p_post.add_argument("--card", required=True,
+                        help="the card the proposal is posted to")
+    p_post.add_argument("--proposal", required=True,
+                        help="the proposal JSON — `propose --out`'s, or the "
+                             "verify step's")
+    p_post.add_argument("--dry-run", dest="dry_run", action="store_true",
+                        help="read the thread and print the page, and post "
+                             "NOTHING (DRE-3712)")
 
     # NO shaping flags (DRE-3338). The batch a drain moves is read off the
     # approved proposal record, so there is nothing left for a flag to shape —
@@ -3961,6 +4081,10 @@ def main(argv=None) -> int:
         print(json.dumps(result, indent=2))
         return 0
 
+    if args.command == "post":
+        return post_record(linear_ops, args.card, args.proposal,
+                           dry_run=args.dry_run)
+
     if args.command == "census":
         cards = read_population(linear_ops, args.lane)
         print(json.dumps({"lane": args.lane, "population": len(cards),
@@ -3972,7 +4096,8 @@ def main(argv=None) -> int:
     # both "is there a decline to open with" (DRE-3373) and "is this batch
     # already proposed here". Before `--out`, so the artifact the console reads
     # carries the answer the comment does.
-    records = decision_records(linear_ops, args.post) if args.post else None
+    card = _thread_card(args)
+    records = decision_records(linear_ops, card) if card else None
     if records is not None:
         answer_decline(proposal, records)
     if args.out:
@@ -3987,6 +4112,34 @@ def main(argv=None) -> int:
               "would have posted follows")
     elif args.post:
         post_proposal(linear_ops, args.post, proposal, records)
+    print(render_proposal(proposal))
+    return 0
+
+
+def post_record(lops, card: str, path: str, *, dry_run: bool = False) -> int:
+    """`post`: the record at `path`, posted to `card` (DRE-4971).
+
+    The thread is read once, as `propose --post` reads it: the decline this
+    proposal answers is recomputed against the record's own batch — the verify
+    step may have changed it since `propose --card` wrote the file — and the
+    same read decides "already proposed here". Everything else is
+    `post_proposal`, so a re-run posts nothing and an empty record is refused.
+    The page is printed either way, for the step summary.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            proposal = json.load(fh)
+    except (OSError, ValueError) as e:
+        print(f"groomer: refused — cannot read the proposal at {path}: {e}",
+              file=sys.stderr)
+        return 2
+    records = decision_records(lops, card)
+    answer_decline(proposal, records)
+    if dry_run:
+        print(f"dry run — nothing posted to {card}; the proposal it would "
+              "have posted follows")
+    else:
+        post_proposal(lops, card, proposal, records)
     print(render_proposal(proposal))
     return 0
 
