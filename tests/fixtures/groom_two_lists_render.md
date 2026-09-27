@@ -22,7 +22,7 @@ Ranked by test-model (asked) / test-model (answered) in 1 call over 5 cards, aga
 
 **To approve:** comment `🧺 groom-approved: 3734d5abc032` on this card. Approval moves the Planning list to Planning and the Cancel list to Canceled. Anything else — including a comment that mentions the marker — leaves both lists where they are.
 
-**To say more than yes:** `🧺 groom-declined: 3734d5abc032 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: 3734d5abc032 DRE-N` keeps a card on either list in Intake; `🧺 groom-added: 3734d5abc032 DRE-N` pulls one in, after the batch. One comment each, and the newest one about a card wins.
+**To say more than yes:** `🧺 groom-declined: 3734d5abc032 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: 3734d5abc032 DRE-N` keeps a card on either list in Intake and out of every later proposal (don't do); `🧺 groom-held: 3734d5abc032 DRE-N` keeps it in Intake and ranks it last next time (hold); `🧺 groom-added: 3734d5abc032 DRE-N` pulls one in, after the batch. One comment each, and the newest one about a card wins.
 
 ## The population
 

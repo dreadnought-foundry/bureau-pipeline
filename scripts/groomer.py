@@ -189,7 +189,7 @@ CLI:
                                        [--window-days 14] [--no-judgement]
                                        [--out proposal.json] [--post DRE-N]
                                        [--keep-answer judgement-answer.txt]
-                                       [--hold-repo atlas]
+                                       [--hold-repo atlas] [--no-verify]
     python3 scripts/groomer.py drain   --card DRE-N [--lane Intake]
 
 `--keep-answer` writes the ranked read's raw answer — every piece of a
@@ -226,6 +226,24 @@ outcomes and never code.
 
 `--no-judgement` makes no call at all and is today's groomer byte-for-byte, so
 the audit card can run the two readings over one population.
+
+## The check before posting, and the CEO's earlier answers (DRE-4966)
+
+Before the proposal is posted, `verify_proposal` hands it to
+`groom_verify.check`: every card on both lists, and up to ten behind them, is
+read against its own comments, merged pull requests and other cards that name
+it. A card already done or superseded goes to the Cancel list with that
+evidence, and the next card takes its slot; a Cancel whose replacement is not
+Done, a merged PR, or approved and in flight goes back to the Planning list
+with the reason. No model call, and the id is computed after, so an approval
+covers the checked lists. A source it could not read is said on the page as
+unread, never as clean. `--no-verify` posts without it.
+
+`propose --post` also reads the CEO's per-card answers on EVERY earlier
+proposal on the standing card (`standing_decisions`): `groom-excluded` is Don't
+do — the card is not offered again until `groom-added` brings it back — and
+`groom-held` is Hold — the drain holds it back exactly as an exclusion, and a
+later proposal may offer it again, ranked after every card never held.
 """
 
 from __future__ import annotations
@@ -247,6 +265,7 @@ import console_receipt  # noqa: E402 — ONE reader of a console-signed decision
 import dead_run  # noqa: E402 — ONE Pacific clock for a time a person reads
 import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
+import groom_verify  # noqa: E402 — the check before posting (DRE-4966)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
 import linear_ops  # noqa: E402
 import planning_classify  # noqa: E402 — the model receipt, one definition
@@ -284,6 +303,10 @@ OUTCOMES = {
 # the first ever carries a `superseded_by` target.
 DEAD_FROM_LINE = "superseded-line"
 DEAD_FROM_JUDGEMENT = "judgement"
+# …and a third, which reads rather than judges (DRE-4966): the check before
+# posting found the card's own comments, a merged pull request or another card
+# saying it is done or superseded. Its reason is that evidence.
+DEAD_FROM_CHECK = "check"
 
 # The one sentence a reason the plain-English guard refused is replaced with.
 # Written once, here, because the presentation card (DRE-3152) and the console
@@ -343,7 +366,19 @@ APPROVAL_TAG = "groom-approved"
 DECLINE_TAG = "groom-declined"       # `<id> — <reason>`; the reason is required
 EXCLUDE_TAG = "groom-excluded"       # `<id> DRE-N[ — <reason>]`, per card
 ADD_TAG = "groom-added"              # `<id> DRE-N[ — <reason>]`, per card
-DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG)
+# Hold and Don't do are two answers (the CEO's answer on DRE-4966, 2026-09-26
+# 09:54 PT): "Hold means ask me again in a later cycle… Don't do means never
+# propose it again." `groom-excluded` is Don't do — no later proposal offers
+# the card until `groom-added` brings it back. `groom-held` is Hold — the drain
+# leaves the card in Intake exactly as it does an excluded one, and a later
+# proposal may offer it again, ranked behind every card that was never held.
+# The console writes it (DRE-4979/DRE-4980); the string is a contract with the
+# console, character for character.
+HOLD_TAG = "groom-held"              # `<id> DRE-N[ — <reason>]`, per card
+DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
+# The per-card markers, and the ones that keep a card out of the drain.
+PER_CARD_TAGS = (EXCLUDE_TAG, ADD_TAG, HOLD_TAG)
+HELD_BACK_TAGS = (EXCLUDE_TAG, HOLD_TAG)
 
 # --- the CEO's repo switch (DRE-3403) ---------------------------------------
 # Beside the decision markers, and deliberately NOT one of them: these are not
@@ -1111,6 +1146,42 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     return rows
 
 
+def _held_last(cards: list[dict], held, *, collisions: dict,
+               broken: list | None = None,
+               repo_priority=REPO_PRIORITY) -> list[dict]:
+    """`sequence`, with every card the CEO HELD after every card that was never
+    held (DRE-4966).
+
+    "When it comes back it ranks behind the cards I haven't held" — whatever
+    its priority or age, so the two groups are sequenced separately, each by
+    the ordinary rules, and the held group is appended. A collision or blocker
+    between the groups is not an ordering constraint here: honouring one would
+    pull a held card back ahead of an unheld one, which is the answer the CEO
+    just overruled. The dependency gate still holds a blocked card later.
+
+    With nothing held this IS `sequence`, row for row.
+    """
+    held = set(held or ())
+    if not held:
+        return sequence(cards, collisions=collisions, broken=broken,
+                        repo_priority=repo_priority)
+    rows: list[dict] = []
+    for group in ([c for c in cards if c["identifier"] not in held],
+                  [c for c in cards if c["identifier"] in held]):
+        if not group:
+            continue
+        ids = {c["identifier"] for c in group}
+        pairs = [p for p in collisions["pairs"]
+                 if p["before"] in ids and p["after"] in ids]
+        rows += sequence(group, collisions={**collisions, "pairs": pairs},
+                         broken=broken, repo_priority=repo_priority)
+    for position, row in enumerate(rows, 1):
+        row["position"] = position
+        if row["identifier"] in held:
+            row["held"] = True
+    return rows
+
+
 def _batchable(unit_list: list[dict]) -> set[str]:
     """The units the batch may contain: every one of them (DRE-4725).
 
@@ -1196,7 +1267,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             batch_cycles: int = 1, repo_priority=REPO_PRIORITY,
             lane: str = "Intake", now: str | None = None,
             window_days: int = WINDOW_DAYS, judgement=None,
-            held_repos=()) -> dict:
+            held_repos=(), excluded=(), held_cards=(),
+            verified: dict | None = None) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
     `judgement` is a `groom_judgement.Judgement` (or a bare
@@ -1213,13 +1285,33 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     `capacity` and never half of a collision pair or a pull-forward. What stays
     the whole lane is `population` and the census: a held repo's cards are
     still visible as existing, and only the OFFER shrinks.
+
+    `excluded` and `held_cards` are the CEO's per-card answers on EARLIER
+    proposals on the standing card (`standing_decisions`, DRE-4966). An
+    excluded card — Don't do — leaves the offer here exactly as a held repo's
+    card does. A held card — Hold — stays on offer and is sequenced after
+    every card that was never held (`_held_last`).
+
+    `verified` is `groom_verify.check`'s answer about a first proposal of the
+    same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
+    its evidence as the reason and takes it out of the slots, so the next card
+    in order fills its place; `keep` rejects a Cancel whose replacement is not
+    real and leaves the card on the Planning list with the reason named.
     """
     now = now or _now()
     # The whole lane, kept under its own name — every read below this line is
     # of the offer, and the two must not be able to swap by accident.
     in_lane = list(cards)
     holds = held_repo_rows(in_lane, held_repos)
-    cards = offered(in_lane, held_repos)
+    excluded = set(excluded or ())
+    left_out = sorted((c["identifier"] for c in offered(in_lane, held_repos)
+                       if c["identifier"] in excluded), key=_card_sort_key)
+    cards = [c for c in offered(in_lane, held_repos)
+             if c["identifier"] not in excluded]
+    held_cards = {c["identifier"] for c in cards} & set(held_cards or ())
+    verified = verified or {}
+    check_cancel = dict(verified.get("cancel") or {})
+    check_keep = dict(verified.get("keep") or {})
     verdicts = _verdicts_of(judgement)
     # Which cards would go on the Cancel list, and on whose word (DRE-4727).
     # Decided per card here and ACTED ON only for a card the walk below places
@@ -1245,11 +1337,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
             continue
         if supersession_gap(card.get("description")):
             unstated.append(card["identifier"])
+    # A Cancel the check rejected — its replacement is not Done, not a merged
+    # PR and not approved and in flight — is not a Cancel (DRE-4966). Taken
+    # out BEFORE the read's refusals are computed, so a rejected card the read
+    # also declined is reported as declined rather than batched.
+    for identifier in check_keep:
+        to_cancel.pop(identifier, None)
 
     collisions = collision_report(cards)
     broken: list = []
-    ordered = sequence(cards, collisions=collisions, broken=broken,
-                       repo_priority=repo_priority)
+    ordered = _held_last(cards, held_cards, collisions=collisions,
+                         broken=broken, repo_priority=repo_priority)
     # A card the read DECLINED is not in the batch (DRE-3544). The rules put
     # DRE-3020 at position 32 of `f673bfefa340` — under the capacity — and the
     # model had said it could not place it, so the CEO was shown a batch row
@@ -1271,12 +1369,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # Except a card its own description condemned: the read never judged it
     # (the declaration a person wrote outranks it, `_mark`), so its answer —
     # or its silence — about that card cannot take it off the Cancel list.
+    #
+    # And a card the check found done or superseded (DRE-4966) takes no slot
+    # either: it goes on the Cancel list with its evidence, and the next card
+    # in order fills its place. Evidence a person wrote down outranks a
+    # model's refusal to place the card, as the description's line does.
     declined = declined_cards(verdicts, getattr(judgement, "problem", None)) \
         - {cid for cid, (source, _) in to_cancel.items()
-           if source == DEAD_FROM_LINE}
+           if source == DEAD_FROM_LINE} - set(check_cancel)
     planned = {row["identifier"]: row for row in cycle_plan(
-        [r for r in ordered if r["identifier"] not in declined], cycles,
-        capacity)}
+        [r for r in ordered if r["identifier"] not in declined
+         and r["identifier"] not in check_cancel], cycles, capacity)}
 
     batch_numbers = sorted({r["cycle"] for r in planned.values()})[:batch_cycles]
     # The morning's set is the batch cycle(s) — `capacity` cards, Planning
@@ -1285,6 +1388,15 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # order, so the page reads as two lists and not as one with holes in it.
     now_rows, later_rows, dead = [], [], []
     for row in ordered:
+        if row["identifier"] in check_cancel:
+            dead.append({"identifier": row["identifier"],
+                         "title": row["title"], "repo": row["repo"],
+                         "superseded_by": None, "source": DEAD_FROM_CHECK,
+                         "check_reason": defang_reason(
+                             check_cancel[row["identifier"]])[0],
+                         "position": len(dead) + 1, "epic": row["epic"],
+                         "band": row["band"]})
+            continue
         if row["identifier"] in declined:
             later_rows.append({"identifier": row["identifier"],
                                "title": row["title"], "repo": row["repo"],
@@ -1304,6 +1416,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                 ("identifier", "title", "position", "cycle",
                                  "cycle_id", "unit", "epic", "repo",
                                  "projected", "band")},
+                             **({"held": True} if row.get("held") else {}),
                              "position": len(now_rows) + 1})
         else:
             # Outside the batch is `not-now` with the cycle it is projected
@@ -1323,6 +1436,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     cancelled = {d["identifier"] for d in dead}
     sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
                       "outcome": "not-now"} if r["identifier"] in declined
+                     else {**r, "cycle": None, "cycle_id": None,
+                           "projected": False, "outcome": "dead"}
+                     if r["identifier"] in check_cancel
                      else {**planned[r["identifier"]], "cycle": None,
                            "cycle_id": None, "projected": False,
                            "outcome": "dead"} if r["identifier"] in cancelled
@@ -1360,9 +1476,23 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         "unhonoured_constraints": broken,
         "unstated_supersessions": unstated,
     }
+    # The CEO's earlier answers, said on the page (DRE-4966) — and absent when
+    # there are none, so a thread with no per-card marker proposes exactly
+    # what it did before.
+    if left_out:
+        proposal["excluded_before"] = left_out
+    if held_cards:
+        proposal["held_before"] = sorted(held_cards, key=_card_sort_key)
     proposal["deprioritised"] = _deprioritised(proposal)
     proposal["judgement"] = _annotate(proposal, judgement, verdicts,
                                       declined=declined)
+    # A rejected Cancel stays on the Planning list with the reason named
+    # (DRE-4966): its Why is the rejection, whoever else wrote one.
+    for rows in (proposal["outcomes"]["now"], proposal["outcomes"]["not-now"],
+                 proposal["sequence"]):
+        for row in rows:
+            if row["identifier"] in check_keep:
+                row["reason"] = defang_reason(check_keep[row["identifier"]])[0]
     # `proposed ∩ unranked = ∅`, checked on the thing that was actually built
     # rather than trusted from the filter above (DRE-3544).
     assert_disjoint(proposal)
@@ -1458,6 +1588,9 @@ def _rules_reason(outcome: str, row: dict) -> str:
     if outcome == "dead":
         return f"superseded by {row.get('superseded_by')}"
     if outcome == "now":
+        if row.get("held"):
+            return (f"held on an earlier proposal, so it is ranked after every "
+                    f"card that was not — position {row['position']}")
         band = BAND_LABELS.get(row.get("band"))
         opened = f"marked {band}" if band else "newest first"
         return f"in the batch by the rules — {opened}, position {row['position']}"
@@ -1496,7 +1629,10 @@ def _mark(outcome: str, row: dict, verdict, *, withheld: list,
     # A card its OWN DESCRIPTION condemned was never placed by the read: the
     # declaration a person wrote outranks it, and the reason has to say what
     # superseded it rather than that a model could not rank it.
-    if outcome == "dead" and row.get("source") == DEAD_FROM_LINE:
+    # The same for a card the check found done: the evidence was read, not
+    # judged (DRE-4966).
+    if outcome == "dead" and row.get("source") in (DEAD_FROM_LINE,
+                                                    DEAD_FROM_CHECK):
         verdict = None
     judged = verdict is not None and verdict.outcome != "unranked"
     if outcome == "dead":
@@ -1557,6 +1693,12 @@ def _cancel_mark(row: dict, verdict, judged: bool, *, withheld: list) -> dict:
     if row.get("source") == DEAD_FROM_LINE:
         return {"reason": _rules_reason("dead", row), "trigger": None,
                 "evidence": None, "judged": False, "reasons": {}}
+    if row.get("source") == DEAD_FROM_CHECK:
+        # The evidence the check read, already through the plain-English
+        # guard in `groom_verify` and defanged in `propose`.
+        return {"reason": row.get("check_reason") or WITHHELD_REASON,
+                "trigger": None, "evidence": row.get("check_reason"),
+                "judged": False, "reasons": {}}
     evidence = (verdict.pointer
                 if judged and verdict.outcome == "likely-done" else None)
     if evidence is not None and not _showable(evidence):
@@ -2065,7 +2207,9 @@ def render_proposal(proposal: dict) -> str:
     add(f"**To say more than yes:** `{MARK} {DECLINE_TAG}: {proposal['id']} — "
         f"<reason>` declines the batch (the reason is required); "
         f"`{MARK} {EXCLUDE_TAG}: {proposal['id']} DRE-N` keeps a card on "
-        f"either list in Intake; "
+        f"either list in Intake and out of every later proposal (don't do); "
+        f"`{MARK} {HOLD_TAG}: {proposal['id']} DRE-N` keeps it in Intake and "
+        f"ranks it last next time (hold); "
         f"`{MARK} {ADD_TAG}: {proposal['id']} DRE-N` pulls one in, after the "
         f"batch. One comment each, and the newest one about a card wins.")
     add("")
@@ -2107,6 +2251,9 @@ def render_proposal(proposal: dict) -> str:
     # (DRE-4727) — the console's reader takes no section to mean no
     # cancellation, which is what most mornings are.
     w.extend(_render_cancel(proposal))
+    # What the check before posting read, and what it could not (DRE-4966).
+    # Absent when the check did not run, so `--no-verify` renders as before.
+    w.extend(_render_check(proposal))
     # Only when a judgement ran. `--no-judgement` renders exactly what it
     # rendered before this card, so the audit (DRE-3151) compares two readings
     # of one population rather than two documents.
@@ -2170,6 +2317,7 @@ def render_proposal(proposal: dict) -> str:
         add("")
     w.extend(_render_unranked(proposal))
     w.extend(_render_held(proposal))
+    w.extend(_render_earlier(proposal))
     add("## On cycles")
     add("")
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
@@ -2397,6 +2545,77 @@ def _render_cancel(proposal: dict) -> list:
                  f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
                  f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
                  f"{_whole_cell(row.get('reason'))} |")
+    w.append("")
+    return w
+
+
+def _render_check(proposal: dict) -> list:
+    """What the check before posting read, found and could not read
+    (DRE-4966) — or nothing, when it did not run.
+
+    Every unread source is named with the cards it was unread for, and every
+    Planning card the check never reached is named too: a card is only ever
+    clean on a source that was read (`standards/console-honesty.md` rule 2).
+    """
+    block = proposal.get("verification")
+    if not block:
+        return []
+    rows = block.get("cards") or []
+    by_id = {row["identifier"]: row for row in rows}
+    w = ["## What the check read", ""]
+    w.append(f"Before this was posted, {_plural(len(rows), 'card')} — both "
+             f"lists and up to {block.get('spare')} behind them, in order — "
+             f"were read against their own comments, merged pull requests "
+             f"and other cards that name them. No model was asked.")
+    w.append("")
+    said = False
+    for identifier in block.get("moved_to_cancel") or []:
+        source = (by_id.get(identifier) or {}).get("source")
+        w.append(f"- Moved to Cancel: {identifier} — found in "
+                 f"{groom_verify.SOURCE_NAMES.get(source, 'its evidence')}; "
+                 f"the reason is in the Cancel table.")
+        said = True
+    for identifier in block.get("cancels_rejected") or []:
+        why = ((by_id.get(identifier) or {}).get("evidence") or [{}])[0]
+        w.append(f"- Cancel rejected, kept on the Planning list: {identifier} "
+                 f"— {_line(why.get('text'))}.")
+        said = True
+    for source in groom_verify.SOURCES:
+        entry = (block.get("unread") or {}).get(source)
+        if not entry:
+            continue
+        cards = sorted(entry["cards"], key=_card_sort_key)
+        w.append(f"- Unread: {groom_verify.SOURCE_NAMES[source]} could not be "
+                 f"read this run for {', '.join(cards)} — none of those cards "
+                 f"is marked clean on that source.")
+        said = True
+    if block.get("not_checked"):
+        w.append(f"- Not checked: {', '.join(block['not_checked'])} — on the "
+                 f"Planning list past the cards the check read, so nothing is "
+                 f"known about them either way.")
+        said = True
+    if not said:
+        w.append("- Nothing found: every card read clean on all three "
+                 "sources.")
+    w.append("")
+    return w
+
+
+def _render_earlier(proposal: dict) -> list:
+    """The CEO's per-card answers on earlier proposals, as they shaped this
+    one (DRE-4966) — or nothing, when there are none."""
+    left_out = proposal.get("excluded_before") or []
+    held = proposal.get("held_before") or []
+    if not left_out and not held:
+        return []
+    w = ["## Your earlier answers", ""]
+    if left_out:
+        w.append(f"- Not proposed again — you said don't do: "
+                 f"{', '.join(left_out)}. `{MARK} {ADD_TAG}: {proposal['id']} "
+                 f"DRE-N` brings one back.")
+    if held:
+        w.append(f"- Held on an earlier proposal, so ranked after every card "
+                 f"you have not held: {', '.join(held)}.")
     w.append("")
     return w
 
@@ -2629,7 +2848,9 @@ def read_decisions(records: list[dict]) -> dict:
     "drained"}`. `approved` is the id of the batch that is currently approved
     and `problem` says why there isn't one; `excluded` and `added` map a card
     identifier to the marker that named it LAST, because a card named by both
-    follows the newest comment; `ignored` is every marker the drain would not
+    follows the newest comment — and `excluded` carries a `groom-held` card
+    too, under its own tag, because the drain holds both back (DRE-4966);
+    `ignored` is every marker the drain would not
     honour, each with the reason, so the record can say what it dropped;
     `drained` is every batch a `groom-drained` record already stands for.
 
@@ -2715,13 +2936,54 @@ def read_decisions(records: list[dict]) -> dict:
                      f"this card is `{approved}`", identifier))
             continue
         # The newest comment wins: a later marker replaces an earlier one for
-        # the same card, whichever of the two markers each of them is.
+        # the same card, whichever of the markers each of them is. A HOLD is
+        # held back exactly as an exclusion is, for the batch it names
+        # (DRE-4966) — the two differ only in what a LATER proposal does,
+        # which is `standing_decisions`' question, not the drain's.
         excluded.pop(identifier, None)
         added.pop(identifier, None)
-        (excluded if tag == EXCLUDE_TAG else added)[identifier] = {
+        (excluded if tag in HELD_BACK_TAGS else added)[identifier] = {
             "tag": tag, "reason": reason}
     return {"approved": approved, "problem": problem, "excluded": excluded,
             "added": added, "ignored": ignored, "drained": drained}
+
+
+def standing_decisions(records: list[dict]) -> dict:
+    """The CEO's per-card answers on EVERY proposal on the standing card —
+    `{"excluded": [...], "held": [...]}` (DRE-4966).
+
+    `read_decisions` answers "what does the drain do with THIS batch", and
+    reads a per-card marker only for the batch it names. This answers "what
+    may the next proposal offer", and the answer outlives the proposal it was
+    written on: a card excluded yesterday is not offered this morning.
+
+      * `groom-excluded` is Don't do — the card is not proposed again;
+      * `groom-held` is Hold — it may be proposed again, ranked last;
+      * `groom-added` brings a card back from either.
+
+    The newest marker per card wins, on whichever proposal it was written,
+    and only a decider's marker counts (`_decides`, DRE-2721 / DRE-3754): the
+    proposer cannot take a card off its own offer. `records` is the WHOLE
+    thread, vouched (`decision_records(..., whole_thread=True)`) — the
+    answer about a card can be the oldest comment on the card.
+    """
+    last: dict[str, str] = {}
+    for record in records:
+        if not _decides(record):
+            continue
+        body = record.get("body") or ""
+        for tag in PER_CARD_TAGS:
+            match = decision_match(tag, body)
+            if not match:
+                continue
+            named = _CARD_TAIL.match(match.group(2))
+            if named:
+                last[named.group(1)] = tag
+            break
+    return {"excluded": sorted((c for c, t in last.items() if t == EXCLUDE_TAG),
+                               key=_card_sort_key),
+            "held": sorted((c for c, t in last.items() if t == HOLD_TAG),
+                           key=_card_sort_key)}
 
 
 def _named_card(tail: str) -> str | None:
@@ -3202,7 +3464,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         if identifier not in on_a_list:
             ignored.append(_ignored(
                 mark["tag"],
-                f"`{EXCLUDE_TAG}` names a card on neither approved list, so "
+                f"`{mark['tag']}` names a card on neither approved list, so "
                 f"there was nothing to hold back", identifier))
 
     moving, cancelling, held_back, rows = [], [], [], []
@@ -3497,6 +3759,12 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
                              "`groom-hold-repo: <slug>` on the --post card "
                              "does — repeatable, and how a dry run with no "
                              "card to read exercises the switch (DRE-3403)")
+    parser.add_argument("--no-verify", dest="verify", action="store_false",
+                        default=True,
+                        help="post without the check before posting — the "
+                             "read of every proposed card's comments, merged "
+                             "pull requests and other cards for evidence it "
+                             "is already done or superseded (DRE-4966)")
     parser.add_argument("--no-judgement", dest="judgement",
                         action="store_false", default=True,
                         help="sequence by the rules alone and make NO model "
@@ -3517,12 +3785,28 @@ def _build(args) -> dict:
     function or the model call inside it.
     """
     cards = read_population(linear_ops, args.lane)
+    # The standing card's WHOLE thread, read once: the repo switch and the
+    # CEO's per-card answers on every earlier proposal both live there, and
+    # either can be the oldest comment on the card.
+    post = getattr(args, "post", None)
+    records = (decision_records(linear_ops, post, whole_thread=True)
+               if post else [])
     # The repo switch, read BEFORE the census (DRE-3403). A card the model
     # never sees cannot be ranked, cannot be given a cycle and cannot fill a
     # slot in the batch — which is the difference between this and the
     # work-in-progress cap, that stops builds after classification.
-    holds = read_holds(linear_ops, args)
-    on_offer = offered(cards, holds)
+    holds = read_holds(linear_ops, args, records=records)
+    # Don't do and Hold, from every earlier proposal (DRE-4966). An excluded
+    # card leaves the offer before the census, as a held repo's card does; a
+    # held card stays on offer and is ranked last.
+    standing = standing_decisions(records)
+    excluded = set(standing["excluded"])
+    on_offer = [c for c in offered(cards, holds)
+                if c["identifier"] not in excluded]
+    if excluded:
+        print(f"groomer: {_plural(len(excluded), 'card')} excluded on an "
+              f"earlier proposal left out — {', '.join(standing['excluded'])}",
+              file=sys.stderr)
     if holds:
         print(f"groomer: {_plural(len(holds), 'repo')} switched off — "
               f"{', '.join(holds)}; {_plural(len(cards) - len(on_offer), 'card')} "
@@ -3555,14 +3839,62 @@ def _build(args) -> dict:
             print(f"groomer: kept the ranking answer at {keep} "
                   f"({len(judgement.answer.splitlines())} line(s))",
                   file=sys.stderr)
-    return propose(cards, cycles=cycles, capacity=args.capacity,
+    shaping = dict(cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
                    window_days=args.window_days, judgement=judgement,
-                   held_repos=holds,
+                   held_repos=holds, excluded=standing["excluded"],
+                   held_cards=standing["held"],
                    repo_priority=tuple(p for p in args.priority.split(",") if p))
+    if getattr(args, "verify", False):
+        # After `propose` and before anything is posted, so the id the CEO
+        # approves covers the checked lists (DRE-4966).
+        return verify_proposal(cards, shaping, lops=linear_ops)
+    return propose(cards, **shaping)
 
 
-def read_holds(lops, args) -> list[str]:
+def verify_proposal(cards: list[dict], shaping: dict, *, lops, run=None,
+                    owners=None) -> dict:
+    """Propose, check the proposal, and propose again with the answer
+    (DRE-4966).
+
+    `groom_verify.check` reads the first proposal's lists and the spares
+    behind them; the second `propose` applies what it found — a done or
+    superseded card to the Cancel list, its slot to the next card, a Cancel
+    with no real replacement back to the Planning list — so the id is a
+    digest of the lists as checked. `propose` is pure, so the second call is
+    the first one plus the answer and nothing else: no second model call,
+    no second read of the lane. The check's per-card record is written onto
+    the proposal for the page, the proof and the audit.
+    """
+    first = propose(cards, **shaping)
+    try:
+        result = groom_verify.check(first, lops=lops, run=run, owners=owners)
+    except Exception as e:  # noqa: BLE001 — a failed check is an unread one
+        # Fail soft, and say so: the proposal posts with every card unread on
+        # every source rather than not at all (vendor boundary Q5).
+        print(f"groomer: the check before posting failed — {e}; every card "
+              f"is reported unread", file=sys.stderr)
+        result = groom_verify.unread_result(first, "the check failed this run")
+    final = propose(cards, verified=result, **shaping)
+    groom_verify.settle(final, result)
+    moved = final["verification"]["moved_to_cancel"]
+    kept = final["verification"]["cancels_rejected"]
+    print(f"groomer: the check read {_plural(len(result['cards']), 'card')} — "
+          f"{len(moved)} moved to Cancel, {len(kept)} Cancel(s) rejected"
+          + "".join(f"; {_unread_line(source, entry)}" for source, entry
+                    in sorted(final["verification"]["unread"].items())),
+          file=sys.stderr)
+    return final
+
+
+def _unread_line(source: str, entry: dict) -> str:
+    """One unread source, for the run log — the reason whole, because the log
+    is where the technical half of it belongs."""
+    return (f"{groom_verify.SOURCE_NAMES.get(source, source)} unread for "
+            f"{_plural(len(entry['cards']), 'card')}: {entry['why']}")
+
+
+def read_holds(lops, args, *, records: list[dict] | None = None) -> list[str]:
     """The repos switched off for this run (DRE-3403).
 
     Off the `--post` card's WHOLE thread when there is a card: a hold is not
@@ -3577,8 +3909,9 @@ def read_holds(lops, args) -> list[str]:
     card = getattr(args, "post", None)
     if not card:
         return sorted(flags)
-    return sorted(flags | set(held_repos(
-        decision_records(lops, card, whole_thread=True))))
+    if records is None:
+        records = decision_records(lops, card, whole_thread=True)
+    return sorted(flags | set(held_repos(records)))
 
 
 def main(argv=None) -> int:

@@ -6,7 +6,7 @@ Ranked by the rules only (judgement off) — priority, creation date, file colli
 
 **To approve:** comment `🧺 groom-approved: a85999f18b18` on this card. Approval moves the Planning list to Planning and the Cancel list to Canceled. Anything else — including a comment that mentions the marker — leaves both lists where they are.
 
-**To say more than yes:** `🧺 groom-declined: a85999f18b18 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: a85999f18b18 DRE-N` keeps a card on either list in Intake; `🧺 groom-added: a85999f18b18 DRE-N` pulls one in, after the batch. One comment each, and the newest one about a card wins.
+**To say more than yes:** `🧺 groom-declined: a85999f18b18 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: a85999f18b18 DRE-N` keeps a card on either list in Intake and out of every later proposal (don't do); `🧺 groom-held: a85999f18b18 DRE-N` keeps it in Intake and ranks it last next time (hold); `🧺 groom-added: a85999f18b18 DRE-N` pulls one in, after the batch. One comment each, and the newest one about a card wins.
 
 ## The population
 

@@ -172,13 +172,17 @@ def test_the_vocabulary_carries_every_marker_the_console_mirrors():
     assert groomer.ADD_TAG == "groom-added"
     assert groomer.DRAINED_TAG == "groom-drained"
     assert groomer.DRAIN_REFUSED_TAG == "groom-drain-refused"
+    # `groom-held` is Hold, beside Don't do (DRE-4966) — a contract with the
+    # console character for character, written by DRE-4979/DRE-4980.
+    assert groomer.HOLD_TAG == "groom-held"
     assert groomer.DECISION_TAGS == (
         groomer.APPROVAL_TAG, groomer.DECLINE_TAG,
-        groomer.EXCLUDE_TAG, groomer.ADD_TAG)
+        groomer.EXCLUDE_TAG, groomer.ADD_TAG, groomer.HOLD_TAG)
 
 
 @pytest.mark.parametrize("tag", ["groom-approved", "groom-declined",
-                                 "groom-excluded", "groom-added"])
+                                 "groom-excluded", "groom-added",
+                                 "groom-held"])
 def test_every_decision_marker_is_anchored_and_the_emoji_is_optional(tag):
     """The same anchoring the approval has always had, for the same reason: a
     reader that matched the marker anywhere would read a sentence ABOUT

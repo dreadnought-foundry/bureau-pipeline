@@ -44,6 +44,12 @@ only then does anything leave Intake.
    longer apply — with a one-line **reason** on every row. Then what is
    deferred and what brings each one back, what could not be ranked at all,
    and which repos are waiting and roughly how long.
+8. **Checks before it posts** (DRE-4966). Every card on both lists, and up to
+   ten behind them, is read against its own comments, merged pull requests and
+   other cards that name it. A card already done or superseded moves to the
+   Cancel list with that evidence as the reason, and a Cancel whose
+   replacement is not real goes back to the Planning list. No model call. The
+   id is computed after, so the approval covers the checked lists. Below.
 
 ## The one ranked read
 
@@ -239,6 +245,62 @@ cancels — because in the 2026-08-22 sweep the executing agent caught an error
 in its own brief precisely because it was working from an explicit list rather
 than its own judgement.
 
+## The check before posting (DRE-4966)
+
+On 2026-09-26 the proposal put DRE-2897 on the Planning list. The evidence that
+it was finished was in three places the groomer did not read: a 2026-09-05
+comment on the card saying it was superseded and not to be built from, PR
+#431, and DRE-3230's description ("Supersedes the parentless DRE-2897"). The
+same proposal offered to cancel DRE-3526 as superseded by DRE-4630, which was
+still in Intake and unapproved.
+
+So `propose` now checks its own lists before it posts them
+(`scripts/groom_verify.py`, called from `groomer.verify_proposal`). It is
+deterministic and asks no model. It reads the morning's Planning list plus up
+to ten cards behind it, in proposal order:
+
+| Source | Counts as evidence |
+| -- | -- |
+| **The card's comments** (the newest fifty) | A comment that *declares* it finished: a line opening with "Superseded", or "do not build from", "not to be built", "nothing left to build", "this card was already done / fixed / shipped". The comment is quoted as the reason. A comment that says "superseded by X" counts only when X is a real replacement (below). |
+| **Merged pull requests** | A search for the quoted `"DRE-N"`, `is:pr is:merged`, per fleet owner, with the Bureau App token the Groom step carries as `GH_TOKEN` (DRE-4964). A merged PR counts when it is **for** the card: its title names the card, or its body carries the card's Linear link or a closing line (`Closes DRE-N`, `Card: DRE-N`). A body that only mentions the card does not — a PR body lists the cards it read or was motivated by, and DRE-4966's own names four it did not deliver. |
+| **Other cards** | A card a Linear search for the number finds, a `related` card, or a sibling under the same parent, whose text says it **supersedes, replaces, absorbs or covers** DRE-N, and which is itself a real replacement. Naming DRE-N is not enough: a Done investigation card lists the follow-ups it filed. |
+
+**A Cancel needs a real replacement.** A Cancel row that says "superseded by X"
+— the description's own line, or a card or PR the ranked read's evidence names
+— stands only if X is **Done**, is a **merged PR**, or is **approved and in
+flight** (Backlog, Todo, In Progress or In Review). Otherwise the Cancel is
+rejected, and the card stays on the Planning list with the reason as its Why.
+A replacement the check could not read does not stand either: Cancel is the
+direction that is hard to undo.
+
+**What moves.** A card with evidence goes to the Cancel list with the first
+piece of it as the reason (comments first, then merged PRs, then other cards),
+and the next card in order takes its slot. The check walks the slots in order,
+so a spare with evidence that no slot reaches is recorded and **not** cancelled
+early — a card outside the morning's set waits its turn (DRE-4727).
+
+**A source it could not read is said, never passed off as clean.** Each card's
+record names the sources that were unread for it; a card with no evidence and
+an unread source is `unread`, never `clean`; a Planning card past the cards the
+check read is `not checked`. The page says all three under
+`## What the check read`, after the Cancel list. The merged-PR search is unread
+for every card when there is no `GH_TOKEN`, when the installation cannot see a
+fleet owner, or when a search fails; a card Linear would not answer for is
+unread on both of the Linear sources. A check that fails outright does not cost
+the morning its proposal: the proposal posts as it would have unchecked, with
+every card unread on every source.
+
+**The record.** `proposal["verification"]` carries, per card, `verdict`
+(`cancel`, `clean`, `unread`, `cancel-stands`, `cancel-rejected`,
+`cancel-kept`), `source` and `evidence`, beside `unread`, `moved_to_cancel`,
+`cancels_rejected` and `not_checked` — so the proof and the audit read them
+rather than repeating the reads. The record is not in the id's digest; the
+lists it changed are.
+
+The cost is one Linear request per card read, one per replacement named, and
+one GitHub search per five cards per owner — seconds. `--no-verify` posts
+without it.
+
 ## The approval gate
 
 ```
@@ -296,7 +358,8 @@ batch that was right apart from two rows.
 | `🧺 groom-proposal: <id>` | propose | unchanged |
 | `🧺 groom-approved: <id>` | the CEO (console or by hand) | unchanged |
 | `🧺 groom-declined: <id> — <reason>` | the CEO | reason required |
-| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card |
+| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966) |
+| `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) |
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
@@ -550,6 +613,32 @@ For a dry run with no card to read the markers off, `--hold-repo <slug>`
 
 **Not the work-in-progress cap.** That one stops BUILDS after classification.
 This stops the cards being proposed at all.
+
+### Don't do and Hold, across proposals (DRE-4966)
+
+The CEO's answer on DRE-4966 (2026-09-26 09:54 PT): "Hold means ask me again in
+a later cycle: the card stays in Intake and can be proposed again. Holding a
+card also marks it lower priority… Don't do means never propose it again."
+
+The drain always honoured an exclusion for the batch it named. Nothing carried
+it forward, so a card the CEO excluded yesterday was offered again this
+morning. Now `propose --post` reads the standing card's whole thread and takes
+the CEO's newest per-card marker for each card, on **any** proposal
+(`standing_decisions`):
+
+- **`groom-excluded` — Don't do.** The card leaves the offer before the census,
+  exactly as a held repo's card does, and is listed under *Your earlier
+  answers* on the page. `🧺 groom-added: <id> DRE-N` brings it back.
+- **`groom-held` — Hold.** The drain leaves it in Intake for the batch it
+  names, exactly as an exclusion. A later proposal may offer it again, but
+  sequences every held card after every card that was never held, whatever
+  their priority or age. The console also lowers the card's Linear priority to
+  Low (DRE-4979).
+- **`groom-added`** after either clears it.
+
+Only a decider's marker counts — a person's, or one the console signed — so the
+proposer cannot take a card off its own offer. A thread with no per-card
+marker proposes exactly what it did before.
 
 ## The next proposal answers your last decline (DRE-3373)
 
