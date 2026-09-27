@@ -390,11 +390,12 @@ jobs:
           # merge_gate.py excludes only check runs sitting in a suite of an
           # allowlisted review workflow. The listing needs actions:read,
           # which the qa-bot App deliberately lacks — this ONE read uses the
-          # workflow's own token (the calling stub grants actions perms). A
-          # blip here must fail CLOSED: empty record → no exclusions → the
-          # gate waits; it never merges past an unverifiable check.
+          # workflow's own token (the calling stub grants actions perms).
+          # DRE-5045: it also shows a CI run queued with no jobs yet. A blip
+          # must fail CLOSED, so it writes the unreadable marker, never an
+          # empty list: the gate waits.
           GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
-            || echo '{"workflow_runs":[]}' > /tmp/workflow-runs.json
+            || echo '{"readable":false}' > /tmp/workflow-runs.json
           # The trusted verdict author is derived from the same App key this
           # gate merges with (app-slug of the minted token), so an App rename
           # follows automatically; GitHub reserves the "[bot]" suffix, so no

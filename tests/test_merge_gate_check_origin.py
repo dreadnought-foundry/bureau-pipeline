@@ -65,13 +65,17 @@ APPROVE = [{
 }]
 
 # The workflow-runs payload exactly as the REST API shapes it (fields
-# observed live on agent-bureau PR #1899).
+# observed live on agent-bureau PR #1899). Every listed run carries its
+# `status`; since DRE-5045 a run that is not `completed` is CI still
+# running, so these are the finished runs the origin tests are about.
 REVIEW_RUN = {
     "id": 29057391640,
     "name": "QA Review",
     "path": ".github/workflows/qa-review.yml",
     "event": "pull_request",
     "check_suite_id": 78612234136,
+    "status": "completed",
+    "conclusion": "success",
 }
 CI_RUN = {
     "id": 29057391428,
@@ -79,6 +83,8 @@ CI_RUN = {
     "path": ".github/workflows/ci.yml",
     "event": "pull_request",
     "check_suite_id": 78612233475,
+    "status": "completed",
+    "conclusion": "success",
 }
 EVIL_RUN = {
     "id": 29057399999,
@@ -86,6 +92,8 @@ EVIL_RUN = {
     "path": ".github/workflows/sneaky.yml",
     "event": "pull_request",
     "check_suite_id": 78612239999,
+    "status": "completed",
+    "conclusion": "success",
 }
 
 
@@ -214,8 +222,10 @@ class CliOriginContractTest(unittest.TestCase):
         self.assertEqual(self.decision(proc), "wait")
 
     def test_empty_origin_record_fails_closed(self):
-        # The workflow substitutes {"workflow_runs":[]} on an API blip: no
-        # exclusions, the review run counts, the gate WAITS — never merges.
+        # An empty origin record: no exclusions, the review run counts, the
+        # gate WAITS — never merges. (Since DRE-5045 an API blip substitutes
+        # the unreadable marker instead, which waits outright —
+        # tests/test_merge_gate_queued_ci.py.)
         proc = self.run_cli(
             [check("unit", 78612233475),
              check("call / review", 78612234136, conclusion="failure")],
