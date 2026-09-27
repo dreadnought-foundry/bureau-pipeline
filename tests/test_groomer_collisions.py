@@ -84,22 +84,37 @@ def test_two_cards_on_one_file_are_a_collision_and_the_file_is_named():
 def test_a_collision_becomes_an_order_between_those_two_cards():
     proposal = groomer.propose(_pair_cards(), cycles=CYCLES)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
-    assert pos["DRE-1"] < pos["DRE-2"], (
-        "the older card goes first when nothing else decides it — the point "
-        "is that SOME explicit order exists, recorded with its reason"
+    assert pos["DRE-2"] < pos["DRE-1"], (
+        "the newer card goes first when nothing else decides it (DRE-4965) — "
+        "the point is that SOME explicit order exists, recorded with its reason"
     )
     assert any("Thread.tsx" in c["files"] for c in proposal["collisions"]["pairs"])
 
 
+def test_two_colliding_cards_with_no_relation_go_newer_first_and_say_so():
+    """The pile is worked newest first (DRE-4965), so a collision nothing else
+    decides goes the same way: the newer card first, and the reason on the
+    page says so. Older first would make every collision drag an old card
+    ahead of a new one, and so old cards into every batch."""
+    [pair] = groomer.collision_report(_pair_cards())["pairs"]
+    assert (pair["before"], pair["after"]) == ("DRE-2", "DRE-1")
+    assert pair["why"] == ("both touch Thread.tsx; newer card first, and the "
+                           "order is recorded")
+    assert "older card first" not in pair["why"]
+    # The pair is the same whichever card the population lists first.
+    [flipped] = groomer.collision_report(list(reversed(_pair_cards())))["pairs"]
+    assert (flipped["before"], flipped["after"]) == ("DRE-2", "DRE-1")
+
+
 def test_a_formal_blocked_by_relation_beats_the_age_tiebreak():
     cards = _pair_cards()
-    cards[0]["inverseRelations"] = {"nodes": [
-        {"type": "blocks", "issue": {"identifier": "DRE-2", "state": {"name": "Intake"}}}
+    cards[1]["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": "DRE-1", "state": {"name": "Intake"}}}
     ]}
     proposal = groomer.propose(cards, cycles=CYCLES)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
-    assert pos["DRE-2"] < pos["DRE-1"], (
-        "DRE-2 blocks DRE-1 — a recorded relation decides the order, not the "
+    assert pos["DRE-1"] < pos["DRE-2"], (
+        "DRE-1 blocks DRE-2 — a recorded relation decides the order, not the "
         "creation dates"
     )
 
@@ -138,7 +153,9 @@ def test_a_cross_epic_collision_orders_the_two_epics():
     ]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=2)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
-    assert max(pos["DRE-11"], pos["DRE-12"]) < min(pos["DRE-21"], pos["DRE-22"])
+    # DRE-21 is the newer of the colliding pair, so its epic goes first
+    # (DRE-4965) — without the collision the identifier would put DRE-900's.
+    assert max(pos["DRE-21"], pos["DRE-22"]) < min(pos["DRE-11"], pos["DRE-12"])
     assert proposal["collisions"]["pairs"], "the cross-epic collision was lost"
 
 
@@ -159,17 +176,17 @@ def test_two_repos_naming_the_same_file_do_not_collide():
 
 def test_portico_stays_first_when_another_repo_names_the_same_basename():
     cards = [
-        card("DRE-1", repo="agent-bureau", created="2026-01-01T00:00:00.000Z",
+        card("DRE-1", repo="agent-bureau", created="2026-08-01T00:00:00.000Z",
              description="edits `CLAUDE.md`"),
-        # High, so only a collision could put the older card ahead of it —
-        # oldest first would anyway (DRE-4725).
-        card("DRE-2", repo="portico", created="2026-08-01T00:00:00.000Z",
+        # High, so only a collision could put the newer card ahead of it —
+        # a collision goes newer first (DRE-4965).
+        card("DRE-2", repo="portico", created="2026-01-01T00:00:00.000Z",
              description="edits `CLAUDE.md`", priority=2),
     ]
     proposal = groomer.propose(cards, cycles=CYCLES)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
     assert pos["DRE-2"] < pos["DRE-1"], (
-        "an older agent-bureau card must not be pulled ahead of Portico by a "
+        "a newer agent-bureau card must not be pulled ahead of Portico by a "
         "shared basename it cannot actually conflict with"
     )
 
@@ -193,14 +210,15 @@ def test_a_constraint_loop_is_broken_where_it_is_found_not_at_the_end():
              description="edits `alpha.ts` and `beta.ts`"),
         card("DRE-12", repo="portico", created="2026-08-03T00:00:00.000Z",
              description="edits `beta.ts`"),
-        # Newer than the tangle, so oldest first puts them after it and only
-        # a loop broken late could push the Portico cards behind (DRE-4725).
-        card("DRE-20", repo="agent-bureau", created="2026-08-20T00:00:00.000Z"),
-        card("DRE-21", repo="agent-bureau", created="2026-08-21T00:00:00.000Z"),
+        # Older than the tangle, so newest first puts them after it and only
+        # a loop broken late could push the Portico cards behind (DRE-4965).
+        card("DRE-20", repo="agent-bureau", created="2026-07-20T00:00:00.000Z"),
+        card("DRE-21", repo="agent-bureau", created="2026-07-21T00:00:00.000Z"),
     ]
-    # alpha.ts puts 10 before 11, beta.ts puts 11 before 12, and 12 blocks 10.
-    cards[0]["inverseRelations"] = {"nodes": [
-        {"type": "blocks", "issue": {"identifier": "DRE-12", "state": {"name": "Intake"}}}
+    # alpha.ts puts 11 before 10, beta.ts puts 12 before 11 — newer first —
+    # and 10 blocks 12.
+    cards[2]["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": "DRE-10", "state": {"name": "Intake"}}}
     ]}
     proposal = groomer.propose(cards, cycles=CYCLES)
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}

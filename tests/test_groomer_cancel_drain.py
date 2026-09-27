@@ -403,9 +403,9 @@ def test_not_in_lane_is_gone():
 # the other decisions, applied to the Cancel list
 # --------------------------------------------------------------------------
 def test_a_held_repo_holds_back_a_card_on_the_cancel_list():
-    cards = [card("DRE-1", days=9), card("DRE-2", days=8, repo="atlas",
+    cards = [card("DRE-1", days=7), card("DRE-2", days=8, repo="atlas",
                                          description="Superseded by: DRE-900"),
-             card("DRE-3", days=7, description="Superseded by: DRE-901")]
+             card("DRE-3", days=9, description="Superseded by: DRE-901")]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, batch_cycles=1,
                                now=NOW)
     assert _cancel(proposal) == ["DRE-2", "DRE-3"]

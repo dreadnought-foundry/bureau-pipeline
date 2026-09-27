@@ -109,7 +109,7 @@ def test_a_rules_only_row_shows_the_rule_that_placed_it():
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=10, now=NOW)
     rows = batch_rows(groomer.render_proposal(proposal))
     assert "Urgent" in " | ".join(rows["DRE-1"])
-    assert "oldest first" in " | ".join(rows["DRE-2"]), (
+    assert "newest first" in " | ".join(rows["DRE-2"]), (
         "a rules-only row shows its rule, not an empty cell"
     )
 
@@ -118,9 +118,9 @@ def test_a_rules_only_row_shows_the_rule_that_placed_it():
 # a trigger on every 'not now'
 # --------------------------------------------------------------------------
 def test_the_not_now_section_groups_one_trigger_shared_by_four_cards():
-    # DRE-1 is the oldest: the batch is filled oldest first (DRE-4725), so the
-    # four newest are the ones past the capacity of two.
-    cards = [card(f"DRE-{n}", days=7 - n) for n in range(1, 7)]
+    # DRE-1 is the newest: the batch is filled newest first (DRE-4965), so
+    # the four oldest are the ones past the capacity of two.
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 7)]
     answer = "\n".join([
         ranked(["DRE-1", "DRE-2"]),
         "DRE-3 | not-now | it waits on the console | revisit when DRE-3120 finishes",
@@ -214,14 +214,15 @@ def test_a_cancel_row_whose_evidence_was_withheld_says_so():
 def test_the_unranked_are_their_own_section_with_their_titles():
     cards = [card("DRE-1", days=1, title="wire the alert engine"),
              card("DRE-2", days=2, title="rename the console tab"),
-             card("DRE-3", days=4, title="ship the groomer"),
-             card("DRE-4", days=3, title="drain the backlog")]
+             card("DRE-3", days=3, title="ship the groomer"),
+             card("DRE-4", days=4, title="drain the backlog")]
     answer = "\n".join([
         ranked(["DRE-3"]),
         "DRE-4 | not-now | the console work has to land first | when the console lands",
     ])
     # A `not-now` no longer defers a card (DRE-4725); the capacity does, and
-    # DRE-4 is the newer of the two cards the read placed.
+    # DRE-4 is the older of the two cards the read placed, and the batch is
+    # filled newest first (DRE-4965).
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=1, now=NOW,
                                judgement=with_pack(cards, answer))
     text = groomer.render_proposal(proposal)
@@ -402,10 +403,11 @@ def test_a_proposal_written_before_the_budget_keys_invents_no_number():
 # --------------------------------------------------------------------------
 # Computed on the fixture: `proposal_id` digests the batch's cards, positions
 # and cycles, so a new column in the comment does not retire a CEO approval.
-# Re-pinned by DRE-4725, which moved the batch itself to oldest first; with
-# the read no longer ordering the batch, the two ids are one.
-FIXTURE_RULES_ONLY_ID = "f02e12cea3b8"
-FIXTURE_JUDGED_ID = "f02e12cea3b8"
+# Re-pinned by DRE-4725, and again by DRE-4965, which moved the batch itself
+# to newest first; with the read no longer ordering the batch, the two ids
+# are one.
+FIXTURE_RULES_ONLY_ID = "a85999f18b18"
+FIXTURE_JUDGED_ID = "a85999f18b18"
 
 
 def _fixture(judgement=None):
