@@ -175,7 +175,7 @@ The cadence is three decisions, in order. D5 (DRE-2683, approved 2026-08-23):
 Approve on the console, as a `groom-drain` `repository_dispatch` that reaches
 `drain` and nothing else. The morning proposal (DRE-3586's signed answer,
 2026-09-21, absorbed by DRE-4677): a `schedule` in `self-groomer.yml` runs
-`propose` — and only `propose` — at 06:15 PT, behind a gate job that reads the
+`propose` — and only `propose` — at 06:00 PT, behind a gate job that reads the
 PT clock and the standing card (`groom_schedule_gate.py`, DRE-4688), so the
 proposal is on the card before the 06:30 briefing. D5's stated cost — on demand
 means it runs when someone remembers — no longer applies to the proposal; the

@@ -26,11 +26,12 @@
 # DRE-4677): D5 is reopened for exactly one thing — "a scheduled 06:30 PT run
 # of propose only. It writes one proposal comment and moves nothing; the drain
 # still needs my Approve. The rest of D5 stands." The run takes about eight
-# minutes, so DRE-4677 moved it to 06:15 PT: the proposal has to be on the
-# card before the 06:30 briefing is assembled. So this file carries a
-# `schedule:` of two UTC cron lines, a `gate` job that decides whether this
-# run is the morning's (DRE-4688), and a `schedule` job that calls the reusable
-# with `mode` the literal `propose`.
+# minutes, so DRE-4677 moved it earlier: the proposal has to be on the card
+# before the 06:30 briefing is assembled. On 2026-09-26 it posted at 06:31 PT,
+# after its target, so DRE-4969 (2026-09-27) moved it to 06:00 PT. So this
+# file carries a `schedule:` of two UTC cron lines, a `gate` job that decides
+# whether this run is the morning's (DRE-4688), and a `schedule` job that calls
+# the reusable with `mode` the literal `propose`.
 #
 # What each trigger can reach:
 #   * `workflow_dispatch` — a person at Actions; `propose` or `drain`, every
@@ -58,14 +59,15 @@ on:
   repository_dispatch:
     types: [groom-drain]
 
-  # The morning proposal (DRE-3586, absorbed by DRE-4677): 06:15 PT, every day.
-  # GitHub's cron is UTC and has no timezone field, so hitting one LOCAL time
-  # all year takes two lines. Every day both fire; exactly one of them is 06:15
-  # on the `America/Los_Angeles` clock, and which one flips at each DST change.
-  # The `gate` job below decides which — never an offset written down here.
+  # The morning proposal (DRE-3586, absorbed by DRE-4677; DRE-4969): 06:00 PT,
+  # every day. GitHub's cron is UTC and has no timezone field, so hitting one
+  # LOCAL time all year takes two lines. Every day both fire; exactly one of
+  # them is 06:00 on the `America/Los_Angeles` clock, and which one flips at
+  # each DST change. The `gate` job below decides which — never an offset
+  # written down here.
   schedule:
-    - cron: "15 13 * * *"
-    - cron: "15 14 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
 
   workflow_dispatch:
     inputs:
@@ -218,7 +220,7 @@ jobs:
         with:
           path: .bureau-pipeline
 
-      - name: Is it 06:15 PT, and is the standing card open?
+      - name: Is it 06:00 PT, and is the standing card open?
         id: gate
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

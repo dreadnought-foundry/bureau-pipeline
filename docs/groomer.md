@@ -1,7 +1,7 @@
 # The groomer — one batch at a time, and you approve it
 
 `scripts/groomer.py`, run by `.github/workflows/self-groomer.yml` — on demand,
-on the CEO's Approve, and every morning at 06:15 PT (see the cadence below).
+on the CEO's Approve, and every morning at 06:00 PT (see the cadence below).
 DRE-2683.
 
 The critic answers whether one card can be built. Planning answers whether one
@@ -704,8 +704,12 @@ reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
   DRE-4677):** D5 is reopened for exactly one thing — "a scheduled 06:30 PT run
   of propose only. It writes one proposal comment and moves nothing; the drain
   still needs my Approve. The rest of D5 stands." The run takes about eight
-  minutes, so DRE-4677 moved it to 06:15 PT: the proposal has to be on the card
-  before the 06:30 briefing is assembled.
+  minutes, so DRE-4677 moved it earlier: the proposal has to be on the card
+  before the 06:30 briefing is assembled. **Moved to 06:00 PT by DRE-4969
+  (2026-09-27):** on 2026-09-26 the proposal posted at 06:31 PT, after its
+  target, and the verify step its epic adds to the groom puts another four to
+  six minutes on the run. The crons moved from a quarter past the hour to the
+  hour; the 06:30 briefing target is unchanged.
 
 So `.github/workflows/self-groomer.yml` carries three triggers:
 
@@ -719,9 +723,9 @@ So `.github/workflows/self-groomer.yml` carries three triggers:
   dispatching App holds `contents: write` and no Actions permission
   (DRE-3001), which is the same path the relay already fires `agent-execute`
   down.
-- **`schedule`, 06:15 PT every day, behind a gate** — `propose` only. GitHub's
+- **`schedule`, 06:00 PT every day, behind a gate** — `propose` only. GitHub's
   cron is UTC with no timezone field, so the file carries two lines,
-  `15 13 * * *` and `15 14 * * *`; every day both fire and exactly one is 06:15
+  `0 13 * * *` and `0 14 * * *`; every day both fire and exactly one is 06:00
   on the Pacific clock. A `gate` job runs `scripts/groom_schedule_gate.py`
   (DRE-4688), which reads the PT clock and the standing card named by the
   `GROOM_PROPOSAL_CARD` repository variable:
