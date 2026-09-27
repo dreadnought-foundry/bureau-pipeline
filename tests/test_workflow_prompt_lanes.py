@@ -35,6 +35,8 @@ EXPECTED_PROMPT_FILES = {
     # asserts that — so this is one prompt shipped three times, and each
     # copy is checked for live lane names here like any other.
     "agent-task.yml": 3,
+    # DRE-4972: the groom verify agent, one per proposed card.
+    "groomer.yml": 1,
     "medic.yml": 1,
     # DRE-3897: the model trial's prompt. It names no lane and no card — it is
     # a fixed, checkable task on a candidate model — but it is an inline agent

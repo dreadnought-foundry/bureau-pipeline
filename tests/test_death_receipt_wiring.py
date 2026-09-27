@@ -279,7 +279,9 @@ def test_the_unmutated_copy_still_passes(tmp_path):
 def test_a_yaml_roundtrip_of_every_discovered_file_still_passes(tmp_path):
     """The other control: `_mutated_dir` rewrites the file through PyYAML, so
     a round trip alone must not produce a violation."""
-    for filename, job in _discovered():
+    # Once per FILE: the round trip is per file, and a workflow with two model
+    # jobs (groomer.yml since DRE-4972) would otherwise make its folder twice.
+    for filename in sorted({filename for filename, _ in _discovered()}):
         workdir = _mutated_dir(tmp_path / filename, filename, lambda doc: None)
         violations, _ = guard.check_dir(workdir)
         assert violations == [], f"{filename} round trip: {violations}"
