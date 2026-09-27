@@ -1201,6 +1201,85 @@ class PostJobTest(unittest.TestCase):
                                  "the post job calls no model")
 
 
+class TheLegsAndThePostRunAsWrittenTest(unittest.TestCase):
+    """The workflow's OWN `run:` blocks, executed: `prepare` and `verdict` on
+    three matrix legs laid out as separate runners, each leg's `verdict.json`
+    placed where an unmerged `download-artifact` puts it, then the post job's
+    `apply`. So the commands, the file names between jobs and the artifact
+    layout are proved together, not only read."""
+
+    def _run(self, step: dict, cwd: Path, env: dict) -> None:
+        import subprocess
+        proc = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=cwd,
+                              env={**os.environ, **env}, capture_output=True,
+                              text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_three_legs_and_the_post(self):
+        import shutil
+        import tempfile
+
+        from test_groom_verify_agent import PROOF_LINE, build_targets, proposal
+
+        doc = _load("groomer.yml")
+        verify, post = doc["jobs"]["verify"], doc["jobs"]["post"]
+        prepare, verdict = (_verify_step(verify, "prepare"),
+                            _verify_step(verify, "verdict"))
+        apply = next(s for s in post["steps"]
+                     if "groom_verify_agent.py apply" in str(s.get("run")))
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            pfile, targets, matrix = build_targets(
+                tmp, proposal(unmapped=("DRE-102",)))
+            rows = json.loads(matrix.read_text())
+            outcomes = {"DRE-101": "success", "DRE-102": "skipped",
+                        "DRE-103": "failure"}
+            post_ws = tmp / "post"
+            for row in rows:
+                if row["card"] not in outcomes:
+                    continue            # a leg whose artifact never arrived
+                ws = tmp / "leg" / row["card"]
+                ws.mkdir(parents=True)
+                (ws / ".bureau-pipeline").symlink_to(ROOT)
+                shutil.copy(targets, ws / "verify-targets.json")
+                env = {"CARD": row["card"], "REPOSITORY": row["repository"],
+                       "GITHUB_OUTPUT": str(ws / "output")}
+                self._run(prepare, ws, env)
+                if row["card"] == "DRE-101":
+                    (ws / "verify-verdict.json").write_text(json.dumps({
+                        "card": "DRE-101", "verdict": "obsolete",
+                        "summary": "The roster migration already exists.",
+                        "proof": [PROOF_LINE]}))
+                    owner, name = row["repository"].split("/")
+                    self.assertIn(f"owner={owner}\nname={name}\n",
+                                  (ws / "output").read_text())
+                self._run(verdict, ws, {
+                    **env, "OUTCOME": outcomes[row["card"]],
+                    "EXECUTION_FILE": str(ws / "no-execution-file.json")})
+                dest = post_ws / "verdicts" / f"groom-verdict-{row['card']}"
+                dest.mkdir(parents=True)
+                shutil.copy(ws / "verdict.json", dest / "verdict.json")
+            (post_ws / ".bureau-pipeline").symlink_to(ROOT)
+            shutil.copy(pfile, post_ws / "proposal.json")
+            self._run(apply, post_ws, {})
+            verified = json.loads(
+                (post_ws / "proposal-verified.json").read_text())
+
+        self.assertEqual(rows[1], {"card": "DRE-102", "repository": ""})
+        block = verified["verify"]
+        self.assertEqual(block["cards"], len(rows))
+        self.assertEqual(block["counts"]["obsolete"], 1)
+        self.assertEqual(len(block["unverified"]), len(rows) - 1)
+        self.assertIn("DRE-101", [r["identifier"]
+                                  for r in verified["outcomes"]["dead"]])
+        marks = {r["identifier"]: r.get("verify")
+                 for r in verified["sequence"]}
+        self.assertEqual(marks["DRE-102"]["reason"],
+                         "repo not in config/repo-map.json: widgets")
+        self.assertEqual(marks["DRE-103"]["reason"], "agent step failed")
+        self.assertEqual(marks["DRE-104"]["reason"], "no verdict artifact")
+
+
 class LaneContractTest(unittest.TestCase):
     """The drain moves a card into Planning, so the groomer is a writer of
     Planning. A writer the contract does not name is a write the harness
