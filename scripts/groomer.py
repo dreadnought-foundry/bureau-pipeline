@@ -29,10 +29,10 @@ that. This module is the reader that sees the set.
      card — is the atom of cycle assignment.
   3. **Finds the collisions.** Two cards citing the same file become an ORDER
      between those two cards, reported with the file that caused it.
-  4. **Sequences.** Urgent first, then High, then everything else — OLDEST
-     first — subject to the constraints above, deterministically (DRE-4725).
-     Repo order is a tie-break inside a day and never the master key
-     (DRE-3096).
+  4. **Sequences.** Urgent first, then High, then everything else — NEWEST
+     first — subject to the constraints above, deterministically (the CEO's
+     decision of 2026-09-26, DRE-4965). Repo order is a tie-break inside a day
+     and never the master key (DRE-3096).
   5. **Assigns cycles.** Linear's own primitive — cycles are enabled and cycle
      11 is running, so "which cycle" is expressible today without inventing a
      container.
@@ -43,34 +43,38 @@ that. This module is the reader that sees the set.
      rather than discovered — which repos wait and roughly how long
      (DRE-3152).
 
-## The order, top to bottom (DRE-3096, reversed by DRE-4725)
+## The order, top to bottom (DRE-3096, DRE-4725, reversed by DRE-4965)
 
-The CEO's decision on DRE-4669 (2026-09-23): "work through the old Intake
-pile, 20 cards at a time, oldest first, until the pile is gone." Measured that
-day, the 14-day window had left 74 of the 117 cards older than 14 days out of
-every batch, for ever, and ordered the rest newest first.
+The CEO's decision of 2026-09-26 (DRE-4965): "He should look at the cards that
+are the most recent and go back from there so that he can find the ones we
+really need to get done." It reverses the oldest first DRE-4725 built on the
+CEO's decision on DRE-4669 (2026-09-23). Only the order changes: DRE-4725
+also removed DRE-3096's 14-day window, which had left 74 of the 117 cards older
+than 14 days out of every batch, for ever, and the window stays gone.
 
-  1. **Urgent** (Linear priority 1) opens the batch, every repo, oldest first.
+  1. **Urgent** (Linear priority 1) opens the batch, every repo, newest first.
      The production-issue lane: a card raised while debugging goes ahead of
      everything.
-  2. **High** (2) next, oldest first — otherwise High means nothing.
-  3. **Then everything else, OLDEST creation day first.** There is no window:
-     no card is left out of the batch for being old, and `--window-days` is
-     still accepted but excludes and orders nothing.
+  2. **High** (2) next, newest first — otherwise High means nothing.
+  3. **Then everything else, NEWEST creation day first**, going back from
+     there. There is no window: no card is left out of the batch for being
+     old — it is reached when its turn comes — and `--window-days` is still
+     accepted but excludes and orders nothing.
   4. **Repo order is a tie-break inside a day** — Portico first only among
      cards of equal priority created on the same day; then the exact
-     timestamp, then the identifier.
-  5. **Collisions and blockers are ordering constraints**: the older card of
+     timestamp, newest first, then the identifier.
+  5. **Collisions and blockers are ordering constraints**: the newer card of
      two naming one file goes first, a blocker goes before what it blocks, and
-     an Urgent or High card waiting on an older unprioritised card pulls that
-     card forward ahead of itself. Never a membership filter.
+     an Urgent or High card waiting on an unprioritised card pulls that card
+     forward ahead of itself. Never a membership filter.
   6. **The date is the CREATION date**, never the last update. A stray agent
      comment must not move a card.
 
 The epic is still the unit, so an epic's band is the highest priority among
 the epic and its children — one Urgent child pulls the whole unit into the
-batch — and its age for ordering is its OLDEST card, so one new child does not
-send an old epic to the back of the pile.
+batch — and its age for ordering is its NEWEST card, so one new child brings
+its old epic forward with it. Inside the unit the children still go oldest
+child first: that is the order they are built in, not the order of the pile.
 
 ## Three outcomes, and only what the CEO agreed moves
 
@@ -79,8 +83,8 @@ well-formed, wanted, and correctly left alone for a month, and without a "later"
 the only way to say it is to say "no". **"Dead" is the Cancel list — a
 recommendation `propose` never acts on, and the drain executes only once the
 CEO agrees** (DRE-4727, DRE-4733). The CEO's decision on DRE-4669 (2026-09-23): when
-the groomer looks at the twenty oldest cards it also decides whether each one
-still applies. So the morning's `capacity` cards are Planning plus Cancel
+the groomer looks at the morning's twenty cards it also decides whether each
+one still applies. So the morning's `capacity` cards are Planning plus Cancel
 together, walked in the rules' order: a card whose description carries a
 `Superseded by:` line, or that the read called `likely-done`, goes on the
 Cancel list; the rest go on the Planning list. A card outside the twenty waits
@@ -207,7 +211,7 @@ context pack of what is already in flight (`groom_context.py`), read once
 through `groom_judgement.py` — and since DRE-4725 the read decides neither
 the batch's membership nor its order.
 
-**The rules' order is the order.** The batch is the oldest cards by the rules
+**The rules' order is the order.** The batch is the newest cards by the rules
 above, `capacity` at a time; the model's `now` set no longer fills it, its
 `now` order no longer reorders it, and a `not-now` no longer takes a card out.
 What the read still does is per card: a card the answer omits or garbles is
@@ -436,8 +440,9 @@ NO_REPO = "(no repo label)"
 # The default of `--window-days`, which since DRE-4725 excludes and orders
 # nothing. It was how far back the batch reached (CEO decision, 2026-09-04:
 # "14 days, creation date"); the CEO's decision on DRE-4669 (2026-09-23)
-# replaced it with oldest first and nothing hidden. Still accepted by
-# `propose` and the CLI, and still written into the proposal as
+# replaced it with nothing hidden, and his decision of 2026-09-26 (DRE-4965)
+# kept nothing hidden and ordered the whole pile newest first. Still accepted
+# by `propose` and the CLI, and still written into the proposal as
 # `window_days`, so every caller that passes it keeps running.
 WINDOW_DAYS = 14
 
@@ -448,9 +453,9 @@ URGENT = 1
 HIGH = 2
 
 # The bands, in the order they are applied. A unit's band is the whole of its
-# rank's first element, so a band is never mixed with another one — the oldest
-# card in the pile cannot outrank Urgent however old it is. Everything that is
-# neither Urgent nor High is ONE band, worked oldest first (DRE-4725).
+# rank's first element, so a band is never mixed with another one — the newest
+# card in the pile cannot outrank Urgent however new it is. Everything that is
+# neither Urgent nor High is ONE band, worked newest first (DRE-4965).
 BAND_URGENT = 0
 BAND_HIGH = 1
 BAND_OLDER = 2
@@ -771,15 +776,22 @@ def collision_report(cards: list[dict], *,
 
 def _order_of(a: dict, b: dict) -> tuple[str, str]:
     """Which of two colliding cards goes first. A recorded relation decides it;
-    otherwise the older card, which is arbitrary but explicit — the point is
-    that SOME order exists and is written down with its reason."""
+    otherwise the newer card, which is arbitrary but explicit — the point is
+    that SOME order exists and is written down with its reason. Newer, because
+    the pile is worked newest first (DRE-4965): older first would make every
+    collision drag an old card ahead of the new one (`_pulled_forward`), and
+    old cards into every batch. Same creation time: the lower identifier."""
     if b["identifier"] in blockers_of(a):
         return b["identifier"], a["identifier"]
     if a["identifier"] in blockers_of(b):
         return a["identifier"], b["identifier"]
-    key = (_created(a), _card_sort_key(a["identifier"]))
-    other = (_created(b), _card_sort_key(b["identifier"]))
-    return ((a["identifier"], b["identifier"]) if key <= other
+    created_a, created_b = _created(a), _created(b)
+    if created_a == created_b:
+        first = (_card_sort_key(a["identifier"])
+                 <= _card_sort_key(b["identifier"]))
+    else:
+        first = created_a > created_b
+    return ((a["identifier"], b["identifier"]) if first
             else (b["identifier"], a["identifier"]))
 
 
@@ -788,7 +800,7 @@ def _collision_why(before: dict, after: dict, shared: set[str]) -> str:
     if after["identifier"] in blockers_of(before) or \
             before["identifier"] in blockers_of(after):
         return f"both touch {files}; a recorded blocks relation sets the order"
-    return f"both touch {files}; older card first, and the order is recorded"
+    return f"both touch {files}; newer card first, and the order is recorded"
 
 
 # --------------------------------------------------------------------------- #
@@ -802,9 +814,10 @@ def units(cards: list[dict]) -> list[dict]:
     Each unit carries the band it is sequenced in and the age it is ordered
     by. The epic is the atom, so both are read across the whole unit: the band
     is the highest priority among the epic and its children — one Urgent child
-    pulls its epic's unit into the batch (DRE-3096) — and the age is its OLDEST
-    card, `created`, so one new child does not send an old epic to the back of
-    the pile (DRE-4725).
+    pulls its epic's unit into the batch (DRE-3096) — and the age is its NEWEST
+    card, `created`. The pile is worked newest first (DRE-4965), so one new
+    child brings its epic forward: an epic somebody added to today is work
+    somebody wants today, however old the epic is.
     """
     grouped: dict[str, list[dict]] = {}
     for card in sorted(cards, key=lambda c: _card_sort_key(c["identifier"])):
@@ -827,7 +840,7 @@ def units(cards: list[dict]) -> list[dict]:
             "key": key,
             "epic": epic,
             "repo": repo,
-            "created": min(_created(c) for c in members),
+            "created": max(_created(c) for c in members),
             "priority": priority,
             "band": _band(priority),
             "cards": [c["identifier"] for c in members],
@@ -931,10 +944,11 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
     Among the possible, a card is ranked by the best rank among ITSELF AND
     EVERYTHING IT MUST PRECEDE (`_pulled_forward`), so the card a constraint
     puts first is pulled forward to where the card it holds would have gone.
-    Under oldest first the older card of a colliding pair is already ahead;
-    where the two disagree — an Urgent or High card that collides with, or is
-    blocked by, an older unprioritised card — the older card goes ahead of it
-    rather than the Urgent card waiting behind the whole pile (DRE-4725).
+    Under newest first the newer card of a colliding pair is already ahead;
+    where the two disagree — an Urgent or High card that collides with a
+    newer unprioritised card, or is blocked by any unprioritised card — that
+    card goes ahead of it rather than the Urgent card waiting behind the whole
+    pile (DRE-4725, DRE-4965).
 
     A cycle in the graph — A must precede B and B must precede A, which happens
     when a collision and a recorded relation disagree — is broken by rank and
@@ -1013,12 +1027,13 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
              broken: list | None = None) -> list[dict]:
     """The population as ONE order: unit before unit, card before card.
 
-    Urgent first, then High, then everything else — OLDEST creation day first,
-    then the repo priority as the tie-break within a day, then the exact
-    timestamp, then the identifier (DRE-4725, reversing DRE-3096's newest
-    first). A unit's age is its OLDEST card. Subject to the constraints
-    throughout: a file collision (the older card before the newer one that
-    names the same file) and a `blockedBy` relation are the edges `_topo`
+    Urgent first, then High, then everything else — NEWEST creation day
+    first, then the repo priority as the tie-break within a day, then the
+    exact timestamp, newest first, then the identifier (DRE-4965, the CEO's
+    decision of 2026-09-26, reversing DRE-4725's order). A unit's age is its
+    NEWEST card. Subject to the constraints throughout: a file collision (the
+    newer card before the older one that names the same file) and a
+    `blockedBy` relation are the edges `_topo`
     honours, at unit level and inside a unit, and the key above decides the
     order among what the edges leave possible — pulling the card a constraint
     puts first forward to where the card it holds would have gone.
@@ -1050,17 +1065,18 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     batchable = _batchable(unit_list)
 
     def unit_rank(key):
-        # The band first, then the unit's OLDEST day, and the repo only after
-        # the day: Portico separates two cards of the same priority created on
-        # the same day, and decides nothing else. The day is the granularity
-        # the tie-break is defined at, so the timestamp only orders cards the
-        # day cannot separate. A unit with no readable creation date is not
-        # the oldest in the pile: it goes to the back of its band, the
-        # reversible answer.
+        # The band first, then the unit's NEWEST day, newest first, and the
+        # repo only after the day: Portico separates two cards of the same
+        # priority created on the same day, and decides nothing else. The day
+        # is the granularity the tie-break is defined at, so the timestamp —
+        # newest first too — only orders cards the day cannot separate. A unit
+        # with no readable creation date is not the newest in the pile: it
+        # goes to the back of its band, the reversible answer.
         unit = unit_index[key]
-        day = _day_ordinal(unit["created"]) or float("inf")
-        return (unit["band"], day, ranks[unit["repo"]],
-                _epoch(unit["created"]), _card_sort_key(key))
+        day = _day_ordinal(unit["created"])
+        return (unit["band"], -day if day else float("inf"),
+                ranks[unit["repo"]], -_epoch(unit["created"]),
+                _card_sort_key(key))
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
                           broken)
@@ -1073,7 +1089,8 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
                        if unit_of.get(b) == key and unit_of.get(a) == key}
 
         # Inside a unit the order is the build order — oldest child first,
-        # constraints on top. The band is a property of the unit, so it has
+        # constraints on top, whatever order the pile is worked in (DRE-4965
+        # left this alone). The band is a property of the unit, so it has
         # nothing left to say here.
         def card_rank(cid):
             return (_created(by_id[cid]), _card_sort_key(cid))
@@ -1099,7 +1116,7 @@ def _batchable(unit_list: list[dict]) -> set[str]:
 
     There is no window left to exclude a unit and no judgement that drops
     one: a unit the read ranked `not-now` is in the order like any other,
-    because under oldest first "not now" is not the model's call. What keeps
+    because since DRE-4725 "not now" is not the model's call. What keeps
     a unit out of THIS batch is only its place in the order against
     `capacity`.
 
@@ -1188,7 +1205,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     two readings over one population (DRE-3150).
 
     `window_days` is accepted and changes nothing (DRE-4725): the batch is
-    the oldest cards first and nothing is hidden for its age.
+    the newest cards first (DRE-4965) and nothing is hidden for its age.
 
     `held_repos` is the slugs the CEO has switched off (DRE-3403). Their cards
     are removed HERE, before anything else reads them, so a held card is never
@@ -1442,7 +1459,7 @@ def _rules_reason(outcome: str, row: dict) -> str:
         return f"superseded by {row.get('superseded_by')}"
     if outcome == "now":
         band = BAND_LABELS.get(row.get("band"))
-        opened = f"marked {band}" if band else "oldest first"
+        opened = f"marked {band}" if band else "newest first"
         return f"in the batch by the rules — {opened}, position {row['position']}"
     return (f"wanted, and this batch was full — it is reconsidered in cycle "
             f"{row.get('reconsidered_in')}")
@@ -2062,7 +2079,7 @@ def render_proposal(proposal: dict) -> str:
     add("## The batch, in order")
     add("")
     add(f"The Planning list — approving moves these cards to Planning. "
-        f"Urgent first, then High, then everything else — oldest first, "
+        f"Urgent first, then High, then everything else — newest first, "
         f"whatever repo it is in, and no card is left out for its age. Repo "
         f"order ("
         + " → ".join(proposal.get("repo_order") or [])
@@ -3472,7 +3489,7 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
                              "tie-break inside a day, not the master key")
     parser.add_argument("--window-days", type=int, default=WINDOW_DAYS,
                         help="accepted and changes nothing since DRE-4725: "
-                             "the batch is oldest first and no card is left "
+                             "the batch is newest first and no card is left "
                              "out for its age (default %(default)s)")
     parser.add_argument("--hold-repo", dest="hold_repo", action="append",
                         default=[], metavar="SLUG",

@@ -26,7 +26,7 @@ only then does anything leave Intake.
    card, is the atom of cycle assignment.
 3. **Finds the collisions.** Two cards citing the same file become an explicit
    order between those two cards, reported with the file that caused it.
-4. **Sequences.** Urgent, then High, then everything else oldest first —
+4. **Sequences.** Urgent, then High, then everything else newest first —
    subject to those constraints, deterministically. The rules are below.
 5. **Assigns cycles**, using Linear's own primitive.
 6. **Reads once, ranked.** One model call over the whole population and the
@@ -79,34 +79,41 @@ keeps as an artifact either way.
 
 ## The order, applied top to bottom
 
-CEO decision on DRE-4669, 2026-09-23: **"work through the old Intake pile, 20
-cards at a time, oldest first, until the pile is gone"** (DRE-4725). It
-reverses DRE-3096's newest-first window: measured that day, the window had left
-74 of the 117 Intake cards older than 14 days out of every batch — out of 254
-in the lane, the oldest 83 days old — and nothing would ever have brought them
-back.
+CEO decision, 2026-09-26 (DRE-4965): **"He should look at the cards that are
+the most recent and go back from there so that he can find the ones we really
+need to get done."** It reverses the order of DRE-4725, which had worked the
+pile oldest first since the CEO's decision on DRE-4669 (DRE-4725, 2026-09-23).
+
+Only the order changed. DRE-4725 also removed DRE-3096's 14-day window —
+measured on 2026-09-23 it had left 74 of the 117 Intake cards older than 14
+days out of every batch, out of 254 in the lane, the oldest 83 days old, and
+nothing would ever have brought them back — and the window stays gone: no card
+is left out of the batch for its age.
 
 1. **Urgent first, every repo.** Linear priority `Urgent` opens the batch,
-   oldest created first among them. This is the production-issue lane: a card
+   newest created first among them. This is the production-issue lane: a card
    raised while debugging goes ahead of everything.
-2. **High next**, oldest first. Otherwise High means nothing.
-3. **Then everything else, oldest first** — by creation day, with no window.
-   No card is left out of the batch for being old; the batch is the first
-   `--capacity` cards of this order. `--window-days` is still accepted, and
-   excludes and orders nothing.
+2. **High next**, newest first. Otherwise High means nothing.
+3. **Then everything else, newest first** — by creation day, going back from
+   there, with no window. No card is left out of the batch for being old; it
+   is reached when its turn comes, and the batch is the first `--capacity`
+   cards of this order. `--window-days` is still accepted, and excludes and
+   orders nothing.
 4. **Repo order is a tie-break inside a day, never the master key.** Portico
    first only among cards of equal priority created on the same day; then the
-   exact time, then the identifier.
+   exact time, newest first, then the identifier.
 5. **Collisions and blockers are ordering constraints, never a membership
-   filter.** Two cards naming the same file go older first, and a card that
-   formally blocks another goes before it. Under oldest first the two mostly
-   agree, because the older card is already ahead. Where they differ — an
-   Urgent or High card that collides with, or is blocked by, an older
-   unprioritised card — the constraint pulls the older card forward into the
-   batch ahead of it, transitively, and the pair is reported with the file that
-   caused it. The rule never filters on the model's picks: the read no longer
-   chooses the batch, so there is no "set the model picked" to keep a card out
-   of. (DRE-3737 proposed exactly that filter; this rule replaces it.)
+   filter.** Two cards naming the same file go newer first, and a card that
+   formally blocks another goes before it. Newer first is what keeps the
+   collision rule from dragging old cards into every batch: under newest
+   first the newer card of a pair is already ahead. Where the two differ — an
+   Urgent or High card that collides with a newer unprioritised card, or is
+   blocked by any unprioritised card — the constraint pulls that card forward
+   into the batch ahead of it, transitively, and the pair is reported with the
+   file that caused it. The rule never filters on the model's picks: the read
+   no longer chooses the batch, so there is no "set the model picked" to keep
+   a card out of. (DRE-3737 proposed exactly that filter; this rule replaces
+   it.)
 6. **The read neither reorders nor removes, except for one thing.** The
    model's `now` order does not change the batch's order and a `not-now` does
    not take a card out. A card the read declined — `unranked` — comes out of
@@ -117,9 +124,9 @@ back.
 
 The epic is still the unit, so an epic's band is the highest priority among the
 epic and its children — one Urgent child pulls the whole unit into the batch —
-and its age for the order is its **oldest** card, so one new child does not send
-an old epic to the back of the pile. Inside a unit the order is unchanged —
-oldest child first, with collisions and blocks relations on top. Nothing
+and its age for the order is its **newest** card, so one new child brings an
+old epic forward with it. Inside a unit the order is unchanged — the build
+order, oldest child first, with collisions and blocks relations on top. Nothing
 leaves Intake for being old either way: DRE-4141 removed the sweep's age-out,
 and the operator's Intake hold (DRE-3035) is untouched by any of this.
 
@@ -132,7 +139,7 @@ line per card, before anything moves.
 
 | Outcome | Means | What it must name |
 | -- | -- | -- |
-| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "oldest first") — and, on a judged run, the five **labelled reasons** below. |
+| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "newest first") — and, on a judged run, the five **labelled reasons** below. |
 | `not-now` | **Wanted, and deliberately not this batch** — the batch is full, and it names the cycle it is reconsidered in. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
 | `dead` (the read calls it `likely-done`) | **Proposed for cancellation, on the Cancel list beside the batch**. It is one of the morning's twenty, and the drain cancels it once the CEO agrees, with the reason on the card. Two readers propose one: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | a one-line **reason** — `superseded by DRE-N` off the card's own line, or the **evidence** the read named: the superseding card, merged PR or decision. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |

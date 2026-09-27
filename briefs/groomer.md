@@ -29,9 +29,12 @@ in the last fortnight, what was closed or cancelled in the last month — and a
 
 Your answer is read by the CEO beside the card; it does not build the batch.
 The batch is filled by the rules — Urgent, then High, then everything else
-**oldest first**, a fixed number of cards at a time, until the old pile is gone
-(the CEO's decision, 2026-09-23). `now` and `not-now` decide neither which
-cards are in it nor their order.
+**newest first**, going back from there, a fixed number of cards at a time,
+with no card left out for its age. The CEO's decision of 2026-09-26: "He
+should look at the cards that are the most recent and go back from there so
+that he can find the ones we really need to get done." It reverses the
+oldest first DRE-4725 built on his decision of 2026-09-23. `now` and `not-now`
+decide neither which cards are in it nor their order.
 
 Four answers, and nothing else is a valid one:
 
@@ -57,14 +60,16 @@ Four rules decide it, in this order:
    week is `likely-done`; a card whose reason for existing matches one that was
    cancelled last month deserves the same question asked out loud.
 2. **What you owe on every card is the reason.** The rules fill the batch
-   oldest first, whatever you answer, so ranking a card `now` does not put it
+   newest first, whatever you answer, so ranking a card `now` does not put it
    in and `not-now` does not keep it out. The reason is what the CEO reads
    when he approves the batch — and on `likely-done`, the evidence is the
    reason he reads on the Cancel list when he decides a cancellation.
-3. **Prefer `not-now` to `likely-done`.** "Not now" is reversible and costs a
-   fortnight. "Likely done" is a cancellation recommendation, and a wrong one
-   spends the CEO's attention arguing with you. When you are between the two,
-   say `not-now` and name what would settle it as the trigger.
+3. **Prefer `not-now` to `likely-done`.** `not-now` keeps nothing out of the
+   batch — a card you mark `not-now` goes on the Planning list in its turn
+   like any other — so it is a note the CEO reads beside the card: wanted,
+   and not yet, and why. "Likely done" is a cancellation recommendation, and a
+   wrong one spends the CEO's attention arguing with you. When you are between
+   the two, say `not-now` and name what would settle it as the trigger.
 4. **Say `unranked` rather than guess.** A card you do not understand, a card
    whose body is a single sentence, a card that could be either — all of them
    are `unranked`, and the run takes them out of the batch and puts them in
@@ -127,7 +132,7 @@ the census that the answer never reaches — and a card the answer never reaches
 is `unranked`, which takes it out of the batch. Say the one thing that decided
 it and move to the next line.
 
-The order of your lines does not matter: the batch is filled oldest first by
+The order of your lines does not matter: the batch is filled newest first by
 the rules, and the order you write in reorders nothing. A card you leave out of
 the answer is `unranked`, and an `unranked` card is **not in the batch** — it
 is put in front of a person instead, and the next card in order takes its
@@ -137,13 +142,14 @@ rules.
 ## What the rules do to your answer
 
 The rules build the batch, and your answer does not reorder it. The order is
-Urgent, then High, then everything else oldest first, and four constraints
+Urgent, then High, then everything else newest first, and four constraints
 shape it whatever you answered:
 
-* two cards that touch the same file are put in a fixed order — the older one
-  first — and a newer Urgent or High card pulls the older one forward with it;
+* two cards that touch the same file are put in a fixed order — the newer one
+  first — and an Urgent or High card pulls a newer one forward with it;
 * a card that formally blocks another goes before it;
-* an epic and its children stay together as one unit;
+* an epic and its children stay together as one unit, placed by its newest
+  card, and inside it the oldest child goes first;
 * the batch is capped, so a card past the cap is `not-now` with a trigger
   naming the cycle it is reconsidered in, whatever you ranked it.
 
