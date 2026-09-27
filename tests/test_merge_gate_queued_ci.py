@@ -150,6 +150,14 @@ class QueuedRunWithNoJobsTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(fields(proc).get("decision"), "merge")
 
+    def test_a_run_missing_its_status_counts_as_unfinished(self):
+        # Fail-closed, like a suite-less check run: a run GitHub's record
+        # does not call `completed` is not proof that CI finished.
+        ci = {k: v for k, v in CI_QUEUED.items() if k != "status"}
+        self.assertEqual(merge_gate.unfinished_runs([ci]), [ci])
+        decision = decide(PORTICO_748_CHECKS, [ci, SPECIMEN, PRUNE, REVIEW])
+        self.assertEqual(decision.action, "wait")
+
     def test_every_unfinished_status_waits(self):
         for status in ("queued", "in_progress", "waiting", "requested",
                        "pending"):

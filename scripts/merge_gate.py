@@ -99,6 +99,22 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    (condition 2 still gates). No counted runs at all → wait (checks
    haven't reported yet).
 
+   CI STILL RUNNING (DRE-5045). Check runs are not the whole record: a
+   workflow run GitHub has QUEUED but not yet given any jobs has no check
+   runs, so a rule that reads only check runs cannot see it. Portico #748
+   (2026-09-26 22:45 PT) read "CI green" off Specimen (success) and prune
+   (skipped) while its CI run sat queued with no jobs, asked to merge, and
+   GitHub refused — the six required checks did not exist yet; #724 and
+   #739 had the same signature. So condition 1 also reads the head's
+   workflow-runs record (the same listing the exclusion above uses): a run
+   that is not an allowlisted review workflow, was triggered by the commit
+   (`COMMIT_EVENTS` — the gate's own run and a fix agent's are not CI of
+   the head) and is not `completed` means CI is still running, and the gate
+   waits exactly as it does for a pending check. A listing the workflow
+   could not read (`UNREADABLE_WORKFLOW_RUNS`) waits too — it never reads
+   as green. Every run completed evaluates exactly as before: the check
+   runs alone still decide green or red.
+
 2. QA Critic — the latest critic verdict comment is APPROVE, bound to the
    PR's current head:
    - AUTHORSHIP (DRE-1987 / #57): only comments authored by the qa-bot App
@@ -243,7 +259,8 @@ Contract with merge-gate.yml:
     (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments),
     --workflow-runs-file (the raw REST payload of
     GET /repos/{repo}/actions/runs?head_sha={sha} — the verified-origin
-    record for the review-run exclusion), --compare-file (the raw payload
+    record for the review-run exclusion and the unfinished-run record,
+    DRE-5045; `UNREADABLE_WORKFLOW_RUNS` when the read failed), --compare-file (the raw payload
     of GET /repos/{repo}/compare/{base}...{head_sha} — the content-binding
     record, DRE-2340; its `.status` is reported as a note and gates
     nothing, DRE-2416), --merge-state (GitHub's own `mergeStateStatus` for
@@ -327,6 +344,13 @@ COMMIT_EVENTS = frozenset({"push", "pull_request", "pull_request_target"})
 
 # Green = completed with a conclusion GitHub treats as non-blocking.
 GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+
+# What merge-gate.yml writes in place of the workflow-runs listing when the
+# read FAILS (DRE-5045). Deliberately not `{"workflow_runs":[]}`: that is a
+# read that succeeded and found no runs, and a blip must never look like "no
+# workflow run is still running" — the queued run a blip hides is exactly
+# the one condition 1 has to wait for.
+UNREADABLE_WORKFLOW_RUNS = '{"readable":false}'
 
 # GitHub compare/{base}...{head} status values: the head is current when it
 # contains the base's tip, behind when the base has commits the head lacks.
@@ -544,6 +568,32 @@ def gating_check_runs(check_runs, workflow_runs,
     return counted, ignored
 
 
+def unfinished_runs(workflow_runs,
+                    review_workflows=DEFAULT_REVIEW_WORKFLOWS):
+    """The head's workflow runs that are CI of the commit and have not
+    finished — condition 1's second record (DRE-5045). `None` in (the
+    listing could not be read) is `None` out, and condition 1 waits on it.
+
+    A run is unfinished CI when it sits at no review path (the critic's
+    verdict COMMENT is its record, as for the check-run exclusion), was
+    triggered by one of `COMMIT_EVENTS` (the gate's own run, a fix agent or
+    the medic can sit on the same SHA without being about it — DRE-3263's
+    classifier) and GitHub does not call it `completed`. A run missing its
+    status counts as unfinished: fail-closed, like a suite-less check run.
+    Its conclusion is never read here — a completed run's jobs are check
+    runs, and the check runs are what decide green or red.
+    """
+    if workflow_runs is None:
+        return None
+    excluded = frozenset(review_workflows)
+    return [
+        r for r in workflow_runs
+        if r.get("path") not in excluded
+        and r.get("event") in COMMIT_EVENTS
+        and r.get("status") != "completed"
+    ]
+
+
 def dependabot_update_types(commits) -> list:
     """Every semver level named in the PR's commit messages (Dependabot's
     `update-type: version-update:semver-<level>` trailer lines), in order.
@@ -682,11 +732,17 @@ def currency_note(compare_status) -> Optional[str]:
     return None
 
 
-def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]:
+def evaluate_checks(check_runs, review_suites=frozenset(),
+                    unfinished=()) -> Optional[Decision]:
     """Condition 1. None = green, proceed. Only check runs sitting in a
     verified review workflow's check suite are excluded — an empty origin
-    record (listing API blip) excludes nothing and the gate waits,
-    fail-closed."""
+    record excludes nothing and the gate waits, fail-closed.
+
+    `unfinished` is `unfinished_runs()`'s answer (DRE-5045), asked only once
+    the check runs read green: any entry is CI still running, and `None` (the
+    listing could not be read) waits rather than read as green. The default
+    (empty) reproduces the pre-DRE-5045 decision for every caller that never
+    passes it."""
     counted = [
         r
         for r in check_runs
@@ -704,6 +760,24 @@ def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]
     if not_green:
         return Decision(
             "wait", f"{len(not_green)} of {total} check runs not green — wait"
+        )
+    if unfinished is None:
+        return Decision(
+            "wait",
+            "the head's workflow runs could not be read — a queued CI run "
+            "with no check runs yet cannot be ruled out; wait, never read "
+            "as green",
+        )
+    if unfinished:
+        named = ", ".join(
+            f"{r.get('name') or r.get('path') or r.get('id')}: "
+            f"{r.get('status')}"
+            for r in unfinished
+        )
+        return Decision(
+            "wait",
+            f"CI still running: {len(unfinished)} workflow run(s) on the head "
+            f"not finished ({named}) — wait",
         )
     return None
 
@@ -848,6 +922,7 @@ def decide(
     is_draft: bool = False,
     fix_lane=None,
     pr_number=None,
+    unfinished_runs=(),
 ) -> Decision:
     """The whole gate: conditions 0 → D → 1 → 2 → 3 → F → 4, first blocker
     wins.
@@ -886,7 +961,13 @@ def decide(
     reproduce the pre-DRE-4486 behavior exactly for every caller that never
     passes them, which is what `test_the_race_merges_today_without_
     condition_f` drives to prove this condition is the thing being
-    tested."""
+    tested.
+
+    `unfinished_runs` is condition 1's workflow-runs record (DRE-5045), as
+    the module-level `unfinished_runs()` computes it: a run on the head that
+    has not finished is CI still running, and `None` (the listing could not
+    be read) waits. The default (empty) reproduces the pre-DRE-5045 behavior
+    for every caller that never passes it."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -895,7 +976,7 @@ def decide(
     if blocked:
         return blocked
 
-    blocked = evaluate_checks(check_runs, review_suites)
+    blocked = evaluate_checks(check_runs, review_suites, unfinished_runs)
     if blocked:
         return blocked
 
@@ -1080,15 +1161,24 @@ def main(argv=None) -> int:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         _die(f"cannot read workflow runs: {e}")
-    workflow_runs = (
-        payload.get("workflow_runs") if isinstance(payload, dict) else payload
-    )
-    if not isinstance(workflow_runs, list):
-        _die("workflow-runs payload has no workflow_runs list")
     review_paths = frozenset(
         p.strip() for p in args.review_workflows.split(",") if p.strip()
     )
-    review_suites = review_suite_ids(workflow_runs, review_paths)
+    # DRE-5045: the workflow's substitute for a failed read. It is not a
+    # listing and is not judged as one — condition 1 waits on it. Anything
+    # ELSE without a list is still a caller that broke, and exits 2.
+    if payload == json.loads(UNREADABLE_WORKFLOW_RUNS):
+        review_suites = frozenset()
+        unfinished = None
+    else:
+        workflow_runs = (
+            payload.get("workflow_runs") if isinstance(payload, dict)
+            else payload
+        )
+        if not isinstance(workflow_runs, list):
+            _die("workflow-runs payload has no workflow_runs list")
+        review_suites = review_suite_ids(workflow_runs, review_paths)
+        unfinished = unfinished_runs(workflow_runs, review_paths)
 
     try:
         with open(args.compare_file) as f:
@@ -1136,6 +1226,7 @@ def main(argv=None) -> int:
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
+        unfinished,
     )
     for note in decision.notes:
         print(f"note={note}")
