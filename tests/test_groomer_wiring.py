@@ -81,6 +81,34 @@ PLAN_CLASSIFY_STEP = "Classify the card — one-off, epic or wave"
 GROOM_STEP = "Groom"
 RECEIPT_STEP = "Judgement receipt — the model that answered"
 
+#: DRE-4972: the step of the `post` job that posts the verified record.
+POST_STEP = "Post the verified proposal"
+
+#: The drain branch of the Groom step, verbatim as it stood before DRE-4972
+#: split the propose branch into compute, verify and post. The split touches
+#: `propose` only; a drain that changed with it would be a change nobody
+#: reviewed as one.
+DRAIN_BRANCH = (
+    'if [ "$MODE" = "drain" ]; then\n'
+    '  if [ -z "$CARD" ]; then\n'
+    '    echo "drain needs the card the approval lives on" >&2\n'
+    '    exit 1\n'
+    '  fi\n'
+    '  # NO shaping flags (DRE-3338): the batch a drain moves is READ off\n'
+    '  # the approved proposal comment on the card, so there is nothing\n'
+    '  # for --capacity/--batch-cycles/--priority to shape. `--lane` is\n'
+    '  # only the fallback for a record whose own lane line is unreadable.\n'
+    '  python3 .bureau-pipeline/scripts/groomer.py drain \\\n'
+    '    --card "$CARD" --lane "$LANE" | tee proposal.txt\n'
+)
+
+#: The Judgement receipt's condition, unchanged by its move into `post`.
+RECEIPT_IF = ("inputs.mode != 'drain' && inputs.card != '' "
+              "&& inputs.dry_run != 'true'")
+
+#: The `runs-on` every reusable job here carries (tests/test_runs_on_switchable.py).
+RUNS_ON = "fromJSON(vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]')"
+
 #: The two UTC cron lines of the morning proposal (DRE-4677, moved to 06:00 by
 #: DRE-4969). Every day both fire and exactly one of them is 06:00 on the
 #: `America/Los_Angeles` clock; the gate script decides which, never an offset
@@ -608,15 +636,16 @@ class DryRunSwitchTest(unittest.TestCase):
 
     The 2026-09-04 demonstration was a real `workflow_dispatch`, so a dry run
     that exists only as a CLI flag is a dry run nobody would have taken. The
-    switch is an input on both files, it reaches `--dry-run` on the step, and
-    it silences the OTHER comment the run writes — the judgement receipt —
-    because "no marker at all" is the whole of the promise.
+    switch is an input on both files, it reaches `--dry-run` on the step that
+    posts — since DRE-4972 the `post` job's, because the Groom step posts
+    nothing — and it silences the OTHER comment the run writes, the judgement
+    receipt, because "no marker at all" is the whole of the promise.
     """
 
     def setUp(self):
         self.doc = _load("groomer.yml")
-        self.groom = _step(self.doc, GROOM_STEP)
-        self.env = self.groom.get("env") or {}
+        self.post = _step(self.doc, POST_STEP)
+        self.env = self.post.get("env") or {}
 
     def test_the_switch_exists_on_both_files_and_is_off_by_default(self):
         spec = (_on(self.doc)["workflow_call"].get("inputs") or {}).get("dry_run")
@@ -638,7 +667,7 @@ class DryRunSwitchTest(unittest.TestCase):
 
     def test_the_switch_reaches_the_step_and_turns_the_flag_on(self):
         self.assertEqual(_expression(self.env.get("DRY_RUN")), "inputs.dry_run")
-        self.assertIn("--dry-run", self.groom.get("run") or "",
+        self.assertIn("--dry-run", self.post.get("run") or "",
                       "the reusable never passes the flag the CLI reads")
 
     def test_a_dry_run_posts_no_judgement_receipt_either(self):
@@ -874,6 +903,304 @@ class JudgementReceiptWiringTest(unittest.TestCase):
         )
 
 
+def _verify_step(job: dict, step_id: str) -> dict:
+    for step in job.get("steps") or []:
+        if step.get("id") == step_id:
+            return step
+    raise AssertionError(f"the verify job has no step with id {step_id!r}")
+
+
+def _needs(job: dict) -> list:
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+class ComputeVerifyPostTest(unittest.TestCase):
+    """DRE-4972: three jobs, and the proposal posted only after the verify
+    matrix finishes. `groom` computes without posting, `verify` runs one
+    read-only agent per Planning and spare card, and `post` applies the
+    verdicts and posts."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.jobs = self.doc["jobs"]
+        self.groom = _step(self.doc, GROOM_STEP)
+        self.run = self.groom.get("run") or ""
+
+    def test_the_jobs_are_exactly_groom_verify_and_post(self):
+        self.assertEqual(list(self.jobs), ["groom", "verify", "post"])
+
+    def test_post_needs_both_and_runs_whatever_verify_did(self):
+        post = self.jobs["post"]
+        self.assertEqual(set(_needs(post)), {"groom", "verify"})
+        condition = _expression(post.get("if"))
+        for clause in ("always()", "inputs.mode != 'drain'",
+                       "needs.groom.result == 'success'"):
+            self.assertIn(clause, condition,
+                          f"the post job's `if` lacks {clause!r}")
+
+    def test_the_groom_step_posts_nothing(self):
+        self.assertNotIn("--post", self.run,
+                         "the Groom step still posts — the proposal would "
+                         "reach the card before the verify matrix ran")
+        self.assertIn('--card "$CARD"', self.run)
+        self.assertIn("--out proposal.json", self.run)
+
+    def test_the_post_job_is_what_posts(self):
+        runs = " ".join(str(s.get("run") or "")
+                        for s in self.jobs["post"].get("steps") or [])
+        self.assertIn("groomer.py post", runs)
+        self.assertIn('--card "$CARD" --proposal proposal-verified.json', runs)
+        for name, job in self.jobs.items():
+            if name == "post":
+                continue
+            for step in job.get("steps") or []:
+                self.assertNotIn("groomer.py post", str(step.get("run") or ""),
+                                 f"job {name!r} posts the proposal")
+
+    def test_the_groom_step_writes_the_targets_and_the_matrix(self):
+        self.assertIn(
+            "groom_verify_agent.py targets --proposal proposal.json "
+            "--out verify-targets.json --matrix-out matrix.json",
+            " ".join(self.run.replace("\\\n", " ").split()))
+        self.assertEqual(_expression((self.groom.get("env") or {})
+                                     .get("LINEAR_API_KEY")),
+                         "secrets.LINEAR_API_KEY")
+        outputs = self.jobs["groom"].get("outputs") or {}
+        self.assertEqual(_expression(outputs.get("verify_matrix")),
+                         f"steps.{self.groom['id']}.outputs.verify_matrix")
+        self.assertIn("verify_matrix=", self.run)
+
+    def test_the_targets_file_joins_the_proposal_artifact(self):
+        keep = _step(self.doc, "Keep the proposal")
+        self.assertEqual((keep.get("with") or {}).get("name"), "groom-proposal")
+        self.assertIn("verify-targets.json", (keep.get("with") or {}).get("path"))
+
+    def test_the_verify_job_fans_out_over_the_groom_output(self):
+        verify = self.jobs["verify"]
+        self.assertEqual(_needs(verify), ["groom"])
+        condition = _expression(verify.get("if"))
+        for clause in ("inputs.mode != 'drain'",
+                       "needs.groom.outputs.verify_matrix != ''",
+                       "needs.groom.outputs.verify_matrix != '[]'"):
+            self.assertIn(clause, condition)
+        strategy = verify.get("strategy") or {}
+        self.assertIs(strategy.get("fail-fast"), False,
+                      "a dead card must never cancel its siblings")
+        self.assertEqual(
+            _expression((strategy.get("matrix") or {}).get("include")),
+            "fromJSON(needs.groom.outputs.verify_matrix)")
+        self.assertEqual(_expression(verify.get("runs-on")), RUNS_ON)
+        self.assertEqual(verify.get("timeout-minutes"), 15)
+
+    def test_both_new_jobs_are_skipped_on_a_drain(self):
+        for name in ("verify", "post"):
+            self.assertIn("inputs.mode != 'drain'",
+                          _expression(self.jobs[name].get("if")),
+                          f"the {name} job runs on a drain")
+
+    def test_the_drain_branch_of_the_groom_step_is_unchanged(self):
+        self.assertIn(DRAIN_BRANCH, self.run)
+
+    def test_the_judgement_receipt_lives_in_post_with_its_condition(self):
+        names = {name: [s.get("name") for s in job.get("steps") or []]
+                 for name, job in self.jobs.items()}
+        self.assertIn(RECEIPT_STEP, names["post"])
+        self.assertNotIn(RECEIPT_STEP, names["groom"])
+        receipt = _step(self.doc, RECEIPT_STEP)
+        self.assertEqual(_expression(receipt.get("if")), RECEIPT_IF)
+        self.assertIn("--proposal proposal-verified.json", receipt.get("run"))
+        self.assertLess(names["post"].index(POST_STEP),
+                        names["post"].index(RECEIPT_STEP),
+                        "the receipt lands before the proposal it describes")
+
+
+class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
+    """The verify job reads the card's repo and writes one file. It holds no
+    token that can write code and no Linear key at all — the epic's rule that
+    the job holding a model over untrusted card text holds no write token."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.job = self.doc["jobs"]["verify"]
+        self.steps = self.job.get("steps") or []
+
+    def test_no_step_carries_the_linear_key(self):
+        self.assertNotIn("LINEAR_API_KEY", str(self.job.get("env") or {}))
+        for step in self.steps:
+            for block in ("env", "with"):
+                self.assertNotIn(
+                    "LINEAR_API_KEY", str(step.get(block) or {}),
+                    f"step {step.get('name') or step.get('id')!r} of the "
+                    f"verify job carries the Linear key in `{block}`")
+
+    def test_the_app_token_is_read_only_and_scoped_to_the_cards_repo(self):
+        mint = _verify_step(self.job, "target_token")
+        self.assertTrue(str(mint.get("uses")).startswith(
+            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"))
+        with_ = mint.get("with") or {}
+        self.assertEqual(with_.get("permission-contents"), "read")
+        self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
+        self.assertEqual(_expression(with_.get("private-key")),
+                         "secrets.BUREAU_APP_PRIVATE_KEY")
+        self.assertTrue(with_.get("owner"), "the token is not scoped to an owner")
+        self.assertTrue(with_.get("repositories"),
+                        "the token is not scoped to the card's repository")
+        self.assertIs(mint.get("continue-on-error"), True)
+
+    def test_the_target_checkout_keeps_no_credential(self):
+        checkout = _verify_step(self.job, "target")
+        with_ = checkout.get("with") or {}
+        self.assertIs(with_.get("persist-credentials"), False)
+        self.assertEqual(with_.get("path"), "target")
+        self.assertEqual(_expression(with_.get("repository")), "matrix.repository")
+        self.assertEqual(_expression(with_.get("token")),
+                         "steps.target_token.outputs.token")
+        self.assertNotIn("ref", with_, "the card is checked against the "
+                                       "repo's default branch")
+        self.assertIs(checkout.get("continue-on-error"), True)
+
+    def test_the_agent_reads_and_writes_one_file_and_nothing_else(self):
+        agent = _verify_step(self.job, "claude")
+        args = str((agent.get("with") or {}).get("claude_args"))
+        self.assertIn('--allowedTools "Read,Glob,Grep,Write"', args)
+        self.assertEqual(args.count("--allowedTools"), 1)
+        self.assertIn("--max-turns 40", args)
+        self.assertIs(agent.get("continue-on-error"), True)
+        self.assertTrue(str(agent.get("uses")).startswith(
+            "anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6"))
+
+    def test_the_prompt_is_fixed_text(self):
+        prompt = str((_verify_step(self.job, "claude").get("with") or {})
+                     .get("prompt"))
+        self.assertNotIn("${{", prompt, "nothing is interpolated into the prompt")
+        self.assertIn("verify-input.md", prompt)
+        self.assertIn("target/", prompt)
+
+    def test_the_bots_are_the_fleet_list_verbatim(self):
+        ours = (_verify_step(self.job, "claude").get("with") or {}).get(
+            "allowed_bots")
+        trial = _step(_load("model-trial.yml"), "Trial the candidate model")
+        self.assertEqual(ours, (trial.get("with") or {}).get("allowed_bots"))
+
+    def test_the_agent_takes_the_credential_the_way_plan_yml_gates_it(self):
+        """Read off plan.yml's classify step, never restated (DRE-3074)."""
+        plan = _step(_load("plan.yml"), PLAN_CLASSIFY_STEP).get("env") or {}
+        with_ = _verify_step(self.job, "claude").get("with") or {}
+        for name, key in (("ANTHROPIC_API_KEY", "anthropic_api_key"),
+                          ("CLAUDE_CODE_OAUTH_TOKEN", "claude_code_oauth_token")):
+            self.assertIn(_expression(plan[name]), _expression(with_.get(key)),
+                          f"the verify agent's {key} is not gated on "
+                          "CLAUDE_AUTH_MODE the way plan.yml gates it")
+
+
+class UnmappedRepoReadsNoCodeTest(unittest.TestCase):
+    """A card whose repo is not in `config/repo-map.json` reaches the verify
+    job with `matrix.repository == ''`. On that leg no token is minted, no
+    code is checked out and no model is called — and the leg still uploads a
+    `verdict.json` saying `unverified`."""
+
+    SKIPPED = ("target_token", "target", "install_claude", "claude")
+
+    def setUp(self):
+        self.job = _load("groomer.yml")["jobs"]["verify"]
+        self.ids = [s.get("id") for s in self.job.get("steps") or []]
+
+    def test_the_four_code_and_model_steps_skip_an_unmapped_repo(self):
+        for step_id in self.SKIPPED:
+            self.assertIn("matrix.repository != ''",
+                          _expression(_verify_step(self.job, step_id).get("if")),
+                          f"step {step_id!r} runs on an unmapped repo")
+
+    def test_prepare_always_runs(self):
+        prepare = _verify_step(self.job, "prepare")
+        self.assertNotIn("if", prepare)
+        run = " ".join(str(prepare.get("run")).replace("\\\n", " ").split())
+        self.assertIn('groom_verify_agent.py prepare --targets verify-targets.json '
+                      '--card "$CARD" --out verify-input.md '
+                      '--started-at-out started.txt', run)
+
+    def test_the_verdict_is_written_always_from_the_targets(self):
+        verdict = _verify_step(self.job, "verdict")
+        self.assertEqual(_expression(verdict.get("if")), "always()")
+        run = str(verdict.get("run"))
+        self.assertIn("--targets verify-targets.json", run)
+        self.assertNotIn("${{", run, "every expression goes through env:")
+        env = verdict.get("env") or {}
+        self.assertEqual(_expression(env.get("OUTCOME")), "steps.claude.outcome")
+        self.assertIn('--step-outcome "$OUTCOME"', run)
+
+    def test_the_steps_run_in_the_contract_order(self):
+        order = ["prepare", *self.SKIPPED, "verdict", "death"]
+        self.assertEqual([i for i in self.ids if i in order], order)
+
+    def test_every_leg_uploads_its_verdict_under_its_own_name(self):
+        steps = self.job.get("steps") or []
+        verdict_at = self.ids.index("verdict")
+        upload = steps[verdict_at + 1]
+        with_ = upload.get("with") or {}
+        self.assertEqual(with_.get("name"), "groom-verdict-${{ matrix.card }}")
+        self.assertEqual(with_.get("path"), "verdict.json")
+        self.assertIs(with_.get("overwrite"), True)
+        self.assertIn("always()", str(upload.get("if")))
+
+    def test_the_death_receipt_is_named_per_leg(self):
+        steps = self.job.get("steps") or []
+        upload = steps[self.ids.index("death") + 1]
+        self.assertEqual(
+            (upload.get("with") or {}).get("name"),
+            "death-receipt-verify-${{ matrix.card }}-attempt${{ github.run_attempt }}")
+
+
+class PostJobTest(unittest.TestCase):
+    """`post`: the verdicts applied to the record, then the record posted."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.job = self.doc["jobs"]["post"]
+        self.steps = self.job.get("steps") or []
+
+    def _downloads(self) -> list:
+        return [s.get("with") or {} for s in self.steps
+                if str(s.get("uses") or "").startswith("actions/download-artifact@")]
+
+    def test_it_downloads_the_proposal_and_every_verdict(self):
+        downloads = self._downloads()
+        self.assertIn("groom-proposal", [d.get("name") for d in downloads])
+        verdicts = [d for d in downloads if d.get("pattern") == "groom-verdict-*"]
+        self.assertEqual(len(verdicts), 1)
+        self.assertEqual(verdicts[0].get("path"), "verdicts")
+        # Every leg's file is `verdict.json`; merged into one directory they
+        # would overwrite one another, and `apply` would see one card.
+        self.assertIs(verdicts[0].get("merge-multiple"), False)
+
+    def test_it_applies_the_verdicts_before_posting(self):
+        runs = [" ".join(str(s.get("run") or "").replace("\\\n", " ").split())
+                for s in self.steps]
+        apply_at = next(i for i, r in enumerate(runs)
+                        if "groom_verify_agent.py apply" in r)
+        self.assertIn("--proposal proposal.json --verdicts verdicts "
+                      "--out proposal-verified.json", runs[apply_at])
+        post_at = next(i for i, r in enumerate(runs) if "groomer.py post" in r)
+        self.assertLess(apply_at, post_at)
+
+    def test_it_keeps_the_verified_record(self):
+        uploads = [s.get("with") or {} for s in self.steps
+                   if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
+        kept = [u for u in uploads if u.get("name") == "groom-proposal-verified"]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("proposal-verified.json", kept[0].get("path"))
+
+    def test_the_post_step_holds_the_linear_key_and_no_model_credential(self):
+        env = _step(self.doc, POST_STEP).get("env") or {}
+        self.assertEqual(_expression(env.get("LINEAR_API_KEY")),
+                         "secrets.LINEAR_API_KEY")
+        for step in self.steps:
+            for name in MODEL_SECRETS:
+                self.assertNotIn(name, step.get("env") or {},
+                                 "the post job calls no model")
+
+
 class LaneContractTest(unittest.TestCase):
     """The drain moves a card into Planning, so the groomer is a writer of
     Planning. A writer the contract does not name is a write the harness
@@ -949,6 +1276,18 @@ class DocumentationTest(unittest.TestCase):
                 sentence.lower(), folded,
                 f"docs/groomer.md still says {sentence!r}",
             )
+
+    def test_what_one_run_does_names_the_three_jobs(self):
+        """DRE-4972: the run is three jobs, an unmapped repo is `unverified`
+        with no code read, and the verify total is on the proposal page."""
+        section = self.doc.split("## What one run does", 1)[1].split(
+            "\n## ", 1)[0]
+        folded = " ".join(section.split())
+        for token in ("`groom`", "`verify`", "`post`", "DRE-4972",
+                      "config/repo-map.json", "`unverified`", "no code is read",
+                      "the verify total is on the proposal page"):
+            self.assertIn(token, folded,
+                          f"`## What one run does` never says {token}")
 
     def test_the_doc_says_why_a_cycle_is_not_sprint_planning(self):
         self.assertIn(groomer.CYCLE_IS_NOT_SPRINT_PLANNING, self.doc)

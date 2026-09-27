@@ -89,6 +89,12 @@ NOT_UPLOADING = {
     # not an agent run: there is no transcript, which is why its own death
     # receipt records `unknown` with the reason (groomer.yml).
     ("groomer.yml", "groom"),
+    # The groom verify matrix (DRE-4972): one read-only proof run per proposed
+    # card, reading its repo under `target/` and writing one verdict file.
+    # There is no working log worth keeping — the verdict and its proof ARE
+    # the output, uploaded as `groom-verdict-<card>` — and the agent-log roles
+    # carry no trust-list entry for it (agent-log-stack.ts, DRE-4343).
+    ("groomer.yml", "verify"),
     # NOTE on red-main-repair: it IS a real agent run against a card, so
     # "nobody has reviewed it" is a deferral, not a decision. The epic
     # DRE-4267 owns that decision; a comment on the epic records it, so it is
