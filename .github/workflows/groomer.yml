@@ -19,6 +19,13 @@
 # the scheduled job's `mode` is anything but the literal `propose`, or if
 # `propose` becomes reachable from the approval dispatch.
 #
+# THREE JOBS (DRE-4972): `groom` computes the proposal and posts nothing,
+# `verify` runs one read-only agent per Planning and spare card against that
+# card's repo on its default branch, and `post` writes the verdicts onto the
+# record and posts it — so the proposal reaches the card only after the matrix
+# finishes. On a drain `verify` and `post` are skipped and `groom` runs the
+# drain exactly as before.
+#
 # Reusable workflow: permissions live in the calling stub (contents: read).
 name: Groomer (reusable)
 
@@ -138,6 +145,10 @@ jobs:
     concurrency:
       group: groomer
       cancel-in-progress: false
+    # The verify matrix's rows (DRE-4972): `[{"card": "DRE-N", "repository":
+    # "<owner/repo>" | ""}, …]`, compacted onto one line. Empty on a drain.
+    outputs:
+      verify_matrix: ${{ steps.groom.outputs.verify_matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -201,7 +212,6 @@ jobs:
           CARD: ${{ inputs.card }}
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           JUDGEMENT: ${{ inputs.judgement }}
-          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.
@@ -219,67 +229,40 @@ jobs:
             python3 .bureau-pipeline/scripts/groomer.py drain \
               --card "$CARD" --lane "$LANE" | tee proposal.txt
           else
-            POST=()
-            if [ -n "$CARD" ]; then POST=(--post "$CARD"); fi
+            # COMPUTE, NEVER POST (DRE-4972). `--card` reads the card's whole
+            # thread — a held repo, an excluded card, an open decline — and
+            # posts nothing: the `post` job posts the
+            # record once the verify matrix has checked it (DRE-4971). The
+            # dry-run switch (DRE-3712) moved there with the post.
+            THREAD=()
+            if [ -n "$CARD" ]; then THREAD=(--card "$CARD"); fi
             # Anything but `on` runs the rules alone — DRE-3150's own flag,
             # unchanged, so the switch and the CLI are one contract.
             JUDGE=()
             if [ "$JUDGEMENT" != "on" ]; then JUDGE=(--no-judgement); fi
-            # The demonstration switch (DRE-3712). `--post` is still passed —
-            # the run reads the card's thread exactly as a real one does, so
-            # what the log shows is the page that WOULD have been posted — and
-            # the flag is what stops it being written.
-            DRY=()
-            if [ "$DRY_RUN" = "true" ]; then DRY=(--dry-run); fi
             # `--keep-answer` (DRE-3331): the ranked read's raw answer, kept
             # for the artifact below. Model output over card text — an
             # artifact, never a comment. Absent when no call answered.
             python3 .bureau-pipeline/scripts/groomer.py propose \
-              "${SHAPING[@]}" "${JUDGE[@]}" "${POST[@]}" "${DRY[@]}" \
+              "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" \
               --keep-answer judgement-answer.txt \
               --out proposal.json | tee proposal.txt
+            # The cards the verify matrix checks (DRE-4970): the Planning
+            # list and the spares behind it, each card's text read HERE —
+            # this job holds the Linear key and the verify job never does —
+            # and sanitized before it is written. `matrix.json` marks a card
+            # whose repo is not in config/repo-map.json with `repository: ""`.
+            python3 .bureau-pipeline/scripts/groom_verify_agent.py targets \
+              --proposal proposal.json --out verify-targets.json \
+              --matrix-out matrix.json
+            # One line, because a job output is one `key=value` line.
+            echo "verify_matrix=$(python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))' matrix.json)" >> "$GITHUB_OUTPUT"
           fi
           {
             echo "### Groomer — $MODE"
             echo
             cat proposal.txt
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # The receipt (DRE-3153): which model answered, and what the one call
-      # cost. Same `🧠 model-attempt:` marker plan.yml posts for the planning
-      # classifier, so the ladder's readers find it without learning a second
-      # grammar — and composed by a Python reader over the proposal the step
-      # above already wrote, never assembled in YAML (DRE-3083: a receipt built
-      # in a shell string is a second answer to "which model answered" that
-      # nothing tests).
-      #
-      # The reader decides whether there is anything to post: no comment under
-      # `--no-judgement`, and none when no model was ever asked. It writes an
-      # EMPTY file rather than failing, so this step never turns a missing
-      # footnote into a red run over a proposal sitting on the card exactly as
-      # intended (Q5: `proposal.json` is written before anything is posted).
-      #
-      # A DRY RUN POSTS NOTHING AT ALL (DRE-3712), this footnote included. The
-      # promise is "no marker", not "no proposal marker" — a receipt comment on
-      # a card nobody proposed anything to is the same demonstration leaking
-      # into the record.
-      - name: Judgement receipt — the model that answered
-        if: ${{ inputs.mode != 'drain' && inputs.card != '' && inputs.dry_run != 'true' }}
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          CARD: ${{ inputs.card }}
-        run: |
-          set -euo pipefail
-          python3 .bureau-pipeline/scripts/groomer_receipt.py \
-            --proposal proposal.json --out receipt.txt
-          if [ -s receipt.txt ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment \
-              "$CARD" "$(cat receipt.txt)"
-            {
-              echo
-              cat receipt.txt
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
 
       - name: Keep the proposal
         if: always()
@@ -290,6 +273,7 @@ jobs:
             proposal.json
             proposal.txt
             judgement-answer.txt
+            verify-targets.json
           if-no-files-found: ignore
           retention-days: 30
 
@@ -340,3 +324,356 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+  # THE VERIFY MATRIX (DRE-4972, epic of DRE-4966..4971). One read-only agent
+  # per card the proposal would put in front of the CEO — the Planning list and
+  # the spares behind it — reading that card's repo on its default branch and
+  # answering `still-needed`, `done`, `obsolete` or `unverified` with proof.
+  # DRE-2382's answer was in code (its file still existed, and only a reader of
+  # it could see the card no longer applied), and the groom job reads no code.
+  #
+  # WHAT THIS JOB HOLDS, deliberately: no Linear key anywhere (the card text
+  # was read and sanitized by `targets` in the groom job), a GitHub App token
+  # minted for ONE repository with `contents: read`, a checkout that keeps no
+  # credential, and a model whose tool set is Read/Glob/Grep/Write. A model
+  # over untrusted card text holds no token that can write code or Linear.
+  #
+  # `fail-fast: false`: one dead card never cancels its siblings, and every
+  # leg writes its `verdict.json` on `always()` — a leg that dies is
+  # `unverified`, never `still-needed`. The matrix ceiling is 256 legs; the
+  # morning is at most capacity 20 plus 10 spares.
+  #
+  # A CARD WHOSE REPO IS NOT IN config/repo-map.json arrives with
+  # `matrix.repository == ''`. On that leg the token, the checkout, the
+  # install and the agent are skipped — no code is read and no model is called
+  # — and `prepare` and `verdict` still run, so the leg uploads a verdict that
+  # says `unverified` and names the slug. No verdict is ever formed from card
+  # text alone.
+  verify:
+    needs: groom
+    if: ${{ inputs.mode != 'drain' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.groom.outputs.verify_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Download the proposal and its targets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: groom-proposal
+
+      # The agent's whole input, and the moment it started. No `if`: on an
+      # unmapped repo `prepare` writes the one line that says the card is not
+      # verifiable and starts the clock all the same, so the verdict below has
+      # a leg to describe. It also splits `owner/repo` for the token's scope —
+      # an expression has no split, and the matrix row is the contract.
+      - name: Prepare the agent's input
+        id: prepare
+        env:
+          CARD: ${{ matrix.card }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          set -euo pipefail
+          python3 .bureau-pipeline/scripts/groom_verify_agent.py prepare \
+            --targets verify-targets.json --card "$CARD" --out verify-input.md \
+            --started-at-out started.txt
+          if [ -n "$REPOSITORY" ]; then
+            echo "owner=${REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+            echo "name=${REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # READ-ONLY, ONE REPOSITORY. The same pin reconcile.yml mints with, and
+      # the App pair DRE-4964 declared optional above. The App must be
+      # installed on the card's repo; a repo it cannot read fails here or at
+      # the checkout, `continue-on-error` keeps the leg alive, and the agent
+      # below does not run without the code — so the verdict is `unverified`,
+      # never `still-needed`.
+      - name: Mint a read-only token for the card's repo
+        id: target_token
+        if: ${{ matrix.repository != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ steps.prepare.outputs.owner }}
+          repositories: ${{ steps.prepare.outputs.name }}
+          permission-contents: read
+
+      # The default branch — no `ref` — and no credential left on disk.
+      - name: Check out the card's repo
+        id: target
+        if: ${{ matrix.repository != '' && steps.target_token.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          token: ${{ steps.target_token.outputs.token }}
+          path: target
+          persist-credentials: false
+
+      - uses: ./.bureau-pipeline/.github/actions/install-claude-code
+        id: install_claude
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' }}
+
+      # Model selection for the verify agent, medic.yml's shape: the id and the
+      # level it runs at come from config/models.yaml (agent `verifier`, the
+      # ADVISORY ladder — a bounded read-only check, not build work), never a
+      # pinned id and never the harness default (DRE-4836: an agent step that
+      # passes no effort runs at Opus 5.5's own `medium`).
+      - name: Select model
+        id: model
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          EFFORT_FILE="$RUNNER_TEMP/model-effort.txt"
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select verifier \
+            --explain-file "$WHY_FILE" --effort-file "$EFFORT_FILE")
+          WHY=$(cat "$WHY_FILE")
+          EFFORT=$(cat "$EFFORT_FILE" 2>/dev/null || true)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "effort_arg=${EFFORT:+--effort $EFFORT}" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (agent: verifier, groom verify)"
+          case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
+
+      # THE AGENT. Through the vendor action, never a raw Messages API call: a
+      # subscription token answers 429 to every raw request (DRE-3074). The
+      # two credential inputs are plan.yml's classify-step grammar, read by
+      # tests/test_groomer_wiring.py rather than restated there.
+      #
+      # NO `LINEAR_API_KEY`, DELIBERATELY (DRE-2696 is the rule this omits).
+      # The tool set is Read/Glob/Grep/Write — no Bash — so the agent could
+      # not run linear_ops.py if it held the key, and it posts no heartbeat.
+      # The waiver and its reason are pinned in tests/test_agent_linear_key.py.
+      #
+      # FIXED TEXT, AND NOTHING INTERPOLATED INTO IT. The card arrives inside
+      # verify-input.md, fenced and sanitized by `targets`
+      # (standards/untrusted-content.md).
+      - name: Verify the card against main
+        id: claude
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
+        continue-on-error: true
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        with:
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ github.token }}
+          # Copied verbatim from model-trial.yml's agent step — a second,
+          # drifting list is how DRE-2020/DRE-2053 happened.
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          claude_args: |
+            --max-turns 40
+            --model ${{ steps.model.outputs.model }}
+            ${{ steps.model.outputs.effort_arg }}
+            --allowedTools "Read,Glob,Grep,Write"
+          prompt: |
+            Read the file verify-input.md at the workspace root and do what it
+            says. The repository to check is checked out under target/.
+
+            Write only the one answer file verify-input.md names. Change
+            nothing under target/, run no commands, and do not commit, push or
+            open a pull request.
+
+      # ALWAYS, and it never trusts the step above: on an unmapped repo the
+      # agent step reads `skipped` and `--targets` forces `unverified` naming
+      # the slug; a failed or skipped agent is `unverified` with the reason.
+      # Every expression is in env:, never in the script.
+      - name: Write the verdict
+        id: verdict
+        if: always()
+        env:
+          CARD: ${{ matrix.card }}
+          OUTCOME: ${{ steps.claude.outcome }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file || '/home/runner/work/_temp/claude-execution-output.json' }}
+        run: |
+          python3 .bureau-pipeline/scripts/groom_verify_agent.py verdict \
+            --card "$CARD" --targets verify-targets.json \
+            --raw verify-verdict.json --execution-file "$EXECUTION_FILE" \
+            --step-outcome "$OUTCOME" --started-at started.txt \
+            --out verdict.json
+
+      # `overwrite`: re-running one failed leg re-uploads its artifact.
+      - name: Keep the verdict
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: groom-verdict-${{ matrix.card }}
+          path: verdict.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
+
+      # THE LEG'S OWN DEATH-CAUSE RECEIPT (DRE-4340) — this job runs a model,
+      # so scripts/check_death_receipts.py requires it. Named per card so
+      # thirty legs do not collide on one artifact name.
+      - name: Keep the run's death-cause receipt
+        id: death
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          MODEL_STEP_OUTCOME: ${{ steps.claude.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          CARD: ${{ inputs.card }}
+          CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/death_receipt.py emit \
+            --execution-file "$EXEC_FILE" \
+            --out "${RUNNER_TEMP:-/tmp}/death-receipt.json" \
+            --job-status "$JOB_STATUS" \
+            --step-outcome "$MODEL_STEP_OUTCOME" \
+            --card "$CARD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the death-cause receipt
+        if: always() && steps.death.outputs.path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: death-receipt-verify-${{ matrix.card }}-attempt${{ github.run_attempt }}
+          path: ${{ steps.death.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 90
+
+  # THE POST (DRE-4972). Nothing reaches the card until here, so a crash
+  # before this job leaves no marker and the next run starts clean.
+  #
+  # `always()`: a failed or skipped verify never stops the proposal posting —
+  # every leg wrote its verdict on `always()`, and a target with no verdict
+  # artifact at all is marked `unverified` by `apply`. Only a groom that did
+  # not succeed stops it, because then there is no record to post.
+  post:
+    needs: [groom, verify]
+    if: ${{ always() && inputs.mode != 'drain' && needs.groom.result == 'success' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    concurrency:
+      group: groomer-post
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Download the proposal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: groom-proposal
+
+      # NOT merged: every leg's file is `verdict.json`, so merged into one
+      # directory they would overwrite one another and `apply` would read one
+      # card. Each artifact lands in `verdicts/<artifact>/`, and `apply` reads
+      # every `verdict.json` under the directory. `continue-on-error`: no
+      # verdict at all (the matrix was skipped, or every leg died before its
+      # upload) is every target `unverified`, not a proposal left unposted.
+      - name: Download every verdict
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: groom-verdict-*
+          path: verdicts
+          merge-multiple: false
+
+      - name: Apply the verdicts
+        run: |
+          set -euo pipefail
+          mkdir -p verdicts
+          python3 .bureau-pipeline/scripts/groom_verify_agent.py apply \
+            --proposal proposal.json --verdicts verdicts \
+            --out proposal-verified.json
+
+      # With a card, `post` posts the verified record at most once per id —
+      # a re-run of the whole workflow recomputes, and `already_proposed`
+      # keeps the second post silent. The dry-run switch (DRE-3712) reads the
+      # thread and posts nothing. Without a card there is nowhere to post, and
+      # the page is printed for the step summary.
+      - name: Post the verified proposal
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ inputs.card }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CARD" ]; then
+            DRY=()
+            if [ "$DRY_RUN" = "true" ]; then DRY=(--dry-run); fi
+            python3 .bureau-pipeline/scripts/groomer.py post \
+              --card "$CARD" --proposal proposal-verified.json "${DRY[@]}" \
+              | tee proposal-verified.txt
+          else
+            python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import groomer; print(groomer.render_proposal(json.load(open("proposal-verified.json"))))' \
+              | tee proposal-verified.txt
+          fi
+          {
+            echo "### Groomer — the verified proposal"
+            echo
+            cat proposal-verified.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The receipt (DRE-3153): which model answered, and what the one call
+      # cost. Same `🧠 model-attempt:` marker plan.yml posts for the planning
+      # classifier, so the ladder's readers find it without learning a second
+      # grammar — and composed by a Python reader over the proposal the step
+      # above already wrote, never assembled in YAML (DRE-3083: a receipt built
+      # in a shell string is a second answer to "which model answered" that
+      # nothing tests).
+      #
+      # The reader decides whether there is anything to post: no comment under
+      # `--no-judgement`, and none when no model was ever asked. It writes an
+      # EMPTY file rather than failing, so this step never turns a missing
+      # footnote into a red run over a proposal sitting on the card exactly as
+      # intended (Q5: `proposal.json` is written before anything is posted).
+      #
+      # In the `post` job since DRE-4972, after the post, so the receipt still
+      # lands after the proposal. It reads the verified record, which carries
+      # the ranked read's block unchanged.
+      #
+      # A DRY RUN POSTS NOTHING AT ALL (DRE-3712), this footnote included. The
+      # promise is "no marker", not "no proposal marker" — a receipt comment on
+      # a card nobody proposed anything to is the same demonstration leaking
+      # into the record.
+      - name: Judgement receipt — the model that answered
+        if: ${{ inputs.mode != 'drain' && inputs.card != '' && inputs.dry_run != 'true' }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ inputs.card }}
+        run: |
+          set -euo pipefail
+          python3 .bureau-pipeline/scripts/groomer_receipt.py \
+            --proposal proposal-verified.json --out receipt.txt
+          if [ -s receipt.txt ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment \
+              "$CARD" "$(cat receipt.txt)"
+            {
+              echo
+              cat receipt.txt
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+
+      - name: Keep the verified proposal
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: groom-proposal-verified
+          path: |
+            proposal-verified.json
+            proposal-verified.txt
+          if-no-files-found: ignore
+          retention-days: 30

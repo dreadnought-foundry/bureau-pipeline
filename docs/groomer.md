@@ -50,15 +50,31 @@ only then does anything leave Intake.
    Cancel list with that evidence as the reason, and a Cancel whose
    replacement is not real goes back to the Planning list. No model call. The
    id is computed after, so the approval covers the checked lists. Below.
-9. **Posts, in its own step** (DRE-4971). The run is
-   compute, verify, then post. `propose --card DRE-N --out proposal.json`
-   computes the proposal, reads the card's thread and posts nothing; the
-   verify matrix
-   (`scripts/groom_verify_agent.py`) reads each card against the code on
-   main, in jobs of its own, and writes its verdicts onto the record; then
-   `post --card DRE-N --proposal proposal-verified.json` posts that record.
-   The page then carries a `## Verified against main` section after the
-   Cancel list. Below, under the approval gate.
+9. **Posts, in its own job** (DRE-4971, wired by DRE-4972). The run is
+   compute, verify, then post — three jobs in `groomer.yml`:
+   - **`groom`** runs `propose --card DRE-N --out proposal.json`, which
+     computes the proposal, reads the card's thread and posts nothing, then
+     `groom_verify_agent.py targets`, which reads each Planning and spare
+     card's text — this job holds the Linear key — and writes the matrix.
+   - **`verify`** is that matrix: one read-only agent per card, reading the
+     card's repo on its default branch under `target/` with a token that can
+     only read that one repo, and holding no Linear key at all. Each agent
+     answers `still-needed`, `done`, `obsolete` or `unverified`, with proof. A
+     card whose repo is not in `config/repo-map.json` is reported
+     `unverified`, naming the slug, and on its leg no code is read and no
+     model is called. A leg that dies is `unverified` too, never
+     `still-needed`, and one dead leg never cancels the others.
+   - **`post`** writes the verdicts onto the record
+     (`groom_verify_agent.py apply`) and runs
+     `post --card DRE-N --proposal proposal-verified.json`, which posts it —
+     so nothing reaches the card until the matrix has finished. A failed
+     verify job does not stop the post; its cards are `unverified`.
+
+   On a drain only `groom` runs, exactly as before. The page carries a
+   `## Verified against main` section after the Cancel list, and its
+   `Verify step:` line is the verify total — cards, dollars and wall clock —
+   so the verify total is on the proposal page, never in a separate comment.
+   Below, under the approval gate.
 
 ## The one ranked read
 

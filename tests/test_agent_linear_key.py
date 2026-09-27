@@ -106,6 +106,20 @@ DOCUMENTED_EXCEPTIONS = {
         "token it is there to exercise. Reporting is the CALLER's job "
         "(model-adoption.yml, DRE-3903) — it reads the three outputs."
     ),
+    (
+        "groomer.yml",
+        "Verify the card against main",
+    ): (
+        "The groom verify agent is denied Linear ON PURPOSE (DRE-4972 + "
+        "DRE-2696). Its tool set is \"Read,Glob,Grep,Write\" with no Bash, so "
+        "it could not run linear_ops.py if it held the key, and it posts no "
+        "heartbeat: it reads one card's repo under target/ and writes one "
+        "verdict file. The card text it judges was read and sanitized in the "
+        "groom job, which holds the key; the epic's rule is that the job "
+        "running a model over that untrusted text holds no Linear write "
+        "token and no code write token, and the whole verify job carries "
+        "neither — pinned by tests/test_groomer_wiring.py."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new
