@@ -258,24 +258,38 @@ def _newest_first(rows: list[dict], key: str) -> list[dict]:
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-def _cap(name: str, rows: list[dict], caps: dict, truncated: dict) -> list[dict]:
+def _cap(name: str, rows: list[dict], caps: dict, truncated: dict,
+         of: int | None = None) -> list[dict]:
+    """The newest `caps[name]` rows. `of` is the source's own count where it
+    is larger than the rows read — a search's `total_count` past its
+    1,000-result ceiling — so the cut is stated against the real size."""
     limit = caps.get(name)
-    if limit is None or len(rows) <= limit:
-        return rows
-    truncated[name] = {"kept": limit, "of": len(rows)}
-    return rows[:limit]
+    kept = rows if limit is None else rows[:limit]
+    whole = max(len(rows), of or 0)
+    if whole > len(kept):
+        truncated[name] = {"kept": len(kept), "of": whole}
+    return kept
 
 
 def pack(*, epics=(), initiatives=(), merged_prs=(), closed_cards=(),
          now: str | None = None, caps: dict | None = None,
-         unread=()) -> dict:
+         unread=(), counts: dict | None = None,
+         unread_owners: dict | None = None,
+         unread_reasons: dict | None = None) -> dict:
     """The context pack, from rows. Pure: no key, no network, no clock.
 
     `now` anchors both windows, so a fixture is never at the mercy of the day
     the suite happens to run — the same reason `groomer.propose` takes one.
+
+    `counts` is a section's size as its SOURCE reports it, where that is more
+    than the rows handed over (DRE-4964: the search's `total_count`).
+    `unread_owners` names the GitHub owners the merged-PR read could not see,
+    each with its reason, and `unread_reasons` says why a whole section is
+    unread — both so a gap is named, never rendered as a zero.
     """
     now = now or _now()
     caps = dict(CAPS if caps is None else caps)
+    counts = {k: int(v) for k, v in (counts or {}).items() if v is not None}
     truncated: dict = {}
 
     epic_rows = [
@@ -322,16 +336,22 @@ def pack(*, epics=(), initiatives=(), merged_prs=(), closed_cards=(),
         "initiatives": _cap("initiatives", list(initiative_rows), caps,
                             truncated),
         "merged_prs": _cap("merged_prs", _newest_first(pr_rows, "merged_at"),
-                           caps, truncated),
+                           caps, truncated, of=counts.get("merged_prs")),
         "closed_cards": _cap("closed_cards",
                              _newest_first(closed_rows, "closed_at"), caps,
                              truncated),
         "truncated": truncated,
+        "counts": counts,
         # Sources this pack could not read at all. Named rather than rendered
         # as an empty section: "nothing merged this fortnight" and "we could
         # not ask GitHub" are different facts with different weights, and only
         # one of them should make a card look stale.
         "unread": sorted(unread),
+        "unread_reasons": {k: str(v) for k, v in (unread_reasons or {}).items()},
+        # The same rule one level down (DRE-4964): an owner whose merges could
+        # not be read is named, and adds nothing to the count — never a 0.
+        "unread_owners": {k: str(v) for k, v in
+                          sorted((unread_owners or {}).items())},
     }
     return built
 
@@ -349,12 +369,22 @@ def summary(built: dict) -> dict:
     several, and a plausible-looking default is indistinguishable from a real
     answer (DRE-3329, `standards/console-honesty.md` rule 2). `0` stays what
     it has always meant — we asked, and there was nothing.
+
+    A section's count is its SOURCE's count where the pack carries one — the
+    merged-PR search's `total_count`, which is true past the 40 rows kept and
+    past the search's 1,000-result ceiling (DRE-4964). An owner the read
+    could not see is listed in `unread` as `merged_prs:<owner>`: the count is
+    the owners that WERE read, and the list says which were not.
     """
     unread = sorted(built.get("unread") or ())
-    out = {name: (None if name in unread else len(built.get(name) or ()))
+    counts = built.get("counts") or {}
+    out = {name: (None if name in unread
+                  else counts.get(name, len(built.get(name) or ())))
            for name in SECTIONS}
     out["truncated"] = sorted(built.get("truncated") or {})
-    out["unread"] = unread
+    out["unread"] = unread + [f"merged_prs:{owner}" for owner in
+                              sorted(built.get("unread_owners") or {})
+                              if "merged_prs" not in unread]
     return out
 
 
@@ -394,9 +424,15 @@ def render(built: dict) -> str:
         if name in unread:
             add(f"- This section could not be read this run ({name}), so treat "
                 f"it as unknown rather than as empty.")
-        elif not rows:
-            add("- Nothing.")
         else:
+            owners = (built.get("unread_owners") or {}) if name == "merged_prs" \
+                else {}
+            if owners:
+                add(f"- Not read this run, so unknown rather than empty: the "
+                    f"merges of {', '.join(sorted(owners))}.")
+            if not rows:
+                add("- Nothing." if not owners else
+                    "- Nothing from the owners that were read.")
             for row in rows:
                 add("- " + _row_line(name, row))
         add("")
@@ -452,10 +488,27 @@ INITIATIVES_QUERY = """query {
   initiatives(first: 50) { nodes { name description status } }
 }"""
 
-# Only merges, only the window, only this org. `gh search prs` is one call for
-# every repo in the fleet — a per-repo `gh pr list` would be one call per repo
-# and the same answer.
-PR_SEARCH_LIMIT = "100"
+# Only merges, only the window, one search per owner (DRE-4964). The REST
+# search API rather than `gh search prs`: the CLI does not serve `mergedAt`, so
+# the rows were dated by `createdAt` and a PR open for a month sorted as if it
+# merged the day it was opened. `search/issues` hands back
+# `pull_request.merged_at` on every result.
+#
+# GitHub search returns at most 1,000 results per query, 100 to a page, and
+# its `total_count` is the true size past that ceiling — so the count comes
+# from `total_count` and the rows from every page there is. Sorted by
+# `updated`, newest first: a PR's `updated_at` is never before its merge, so a
+# row past the ceiling merged no later than the oldest `updated_at` that WAS
+# read. The 40 newest merges are therefore on the pages read unless a thousand
+# PRs were touched since the fortieth of them merged, and at 1,337 merges a
+# fortnight that fortieth is about ten hours old.
+PR_SEARCH_PER_PAGE = 100
+PR_SEARCH_CEILING = 1000
+
+#: The credential the read spends, by the name the Groom step hands it
+#: (`groomer.yml`) — the Bureau App's installation token. The same name the
+#: per-card read uses; it is a contract, not a local choice.
+TOKEN_ENV = "GH_TOKEN"
 
 
 def _since(now: str, days: int) -> str:
@@ -497,28 +550,126 @@ def read_closed_cards(lops, *, now: str, days: int = CLOSED_CARD_DAYS) -> list[d
     return lops.gql_paged(CLOSED_QUERY, {"since": _since(now, days)})
 
 
-def read_merged_prs(*, now: str, org: str = "dreadnought-foundry",
-                    days: int = MERGED_PR_DAYS, run=None) -> list[dict]:
-    """The org's merged pull requests inside the window, via `gh`.
+def fleet_owners() -> list[str]:
+    """Every owner in `config/repo-map.json` — the roster the relay routes on,
+    read through the one reader `release_train` already keeps."""
+    import release_train
 
-    Read-path only and LOUD: a non-zero exit raises, so `read_pack` records the
-    section as unread instead of handing the model an empty fortnight.
+    return release_train.fleet_owners(release_train.fleet_roster())
+
+
+def _api(run, args: list[str], what: str) -> dict:
+    out = run(["api", *args])
+    try:
+        doc = json.loads(out or "{}")
+    except ValueError as e:
+        raise ContextError(f"{what} returned unreadable JSON: {e}") from e
+    if not isinstance(doc, dict):
+        raise ContextError(f"{what} returned {type(doc).__name__}, not an object")
+    return doc
+
+
+def installed_owners(run) -> set[str]:
+    """The owners the token's App installation can see, lower-cased.
+
+    An installation token is scoped to ONE installation, and a search of an
+    owner it cannot see does not fail: it answers from that owner's public
+    repositories, which for a private fleet repo is a confident, empty 0.
+    So the question is asked of the token first — `/installation/repositories`
+    — and never inferred from a search that came back empty.
     """
+    seen: set[str] = set()
+    page = 1
+    while True:
+        doc = _api(run, ["-X", "GET", "installation/repositories",
+                         "-f", "per_page=100", "-f", f"page={page}"],
+                   "installation/repositories")
+        repos = doc.get("repositories") or []
+        for repo in repos:
+            seen.add(str(repo.get("full_name") or "").split("/")[0].lower())
+        if len(repos) < 100 or page * 100 >= int(doc.get("total_count") or 0):
+            break
+        page += 1
+    seen.discard("")
+    return seen
+
+
+def _search_owner(run, owner: str, since: str) -> tuple[list[dict], int]:
+    """Every merged PR of `owner` since `since`, every page, and the search's
+    own `total_count`."""
+    query = f"is:pr is:merged user:{owner} merged:>={since}"
+    rows: list[dict] = []
+    total = 0
+    page = 1
+    while True:
+        doc = _api(run, ["-X", "GET", "search/issues", "-f", f"q={query}",
+                         "-f", "sort=updated", "-f", "order=desc",
+                         "-f", f"per_page={PR_SEARCH_PER_PAGE}",
+                         "-f", f"page={page}"],
+                   f"search/issues for {owner}")
+        total = int(doc.get("total_count") or 0)
+        items = doc.get("items") or []
+        for found in items:
+            merged_at = (found.get("pull_request") or {}).get("merged_at")
+            if not merged_at:
+                continue
+            repo = "/".join(str(found.get("repository_url") or "")
+                            .rstrip("/").split("/")[-2:])
+            rows.append({
+                "title": found.get("title") or "",
+                "url": found.get("html_url") or "",
+                "repository": {"nameWithOwner": repo},
+                "createdAt": found.get("created_at") or "",
+                "merged_at": merged_at,
+            })
+        read = page * PR_SEARCH_PER_PAGE
+        if (len(items) < PR_SEARCH_PER_PAGE or read >= total
+                or read >= PR_SEARCH_CEILING):
+            return rows, total
+        page += 1
+
+
+def read_merged_prs(*, now: str, owners=None, days: int = MERGED_PR_DAYS,
+                    run=None) -> dict:
+    """The fleet's merged pull requests inside the window, via the REST API.
+
+    Returns `{"rows", "total_count", "unread_owners"}`. The owners are the
+    fleet's (`config/repo-map.json`); each one the token's installation cannot
+    see, and each one whose search fails, is named in `unread_owners` with the
+    reason and adds nothing to `total_count`.
+
+    LOUD where the whole read fails: no token, the installation unreadable, or
+    no owner readable at all raises, so `read_pack` records the section as
+    unread — with the reason — instead of handing the model an empty fortnight.
+    """
+    if not (os.environ.get(TOKEN_ENV) or "").strip():
+        raise ContextError(
+            f"no {TOKEN_ENV} in the environment — the Groom step hands the "
+            f"merged-PR read the Bureau App token under that name")
     run = run or _gh_json
     since = (_since(now, days) or "")[:10]
-    out = run([
-        "search", "prs", "--owner", org, "--merged", "--merged-at", f">={since}",
-        "--limit", PR_SEARCH_LIMIT, "--json", "title,url,repository,createdAt",
-    ])
-    try:
-        rows = json.loads(out or "[]")
-    except ValueError as e:
-        raise ContextError(f"gh search prs returned unreadable JSON: {e}") from e
-    # `gh search prs` does not serve mergedAt; the window is already applied by
-    # the query, so the row's own createdAt only orders the newest-first cut.
-    for row in rows:
-        row.setdefault("merged_at", row.get("createdAt") or "")
-    return rows
+    owners = list(owners) if owners is not None else fleet_owners()
+    visible = installed_owners(run)
+
+    rows: list[dict] = []
+    total = 0
+    unread: dict[str, str] = {}
+    for owner in owners:
+        if owner.lower() not in visible:
+            unread[owner] = "the Bureau App token's installation cannot see it"
+            continue
+        try:
+            found, count = _search_owner(run, owner, since)
+        except Exception as e:  # noqa: BLE001 — one owner is one named gap
+            unread[owner] = str(e)
+            continue
+        rows.extend(found)
+        total += count
+    if owners and len(unread) == len(owners):
+        raise ContextError(
+            "no owner's merged pull requests could be read — "
+            + "; ".join(f"{o}: {why}" for o, why in sorted(unread.items())))
+    return {"rows": rows, "total_count": total, "unread_owners": unread}
 
 
 def _gh_json(args: list[str]) -> str:
@@ -531,18 +682,20 @@ def _gh_json(args: list[str]) -> str:
     return done.stdout
 
 
-def read_pack(lops=None, *, now: str | None = None, org: str | None = None,
+def read_pack(lops=None, *, now: str | None = None, owners=None,
               run=None) -> dict:
-    """Fetch every source and build the pack. A source that fails is NAMED."""
+    """Fetch every source and build the pack. A source that fails is NAMED,
+    and so is the reason it failed."""
     lops = lops or linear_ops
     now = now or _now()
-    org = org or (os.environ.get("REPO") or "dreadnought-foundry/x").split("/")[0]
     rows: dict = {name: [] for name in SECTIONS}
     unread: list[str] = []
+    reasons: dict[str, str] = {}
+    merged: dict = {}
     for name, reader in (
         ("epics_in_progress", lambda: read_epics(lops)),
         ("initiatives", lambda: read_initiatives(lops)),
-        ("merged_prs", lambda: read_merged_prs(now=now, org=org, run=run)),
+        ("merged_prs", lambda: read_merged_prs(now=now, owners=owners, run=run)),
         ("closed_cards", lambda: read_closed_cards(lops, now=now)),
     ):
         try:
@@ -551,9 +704,17 @@ def read_pack(lops=None, *, now: str | None = None, org: str | None = None,
             print(f"groom context: {name} could not be read: {e}",
                   file=sys.stderr)
             unread.append(name)
+            reasons[name] = str(e)
+    if "merged_prs" not in unread:
+        merged, rows["merged_prs"] = rows["merged_prs"], rows["merged_prs"]["rows"]
+        for owner, why in sorted(merged["unread_owners"].items()):
+            print(f"groom context: merged_prs for {owner} could not be read: "
+                  f"{why}", file=sys.stderr)
     return pack(epics=rows["epics_in_progress"], initiatives=rows["initiatives"],
                 merged_prs=rows["merged_prs"], closed_cards=rows["closed_cards"],
-                now=now, unread=unread)
+                now=now, unread=unread, unread_reasons=reasons,
+                counts=({"merged_prs": merged["total_count"]} if merged else None),
+                unread_owners=merged.get("unread_owners"))
 
 
 def _now() -> str:
