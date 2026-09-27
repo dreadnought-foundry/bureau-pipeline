@@ -94,7 +94,7 @@ EXPECTED_STUBS = {
     "pr-review.yml": ("qa-review.yml", "QA Review"),
     # DRE-2683, amended by DRE-3337 and by DRE-3586 (absorbed by DRE-4677): a
     # manual dispatch, a `groom-drain` repository_dispatch that reaches the
-    # drain and only the drain, and a 06:15 PT schedule that reaches `propose`
+    # drain and only the drain, and a 06:00 PT schedule that reaches `propose`
     # and only `propose`, behind the `gate` job declared in STEP_JOBS. The
     # trigger shape is asserted in tests/test_groomer_wiring.py.
     "self-groomer.yml": ("groomer.yml", "Groomer"),

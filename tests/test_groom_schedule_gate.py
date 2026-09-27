@@ -1,4 +1,4 @@
-"""The scheduled groomer's gate — 06:15 PT, and a card to post to (DRE-4688).
+"""The scheduled groomer's gate — 06:00 PT, and a card to post to (DRE-4688).
 
 `self-groomer.yml`'s schedule job calls `groomer.yml`, and a job with `uses:`
 has no steps — so the two questions a scheduled groom has to answer before it
@@ -6,8 +6,8 @@ spends a model call cannot be answered inside it. They are answered here, by
 one script a separate gate job runs:
 
   * IS IT THE MORNING? GitHub's `schedule:` takes UTC only, so the sibling
-    carries two cron lines (`15 13 * * *` and `15 14 * * *`). On any given day
-    exactly one of them is 06:15 on the `America/Los_Angeles` wall clock and
+    carries two cron lines (`0 13 * * *` and `0 14 * * *`). On any given day
+    exactly one of them is 06:00 on the `America/Los_Angeles` wall clock and
     the other is an hour off — which one flips at each DST change, so the
     reading is done with `zoneinfo` and never with a restated offset. Both
     tests below run over a January date AND a July date for that reason: a
@@ -35,7 +35,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_schedule_gate.py -
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -48,14 +48,16 @@ import groom_schedule_gate as gate  # noqa: E402
 UTC = timezone.utc
 
 #: The two cron lines of the pair, as the sibling workflow card will write
-#: them: `15 13 * * *` and `15 14 * * *`.
-CRONS = ("13:15", "14:15")
+#: them: `0 13 * * *` and `0 14 * * *`.
+CRONS = ("13:00", "14:00")
 
 #: One standard-time date and one daylight-time date. Both are read on the PT
-#: clock, so which cron lands on 06:15 differs between them — that difference
+#: clock, so which cron lands on 06:00 differs between them — that difference
 #: IS the test.
 JANUARY = "2026-01-15"
 JULY = "2026-07-15"
+#: A daylight-time date in the month the move was made (DRE-4969).
+SEPTEMBER = "2026-09-26"
 
 
 def utc_at(date: str, clock: str) -> datetime:
@@ -125,20 +127,31 @@ def run(tmp_path, *, card_arg: str, now: datetime, lops, monkeypatch, capsys):
 # The clock — both sides of a DST change, pinned
 # ---------------------------------------------------------------------------
 
-def test_the_cron_that_is_0615_pt_differs_by_season():
-    """13:15 UTC is the morning in July; 14:15 UTC is the morning in January.
+def test_the_cron_that_is_0600_pt_differs_by_season():
+    """13:00 UTC is the morning in July; 14:00 UTC is the morning in January.
     Exactly one cron of the pair is inside the window on each date."""
-    assert gate.in_morning_window(utc_at(JULY, "13:15")) is True
-    assert gate.in_morning_window(utc_at(JULY, "14:15")) is False
+    assert gate.in_morning_window(utc_at(JULY, "13:00")) is True
+    assert gate.in_morning_window(utc_at(JULY, "14:00")) is False
 
-    assert gate.in_morning_window(utc_at(JANUARY, "14:15")) is True
-    assert gate.in_morning_window(utc_at(JANUARY, "13:15")) is False
+    assert gate.in_morning_window(utc_at(JANUARY, "14:00")) is True
+    assert gate.in_morning_window(utc_at(JANUARY, "13:00")) is False
 
 
 def test_exactly_one_cron_of_the_pair_is_the_morning_on_any_date():
     for date in (JANUARY, JULY):
         inside = [c for c in CRONS if gate.in_morning_window(utc_at(date, c))]
         assert len(inside) == 1, f"{date}: {inside!r} of {CRONS!r} read as 06:xx PT"
+
+
+def test_exactly_one_cron_of_the_pair_is_0600_pt_on_every_day_of_the_year():
+    """Not merely inside the 06:xx hour: at a punctual start one cron of the
+    pair reads exactly `06:00 PT` on every date, both DST changes included
+    (DRE-4969 moved the pair from :15 to :00)."""
+    day = date(2026, 1, 1)
+    while day.year == 2026:
+        at_six = [c for c in CRONS if gate.pt_clock(utc_at(day.isoformat(), c)) == "06:00 PT"]
+        assert len(at_six) == 1, f"{day}: {at_six!r} of {CRONS!r} read as 06:00 PT"
+        day += timedelta(days=1)
 
 
 def test_the_window_is_the_whole_0600_to_0659_hour():
@@ -194,14 +207,27 @@ def test_an_empty_identifier_is_not_open_and_never_reaches_linear():
 
 def test_inside_the_window_with_an_open_card_it_goes(tmp_path, monkeypatch, capsys):
     code, written, stdout = run(
-        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:15"),
+        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:00"),
         lops=FakeLinear(OPEN_CARD), monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 0
     assert written["go"] == "true"
-    assert "06:15 PT" in written["why"]
+    assert "06:00 PT" in written["why"]
     assert "DRE-4541" in written["why"]
     assert written["why"] in stdout
+
+
+def test_a_1300_utc_run_in_september_says_0600_pt(tmp_path, monkeypatch, capsys):
+    """The morning DRE-4969 was written about: on 2026-09-26 the proposal
+    posted at 06:31 PT. The 13:00 UTC cron of the pair is that morning's run,
+    and its `why` names the hour the CEO reads — `06:00 PT`."""
+    code, written, _ = run(
+        tmp_path, card_arg="DRE-4541", now=utc_at(SEPTEMBER, "13:00"),
+        lops=FakeLinear(OPEN_CARD), monkeypatch=monkeypatch, capsys=capsys,
+    )
+    assert code == 0
+    assert written["go"] == "true"
+    assert "06:00 PT" in written["why"]
 
 
 def test_outside_the_window_it_is_a_quiet_no_op(tmp_path, monkeypatch, capsys):
@@ -209,12 +235,12 @@ def test_outside_the_window_it_is_a_quiet_no_op(tmp_path, monkeypatch, capsys):
     never reads Linear — the card is not its question."""
     lops = FakeLinear(OPEN_CARD)
     code, written, _ = run(
-        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "14:15"),
+        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "14:00"),
         lops=lops, monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 0
     assert written["go"] == "false"
-    assert "07:15 PT" in written["why"]
+    assert "07:00 PT" in written["why"]
     assert lops.reads == []
 
 
@@ -223,7 +249,7 @@ def test_outside_the_window_an_absent_card_is_not_a_failure(
     tmp_path, monkeypatch, capsys, card_arg
 ):
     code, written, _ = run(
-        tmp_path, card_arg=card_arg, now=utc_at(JANUARY, "13:15"),
+        tmp_path, card_arg=card_arg, now=utc_at(JANUARY, "13:00"),
         lops=FakeLinear(CANCELED_CARD), monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 0
@@ -233,12 +259,12 @@ def test_outside_the_window_an_absent_card_is_not_a_failure(
 def test_inside_the_window_an_empty_card_is_a_loud_refusal(tmp_path, monkeypatch, capsys):
     lops = FakeLinear()
     code, written, stdout = run(
-        tmp_path, card_arg="", now=utc_at(JANUARY, "14:15"),
+        tmp_path, card_arg="", now=utc_at(JANUARY, "14:00"),
         lops=lops, monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 1
     assert written["go"] == "false"
-    assert "06:15 PT" in written["why"]
+    assert "06:00 PT" in written["why"]
     assert gate.CARD_VARIABLE in written["why"]
     assert written["why"] in stdout
     assert lops.reads == []
@@ -249,19 +275,19 @@ def test_inside_the_window_a_closed_card_is_a_loud_refusal(
     tmp_path, monkeypatch, capsys, issues, state
 ):
     code, written, _ = run(
-        tmp_path, card_arg="DRE-4541", now=utc_at(JANUARY, "14:15"),
+        tmp_path, card_arg="DRE-4541", now=utc_at(JANUARY, "14:00"),
         lops=FakeLinear(issues), monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 1
     assert written["go"] == "false"
-    assert "06:15 PT" in written["why"]
+    assert "06:00 PT" in written["why"]
     assert "DRE-4541" in written["why"]
     assert state in written["why"]
 
 
 def test_inside_the_window_an_unreadable_card_is_a_loud_refusal(tmp_path, monkeypatch, capsys):
     code, written, _ = run(
-        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:15"),
+        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:00"),
         lops=FakeLinear(error=RuntimeError("Linear said 404")),
         monkeypatch=monkeypatch, capsys=capsys,
     )
@@ -285,7 +311,7 @@ def test_the_why_is_one_line_whatever_the_card_title_carries(tmp_path, monkeypat
         "state": {"name": "Cancel\ned\ngo=true", "type": "canceled"},
     }}
     code, written, _ = run(
-        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:15"),
+        tmp_path, card_arg="DRE-4541", now=utc_at(JULY, "13:00"),
         lops=FakeLinear(hostile), monkeypatch=monkeypatch, capsys=capsys,
     )
     assert code == 1
@@ -297,7 +323,7 @@ def test_github_output_defaults_to_the_environment(tmp_path, monkeypatch, capsys
     out = tmp_path / "from-env"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setattr(gate, "linear_ops", FakeLinear(OPEN_CARD))
-    assert gate.main(["--card", "DRE-4541", "--now", utc_at(JULY, "13:15").isoformat()]) == 0
+    assert gate.main(["--card", "DRE-4541", "--now", utc_at(JULY, "13:00").isoformat()]) == 0
     written = dict(
         line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines() if line
     )
@@ -309,7 +335,7 @@ def test_no_output_file_is_still_a_decision(monkeypatch, capsys):
     still prints its sentence — it does not crash for want of a file."""
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.setattr(gate, "linear_ops", FakeLinear(CANCELED_CARD))
-    assert gate.main(["--card", "DRE-4541", "--now", utc_at(JULY, "13:15").isoformat()]) == 1
+    assert gate.main(["--card", "DRE-4541", "--now", utc_at(JULY, "13:00").isoformat()]) == 1
     assert "DRE-4541" in capsys.readouterr().out
 
 

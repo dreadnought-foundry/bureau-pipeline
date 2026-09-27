@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The scheduled groomer's gate — is it 06:15 PT, and is there a card to post
+"""The scheduled groomer's gate — is it 06:00 PT, and is there a card to post
 to (DRE-4688)?
 
 `self-groomer.yml`'s schedule job calls `groomer.yml`, and **a job with
@@ -13,8 +13,8 @@ one that does the work.
 ## Question one: is it the morning?
 
 GitHub's `schedule:` takes UTC only and has no timezone field, so hitting one
-LOCAL hour all year needs two cron lines — `15 13 * * *` and `15 14 * * *`.
-Every day both fire, exactly one of them is 06:15 on the
+LOCAL hour all year needs two cron lines — `0 13 * * *` and `0 14 * * *`.
+Every day both fire, exactly one of them is 06:00 on the
 `America/Los_Angeles` wall clock, and WHICH one flips at each DST change.
 The reading is therefore done with `zoneinfo` on the PT clock and never from
 a restated offset, the way `release_train.in_window` reads a release window
@@ -25,7 +25,7 @@ sleep until 07:03 PT on 2026-09-21 (DRE-4450).
 
 The window is the whole `06:00`–`06:59` PT hour rather than the minute,
 because a cron fires when GitHub gets to it: a scheduled run routinely starts
-several minutes late, and a gate keyed on `06:15` exactly would skip the
+several minutes late, and a gate keyed on `06:00` exactly would skip the
 morning for being punctual.
 
 ## Question two: is there a card to post to?
@@ -107,7 +107,7 @@ def in_morning_window(now: datetime) -> bool:
 
 
 def pt_clock(now: datetime) -> str:
-    """`now` as the sentence says it: `06:15 PT`."""
+    """`now` as the sentence says it: `06:00 PT`."""
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return f"{now.astimezone(PT):%H:%M} PT"
