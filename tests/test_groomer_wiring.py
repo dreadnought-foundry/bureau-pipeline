@@ -18,10 +18,11 @@ call (DRE-3338).
 DRE-4677):** D5 is reopened for exactly one thing — "a scheduled 06:30 PT run of
 propose only. It writes one proposal comment and moves nothing; the drain still
 needs my Approve. The rest of D5 stands." The run takes about eight minutes, so
-DRE-4677 moved it to 06:15 PT to have the proposal on the card before the 06:30
-briefing is assembled. `self-groomer.yml` carries a `schedule:` of two UTC cron
-lines, `15 13 * * *` and `15 14 * * *`; a `gate` job running
-`scripts/groom_schedule_gate.py` (DRE-4688) decides which of the pair is 06:15
+DRE-4677 moved it earlier to have the proposal on the card before the 06:30
+briefing is assembled, and DRE-4969 (2026-09-27) moved it to 06:00 PT after the
+2026-09-26 proposal posted at 06:31. `self-groomer.yml` carries a `schedule:`
+of two UTC cron lines, `0 13 * * *` and `0 14 * * *`; a `gate` job running
+`scripts/groom_schedule_gate.py` (DRE-4688) decides which of the pair is 06:00
 on the PT clock and whether the standing card in `GROOM_PROPOSAL_CARD` is open;
 and a `schedule` job keyed on the gate's `go` calls the reusable with `mode` the
 literal `propose`.
@@ -80,10 +81,11 @@ PLAN_CLASSIFY_STEP = "Classify the card — one-off, epic or wave"
 GROOM_STEP = "Groom"
 RECEIPT_STEP = "Judgement receipt — the model that answered"
 
-#: The two UTC cron lines of the morning proposal (DRE-4677). Every day both
-#: fire and exactly one of them is 06:15 on the `America/Los_Angeles` clock;
-#: the gate script decides which, never an offset written down here.
-MORNING_CRONS = ["15 13 * * *", "15 14 * * *"]
+#: The two UTC cron lines of the morning proposal (DRE-4677, moved to 06:00 by
+#: DRE-4969). Every day both fire and exactly one of them is 06:00 on the
+#: `America/Los_Angeles` clock; the gate script decides which, never an offset
+#: written down here.
+MORNING_CRONS = ["0 13 * * *", "0 14 * * *"]
 
 #: The gate's contract with DRE-4688, verbatim: the command the gate step runs.
 GATE_COMMAND = (
@@ -217,7 +219,7 @@ class TriggerContractTest(unittest.TestCase):
         self.assertEqual(
             set(on), {"workflow_dispatch", "repository_dispatch", "schedule"},
             "three triggers and no more: a person dispatching it, the CEO's "
-            "Approve on the console (DRE-3337), and the 06:15 PT morning "
+            "Approve on the console (DRE-3337), and the 06:00 PT morning "
             "proposal (DRE-3586, absorbed by DRE-4677)",
         )
         self.assertEqual(
@@ -928,12 +930,13 @@ class DocumentationTest(unittest.TestCase):
             self.assertIn(token, self.doc)
 
     def test_the_cadence_section_records_all_three_triggers(self):
-        """The hand dispatch, the Approve-fired drain, and the 06:15 PT gated
+        """The hand dispatch, the Approve-fired drain, and the 06:00 PT gated
         propose — each decision with its date, and the gate named so the
         operator knows what a quiet morning means."""
         section = self.doc.split("## The cadence", 1)[1].split("\n## ", 1)[0]
         for token in ("DRE-2683", "2026-08-23", "DRE-3337", "2026-09-08",
-                      *THIRD_DECISION, "06:15 PT", "groom_schedule_gate.py",
+                      *THIRD_DECISION, "06:00 PT", "DRE-4969", "2026-09-27",
+                      "groom_schedule_gate.py",
                       "GROOM_PROPOSAL_CARD", "workflow_dispatch",
                       "repository_dispatch"):
             self.assertIn(token, section, f"the cadence section never names {token}")
