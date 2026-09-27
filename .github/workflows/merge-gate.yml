@@ -391,13 +391,9 @@ jobs:
           # allowlisted review workflow. The listing needs actions:read,
           # which the qa-bot App deliberately lacks — this ONE read uses the
           # workflow's own token (the calling stub grants actions perms).
-          # DRE-5045: the same listing is how the gate sees a CI run that is
-          # QUEUED with no jobs yet — it has no check runs, so the check-runs
-          # read alone called portico #748 green and GitHub refused the
-          # merge. A blip here must fail CLOSED, and an empty listing would
-          # read as "nothing still running", so the substitute says the read
-          # FAILED (merge_gate.UNREADABLE_WORKFLOW_RUNS) and the gate waits;
-          # it never merges past an unverifiable check.
+          # DRE-5045: it also shows a CI run queued with no jobs yet. A blip
+          # must fail CLOSED, so it writes the unreadable marker, never an
+          # empty list: the gate waits.
           GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
             || echo '{"readable":false}' > /tmp/workflow-runs.json
           # The trusted verdict author is derived from the same App key this
