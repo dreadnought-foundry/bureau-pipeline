@@ -99,12 +99,15 @@ class ScriptInvocationTest(unittest.TestCase):
         """DRE-1994: the review-run exclusion needs GitHub's own record of
         which workflow FILE produced each check suite — the workflow-runs
         listing for the head SHA, written to the exact file the script is
-        handed, with a fail-CLOSED empty substitute on an API blip."""
+        handed, with a fail-CLOSED substitute on an API blip. Since DRE-5045
+        the substitute says the read FAILED — it is not an empty listing,
+        which would read as "no workflow run is still running"."""
         self.assertIn("actions/runs?head_sha=$SHA", self.run_block)
         m = re.search(r"--workflow-runs-file (\S+)", self.run_block)
         self.assertIsNotNone(m, "workflow does not pass --workflow-runs-file")
         self.assertIn(f"> {m.group(1)}", self.run_block)
-        self.assertIn('\'{"workflow_runs":[]}\'', self.run_block)
+        self.assertIn(f"'{merge_gate.UNREADABLE_WORKFLOW_RUNS}'", self.run_block)
+        self.assertNotIn('\'{"workflow_runs":[]}\'', self.run_block)
 
     def test_origin_listing_uses_the_workflows_own_token(self):
         """The runs listing needs actions:read, which the qa-bot App

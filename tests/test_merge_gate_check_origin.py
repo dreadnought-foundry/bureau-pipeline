@@ -214,8 +214,10 @@ class CliOriginContractTest(unittest.TestCase):
         self.assertEqual(self.decision(proc), "wait")
 
     def test_empty_origin_record_fails_closed(self):
-        # The workflow substitutes {"workflow_runs":[]} on an API blip: no
-        # exclusions, the review run counts, the gate WAITS — never merges.
+        # An empty origin record: no exclusions, the review run counts, the
+        # gate WAITS — never merges. (Since DRE-5045 an API blip substitutes
+        # the unreadable marker instead, which waits outright —
+        # tests/test_merge_gate_queued_ci.py.)
         proc = self.run_cli(
             [check("unit", 78612233475),
              check("call / review", 78612234136, conclusion="failure")],

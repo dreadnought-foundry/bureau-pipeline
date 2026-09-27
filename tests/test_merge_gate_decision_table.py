@@ -228,7 +228,7 @@ ROWS = [
               "decides — review-workflow jobs are excluded whatever their name"),
     Row("ci_no_origin_record_fails_closed", [CRITIC_OK], "wait", "not green",
         "DRE-1994 fail-closed direction: if the workflow-runs listing is "
-        "unavailable (API blip → the workflow substitutes an empty record), "
+        "empty (no origin record reaches the exclusion), "
         "NOTHING is excluded — the genuine review run counts and the gate "
         "waits; it never merges past an unverifiable check. OLD had no "
         "origin record at all and excluded by name → merge.",
