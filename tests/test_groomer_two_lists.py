@@ -1,8 +1,8 @@
 """The proposal is two lists, Planning and Cancel, drawn from the same twenty
 (DRE-4727).
 
-The CEO's decision on DRE-4669 (2026-09-23): when the groomer looks at the 20
-oldest cards it also decides whether each one still applies, and the ones that
+The CEO's decision on DRE-4669 (2026-09-23): when the groomer looks at the
+morning's 20 cards it also decides whether each one still applies, and the ones that
 were replaced, superseded or already done go on a list he can agree with or
 not. What this file holds:
 
@@ -51,9 +51,9 @@ LIKELY_DONE = ("DRE-5", "DRE-15")
 
 
 def lane(count: int = 25, *, superseded=SUPERSEDED + ("DRE-22",)) -> list:
-    """`count` cards, DRE-1 the oldest and each one a day newer than the last,
-    so the rules' order is the identifier order."""
-    return [card(f"DRE-{n}", days=100 - n,
+    """`count` cards, DRE-1 the newest and each one a day older than the last,
+    so the rules' order — newest first (DRE-4965) — is the identifier order."""
+    return [card(f"DRE-{n}", days=n,
                  description=("Superseded by: DRE-900"
                               if f"DRE-{n}" in superseded else ""))
             for n in range(1, count + 1)]
@@ -148,7 +148,7 @@ def test_an_unranked_card_is_skipped_and_the_next_card_takes_its_slot():
 
 
 def test_an_epic_is_never_split_between_the_set_and_the_rest():
-    cards = [card(f"DRE-{n}", days=100 - n) for n in range(1, 4)]
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
     cards += [card(f"DRE-{n}", days=50, parent="DRE-800",
                    description=("Superseded by: DRE-900" if n == 10 else ""))
               for n in (10, 11)]
@@ -355,13 +355,13 @@ def test_a_proposal_with_neither_list_is_still_refused():
 # --------------------------------------------------------------------------
 def fixture_proposal() -> dict:
     """Three Planning rows and two Cancel rows, one reason carrying a pipe."""
-    cards = [card("DRE-4101", days=40, title="retire the nightly sweep's age-out"),
-             card("DRE-4102", days=39, description="Superseded by: DRE-4250",
+    cards = [card("DRE-4101", days=36, title="retire the nightly sweep's age-out"),
+             card("DRE-4102", days=37, description="Superseded by: DRE-4250",
                   title="first cut of the intake census"),
              card("DRE-4103", days=38, priority=2, repo="agent-bureau",
                   title="show the proposal's two lists on the console"),
-             card("DRE-4104", days=37, title="write the cancel reason on the card"),
-             card("DRE-4105", days=36, repo="agent-bureau",
+             card("DRE-4104", days=39, title="write the cancel reason on the card"),
+             card("DRE-4105", days=40, repo="agent-bureau",
                   title="a probe of the old board cutover")]
     answer = "\n".join([
         "DRE-4101 | now | the pile is only drained oldest first if nothing ages out",

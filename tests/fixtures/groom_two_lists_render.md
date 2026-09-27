@@ -33,7 +33,7 @@ Ranked by test-model (asked) / test-model (answered) in 1 call over 5 cards, aga
 
 ## The batch, in order
 
-The Planning list — approving moves these cards to Planning. Urgent first, then High, then everything else — oldest first, whatever repo it is in, and no card is left out for its age. Repo order (portico → agent-bureau) breaks a tie between cards of equal priority created on the same day, and decides nothing else. An epic and its children are one unit — unless a collision or a recorded blocks relation says otherwise, in which case the constraint wins.
+The Planning list — approving moves these cards to Planning. Urgent first, then High, then everything else — newest first, whatever repo it is in, and no card is left out for its age. Repo order (portico → agent-bureau) breaks a tie between cards of equal priority created on the same day, and decides nothing else. An epic and its children are one unit — unless a collision or a recorded blocks relation says otherwise, in which case the constraint wins.
 
 | # | Card | Pri | Repo | Epic | Title | Why |
 | -- | -- | -- | -- | -- | -- | -- |

@@ -1,26 +1,28 @@
-"""Urgent, High, then the oldest Intake cards first — and nothing is hidden
-for its age (DRE-4725).
+"""Urgent, High, then the newest Intake cards first — and nothing is hidden
+for its age (DRE-4965).
 
 The groomer used to batch Urgent, High, then the last 14 days newest first, and
 leave every older unprioritised card out of the batch for ever. Measured on
 2026-09-23 that was 74 of the 117 Intake cards older than 14 days, out of 254
-in the lane, the oldest 83 days old. The CEO's decision on DRE-4669
-(2026-09-23) reverses both halves: "work through the old Intake pile, 20 cards
-at a time, oldest first, until the pile is gone."
+in the lane, the oldest 83 days old. DRE-4725 removed the window and worked
+the pile oldest first, on the CEO's decision on DRE-4669 (2026-09-23). The
+CEO's decision of 2026-09-26 reverses the order and keeps the window gone:
+"He should look at the cards that are the most recent and go back from there
+so that he can find the ones we really need to get done."
 
 The order, top to bottom, and every rule below is one test here:
 
-  1. **Urgent opens the batch**, every repo, oldest first.
-  2. **High next**, oldest first.
-  3. **Then everything else, OLDEST creation day first.** No window: a card
-     is never left out for being old.
+  1. **Urgent opens the batch**, every repo, newest first.
+  2. **High next**, newest first.
+  3. **Then everything else, NEWEST creation day first.** No window: a card
+     is never left out for being old — it is reached when its turn comes.
   4. **Repo order is a tie-break inside a day** — Portico first only among
      cards of equal priority created the same day. Never the master key.
-  5. **A unit's age is its OLDEST card**, so an old epic is not sent to the
-     back by one new child.
-  6. **Collisions and blockers are ordering constraints**: the older card of
+  5. **A unit's age is its NEWEST card**, so one new child brings an old epic
+     forward — and inside the epic the children still go oldest first.
+  6. **Collisions and blockers are ordering constraints**: the newer card of
      a colliding pair, and a blocker, go first — and an Urgent or High card
-     that waits on an older unprioritised one pulls it forward with it.
+     that waits on an unprioritised one pulls it forward with it.
   7. **The read decides neither membership nor order.** The model's `now`
      order does not reorder the batch and `not-now` does not remove a card;
      only a card the read declined (`unranked`) comes out, and the next card
@@ -98,51 +100,74 @@ def _mixed_population():
          for n in range(5)]
 
 
-def test_the_batch_is_urgent_then_high_then_oldest_first():
+def test_the_batch_is_urgent_then_high_then_newest_first():
     proposal = groomer.propose(_mixed_population(), cycles=CYCLES, now=NOW)
     assert _order(proposal) == [
         "DRE-100",      # Urgent
         "DRE-101",      # High
-        "DRE-204",      # then everything else, OLDEST first, whatever the repo
-        "DRE-203",
-        "DRE-202",
-        "DRE-201",
-        "DRE-200",
-        "DRE-102",
+        "DRE-104",      # then everything else, NEWEST first, whatever the repo
         "DRE-103",
-        "DRE-104",
-    ], "the batch is not Urgent → High → oldest first"
+        "DRE-102",
+        "DRE-200",      # …and back from there, older than 14 days and still in
+        "DRE-201",
+        "DRE-202",
+        "DRE-203",
+        "DRE-204",
+    ], "the batch is not Urgent → High → newest first"
 
 
-def test_an_83_day_old_card_with_no_priority_precedes_a_3_day_old_one():
-    cards = [card("DRE-1", created=_ago(3)), card("DRE-2", created=_ago(83))]
+def test_the_batch_breaks_a_same_day_tie_by_repo_inside_newest_first():
+    """The one criterion in one population: Urgent, High, then newest day
+    first; repo order breaks a tie inside a day, and a card older than 14 days
+    is in the batch when its turn comes."""
+    cards = [card("DRE-1", repo="agent-bureau", created=_ago(40)),
+             card("DRE-2", repo="agent-bureau", created=_ago(2.0)),
+             card("DRE-3", repo="portico", created=_ago(2.2)),
+             card("DRE-4", repo="agent-bureau", created=_ago(60),
+                  priority=HIGH),
+             card("DRE-5", repo="agent-bureau", created=_ago(1)),
+             card("DRE-6", repo="portico", created=_ago(90), priority=URGENT)]
+    proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
+    assert _order(proposal) == ["DRE-6", "DRE-4", "DRE-5", "DRE-3", "DRE-2",
+                                "DRE-1"], (
+        "Urgent, High, then the newest day first; Portico wins the same-day "
+        "tie against the later agent-bureau card; the 40-day-old card last"
+    )
+    assert "DRE-1" in _batch(proposal)
+
+
+def test_a_3_day_old_card_with_no_priority_precedes_an_83_day_old_one():
+    cards = [card("DRE-1", created=_ago(83)), card("DRE-2", created=_ago(3))]
     proposal = groomer.propose(cards, cycles=CYCLES, now=NOW,
                                judgement=None)
     assert _order(proposal) == ["DRE-2", "DRE-1"], (
-        "the oldest card in the pile goes first — it is what the batch is for"
+        "the newest card in the pile goes first — the CEO works back from there"
+    )
+    assert _batch(proposal) == {"DRE-1", "DRE-2"}, (
+        "the 83-day-old card is still in the batch: no window"
     )
 
 
-def test_urgent_beats_high_and_both_beat_the_oldest_card():
+def test_urgent_beats_high_and_both_beat_the_newest_card():
     cards = [card("DRE-1", created=_ago(0.5)),
              card("DRE-2", created=_ago(50), priority=HIGH),
              card("DRE-3", created=_ago(50), priority=URGENT),
              card("DRE-4", created=_ago(80))]
     assert _order(groomer.propose(cards, cycles=CYCLES, now=NOW)) == \
-        ["DRE-3", "DRE-2", "DRE-4", "DRE-1"]
+        ["DRE-3", "DRE-2", "DRE-1", "DRE-4"]
 
 
-def test_urgent_cards_are_oldest_first_among_themselves():
+def test_urgent_cards_are_newest_first_among_themselves():
     cards = [card("DRE-1", created=_ago(30), priority=URGENT),
              card("DRE-2", created=_ago(3), priority=URGENT),
              card("DRE-3", created=_ago(12), priority=URGENT)]
     assert _order(groomer.propose(cards, cycles=CYCLES, now=NOW)) == \
-        ["DRE-1", "DRE-3", "DRE-2"]
+        ["DRE-2", "DRE-3", "DRE-1"]
 
 
-def test_high_cards_are_oldest_first_among_themselves():
-    cards = [card("DRE-1", created=_ago(4), priority=HIGH),
-             card("DRE-2", created=_ago(40), priority=HIGH),
+def test_high_cards_are_newest_first_among_themselves():
+    cards = [card("DRE-1", created=_ago(40), priority=HIGH),
+             card("DRE-2", created=_ago(4), priority=HIGH),
              card("DRE-3", created=_ago(1))]
     assert _order(groomer.propose(cards, cycles=CYCLES, now=NOW)) == \
         ["DRE-2", "DRE-1", "DRE-3"]
@@ -151,12 +176,12 @@ def test_high_cards_are_oldest_first_among_themselves():
 def test_a_medium_priority_card_gets_no_lane_of_its_own():
     """Only Urgent and High are lanes. Medium (3) and Low (4) are ordinary
     cards: ordered by age with the unprioritised ones, and batched."""
-    cards = [card("DRE-1", created=_ago(40), priority=3),
+    cards = [card("DRE-1", created=_ago(1), priority=3),
              card("DRE-2", created=_ago(20), priority=4),
-             card("DRE-3", created=_ago(1)),
+             card("DRE-3", created=_ago(40)),
              card("DRE-4", created=_ago(30))]
     proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
-    assert _order(proposal) == ["DRE-1", "DRE-4", "DRE-2", "DRE-3"]
+    assert _order(proposal) == ["DRE-1", "DRE-2", "DRE-4", "DRE-3"]
     assert proposal["older_than_window"]["cards"] == 0
 
 
@@ -172,15 +197,16 @@ def test_a_card_older_than_fourteen_days_with_no_priority_is_in_the_batch():
     )
 
 
-def test_an_old_card_nothing_needs_is_in_the_batch_by_age():
+def test_an_old_card_nothing_needs_is_in_the_batch_when_its_turn_comes():
     """What used to be the counterweight to the pull-forward rules — old and
-    uninvolved stays out — is now the ordinary case the batch exists for."""
+    uninvolved stays out — is gone with the window: it waits its turn behind
+    the newer cards, and nothing leaves it out."""
     cards = [card("DRE-1", repo="portico", created=_ago(45),
                   description="rewrites `Alone.tsx`"),
              card("DRE-2", repo="portico", created=_ago(2),
                   description="rewrites `Other.tsx`")]
     proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
-    assert _order(proposal) == ["DRE-1", "DRE-2"]
+    assert _order(proposal) == ["DRE-2", "DRE-1"]
     assert proposal["older_than_window"]["cards"] == 0
     assert proposal["collisions"]["pairs"] == [], "the fixture collided"
 
@@ -215,7 +241,7 @@ def test_the_page_no_longer_says_not_batched_raise_a_priority():
 def test_a_card_past_the_capacity_is_not_now_with_the_cycle_it_waits_for():
     """Outside the batch is `not-now` with the cycle it is projected into —
     for an 83-day-old card as for a 3-day-old one."""
-    cards = [card(f"DRE-{n}", created=_ago(90 - n)) for n in range(1, 6)]
+    cards = [card(f"DRE-{n}", created=_ago(80 + n)) for n in range(1, 6)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=2, now=NOW)
     assert _order(proposal) == ["DRE-1", "DRE-2"]
     later = {r["identifier"]: r for r in proposal["outcomes"]["not-now"]}
@@ -233,24 +259,25 @@ def test_a_card_past_the_capacity_is_not_now_with_the_cycle_it_waits_for():
 def test_portico_wins_the_tie_between_cards_created_the_same_day():
     """Two Portico cards created the same day rank ahead of an agent-bureau
     card created the same day — even when the agent-bureau card is the
-    earlier of the three by the clock. Same priority, same day: repo decides."""
+    latest of the three by the clock. Same priority, same day: repo decides."""
     cards = [                                        # all three on 2026-09-01
-        card("DRE-1", repo="agent-bureau", created=_ago(3.0)),
-        card("DRE-2", repo="portico", created=_ago(2.9)),
-        card("DRE-3", repo="portico", created=_ago(2.6)),
+        card("DRE-1", repo="agent-bureau", created=_ago(2.6)),
+        card("DRE-2", repo="portico", created=_ago(3.0)),
+        card("DRE-3", repo="portico", created=_ago(2.9)),
     ]
     order = _order(groomer.propose(cards, cycles=CYCLES, now=NOW))
     assert order.index("DRE-1") == 2, (
         "REPO_PRIORITY breaks a tie inside a day, it does not order the days"
     )
-    assert order[:2] == ["DRE-2", "DRE-3"], "the timestamp orders within repo"
+    assert order[:2] == ["DRE-3", "DRE-2"], (
+        "the timestamp orders within repo, newest first")
 
 
-def test_an_older_agent_bureau_card_outranks_a_newer_portico_one():
+def test_a_newer_agent_bureau_card_outranks_an_older_portico_one():
     """The other half of the same rule: a different DAY is not a tie, so the
-    older card goes first whatever repo it is in."""
-    cards = [card("DRE-1", repo="portico", created=_ago(2)),
-             card("DRE-2", repo="agent-bureau", created=_ago(10))]
+    newer card goes first whatever repo it is in."""
+    cards = [card("DRE-1", repo="portico", created=_ago(10)),
+             card("DRE-2", repo="agent-bureau", created=_ago(2))]
     assert _order(groomer.propose(cards, cycles=CYCLES, now=NOW)) == \
         ["DRE-2", "DRE-1"]
 
@@ -273,33 +300,52 @@ def test_a_stray_update_does_not_move_a_card():
     proposal = groomer.propose(
         [card("DRE-2", created=_ago(1)), touched,
          card("DRE-3", created=_ago(20))], cycles=CYCLES, now=NOW)
-    assert _order(proposal) == ["DRE-1", "DRE-3", "DRE-2"]
+    assert _order(proposal) == ["DRE-2", "DRE-3", "DRE-1"]
 
 
 def test_a_card_with_no_readable_creation_date_goes_to_the_back():
-    """An unreadable date is not the oldest card in the pile. It is ordered
+    """An unreadable date is not the newest card in the pile. It is ordered
     last, the reversible answer, rather than opening the batch."""
     undated = card("DRE-1", created=_ago(40))
     undated["createdAt"] = None
     proposal = groomer.propose(
-        [undated, card("DRE-2", created=_ago(1)),
-         card("DRE-3", created=_ago(20))], cycles=CYCLES, now=NOW)
+        [undated, card("DRE-2", created=_ago(20)),
+         card("DRE-3", created=_ago(1))], cycles=CYCLES, now=NOW)
     assert _order(proposal) == ["DRE-3", "DRE-2", "DRE-1"]
 
 
 # --------------------------------------------------------------------------
-# the epic is still the unit, and its age is its OLDEST card
+# the epic is still the unit, and its age is its NEWEST card
 # --------------------------------------------------------------------------
-def test_a_units_ordering_age_is_its_oldest_card():
-    """One new child does not send an old epic to the back of the pile."""
-    cards = [card("DRE-901", parent="DRE-900", created=_ago(60)),
-             card("DRE-902", parent="DRE-900", created=_ago(1)),
-             card("DRE-1", created=_ago(30))]
+def test_a_units_ordering_age_is_its_newest_card():
+    """One new child brings its old epic forward: an old epic with one child
+    created today sorts as today (DRE-4965)."""
+    today = _ago(0.1)
+    cards = [card("DRE-900", created=_ago(60), title="[EPIC] Forms"),
+             card("DRE-901", parent="DRE-900", created=_ago(60)),
+             card("DRE-902", parent="DRE-900", created=today),
+             card("DRE-1", created=_ago(1)),
+             card("DRE-2", created=_ago(30))]
+    [epic] = [u for u in groomer.units(cards) if u["key"] == "DRE-900"]
+    assert epic["created"] == today, "the unit's age is its newest card"
     proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
-    assert _order(proposal) == ["DRE-901", "DRE-902", "DRE-1"], (
-        "the epic's unit is 60 days old by its oldest child, so it goes "
-        "ahead of a 30-day-old card"
+    assert _order(proposal) == ["DRE-900", "DRE-901", "DRE-902", "DRE-1",
+                                "DRE-2"], (
+        "the epic's unit is today's by its newest child, so it goes ahead of "
+        "a card from yesterday"
     )
+
+
+def test_children_inside_one_epic_still_come_oldest_first():
+    """Only the pile's order changed. Inside an epic the order is the build
+    order, and that is oldest child first — whatever order they were filed
+    in and however new the newest one is."""
+    cards = [card("DRE-911", parent="DRE-910", created=_ago(5)),
+             card("DRE-912", parent="DRE-910", created=_ago(30)),
+             card("DRE-913", parent="DRE-910", created=_ago(1)),
+             card("DRE-914", parent="DRE-910", created=_ago(12))]
+    proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
+    assert _order(proposal) == ["DRE-912", "DRE-914", "DRE-911", "DRE-913"]
 
 
 def test_one_urgent_child_pulls_its_whole_epic_into_the_batch():
@@ -319,10 +365,10 @@ def test_one_urgent_child_pulls_its_whole_epic_into_the_batch():
 # --------------------------------------------------------------------------
 # collisions and blockers — ordering constraints, never a membership filter
 # --------------------------------------------------------------------------
-def test_an_old_card_colliding_on_a_file_is_pulled_into_the_batch():
-    """Existing behaviour, re-asserted under the new key: the collision is
-    ordered BEFORE the batched card it collides with, and the pair is reported
-    with the file that caused it."""
+def test_two_colliding_cards_with_no_relation_go_newer_first():
+    """The collision is ordered the way the pile is — the newer card first —
+    and the pair is reported with the file that caused it and a reason that
+    says so."""
     cards = [
         card("DRE-1", repo="portico", created=_ago(45),
              description="rewrites `Thread.tsx`"),
@@ -330,15 +376,14 @@ def test_an_old_card_colliding_on_a_file_is_pulled_into_the_batch():
              description="also rewrites `rails/CommentsRail/Thread.tsx`"),
     ]
     proposal = groomer.propose(cards, cycles=CYCLES, now=NOW)
-    assert _order(proposal) == ["DRE-1", "DRE-2"], (
-        "a 45-day-old card that collides with a batched card is pulled "
-        "forward, not left behind to conflict with it later"
-    )
+    assert _order(proposal) == ["DRE-2", "DRE-1"]
     assert proposal["older_than_window"]["cards"] == 0
     pair = proposal["collisions"]["pairs"][0]
-    assert (pair["before"], pair["after"]) == ("DRE-1", "DRE-2")
+    assert (pair["before"], pair["after"]) == ("DRE-2", "DRE-1")
     assert pair["files"] == ["Thread.tsx"]
-    assert "Thread.tsx" in groomer.render_proposal(proposal)
+    assert "newer card first" in pair["why"]
+    text = groomer.render_proposal(proposal)
+    assert "Thread.tsx" in text and "newer card first" in text
 
 
 def test_an_old_blocker_of_a_batched_card_is_pulled_into_the_batch():
@@ -346,38 +391,57 @@ def test_an_old_blocker_of_a_batched_card_is_pulled_into_the_batch():
     blocked["inverseRelations"] = {"nodes": [
         {"type": "blocks", "issue": {"identifier": "DRE-1",
                                      "state": {"name": "Intake"}}}]}
-    cards = [card("DRE-1", repo="portico", created=_ago(80)), blocked]
-    assert _order(groomer.propose(cards, cycles=CYCLES, now=NOW)) == \
-        ["DRE-1", "DRE-2"]
+    # A card newer than the blocker and older than what it blocks, so only
+    # the blocks relation puts the 80-day-old card into a batch of two.
+    cards = [card("DRE-1", repo="portico", created=_ago(80)), blocked,
+             card("DRE-3", repo="portico", created=_ago(10))]
+    assert _order(groomer.propose(cards, cycles=CYCLES, capacity=2,
+                                  now=NOW)) == ["DRE-1", "DRE-2"]
 
 
-def test_a_high_card_colliding_with_an_older_card_pulls_it_ahead_of_itself():
-    """Where oldest-first and the collision rule differ: a High card that
-    names the same file as an older unprioritised card. The older card goes
-    first, pulled forward past every other card in the pile, the High card
-    follows it — both inside a batch of two — and the pair is reported with
-    the file that caused it."""
+def test_a_high_card_colliding_with_an_older_card_does_not_drag_it_forward():
+    """Why a collision goes newer first (DRE-4965): a High card that names the
+    same file as an older unprioritised card goes first, and the old card
+    waits its turn in the pile — older first would pull it ahead of the High
+    card and into every batch."""
     cards = [card("DRE-1", created=_ago(40),
                   description="rewrites `Thread.tsx`"),
              card("DRE-2", created=_ago(3), priority=HIGH,
                   description="also rewrites `Thread.tsx`")] + \
-        [card(f"DRE-{n}", created=_ago(50 + n)) for n in range(10, 15)]
+        [card(f"DRE-{n}", created=_ago(n - 5)) for n in range(10, 15)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=2, now=NOW)
-    assert _order(proposal) == ["DRE-1", "DRE-2"]
+    assert _order(proposal) == ["DRE-2", "DRE-10"]
+    assert "DRE-1" not in _batch(proposal)
     pair = proposal["collisions"]["pairs"][0]
-    assert (pair["before"], pair["after"]) == ("DRE-1", "DRE-2")
+    assert (pair["before"], pair["after"]) == ("DRE-2", "DRE-1")
     assert "Thread.tsx" in pair["why"]
     assert "Thread.tsx" in groomer.render_proposal(proposal)
 
 
+def test_a_high_card_colliding_with_a_newer_card_pulls_it_ahead_of_itself():
+    """Where newest-first and the collision rule differ: a High card that
+    names the same file as a newer unprioritised card. The newer card goes
+    first, pulled forward past every other card in the pile, the High card
+    follows it — both inside a batch of two."""
+    cards = [card("DRE-1", created=_ago(3),
+                  description="rewrites `Thread.tsx`"),
+             card("DRE-2", created=_ago(40), priority=HIGH,
+                  description="also rewrites `Thread.tsx`")] + \
+        [card(f"DRE-{n}", created=_ago((n - 9) / 10)) for n in range(10, 15)]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=2, now=NOW)
+    assert _order(proposal) == ["DRE-1", "DRE-2"]
+    pair = proposal["collisions"]["pairs"][0]
+    assert (pair["before"], pair["after"]) == ("DRE-1", "DRE-2")
+
+
 def test_an_urgent_card_blocked_by_an_older_card_pulls_its_blocker_into_the_batch():
-    """The blocker is unprioritised and younger than the rest of the pile; it
+    """The blocker is unprioritised and older than the rest of the pile; it
     is pulled forward by the Urgent card it holds, not left behind the pile
     with the Urgent card waiting behind it."""
     urgent = _blocked_by(card("DRE-5", created=_ago(1), priority=URGENT),
                          "DRE-6")
     cards = [urgent, card("DRE-6", created=_ago(20))] + \
-        [card(f"DRE-{n}", created=_ago(60 + n)) for n in range(10, 15)]
+        [card(f"DRE-{n}", created=_ago((n - 9) / 10)) for n in range(10, 15)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=2, now=NOW)
     assert _order(proposal) == ["DRE-6", "DRE-5"]
 
@@ -385,12 +449,12 @@ def test_an_urgent_card_blocked_by_an_older_card_pulls_its_blocker_into_the_batc
 def test_a_blocker_of_a_collider_is_pulled_forward_too():
     """The pull is transitive: a card that blocks a card that collides with
     a High card goes ahead of both."""
-    cards = [_blocked_by(card("DRE-1", created=_ago(30),
+    cards = [_blocked_by(card("DRE-1", created=_ago(1),
                               description="rewrites `Form.tsx`"), "DRE-3"),
-             card("DRE-2", created=_ago(2), priority=HIGH,
+             card("DRE-2", created=_ago(30), priority=HIGH,
                   description="also rewrites `Form.tsx`"),
-             card("DRE-3", created=_ago(10))] + \
-        [card(f"DRE-{n}", created=_ago(60 + n)) for n in range(10, 15)]
+             card("DRE-3", created=_ago(50))] + \
+        [card(f"DRE-{n}", created=_ago((n - 9) / 10)) for n in range(10, 15)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
     assert _order(proposal) == ["DRE-3", "DRE-1", "DRE-2"]
 
@@ -406,8 +470,8 @@ def _judged(cards, answer, **kwargs):
 def test_the_models_now_order_does_not_reorder_the_batch():
     cards = [card("DRE-1", created=_ago(10)), card("DRE-2", created=_ago(5)),
              card("DRE-3", created=_ago(1))]
-    proposal = _judged(cards, ranked(["DRE-3", "DRE-2", "DRE-1"]))
-    assert _order(proposal) == ["DRE-1", "DRE-2", "DRE-3"], (
+    proposal = _judged(cards, ranked(["DRE-1", "DRE-2", "DRE-3"]))
+    assert _order(proposal) == ["DRE-3", "DRE-2", "DRE-1"], (
         "the rules' order is the order; the ranked read does not reorder it"
     )
     rules = groomer.propose(cards, cycles=CYCLES, now=NOW)
@@ -418,10 +482,10 @@ def test_the_models_now_order_does_not_reorder_the_batch():
 def test_a_not_now_verdict_does_not_take_a_card_out_of_the_batch():
     cards = [card("DRE-1", created=_ago(30)), card("DRE-2", created=_ago(2))]
     answer = "\n".join([
-        ranked(["DRE-2"]),
-        "DRE-1 | not-now | it can wait | when the console lands"])
+        ranked(["DRE-1"]),
+        "DRE-2 | not-now | it can wait | when the console lands"])
     proposal = _judged(cards, answer)
-    assert _order(proposal) == ["DRE-1", "DRE-2"]
+    assert _order(proposal) == ["DRE-2", "DRE-1"]
     assert proposal["outcomes"]["not-now"] == []
     groomer.assert_disjoint(proposal)
 
@@ -429,23 +493,23 @@ def test_a_not_now_verdict_does_not_take_a_card_out_of_the_batch():
 def test_an_unranked_card_is_skipped_and_the_next_in_order_fills_its_slot():
     cards = [card("DRE-1", created=_ago(30)), card("DRE-2", created=_ago(20)),
              card("DRE-3", created=_ago(10)), card("DRE-4", created=_ago(1))]
-    # DRE-2 is left out of the answer, which is the read declining it; the
+    # DRE-3 is left out of the answer, which is the read declining it; the
     # model's `now` order is the reverse of the rules' and decides nothing.
-    proposal = _judged(cards, ranked(["DRE-4", "DRE-3", "DRE-1"]), capacity=2)
-    assert proposal["judgement"]["unranked"] == ["DRE-2"]
-    assert _order(proposal) == ["DRE-1", "DRE-3"], (
+    proposal = _judged(cards, ranked(["DRE-1", "DRE-2", "DRE-4"]), capacity=2)
+    assert proposal["judgement"]["unranked"] == ["DRE-3"]
+    assert _order(proposal) == ["DRE-4", "DRE-2"], (
         "the declined card comes out and the next card in order takes the "
         "slot — the batch is still two cards"
     )
     later = {r["identifier"]: r for r in proposal["outcomes"]["not-now"]}
-    assert later["DRE-2"]["reconsidered_in"] is None
-    assert later["DRE-2"]["trigger"] is None
-    assert later["DRE-4"]["reconsidered_in"] is not None
+    assert later["DRE-3"]["reconsidered_in"] is None
+    assert later["DRE-3"]["trigger"] is None
+    assert later["DRE-1"]["reconsidered_in"] is not None
     assert "Could not rank" in groomer.render_proposal(proposal)
     groomer.assert_disjoint(proposal)
 
 
-def test_dre_3737s_fixture_batches_all_four_oldest_first():
+def test_dre_3737s_fixture_batches_all_four_newest_first():
     """DRE-3737's own fixture, with the outcome the CEO decided.
 
     DRE-3737 (epic DRE-3149) would have kept a card the model ranked
@@ -453,10 +517,11 @@ def test_dre_3737s_fixture_batches_all_four_oldest_first():
     model picked — "the collision rule orders cards WITHIN the set the model
     picked". Its premise was that the model's `now` set is what the batch is
     made of. The CEO's decision on DRE-4669 (2026-09-23) removed that premise:
-    the batch is the oldest cards by the rules, and `now`/`not-now` decide
-    neither membership nor order. So the expected outcome here is the
-    OPPOSITE of DRE-3737's: C, the older card that names A's file, is in the
-    batch ahead of A, and D, the oldest card of all, opens it.
+    the batch is filled by the rules — newest first since his decision of
+    2026-09-26 — and `now`/`not-now` decide neither membership nor order. So
+    the expected outcome here is the OPPOSITE of DRE-3737's: C, the older
+    card that names A's file, is in the batch, after A, and D, the oldest
+    card of all, closes it.
 
     A is DRE-11 (3 days), B DRE-12 (5 days), both ranked `now`; C is DRE-13
     (40 days) and D DRE-14 (60 days), both ranked `not-now`.
@@ -472,12 +537,10 @@ def test_dre_3737s_fixture_batches_all_four_oldest_first():
         "DRE-14 | not-now | it can wait | when the forms work lands"])
     proposal = _judged(cards, answer, capacity=20)
     order = _order(proposal)
-    assert set(order) == {"DRE-11", "DRE-12", "DRE-13", "DRE-14"}
-    assert order[0] == "DRE-14"
-    assert order.index("DRE-13") < order.index("DRE-11")
+    assert order == ["DRE-11", "DRE-12", "DRE-13", "DRE-14"]
     assert _batch(proposal) == {"DRE-11", "DRE-12", "DRE-13", "DRE-14"}
     pair = proposal["collisions"]["pairs"][0]
-    assert (pair["before"], pair["after"]) == ("DRE-13", "DRE-11")
+    assert (pair["before"], pair["after"]) == ("DRE-11", "DRE-13")
     groomer.assert_disjoint(proposal)
 
 
@@ -491,7 +554,7 @@ def test_window_days_is_accepted_and_changes_nothing():
     for window in (1, 30, 90):
         wide = groomer.propose(cards, cycles=CYCLES, now=NOW,
                                window_days=window)
-        assert _order(wide) == _order(base) == ["DRE-3", "DRE-1", "DRE-2"]
+        assert _order(wide) == _order(base) == ["DRE-2", "DRE-1", "DRE-3"]
         assert wide["id"] == base["id"]
         assert wide["window_days"] == window
         assert wide["older_than_window"]["cards"] == 0
@@ -535,7 +598,7 @@ def test_the_cli_still_takes_window_days_and_it_hides_nothing():
     for argv in ((), ("--window-days", "14"), ("--window-days", "30")):
         proposal = _cli_proposal(*argv)
         assert [r["identifier"] for r in proposal["outcomes"]["now"]] == \
-            ["DRE-1", "DRE-2"]
+            ["DRE-2", "DRE-1"]
         assert proposal["older_than_window"]["cards"] == 0
 
 
@@ -546,27 +609,83 @@ def _doc_section(text: str, heading: str) -> str:
     return text.split(heading, 1)[1].split("\n## ", 1)[0]
 
 
-def test_the_doc_states_urgent_high_then_oldest_first_with_no_window():
+def test_the_doc_states_urgent_high_then_newest_first_with_no_window():
     doc = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
     order = _doc_section(doc, "## The order, applied top to bottom")
     assert order.index("1. **Urgent") < order.index("2. **High") < \
-        order.index("3. **Then everything else, oldest first"), (
+        order.index("3. **Then everything else, newest first"), (
             "the order is documented as applied")
-    for stale in ("newest first", "Then the window", "not batched"):
+    for stale in ("Then everything else, oldest first", "Then the window",
+                  "not batched", "go older first"):
         assert stale not in order, f"the order section still says {stale!r}"
     assert "no window" in order
-    assert "pulls the older card forward" in order
+    assert "go newer first" in order
     assert "never filters on the model's picks" in order
     outcomes = _doc_section(doc, "## The outcomes, and what each one owes")
     assert "older than the window" not in outcomes
+    assert '"newest first"' in outcomes and '"oldest first"' not in outcomes
 
 
 def test_the_brief_no_longer_says_the_now_lines_fill_the_batch():
     brief = (ROOT / "briefs" / "groomer.md").read_text(encoding="utf-8")
     assert "is the order the batch is filled in" not in brief
     assert "hands the ordering back to the rules" not in brief
-    assert "oldest first" in brief
+    assert "newest first" in brief
     # The four outcomes and the line format are unchanged.
     for outcome in ("`now`", "`not-now`", "`likely-done`", "`unranked`"):
         assert outcome in brief
     assert "<card id> | <outcome> | <reason> | <trigger or evidence>" in brief
+
+
+# --------------------------------------------------------------------------
+# the CEO's decision of 2026-09-26, written where the order is written
+# --------------------------------------------------------------------------
+CEO_2026_09_26 = ("He should look at the cards that are the most recent and go "
+                  "back from there so that he can find the ones we really need "
+                  "to get done.")
+
+ORDER_FILES = (ROOT / "scripts" / "groomer.py", ROOT / "briefs" / "groomer.md",
+               ROOT / "docs" / "groomer.md")
+
+
+def _flat(text: str) -> str:
+    """The text as one line, so a quote wrapped across lines still reads."""
+    return " ".join(text.split())
+
+
+def test_the_ceos_decision_is_quoted_as_reversing_dre_4725():
+    for path in ORDER_FILES:
+        flat = _flat(path.read_text(encoding="utf-8"))
+        assert CEO_2026_09_26 in flat, f"{path.name} does not quote the CEO"
+        at = flat.index(CEO_2026_09_26)
+        around = flat[max(0, at - 400):at + len(CEO_2026_09_26) + 400]
+        assert "2026-09-26" in around, f"{path.name} does not date it"
+        assert "DRE-4725" in around and "revers" in around, (
+            f"{path.name} does not say the decision reverses DRE-4725's order"
+        )
+
+
+def test_oldest_first_is_written_only_about_epic_children_or_the_reversal():
+    """`grep -n "oldest first"` over the three files finds only the sentence
+    about an epic's children and the history of the reversal."""
+    for path in ORDER_FILES:
+        for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1):
+            if "oldest first" in line:
+                assert "child" in line or "DRE-4725" in line, (
+                    f"{path.name}:{number} still orders by oldest first: "
+                    f"{line.strip()!r}"
+                )
+
+
+def test_the_brief_says_what_not_now_does_today():
+    """Rule 3 said `not-now` "is reversible and costs a fortnight", which has
+    been false since DRE-4725: a `not-now` card still goes on the Planning
+    list. It keeps nothing out of the batch — it is a note the CEO reads."""
+    brief = _flat((ROOT / "briefs" / "groomer.md").read_text(encoding="utf-8"))
+    rule = brief.split("3. **Prefer `not-now` to `likely-done`.**", 1)[1]
+    rule = rule.split("4. **", 1)[0]
+    assert "costs a fortnight" not in rule
+    assert "keeps nothing out of the batch" in rule
+    assert "the CEO reads" in rule
+    assert "name what would settle it" in rule
