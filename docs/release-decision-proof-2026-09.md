@@ -55,7 +55,7 @@ The CEO gave the go at about 08:03 PT ("Do the release bake 4773"). The operator
 08:03:56 PT  gh variable set RELEASE_HOLD -R dreadnought-foundry/agent-bureau --body "2026-09-27"
              gh workflow run release-train.yml -R dreadnought-foundry/agent-bureau      # → run 36328177968
 08:04:54 PT  gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau
-             gh variable list                                                            # no RELEASE_HOLD; no org-level brake existed
+             gh variable list                                                            # repository scope only: no RELEASE_HOLD left
 ```
 
 The brake stood for 58 seconds. Every surface exited `held`, and the Release job was skipped. The log's decision lines and receipts (08:04:25 PT):
@@ -93,7 +93,7 @@ The train decided at 08:04:19 PT (`decided_at`), inside the 58 seconds the brake
 
 > `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau` — or, when the fleet-wide brake is the one that is set, `gh variable delete RELEASE_HOLD --org dreadnought-foundry`
 
-The operator cleared the brake with `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau`. That is the first clause, word for word. The second clause covers an org-level brake, and none existed: `gh variable list` showed no org-level `RELEASE_HOLD`. So the message told the reader the right command for the brake that was actually set.
+The operator cleared the brake with `gh variable delete RELEASE_HOLD --repo dreadnought-foundry/agent-bureau`. That is the first clause, word for word. The second clause covers an org-level brake. The org scope was not read: `gh variable list` without `--org` lists repository variables only, and reading organization variables returns `HTTP 403: Resource not accessible by integration` to the token that checked this record. What rules out an org-level brake is the day's earlier runs. The 06:08, 06:16 and 06:59 PT runs were not held, and the released run's last decision came at 07:12:21 PT (`decided_at`). An org-level brake set before then would have held them. So the message told the reader the right command for the brake that was actually set. One case this does not exclude: an org-level brake set in the 52 minutes between 07:12 PT and the operator's brake at 08:03:56 PT. No train run after 08:04:54 PT was read for this record, so nothing here shows a run released unheld once the repository brake was gone.
 
 ### The released run
 
@@ -185,6 +185,8 @@ The rows, parsed (subject_id is the deployment id; received_at is UTC as stored)
 6692682347..6692682060 2026-09-27T13:16:33–35Z current (console, website, relay, relay-gh) null 36321812820
 ```
 
+(The last line is a hand-written summary of four rows, not parsed output: one `current` row per surface from run `36321812820`, received between 13:16:33Z and 13:16:35Z.)
+
 | kind | run | Record row | recorded (PT) | run's own time in the log (PT) |
 | --- | --- | --- | --- | --- |
 | released | `36324293496` | `6693321502`: console, `released`, `agent-bureau-console-v1.6.165` | 07:17:23 | 07:17:22 |
@@ -216,7 +218,7 @@ gh api 'repos/dreadnought-foundry/agent-bureau/deployments?environment=release-t
 6692600404 2026-09-27T13:08:37Z console current 36321348313
 ```
 
-**Twelve created, twelve held — no gap.** GitHub's twelve newest decision deployments in `release-train` are the four held (`6693834152`, `…286`, `…451`, `…618`), the release and three `current` from the released run (`6693321502`, `6693129468`, `…664`, `…849`), and four `current` from the no-op run (`6692682060`, `…145`, `…251`, `…347`). The Record returned exactly those twelve ids. The query's time window also holds four earlier decisions, from run `36321348313` at 06:08 PT, which fell outside `LIMIT 12`. They were not read, and they are not a gap.
+**Twelve created, twelve held — no gap.** GitHub's twelve newest decision deployments in `release-train` are the four held (`6693834152`, `…286`, `…451`, `…618`), the release and three `current` from the released run (`6693321502`, `6693129468`, `…664`, `…849`), and four `current` from the no-op run (`6692682060`, `…145`, `…251`, `…347`). The Record returned exactly those twelve ids. The query's time window also holds four earlier decisions, from run `36321348313` at 06:08 PT. They fall outside `LIMIT 12`, so their absence from these rows is not a gap. Whether the Record holds them was not checked.
 
 **How the rows got there.** The Record files these as `deployment` messages. They apply on Postgres since the release-history fix DRE-4976 (2026-09-26 18:14 PT). Nine earlier messages were redriven between 19:55 and 20:01 PT that evening. As the 2026-09-26 read found, held and no-op decisions produce no delivered `deployment_status`, so the Record reads each decision from the `deployment` message itself. Production's Train Yard tab, live since console `v1.6.165` (07:17 PT today), shows these decisions.
 
@@ -246,7 +248,7 @@ It went live at 07:17:20 PT. The four held decisions were written at 08:04:22–
 
 ## 2026-09-26 — the first pass (the 09-25 release and the 09-26 no-op)
 
-Kept as written on 2026-09-26, apart from three edits. The headings moved down one level. In Step 4, "about 08:08 PT" replaces an exact time, and a note points to the 2026-09-27 read of the Record. The old "What is not proven" list is replaced by the final section of this record.
+Kept as written on 2026-09-26, apart from three edits. The headings moved down one level. In Step 4, "about 08:08 PT on 2026-09-26" replaces an exact time, a note adds that the first stored message arrived at 08:08:33 PT, and a closing note points to the 2026-09-27 read of the Record. The old "What is not proven" list is replaced by the final section of this record.
 
 ### Preconditions — the build cards are Done and on `stable`
 
@@ -447,6 +449,7 @@ Both are console `v1.6.151`'s own stage statuses ("roll out" at 08:08:32 PT and 
 
 - **The App's `deployment_status` delivery for a held or a no-op decision.** It cannot exist while those decisions are written `inactive`, and `docs/release-decision.md` maps both `held` and `no-op` to `inactive`. For the no-op this was observed on 2026-09-26: the `deployment` was delivered, no status was delivered, and none of the 39 status deliveries in those hours was `inactive`. For the held run it is inferred. Today's four held decisions each carry one `inactive` status, read from GitHub, but the delivery log was not re-read today. Criterion 1 names this delivery. What proves each decision instead is the `deployment` message, which carries the whole payload and is what the Record files. Keeping or rewording that criterion is the CEO's call when he closes the card.
 - **The App's delivery log was not re-read on 2026-09-27.** Reading it needs an App JWT minted from App 3350400's private key, and this session's permission guard refused the key read. The delivery evidence for criterion 1 therefore rests on the 09-25 release (`36216605642`). Today's three runs rest on the log, the deployment GitHub holds, and the Record's row.
+- **The organization's variables were not read.** Reading them returns `HTTP 403` to the token that checked this record. That no org-level `RELEASE_HOLD` was set rests on the day's unheld runs up to 07:12 PT, as the held-run section explains.
 - **Two follow-ups this record points to, not filed as cards.** A Linear search at 08:12 PT found no card for either.
   1. `docs/release-decision.md` says "The Record's App receives every `deployment` and `deployment_status` message the repository produces". For `inactive` statuses that is not true. The file is generated from `scripts/release_decision.py`, so correcting it is a code change for its own card.
   2. The same file defines `re_arm_at` as "the UTC minute the run re-armed itself for". The 09-26 no-op payload carries `"re_arm_at": "2026-09-26T12:00:00Z"`, but its own `reason` says "not re-armed". In code (`Decision.re_arm_at`), the field is the minute the surface may next be released, and it is set whether or not a re-armed run was dispatched. A consumer that reads it as "a re-armed run is waiting" (DRE-4761's Record, or the Train Yard tab) will be wrong. The field's description needs a fix.
