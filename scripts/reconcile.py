@@ -7993,14 +7993,24 @@ def recover_limit_deaths() -> None:
     pass. `CLAUDE_ACCOUNT` is the seam DRE-3170 fills; unset, only the clock
     can trigger.
 
+    The board is every lane the sweep reads, `SWEPT_LANES`, not the default
+    `SWEEP_STATES` (DRE-4211). A classify or plan death leaves its card in
+    Planning, and the recovery re-enters it from there by bouncing it through
+    Intake; handed only Todo, In Progress and In Review, the pass never saw
+    those cards, and every planner run a limit killed had to be re-sent by
+    hand. `SWEPT_LANES` is exactly what the sweep's one board read covers, so
+    the wider list costs no Linear request.
+
     The WIP room is promotion's own — the cap minus `wip_count(wip_base(...))`
-    — never a count of this repo's whole board (DRE-4934).
+    over `active_cards()`, the lanes promotion counts — never a count of this
+    repo's whole board (DRE-4934), and never of the Planning and Intake cards
+    this pass now also sees: a card waiting on a plan holds no build slot.
     """
     try:
-        cards = [c for c in active_cards() if card_repo(c) in (None, REPO_SLUG)]
+        cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
-            MAX_WIP - wip_count(wip_base(cards)),
+            MAX_WIP - wip_count(wip_base(active_cards())),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
             move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
