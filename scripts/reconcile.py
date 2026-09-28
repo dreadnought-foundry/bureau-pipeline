@@ -7996,7 +7996,7 @@ def recover_limit_deaths() -> None:
     The board is every lane the sweep reads, `SWEPT_LANES`, not the default
     `SWEEP_STATES` (DRE-4211). A classify or plan death leaves its card in
     Planning, and the recovery re-enters it from there by bouncing it through
-    Intake; handed only Todo, In Progress and In Review, the pass never saw
+    Intake. Handed only Todo, In Progress and In Review, the pass never saw
     those cards, and every planner run a limit killed had to be re-sent by
     hand. `SWEPT_LANES` is exactly what the sweep's one board read covers, so
     the wider list costs no Linear request.
