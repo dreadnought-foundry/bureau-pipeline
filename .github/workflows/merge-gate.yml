@@ -4,7 +4,10 @@
 # head commit** (DRE-1990: the verdict embeds the SHA it reviewed; a missing
 # or stale SHA is treated as no verdict), AND the pull request is not a
 # DRAFT (DRE-3467 — GitHub never merges one, so the gate posts the honest
-# waiting-for-human state instead of failing on the merge command). The
+# waiting-for-human state instead of failing on the merge command), AND no
+# other OPEN pull request whose head this branch carries stands unapproved
+# (DRE-4103 — a merge would land that work too, and GitHub would mark it
+# merged; the gate holds and says which, on the PR). The
 # merge uses the qa-bot identity
 # (distinct GitHub App), so author != merger is enforced by identity, not
 # policy. No human in the loop; no agent claims trusted — all inputs are
@@ -254,11 +257,18 @@ jobs:
           # this is one of the fleet's longest. DRE-4486 needed room for its
           # lane read, so every `${{ github.repository }}` and every
           # `${{ github.token }}` in the script below moved up here and the
-          # block came out SHORTER than it went in. The one substitution
-          # left in the script is QA_LOGIN's app-slug derivation, which
-          # tests/test_merge_gate_wiring.py pins there on purpose.
+          # block came out SHORTER than it went in. DRE-4103 needed room for
+          # the stack read and moved the last one, QA_LOGIN's app-slug
+          # derivation, so the script carries no expression at all;
+          # tests/test_merge_gate_wiring.py pins the derivation here.
           REPO_FULL: ${{ github.repository }}
           WORKFLOW_TOKEN: ${{ github.token }}
+          # The trusted verdict author is derived from the same App key this
+          # gate merges with (app-slug of the minted token), so an App rename
+          # follows automatically; GitHub reserves the "[bot]" suffix, so no
+          # user account can impersonate it. Empirically the critic posts as
+          # agent-bureau-qa-bot[bot] since bureau-pipeline #51.
+          QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
         run: |
           set -euo pipefail
 
@@ -396,12 +406,6 @@ jobs:
           # empty list: the gate waits.
           GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
             || echo '{"readable":false}' > /tmp/workflow-runs.json
-          # The trusted verdict author is derived from the same App key this
-          # gate merges with (app-slug of the minted token), so an App rename
-          # follows automatically; GitHub reserves the "[bot]" suffix, so no
-          # user account can impersonate it. Empirically the critic posts as
-          # agent-bureau-qa-bot[bot] since bureau-pipeline #51.
-          QA_LOGIN="${{ steps.qa.outputs.app-slug }}[bot]"
           # DRE-2039: the dependabot-policy record — the PR author from
           # GitHub's own PR object (REST user.login gives the literal
           # "dependabot[bot]"; gh's GraphQL author rendering varies by
@@ -424,6 +428,18 @@ jobs:
           # blip reading as "no fix run running" is precisely this failure.
           GH_TOKEN="$WORKFLOW_TOKEN" python3 .bureau-pipeline/scripts/stranded_fix.py lane \
             --repo "$REPO_FULL" --out /tmp/fix-lane.json
+          # DRE-4103: the STACK record — every open pull request in the repo,
+          # and the comment thread of each one whose head this branch carries
+          # (read off the compare record above: the commits a merge would
+          # bring into the base). On 2026-09-16 the gate merged an approved
+          # PR whose branch carried two open PRs under REQUEST_CHANGES, and
+          # GitHub marked those merged too. Condition S in merge_gate.py is
+          # the rule. Never fails this step: an unreadable read is written
+          # INTO the record and the gate holds on it — a blip is never "no
+          # other open pull requests".
+          python3 .bureau-pipeline/scripts/stacked_prs.py gather \
+            --repo "$REPO_FULL" --pr "$PR" \
+            --compare-file /tmp/compare.json --out /tmp/stack.json
 
           python3 .bureau-pipeline/scripts/merge_gate.py \
             --head-sha "$SHA" \
@@ -440,6 +456,7 @@ jobs:
             --pr-commits-file /tmp/pr-commits.json \
             --fix-lane-file /tmp/fix-lane.json \
             --pr-number "$PR" \
+            --stack-file /tmp/stack.json \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
@@ -552,6 +569,24 @@ jobs:
               --marker "$HUMAN_MARK" \
               --body-file /tmp/human-note.md
             exit 0
+          fi
+          # DRE-4103: a stack hold says so ON the PR — which open pull
+          # requests this branch carries and what stands on each (the
+          # reason= line), through gate_note.py like the `human` arm.
+          # `stacked_on=` is OPTIONAL, hence `|| true`. The marker names the
+          # blocking set and ends on a word, so a changed set is a new note
+          # and an unchanged one is never re-posted. No verdict-shaped text.
+          STACKED=$(grep -m1 '^stacked_on=' /tmp/gate-decision | cut -d= -f2- || true)
+          if [ -n "$STACKED" ]; then
+            REASON=$(grep -m1 '^reason=' /tmp/gate-decision | cut -d= -f2-)
+            STACK_MARK="Merge gate: held for $STACKED until approved"
+            printf '⏸️ %s — %s\n' "$STACK_MARK" "$REASON" > /tmp/stack-note.md
+            python3 .bureau-pipeline/scripts/gate_note.py \
+              --repo "$REPO_FULL" \
+              --pr "$PR" \
+              --author "$QA_LOGIN" \
+              --marker "$STACK_MARK" \
+              --body-file /tmp/stack-note.md
           fi
           [ "$DECISION" = "merge" ] || exit 0
 

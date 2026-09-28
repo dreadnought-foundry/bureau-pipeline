@@ -8,7 +8,7 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → F → 4.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → S → F → 4.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -182,6 +182,35 @@ not a critic catch).
    - Same authorship rule as the critic: a forged FAIL could stall merges,
      a forged PASS could mask a real FAIL.
 
+S. STACK (DRE-4103) — the OTHER open pull requests this branch carries.
+   On 2026-09-16 17:08 PT agent-bureau #2585 (APPROVE) was merged by gate
+   run 35165261547 with a branch built on #2583 and #2582, both standing
+   under REQUEST_CHANGES. The merge commit made all three heads reachable
+   from `main`, GitHub marked the two rejected pull requests merged, and
+   linear-sync closed all three cards Done. Every condition above is about
+   the pull request the event named; none asked what else its branch
+   carries, so any rejected pull request could be landed by opening one
+   approved pull request on top of it.
+
+   This asks. `stacked_prs.py gather` (the workflow) lists the repo's open
+   pull requests and reads the thread of each one whose HEAD is among the
+   commits this merge would bring into the base — the `commits[]` of the
+   same compare record condition 0 reads. For each, the critic's latest
+   verdict must be APPROVE bound to that pull request's own head, read with
+   the same authorship and anchored-marker rules as condition 2. Anything
+   else — REQUEST_CHANGES, no review, an approval of an older commit — is
+   `hold`, naming each blocking pull request and what stands on it; the
+   workflow posts that on the PR. A parent that has merged is not open and
+   blocks nothing, so an all-approved stack merges exactly as before.
+
+   UNKNOWN holds: a listing that failed is never "no open pull requests",
+   and a blipped or truncated commit record is never "carries none of
+   them" (with nothing else open, the commit record is not needed at all).
+   The residual — a parent that moved on after the child branched — is in
+   stacked_prs.py's docstring. Evaluated after 2 and 3 (the pull request's
+   own REQUEST_CHANGES is the more direct answer) and before F and 4, whose
+   notes would otherwise say a merge is all that is left.
+
 F. FIX RUN IN FLIGHT (DRE-4486) — the Agent Fix lane's own record for this
    pull request. A fix run can still be working a PR when this gate merges
    it; when the fix finishes it pushes to the PR's branch, which has
@@ -271,7 +300,9 @@ Contract with merge-gate.yml:
     comma-separated allowlist of review workflow paths), --head-branch /
     --pr-author / --pr-commits-file (the raw REST payload of GET
     pulls/{pr}/commits) — the dependabot-policy record (DRE-2039) AND the
-    content-binding commit record (DRE-2340 condition 4), all optional;
+    content-binding commit record (DRE-2340 condition 4), --stack-file
+    (the record `stacked_prs.py gather` writes — condition S, DRE-4103;
+    unreadable holds), all optional;
     omitted = the pre-DRE-2039/2416 behavior for every caller that never
     passes them. The compare payload must NOT be trimmed (DRE-2340): its
     `files[]` is what the head's content id is computed from.
@@ -280,14 +311,18 @@ Contract with merge-gate.yml:
     English), then — only when a verdict was honoured across a head change
     — a `carried=` line naming the reviewed commits and a
     `carried_content_id=` line, which the workflow turns into the PR
-    comment that explains the carry.
+    comment that explains the carry; and — only on a stack hold — a
+    `stacked_on=` line naming the blocking pull requests (`#2582, #2583`),
+    which the workflow turns into the note it posts on the PR.
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
 wait vs hold vs conflict vs human: `wait` means the gate expects a future
 event to change the answer (CI finishing, a fresh review of the current
 head); `hold` means an explicit negative verdict is standing
-(REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it;
+(REQUEST_CHANGES, Verifier FAIL — or, since DRE-4103, anything short of an
+APPROVE on an open pull request this branch carries) and only a new
+verdict, or that pull request's own merge, lifts it;
 `conflict` means the branch cannot merge until it is reconciled with its
 base (DRE-2416) and the workflow dispatches the fix agent; `human` means
 the gate will not merge this PR as it stands and no event it watches will
@@ -315,6 +350,11 @@ from verdict_content import content_id, verdict_content_id  # noqa: F401
 # above exists: the gate, the fix run and the sweep must never drift about
 # what "a fix run is in flight for this pull request" means.
 from stranded_fix import lane_refusal, read_lane  # noqa: E402
+
+# Condition S's record (DRE-4103). "Which open pull requests does this branch
+# carry" lives in ONE module, read by the gatherer that fetches their threads
+# and by this gate that reads their verdicts — the same reason as above.
+import stacked_prs  # noqa: E402
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -425,6 +465,10 @@ class Decision:
     #: The head content id the carry was proved against; None when nothing
     #: was carried.
     content_id: Optional[str] = None
+    #: Condition S (DRE-4103): the open pull requests this branch carries
+    #: that are not approved, by number. Non-empty only on a stack hold; the
+    #: workflow posts the refusal on the PR when it is.
+    stacked_on: list = field(default_factory=list)
 
 
 def first_line(body: Optional[str]) -> str:
@@ -712,6 +756,114 @@ def evaluate_fix_lane(fix_lane, pr_number) -> Optional[Decision]:
     return Decision("wait", reason) if reason else None
 
 
+def stacked_reading(comments, qa_login: str, head_sha: str) -> Optional[str]:
+    """Condition S's reading of ONE open pull request this branch carries:
+    None when the critic's latest verdict is APPROVE bound to that pull
+    request's own head, else what stands there instead, in plain English.
+
+    The same authorship and anchored-marker reads the gate applies to the
+    pull request it is gating (`latest_verdict_comment`, `verdict_token`,
+    `verdict_sha`) — never a second parse. No content carry here: an
+    approval of an older commit is not an approval of the code this merge
+    would land, and the price of that strictness is only order — the parent
+    merges through its own gate first, and then it is no longer open.
+
+    The words are posted on the PR under the qa-bot login, so they must
+    carry no verdict marker: a body naming the critic's marker would re-wake
+    the gate's own issue_comment leg and would BE a verdict-shaped
+    credential (standards/untrusted-content.md).
+    """
+    if comments is None:
+        return "UNKNOWN: its comment thread could not be read"
+    try:
+        comments = flatten_pages(comments)
+    except ValueError:
+        return "UNKNOWN: its comment thread is not a comment record"
+    line = first_line(latest_verdict_comment(comments, qa_login, CRITIC_MARKER))
+    if not line:
+        return "the critic has not reviewed it"
+    token = verdict_token(line, CRITIC_MARKER)
+    sha = verdict_sha(line)
+    if sha is None:
+        return "the critic's latest word on it names no reviewed commit"
+    if sha != head_sha:
+        return (
+            f"the critic's latest verdict ({token or 'no verdict'}) is for an "
+            f"older commit ({sha[:8]}), not its current head ({head_sha[:8]})"
+        )
+    if token == "APPROVE":
+        return None
+    if token == "REQUEST_CHANGES":
+        return "the critic asked for changes (REQUEST_CHANGES)"
+    return f"the critic's latest verdict is {token or 'unreadable'}, not APPROVE"
+
+
+def evaluate_stack(stack, branch_commits, pr_number,
+                   qa_login: str) -> Optional[Decision]:
+    """Condition S (DRE-4103). None = no open pull request this branch
+    carries stands unapproved, proceed. Otherwise `hold`, naming each one
+    and what stands on it: merging would land that work in the base too,
+    and GitHub would then mark those pull requests merged — the 2026-09-16
+    incident, where #2585's approval landed #2582 and #2583 under
+    REQUEST_CHANGES.
+
+    `hold`, never `wait` or a failure: only a new verdict on a pull request
+    below (or its merge) changes the answer, and the pull request is
+    reconsidered the way any held one is — its own verdict still binds its
+    head, so reconcile's sweep keeps re-triggering the gate for it.
+
+    `None` for `stack` is the pre-DRE-4103 caller and gates nothing, the
+    default-to-old-behaviour shape conditions D, 0, F and 4 take. Every
+    reading that cannot be taken says UNKNOWN and holds: an unreadable
+    listing is never "no open pull requests", and an incomplete commit
+    record is never "carries none of them".
+    """
+    if stack is None:
+        return None
+    if not stack.readable:
+        return Decision(
+            "hold",
+            f"UNKNOWN: the open pull requests could not be read "
+            f"({stack.detail}) — the gate cannot tell whether this branch "
+            "carries another pull request's unapproved work into the base, "
+            "so it holds rather than assume it carries none (DRE-4103)",
+        )
+    try:
+        own = int(pr_number)
+    except (TypeError, ValueError):
+        own = None
+    if not any(number != own for number, _ in stack.open_prs):
+        return None  # nothing else is open, so nothing can be stacked under it
+    if branch_commits is None:
+        return Decision(
+            "hold",
+            "UNKNOWN: the record of this branch's commits is missing or "
+            "truncated, and other pull requests are open — the gate cannot "
+            "prove this branch carries none of their unapproved work, so it "
+            "holds (DRE-4103)",
+        )
+    blockers = []
+    for number, head in stacked_prs.stacked_on(
+            stack.open_prs, pr_number, branch_commits):
+        if number not in stack.comments:
+            reading = "UNKNOWN: its comment thread was never read"
+        else:
+            reading = stacked_reading(stack.comments[number], qa_login, head)
+        if reading:
+            blockers.append((number, reading))
+    if not blockers:
+        return None
+    named = "; ".join(f"#{number} — {reading}" for number, reading in blockers)
+    decision = Decision(
+        "hold",
+        "this branch also carries other open pull requests, and merging it "
+        f"would land their work in the base unapproved: {named}. Holding "
+        "until each of them is approved or has merged on its own (DRE-4103)",
+    )
+    decision.stacked_on = [number for number, _ in blockers]
+    return decision
+
+
 def currency_note(compare_status) -> Optional[str]:
     """The audit line for a head that is behind its base (DRE-2416).
 
@@ -923,9 +1075,11 @@ def decide(
     fix_lane=None,
     pr_number=None,
     unfinished_runs=(),
+    stack=None,
+    branch_commits=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → F → 4, first blocker
-    wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4, first
+    blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
@@ -967,7 +1121,15 @@ def decide(
     the module-level `unfinished_runs()` computes it: a run on the head that
     has not finished is CI still running, and `None` (the listing could not
     be read) waits. The default (empty) reproduces the pre-DRE-5045 behavior
-    for every caller that never passes it."""
+    for every caller that never passes it.
+
+    `stack` / `branch_commits` are condition S's record (DRE-4103):
+    `stacked_prs.read_stack`'s answer and `stacked_prs.branch_commits` over
+    the same compare payload `head_content_id` comes from. Evaluated after
+    the pull request's OWN verdicts (its own REQUEST_CHANGES is the more
+    direct answer) and before F and 4, whose notes would otherwise claim a
+    merge is all that is left. The default (None) reproduces the
+    pre-DRE-4103 behavior for every caller that never passes it."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1016,6 +1178,12 @@ def decide(
             decision.carried = carried
             decision.content_id = head_content_id
         return decision
+
+    # Condition S (DRE-4103): this pull request's own verdicts say merge, but
+    # a merge also lands every open pull request its branch carries.
+    blocked = evaluate_stack(stack, branch_commits, pr_number, qa_login)
+    if blocked:
+        return _decided(blocked)
 
     # Condition F (DRE-4486), before the draft note: a fix run in flight for
     # this pull request would be stranded on a dead branch by a merge now.
@@ -1110,6 +1278,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pr-number", default=None,
                         help="the pull request being gated — condition F "
                              "attributes in-flight fix runs to it (DRE-4486)")
+    # Condition S's record (DRE-4103) — optional; omitting it reproduces the
+    # pre-DRE-4103 behavior for every caller that never passes it.
+    parser.add_argument("--stack-file", default=None,
+                        help="the stack record written by `stacked_prs.py "
+                             "gather` — the repo's open pull requests and the "
+                             "threads of those this branch carries (DRE-4103). "
+                             "A file that cannot be read is fail-closed: the "
+                             "gate holds rather than assume nothing is "
+                             "stacked under this pull request")
     return parser
 
 
@@ -1196,6 +1373,8 @@ def main(argv=None) -> int:
     # trimmed, truncated (300-file cap) or blipped record yields None, and
     # None means verdicts bind the head SHA alone, exactly as before.
     head_content_id = content_id(payload)
+    # DRE-4103: condition S's commit record, from the same payload.
+    branch_commits = stacked_prs.branch_commits(payload)
 
     pr_commits = []
     if args.pr_commits_file:
@@ -1222,11 +1401,25 @@ def main(argv=None) -> int:
                             "detail": f"cannot read the fix-lane record: {e}"}
         fix_lane = read_lane(lane_payload)
 
+    # DRE-4103: an unreadable stack file is NOT an empty stack — it reads as
+    # the fail-closed record and condition S holds on it. The branch's
+    # commits came from the compare payload read above, so the gate and the
+    # gatherer judge "carried" over the very same record.
+    stack = None
+    if args.stack_file:
+        try:
+            with open(args.stack_file) as f:
+                stack_payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            stack_payload = {"readable": False,
+                             "detail": f"cannot read the stack record: {e}"}
+        stack = stacked_prs.read_stack(stack_payload)
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
-        unfinished,
+        unfinished, stack, branch_commits,
     )
     for note in decision.notes:
         print(f"note={note}")
@@ -1238,6 +1431,10 @@ def main(argv=None) -> int:
     if decision.carried:
         print(f"carried={','.join(decision.carried)}")
         print(f"carried_content_id={decision.content_id}")
+    # DRE-4103: only on a stack hold. The workflow names these pull requests
+    # in the note it posts on the PR; the reason= line says why each blocks.
+    if decision.stacked_on:
+        print(f"stacked_on={', '.join(f'#{n}' for n in decision.stacked_on)}")
     return 0
 
 

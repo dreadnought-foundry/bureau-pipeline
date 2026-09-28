@@ -502,7 +502,7 @@ class WiringTest(unittest.TestCase):
 
     def test_the_record_is_gathered_from_the_compare_the_gate_already_read(self):
         gather = self.run_block.index("stacked_prs.py gather")
-        invoke = self.run_block.index("scripts/merge_gate.py")
+        invoke = self.run_block.index("python3 .bureau-pipeline/scripts/merge_gate.py")
         compare = self.run_block.index("> /tmp/compare.json")
         self.assertLess(compare, gather)
         self.assertLess(gather, invoke)
@@ -518,7 +518,7 @@ class WiringTest(unittest.TestCase):
     def test_the_optional_output_cannot_kill_the_step(self):
         line = next(ln for ln in self.run_block.splitlines()
                     if "'^stacked_on='" in ln)
-        self.assertTrue(line.rstrip().endswith("|| true"), line)
+        self.assertTrue(line.rstrip().endswith("|| true)"), line)
 
     def test_the_refusal_is_posted_once_through_gate_note(self):
         arm = self.run_block[self.run_block.index("'^stacked_on='"):
@@ -566,7 +566,7 @@ if args[:2] == ["pr", "merge"]:
     emit("merged")
 if args[0] == "api":
     method = opt("--method") or "GET"
-    path = [a for a in args[1:] if not a.startswith("-")][0]
+    path = [a for a in args[1:] if "/" in a and not a.startswith("-")][0]
     m = re.search(r"issues/(\d+)/comments", path)
     if method == "POST" and m:
         rows = threads[m.group(1)]

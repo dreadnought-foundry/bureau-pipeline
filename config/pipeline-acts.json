@@ -1458,6 +1458,14 @@
     },
     {
       "file": ".github/workflows/merge-gate.yml",
+      "anchor": "--body-file /tmp/stack-note.md",
+      "step": "Evaluate and merge",
+      "kind": "undeclared-act",
+      "means": "The gate held this PR because its branch carries other open pull requests that are not approved, and it names each one and what stands on it (DRE-4103).",
+      "why": "Act-shaped — it is a hold — and the registry has no row for it, the same standing as the waiting-for-human note beside it. Giving it a row is a REGISTRY change, not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; a trailer here is a change to that contract, and the card that converts the human note owns this one with it."
+    },
+    {
+      "file": ".github/workflows/merge-gate.yml",
       "anchor": "🔀 Auto-merged by qa-bot:",
       "step": "Evaluate and merge",
       "kind": "not-an-act",
