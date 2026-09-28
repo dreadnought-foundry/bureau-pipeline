@@ -21,6 +21,12 @@ on:
     types: [completed]
   issue_comment:
     types: [created]
+  # A person's approving review re-wakes the gate (DRE-4341): a pull request
+  # held for a required code-owner review has its card parked in Green Light,
+  # where the sweep dispatches nothing. The reusable's job `if:` admits only a
+  # submitted, approving, non-bot review on a same-repo head.
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
     inputs:
       pr_number:

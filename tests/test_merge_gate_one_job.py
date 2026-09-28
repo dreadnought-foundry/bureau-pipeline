@@ -367,5 +367,82 @@ class CommentPredicateMeasuredTest(unittest.TestCase):
         self.assertTrue(evaluate_runs(event))
 
 
+# --------------------------------------------------------------------------
+# 5. the review leg (DRE-4341)
+# --------------------------------------------------------------------------
+def review_event(state: str = "approved", pr: int = PR, action: str = "submitted",
+                 user_type: str = "User", head_repo: str = "dreadnought-foundry/portico") -> dict:
+    """The context the gate sees when a person submits a review: the review
+    (its state is lowercase in the webhook payload) and the pull request it
+    is on."""
+    return {
+        "github": {
+            "event_name": "pull_request_review",
+            "repository": "dreadnought-foundry/portico",
+            "event": {
+                "action": action,
+                "review": {"state": state,
+                           "user": {"login": "smeed652", "type": user_type}},
+                "pull_request": {
+                    "number": pr,
+                    "head": {"ref": "agent/DRE-4177-portal-favicons",
+                             "repo": {"full_name": head_repo}},
+                },
+            },
+        },
+        "inputs": {},
+    }
+
+
+class ReviewLegTest(unittest.TestCase):
+    """A green, approved pull request GitHub refuses for a missing code-owner
+    review is parked in Green Light, where the sweep dispatches nothing — so
+    the owner's approving review is what re-wakes the gate. One job, keyed on
+    the review's own pull request."""
+
+    def setUp(self):
+        self.job = _job("evaluate")
+        self.group = self.job["concurrency"]["group"]
+        steps = self.job["steps"]
+        self.pr_expr = next(
+            s for s in steps if s.get("name") == "Evaluate and merge"
+        )["env"]["PR"]
+
+    def test_an_approving_review_runs_the_job_in_one_job(self):
+        event = review_event("approved")
+        self.assertFalse(resolve_runs(event), "the review names its PR — no lookup job")
+        self.assertTrue(evaluate_runs(event, _needs("skipped")))
+
+    def test_the_group_and_the_pr_both_name_the_reviews_pull_request(self):
+        ctx = _ctx(review_event("approved"), _needs("skipped"))
+        self.assertEqual(fc.interpolate(self.group, ctx), f"merge-gate-pr-{PR}")
+        self.assertEqual(fc.interpolate(self.pr_expr, ctx), str(PR))
+
+    def test_the_review_leg_lands_in_the_same_group_as_every_other_leg(self):
+        review = fc.interpolate(self.group, _ctx(review_event("approved"), _needs("skipped")))
+        comment = fc.interpolate(self.group, _ctx(comment_event(APPROVE_BODY), _needs("skipped")))
+        self.assertEqual(review, comment)
+
+    def test_a_comment_or_changes_requested_review_does_not_run_the_job(self):
+        for state in ("commented", "changes_requested", "dismissed"):
+            with self.subTest(state=state):
+                self.assertFalse(evaluate_runs(review_event(state)))
+
+    def test_only_a_submitted_review_runs_the_job(self):
+        self.assertFalse(evaluate_runs(review_event("approved", action="edited")))
+        self.assertFalse(evaluate_runs(review_event("approved", action="dismissed")))
+
+    def test_a_bots_formal_approval_does_not_wake_the_gate_twice(self):
+        """sync_review_state.py submits a formal APPROVE review as the qa-bot
+        beside every APPROVE verdict comment — which already wakes the gate.
+        A code owner is a person; a bot's review is not a second wake."""
+        self.assertFalse(evaluate_runs(review_event("approved", user_type="Bot")))
+
+    def test_a_review_on_a_fork_does_not_run_the_job(self):
+        # A fork's pull_request_review run gets no secrets — the token mint
+        # would fail red, and a fork branch is never gated anyway.
+        self.assertFalse(evaluate_runs(review_event("approved", head_repo="someone/portico")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,7 +32,9 @@
 #
 # Triggered (via the product-repo stub) from both directions of the race: CI
 # finishing (workflow_run) and the critic verdict landing (issue_comment).
-# Whichever happens last merges.
+# Whichever happens last merges. A person's approving review wakes it too
+# (pull_request_review, DRE-4341) — the one wake left for a card the gate
+# parked in Green Light while it waited on a required code-owner review.
 #
 # Reusable workflow: permissions live in the calling stub (contents: read,
 # actions: write). Job-level concurrency stays here — it keys off
@@ -190,6 +192,14 @@ jobs:
     # the fix agent, and a verdict from a workflow_dispatch re-review has no
     # other wake (its run's completion is not a `pull_request` event). The
     # one provable no-op, a comment on an already-closed PR, was 3 of 279.
+    #
+    # pull_request_review leg (DRE-4341): a person's submitted APPROVING
+    # review. A pull request held for a required code-owner review has its
+    # card parked in Green Light, where the sweep dispatches nothing, so the
+    # owner's approval is what re-wakes the gate. Not a bot's review —
+    # sync_review_state.py files a formal APPROVE beside every APPROVE verdict
+    # comment, which already woke the gate — and not a fork's, which gets no
+    # secrets to mint the token with and is never gated anyway.
     if: >
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' &&
@@ -198,6 +208,11 @@ jobs:
         github.event.issue.pull_request &&
         contains(github.event.comment.body, 'QA Critic') &&
         github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') ||
+       (github.event_name == 'pull_request_review' &&
+        github.event.action == 'submitted' &&
+        github.event.review.state == 'approved' &&
+        github.event.review.user.type != 'Bot' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
        (github.event_name == 'workflow_run' &&
         github.event.workflow_run.event == 'pull_request' &&
         (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
@@ -218,13 +233,14 @@ jobs:
     # from whichever place this event carries it: the lookup's answer when
     # it ran, else the event's own field (DRE-4279) — every leg renders the
     # same string for the same PR, and tests/test_merge_gate_one_job.py
-    # renders all four to prove it. The SAME expression is the `PR` the step
+    # renders every leg to prove it (the review leg's number is
+    # `pull_request.number`, DRE-4341). The SAME expression is the `PR` the step
     # below evaluates, so the serialization and the evaluation can never be
     # about different PRs. Never cancel-in-progress: the queued wake is the
     # one that was going to merge, and dropping it would leave the PR
     # waiting for reconcile's ~15-minute nudge.
     concurrency:
-      group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}
+      group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.pull_request.number || github.event.inputs.pr_number }}
       cancel-in-progress: false
     steps:
       - name: Mint qa-bot token (author != merger)
@@ -250,7 +266,7 @@ jobs:
           # the lookup's answer when it ran, else the event's own number —
           # so the serialization and the evaluation can never be about
           # different PRs (DRE-2508, DRE-4279).
-          PR: ${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}
+          PR: ${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.pull_request.number || github.event.inputs.pr_number }}
           # Through env, the remedy tests/test_workflow_expression_budget.py
           # names: a `run:` block carrying one `${{ }}` is compiled into a
           # single format() expression with a 21,000-character ceiling, and
@@ -440,6 +456,16 @@ jobs:
           python3 .bureau-pipeline/scripts/stacked_prs.py gather \
             --repo "$REPO_FULL" --pr "$PR" \
             --compare-file /tmp/compare.json --out /tmp/stack.json
+          # DRE-4341: the OWNERS record — the base branch's rules, this PR's
+          # reviews and CODEOWNERS, beside the files the compare record above
+          # lists. Condition O in merge_gate.py holds when a required
+          # code-owner review is missing, so GitHub's refusal becomes one note
+          # naming who, not a "real failure" on every wake. Never fails this
+          # step: a failed read is UNKNOWN, which merges as before and so
+          # stays loud if GitHub refuses.
+          python3 .bureau-pipeline/scripts/code_owner_hold.py gather \
+            --repo "$REPO_FULL" --pr "$PR" --base "$BASE" \
+            --compare-file /tmp/compare.json --out /tmp/owners.json
 
           python3 .bureau-pipeline/scripts/merge_gate.py \
             --head-sha "$SHA" \
@@ -457,6 +483,7 @@ jobs:
             --fix-lane-file /tmp/fix-lane.json \
             --pr-number "$PR" \
             --stack-file /tmp/stack.json \
+            --owners-file /tmp/owners.json \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
@@ -508,6 +535,16 @@ jobs:
               > /tmp/carry-note.md
             gh api "repos/$REPO_FULL/issues/$PR/comments" \
               -F body=@/tmp/carry-note.md >/dev/null || true
+          fi
+
+          # DRE-4341: a card the gate parked in Green Light for a code-owner
+          # review goes back to In Review once that review has landed —
+          # before any arm below, so the merge path finds it where
+          # linear-sync closes it. Only a card carrying the gate's own hold
+          # marker moves; one parked for any other reason is left alone.
+          COR=$(grep -m1 '^code_owner_review=' /tmp/gate-decision | cut -d= -f2- || true)
+          if [ -n "$CARD" ] && [ "$COR" = "met" ]; then
+            python3 .bureau-pipeline/scripts/code_owner_hold.py release --card "$CARD" --pr "$PR"
           fi
 
           # DRE-2416: `conflict` = the branch cannot merge until it is
@@ -588,6 +625,17 @@ jobs:
               --marker "$STACK_MARK" \
               --body-file /tmp/stack-note.md
           fi
+          # DRE-4341: a code-owner hold — ONE note on the PR per head, naming
+          # who must approve which folders, and the card parked in Green
+          # Light once with the same sentence (only when the calling repo's
+          # stub wakes the gate on a review). Exits 0: the rule is working.
+          OWNER_HOLD=$(grep -m1 '^owner_hold=' /tmp/gate-decision | cut -d= -f2- || true)
+          if [ -n "$OWNER_HOLD" ]; then
+            python3 .bureau-pipeline/scripts/code_owner_hold.py hold \
+              --repo "$REPO_FULL" --pr "$PR" --author "$QA_LOGIN" \
+              --head-sha "$SHA" --card "$CARD" --groups "$OWNER_HOLD"
+            exit 0
+          fi
           [ "$DECISION" = "merge" ] || exit 0
 
           # Both gates green: advance card, merge as qa-bot.
@@ -605,6 +653,11 @@ jobs:
             NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
             if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
               echo "merge failed with the head still at $SHA — real failure"
+              # DRE-4341: name what the base branch requires and what is met,
+              # so the medic diagnoses from facts instead of guessing.
+              python3 .bureau-pipeline/scripts/code_owner_hold.py explain \
+                --owners-file /tmp/owners.json \
+                --check-runs-file /tmp/check-runs.json --author "$AUTHOR" || true
               exit 1
             fi
             echo "head moved since evaluation (was $SHA, now ${NOW:-unverifiable}) — not merging; the gate re-runs on the new head's events"

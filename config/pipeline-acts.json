@@ -589,7 +589,7 @@
       "why": "The third ordinary place a card waits, and the one where the measurement says NOT to use its own number. MEASURED (DRE-3388, 2026-09-08 15:10 PT, against live Actions runs on agent-bureau and bureau-pipeline): the last 50 completed merge-gate runs per repo — 100 runs, 64 green — with a longest green duration of 1.0 min. That is how long the gate takes to RUN, not how long a pull request sitting at it may be silent: the gate re-fires on each check-run and on the 15-minute reconcile sweep, and what the row is actually waiting on is the review that must complete on its head. So it takes the same 3900 s `fix-attempt-landed` carries, and the measurement is recorded here as the reason a 60-second cadence was refused. Nothing new is posted for it — the console reads the gate's re-check from GitHub.",
       "emits": {
         "file": ".github/workflows/merge-gate.yml",
-        "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}"
+        "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.pull_request.number || github.event.inputs.pr_number }}"
       }
     },
     {
@@ -1463,6 +1463,20 @@
       "kind": "undeclared-act",
       "means": "The gate held this PR because its branch carries other open pull requests that are not approved, and it names each one and what stands on it (DRE-4103).",
       "why": "Act-shaped — it is a hold — and the registry has no row for it, the same standing as the waiting-for-human note beside it. Giving it a row is a REGISTRY change, not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; a trailer here is a change to that contract, and the card that converts the human note owns this one with it."
+    },
+    {
+      "file": "scripts/code_owner_hold.py",
+      "anchor": "linear_ops.cmd_comment(card, card_comment(pr, sentence))",
+      "kind": "undeclared-act",
+      "means": "The gate is holding a green, approved pull request for a required code-owner review and parks the card in Green Light, naming who must approve which folders (DRE-4341).",
+      "why": "Act-shaped — it is a hold — and the registry has no row for it, the same standing as the gate's waiting-for-human and stack notes. Giving it a row is a REGISTRY change, not an emission change. Its first line is already machine-readable in its own single-definition grammar (`merge-gate: code-owner hold · PR #N`, `code_owner_hold.latest_gate_marker`): the gate's release reads it back to know the card is one it parked, and the console's sibling card reads the same line. A trailer beside it is a second grammar for the same fact, and the card that gives the gate's holds a registry row owns this one with them."
+    },
+    {
+      "file": "scripts/code_owner_hold.py",
+      "anchor": "linear_ops.cmd_comment(card, release_comment(pr))",
+      "kind": "undeclared-act",
+      "means": "The code-owner review the gate was holding for has landed, so the gate moves the card it parked back to In Review before it merges (DRE-4341).",
+      "why": "The discharge of the hold row above, and it stands with it: its first line (`merge-gate: code-owner release · PR #N`) is the marker `code_owner_hold.latest_gate_marker` reads so a later hold on the same card is recognized as a new one. A registry row for the hold would name this as what discharges it — the same REGISTRY change, owned by the same card."
     },
     {
       "file": ".github/workflows/merge-gate.yml",
