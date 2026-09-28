@@ -593,6 +593,11 @@ class _PromotionBoard:
         ), patch.object(
             reconcile, "epic_blockers_unmet", return_value=False
         ), patch.object(
+            # The green light is stubbed below, so the pass's epic record it
+            # is read off since DRE-3644 is stubbed with it — unstubbed, the
+            # wave-committed card joins the batched read and reaches Linear.
+            reconcile, "epic_records", return_value={}
+        ), patch.object(
             reconcile.mid_epic, "last_green_light", return_value=self.green_lit_at
         ), patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=advance

@@ -3010,27 +3010,39 @@ def card_state(identifier: str) -> str:
 #: which is how `children(first: 1)` once reported "no children" for every epic
 #: on the board (DRE-3044) — so the shape is stated here, once, and the two
 #: queries below are the same selection asked for many epics or for one.
+#:
+#: `id` and the first comment page are the growth report's (DRE-3644): the
+#: UUID is what `linear_ops.comment_count` filters on, and a first page that
+#: is also the last answers the count with no request at all — every epic
+#: under 250 comments. An epic past it is the one near the cap, and its count
+#: is paged exactly as DRE-3343 built it.
 EPIC_RECORD_GQL = """
-             identifier description state { name }
+             id identifier description state { name }
              children(first: 250) { nodes { identifier createdAt state { name } } }
              history(last: 50) { nodes { createdAt toState { name } } }
              inverseRelations(first: 20) { nodes {
                type issue { identifier state { name } }
-             } }"""
+             } }
+             comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }"""
 
-#: How many epics one PAGE of the record asks for. Twenty-five, not the 100
-#: every other paged read here uses, because this selection is far heavier per
-#: node: 250 children + 50 history entries + 20 relations apiece. Linear prices
-#: a request on the nodes it could return, so 100 × 320 is a query it can
-#: refuse outright — and a refused batch would fall back to the per-epic reads
-#: this cut exists to remove, permanently and quietly. The yardstick is the one
-#: heavy query this repo KNOWS Linear answers: `backlog_children`, at 100 cards
-#: × a 50-comment window, live since DRE-2929. 25 × 320 sits in that same
-#: order. A board with more active epics than this pages, exactly as the
-#: 260-card Backlog read pages, and still costs the pass a handful of requests
-#: rather than two per epic. It cannot be measured from CI — no test here
-#: reaches Linear — so it is set conservatively on purpose.
-EPIC_RECORD_PAGE = 25
+#: How many epics one PAGE of the record asks for. Eight, not the 100 every
+#: other paged read here uses, because this selection is far heavier per node:
+#: 250 children + 50 history entries + 20 relations + 250 comment ids = 570
+#: apiece. Linear prices a request on the nodes it could return, so an
+#: oversized page is a query it can refuse outright — and a refused batch
+#: would fall back to the per-epic reads this cut exists to remove,
+#: permanently and quietly. The yardstick is the one heavy query this repo
+#: KNOWS Linear answers: `backlog_children`, at 100 cards × a 50-comment
+#: window = 5,000 nodes, live since DRE-2929. 8 × 570 = 4,560 is at or under
+#: it; 9 × 570 = 5,130 is not (DRE-3644 — it was 25 × 320 before the comment
+#: page joined the record). `tests/test_growth_rides_the_record.py` recomputes
+#: the weight off the query's own `first:`/`last:` numbers, so a connection
+#: widened later fails there rather than here. A board with more active epics
+#: than this pages, exactly as the 260-card Backlog read pages, and still
+#: costs the pass a handful of requests rather than two per epic. It cannot be
+#: measured from CI — no test here reaches Linear — so it is set
+#: conservatively on purpose.
+EPIC_RECORD_PAGE = 8
 
 _EPIC_RECORDS_QUERY = """query($after: String, $numbers: [Float!]) {
            issues(first: %d, after: $after, filter: {
@@ -3335,11 +3347,16 @@ def advance_unblocked_epics(done_epic: str) -> None:
         # Fails SAFE like the rest of this function: a record we cannot read is
         # not a record we may act on, so the epic takes the unchanged Triage
         # path rather than the sweep guessing or freezing.
+        # The green light is read off the pass's epic record (DRE-3644): the
+        # epic gate just above read `dep` into it, so this costs nothing; a
+        # miss passes None and reads the epic alone, as before.
         try:
             bodies = linear_ops.comment_bodies(dep)
             arrival = wave_commitment.turn_arrival(
                 dep, bodies,
-                mid_epic.last_green_light(linear_ops, dep)
+                mid_epic.last_green_light(
+                    linear_ops, dep, issue=epic_records([dep]).get(dep),
+                )
                 if wave_commitment.state(bodies) is not None else None,
             )
         except Exception as e:  # noqa: BLE001 — an unreadable record is unknown
@@ -3637,12 +3654,23 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     # so a card the loop never reaches costs nothing extra to have named here.
     # On a full sweep the close ran first and every one of them is already in
     # the record, so this line spends nothing at all.
+    #
+    # The same read serves both green lights below (DRE-3644): the epic's, and
+    # the one a candidate carrying a wave-commitment record is checked against
+    # — named here off comment bodies the Backlog read already carried, so a
+    # committed card costs the batch one identifier rather than a read of its
+    # own.
     epic_records({
         (card.get("parent") or {}).get("identifier")
         for card in candidates
         if card_repo(card) == REPO_SLUG
         and ((card.get("parent") or {}).get("state") or {}).get("name")
         in EPIC_ACTIVE_STATES
+    } | {
+        card["identifier"]
+        for card in candidates
+        if card_repo(card) == REPO_SLUG
+        and wave_commitment.state(card_comment_bodies(card)) is not None
     })
     for index, card in enumerate(candidates):
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
@@ -3711,7 +3739,10 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         if wave_commitment.state(bodies) is not None:
             committed = wave_commitment.promotion_refusal(
                 card["identifier"], bodies,
-                mid_epic.last_green_light(linear_ops, card["identifier"]),
+                mid_epic.last_green_light(
+                    linear_ops, card["identifier"],
+                    issue=epic_records([card["identifier"]]).get(card["identifier"]),
+                ),
             )
             if committed is not None:
                 print(
@@ -3844,7 +3875,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             # hoisting it buys the second reader nothing and costs nothing.
             if epic_id is not None:
                 if epic_id not in green_light:
-                    green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+                    # Off the record the epic gate above just read (DRE-3644).
+                    green_light[epic_id] = mid_epic.last_green_light(
+                        linear_ops, epic_id,
+                        issue=epic_records([epic_id]).get(epic_id),
+                    )
                 # The second critic's release (DRE-3059), asked FIRST because
                 # it is the epic-level fact: a plan nobody has read since the
                 # CEO approved it releases no child, whatever that child
@@ -7912,11 +7947,25 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     sweep (DRE-3343). An epic whose count Linear did not answer with is NOT in
     that list: absent data is not a number, and a warning nobody can act on is
     worse than the silence it replaces.
+
+    Read off the pass's epic record (DRE-3644): ONE batched read for every
+    epic — none at all on a full sweep, where the close has already read them
+    — instead of the epic's own read plus its comment count, per epic, every
+    pass (26 of the 56 reads the live sweep of 2026-09-20 spent). An epic the
+    batch did not answer is read alone, as before, and says so.
     """
     near_cap: list[tuple[str, int]] = []
+    try:
+        records = epic_records(epics)
+    except Exception:  # noqa: BLE001 — a KPI read never fails the sweep
+        # Every epic is then read alone below, and each one says why.
+        records = {}
     for epic in sorted(epics):
+        record = records.get(epic)
+        if record is None:
+            print(f"epic-growth: {epic} read alone — {epic_record_gap(epic)}")
         try:
-            report = mid_epic.refresh_epic_growth(linear_ops, epic)
+            report = mid_epic.refresh_epic_growth(linear_ops, epic, issue=record)
         except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
             print(f"epic-growth: {epic} unknown — Linear did not answer ({exc})")
             continue
