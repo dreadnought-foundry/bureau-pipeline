@@ -1068,7 +1068,7 @@ class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
         self.assertIn("--max-turns 40", args)
         self.assertIs(agent.get("continue-on-error"), True)
         self.assertTrue(str(agent.get("uses")).startswith(
-            "anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6"))
+            "anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829"))
 
     def test_the_prompt_is_fixed_text(self):
         prompt = str((_verify_step(self.job, "claude").get("with") or {})

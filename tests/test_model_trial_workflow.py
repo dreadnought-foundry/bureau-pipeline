@@ -64,9 +64,10 @@ import check_workflow_watchers as watchers  # noqa: E402
 
 # The vendor step and its pin. One sha across the repo (DRE-3416): a floating
 # major is what killed every Claude-running job in the fleet for 72 minutes.
-# v1.0.234 since DRE-3417 (2026-09-25), which installs Claude Code 2.1.282.
+# v1.0.234 since DRE-3417 (2026-09-25), which installs Claude Code 2.1.282;
+# v1.0.236 since DRE-5116 (2026-09-28), which installs Claude Code 2.1.284.
 VENDOR_ACTION = "anthropics/claude-code-action"
-VENDOR_PIN = "9171db3e57d6a3140a37ddc2ba92788584e0ead6"
+VENDOR_PIN = "8ce9314fa9a404564fa7e954cd84f25bcba2b829"
 
 # The shared install-and-assert step (DRE-3414). The path resolves against the
 # CALLER's workspace, which is why it is the `.bureau-pipeline/` form.

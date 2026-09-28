@@ -258,10 +258,14 @@ class LiveTreeTest(unittest.TestCase):
         self.assertGreater(pinned, 100, "the live scan went vacuous")
         self.assertEqual(missing, [], f"pins with no version comment: {missing}")
 
-    def test_the_claude_code_action_pin_is_the_dre_3417_release(self):
+    def test_the_claude_code_action_pin_is_the_dre_5116_release(self):
         """DRE-3416 held the vendor at v1.0.217 (Claude Code 2.1.263); DRE-3417
         moved it to v1.0.234 (Claude Code 2.1.282) on 2026-09-25, because the
         API refuses Claude Opus 5.5 from anything older than 2.1.280 (DRE-4852).
+        DRE-5116 moved it to v1.0.236 (Claude Code 2.1.284) on 2026-09-28: the
+        first Claude Code whose model registry knows `claude-sonnet-5-5`, which
+        2.1.282 ran with its unknown-model defaults (a 200K context window and a
+        32K output ceiling, against the model's 1M and 128K).
         One sha, everywhere: a workflow left on the old one would run a vendor
         action built for a different Claude Code than the one installed."""
         found = set()
@@ -269,7 +273,7 @@ class LiveTreeTest(unittest.TestCase):
             for ref in check_action_pins.references(path):
                 if ref.action == "anthropics/claude-code-action":
                     found.add(ref.ref)
-        self.assertEqual(found, {"9171db3e57d6a3140a37ddc2ba92788584e0ead6"})
+        self.assertEqual(found, {"8ce9314fa9a404564fa7e954cd84f25bcba2b829"})
 
     #: What each vendor sha this repo has pinned installs, read from that
     #: release's `base-action/action.yml` (`CLAUDE_CODE_VERSION=`). Recorded,
@@ -277,6 +281,7 @@ class LiveTreeTest(unittest.TestCase):
     VENDOR_INSTALLS = {
         "9c5ddab2e6d17b83ea679153b31f1d5f023cf636": "2.1.263",  # v1.0.217
         "9171db3e57d6a3140a37ddc2ba92788584e0ead6": "2.1.282",  # v1.0.234
+        "8ce9314fa9a404564fa7e954cd84f25bcba2b829": "2.1.284",  # v1.0.236
     }
 
     def test_the_installer_default_is_what_the_pinned_vendor_installs(self):
