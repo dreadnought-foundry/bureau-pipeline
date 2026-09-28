@@ -16,9 +16,12 @@ This module is the fetch that gives the decision a memory. It runs in
     repair_history.py gather --repo <owner/name> --workflow-id <id> \\
         --run-id <id> --run-attempt <n> --branch <default> \\
         --workflow-path <.github/workflows/ci.yml> --head-sha <sha> \\
-        --current-log /tmp/red-main-log.txt --out /tmp/repair-history.json
+        --current-log /tmp/red-main-log.txt --out /tmp/repair-history.json \\
+        --run-created-at <the event's workflow_run.created_at>
 
-    {"current": <entry>, "prior": [<entry>, …]}
+    {"current": <entry> + {created_at}, "prior": [<entry>, …],
+     "branch_runs": [{run_id, head_sha, status, conclusion, event,
+                      created_at}, …]}
     <entry> = {run_id, run_attempt, workflow_path, head_sha, log, jobs:
                [{name, conclusion, steps: [{name, conclusion}]}]}
 
@@ -27,6 +30,12 @@ the most recent thing that happened) followed by up to the 3 most recent
 COMPLETED runs of the same workflow on the default branch, older than this
 one. `decide` compares (workflow path, job name, step name) exactly, so those
 three fields are what every entry exists to carry.
+
+`branch_runs` is the same listing, every run in it but this one — NEWER runs
+included — narrowed to what the listing already says about each (DRE-5069).
+`decide` reads it for a run created after this one, on another commit, that
+concluded `success`: `main` has moved past the fault, and the failure is
+superseded. It costs no call beyond the listing `prior` is cut from.
 
 Two properties carry the design, in this order:
 
@@ -203,6 +212,22 @@ def _log_or_empty(gh, run_id, attempt=None) -> str:
         return ""
 
 
+def _branch_run(run) -> dict:
+    """One listed run, narrowed to what the superseded rule reads (DRE-5069).
+
+    Off the listing alone — no jobs, no log — so recording every listed run
+    costs no call beyond the one already made.
+    """
+    return {
+        "run_id": run.get("id"),
+        "head_sha": run.get("head_sha") or "",
+        "status": run.get("status") or "",
+        "conclusion": run.get("conclusion") or "",
+        "event": run.get("event") or "",
+        "created_at": run.get("created_at") or "",
+    }
+
+
 def _is_older(candidate, run_id) -> bool:
     """Is `candidate` a run from BEFORE this one?
 
@@ -218,7 +243,8 @@ def _is_older(candidate, run_id) -> bool:
 
 
 def gather(*, repo: str, workflow_id, run_id, run_attempt: int, branch: str,
-           workflow_path: str, head_sha: str, current_log: str, gh) -> dict | None:
+           workflow_path: str, head_sha: str, current_log: str, gh,
+           run_created_at: str = "") -> dict | None:
     """The history document, or None when there is no usable one.
 
     None means exactly one thing: the CURRENT run's jobs could not be read, so
@@ -279,13 +305,24 @@ def gather(*, repo: str, workflow_id, run_id, run_attempt: int, branch: str,
         if entry is not None:
             prior.append(entry)
 
+    current = _entry(
+        run_id=run_id, run_attempt=run_attempt or 1,
+        workflow_path=workflow_path, head_sha=head_sha,
+        jobs=current_jobs, log=current_log,
+    )
+    # From the event, which a re-run does not change: attempt 2 of a failed
+    # run is ordered where its commit was, not where the re-run was clicked.
+    current["created_at"] = run_created_at or ""
+
     return {
-        "current": _entry(
-            run_id=run_id, run_attempt=run_attempt or 1,
-            workflow_path=workflow_path, head_sha=head_sha,
-            jobs=current_jobs, log=current_log,
-        ),
+        "current": current,
         "prior": prior,
+        # DRE-5069: every listed run but this one, newer ones included, so the
+        # decision can see whether main has already gone green past this sha.
+        "branch_runs": [
+            _branch_run(run) for run in listing or ()
+            if isinstance(run, dict) and str(run.get("id")) != str(run_id)
+        ],
     }
 
 
@@ -315,6 +352,7 @@ def main(argv: list[str]) -> int:
     g.add_argument("--workflow-path", default="")
     g.add_argument("--head-sha", default="")
     g.add_argument("--current-log", default="")
+    g.add_argument("--run-created-at", default="")
     g.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
@@ -334,6 +372,7 @@ def main(argv: list[str]) -> int:
             head_sha=args.head_sha,
             current_log=_read_text(args.current_log),
             gh=_Gh(args.repo),
+            run_created_at=args.run_created_at,
         )
     except Exception as exc:  # noqa: BLE001 — see the module docstring: this
         # step may narrow the decision, never break it. A red main is already

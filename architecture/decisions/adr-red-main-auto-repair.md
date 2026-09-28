@@ -154,6 +154,18 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     PT, each retried once, every time on *The action 'Test' has timed out
     after 12 minutes*; the loop read all eight runs as infrastructure, started
     nothing, and the red main surfaced ~12 hours later when a person asked.
+- **A failure main has already moved past is superseded (DRE-5069).** When
+  a run of the same workflow on the default branch — created after the
+  failed run, on another commit — concluded `success`, the fault is gone
+  however it was fixed, and the decision is `superseded`: no card, no agent,
+  ahead of the budget. "After" is the record's own `created_at` (a re-run
+  keeps it), never a comparison of sha strings, and it is read off the same
+  listing `repair_history.py` already makes. A later run still in progress,
+  cancelled or failed changes nothing. On 2026-09-25 CI on the fork commit
+  `56111d9` failed at 15:33 PT, twenty-one minutes after its fix merged,
+  and two repair runs (36197298146 at 15:33 PT, 36202241737 at 16:45 PT)
+  were spent on it — `already-repaired` only knew a merged `repair/*` PR as
+  the fix.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the repair branch and its PR are the attempt record — no external state;
