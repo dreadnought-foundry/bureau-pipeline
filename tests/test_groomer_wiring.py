@@ -1077,11 +1077,15 @@ class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
         self.assertIn("verify-input.md", prompt)
         self.assertIn("target/", prompt)
 
-    def test_the_bots_are_the_fleet_list_verbatim(self):
+    def test_the_bots_are_the_fleet_list_plus_the_qa_bot(self):
+        """The fleet list verbatim, plus the qa-bot a scheduled morning
+        initiates as (DRE-5123, tests/test_scheduled_claude_allowed_bots.py)."""
         ours = (_verify_step(self.job, "claude").get("with") or {}).get(
             "allowed_bots")
         trial = _step(_load("model-trial.yml"), "Trial the candidate model")
-        self.assertEqual(ours, (trial.get("with") or {}).get("allowed_bots"))
+        fleet = str((trial.get("with") or {}).get("allowed_bots")).split(",")
+        self.assertEqual(sorted(str(ours).split(",")),
+                         sorted(fleet + ["agent-bureau-qa-bot"]))
 
     def test_the_agent_takes_the_credential_the_way_plan_yml_gates_it(self):
         """Read off plan.yml's classify step, never restated (DRE-3074)."""
