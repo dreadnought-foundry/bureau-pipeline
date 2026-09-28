@@ -183,13 +183,13 @@ OUTPUT_FLOOR = 4000
 
 #: The ceiling, and it is the whole of the one-request bound. Held under the
 #: SMALLEST per-model output maximum the installed Claude Code CLI reports for
-#: any rung of the planner ladder — 2.1.282, the version this repo's installer
-#: pins since DRE-3417 (2026-09-25), reports `max_output_tokens.upper` of
+#: any rung of the planner ladder — 2.1.284, the version this repo's installer
+#: pins since DRE-5116 (2026-09-28), reports `max_output_tokens.upper` of
 #: 128,000 for all three rungs: `claude-fable-5-1`, `claude-opus-5-5` (which
 #: took the Opus rung from `claude-opus-5` on 2026-09-25 under DRE-4836, and
-#: which 2.1.282 gives the same 128,000 upper) and `claude-sonnet-4-6`.
-#: Re-read out of the 2.1.282 binary's own model registry on 2026-09-25, not
-#: carried forward from the 2.1.263 reading this comment used to quote.
+#: which 2.1.284 gives the same 128,000 upper) and `claude-sonnet-4-6`.
+#: Re-read out of the 2.1.284 binary's own model registry on 2026-09-28, and
+#: unchanged from the 2.1.282 reading of 2026-09-25.
 #: There is also a per-model output maximum of 64,000 for `claude-fable-5-1`
 #: in the usage ledger of a real run — because the CLI CLAMPS the budget to
 #: that limit and answers at it. A

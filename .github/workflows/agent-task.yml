@@ -527,7 +527,7 @@ jobs:
         id: claude
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
@@ -710,7 +710,7 @@ jobs:
         id: claude_retry1
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry1.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:
@@ -893,7 +893,7 @@ jobs:
         id: claude_retry2
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry2.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:

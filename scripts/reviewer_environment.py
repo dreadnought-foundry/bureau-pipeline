@@ -152,7 +152,8 @@ _ACTION_PIN_CHECK = (
     "grep -n 'claude-code-action@' .github/workflows/*.yml in bureau-pipeline, "
     "then compare the pinned SHA with anthropics/claude-code-action#1817 "
     "(DRE-3416 pinned v1.0.217; DRE-3417 moved it to v1.0.234 / "
-    "Claude Code 2.1.282 on 2026-09-25)"
+    "Claude Code 2.1.282 on 2026-09-25; DRE-5116 moved it to v1.0.236 / "
+    "Claude Code 2.1.284 on 2026-09-28)"
 )
 _CREDENTIAL_CHECK = "make cred-doctor in agent-bureau"
 

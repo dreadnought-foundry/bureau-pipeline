@@ -1128,7 +1128,7 @@ jobs:
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         # A crash here (is_error / no verdict) must NOT fail-close into a
         # false REQUEST_CHANGES — the gate below detects it and we retry.
         continue-on-error: true
@@ -1466,7 +1466,7 @@ jobs:
         # would start against an executable the install step never produced,
         # and buy a second identical death for the price of a first.
         if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         continue-on-error: true
         with:
           # DRE-3414: the launcher the shared install step above PROVED
