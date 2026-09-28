@@ -22,8 +22,8 @@
 #     bucket card dispatch is draining.
 #
 # Model: the workhorse ladder with runtime availability detection
-# (model_fallback.py, engineer role) — claude-opus-5, then claude-sonnet-5
-# (DRE-3880 replaced claude-sonnet-4-6 on that rung, 2026-09-16).
+# (model_fallback.py, engineer role) — Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5
+# (config/models.yaml is the source; DRE-5116 added Sonnet 5.5, 2026-09-28).
 #
 # Reusable workflow: the workflow_run trigger list (which CI workflows to
 # watch) and permissions live in the calling stub; the stub's github.token
@@ -477,7 +477,7 @@ jobs:
         # own outcome for the step, are what the receipt reads.
         id: claude
         if: steps.decide.outputs.go == 'true'
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # DRE-2696. Same gap as agent-fix.yml's "Fix" step: the prompt
           # below sends this agent to briefs/engineer.md, which states

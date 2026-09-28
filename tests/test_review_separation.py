@@ -36,6 +36,14 @@ WHAT THESE TESTS PIN
      selection rule with it fails `sync_model_config.py --check` twice over —
      the new rung is a bare overlap, and the old rule is stale.
 
+DRE-5116 (2026-09-28) put `claude-sonnet-5-5` above `claude-sonnet-5` on BOTH
+ladders and kept Sonnet 5, so two models now sit on both. Each gets a rule, and
+validation was widened to match: every advisory rung ABOVE the ladder's last
+that also sits on a build ladder needs one (it used to be the advisory top
+only, which refused Sonnet 5's rule as stale). `TwoSonnetsOnBothLaddersTest`
+pins that, including the case it exists for — a Sonnet-5 build still never
+reviewed by Sonnet 5 when Sonnet 5.5 is unavailable too.
+
 The 2026-08-09 guard is untouched by all of it, and the tests that pin it live
 in tests/test_model_policy.py: a probe reporting a model up still decides only
 how far DOWN a ladder we walk, and nothing here puts a model on a ladder.
@@ -69,6 +77,9 @@ OPUS = "claude-opus-5"
 OPUS55 = "claude-opus-5-5"
 SONNET46 = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
+# Above Sonnet 5 on both ladders since DRE-5116 (2026-09-28): the advisory top
+# and the workhorse ladder's Sonnet rung.
+SONNET55 = "claude-sonnet-5-5"
 FABLE51 = "claude-fable-5-1"
 # The successor that does not exist yet — the DRE-3892 adoption this config
 # has to survive. Deliberately unpriced: an unpriced candidate is `ask` to the
@@ -160,8 +171,11 @@ class LaddersAsDataTest(unittest.TestCase):
 
     def test_the_workhorse_ladder_is_opus_then_sonnet_5(self):
         # Opus 5.5 took the top rung on 2026-09-25 (DRE-4836) and Opus 5 kept
-        # the one below it; Sonnet 5 is still the rung this file is about.
-        self.assertEqual(_ladder(_canonical(), WORKHORSE), [OPUS55, OPUS, SONNET5])
+        # the one below it; Sonnet 5.5 went in above Sonnet 5 on 2026-09-28
+        # (DRE-5116), and Sonnet 5 is still the ladder's last rung.
+        self.assertEqual(
+            _ladder(_canonical(), WORKHORSE), [OPUS55, OPUS, SONNET55, SONNET5]
+        )
 
     def test_sonnet_4_6_keeps_the_judgement_ladders_last_rung(self):
         # "Do NOT retire it" — it keeps its existing place as the planner's
@@ -186,9 +200,11 @@ class LaddersAsDataTest(unittest.TestCase):
 
     def test_the_overlap_is_real_and_declared(self):
         cfg = _canonical()
-        self.assertIn(SONNET5, _ladder(cfg, WORKHORSE))
-        self.assertEqual(_ladder(cfg, ADVISORY)[0], SONNET5)
-        self.assertEqual(_rules(cfg).get(SONNET5), OPUS55)
+        self.assertEqual(_ladder(cfg, ADVISORY), [SONNET55, SONNET5, OPUS55])
+        for model in (SONNET55, SONNET5):
+            with self.subTest(model=model):
+                self.assertIn(model, _ladder(cfg, WORKHORSE))
+                self.assertEqual(_rules(cfg).get(model), OPUS55)
 
 
 class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
@@ -209,18 +225,24 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         cfg = _canonical()
         cfg.pop("review_separation", None)
         self.assertRefused(cfg, SONNET5)
+        self.assertRefused(cfg, SONNET55)
 
     def test_an_empty_rule_list_is_still_a_bare_overlap(self):
         cfg = _canonical()
         cfg["review_separation"]["rules"] = []
         self.assertRefused(cfg, SONNET5)
+        self.assertRefused(cfg, SONNET55)
 
     def test_a_rule_that_reviews_on_the_build_model_is_refused(self):
         # A "rule" that sends the reviewer back to the model the build ran on
-        # is the overlap wearing a declaration.
-        cfg = _canonical()
-        cfg["review_separation"]["rules"][0]["reviewers_use"] = SONNET5
-        self.assertRefused(cfg, SONNET5)
+        # is the overlap wearing a declaration — for either Sonnet rung.
+        for model in (SONNET55, SONNET5):
+            with self.subTest(built_on=model):
+                cfg = _canonical()
+                for rule in cfg["review_separation"]["rules"]:
+                    if rule["built_on"] == model:
+                        rule["reviewers_use"] = model
+                self.assertRefused(cfg, model)
 
     def test_a_reviewers_model_off_the_advisory_ladder_is_refused(self):
         cfg = _canonical()
@@ -361,7 +383,11 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
                         got, SONNET5,
                         f"{role} reviewed a Sonnet-5 build on Sonnet 5",
                     )
-                    self.assertEqual(got, OPUS55)
+                    # Opus 5.5 leads; with it down the reviewer falls to Sonnet
+                    # 5.5 (DRE-5116), a different model, never to Sonnet 5.
+                    self.assertEqual(
+                        got, OPUS55 if avail.get(OPUS55, True) else SONNET55
+                    )
 
     def test_an_unknown_build_model_still_never_reviews_on_an_overlap_model(self):
         # Fail CLOSED. A card we could not read is not evidence the build ran
@@ -379,19 +405,19 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
         # rule declares — the critic keeps its own ladder's top rung.
         mf.clear_availability_cache()
         self.assertEqual(
-            mf.select("critic", probe=lambda m: True, built_on=OPUS), SONNET5
+            mf.select("critic", probe=lambda m: True, built_on=OPUS), SONNET55
         )
 
     def test_no_build_model_at_all_leaves_selection_exactly_as_it_was(self):
         mf.clear_availability_cache()
-        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET5)
+        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET55)
 
     def test_the_separation_does_not_touch_a_role_it_does_not_bind(self):
         # The medic is advisory too, and it reviews nothing: binding it would
         # be a spend change nobody asked for.
         mf.clear_availability_cache()
         self.assertEqual(
-            mf.select("medic", probe=lambda m: True, built_on=SONNET5), SONNET5
+            mf.select("medic", probe=lambda m: True, built_on=SONNET55), SONNET55
         )
         mf.clear_availability_cache()
         self.assertEqual(
@@ -443,9 +469,9 @@ class ASonnetFiveBuildIsNeverReviewedBySonnetFiveTest(unittest.TestCase):
             # stdout is still ONLY the model id — every workflow captures it.
             model, _ = _cli_select(
                 tree, "critic", "--built-on", OPUS55,
-                available={OPUS55: True, SONNET5: True},
+                available={OPUS55: True, SONNET55: True, SONNET5: True},
             )
-            self.assertEqual(model, SONNET5)
+            self.assertEqual(model, SONNET55)
 
 
 class TheBuildModelIsReadFromTheCardTest(unittest.TestCase):
@@ -606,9 +632,10 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
 
     def test_adopting_the_rung_WITH_the_rule_is_accepted(self):
         cfg = self._adopt(_canonical(), SONNET6)
-        cfg["review_separation"]["rules"] = [
-            {"built_on": SONNET6, "reviewers_use": OPUS55, "reason": "carried forward"}
-        ]
+        for rule in cfg["review_separation"]["rules"]:
+            if rule["built_on"] == SONNET5:
+                rule["built_on"] = SONNET6
+                rule["reason"] = "carried forward"
         self.assertEqual(mf.policy_errors(cfg), [])
 
     def test_ci_goes_red_on_an_adoption_that_drops_the_rule(self):
@@ -649,6 +676,122 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
             sorted(
                 {cfg["kinds"][ADVISORY]["ladder"], cfg["kinds"][WORKHORSE]["ladder"]}
             ),
+        )
+
+
+class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
+    """DRE-5116: Sonnet 5.5 above Sonnet 5 on BOTH ladders, Sonnet 5 kept.
+
+    Validation used to admit a rule only for the advisory ladder's TOP rung.
+    With two Sonnets on both ladders that refused Sonnet 5's rule as stale, and
+    without that rule a Sonnet-5 build — which happens exactly when Sonnet 5.5
+    was skipped — is one unavailable Sonnet 5.5 away from being reviewed on
+    Sonnet 5. So every advisory rung above the ladder's LAST that also sits on
+    a build ladder needs a rule; the last rung is the designed loud fall onto
+    the build model and needs none.
+    """
+
+    def setUp(self):
+        mf.clear_availability_cache()
+
+    def tearDown(self):
+        mf.clear_availability_cache()
+
+    def test_the_lower_sonnet_rule_is_admitted_not_stale(self):
+        errors = mf.policy_errors(_canonical())
+        self.assertEqual(errors, [])
+
+    def test_dropping_the_lower_sonnet_rule_is_a_bare_overlap(self):
+        cfg = _canonical()
+        cfg["review_separation"]["rules"] = [
+            r for r in cfg["review_separation"]["rules"] if r["built_on"] != SONNET5
+        ]
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(
+            any(SONNET5 in e and "BARE" in e and "last rung" in e for e in errors),
+            f"a lower overlap with no rule must be refused by name: {errors}",
+        )
+
+    def test_the_top_still_needs_its_rule(self):
+        cfg = _canonical()
+        cfg["review_separation"]["rules"] = [
+            r for r in cfg["review_separation"]["rules"] if r["built_on"] != SONNET55
+        ]
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(
+            any(SONNET55 in e and "tops" in e for e in errors), errors
+        )
+
+    def test_the_last_rung_needs_no_rule_but_may_carry_one(self):
+        # Opus 5.5 is the advisory ladder's last rung AND the workhorse
+        # primary: the designed loud fall. No rule is required for it today,
+        # and one is admitted rather than refused as stale.
+        cfg = _canonical()
+        self.assertNotIn(OPUS55, _rules(cfg))
+        self.assertEqual(mf.policy_errors(cfg), [])
+        cfg["review_separation"]["rules"].append(
+            {"built_on": OPUS55, "reviewers_use": SONNET55, "reason": "allowed"}
+        )
+        self.assertEqual(mf.policy_errors(cfg), [])
+
+    def test_a_rule_for_a_model_on_one_ladder_is_still_stale(self):
+        # Opus 5 is a workhorse rung only — no overlap, so a rule is stale.
+        cfg = _canonical()
+        cfg["review_separation"]["rules"].append(
+            {"built_on": OPUS, "reviewers_use": SONNET55, "reason": "stale"}
+        )
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(any(OPUS in e and "STALE" in e for e in errors), errors)
+
+    def test_a_sonnet_5_build_is_never_reviewed_by_sonnet_5_at_any_availability(self):
+        # THE case the widening exists for: Sonnet 5.5 unavailable too.
+        for role in REVIEWER_ROLES:
+            for avail in (
+                {},
+                {SONNET55: False},
+                {OPUS55: False},
+                {OPUS55: False, SONNET55: False},
+            ):
+                with self.subTest(role=role, avail=avail):
+                    mf.clear_availability_cache()
+                    got = mf.select(
+                        role, probe=lambda m: avail.get(m, True), built_on=SONNET5
+                    )
+                    self.assertNotEqual(got, SONNET5)
+
+    def test_a_sonnet_5_5_build_is_reviewed_on_opus_5_5_then_sonnet_5(self):
+        for role in REVIEWER_ROLES:
+            with self.subTest(role=role):
+                mf.clear_availability_cache()
+                decision = mf.select_with_reasons(
+                    role, probe=lambda m: True, built_on=SONNET55
+                )
+                self.assertEqual(decision["model"], OPUS55)
+                self.assertEqual(decision["ladder"], [OPUS55, SONNET5])
+                self.assertEqual(decision["separated"], [SONNET55])
+                self.assertFalse(decision["degraded"])
+                mf.clear_availability_cache()
+                self.assertEqual(
+                    mf.select(role, probe=lambda m: m != OPUS55, built_on=SONNET55),
+                    SONNET5,
+                )
+
+    def test_a_cardless_pr_still_lands_on_opus_5_5(self):
+        # --built-on-unknown fails CLOSED: both Sonnet rungs come off, so the
+        # reviewer lands where it landed before DRE-5116.
+        for role in REVIEWER_ROLES:
+            with self.subTest(role=role):
+                mf.clear_availability_cache()
+                decision = mf.select_with_reasons(
+                    role, probe=lambda m: True, built_on_unknown=True
+                )
+                self.assertEqual(decision["model"], OPUS55)
+                self.assertEqual(sorted(decision["separated"]), sorted([SONNET55, SONNET5]))
+
+    def test_the_mirror_carries_both_rules(self):
+        self.assertEqual(
+            mf._FALLBACK_MODEL_CONFIG["review_separation"]["rules"],
+            {SONNET55: OPUS55, SONNET5: OPUS55},
         )
 
 

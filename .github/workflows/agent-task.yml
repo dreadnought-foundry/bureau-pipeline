@@ -269,7 +269,7 @@ jobs:
       # Model selection: the shared WORKHORSE ladder with runtime availability
       # detection (DRE-1490). Build roles are classified `workhorse` in
       # config/models.yaml (DRE-2317) and select() walks that ladder best→worst
-      # — claude-opus-5, then claude-sonnet-5 — returning the first AVAILABLE
+      # — Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5 — returning the first AVAILABLE
       # model. Availability is probed via a minimal /v1/messages call using the
       # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
       # skip; any other response, including 429, ⇒ choose it; an inconclusive
@@ -280,8 +280,9 @@ jobs:
       # 2026-08-09 incident, pinned by tests/test_model_policy.py.
       #
       # The advisory ladder's top is a different question since 2026-09-16
-      # (DRE-3880): `claude-sonnet-5` is BOTH the critic's model and this
-      # ladder's backup rung, so build and review can coincide. The fence is
+      # (DRE-3880): a Sonnet rung is BOTH a critic's model and this ladder's
+      # backup (Sonnet 5.5 and Sonnet 5 since DRE-5116), so build and review
+      # can coincide. The fence is
       # kept per pull request instead — a build that ran on it is reviewed on
       # something else (config/models.yaml `review_separation`), which the
       # critic's and verifier's own Select-model steps apply. Nothing about
@@ -527,7 +528,7 @@ jobs:
         id: claude
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
@@ -710,7 +711,7 @@ jobs:
         id: claude_retry1
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry1.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:
@@ -893,7 +894,7 @@ jobs:
         id: claude_retry2
         if: always() && steps.install_claude.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.retry2.outputs.retry == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6 # v1.0.234
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
           # The same credential attempt 1 carries, for the same reason (the
           # brief's progress heartbeats). Worded differently on purpose:

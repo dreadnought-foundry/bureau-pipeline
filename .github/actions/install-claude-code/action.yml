@@ -53,9 +53,9 @@ inputs:
       Version argument handed to the native installer (an exact version,
       "stable", or "latest").
     required: false
-    # 2.1.282 — EXACTLY what the vendor action installs at the sha every
-    # workflow here pins (`anthropics/claude-code-action@9171db3…`, v1.0.234:
-    # `base-action/action.yml` sets `CLAUDE_CODE_VERSION="2.1.282"` and pipes
+    # 2.1.284 — EXACTLY what the vendor action installs at the sha every
+    # workflow here pins (`anthropics/claude-code-action@8ce9314…`, v1.0.236:
+    # `base-action/action.yml` sets `CLAUDE_CODE_VERSION="2.1.284"` and pipes
     # it into https://claude.ai/install.sh). Passing the proved path to that
     # action makes it skip its own install, so this line — not the vendor's —
     # now decides which Claude Code the fleet runs. Taking the install over
@@ -76,11 +76,18 @@ inputs:
     # failure, never as a dead model run — and the PR was proved on a live
     # Opus 5.5 run from its own branch before it merged.
     #
+    # Then 2.1.284 / v1.0.236 on 2026-09-28 (DRE-5116), again for a model:
+    # 2.1.282 has no registry entry for Claude Sonnet 5.5, so it ran the model
+    # with its unknown-model defaults — a 200K context window and a 32K output
+    # ceiling, where the same binary gives Sonnet 5 1M and 64K. 2.1.284 is the
+    # first release that knows it (1M native, 128K output). Proved on a live
+    # Sonnet 5.5 trial from the PR's own branch before it merged.
+    #
     # MOVE THIS WITH THE VENDOR PIN. The version the pinned release installs
     # is the version this line takes; `tests/test_check_action_pins.py` holds
     # the other half of the pair, and `tests/test_model_cli_support.py` fails
     # when a model on a ladder needs a newer Claude Code than this line.
-    default: "2.1.282"
+    default: "2.1.284"
   installer-url:
     description: >-
       Where the native installer is fetched from. A seam for tests, which

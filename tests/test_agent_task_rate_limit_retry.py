@@ -519,7 +519,7 @@ class WorkflowWiring(unittest.TestCase):
         pins = {_step(i)["uses"] for i in ATTEMPT_IDS}
         self.assertEqual(len(pins), 1, f"the attempts pin different commits: {pins}")
         pin = pins.pop()
-        self.assertIn("@9171db3e57d6a3140a37ddc2ba92788584e0ead6", pin)  # v1.0.234 (DRE-3417)
+        self.assertIn("@8ce9314fa9a404564fa7e954cd84f25bcba2b829", pin)  # v1.0.236 (DRE-5116)
 
     def test_the_attempts_run_the_same_agent(self):
         """GitHub Actions has no YAML anchors, so the retry `with:` blocks are

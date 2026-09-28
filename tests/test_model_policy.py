@@ -87,6 +87,9 @@ OPUS = "claude-opus-5"
 OPUS55 = "claude-opus-5-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
+# The advisory ladder's top rung since DRE-5116 (2026-09-28); SONNET5 is the
+# rung below it.
+SONNET55 = "claude-sonnet-5-5"
 FABLE = "claude-fable-5"
 # The CURRENT Fable id. `claude-fable-5` above is its predecessor, excluded from
 # every ladder on cost policy (2026-08-12) and kept readable for attribution;
@@ -253,11 +256,12 @@ class RoleKindsTest(unittest.TestCase):
         # ladder moved Fable -> Sonnet 5 on measured cost: 5.5x per review with
         # the rejection-rate difference inside noise. The advisory model is no
         # longer the strongest thing we can run, so a test asserting it is
-        # would pin a premise we deliberately dropped.
+        # would pin a premise we deliberately dropped. Sonnet 5 -> Sonnet 5.5
+        # on 2026-09-28 (DRE-5116), a same-family, same-price adoption.
         advisory = _advisory_ladder()
-        self.assertEqual(advisory[0], SONNET5)
+        self.assertEqual(advisory[0], SONNET55)
         mf.clear_availability_cache()
-        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET5)
+        self.assertEqual(mf.select("critic", probe=lambda m: True), SONNET55)
 
     def test_the_excluded_model_is_on_no_ladder_at_all(self):
         # What survives the rename above. Fable came OFF every ladder rather
@@ -353,11 +357,11 @@ class IncidentConditionTest(unittest.TestCase):
         # planner's being the one this file spends most of its words guarding.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True,
+            all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
                       FABLE: True, FABLE51: True}
             self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS55)
             self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
-            self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET5)
+            self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET55)
 
     def test_availability_still_only_walks_down(self):
         # The other half of the rule: a probe may decide how far DOWN a ladder
@@ -470,7 +474,7 @@ class JudgementKindTest(unittest.TestCase):
         # both Fable ids.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True,
+            all_up = {OPUS: True, SONNET: True, SONNET5: True, SONNET55: True,
                       FABLE: True, FABLE51: True}
             for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
                 with self.subTest(role=role):
@@ -653,22 +657,22 @@ class SelectionIsRecordedTest(unittest.TestCase):
 
     def test_the_decision_records_every_skipped_rung_and_its_reason(self):
         # The unavailable rung is the advisory TOP, whatever it currently is —
-        # SONNET5 since 2026-08-12, FABLE before that.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET5)
-        self.assertEqual(decision["model"], OPUS55)
+        # SONNET55 since 2026-09-28, SONNET5 from 2026-08-12, FABLE before that.
+        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
+        self.assertEqual(decision["model"], SONNET5)
         self.assertEqual(decision["kind"], ADVISORY)
-        self.assertEqual([s["model"] for s in decision["skipped"]], [SONNET5])
+        self.assertEqual([s["model"] for s in decision["skipped"]], [SONNET55])
         self.assertTrue(decision["skipped"][0]["reason"])
         self.assertTrue(decision["degraded"])
 
     def test_an_inconclusive_probe_is_recorded_differently_from_a_404(self):
         def probe(model):
-            if model == SONNET5:
+            if model == SONNET55:
                 raise RuntimeError("probe blew up")
             return True
 
         decision = mf.select_with_reasons("critic", probe=probe)
-        self.assertEqual(decision["model"], OPUS55)
+        self.assertEqual(decision["model"], SONNET5)
         self.assertIn("inconclusive", decision["skipped"][0]["reason"].lower())
 
     def test_the_top_rung_records_that_nothing_was_skipped(self):
@@ -679,11 +683,11 @@ class SelectionIsRecordedTest(unittest.TestCase):
         self.assertIn("nothing", mf.selection_note(decision).lower())
 
     def test_the_note_is_one_line_and_names_what_was_skipped_and_why(self):
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET5)
+        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
         note = mf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1, "the note is a single line")
-        self.assertIn(OPUS55, note)
         self.assertIn(SONNET5, note)
+        self.assertIn(SONNET55, note)
         self.assertIn("skip", note.lower())
 
     def test_a_weakened_advisory_model_is_marked_degraded_loudly(self):
@@ -691,8 +695,9 @@ class SelectionIsRecordedTest(unittest.TestCase):
         # INTENDED model announces it. NOTE the meaning inverted on 2026-08-12
         # — falling from Sonnet 5 to Opus is falling UP in cost ($2/$10 ->
         # $5/$25), so this now reads "unexpected spend", not "quietly cheap".
-        # Either way the run is worth looking at, which is why it stays loud.
-        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET5)
+        # Either way the run is worth looking at, which is why it stays loud —
+        # and since DRE-5116 a fall from Sonnet 5.5 to Sonnet 5 is loud too.
+        decision = mf.select_with_reasons("critic", probe=lambda m: m != SONNET55)
         note = mf.selection_note(decision)
         self.assertTrue(
             note.startswith("DEGRADED"),
@@ -704,12 +709,13 @@ class SelectionIsRecordedTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             model, note = _cli_select(
                 tree, "critic",
-                {OPUS: True, SONNET: True, SONNET5: False}, explain=True
+                {OPUS: True, SONNET: True, SONNET55: False, SONNET5: True},
+                explain=True,
             )
             # stdout stays exactly the model id — the workflows capture it.
-            self.assertEqual(model, OPUS55)
+            self.assertEqual(model, SONNET5)
             self.assertTrue(note.startswith("DEGRADED"), note)
-            self.assertIn(SONNET5, note)
+            self.assertIn(SONNET55, note)
 
     def test_every_selecting_workflow_records_the_explanation(self):
         for wf, agent in SELECTORS.items():

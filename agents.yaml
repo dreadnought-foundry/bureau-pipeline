@@ -235,7 +235,7 @@ agents:
     category: development
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-sonnet-5  # top of the `advisory` ladder
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
     # 80 (DRE-2422), and the retry in qa-review.yml gets 120. 40 was sized
@@ -291,7 +291,7 @@ agents:
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-sonnet-5  # top of the `advisory` ladder
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
     # The FIRST attempt's ceiling (DRE-2429 set 80, was 60; DRE-2539 raised it
@@ -387,7 +387,7 @@ agents:
     category: product
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-sonnet-5  # top of the `advisory` ladder
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
     trigger: "Linear epic planned (agent-plan dispatch, plan route) — runs before the epic reaches Green Light"
     # Structural review of cards that already exist, with the mechanical half
@@ -412,7 +412,7 @@ agents:
     category: product
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-sonnet-5  # top of the `advisory` ladder
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
     trigger: "Approved epic activated (agent-plan dispatch, activate route) — runs before the children promote"
     # The FLOOR of a band, not a literal: this review's ceiling is sized per
@@ -436,7 +436,7 @@ agents:
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-sonnet-5  # top of the `advisory` ladder
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
     # Ceiling 40 → 60 with DRE-2785's web grant. Diagnosis is the work the web helps

@@ -67,6 +67,17 @@ prices:
     output: 25.00
     source: "https://www.anthropic.com/pricing"
     declared: 2026-09-14
+  # The advisory ladder's top rung and the workhorse ladder's Sonnet rung since
+  # 2026-09-28 (DRE-5116). The SAME price as the Sonnet 5 below it on both
+  # sides ($2/$10; cache reads $0.20), which is what makes it a "newer versions
+  # auto" adoption under the CEO's rule of 2026-09-14. Read from Anthropic's
+  # model table; Claude Code 2.1.284's own registry prices it on the same
+  # `tier_2_10` as Sonnet 5.
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
+    source: "https://www.anthropic.com/pricing"
+    declared: 2026-09-28
   claude-sonnet-5:
     input: 2.00
     output: 10.00
