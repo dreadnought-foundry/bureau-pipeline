@@ -99,17 +99,21 @@ def _dre2937_receipts() -> list:
     client's error line. The park marker this card matches on is dead_run's own
     hold sentence, so the fixture has to BE that sentence.
     """
+    # Both runs read as past implementation green (DRE-4366): that is the
+    # reading under which a first death is retried and a second one parks.
     first = dead_run.decide(
         0,
         turn_exhaustion=True,
         turn_facts="the 151-turn cap after 151 turns and $16.79",
         run_url=RUN_URL,
+        last_progress=3,
     )
     second = dead_run.decide(
         1,
         turn_exhaustion=True,
         turn_facts="the 151-turn cap after 151 turns and $16.47",
         run_url=RUN_URL,
+        last_progress=3,
     )
     return [
         {"body": first.comments[0], "created_at": FIRST_DEATH_AT, "action": first.action},
@@ -188,6 +192,89 @@ class ParkedCardIsNotRetriedTest(unittest.TestCase):
         self.assertIn(dead_run.PARK_STATE, body)
         self.assertIn(medic_retry.DECLINED_TAG, body)
         self.assertIn(RUN_URL, body)
+
+
+# ── 1b. a card the turn-cap reading sent to Planning is not retried ─────────
+# DRE-4366. A turn-cap death before implementation green is not retried at all:
+# the card goes to Planning to be split. The medic must not undo that by
+# re-running the dead run a minute later — the DRE-2937 incident, one lane over.
+REPLANNED_AT = "2026-09-01T23:13:00.000Z"
+
+
+def _replan_receipt() -> dict:
+    """The receipt `dead_run.decide()` writes when it sends a card to
+    Planning, composed by the module that writes it."""
+    decision = dead_run.decide(
+        0,
+        turn_exhaustion=True,
+        turn_facts="the 400-turn cap after 401 turns and $14.20",
+        run_url=RUN_URL,
+        last_progress=2,
+    )
+    assert decision.action == "replan", decision.action
+    return {"body": decision.comments[0], "created_at": REPLANNED_AT}
+
+
+class ReplannedCardIsNotRetriedTest(unittest.TestCase):
+    def test_the_replan_mark_is_dead_runs_own_prefix(self):
+        self.assertEqual(dead_run.REPLAN_MARK, medic_retry.REPLAN_RECEIPT_MARK)
+        self.assertTrue(
+            _replan_receipt()["body"].startswith(medic_retry.REPLAN_RECEIPT_MARK)
+        )
+
+    def test_planning_plus_a_replan_receipt_newer_than_the_run_is_parked(self):
+        reason = medic_retry.park_reason(
+            state="Planning",
+            labels=[],
+            receipts=[_replan_receipt()],
+            run_started_at=RUN_STARTED_AT,
+        )
+        self.assertTrue(reason, "a card sent to Planning after the run was missed")
+        self.assertIn("Planning", reason)
+        self.assertIn(REPLANNED_AT, reason)
+
+    def test_a_replan_receipt_older_than_the_run_is_not_this_runs(self):
+        stale = dict(_replan_receipt(), created_at="2026-08-30T10:00:00.000Z")
+        self.assertEqual(
+            "",
+            medic_retry.park_reason(
+                state="Planning", labels=[], receipts=[stale],
+                run_started_at=RUN_STARTED_AT,
+            ),
+        )
+
+    def test_planning_without_the_receipt_is_not_a_park(self):
+        """Planning is also where a hand-back and a NEEDS WORK verdict send a
+        card; neither is this run's business."""
+        self.assertEqual(
+            "",
+            medic_retry.park_reason(
+                state="Planning", labels=[],
+                receipts=[{"body": "🤖 Handed back to Planning: …",
+                           "created_at": REPLANNED_AT}],
+                run_started_at=RUN_STARTED_AT,
+            ),
+        )
+
+    def test_the_cli_declines_when_the_latest_receipt_is_the_replan(self):
+        """Through the seam medic.yml calls, on a log that would otherwise be
+        retried: the park read answers first."""
+        facts = {"state": "Planning", "labels": ["repo:bureau-pipeline"],
+                 "comments": [_replan_receipt()]}
+        buf = io.StringIO()
+        with mock.patch.object(medic_retry, "card_facts", return_value=facts):
+            with contextlib.redirect_stdout(buf):
+                rc = medic_retry.main([
+                    "decide",
+                    "--branch", "agent/DRE-4366-turn-death",
+                    "--log", os.path.join(FIXTURES, "agent-task-infra-flake.log"),
+                    "--run-started-at", RUN_STARTED_AT,
+                ])
+        out = buf.getvalue()
+        self.assertEqual(0, rc)
+        self.assertIn("retry=false", out)
+        self.assertIn(f"rule={medic_retry.RULE_PARKED}", out)
+        self.assertIn("card=DRE-4366", out)
 
 
 # ── 2. a turn-cap death is never retried, whatever the card says ─────────────

@@ -461,144 +461,255 @@ class HostileLabelScenario(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# the REPORT half: the park receipt names the right remedy                     #
+# the REPORT half: the death is READ before anything is retried (DRE-4366)     #
 # --------------------------------------------------------------------------- #
 
-class ParkReceiptScenario(unittest.TestCase):
-    """Drive the real `Report result to Linear` block on the SECOND turn-cap
-    death — the one that parks the card."""
+#: The three first-line prefixes the DRE-4366 contract names.
+REQUEUE_PREFIX = "🪦 turn-exhaustion-requeue:"
+REPLAN_PREFIX = "✂️ turn-exhaustion-requeue → Planning:"
+HOLD_PREFIX = "🚨 held-for-human (turn-exhaustion-requeue cap reached)"
 
-    def _run(self, thread: list[str], prior="1"):
-        td = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
-        _checkout(td)
-        log = os.path.join(td, "linear.jsonl")
-        exec_file = os.path.join(td, "claude-execution-output.json")
-        with open(exec_file, "w", encoding="utf-8") as fh:
-            json.dump(TURN_CAP_DEATH, fh)
-        for path in ("/tmp/agent-handback.txt", "/tmp/agent-escalation.txt",
-                     "/tmp/agent-blocker.txt"):
-            if os.path.exists(path):
-                os.remove(path)
-        # DRE-3484: the Report block carries no `${{ }}` — its five values
-        # arrive as env below. The empty table is the guard, not an omission:
-        # substitute() raises on any expression it has no value for, so putting
-        # an interpolation back into that block fails here immediately.
-        body = substitute(step("Report result to Linear")["run"], {})
-        proc = _bash(td, "report.sh", body, dict(
-            os.environ,
-            PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
-            RUNNER_TEMP=td,
-            CARD=CARD,
-            MODEL_USED="claude-opus-5",
-            CLAUDE_OUTCOME="failure",
-            DEDUPE_OUTCOME="success",
-            MODEL_OUTCOME="success",
-            CTX_OUTCOME="success",
-            SANITIZE_OUTCOME="success",
-            INPROGRESS_OUTCOME="success",
-            PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
-            GH_TOKEN="test",
-            LINEAR_API_KEY="test-key",
-            # The five the step declares in `env:` since DRE-3484.
-            BUREAU_SERVER_URL="https://github.com",
-            BUREAU_REPOSITORY=REPO,
-            BUREAU_RUN_ID=RUN_ID,
-            CLAUDE_EXECUTION_FILE=exec_file,
-            RESCUE_LOCAL_WORK="false",
-            LINEAR_STUB_LOG=log,
-            LINEAR_STUB_PRIOR=prior,
-            LINEAR_STUB_THREAD=_write_thread(td, thread),
-            LINEAR_STUB_LABELS="repo:bureau-pipeline,agent:engineer",
-            LINEAR_STUB_FAIL="",
-        ))
-        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
-        return proc, _journal(log)
+#: The agent's own exit files, which the Report step reads at fixed paths.
+EXIT_FILES = ("/tmp/agent-handback.txt", "/tmp/agent-escalation.txt",
+              "/tmp/agent-blocker.txt")
 
-    def test_dre_3088s_three_green_deaths_park_with_the_BUDGET_remedy(self):
-        """The card this was written from. Splitting it had already been
-        tried, and the receipt used to ask for it again."""
-        _, journal = self._run(_thread(3, 3, 3))
+#: A card_pr.py whose answer the test picks: exit 3 is "GitHub would not say".
+CARD_PR_EXIT_STUB = '''#!/usr/bin/env python3
+import os, sys
+code = int(os.environ.get("CARD_PR_STUB_EXIT", "0"))
+if code == 0:
+    print("\\t")
+sys.exit(code)
+'''
+
+
+def _clear_exit_files():
+    for path in EXIT_FILES:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def run_report(tc, thread, *, prior="0", claude_outcome="failure",
+               fail="", exit_files=None, card_pr_exit="0"):
+    """Drive the real `Report result to Linear` block on a turn-cap death.
+
+    `exit_files` maps one of EXIT_FILES to the text the agent wrote there
+    before it died; they live at fixed /tmp paths because that is where both
+    the agent and the step put them.
+    """
+    td = tempfile.mkdtemp()
+    tc.addCleanup(shutil.rmtree, td, ignore_errors=True)
+    base = _checkout(td)
+    _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_EXIT_STUB)
+    log = os.path.join(td, "linear.jsonl")
+    exec_file = os.path.join(td, "claude-execution-output.json")
+    with open(exec_file, "w", encoding="utf-8") as fh:
+        json.dump(TURN_CAP_DEATH, fh)
+    _clear_exit_files()
+    tc.addCleanup(_clear_exit_files)
+    for path, text in (exit_files or {}).items():
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    # DRE-3484: the Report block carries no `${{ }}` — its values arrive as
+    # env below. The empty table is the guard, not an omission: substitute()
+    # raises on any expression it has no value for, so putting an
+    # interpolation back into that block fails here immediately.
+    body = substitute(step("Report result to Linear")["run"], {})
+    proc = _bash(td, "report.sh", body, dict(
+        os.environ,
+        PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
+        RUNNER_TEMP=td,
+        CARD=CARD,
+        MODEL_USED="claude-opus-5",
+        CLAUDE_OUTCOME=claude_outcome,
+        DEDUPE_OUTCOME="success",
+        MODEL_OUTCOME="success",
+        CTX_OUTCOME="success",
+        SANITIZE_OUTCOME="success",
+        INPROGRESS_OUTCOME="success",
+        PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
+        GH_TOKEN="test",
+        LINEAR_API_KEY="test-key",
+        # The five the step declares in `env:` since DRE-3484.
+        BUREAU_SERVER_URL="https://github.com",
+        BUREAU_REPOSITORY=REPO,
+        BUREAU_RUN_ID=RUN_ID,
+        CLAUDE_EXECUTION_FILE=exec_file,
+        RESCUE_LOCAL_WORK="false",
+        LINEAR_STUB_LOG=log,
+        LINEAR_STUB_PRIOR=prior,
+        LINEAR_STUB_THREAD=_write_thread(td, thread),
+        LINEAR_STUB_LABELS="repo:bureau-pipeline,agent:engineer",
+        LINEAR_STUB_FAIL=fail,
+        CARD_PR_STUB_EXIT=card_pr_exit,
+    ))
+    tc.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+    return proc, _journal(log)
+
+
+def _this_run(reached: int, turns: int = 400) -> list[str]:
+    """The thread as the Report step dumps it: this run's heartbeat and its
+    markers are the LAST block, and its own receipt is not posted yet."""
+    bodies = [
+        f"🧠 model-attempt: claude-opus-5 — engineer agent starting "
+        f"(turns={turns}). preferred. Run: https://github.com/{REPO}/actions/"
+        f"runs/{RUN_ID}"
+    ]
+    labels = {1: "plan formed", 2: "failing tests written",
+              3: "implementation green", 4: "local checks", 5: "PR opened"}
+    bodies += [f"⏳ {n}/5 {labels[n]}" for n in range(1, reached + 1)]
+    return bodies
+
+
+def moves(journal) -> list[tuple]:
+    """Every lane or label write the step made."""
+    return [(e["op"], *e["args"][1:]) for e in journal
+            if e["op"] in ("state", "advance", "add_label")]
+
+
+class TurnDeathIsReadScenario(unittest.TestCase):
+    """The three rules, driven through the real step."""
+
+    def test_a_first_death_past_green_requeues_to_todo(self):
+        _, journal = run_report(self, _this_run(3), prior="0")
         posted = comments(journal)
         self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith(REQUEUE_PREFIX), posted[0])
+        self.assertIn("⏳ 3/5", posted[0])
         self.assertIn("budget, not size", posted[0])
-        self.assertIn("turns:250", posted[0])
-        self.assertNotIn("splits it into smaller pieces", posted[0])
+        self.assertEqual([("state", "Todo")], moves(journal))
 
-    def test_the_park_still_lands_both_writes(self):
-        """The diagnosis changes the words, never the act: Backlog plus the
-        needs-human label, atomically (DRE-2931)."""
-        _, journal = self._run(_thread(3, 3, 3))
-        self.assertTrue([e for e in journal
-                         if e["op"] == "add_label" and e["args"][1] == "needs-human"])
-        self.assertTrue([e for e in journal
-                         if e["op"] == "state" and e["args"][1] == "Backlog"])
-
-    def test_early_stalling_deaths_still_ask_for_a_SPLIT(self):
-        """The other half of the fork, driven the same way — the message the
-        pipeline has always sent, on the evidence that supports it."""
-        _, journal = self._run(_thread(1, 1))
+    def test_a_death_before_green_goes_to_planning_and_is_not_retried(self):
+        _, journal = run_report(self, _this_run(2), prior="0")
         posted = comments(journal)
-        self.assertIn("splits it into smaller pieces", posted[0])
-        self.assertNotIn("budget, not size", posted[0])
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith(REPLAN_PREFIX), posted[0])
+        self.assertIn("⏳ 1/5 plan formed", posted[0])
+        self.assertIn("⏳ 2/5 failing tests written", posted[0])
+        # The hand-back path's write, copied: Planning, from the build lanes.
+        self.assertEqual([("advance", "Planning", "In Progress,Todo")],
+                         moves(journal))
 
-    def test_a_card_already_at_250_is_told_to_go_to_400(self):
-        _, journal = self._run(_thread(3, 3, turns=250))
-        self.assertIn("turns:400", comments(journal)[0])
+    def test_a_replan_writes_no_hold_label_and_no_backlog(self):
+        _, journal = run_report(self, _this_run(1), prior="1")
+        self.assertNotIn(("add_label", "needs-human"), moves(journal))
+        self.assertFalse([m for m in moves(journal) if "Backlog" in m])
+        self.assertFalse([m for m in moves(journal) if "Todo" == m[-1]])
+
+    def test_a_second_death_past_green_parks(self):
+        """Backlog plus the hold label, atomically (DRE-2931), and a receipt
+        that reads budget rather than size."""
+        _, journal = run_report(self, _this_run(3), prior="1")
+        posted = comments(journal)
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith(HOLD_PREFIX), posted[0])
+        self.assertIn("budget, not size", posted[0])
+        self.assertNotIn("split", posted[0].lower())
+        self.assertIn(("add_label", "needs-human"), moves(journal))
+        self.assertIn(("state", "Backlog", "--park"), moves(journal))
 
     def test_an_unreadable_thread_does_not_fail_the_step(self):
-        """The dump is a nice-to-have on a path that is already handling a
-        death. If Linear refuses it, the receipt degrades to the split text
-        and the park still happens."""
-        _, journal = self._run(_thread(3, 3, 3))  # control: the good path
-        self.assertIn("budget, not size", comments(journal)[0])
+        """The dump is read on a path that is already handling a death. If
+        Linear refuses it the step still finishes, and with no evidence the
+        work was finished nothing is retried."""
+        _, journal = run_report(self, _this_run(3), fail="dump-comments")
+        posted = comments(journal)
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith(REPLAN_PREFIX), posted[0])
 
+
+class HandBackBeforeDyingScenario(unittest.TestCase):
+    """An agent that wrote its hand-back and THEN ran out of turns. The
+    hand-back branch used to take the card with an untagged receipt; now the
+    death is read, and the replan receipt carries the note."""
+
+    NOTE = "1. the ledger counter\n2. the medic refusal\n"
+
+    def test_the_replan_receipt_attaches_the_hand_back(self):
+        _, journal = run_report(
+            self, _this_run(1),
+            exit_files={"/tmp/agent-handback.txt": self.NOTE})
+        posted = comments(journal)
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith(REPLAN_PREFIX), posted[0])
+        self.assertIn("1. the ledger counter", posted[0])
+        self.assertIn("2. the medic refusal", posted[0])
+        self.assertEqual([("advance", "Planning", "In Progress,Todo")],
+                         moves(journal))
+
+
+class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
+    """The paths that used to lose the receipt: whichever action follows, the
+    card gets one comment whose FIRST LINE carries the tag."""
+
+    def _tagged(self, posted):
+        return [b for b in posted
+                if dead_run_tag() in b.split("\n", 1)[0]]
+
+    def test_a_cancelled_turn_death_defers_with_the_tag(self):
+        _, journal = run_report(self, _this_run(3), claude_outcome="cancelled")
+        posted = comments(journal)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertEqual([], moves(journal), "a deferred death moves nothing")
+
+    def test_an_unlanded_park_keeps_the_tag(self):
+        _, journal = run_report(self, _this_run(3), prior="1", fail="add_label")
+        posted = comments(journal)
+        self.assertEqual(1, len(posted), posted)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertIn("did NOT land", posted[0])
+
+    def test_an_escalation_written_before_dying_keeps_its_exit_and_the_tag(self):
+        _, journal = run_report(
+            self, _this_run(2),
+            exit_files={"/tmp/agent-escalation.txt": "Which of A or B?"})
+        posted = comments(journal)
+        self.assertEqual(2, len(posted), posted)
+        self.assertIn("Which of A or B?", posted[0])
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertIn(("advance", "Green Light", "In Progress,Todo"),
+                      moves(journal))
+
+    def test_a_blocker_written_before_dying_keeps_its_exit_and_the_tag(self):
+        _, journal = run_report(
+            self, _this_run(2),
+            exit_files={"/tmp/agent-blocker.txt": "the API does not exist"})
+        posted = comments(journal)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertIn(("state", "Backlog", "--park"), moves(journal))
+
+    def test_an_unreadable_pr_state_keeps_the_tag(self):
+        _, journal = run_report(self, _this_run(3), card_pr_exit="3")
+        posted = comments(journal)
+        self.assertEqual(1, len(self._tagged(posted)), posted)
+        self.assertEqual([], moves(journal))
+
+    def test_an_ordinary_hand_back_is_unchanged(self):
+        """No turn-cap death, no tag: the hand-back branch still owns a run
+        that stopped on purpose."""
         td = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, td, ignore_errors=True)
-        _checkout(td)
-        log = os.path.join(td, "linear.jsonl")
-        exec_file = os.path.join(td, "claude-execution-output.json")
-        with open(exec_file, "w", encoding="utf-8") as fh:
-            json.dump(TURN_CAP_DEATH, fh)
-        # DRE-3484: the Report block carries no `${{ }}` — its five values
-        # arrive as env below. The empty table is the guard, not an omission:
-        # substitute() raises on any expression it has no value for, so putting
-        # an interpolation back into that block fails here immediately.
-        body = substitute(step("Report result to Linear")["run"], {})
-        proc = _bash(td, "report.sh", body, dict(
-            os.environ,
-            PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
-            RUNNER_TEMP=td,
-            CARD=CARD, MODEL_USED="claude-opus-5", CLAUDE_OUTCOME="failure",
-            DEDUPE_OUTCOME="success", MODEL_OUTCOME="success",
-            CTX_OUTCOME="success", SANITIZE_OUTCOME="success",
-            INPROGRESS_OUTCOME="success",
-            PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
-            GH_TOKEN="test", LINEAR_API_KEY="test-key",
-            # The five the step declares in `env:` since DRE-3484.
-            BUREAU_SERVER_URL="https://github.com",
-            BUREAU_REPOSITORY=REPO,
-            BUREAU_RUN_ID=RUN_ID,
-            CLAUDE_EXECUTION_FILE=exec_file,
-            RESCUE_LOCAL_WORK="false",
-            LINEAR_STUB_LOG=log, LINEAR_STUB_PRIOR="1",
-            LINEAR_STUB_THREAD=_write_thread(td, _thread(3, 3, 3)),
-            LINEAR_STUB_FAIL="dump-comments",
-        ))
-        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
-        posted = comments(_journal(log))
-        self.assertEqual(1, len(posted), posted)
-        self.assertIn("splits it into smaller pieces", posted[0])
-
-    def test_the_FIRST_turn_cap_death_still_only_requeues(self):
-        """The diagnosis belongs to the park. One death is not a pattern, and
-        this run must still go back to Todo untouched."""
-        _, journal = self._run(_thread(3), prior="0")
+        global TURN_CAP_DEATH
+        saved = TURN_CAP_DEATH
+        TURN_CAP_DEATH = {"type": "result", "subtype": "success",
+                          "is_error": False, "num_turns": 90,
+                          "total_cost_usd": 6.10, "result": "handed back"}
+        try:
+            _, journal = run_report(
+                self, _this_run(1),
+                exit_files={"/tmp/agent-handback.txt": "1. a piece\n"})
+        finally:
+            TURN_CAP_DEATH = saved
         posted = comments(journal)
-        self.assertIn("turn-exhaustion-requeue", posted[0])
-        self.assertNotIn("budget, not size", posted[0])
-        self.assertTrue([e for e in journal
-                         if e["op"] == "state" and e["args"][1] == "Todo"])
+        self.assertEqual(1, len(posted), posted)
+        self.assertTrue(posted[0].startswith("🤖 Handed back to Planning"))
+        self.assertEqual([], self._tagged(posted))
+
+
+def dead_run_tag() -> str:
+    import dead_run
+
+    return dead_run.TURN_TAG
 
 
 if __name__ == "__main__":
