@@ -334,7 +334,8 @@ class TheFactsAreRecordedTest(unittest.TestCase):
         g1, g2 = _step("gate1")["run"], _step("gate2")["run"]
         start = "# DRE-4885"
         self.assertIn(start, g1)
-        block = lambda run: run[run.index(start):run.index("if python3")]
+        end = "esac\n"
+        block = lambda run: run[run.index(start):run.index(end) + len(end)]
         self.assertEqual(block(g1), block(g2))
 
     def test_the_backoff_has_an_id_and_an_unchanged_if(self):

@@ -1125,6 +1125,18 @@ jobs:
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # DRE-4885: when this attempt started, so its gate can record how long
+      # it ran. A critic killed from outside (exit 137 on a runner out of
+      # memory) writes no execution record, and without a running time the
+      # post step cannot tell it from a startup/auth death — portico #717's
+      # first attempt reviewed for 1,238 seconds and was reported as one.
+      # The `if` is byte-identical to the attempt's own, pinned by
+      # tests/test_qa_review_killed_critic.py.
+      - name: Stamp critic attempt 1 start
+        id: a1_start
+        if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
@@ -1366,9 +1378,19 @@ jobs:
         id: gate1
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         continue-on-error: true
+        env:
+          ATTEMPT_STARTED: ${{ steps.a1_start.outputs.at }}
         run: |
           EXEC_FILE="${{ steps.critic.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          # DRE-4885: how long the attempt ran, written BEFORE the gate reads
+          # anything, as bare digits and only off a numeric stamp — an empty
+          # or odd stamp writes nothing, and the post step reads that as "not
+          # measured". Identical in both gate steps.
+          case "${ATTEMPT_STARTED:-}" in
+            ''|*[!0-9]*) ;;
+            *) echo "elapsed=$(( $(date +%s) - 10#$ATTEMPT_STARTED ))" >> "$GITHUB_OUTPUT" ;;
+          esac
           # --github-output (DRE-2465): the gate also writes `outcome` and,
           # for a run that ended cleanly, `turns`/`cost` — numbers only, so a
           # hostile execution record cannot forge a second step output. The
@@ -1427,7 +1449,14 @@ jobs:
       #
       # Gated identically to the retry it guards, so a healthy review never
       # sleeps.
+      #
+      # DRE-4885: `id: backoff` so the post step can read its outcome.
+      # `sleep 120` cannot fail on its own, so a `failure` here means the
+      # machine ended it from outside — what a runner out of memory does to
+      # each new process, and what portico run 36161433688 recorded (failed
+      # after 8 seconds).
       - name: Back off before the critic retry
+        id: backoff
         # Byte-identical to the retry's own `if` below, including DRE-3414's
         # install conjunct — tests/test_gate_pool_and_backoff.py fails if the
         # two ever drift, because a backoff that outlives its retry sleeps
@@ -1458,6 +1487,14 @@ jobs:
       # through the "Build card review context" stage, sanitized and fenced.
       # A retry that quietly gained a credential attempt 1 never had would be
       # exactly the drift this comment block warns about.
+      #
+      # DRE-4885: the retry's start stamp, AFTER the back-off so the sleep is
+      # not counted as review time. Same `if` as the retry, byte for byte.
+      - name: Stamp critic attempt 2 start
+        id: a2_start
+        if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Critic review (retry)
         id: critic_retry
         # DRE-3414: `always()` is why this needs saying out loud. A failed
@@ -1727,9 +1764,19 @@ jobs:
         id: gate2
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         continue-on-error: true
+        env:
+          ATTEMPT_STARTED: ${{ steps.a2_start.outputs.at }}
         run: |
           EXEC_FILE="${{ steps.critic_retry.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          # DRE-4885: how long the attempt ran, written BEFORE the gate reads
+          # anything, as bare digits and only off a numeric stamp — an empty
+          # or odd stamp writes nothing, and the post step reads that as "not
+          # measured". Identical in both gate steps.
+          case "${ATTEMPT_STARTED:-}" in
+            ''|*[!0-9]*) ;;
+            *) echo "elapsed=$(( $(date +%s) - 10#$ATTEMPT_STARTED ))" >> "$GITHUB_OUTPUT" ;;
+          esac
           # --github-output (DRE-2465): identical to the attempt-1 gate above.
           # Both attempts must report, or a retry that ran to completion after
           # a first attempt that crashed silently keeps the crash wording.
@@ -1980,6 +2027,15 @@ jobs:
           # from a step outcome, so nothing a hostile diff could reach
           # composes it.
           INSTALL_FAILED: ${{ steps.install_claude.outcome == 'failure' }}
+          # DRE-4885: how long each attempt ran (bare seconds, written by its
+          # gate off its own start stamp; empty when not measured) and whether
+          # the back-off sleep was ended from outside. With the runner's name
+          # ($RUNNER_NAME, already in every step's environment) these tell a
+          # critic killed mid-review apart from one that never started. All
+          # read after both attempts have ended; nothing here reads a log.
+          A1_ELAPSED: ${{ steps.gate1.outputs.elapsed }}
+          A2_ELAPSED: ${{ steps.gate2.outputs.elapsed }}
+          BACKOFF_OUTCOME: ${{ steps.backoff.outcome }}
         run: |
           # DRE-3226: is the pipeline checkout this step runs on still there?
           # Asked BEFORE anything is composed, because the answer decides
@@ -2066,6 +2122,25 @@ jobs:
             else
               SPENT="the retry ran ${A2_TURNS} turns and billed about \$${A2_COST:-?}"
             fi
+          fi
+          # DRE-4885: was either attempt STOPPED MID-REVIEW — no execution
+          # record, yet it ran for more than a minute? A process killed from
+          # outside writes no record, so the gate says `unknown`, exactly as
+          # it does for a startup/auth death; the running time is what tells
+          # them apart. portico #717's first attempt reviewed for 1,238
+          # seconds before a light runner ran out of memory, and was told it
+          # had crashed on a credential. Each attempt is read on its own, and
+          # a time that is empty or not bare digits is "not measured": it
+          # never makes an attempt stopped, and never outweighs the other.
+          A1_SECS=""; A2_SECS=""
+          case "${A1_ELAPSED:-}" in ''|*[!0-9]*) ;; *) A1_SECS=$((10#$A1_ELAPSED)) ;; esac
+          case "${A2_ELAPSED:-}" in ''|*[!0-9]*) ;; *) A2_SECS=$((10#$A2_ELAPSED)) ;; esac
+          A1_STOPPED=""; A2_STOPPED=""
+          if [ "${A1_OUTCOME:-}" = "unknown" ] && [ -n "$A1_SECS" ] && [ "$A1_SECS" -gt 60 ]; then
+            A1_STOPPED=true
+          fi
+          if [ "${A2_OUTCOME:-}" = "unknown" ] && [ -n "$A2_SECS" ] && [ "$A2_SECS" -gt 60 ]; then
+            A2_STOPPED=true
           fi
           if [ "$REAL" = "true" ]; then
             # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
@@ -2189,6 +2264,58 @@ jobs:
             printf '%s\n\n%s\n' \
               "🔎 QA Critic ran but produced no verdict — re-review needed, this is NOT a code rejection." \
               "The adversarial reviewer completed its run and then left no verdict we could read — $RAN.${WHY:+ What was found in its place: $WHY.} This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
+          elif [ -n "$A1_STOPPED$A2_STOPPED" ]; then
+            # DRE-4885: an attempt was STOPPED MID-REVIEW — no execution
+            # record, but it ran past a minute, which a startup/auth death
+            # never does. Ordered after every branch that reads an execution
+            # record, so a real verdict, an install failure, a held verdict,
+            # turn exhaustion and a completed run each still win as before.
+            # The first line is the crash branch's, byte for byte: it is the
+            # neutral marker medic_classify.CRITIC_NEUTRAL_MARKER and the
+            # merge gate match on, and it carries no "VERDICT:" line. The
+            # body names the machine and both attempts' times, and it says
+            # "ran out of memory" only on in-job evidence: the back-off's
+            # two-minute sleep cannot fail on its own, so a failed one means
+            # the machine was ending new processes. Otherwise the cause is
+            # stated as unknown.
+            # The runner's name reaches the comment as data: control
+            # characters and backticks are dropped so it stays on its line and
+            # inside its code span, and it is never re-parsed as shell. The
+            # class comes from out_of_memory.runner_class, the one reader that
+            # knows the pool prefixes.
+            _took() {
+              if [ "$1" -eq 1 ]; then printf '1 second'
+              elif [ "$1" -lt 120 ]; then printf '%s seconds' "$1"
+              else printf '%s minutes (%s seconds)' "$(( $1 / 60 ))" "$1"
+              fi
+            }
+            if [ -n "$A1_STOPPED" ]; then
+              TOOK="the first attempt was stopped after $(_took "$A1_SECS")"
+            elif [ -n "$A1_SECS" ]; then
+              TOOK="the first attempt ended after $(_took "$A1_SECS")"
+            else
+              TOOK="the first attempt's running time was not recorded"
+            fi
+            if [ -n "$A2_STOPPED" ]; then
+              TOOK="$TOOK; the retry was stopped after $(_took "$A2_SECS") on the same machine"
+            elif [ -n "$A2_SECS" ]; then
+              TOOK="$TOOK; the retry ended after $(_took "$A2_SECS") on the same machine"
+            else
+              TOOK="$TOOK; the retry's running time was not recorded"
+            fi
+            RUNNER_SHOWN=$(printf '%s' "${RUNNER_NAME:-}" | tr -d '\000-\037`')
+            RUNNER_CLASS=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import out_of_memory; print(out_of_memory.runner_class(sys.argv[2]))' \
+              "$PIPELINE_DIR/scripts" "$RUNNER_SHOWN" 2>/dev/null || true)
+            WHERE="runner \`${RUNNER_SHOWN:-unnamed}\` (class \`${RUNNER_CLASS:-unknown}\`)"
+            if [ "${BACKOFF_OUTCOME:-}" = "failure" ]; then
+              WHY="The adversarial reviewer was stopped mid-review because the machine ran out of memory. It was reviewing on $WHERE: $TOOK. The 120-second wait before the retry was itself ended early, which a sleep never does on its own, so the machine was killing new processes."
+            else
+              WHY="The adversarial reviewer was stopped mid-review, cause unknown. It was reviewing on $WHERE: $TOOK. An attempt that runs for more than a minute has started and was working when it stopped."
+            fi
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
+              "$WHY No verdict was produced and nothing was rejected. This was NOT an authentication or startup failure, so no credential needs rotating on the strength of this message.${SPENT:+ What the execution records report: $SPENT.} Merge is held until a critic actually reviews this PR; this is not a request for changes." \
               > /tmp/qa-comment.md
           else
             # The critic CRASHED on both attempts (is_error / no verdict). Do
