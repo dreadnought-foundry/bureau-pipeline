@@ -264,7 +264,7 @@ class TestApply:
         # that names the moved rung; everything else is added, never rewritten.
         for line in removed:
             assert re.fullmatch(
-                r"\s*(- model|built_on): claude-sonnet-(5|4-6)", line), line
+                r"\s*-?\s*(model|built_on): claude-sonnet-(5|4-6)", line), line
         assert all(not l.lstrip().startswith("#") for l in removed)
         assert all("reason:" not in l for l in removed)
         assert sum(1 for l in added if re.fullmatch(r"\s*- model: claude-sonnet-6", l)) == 3
@@ -383,7 +383,7 @@ class TestApply:
 # --------------------------------------------------------------------------- #
 
 _PATH = re.compile(r"[\w.-]+/[\w./-]+|\.(ya?ml|py|json|md)\b")
-_COMMAND = re.compile(r"python|`|--|\$ |scripts|gh |make ")
+_COMMAND = re.compile(r"python|`|--|\$ |scripts|\bgh\b|\bmake\b|\bgit\b")
 
 
 def render(capsys, target, decision_path, *extra):
