@@ -96,6 +96,13 @@ if args[:2] == ["pr", "merge"]:
 if args[0] == "api":
     method = opt("--method") or "GET"
     path = [a for a in args[1:] if not a.startswith("-")][0]
+    if "pulls?state=open" in path:
+        # DRE-4103: the gate lists the repo's open pull requests to find any
+        # this branch is stacked on. Only this one is open — nothing is under
+        # it; the stacked shapes have their own suite
+        # (tests/test_merge_gate_stacked.py).
+        emit(json.dumps({"number": int(os.environ["PR"]),
+                         "head_sha": fx["pr"]["headRefOid"]}))
     if method == "POST":
         rows = comments()
         body = json.loads(sys.stdin.read())["body"]

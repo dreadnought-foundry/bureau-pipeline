@@ -75,9 +75,13 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIn('--qa-login "$QA_LOGIN"', self.run_block)
         # The trusted login is DERIVED from the same App key the gate merges
         # with (#57) — never a hardcoded literal that could drift on rename.
-        self.assertIn(
-            'QA_LOGIN="${{ steps.qa.outputs.app-slug }}[bot]"', self.run_block
+        # DRE-4103 moved the derivation into the step's `env:` (the
+        # expression-budget remedy, as DRE-4486 did for the repository and
+        # token), so it is asserted there, and the script must not shadow it.
+        self.assertEqual(
+            self.step["env"]["QA_LOGIN"], "${{ steps.qa.outputs.app-slug }}[bot]"
         )
+        self.assertNotIn("QA_LOGIN=", self.run_block)
 
     def test_inputs_come_from_githubs_own_records(self):
         """Check runs from the REST check-runs API on the head SHA; comments
