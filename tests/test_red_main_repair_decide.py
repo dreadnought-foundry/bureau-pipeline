@@ -19,7 +19,11 @@ table:
     duplicate event a no-op;
   * fail-closed — unreadable attempt records mean no dispatch (a blind
     dispatch could double-run repairs), and only a full 40-hex SHA ever
-    becomes a branch name.
+    becomes a branch name;
+  * superseded (DRE-5069) — a LATER run of the same workflow on the default
+    branch that concluded `success` means `main` has already moved past the
+    fault: no card, no agent. Anything short of a later green leaves the
+    decision exactly where it was.
 """
 
 import json
@@ -29,10 +33,16 @@ import sys
 import tempfile
 import unittest
 
+import yaml
+
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import red_main_repair  # noqa: E402
+
+WORKFLOW = os.path.join(
+    os.path.dirname(__file__), "..", ".github", "workflows",
+    "red-main-repair.yml")
 
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
@@ -293,6 +303,247 @@ class DecideTest(unittest.TestCase):
         d = _decide(head_sha="main; rm -rf /")
         self.assertFalse(d["go"])
         self.assertEqual(d["reason"], "bad-head-sha")
+
+
+# --------------------------------------------------------------------------- #
+# Superseded (DRE-5069)                                                        #
+# --------------------------------------------------------------------------- #
+
+# 2026-09-25, from the run records. `main` forked into two alembic heads at
+# 13:06 PT; CI on the fork commit 56111d9 (run 36188016837) concluded
+# `failure` at 15:33 PT, twenty-one minutes after the fix (#2785) had merged
+# and a later commit on `main` had already gone green. Only the short sha is
+# in the record, so the full one here is padded; the green run's id is
+# illustrative — its order relative to the failed run is what the rule reads.
+FORK_SHA = "56111d9" + "0" * 33
+FAILED_RUN = 36188016837
+FAILED_CREATED = "2026-09-25T20:06:14Z"      # 13:06 PT
+FIX_SHA = "0e2785f" + "1" * 33               # sorts BELOW the fork sha
+GREEN_RUN = 36196100001
+GREEN_CREATED = "2026-09-25T22:12:40Z"       # 15:12 PT, after the fix merged
+
+
+def _branch_run(*, run_id=GREEN_RUN, head_sha=FIX_SHA, created_at=GREEN_CREATED,
+                status="completed", conclusion="success", event="push"):
+    return {"run_id": run_id, "head_sha": head_sha, "created_at": created_at,
+            "status": status, "conclusion": conclusion, "event": event}
+
+
+def _superseding_history(*branch_runs, run_attempt=1,
+                         created_at=FAILED_CREATED, head_sha=FORK_SHA):
+    return {
+        "current": {"run_id": FAILED_RUN, "run_attempt": run_attempt,
+                    "workflow_path": ".github/workflows/ci.yml",
+                    "head_sha": head_sha, "created_at": created_at,
+                    "log": STALE_ASSERTION_LOG, "jobs": []},
+        "prior": [],
+        "branch_runs": list(branch_runs),
+    }
+
+
+class SupersededTest(unittest.TestCase):
+    """A later green run of the same workflow on `main` supersedes the red."""
+
+    def _decide(self, history, **overrides):
+        return _decide(head_sha=FORK_SHA, history=history, **overrides)
+
+    def test_the_2026_09_25_failure_reads_superseded(self):
+        # Attempt 1 of run 36188016837 bought repair run 36197298146 at
+        # 15:33 PT — a card and an agent against a main with nothing broken.
+        d = self._decide(_superseding_history(_branch_run()))
+        self.assertFalse(d["go"])
+        self.assertEqual(d["reason"], "superseded")
+        self.assertFalse(d["escalate"])
+        self.assertEqual(d["branch"], "")
+        self.assertEqual(d["superseded_by"], str(GREEN_RUN))
+
+    def test_the_re_run_of_the_failed_jobs_reads_superseded_too(self):
+        # Attempt 2 of the same run concluded `failure` at 16:45 PT and bought
+        # repair run 36202241737. A re-run keeps the run's created_at, so the
+        # green run is still the later one.
+        d = self._decide(_superseding_history(_branch_run(), run_attempt=2))
+        self.assertEqual(d["reason"], "superseded")
+        self.assertFalse(d["go"])
+
+    def test_without_the_later_green_run_the_same_failure_dispatches(self):
+        # The control: the fixture above is superseded BECAUSE of the green
+        # run, not because of anything else in it.
+        d = self._decide(_superseding_history())
+        self.assertTrue(d["go"])
+        self.assertEqual(d["reason"], "dispatch")
+        self.assertEqual(d["superseded_by"], "")
+
+    def test_superseded_outranks_the_budget_so_no_triage_card_is_filed(self):
+        # A spent budget raises a card for a human. A fault main has already
+        # moved past needs no human either.
+        d = self._decide(
+            _superseding_history(_branch_run()),
+            refs=[f"repair/{FORK_SHA}", f"repair/{FORK_SHA}-2"],
+            pulls=[_pull(f"repair/{FORK_SHA}", state="closed"),
+                   _pull(f"repair/{FORK_SHA}-2", state="closed")],
+        )
+        self.assertEqual(d["reason"], "superseded")
+        self.assertFalse(d["escalate"])
+
+    def test_an_earlier_green_run_does_not_supersede(self):
+        # Green BEFORE the failure is the commit the fault landed on top of.
+        d = self._decide(_superseding_history(
+            _branch_run(created_at="2026-09-25T19:40:00Z")))
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_later_is_read_from_the_record_never_from_the_sha_strings(self):
+        # The fix sha sorts below the fork sha and is still the later commit;
+        # an earlier green whose sha sorts ABOVE the fork sha is still earlier.
+        self.assertLess(FIX_SHA, FORK_SHA)
+        self.assertEqual(
+            self._decide(_superseding_history(_branch_run()))["reason"],
+            "superseded")
+        self.assertEqual(
+            self._decide(_superseding_history(_branch_run(
+                head_sha="f" * 40, created_at="2026-09-25T19:40:00Z",
+            )))["reason"],
+            "dispatch")
+
+    def test_a_later_green_run_on_the_same_commit_is_not_a_later_commit(self):
+        d = self._decide(_superseding_history(_branch_run(head_sha=FORK_SHA)))
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_an_unordered_failed_run_is_never_superseded(self):
+        # No created_at on the failed run means no "later" can be read at all;
+        # that is "nothing is known", which lands where the decision did
+        # before this rule existed.
+        d = self._decide(_superseding_history(_branch_run(), created_at=""))
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_an_unordered_green_run_is_never_superseding(self):
+        d = self._decide(_superseding_history(_branch_run(created_at=None)))
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_a_pull_request_run_is_not_a_run_of_the_default_branch(self):
+        # A fork's PR from a branch it happened to name `main` answers the
+        # same branch filter, and proves nothing about this repo's main.
+        d = self._decide(_superseding_history(
+            _branch_run(event="pull_request")))
+        self.assertEqual(d["reason"], "dispatch")
+
+    def test_no_history_is_not_superseded(self):
+        self.assertEqual(self._decide(None)["reason"], "dispatch")
+
+    def test_the_docstring_keeps_the_two_wasted_runs(self):
+        doc = red_main_repair.__doc__
+        for fact in ("36197298146", "15:33 PT", "36202241737", "16:45 PT"):
+            self.assertIn(fact, doc)
+
+    def test_every_decision_answers_superseded_by(self):
+        for d in (_decide(conclusion="success"), _decide(),
+                  self._decide(_superseding_history(_branch_run()))):
+            self.assertIsInstance(d["superseded_by"], str)
+
+
+class NotSupersededTest(unittest.TestCase):
+    """A later run that is not a SUCCESS changes nothing: the same fault may
+    still stand, and the debounce, budget and backoff apply as before."""
+
+    NOT_GREEN = (
+        {"status": "in_progress", "conclusion": None},
+        {"status": "completed", "conclusion": "cancelled"},
+        {"status": "completed", "conclusion": "failure"},
+    )
+
+    # Every decision the later run must leave untouched, by its reason today.
+    SCENARIOS = {
+        "dispatch": {},
+        "infra-backoff": {"log_text": RATE_LIMIT_LOG},
+        "duplicate-event": {"refs": [f"repair/{FORK_SHA}"]},
+        "budget-exhausted": {
+            "refs": [f"repair/{FORK_SHA}", f"repair/{FORK_SHA}-2"],
+            "pulls": [_pull(f"repair/{FORK_SHA}", state="closed"),
+                      _pull(f"repair/{FORK_SHA}-2", state="closed")],
+        },
+        "repair-in-flight": {"pulls": [_pull(f"repair/{OTHER_SHA}")]},
+    }
+
+    def test_a_later_run_short_of_success_leaves_the_decision_as_it_was(self):
+        for reason, scenario in self.SCENARIOS.items():
+            today = _decide(head_sha=FORK_SHA, **scenario)
+            self.assertEqual(today["reason"], reason)
+            for later in self.NOT_GREEN:
+                with self.subTest(today=reason, later=later):
+                    d = _decide(
+                        head_sha=FORK_SHA,
+                        history=_superseding_history(_branch_run(**later)),
+                        **scenario,
+                    )
+                    self.assertEqual(d, today)
+
+    def test_one_later_green_among_later_reds_still_supersedes(self):
+        d = _decide(head_sha=FORK_SHA, history=_superseding_history(
+            _branch_run(run_id=GREEN_RUN + 1, conclusion="failure",
+                        created_at="2026-09-25T22:30:00Z"),
+            _branch_run(),
+        ))
+        self.assertEqual(d["reason"], "superseded")
+        self.assertEqual(d["superseded_by"], str(GREEN_RUN))
+
+
+class SupersededReceiptTest(unittest.TestCase):
+    """The skip is readable in the run log: the reason and the green run."""
+
+    def _cli(self, history):
+        with tempfile.TemporaryDirectory() as td:
+            paths = {name: os.path.join(td, name)
+                     for name in ("log", "refs", "pulls", "history")}
+            open(paths["log"], "w").write(STALE_ASSERTION_LOG)
+            open(paths["refs"], "w").write("[]")
+            open(paths["pulls"], "w").write("[]")
+            open(paths["history"], "w").write(json.dumps(history))
+            return subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "red_main_repair.py"),
+                 "decide", "--conclusion", "failure",
+                 "--head-branch", "main", "--default-branch", "main",
+                 "--head-sha", FORK_SHA, "--log-file", paths["log"],
+                 "--refs-file", paths["refs"], "--pulls-file", paths["pulls"],
+                 "--history-file", paths["history"]],
+                capture_output=True, text=True,
+            )
+
+    def test_the_cli_emits_the_reason_and_the_green_run(self):
+        res = self._cli(_superseding_history(_branch_run()))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = CliTest._outputs(res.stdout)
+        self.assertEqual(out["go"], "false")
+        self.assertEqual(out["reason"], "superseded")
+        self.assertEqual(out["superseded_by"], str(GREEN_RUN))
+        self.assertIn(str(GREEN_RUN), res.stderr)
+
+    @staticmethod
+    def _steps():
+        return yaml.safe_load(open(WORKFLOW))["jobs"]["repair"]["steps"]
+
+    def test_the_workflow_prints_the_skip_and_the_green_run(self):
+        receipts = [
+            s for s in self._steps()
+            if "steps.decide.outputs.reason == 'superseded'" in (s.get("if") or "")
+        ]
+        self.assertEqual(len(receipts), 1, "no step reports a superseded skip")
+        step = receipts[0]
+        env = step.get("env") or {}
+        self.assertEqual(env.get("SUPERSEDED_BY"),
+                         "${{ steps.decide.outputs.superseded_by }}")
+        run = step.get("run") or ""
+        self.assertIn("superseded", run)
+        self.assertRegex(run, r"\$\{?SUPERSEDED_BY")
+
+    def test_the_superseded_decision_reaches_no_card_and_no_agent(self):
+        # go is false on a superseded decision, and these are the steps that
+        # would file a card or spend a model run; each is gated on go.
+        by_id = {s.get("id"): s for s in self._steps() if s.get("id")}
+        for step_id in ("card", "claude"):
+            self.assertIn("steps.decide.outputs.go == 'true'",
+                          by_id[step_id].get("if") or "")
+        triage = [s for s in self._steps()
+                  if "escalate == 'true'" in (s.get("if") or "")]
+        self.assertTrue(triage)
 
 
 class CliTest(unittest.TestCase):

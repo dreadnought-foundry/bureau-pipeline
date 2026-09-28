@@ -151,6 +151,39 @@ class DocumentShapeTest(unittest.TestCase):
         self.assertEqual(
             [entry["head_sha"] for entry in doc["prior"]], PRIOR_SHAS[:3])
 
+    def test_the_branch_runs_are_recorded_from_the_same_listing(self):
+        # DRE-5069: whether a LATER run on the branch went green is read off
+        # the listing this module already makes — one call, and no jobs or
+        # log fetched for the runs it only records.
+        gh = FakeGh()
+        green = {"id": RUN_ID + 7, "path": WF_PATH, "head_sha": "f" * 40,
+                 "status": "completed", "conclusion": "success",
+                 "event": "push", "created_at": "2026-09-25T22:12:40Z"}
+        gh.runs = [green] + gh.runs
+        doc = _gather(gh, run_created_at="2026-09-25T20:06:14Z")
+        self.assertEqual(doc["current"]["created_at"], "2026-09-25T20:06:14Z")
+        self.assertEqual(doc["branch_runs"][0], {
+            "run_id": RUN_ID + 7, "head_sha": "f" * 40,
+            "status": "completed", "conclusion": "success",
+            "event": "push", "created_at": "2026-09-25T22:12:40Z",
+        })
+        self.assertEqual(len(doc["branch_runs"]), 1 + len(PRIOR_SHAS))
+        self.assertEqual([c for c in gh.calls if c[0] == "runs"],
+                         [("runs", WF_ID, "main", repair_history.LIST_PER_PAGE)])
+        self.assertNotIn(("jobs", RUN_ID + 7, None), gh.calls)
+        self.assertNotIn(("log", RUN_ID + 7, None), gh.calls)
+
+    def test_this_run_is_not_one_of_the_branch_runs(self):
+        gh = FakeGh()
+        gh.runs = [{"id": RUN_ID, "path": WF_PATH, "head_sha": SHA,
+                    "status": "completed", "conclusion": "failure"}] + gh.runs
+        doc = _gather(gh)
+        self.assertNotIn(RUN_ID, [r["run_id"] for r in doc["branch_runs"]])
+
+    def test_an_unreadable_listing_records_no_branch_runs(self):
+        doc = _gather(FakeGh(raises=["runs"]))
+        self.assertEqual(doc["branch_runs"], [])
+
     def test_an_unfinished_run_is_not_history(self):
         # `status=completed` is asked for, but a listing that answers with an
         # in-progress run must not have its half-written jobs compared.

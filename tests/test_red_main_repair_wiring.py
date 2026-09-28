@@ -173,6 +173,18 @@ class RepeatedTimeoutHistoryTest(unittest.TestCase):
         # interpolated into the script line.
         self.assertNotIn("github.event", gather.get("run") or "")
 
+    def test_the_history_knows_when_this_run_was_created(self):
+        # DRE-5069: "a later run on the branch" is read against this run's own
+        # created_at, from the event — a re-run keeps it, so attempt 2 of a
+        # failed run is still ordered where the commit was.
+        steps = self._steps()
+        gather = steps[self._index(steps, "repair_history.py")]
+        env = gather.get("env") or {}
+        self.assertEqual(env.get("RUN_CREATED_AT"),
+                         "${{ github.event.workflow_run.created_at }}")
+        self.assertIn('--run-created-at "$RUN_CREATED_AT"',
+                      gather.get("run") or "")
+
     def test_decide_is_handed_the_history_file(self):
         body = src(REUSABLE)
         self.assertIn("--history-file /tmp/repair-history.json", body)

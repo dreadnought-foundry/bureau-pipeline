@@ -33,6 +33,20 @@ gathers the inputs from GitHub's own records and acts on the output:
   * Debounce by SHA (guardrail 3). A repair branch for this SHA already
     existing (agent still building, or died pre-PR) makes a duplicate event
     a no-op.
+  * Superseded (DRE-5069). A LATER run of the same workflow on the default
+    branch — created after the failed run, on another commit, concluded
+    `success` — means `main` has already moved past the fault, and the
+    decision is `superseded`: no card, no agent. On 2026-09-25 `main` forked
+    into two alembic heads at 13:06 PT (DRE-4912); CI on the fork commit
+    56111d9 (run 36188016837) concluded `failure` at 15:33 PT, twenty-one
+    minutes after the fix (#2785) merged, with `main`'s tip already green.
+    Red-Main Repair spent run 36197298146 at 15:33 PT on it, and attempt 2
+    of the same CI run bought run 36202241737 at 16:45 PT — two cards and two
+    agents against a fault that had been gone for an hour, because
+    `already-repaired` only knew a merged `repair/*` PR as the fix. "Later"
+    is the record's own order (`created_at`, which a re-run keeps), never a
+    comparison of sha strings. A later run still in progress, cancelled or
+    failed does not count: the same fault may still stand.
   * Fail-closed. Unreadable attempt records mean NO dispatch (a blind
     dispatch could double-run a repair; the next failure event retries with
     fresh records), and only a validated full 40-hex SHA ever becomes a
@@ -56,8 +70,9 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
                    malformed reads as "no history" — today's behaviour. It
                    is never read as "repeated" (DRE-4674).
 
-Emits go=, branch=, attempt=, escalate=, reason= and the timeout_* detail
-(job / step / limit / commits) through `github_output`, so a
+Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
+(job / step / limit / commits) and superseded_by= (the green run's id, empty
+unless the reason is `superseded`) through `github_output`, so a
 value that grows a second line rides a heredoc delimiter instead of killing
 the step (DRE-4202); exit 0 on every decision (including the fail-closed
 ones). Anything genuinely unexpected raises and fails the job loudly — the
@@ -70,6 +85,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 
 import github_output
 import medic_classify
@@ -288,6 +304,70 @@ def repeated_timeout(history) -> dict | None:
     return None
 
 
+# --------------------------------------------------------------------------- #
+# Whether main has already moved past this failure (DRE-5069)                  #
+# --------------------------------------------------------------------------- #
+
+#: The one conclusion that proves the fault gone. `cancelled`, `failure` and a
+#: run still in progress prove nothing — the same fault may still stand.
+_GREEN_CONCLUSION = "success"
+
+#: Events whose runs answer the default-branch filter without being runs of
+#: this repository's default branch: a fork's pull request from a branch it
+#: named `main`.
+_NOT_THE_BRANCH_EVENTS = ("pull_request", "pull_request_target")
+
+
+def _created(value):
+    """An ISO-8601 `created_at` as an aware datetime, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def superseding_run(history) -> str:
+    """The id of a green run that supersedes this failure, or "".
+
+    The rule, whole: a run in the history's `branch_runs` that was CREATED
+    after the failed run, on a commit other than the failed one, completed
+    with conclusion `success`. The order is the record's own `created_at` —
+    never a comparison of sha strings — and a re-run keeps its run's
+    `created_at`, so attempt 2 of a failed run is ordered where attempt 1
+    was. Anything that cannot be ordered is not later: unusable history
+    answers "", which is the decision before this rule existed.
+    """
+    if not isinstance(history, dict):
+        return ""
+    current = history.get("current")
+    if not isinstance(current, dict):
+        return ""
+    failed_at = _created(current.get("created_at"))
+    if failed_at is None:
+        return ""
+    failed_sha = current.get("head_sha") or ""
+    runs = history.get("branch_runs")
+    for run in runs if isinstance(runs, list) else ():
+        if not isinstance(run, dict):
+            continue
+        # GitHub sets a conclusion only when a run completes, so this one
+        # test also turns away a run still in progress (conclusion null).
+        if (run.get("conclusion") or "") != _GREEN_CONCLUSION:
+            continue
+        if (run.get("event") or "") in _NOT_THE_BRANCH_EVENTS:
+            continue
+        if not run.get("head_sha") or run.get("head_sha") == failed_sha:
+            continue
+        created = _created(run.get("created_at"))
+        if created is None or created <= failed_at:
+            continue
+        if run.get("run_id"):
+            return str(run["run_id"])
+    return ""
+
+
 def load_history(path: str):
     """The gathered history document, or None for "no history".
 
@@ -363,13 +443,13 @@ def decide(
     head_ref / state ("open"|"closed") / merged (bool) covering repair PRs
     of ANY state; `history` the document `repair_history.py` gathers, or None
     for "nothing is known about earlier runs". Returns go / branch / attempt /
-    escalate / reason plus the timeout_* detail."""
+    escalate / reason plus the timeout_* detail and superseded_by."""
 
     # Every decision answers these, so the workflow can read them without
     # asking which branch it came down: a key the decision omitted would
     # interpolate an empty expression into a card or a prompt.
     detail = {"timeout_job": "", "timeout_step": "", "timeout_limit": "",
-              "timeout_commits": ""}
+              "timeout_commits": "", "superseded_by": ""}
 
     def noop(reason: str, escalate: bool = False) -> dict:
         return {"go": False, "branch": "", "attempt": 0,
@@ -382,6 +462,15 @@ def decide(
         return noop("not-default-branch")
     if not _SHA_RE.match(head_sha or ""):
         return noop("bad-head-sha")
+
+    # DRE-5069. A later commit on main has already gone green on this same
+    # workflow: the fault is gone, however it was fixed. Ahead of everything
+    # below, the budget included — a spent budget files a card for a human,
+    # and a fault main has already moved past needs none.
+    green = superseding_run(history)
+    if green:
+        detail = {**detail, "superseded_by": green}
+        return noop("superseded")
 
     # DRE-4674. The clock gets exactly one free pass. A repeat outranks the
     # backoff — including an infra fingerprint in the same log — because a
@@ -492,6 +581,9 @@ def outputs(decision: dict) -> str:
         ("timeout_step", decision["timeout_step"]),
         ("timeout_limit", decision["timeout_limit"]),
         ("timeout_commits", decision["timeout_commits"]),
+        # DRE-5069: the green run that superseded this failure, so the skip
+        # names what proved main green. Empty unless the reason is superseded.
+        ("superseded_by", decision.get("superseded_by", "")),
     ])
 
 
@@ -524,7 +616,8 @@ def main(argv: list[str]) -> int:
             decision = {"go": False, "branch": "", "attempt": 0,
                         "escalate": False, "reason": "records-unreadable",
                         "timeout_job": "", "timeout_step": "",
-                        "timeout_limit": "", "timeout_commits": ""}
+                        "timeout_limit": "", "timeout_commits": "",
+                        "superseded_by": ""}
             print("repair decide: attempt records unreadable — fail-closed, no "
                   "dispatch (the next failure event retries with fresh records)",
                   file=sys.stderr)
@@ -533,7 +626,8 @@ def main(argv: list[str]) -> int:
             history = load_history(args.history_file)
             if args.history_file and history is None:
                 print("repair decide: no usable repair history — the clock "
-                      "rule falls back to today's behaviour (DRE-4674)",
+                      "rule (DRE-4674) and the superseded rule (DRE-5069) "
+                      "fall back to today's behaviour",
                       file=sys.stderr)
             decision = decide(
                 conclusion=args.conclusion,
@@ -549,6 +643,11 @@ def main(argv: list[str]) -> int:
             print(f"repair decide: {decision['reason']}"
                   + (f" → {decision['branch']}" if decision["go"] else ""),
                   file=sys.stderr)
+            if decision["superseded_by"]:
+                print(f"repair decide: run {decision['superseded_by']} of this "
+                      f"workflow went green on a later commit of "
+                      f"{args.default_branch} — this failure is superseded, "
+                      f"no card and no agent (DRE-5069)", file=sys.stderr)
             if decision["timeout_step"]:
                 print(f"repair decide: the step "
                       f"{decision['timeout_step']!r} of job "

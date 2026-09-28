@@ -152,12 +152,20 @@ jobs:
       # script never raises and never fails this step — a gather that cannot
       # answer writes a marker the decide step reads as "no history", which is
       # exactly the behaviour before this step existed.
+      #
+      # DRE-5069: the same listing also says whether main has already moved
+      # past this failure — a run of this workflow created after this one, on
+      # a later commit, that concluded success. On 2026-09-25 two repair runs
+      # (36197298146, 36202241737) were spent on a fault whose fix had merged
+      # before either began. RUN_CREATED_AT is what "after" is measured from;
+      # a re-run keeps it. No call is added: the listing is already made.
       - name: Gather repair history (what the clock already killed)
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
           WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -167,6 +175,7 @@ jobs:
             --workflow-id "$WORKFLOW_ID" \
             --run-id "$RUN_ID" \
             --run-attempt "$RUN_ATTEMPT" \
+            --run-created-at "$RUN_CREATED_AT" \
             --branch "$DEFAULT_BRANCH" \
             --workflow-path "$WORKFLOW_PATH" \
             --head-sha "$HEAD_SHA" \
@@ -215,6 +224,21 @@ jobs:
             --refs-file /tmp/repair-refs.json \
             --pulls-file /tmp/repair-pulls.json \
             --history-file /tmp/repair-history.json >> "$GITHUB_OUTPUT"
+
+      # DRE-5069: the skip's receipt. A superseded failure files no card and
+      # dispatches no agent (every step that would is gated on go), so this
+      # line in the run log is the whole record of why — and the green run
+      # it names is the proof main had already moved past the fault.
+      - name: Report — superseded by a later green run
+        if: steps.decide.outputs.reason == 'superseded'
+        env:
+          SUPERSEDED_BY: ${{ steps.decide.outputs.superseded_by }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "superseded: run $SUPERSEDED_BY of this workflow went green on a later commit of the default branch, so the failure at ${HEAD_SHA:0:7} ($RUN_URL) is already behind main — no card, no repair agent."
+          echo "green run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$SUPERSEDED_BY"
+          echo "Superseded by [run $SUPERSEDED_BY]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$SUPERSEDED_BY) — no repair needed for ${HEAD_SHA:0:7}." >> "$GITHUB_STEP_SUMMARY"
 
       # Guardrail 2, budget exhausted: two attempts failed at this SHA —
       # stop and raise a plain-English triage card for a human, never a

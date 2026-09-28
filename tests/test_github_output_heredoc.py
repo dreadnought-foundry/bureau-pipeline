@@ -261,7 +261,7 @@ class PlainValueTest(unittest.TestCase):
             "go": True, "branch": "repair/DRE-4200-eeac2b140cef",
             "attempt": 2, "escalate": False, "reason": "dispatch",
             "timeout_job": "", "timeout_step": "", "timeout_limit": "",
-            "timeout_commits": "",
+            "timeout_commits": "", "superseded_by": "",
         })
         self.assertEqual(block.splitlines(), [
             "go=true",
@@ -273,6 +273,7 @@ class PlainValueTest(unittest.TestCase):
             "timeout_step=",
             "timeout_limit=",
             "timeout_commits=",
+            "superseded_by=",
         ])
 
     def test_render_leaves_a_single_line_value_alone(self):
