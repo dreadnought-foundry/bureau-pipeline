@@ -1,0 +1,24 @@
+# THROWAWAY — DRE-5116's live trial of claude-sonnet-5-5, on branch
+# trial/DRE-5116-sonnet-5-5-live only. Never merged, and never on the card
+# branch. Proves the card branch's pin raise (Claude Code 2.1.284 via the house
+# installer, claude-code-action v1.0.236) runs claude-sonnet-5-5 through the
+# house trial on a 1M context, the way DRE-3417 proved Opus 5.5
+# (trial-dre-3417-live.yml, draft PR #512). The first trial, on 2.1.282, was
+# draft PR #544.
+name: DRE-5116 live Sonnet 5.5 trial on 2.1.284
+# claude-code-action accepts no `push` event, and `workflow_dispatch` needs the
+# file on the default branch, so the trial rides a draft PR into the card
+# branch, exactly as DRE-3417's did.
+on:
+  pull_request:
+    branches: ["agent/DRE-5116-sonnet-5-5-adoption"]
+permissions:
+  contents: read
+jobs:
+  fleet-runner:
+    # The house trial, on the fleet's own runners (vars.BUREAU_RUNS_ON).
+    uses: ./.github/workflows/model-trial.yml
+    with:
+      model: claude-sonnet-5-5
+      pipeline_ref: trial/DRE-5116-sonnet-5-5-live
+    secrets: inherit
