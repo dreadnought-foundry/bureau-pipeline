@@ -305,7 +305,7 @@
       "segment": "planning",
       "clauses": {
         "entrance": {
-          "text": "A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the planner has escalated a card whose reasoning is itself the deliverable and stated why (DRE-2848), the post-approval critic sent an approved plan back with a stated reason (DRE-2721), a card has aged out of Intake and the sweep moved it here (DRE-2687), or a card has stood still in Planning past that lane's window and the sweep moved it here (DRE-4124 — the same remedy as the Intake age-out, one lane later: it used to be labelled for a human and left in Planning, where every other mechanism skips a held card and nobody was ever asked).",
+          "text": "A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the planner has escalated a card whose reasoning is itself the deliverable and stated why (DRE-2848), the post-approval critic sent an approved plan back with a stated reason (DRE-2721), a card has aged out of Intake and the sweep moved it here (DRE-2687), or a card has stood still in Planning past that lane's window and the sweep moved it here (DRE-4124 — the same remedy as the Intake age-out, one lane later: it used to be labelled for a human and left in Planning, where every other mechanism skips a held card and nobody was ever asked), or the merge gate is holding a green, approved pull request for a required code-owner review and moved the card here to ask the person the repository's rules name (DRE-4341 — only when the calling repo's merge-gate stub wakes the gate on a submitted review, because the sweep dispatches nothing for a card in this lane).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history the Phase-5 front door records — the four entrances exist, nothing yet reads a card's arrival against them"
@@ -317,13 +317,13 @@
           "pending": "needs the transition history the Phase-5 front door records"
         },
         "writers": {
-          "text": "The planner, the two agent runs that escalate, the sweep that moves a card out of Intake once it has aged past the window, and a human.",
-          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "reconcile.py", "operator"],
+          "text": "The planner, the two agent runs that escalate, the sweep that moves a card out of Intake once it has aged past the window, the merge gate parking a card whose pull request waits on a required code-owner review (DRE-4341), and a human.",
+          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "reconcile.py", "merge-gate.yml", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
         "evidence": {
-          "text": "A plan artifact, an escalation comment written in business terms — never code, never a diff — or a `plan-critic:` marker recording the round that sent the plan back (DRE-2721).",
+          "text": "A plan artifact, an escalation comment written in business terms — never code, never a diff — or a `plan-critic:` marker recording the round that sent the plan back (DRE-2721), or the merge gate's code-owner hold comment naming who must review which folders (DRE-4341).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs routing verdicts (DRE-2724) writing on every card before arrival can be judged against the evidence"
@@ -436,7 +436,7 @@
       "note": "Folded from the two review lanes DRE-2726 retired (DRE-2818 deleted their entries once Linear archived the states). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.",
       "clauses": {
         "entrance": {
-          "text": "A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate. The card may arrive here from ANY pre-review lane — Intake, Triage, Planning, Backlog, Todo or In Progress — and not only from In Progress: a pull request opened outside the relay's dispatch has no agent-task run behind it to have written In Progress, so qa-review.yml advances the card itself when the pull request opens (DRE-4179). Green Light is not a pre-review lane for this route: it is the CEO's own queue and a branch existing does not take a card out of it.",
+          "text": "A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate. The card may arrive here from ANY pre-review lane — Intake, Triage, Planning, Backlog, Todo or In Progress — and not only from In Progress: a pull request opened outside the relay's dispatch has no agent-task run behind it to have written In Progress, so qa-review.yml advances the card itself when the pull request opens (DRE-4179). Green Light is not a pre-review lane for this route: it is the CEO's own queue and a branch existing does not take a card out of it. The one move out of Green Light into this lane is the merge gate's release (DRE-4341): once the required code-owner review it was holding for has landed, it moves the card back here before it merges — only a card it parked itself, recognized by its own hold marker, never a card someone else put in Green Light.",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history Phase 5 records"

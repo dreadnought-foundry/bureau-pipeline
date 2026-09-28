@@ -692,7 +692,7 @@ class Shipped:
 
     @property
     def moves(self):
-        return [c[1:] for c in self.linear_calls if c[0] == "advance"]
+        return [c for c in self.linear_calls if c[0] == "advance"]
 
     @property
     def card_comments(self):
@@ -832,20 +832,20 @@ class TheStubCannotWakeTheGateTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.run = run_shipped(stub=STUB_WITHOUT_REVIEW)
+        cls.shipped = run_shipped(stub=STUB_WITHOUT_REVIEW)
 
     def test_the_note_is_still_posted_and_the_step_exits_clean(self):
-        self.assertEqual(self.run.proc.returncode, 0, self.run.out)
-        self.assertEqual(len(self.run.notes), 1)
-        self.assertEqual(self.run.merges, [])
+        self.assertEqual(self.shipped.proc.returncode, 0, self.shipped.out)
+        self.assertEqual(len(self.shipped.notes), 1)
+        self.assertEqual(self.shipped.merges, [])
 
     def test_the_card_stays_in_review(self):
-        self.assertEqual(self.run.moves, [])
-        self.assertEqual(self.run.card_comments, [])
-        self.assertEqual(self.run.linear["cards"][CARD]["state"], "In Review")
+        self.assertEqual(self.shipped.moves, [])
+        self.assertEqual(self.shipped.card_comments, [])
+        self.assertEqual(self.shipped.linear["cards"][CARD]["state"], "In Review")
 
     def test_the_log_says_why_the_park_was_skipped(self):
-        self.assertRegex(self.run.proc.stdout,
+        self.assertRegex(self.shipped.proc.stdout,
                          r"park skipped.*cannot wake the gate on a review")
 
 

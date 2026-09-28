@@ -272,6 +272,23 @@ F. FIX RUN IN FLIGHT (DRE-4486) — the Agent Fix lane's own record for this
    ahead of it: a conflicted draft still routes to the fix agent, because
    the branch has to be reconciled with its base whatever the flag says.
 
+O. CODE-OWNER REVIEW (DRE-4341) — the base branch's rules, the pull
+   request's reviews and CODEOWNERS, gathered by `code_owner_hold.py gather`
+   and read by `code_owner_hold.read_owners`. On 2026-09-19 Portico #616 was
+   green and approved, the gate decided `merge`, and GitHub refused it five
+   times over nine hours — "the base branch policy prohibits the merge" —
+   because a ruleset requires the review of the owner CODEOWNERS names for a
+   folder the pull request touched. Each refusal was logged as a real
+   failure and nobody was asked for anything.
+
+   UNMET is `hold`, naming whose review is missing and for which folders;
+   the workflow posts that once per head on the PR and parks the card in
+   Green Light for that person (`code_owner_hold.py hold`). UNKNOWN — any
+   read that failed, or an approval that cannot be proved to be an owner's —
+   is NOT a hold: the gate merges as before, so a refusal still fails the
+   step loudly, never a silent hold. Evaluated LAST, after condition 4, so
+   the approval the note asks for is the one thing left.
+
 STRUCTURED / ANCHORED verdict parsing (DRE-1992 scope note, 2026-07-09):
 a comment merely QUOTING a verdict marker must not count as one. A comment
 is a verdict comment only if its FIRST LINE starts with the marker
@@ -302,7 +319,9 @@ Contract with merge-gate.yml:
     pulls/{pr}/commits) — the dependabot-policy record (DRE-2039) AND the
     content-binding commit record (DRE-2340 condition 4), --stack-file
     (the record `stacked_prs.py gather` writes — condition S, DRE-4103;
-    unreadable holds), all optional;
+    unreadable holds), --owners-file (the record `code_owner_hold.py
+    gather` writes — condition O, DRE-4341; unreadable is UNKNOWN and merges
+    as before), all optional;
     omitted = the pre-DRE-2039/2416 behavior for every caller that never
     passes them. The compare payload must NOT be trimmed (DRE-2340): its
     `files[]` is what the head's content id is computed from.
@@ -313,7 +332,11 @@ Contract with merge-gate.yml:
     `carried_content_id=` line, which the workflow turns into the PR
     comment that explains the carry; and — only on a stack hold — a
     `stacked_on=` line naming the blocking pull requests (`#2582, #2583`),
-    which the workflow turns into the note it posts on the PR.
+    which the workflow turns into the note it posts on the PR; and —
+    whenever --owners-file was passed (condition O, DRE-4341) — a
+    `code_owner_review=` line (met | unmet | not_required | unknown), plus,
+    only on a code-owner hold, an `owner_hold=` line carrying JSON
+    `[{"owners": […], "folders": […]}, …]` for the note and the card.
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
@@ -322,7 +345,9 @@ event to change the answer (CI finishing, a fresh review of the current
 head); `hold` means an explicit negative verdict is standing
 (REQUEST_CHANGES, Verifier FAIL — or, since DRE-4103, anything short of an
 APPROVE on an open pull request this branch carries) and only a new
-verdict, or that pull request's own merge, lifts it;
+verdict, or that pull request's own merge, lifts it — or, since DRE-4341, a
+required code-owner review is missing and only that person's approval
+lifts it;
 `conflict` means the branch cannot merge until it is reconciled with its
 base (DRE-2416) and the workflow dispatches the fix agent; `human` means
 the gate will not merge this PR as it stands and no event it watches will
@@ -355,6 +380,11 @@ from stranded_fix import lane_refusal, read_lane  # noqa: E402
 # carry" lives in ONE module, read by the gatherer that fetches their threads
 # and by this gate that reads their verdicts — the same reason as above.
 import stacked_prs  # noqa: E402
+
+# Condition O's record (DRE-4341). What the base branch's rules, the pull
+# request's reviews and CODEOWNERS say about a required code-owner review is
+# read in ONE module, by the gatherer, the gate and the hold arm alike.
+import code_owner_hold  # noqa: E402
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -469,6 +499,13 @@ class Decision:
     #: that are not approved, by number. Non-empty only on a stack hold; the
     #: workflow posts the refusal on the PR when it is.
     stacked_on: list = field(default_factory=list)
+    #: Condition O (DRE-4341): `code_owner_hold`'s reading of the code-owner
+    #: requirement (met / unmet / not_required / unknown), or None when the
+    #: caller passed no owners record.
+    code_owner_review: Optional[str] = None
+    #: On a code-owner hold, whose review is missing and for which folders —
+    #: `(((owner, …), (folder, …)), …)`. Empty on every other decision.
+    owner_hold: tuple = ()
 
 
 def first_line(body: Optional[str]) -> str:
@@ -1059,7 +1096,51 @@ def evaluate_verifier(
     return Decision("hold", "latest verifier verdict is not PASS — holding"), ""
 
 
-def decide(
+def evaluate_owners(owners) -> tuple:
+    """Condition O (DRE-4341): `(blocked, note)`.
+
+    UNMET is a `hold` naming whose review is missing and for which folders —
+    GitHub would refuse the merge, and only that person's review lifts it.
+    UNKNOWN (a read failed, or an approval cannot be proved to be an
+    owner's) is NOT a hold: the gate merges as it did before this condition
+    existed, so a refusal still fails the step loudly, and the note says why
+    the gate could not tell. MET, NOT_REQUIRED and no record at all proceed.
+    """
+    if owners is None:
+        return None, None
+    if owners.state == code_owner_hold.UNMET:
+        who = " and ".join(
+            f"{' or '.join(o)} for {', '.join(f)}" for o, f in owners.groups
+        )
+        blocked = Decision(
+            "hold",
+            f"a required code-owner review is missing — waiting on {who} "
+            "(DRE-4341)",
+        )
+        blocked.owner_hold = owners.groups
+        return blocked, None
+    if owners.state == code_owner_hold.UNKNOWN:
+        return None, (
+            f"code-owner review UNKNOWN ({owners.detail}) — merging as before; "
+            "a refusal from GitHub stays a loud failure (DRE-4341)"
+        )
+    return None, None
+
+
+def decide(*args, owners=None, **kwargs) -> Decision:
+    """The whole gate — `_decide`'s conditions, then condition O (DRE-4341)
+    over `owners`, `code_owner_hold.read_owners`'s answer. Every decision
+    carries that answer as `code_owner_review`, whatever it decided, so the
+    workflow can release a card the gate parked on any evaluation where the
+    review has landed. The default (None) reproduces the pre-DRE-4341
+    behavior for every caller that never passes it."""
+    decision = _decide(*args, owners=owners, **kwargs)
+    if owners is not None:
+        decision.code_owner_review = owners.state
+    return decision
+
+
+def _decide(
     head_sha: str,
     qa_login: str,
     check_runs,
@@ -1077,8 +1158,9 @@ def decide(
     unfinished_runs=(),
     stack=None,
     branch_commits=None,
+    owners=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4, first
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4 → O, first
     blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
@@ -1129,7 +1211,12 @@ def decide(
     the pull request's OWN verdicts (its own REQUEST_CHANGES is the more
     direct answer) and before F and 4, whose notes would otherwise claim a
     merge is all that is left. The default (None) reproduces the
-    pre-DRE-4103 behavior for every caller that never passes it."""
+    pre-DRE-4103 behavior for every caller that never passes it.
+
+    `owners` is condition O's reading (DRE-4341), evaluated after condition
+    4: reaching it means every other condition said merge, so the one thing
+    the hold's note asks for — the code owner's approval — is the one thing
+    left."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1199,6 +1286,13 @@ def decide(
     if blocked:
         return _decided(blocked)
 
+    # Condition O (DRE-4341), last: GitHub would refuse this merge for a
+    # missing code-owner review, so it is a hold that names who, not a merge
+    # that fails "for real" on every wake.
+    blocked, owners_note = evaluate_owners(owners)
+    if blocked:
+        return _decided(blocked)
+
     if carried:
         reason = (
             f"CI green + critic APPROVE bound to {critic_sha or head_sha}, "
@@ -1215,6 +1309,8 @@ def decide(
     stale_note = currency_note(compare_status)
     if stale_note:
         decision.notes.append(stale_note)
+    if owners_note:
+        decision.notes.append(owners_note)
     return decision
 
 
@@ -1287,6 +1383,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "A file that cannot be read is fail-closed: the "
                              "gate holds rather than assume nothing is "
                              "stacked under this pull request")
+    # Condition O's record (DRE-4341) — optional; omitting it reproduces the
+    # pre-DRE-4341 behavior for every caller that never passes it.
+    parser.add_argument("--owners-file", default=None,
+                        help="the owners record written by `code_owner_hold.py "
+                             "gather` — the base branch's rules, the PR's "
+                             "reviews and CODEOWNERS (DRE-4341). A file that "
+                             "cannot be read is UNKNOWN: the gate merges as "
+                             "before and a refusal stays loud")
     return parser
 
 
@@ -1415,11 +1519,21 @@ def main(argv=None) -> int:
                              "detail": f"cannot read the stack record: {e}"}
         stack = stacked_prs.read_stack(stack_payload)
 
+    # DRE-4341: an unreadable owners file is UNKNOWN, never a hold — the gate
+    # merges as it did before condition O, so a refusal stays loud.
+    owners = None
+    if args.owners_file:
+        try:
+            with open(args.owners_file) as f:
+                owners = code_owner_hold.read_owners(json.load(f), args.pr_author)
+        except (OSError, json.JSONDecodeError) as e:
+            owners = code_owner_hold.unknown(f"cannot read the owners record: {e}")
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
-        unfinished, stack, branch_commits,
+        unfinished, stack, branch_commits, owners=owners,
     )
     for note in decision.notes:
         print(f"note={note}")
@@ -1435,6 +1549,15 @@ def main(argv=None) -> int:
     # in the note it posts on the PR; the reason= line says why each blocks.
     if decision.stacked_on:
         print(f"stacked_on={', '.join(f'#{n}' for n in decision.stacked_on)}")
+    # DRE-4341: whenever an owners record was passed — the workflow releases
+    # a card the gate parked when this reads `met` — and, on a code-owner
+    # hold, whose review is missing, for the note the workflow posts.
+    if decision.code_owner_review is not None:
+        print(f"code_owner_review={decision.code_owner_review}")
+    if decision.owner_hold:
+        print("owner_hold=" + json.dumps(
+            [{"owners": list(o), "folders": list(f)} for o, f in decision.owner_hold]
+        ))
     return 0
 
 
