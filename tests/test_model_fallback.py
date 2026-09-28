@@ -56,11 +56,14 @@ OPUS = "claude-opus-5"
 # The workhorse ladder's top rung since DRE-4836 (2026-09-25); OPUS is the
 # rung below it, and the planner's Opus rung is this one too.
 OPUS55 = "claude-opus-5-5"
-# The WORKHORSE ladder's backup rung since 2026-09-16 (DRE-3880). It is also
-# the top of the advisory ladder — the one model on two ladders in this config
-# — and the fence that used to be bought by keeping those lists disjoint is
-# bought per pull request instead (tests/test_review_separation.py).
+# The WORKHORSE ladder's backup rung since 2026-09-16 (DRE-3880), and its last
+# rung since DRE-5116 (2026-09-28) put Sonnet 5.5 above it. Both Sonnets sit on
+# the advisory ladder too, and the fence that used to be bought by keeping
+# those lists disjoint is bought per pull request instead
+# (tests/test_review_separation.py).
 SONNET5 = "claude-sonnet-5"
+# The workhorse ladder's Sonnet rung and the advisory top since DRE-5116.
+SONNET55 = "claude-sonnet-5-5"
 # Sonnet 4.6, which DRE-3880 took OFF the workhorse ladder and deliberately did
 # not retire: it keeps the judgement ladder's last rung, the one that exists so
 # a plan never blocks on availability.
@@ -83,7 +86,7 @@ class LadderShapeTest(unittest.TestCase):
     def test_ladder_is_best_first(self):
         # Best → worst. The ladder is the contract; every build role shares it.
         # Fable is deliberately absent — see FableIsNotABuildModelTest.
-        self.assertEqual(mf.LADDER, [OPUS55, OPUS, SONNET5])
+        self.assertEqual(mf.LADDER, [OPUS55, OPUS, SONNET55, SONNET5])
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(mf.LADDER) <= mf.KNOWN_MODELS)
@@ -175,12 +178,13 @@ class SelectLadderTest(unittest.TestCase):
     def test_probe_exception_treated_as_inconclusive_falls_through(self):
         # A probe that raises (network error/timeout) must not block the build
         # and must not return a model just confirmed 404. Here Opus raises
-        # (inconclusive → skip) and Sonnet is available → Sonnet.
+        # (inconclusive → skip) and Sonnet is available → the first Sonnet
+        # rung, which is Sonnet 5.5 since DRE-5116.
         def probe(m):
             if m in (OPUS55, OPUS):
                 raise TimeoutError("probe network error")
             return True
-        self.assertEqual(mf.select("engineer", probe=probe), SONNET5)
+        self.assertEqual(mf.select("engineer", probe=probe), SONNET55)
 
 
 class CachingTest(unittest.TestCase):
@@ -199,7 +203,7 @@ class CachingTest(unittest.TestCase):
 
         def probe(m):
             calls.append(m)
-            return {OPUS55: False, OPUS: False, SONNET5: True}[m]
+            return {OPUS55: False, OPUS: False, SONNET55: False, SONNET5: True}[m]
 
         t = [1000.0]
         # First select: Opus probed (False) then Sonnet probed (True) → 2 calls.
@@ -317,8 +321,12 @@ class CliTest(unittest.TestCase):
 
     def test_cli_select_skips_an_unavailable_top_of_ladder(self):
         self.assertEqual(
-            self._select("engineer", {OPUS55: False, OPUS: False, SONNET5: True}),
+            self._select("engineer", {OPUS55: False, OPUS: False, SONNET55: False, SONNET5: True}),
             SONNET5,
+        )
+        self.assertEqual(
+            self._select("engineer", {OPUS55: False, OPUS: False, SONNET55: True, SONNET5: True}),
+            SONNET55,
         )
 
     def test_cli_select_returns_top_of_ladder_when_available(self):

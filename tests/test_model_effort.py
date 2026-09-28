@@ -46,6 +46,8 @@ import model_fallback as mf  # noqa: E402
 OPUS55 = "claude-opus-5-5"
 OPUS = "claude-opus-5"
 SONNET5 = "claude-sonnet-5"
+# The advisory top and the workhorse Sonnet rung since DRE-5116 (2026-09-28).
+SONNET55 = "claude-sonnet-5-5"
 SONNET46 = "claude-sonnet-4-6"
 FABLE51 = "claude-fable-5-1"
 
@@ -65,32 +67,34 @@ def _ladder(cfg: dict, name: str) -> list:
 class LadderTest(unittest.TestCase):
     """The ladders as the card adopts them, and the file still validating."""
 
-    def test_workhorse_ladder_is_opus_5_5_then_opus_5_then_sonnet_5(self):
+    def test_workhorse_ladder_is_opus_5_5_then_opus_5_then_the_two_sonnets(self):
         # The "newer versions auto" rule (CEO, 2026-09-14): a same-family newer
         # version at the same or lower price is adopted through a normal PR.
-        # Opus 5 keeps the rung below it, so a run that cannot get 5.5 falls
-        # back to the model the fleet has been building on.
+        # Opus 5 keeps the rung below Opus 5.5, so a run that cannot get 5.5
+        # falls back to the model the fleet has been building on; Sonnet 5.5
+        # went in directly above Sonnet 5 the same way (DRE-5116).
         cfg = _canonical()
         self.assertEqual(
-            _ladder(cfg, cfg["default_ladder"]), [OPUS55, OPUS, SONNET5]
+            _ladder(cfg, cfg["default_ladder"]), [OPUS55, OPUS, SONNET55, SONNET5]
         )
 
     def test_the_opus_rung_of_the_other_two_ladders_is_opus_5_5(self):
-        # Their FIRST rungs are unchanged — Sonnet 5 still tops the advisory
-        # ladder and Fable 5.1 the judgement one. Only the Opus fallback moves.
+        # Only the Opus fallback moved with DRE-4836. Sonnet 5.5 took the
+        # advisory top on 2026-09-28 (DRE-5116) with Sonnet 5 kept below it,
+        # and Fable 5.1 still tops the judgement one.
         cfg = _canonical()
-        self.assertEqual(_ladder(cfg, "advisory"), [SONNET5, OPUS55])
+        self.assertEqual(_ladder(cfg, "advisory"), [SONNET55, SONNET5, OPUS55])
         self.assertEqual(_ladder(cfg, "judgement"), [FABLE51, OPUS55, SONNET46])
 
-    def test_review_separation_sends_a_sonnet_5_build_to_opus_5_5(self):
+    def test_review_separation_sends_a_sonnet_build_to_opus_5_5(self):
         # DRE-3892's carry-forward, arriving: a same-family adoption moves the
         # overlapping rung on both ladders at once, and a rule left naming the
-        # old id is refused as stale. Reviewers stay on Sonnet 5 for everything
-        # else — only the substitute for a Sonnet-5 BUILD is named here.
+        # old id is refused as stale. Since DRE-5116 both Sonnet rungs sit on
+        # both ladders, so each carries a rule, and both name Opus 5.5.
         cfg = _canonical()
         rules = cfg["review_separation"]["rules"]
-        self.assertEqual([r["built_on"] for r in rules], [SONNET5])
-        self.assertEqual(rules[0]["reviewers_use"], OPUS55)
+        self.assertEqual([r["built_on"] for r in rules], [SONNET55, SONNET5])
+        self.assertEqual({r["reviewers_use"] for r in rules}, {OPUS55})
 
     def test_the_canonical_config_still_validates(self):
         self.assertEqual(mf.policy_errors(_canonical()), [])
@@ -117,6 +121,19 @@ class LadderTest(unittest.TestCase):
         self.assertIn("DRE-4836", reasons)
         self.assertIn("$4", reasons)
 
+    def test_the_sonnet_5_5_rungs_cite_the_card_the_trial_and_the_rule(self):
+        cfg = _canonical()
+        reasons = " ".join(
+            " ".join(rung["reason"].split())
+            for rungs in cfg["ladders"].values()
+            for rung in rungs
+            if rung["model"] == SONNET55
+        )
+        self.assertIn("DRE-5116", reasons)
+        self.assertIn("actions/runs/36481112286", reasons)
+        self.assertIn("2026-09-14", reasons)
+        self.assertIn("$2/$10", reasons)
+
 
 class PriceTest(unittest.TestCase):
     """The declared price — what "no dearer" is read from (DRE-3895)."""
@@ -129,6 +146,19 @@ class PriceTest(unittest.TestCase):
         self.assertEqual(float(entry["output"]), 20.00)
         self.assertTrue(str(entry.get("source") or "").startswith("http"))
         self.assertTrue(entry.get("declared"), "a figure needs the date a human wrote it")
+
+    def test_sonnet_5_5_is_declared_at_the_price_of_sonnet_5(self):
+        # DRE-5116's adoption rests on this: the same price on both sides.
+        prices = yaml.safe_load(PRICES.read_text())["prices"]
+        self.assertIn(SONNET55, prices, "an id with no price can never be adopted")
+        entry = prices[SONNET55]
+        self.assertEqual(float(entry["input"]), 2.00)
+        self.assertEqual(float(entry["output"]), 10.00)
+        self.assertTrue(str(entry.get("source") or "").startswith("http"))
+        self.assertTrue(entry.get("declared"))
+        new, old = mf.declared_prices()[SONNET55], mf.declared_prices()[SONNET5]
+        self.assertLessEqual(new["input"], old["input"])
+        self.assertLessEqual(new["output"], old["output"])
 
     def test_opus_5_5_is_no_dearer_than_the_opus_5_it_replaces(self):
         # The whole adoption rule in one assertion: same family, newer, and at
@@ -148,6 +178,13 @@ class DeclaredEffortTest(unittest.TestCase):
 
     def test_effort_for_reads_it(self):
         self.assertEqual(mf.effort_for(OPUS55), HIGH)
+
+    def test_the_config_declares_high_for_sonnet_5_5(self):
+        # DRE-5116: the level the fleet runs Sonnet 5 at (its default, `high`),
+        # written down because Sonnet 5.5's levels are recalibrated.
+        self.assertEqual(_canonical().get("effort", {}).get(SONNET55), HIGH)
+        self.assertEqual(mf.effort_for(SONNET55), HIGH)
+        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"].get(SONNET55), HIGH)
 
     def test_a_model_with_no_declared_effort_gets_no_argument(self):
         # The adoption changes Opus 5.5 and nothing else: every other model

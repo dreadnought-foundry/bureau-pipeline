@@ -57,6 +57,9 @@ import model_fallback as mf  # noqa: E402
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
+# The advisory ladder's top rung and the workhorse ladder's Sonnet rung since
+# DRE-5116 (2026-09-28) — Sonnet 5 keeps the rung below it on both.
+SONNET55 = "claude-sonnet-5-5"
 # The workhorse ladder's primary since DRE-4836 (2026-09-25) — Opus 5 keeps
 # the rung below it.
 OPUS55 = "claude-opus-5-5"
@@ -481,7 +484,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             )
             # The Python degrade path:
             self.assertIn(
-                f'"{SONNET5}", "{OPUS}"',
+                f'"{SONNET5}", "{SONNET55}", "{OPUS}"',
                 (tree / "scripts" / "model_fallback.py").read_text(),
             )
             # And the CI path agrees.
@@ -519,8 +522,9 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # Hardcoded on purpose: the mirror is GENERATED from models.yaml, so
             # asserting it against a literal is the canary that catches a mirror
             # change nobody meant. Moved fable-5 -> sonnet-5 on 2026-08-12 with
-            # the advisory ladder itself.
-            self.assertEqual(_cli_select(tree, "critic"), SONNET5)
+            # the advisory ladder itself, and sonnet-5 -> sonnet-5-5 on
+            # 2026-09-28 (DRE-5116).
+            self.assertEqual(_cli_select(tree, "critic"), SONNET55)
             # The degrade path carries the JUDGEMENT ladder too (DRE-3015): a
             # truncated checkout must not silently drop the planner back onto
             # the build model, which would look exactly like a healthy run.

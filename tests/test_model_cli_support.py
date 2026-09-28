@@ -24,6 +24,17 @@ Raising the pin is what lets Opus 5.5 back on, and DRE-3417 did that on
 the model back on the ladders in the same pull request. This file is what
 fails if a model ever goes on a ladder before the pin can run it.
 
+DRE-5116 (2026-09-28) added the second row, and it is a different kind of
+floor. 2.1.282 did RUN `claude-sonnet-5-5` — the API accepted it, and a live
+trial passed — but that binary had no registry entry for the model and ran it
+on its unknown-model defaults: a 200K context window and a 32K output ceiling
+(trial run 36479502126), where the model has 1M and 128K. The critic tops the
+advisory ladder on it, so that is a fifth of its context gone with nothing
+failing. 2.1.284 is the first release that knows the model (trial run
+36481112286: contextWindow 1,000,000). The row names the oldest Claude Code
+that runs the model AS the fleet means to run it, and the pin moved to 2.1.284
+(claude-code-action v1.0.236) in the same PR.
+
 The table below is the only place a minimum is written. Add a row when the API
 starts refusing a model from an older Claude Code, with the version its 400
 names.
@@ -49,6 +60,10 @@ import model_fallback as mf  # noqa: E402
 # 36096103941 and 36098144053 (2026-09-24 21:50 and 22:20 PT).
 MINIMUM_CLAUDE_CODE = {
     "claude-opus-5-5": "2.1.280",
+    # Not a refusal: 2.1.282 runs it, on a 200K window. 2.1.284 is the first
+    # Claude Code whose registry carries it (1M native, 128K output) — read off
+    # the published binaries and confirmed by live trial run 36481112286.
+    "claude-sonnet-5-5": "2.1.284",
 }
 
 _EXACT_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
