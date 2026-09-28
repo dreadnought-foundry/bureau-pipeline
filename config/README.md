@@ -230,7 +230,7 @@ but not selectable* (retired ids, and ids excluded by cost policy).
 | kind | who | model | why |
 |---|---|---|---|
 | `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5.5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
-| `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around. |
+| `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5.5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around — and Sonnet 5.5, its same-price successor, since 2026-09-28 (DRE-5116), with Sonnet 5 kept as the rung below. |
 | `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
 The allocation used to be exactly inverted — the cheapest model judging the most
@@ -261,7 +261,7 @@ So the rule, now enforced by schema validation in
   selector keeps running the last-known-good ladders instead of honouring it.
   The rungs beneath the top are deliberately shared: that is the DEGRADED fall
   onto the build model. **One exemption, for the advisory ladder only**
-  (DRE-3880) — see *The one declared overlap* below;
+  (DRE-3880) — see *The declared overlaps* below;
 - nothing **dearer than the rung a non-build ladder degrades onto** may sit
   below that rung, where the check above cannot see it. The question is the
   **declared price** in `model-prices.yaml`, so a rung with no declared price is
@@ -285,20 +285,35 @@ So the rule, now enforced by schema validation in
   Linear card for a human whenever the API offers a model this file does not
   name.
 
-## The one declared overlap — a Sonnet-5 build is never reviewed by Sonnet 5
+## The declared overlaps — a Sonnet build is never reviewed by the same Sonnet
 
-Since 2026-09-16 (CEO decision, DRE-3880) `claude-sonnet-5` **tops the advisory
-ladder and backs the workhorse one**. One model, two ladders — so the build /
-review fence the rule above used to buy by keeping those two lists disjoint is
-bought at **selection time**, per pull request, instead:
+Since 2026-09-16 (CEO decision, DRE-3880) `claude-sonnet-5` **topped the
+advisory ladder and backed the workhorse one**. One model, two ladders — so the
+build / review fence the rule above used to buy by keeping those two lists
+disjoint is bought at **selection time**, per pull request, instead. Since
+2026-09-28 (DRE-5116) there are **two** such models: `claude-sonnet-5-5` tops the
+advisory ladder and is the workhorse ladder's Sonnet rung, and `claude-sonnet-5`
+is the rung below it on both. Each has a rule:
 
 ```yaml
 review_separation:
   roles: [critic, verifier]          # the roles that REVIEW a pull request
   rules:
-    - built_on: claude-sonnet-5        # …when the build ran on this…
+    - built_on: claude-sonnet-5-5      # …when the build ran on this…
       reviewers_use: claude-opus-5-5   # …those roles run on this instead
+    - built_on: claude-sonnet-5
+      reviewers_use: claude-opus-5-5
 ```
+
+**Which overlaps need a rule.** Every advisory rung that also sits on a build
+ladder, except the advisory ladder's **last** rung, which is the designed loud
+fall onto the build model (Opus 5.5 today) and may carry a rule but never needs
+one. Until DRE-5116 this read "the advisory top only", which was the same set
+while one Sonnet sat on both ladders; with two, it refused Sonnet 5's rule as
+stale, and without that rule a Sonnet-5 build — which happens exactly when
+Sonnet 5.5 was skipped — would be one unavailable Sonnet 5.5 away from its own
+reviewer. `tests/test_review_separation.py::TwoSonnetsOnBothLaddersTest` holds
+it.
 
 The critic's and the verifier's Select-model steps read the model the build ran
 on off the card's own `model-attempt:` heartbeat
@@ -307,13 +322,13 @@ rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
 which bars **every** declared overlap: absence of evidence that the build ran on
 something else is not evidence that it did, and the guarantee has to survive a
 Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
-than Sonnet 5 on any pull request whose card cannot be read.
+than Sonnet on any pull request whose card cannot be read.
 
 **A cardless pull request is the everyday case of that.** A bot PR has no card,
-so its critic runs `--built-on-unknown`, skips Sonnet 5 and lands on the Opus
-rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
+so its critic runs `--built-on-unknown`, skips both Sonnet rungs and lands on
+the Opus rung — `claude-opus-5-5` since DRE-4836. A hand-built PR on an
 `agent/DRE-<n>-*` branch whose card carries a `model-attempt:` heartbeat naming
-any model but Sonnet 5 is reviewed on Sonnet 5 as usual.
+any model but a Sonnet is reviewed on Sonnet 5.5 as usual.
 `tests/test_review_separation.py::test_an_unknown_build_model_still_never_reviews_on_an_overlap_model`
 is what holds it.
 
@@ -326,8 +341,8 @@ A declaration is not decoration. `policy_errors` refuses a **bare** overlap (one
 with no rule), a rule that sends the reviewer back to the build model, a
 `reviewers_use` that is not on the advisory ladder, and a **stale** rule
 describing an overlap that no longer exists. That last one is the DRE-3892
-carry-forward: a same-family successor replaces this rung on *both* ladders at
-once, so an adoption that leaves the rule behind fails `--check` twice — the new
+carry-forward: a same-family successor replaces a Sonnet rung on *both* ladders
+at once, so an adoption that leaves the rule behind fails `--check` twice — the new
 rung is a bare overlap, and the old rule names a model that is no longer one.
 **DRE-4836 (2026-09-25) is the first adoption that hit it**: Opus 5.5 replaced
 Opus 5 on all three ladders at once, and the rule moved with the rung.
@@ -339,7 +354,7 @@ for the planner's model, because Fable on a build ladder is still the 2026-08-09
 incident.
 
 Recording it is **not** a degradation: the selection note names the separation
-and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet-5 build
+and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet build
 would teach the fleet to ignore the warning that means a reviewer did not get
 its model.
 
@@ -403,7 +418,7 @@ byte-for-byte regeneration, the red `--check`, and that editing this file alone
 changes what the fleet selects.
 
 The literal carries `review_separation` too (DRE-3880): a degrade that dropped
-the fence would review a Sonnet-5 build on Sonnet 5 and look exactly like a
+the fence would review a Sonnet build on the same Sonnet and look exactly like a
 healthy run.
 
 ## The effort level (DRE-4836)
@@ -414,6 +429,7 @@ that model asks for, passed to the CLI as `--effort`:
 ```yaml
 effort:
   claude-opus-5-5: high
+  claude-sonnet-5-5: high
 ```
 
 It exists because **Claude Opus 5.5 defaults to `medium`**, one level below
@@ -422,6 +438,11 @@ have every build agent in the fleet thinking one level less, on every card, with
 nothing in any log saying so. The CEO's decision of 2026-09-24 is that wherever
 the fleet runs Opus 5.5 it runs it at `high`, explicitly — not the model's own
 default, and not the harness's.
+
+`claude-sonnet-5-5` is declared at `high` too (DRE-5116). That is the level the
+fleet runs Sonnet 5 at — Sonnet 5 has no entry because its default is `high` —
+and Sonnet 5.5's default is still `high`, but its levels are recalibrated, so
+the level is written down rather than left to a default that may move.
 
 A model that is **not named here gets no `--effort` argument at all**, which is
 what keeps an adoption of one model's level from moving another model's spend.
@@ -445,6 +466,16 @@ in the same PR that raised the pin to 2.1.282 (`claude-code-action` v1.0.234).
 pinned Claude Code (`.github/actions/install-claude-code/action.yml`
 `default:`) cannot run, so an adoption like DRE-4836 and the pin it needs have
 to land together.
+
+**"Runs" means runs as intended, not just "is accepted".** On 2026-09-28
+Claude Code 2.1.282 ran `claude-sonnet-5-5` without error, but it had no
+registry entry for the model and gave it its unknown-model defaults — a 200K
+context window and a 32K output ceiling, against the model's 1M and 128K. The
+critic tops the advisory ladder, so that would have cost it four fifths of its
+context with nothing failing. DRE-5116 raised the pin to 2.1.284
+(`claude-code-action` v1.0.236), the first release that knows the model, in the
+same PR as the ladder move, and the table's row for it names 2.1.284. Read a
+trial's `modelUsage.<model>.contextWindow`, not only its pass/fail.
 
 ## Changing a model
 

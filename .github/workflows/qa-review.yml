@@ -996,8 +996,9 @@ jobs:
       # is precisely the failure DRE-2317 exists to prevent.
       #
       # A SONNET-5 BUILD IS NEVER REVIEWED BY SONNET 5 (DRE-3880). Since
-      # 2026-09-16 `claude-sonnet-5` tops the advisory ladder AND backs the
-      # workhorse one, so the critic can no longer assume its own ladder is
+      # 2026-09-16 `claude-sonnet-5` sat on the advisory ladder AND the
+      # workhorse one — and since 2026-09-28 `claude-sonnet-5-5` does too, above
+      # it on both (DRE-5116) — so the critic can no longer assume its own ladder is
       # disjoint from the build path — the separation is bought HERE, per pull
       # request. `build-model` reads the model this card's last attempt ran on
       # out of its own `model-attempt:` heartbeat, and `--built-on` hands it to

@@ -52,7 +52,8 @@
 #                                card. The HOT PATH. Cost-appropriate model.
 #                    advisory  — bounded consults at decision points (the
 #                                critic gates every unattended merge). Sonnet 5
-#                                since 2026-08-12, on measured cost.
+#                                since 2026-08-12, on measured cost; Sonnet 5.5
+#                                since 2026-09-28 (DRE-5116).
 #                    judgement — judgement-heavy, LOW-VOLUME work whose output
 #                                every downstream run is shaped by: the planner,
 #                                once per epic. The STRONGEST model, and never
@@ -76,10 +77,13 @@
 #                  advisory — and `rules` names, for each model that sits on the
 #                  advisory ladder AND a build ladder, the model those reviewers
 #                  use instead when the pull request in front of them was BUILT
-#                  on it. Schema validation refuses a BARE overlap (one with no
-#                  rule), a rule that sends the reviewer back to the build
-#                  model, a `reviewers_use` that is not on the advisory ladder,
-#                  and a STALE rule describing an overlap that no longer exists.
+#                  on it. Every such model ABOVE the advisory ladder's last rung
+#                  needs a rule (DRE-5116; it was only the top rung until two
+#                  Sonnet versions sat on both ladders at once). Schema
+#                  validation refuses a BARE overlap (one with no rule), a rule
+#                  that sends the reviewer back to the build model, a
+#                  `reviewers_use` that is not on the advisory ladder, and a
+#                  STALE rule describing an overlap that no longer exists.
 #   effort         model id → the effort level every run on that model asks
 #                  for, passed to the CLI as `--effort`. A model that is NOT
 #                  named here is run with no `--effort` argument at all, which
@@ -163,27 +167,62 @@ ladders:
         404s it, or the subscription does not serve it — lands on the model the
         fleet has been building on all along, which is what makes the first
         fleet build on the new ladder safe to be the first real run.
+    - model: claude-sonnet-5-5
+      reason: >-
+        the Sonnet rung since 2026-09-28 (DRE-5116) — what a build gets when
+        NEITHER Opus rung above is available. Adopted under the CEO's "newer
+        versions auto" rule of 2026-09-14, on his request of 2026-09-28 13:23
+        PT that the whole system move to Sonnet 5.5: the successor to Sonnet 5
+        at the SAME price ($2/$10 per MTok, cache reads $0.20), with the same
+        1M context, 128K output and tokenizer. Trialed live on the pinned
+        Claude Code before it went on (https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36481112286, `passed — completed, 3 turns,
+        4s`, contextWindow 1,000,000). That needed Claude Code 2.1.284
+        (claude-code-action v1.0.236), raised in the same PR: 2.1.282 had no
+        registry entry for this model and ran it on a 200K window.
+        tests/test_model_cli_support.py holds the pair. It is ALSO the top of
+        the advisory ladder (Sonnet 5 below it is that ladder's second rung),
+        and `review_separation` declares what its reviewers run instead.
     - model: claude-sonnet-5
       reason: >-
-        the last rung — what a build gets when NEITHER Opus rung above is
-        available. Replaced `claude-sonnet-4-6` here on
+        the last rung — what a build gets when NEITHER Opus rung NOR Sonnet 5.5
+        above is available; the ladder's last rung since DRE-5116 put Sonnet 5.5
+        directly above it (2026-09-28), and kept, not replaced, as that card
+        specifies — the fallback if Sonnet 5.5 is not served. Replaced `claude-sonnet-4-6` here on
         2026-09-16 (CEO decision, DRE-3880): same 1M context and 128k output,
         and cheaper ($2/$10 against $3/$15). Sonnet 4.6 was NOT retired — it
         keeps the judgement ladder's last rung below, and only its WORKHORSE
-        entry was replaced. This rung is ALSO the top of the advisory ladder,
-        which makes it the one model on two ladders in this file; the fence
-        that used to be bought by keeping the lists disjoint is bought at
-        selection time instead, and `review_separation` below declares it.
+        entry was replaced. This rung is ALSO on the advisory ladder (its top
+        until 2026-09-28, its second rung since), so it is one of two Sonnet
+        models on both ladders; the fence that used to be bought by keeping
+        the lists disjoint is bought at selection time instead, and
+        `review_separation` below declares it for both.
 
   # The ADVISORY ladder: the roles that judge rather than build. Sonnet-first
-  # since 2026-08-12 on MEASURED cost. The premise this ladder was built on —
+  # since 2026-08-12 on MEASURED cost, and Sonnet 5.5-first since 2026-09-28
+  # (DRE-5116). The premise this ladder was built on —
   # "advisory work is bounded, so the price per token is affordable" — held for
   # verifier and medic but NOT for the critic, which fires on every PR push.
   advisory:
+    - model: claude-sonnet-5-5
+      reason: >-
+        preferred — the reviewers' model since 2026-09-28 (DRE-5116), adopted
+        under the CEO's "newer versions auto" rule of 2026-09-14 on his request
+        of 2026-09-28 that the whole system move to Sonnet 5.5. It is Sonnet
+        5's successor at the SAME price ($2/$10 per MTok) with the same 1M
+        context and 128K output, so the cost case measured for Sonnet 5 below
+        carries over unchanged and nothing is given up on large diffs — which
+        is why it waited for Claude Code 2.1.284: on 2.1.282 it ran on a 200K
+        window. Live trial on 2.1.284: https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36481112286 (`passed — completed, 3 turns,
+        4s`, contextWindow 1,000,000). It also sits on the workhorse ladder,
+        so `review_separation` declares what its reviewers run instead.
     - model: claude-sonnet-5
       reason: >-
-        ALSO the workhorse ladder's backup rung since 2026-09-16 (DRE-3880) —
-        the one declared overlap in this file, see `review_separation`.
+        the first fallback since 2026-09-28 (DRE-5116), when Sonnet 5.5 took
+        the top rung above it; kept rather than replaced, so a reviewer that
+        cannot get Sonnet 5.5 lands on the model the critic ran on for six
+        weeks before falling to Opus. ALSO the workhorse ladder's last rung
+        since 2026-09-16 (DRE-3880) — one of the two declared overlaps in this
+        file, see `review_separation`. It was
         promoted to primary 2026-08-12 on measured cost with no measured
         quality loss. Fable cost 5.5x per critic review ($0.60 -> $3.33 median,
         portico) while the critic's run rate rose 27/day -> 63/day, taking it
@@ -200,8 +239,9 @@ ladders:
         on 2026-09-25 (DRE-4836) with the workhorse ladder's primary: the Opus
         rung is one decision written in three places, and a ladder left on the
         older id would have reviewers falling onto a model no build runs on.
-        The ladder's FIRST rung is unchanged — reviewers still start on Sonnet
-        5. NOTE the direction INVERTED on 2026-08-12: falling to Opus
+        The ladder's FIRST rung was unchanged by that move; since 2026-09-28
+        (DRE-5116) reviewers start on Sonnet 5.5, then Sonnet 5, then this
+        rung. NOTE the direction INVERTED on 2026-08-12: falling to Opus
         is now falling UP in capability and cost ($4/$20 vs $2/$10), not down.
         The warning still matters — an advisory role that did not get its
         intended model is a run worth looking at — but read it as "unexpected
@@ -287,11 +327,21 @@ agents:
 
 # THE BUILD/REVIEW FENCE, DECLARED (DRE-3880, CEO decision 2026-09-16)
 # --------------------------------------------------------------------
-# `claude-sonnet-5` tops the advisory ladder AND backs the workhorse one, so
+# `claude-sonnet-5` topped the advisory ladder AND backed the workhorse one, so
 # the separation the old schema rule bought by keeping those two lists disjoint
 # has to be bought somewhere else. It is bought HERE, per pull request: when a
 # build ran on a model named below, the reviewers for that pull request skip it
 # and use the model this file names instead.
+#
+# Since 2026-09-28 (DRE-5116) TWO models sit on both ladders: Sonnet 5.5 tops
+# the advisory ladder and is the workhorse ladder's Sonnet rung, and Sonnet 5 is
+# the rung below it on both. Each gets a rule. Validation used to admit a rule
+# only for the advisory TOP, which would have refused Sonnet 5's as stale and
+# left a Sonnet-5 build one unavailable Sonnet 5.5 away from being reviewed on
+# Sonnet 5 — and a Sonnet-5 build happens precisely when Sonnet 5.5 was
+# skipped. So every advisory rung ABOVE the ladder's last that also sits on a
+# build ladder needs a rule; the last rung is the designed loud fall onto the
+# build model and needs none.
 #
 # The overlap is not new in principle — the advisory ladder's own fallback is
 # `claude-opus-5`, the workhorse PRIMARY, so reviewer and worker have coincided
@@ -302,7 +352,7 @@ agents:
 # overlap, a rule pointing back at the build model, a `reviewers_use` that is
 # not on the advisory ladder, and a rule that no longer describes a real
 # overlap. That last one is the DRE-3892 carry-forward — a future same-family
-# adoption moves this rung on BOTH ladders at once, and an adoption that did
+# adoption moves a Sonnet rung on BOTH ladders at once, and an adoption that did
 # not move the rule with it fails `sync_model_config.py --check` twice over.
 review_separation:
   # The two roles that REVIEW a pull request. The medic is advisory too and is
@@ -312,12 +362,23 @@ review_separation:
     - critic
     - verifier
   rules:
+    - built_on: claude-sonnet-5-5
+      reviewers_use: claude-opus-5-5
+      reason: >-
+        a Sonnet-5.5 build is never reviewed by Sonnet 5.5 (DRE-5116). Opus
+        5.5, not Sonnet 5: Sonnet 5 is Sonnet 5.5's own predecessor, so a
+        different family is the real separation, and Opus 5.5 is already the
+        substitute below, so this adds no model these roles did not already run
+        on. A card we could not read (`--built-on-unknown`) still lands on Opus
+        5.5, exactly as it did before, because both Sonnet rungs come off.
+        Sonnet 5 stays behind it as the next rung.
     - built_on: claude-sonnet-5
       reviewers_use: claude-opus-5-5
       reason: >-
         a Sonnet-5 build is never reviewed by Sonnet 5. Opus 5.5 is the
-        advisory ladder's own next rung, so the substitute is a model these
-        roles already run on rather than a new spend decision. The id moved
+        advisory ladder's own last rung, so the substitute is a model these
+        roles already run on rather than a new spend decision; Sonnet 5.5, a
+        different model, stays behind it. The id moved
         with that rung on 2026-09-25 (DRE-4836) — this is the DRE-3892
         carry-forward arriving exactly as written: a same-family adoption moves
         the overlap on both ladders at once, and a rule left naming
@@ -337,8 +398,15 @@ review_separation:
 # chooses a model emits the argument for the model it actually chose. A run
 # that FELL to another rung gets that rung's level — Opus 5's, which is to say
 # none, because Opus 5 already defaults to `high`.
+#
+# Claude Sonnet 5.5 (DRE-5116) is declared at `high` too. That is the level the
+# fleet runs Sonnet 5 at — Sonnet 5 has no entry because its default IS `high`
+# — and Sonnet 5.5's default is still `high`, but its levels are recalibrated,
+# so the level is written down rather than left to a default that may move.
+# Both live trials ran at the default, which is this same level.
 effort:
   claude-opus-5-5: high
+  claude-sonnet-5-5: high
 
 discovery:
   # A model id we SEE but do not name here may, at most, be proposed for the
@@ -356,8 +424,8 @@ retired:
     reason: "rotated out when Opus 5 landed; kept readable so old markers attribute"
 
 # Fable held the advisory ladder 2026-08-09 to 2026-08-12 and came off it on a
-# MEASUREMENT, not a preference — see the advisory ladder's top rung for the
-# numbers. Kept readable, never selectable, so model-attempt:/model-error:
+# MEASUREMENT, not a preference — see the advisory ladder's Sonnet 5 rung for
+# the numbers. Kept readable, never selectable, so model-attempt:/model-error:
 # markers on in-flight cards still attribute instead of resolving to None.
 #
 # This is `claude-fable-5`, the PREDECESSOR of the `claude-fable-5-1` on the

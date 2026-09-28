@@ -66,15 +66,21 @@ workhorse` (or `judgement`) is REJECTED — the selector degrades to the
 last-known-good mirror rather than honour it, and `sync_model_config.py
 --check` fails CI red.
 
-THE ONE DECLARED OVERLAP (DRE-3880, CEO decision 2026-09-16)
-------------------------------------------------------------
-`claude-sonnet-5` tops the ADVISORY ladder and backs the WORKHORSE one, so the
-build/review fence is no longer bought by keeping those two lists disjoint. It
-is bought at SELECTION time, per pull request: `select(role, built_on=…)` walks
-the reviewer past the model the build ran on. `config/models.yaml`'s
+THE DECLARED OVERLAPS (DRE-3880, CEO decision 2026-09-16; DRE-5116)
+-------------------------------------------------------------------
+`claude-sonnet-5` topped the ADVISORY ladder and backed the WORKHORSE one, so
+the build/review fence is no longer bought by keeping those two lists disjoint.
+It is bought at SELECTION time, per pull request: `select(role, built_on=…)`
+walks the reviewer past the model the build ran on. `config/models.yaml`'s
 `review_separation` block declares that, the schema permits the overlap ONLY
 together with the declaration, and the generated mirror below carries it so a
 truncated checkout separates too.
+
+Since 2026-09-28 (DRE-5116) there are two such models: `claude-sonnet-5-5` tops
+the advisory ladder and `claude-sonnet-5` sits below it, and both are rungs of
+the workhorse ladder. Every advisory rung above the ladder's LAST one that also
+sits on a build ladder needs its own rule; the last rung is the designed loud
+fall onto the build model.
 
 None of that touches the 2026-08-09 rule. The STRONGEST model we run — the top
 of the judgement ladder — is still unreachable from a build ladder at every
@@ -192,8 +198,8 @@ _FALLBACK_MODEL_CONFIG = {
         "judgement": "judgement",
     },
     "ladders": {
-        "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5"],
-        "advisory": ["claude-sonnet-5", "claude-opus-5-5"],
+        "workhorse": ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5"],
+        "advisory": ["claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5"],
         "judgement": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-4-6"],
     },
     "agents": {
@@ -212,11 +218,13 @@ _FALLBACK_MODEL_CONFIG = {
     },
     "effort": {
         "claude-opus-5-5": "high",
+        "claude-sonnet-5-5": "high",
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "review_separation": {
         "roles": ["critic", "verifier"],
         "rules": {
+            "claude-sonnet-5-5": "claude-opus-5-5",
             "claude-sonnet-5": "claude-opus-5-5",
         },
     },
@@ -436,14 +444,26 @@ def policy_errors(config, prices=None) -> list[str]:
          the decision "we do not run this at all" and has to be enforced on its
          own terms.
       8. `review_separation` (DRE-3880) binds both the critic and the verifier,
-         names only advisory roles, and carries exactly one rule per real
-         overlap: `reviewers_use` is on the advisory ladder and is not the
+         names only advisory roles, and carries a rule for every overlap that
+         needs one: `reviewers_use` is on the advisory ladder and is not the
          build model itself, and a rule describing an overlap that no longer
          exists is STALE and refused. The stale half is the DRE-3892 carry-
          forward: a same-family adoption moves the overlapping rung on both
          ladders at once, so an adoption that leaves the rule behind fails
          twice — the new rung is a bare overlap, and the old rule names a model
          that is no longer one.
+
+         WHICH overlaps need a rule (DRE-5116): every advisory rung that also
+         sits on a build ladder, EXCEPT the advisory ladder's last rung. That
+         read "the advisory top" until 2026-09-28, which was the same set while
+         one Sonnet sat on both ladders. With Sonnet 5.5 above Sonnet 5 on
+         both, the top-only rule refused Sonnet 5's rule as stale — and without
+         it a Sonnet-5 build, which happens exactly when Sonnet 5.5 was skipped,
+         is one unavailable Sonnet 5.5 away from its own reviewer. The last
+         rung is the ladder's designed loud fall onto the build model (Opus
+         5.5 today); a rule for it is admitted, never required. A rule is
+         STALE when its model is not on both the advisory ladder and a build
+         ladder.
     """
     cfg = _normalize_config(config)
     if cfg is None:
@@ -492,13 +512,18 @@ def policy_errors(config, prices=None) -> list[str]:
     if prices is None:
         prices = declared_prices()
 
-    # Rule 8 (DRE-3880), first — rule 4 reads its answer. The advisory ladder's
-    # TOP rung is the only place an overlap is admissible, and only with a rule
-    # that says what the reviewers run instead.
+    # Rule 8 (DRE-3880, widened by DRE-5116), first — rule 4 reads its answer.
+    # An advisory rung that also sits on a build ladder is admissible only with
+    # a rule that says what the reviewers run instead — every such rung above
+    # the ladder's LAST, which is the designed loud fall onto the build model
+    # and may carry a rule but never needs one.
     advisory_ladder_name = kinds[ADVISORY_KIND]
     advisory_models = ladders.get(advisory_ladder_name, [])
-    advisory_top = advisory_models[0] if advisory_models else None
-    overlap = advisory_top if advisory_top in workhorse_models else None
+    overlaps = [m for m in advisory_models if m in workhorse_models]
+    required = [
+        m for at, m in enumerate(advisory_models)
+        if m in workhorse_models and (at == 0 or at < len(advisory_models) - 1)
+    ]
     separation = cfg["review_separation"]
     declared: dict[str, str] = {}
     if separation["declared"]:
@@ -518,10 +543,10 @@ def policy_errors(config, prices=None) -> list[str]:
                     "would be a spend change wearing a safety rule"
                 )
     for built_on, use in separation["rules"].items():
-        if built_on != overlap:
+        if built_on not in overlaps:
             errors.append(
                 f"review_separation.rules: {built_on} is not on both the "
-                f"{advisory_ladder_name} ladder's top rung and a build ladder, "
+                f"{advisory_ladder_name} ladder and a build ladder, "
                 "so this rule describes an overlap that does not exist — a "
                 "STALE rule is how the guarantee is lost without anybody "
                 "editing it (DRE-3892)"
@@ -540,13 +565,19 @@ def policy_errors(config, prices=None) -> list[str]:
             )
         else:
             declared[built_on] = use
-    if overlap is not None and overlap not in declared:
+    for overlap in required:
+        if overlap in declared:
+            continue
+        where = (
+            f"tops the {ADVISORY_KIND} ladder"
+            if advisory_models and overlap == advisory_models[0]
+            else f"sits above the {ADVISORY_KIND} ladder's last rung"
+        )
         errors.append(
-            f"ladders.{advisory_ladder_name}: {overlap} tops the "
-            f"{ADVISORY_KIND} ladder and also sits on a build ladder — a BARE "
-            "overlap is refused. Declare it in `review_separation.rules` "
-            "(which model the reviewers use when a build ran on it) or take it "
-            "off one of the two ladders"
+            f"ladders.{advisory_ladder_name}: {overlap} {where} and also sits "
+            "on a build ladder — a BARE overlap is refused. Declare it in "
+            "`review_separation.rules` (which model the reviewers use when a "
+            "build ran on it) or take it off one of the two ladders"
         )
 
     # Rule 4, for every kind that is not the build path. A non-workhorse ladder
