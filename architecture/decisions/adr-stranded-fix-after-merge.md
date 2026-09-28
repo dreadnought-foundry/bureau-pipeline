@@ -73,7 +73,8 @@ Three mechanisms, in the order they act:
 
 1. **The gate does not merge while a fix run is live for the pull request.**
    `merge_gate.evaluate_fix_lane` — condition F, evaluated 0 → D → 1 → 2 → 3
-   → **F** → 4. `merge-gate.yml` gathers the lane with `stranded_fix.py lane`
+   → **F** → 4 (since DRE-4103, 0 → D → 1 → 2 → 3 → S → **F** → 4: the
+   stack condition sits between the verdicts and this one). `merge-gate.yml` gathers the lane with `stranded_fix.py lane`
    and threads it as `--fix-lane-file`. This is the prevention; the other two
    are what stands when it does not hold.
 2. **A fix run that finds its pull request already merged does not push

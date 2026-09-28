@@ -129,6 +129,13 @@ if args[:2] == ["run", "list"]:
 
 if args[0] == "api":
     path = [a for a in args[1:] if not a.startswith("-")][0]
+    if "pulls?state=open" in path:
+        # DRE-4103: the gate lists the repo's open pull requests to find any
+        # this branch is stacked on. Only this one is open — nothing is under
+        # it; the stacked shapes have their own suite
+        # (tests/test_merge_gate_stacked.py).
+        emit(json.dumps({"number": int(os.environ["PR"]),
+                         "head_sha": fx["pr"]["headRefOid"]}))
     if (opt("--method") or "GET") == "POST" or "-F" in args:
         emit({})
     if "check-runs" in path:
@@ -267,6 +274,8 @@ def run_shipped_step(body=None, die_at_page: int = 0) -> ShippedStepResult:
             # as a `${{ }}` `substitute()` has no value for.
             "REPO_FULL": REPO,
             "WORKFLOW_TOKEN": "workflow-token",
+            # DRE-4103 moved the login's app-slug derivation to the step env too.
+            "QA_LOGIN": QA_LOGIN,
         }
         if die_at_page:
             env["COMMENTS_DIE_AT_PAGE"] = str(die_at_page)
