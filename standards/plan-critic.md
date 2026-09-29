@@ -45,7 +45,7 @@ behind it can start, everything past that card is a second epic wearing the
 first one's number — nobody can cost it until the first half has been observed —
 and the finding is one sentence:
 
-    DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — that is a second epic, not a later step.
+    DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — that is a child epic under this one, not a later step.
 
 The reader is `scripts/plan_seam.py`: relation-based, walking the `blocks`
 relations of `children-json` joined with `children-detail`, with the epic's

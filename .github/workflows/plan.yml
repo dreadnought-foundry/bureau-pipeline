@@ -2114,8 +2114,8 @@ jobs:
             ${{ steps.pre1.outputs.findings }}
 
             ONE FINDING IS NOT FIXED BY EDITING CARDS. A finding that reads
-            `wait on observing … live — that is a second epic` says the plan is
-            TWO epics, so reordering the cards or rewording them answers
+            `wait on observing … live — that is a child epic under this one`
+            says the plan is TWO epics, so reordering the cards or rewording them answers
             nothing: say so in the artifact's summary, cancel the cards on the
             far side of the seam here, and file the second epic as a SIBLING of
             this one — the same parent, its own number — with those cards
@@ -2203,8 +2203,8 @@ jobs:
             ${{ steps.pre1.outputs.findings }}
 
             ONE FINDING IS NOT FIXED BY EDITING CARDS. A finding that reads
-            `wait on observing … live — that is a second epic` says the plan is
-            TWO epics, so reordering the cards or rewording them answers
+            `wait on observing … live — that is a child epic under this one`
+            says the plan is TWO epics, so reordering the cards or rewording them answers
             nothing: say so in the artifact's summary, cancel the cards on the
             far side of the seam here, and file the second epic as a SIBLING of
             this one — the same parent, its own number — with those cards

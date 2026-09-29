@@ -14,7 +14,7 @@ half of its turn. So the finding is computed BEFORE the critic reads anything,
 off the board's own relations, in the words `standards/card-quality.md` fixes:
 
     DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — that is a
-    second epic, not a later step.
+    child epic under this one, not a later step.
 
 ## The rule, in two sentences
 
@@ -78,7 +78,7 @@ import routing_verdict  # noqa: E402
 #: (DRE-3391), the gate card's test derives what it expects from this module
 #: rather than retyping it, and `tests/test_plan_seam.py` pins the text.
 FINDING = ("{waiting}: wait on observing {observation} live — that is a "
-           "second epic, not a later step.")
+           "child epic under this one, not a later step.")
 
 #: The heading the seam block opens with when it is appended to the mechanical
 #: note. It says what the finding IS, because the same comment carries advisory
