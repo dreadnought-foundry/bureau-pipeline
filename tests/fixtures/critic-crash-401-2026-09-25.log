@@ -1,0 +1,5 @@
+qa-review / review	Gate critic result (attempt 1)	2026-09-25T21:10:25.4420114Z critic result gate: what the agent itself reported (from the execution file):
+qa-review / review	Gate critic result (attempt 1)	2026-09-25T21:10:25.4420387Z   api_error_status: 401
+qa-review / review	Gate critic result (attempt 1)	2026-09-25T21:10:25.4420592Z   terminal_reason: api_error
+qa-review / review	Gate critic result (attempt 1)	2026-09-25T21:10:25.4420789Z   result: Failed to authenticate. API Error: 401 OAuth access token is invalid.
+qa-review / review	Gate critic result (attempt 1)	2026-09-25T21:10:25.4431056Z ##[error]Process completed with exit code 1.

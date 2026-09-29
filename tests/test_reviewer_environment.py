@@ -250,6 +250,112 @@ class TestAQuotedPhraseIsNotACrash:
 
 
 # --------------------------------------------------------------------------- #
+# 2b. the wording today's Claude Code prints for a dead credential (DRE-5056)  #
+# --------------------------------------------------------------------------- #
+
+FIXTURES = ROOT / "tests" / "fixtures"
+
+#: The result-gate lines of agent-bureau run 36189071180 (2026-09-25, 14:10 PT),
+#: GitHub's log prefix kept. The lines are the ones DRE-5056 quotes off that
+#: run; the job and step names are the reusable review's own.
+CRASH_2026_09_25 = FIXTURES / "critic-crash-401-2026-09-25.log"
+
+#: The execution file of the 2026-08-20 crash — "OAuth access token has expired".
+CRASH_2026_08_20 = FIXTURES / "critic-crash-401-2026-08-20.json"
+
+CREDENTIAL_SLUGS = ("credential-refused", "authentication-error")
+
+
+class TestAnExplicit401NamesTheCredentialAsRefused:
+    """Claude Code 2.1.28x no longer prints `authentication_error`, and the gate
+    prints no turn, cost or duration numbers — so on 2026-09-25 a revoked token
+    detected as nothing, the medic posted the old rate-limit note, and the
+    review was never held. The run's own sentence is the evidence now."""
+
+    def test_the_2026_09_25_crash_is_a_refused_credential(self):
+        found = renv.detect(CRASH_2026_09_25.read_text("utf-8"))
+        assert found is not None, (
+            "run 36189071180 died on a revoked token and must name a cause"
+        )
+        assert found.slug == "credential-refused", (
+            "DRE-4570's proof reads the hold for `credential-refused`"
+        )
+
+    def test_the_2026_08_20_crash_is_a_refused_credential_too(self):
+        found = renv.detect(CRASH_2026_08_20.read_text("utf-8"))
+        assert found is not None and found.slug in CREDENTIAL_SLUGS
+
+    def test_the_fixture_carries_no_numbers_so_the_record_cannot_decide(self):
+        """The fixture is the case the record reader misses: no turns, no cost,
+        no duration. If this ever carries them, the test above proves less."""
+        record = renv.execution_record(CRASH_2026_09_25.read_text("utf-8"))
+        assert record is not None and record["api_error_status"] == "401"
+        assert not check_agent_result.has_service_outage_signature(record)
+
+    def test_an_explicit_401_decides_at_any_duration(self):
+        """The run took 2,069 ms — over the record's 1000 ms limit."""
+        slow = _log(
+            f"critic result gate: {execution_result.FAILURE_HEADER}",
+            "  num_turns: 1",
+            "  total_cost_usd: 0",
+            "  duration_ms: 2069",
+            "  result: Failed to authenticate. API Error: 401 OAuth access "
+            "token is invalid.",
+        )
+        found = renv.detect(slow)
+        assert found is not None and found.slug == "credential-refused"
+
+    def test_the_duration_limit_still_holds_without_the_401(self):
+        slow = _log(
+            f"critic result gate: {execution_result.FAILURE_HEADER}",
+            "  subtype: error_during_execution",
+            "  num_turns: 1",
+            "  total_cost_usd: 0",
+            "  duration_ms: 2069",
+            "  result: Claude AI usage limit reached",
+        )
+        assert renv.detect(slow) is None
+
+    def test_the_old_authentication_error_line_still_reads_as_before(self):
+        found = renv.detect(AUTHENTICATION_LOG)
+        assert found is not None and found.slug == "authentication-error"
+
+    @pytest.mark.parametrize("line", [
+        "  result: API Error: 429 rate_limit_error",
+        "  result: Failed to authenticate. API Error: 429 This organization has "
+        "been disabled.",
+        "  result: API Error: 500 Internal server error",
+        "  result: API Error: 529 Overloaded",
+        "  result: Failed to authenticate. API Error: 503 Service Unavailable",
+        "  result: Failed to authenticate. API Error: 4010",
+    ])
+    def test_a_429_or_a_5xx_is_not_a_credential(self, line):
+        found = renv.detect(_log(line))
+        assert found is None or found.slug not in CREDENTIAL_SLUGS
+
+    @pytest.mark.parametrize("line", [
+        "a line reading `Failed to authenticate. API Error: 401` names the "
+        "credential as refused",
+        "+    assert 'Failed to authenticate. API Error: 401' in line",
+        "-  result: Failed to authenticate. API Error: 401 OAuth access token",
+        "> result: Failed to authenticate. API Error: 401 OAuth access token",
+        "| Failed to authenticate. API Error: 401 |",
+    ])
+    def test_a_quoted_401_is_not_a_crash(self, line):
+        assert renv.detect(_log(line)) is None
+
+    def test_the_medic_names_the_cause_on_the_2026_09_25_log(self, tmp_path):
+        """What went wrong in production: the class was `critic_infra_crash`
+        with an empty signature, so no evidence note, so no hold."""
+        out = _lines(_classify_cli(
+            "QA Review (reusable)", CRASH_2026_09_25.read_text("utf-8"), tmp_path
+        ))
+        assert out["class"] == "environment_crash"
+        assert out["signature"] == "credential-refused"
+        assert out["infra_crash"] == "true"
+
+
+# --------------------------------------------------------------------------- #
 # 3. the evidence note — the phrase the fleet alarm counts                     #
 # --------------------------------------------------------------------------- #
 
