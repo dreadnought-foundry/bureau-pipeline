@@ -424,8 +424,11 @@ class TestGrowthIsLegible:
         line = mid_epic.growth_line("DRE-2700", 9, 14)
         assert "9" in line and "14" in line and "DRE-2700" in line
 
+    # The pass's epic record is stubbed too (DRE-3644): the report reads its
+    # epics through it first, and an unstubbed read would reach Linear.
     def test_the_sweep_reports_growth_for_this_repos_active_epics(self):
-        with patch.object(mid_epic, "refresh_epic_growth") as refresh:
+        with patch.object(reconcile, "epic_records", return_value={}), \
+                patch.object(mid_epic, "refresh_epic_growth") as refresh:
             refresh.return_value = {
                 "green_lit": 9, "current": 14, "unrecorded": [], "re_approved": [],
             }
@@ -434,9 +437,11 @@ class TestGrowthIsLegible:
         assert refresh.call_args.args[1] == "DRE-2700"
 
     def test_a_growth_read_that_fails_never_fails_the_sweep(self):
-        with patch.object(
-            mid_epic, "refresh_epic_growth", side_effect=RuntimeError("linear down")
-        ):
+        with patch.object(reconcile, "epic_records", return_value={}), \
+                patch.object(
+                    mid_epic, "refresh_epic_growth",
+                    side_effect=RuntimeError("linear down"),
+                ):
             reconcile.report_epic_growth({"DRE-2700"})  # must not raise
 
 

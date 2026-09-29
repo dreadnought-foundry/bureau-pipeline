@@ -71,6 +71,10 @@ def sweep_turn(*dependents: str, children: tuple = ()):
     forward relations, or the card itself (with `children`) — so the fake
     serves the same number of reads whether or not the turn still reads the
     card to decide a dispatch (DRE-3664 removed that read with the dispatch).
+
+    The epic gate is stubbed, so the pass's epic record it would have read —
+    the one the green light is taken off since DRE-3644 — is stubbed with it:
+    the turn reads it for free in the sweep, and this counts the turn's reads.
     """
     from unittest.mock import patch
 
@@ -97,6 +101,7 @@ def sweep_turn(*dependents: str, children: tuple = ()):
         patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
         patch.object(reconcile, "card_state", return_value="Backlog"), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile, "epic_records", return_value={}), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment") as comment:
         reconcile.advance_unblocked_epics("DRE-2900")

@@ -61,10 +61,14 @@ edges, nodes, pageInfo
 
 `Issue` carries no comment count either. So `linear_ops.comment_count()` pages
 comment ids, 250 to a page — and the cap is what makes that affordable: an
-issue cannot exceed eight pages, by Linear's own limit. An epic below the line
-costs ONE request, because page one comes back with `hasNextPage: false`. Only
-an epic near the cap costs eight, and that is precisely the epic the warning
-exists for. Measured live on 2026-09-13: DRE-2668, 2,000 comments, 8 requests.
+issue cannot exceed eight pages, by Linear's own limit. Page one is not a
+request of its own any more: since DRE-3644 it rides the sweep's batched epic
+record (`reconcile.EPIC_RECORD_GQL` selects `comments(first: 250)`), so an epic
+under 250 comments costs NOTHING — its first page comes back with
+`hasNextPage: false` and is the count. Only an epic past that page is paged by
+`comment_count()`, which walks it from the start: up to eight requests for an
+epic near the cap, and that is precisely the epic the warning exists for.
+Measured live on 2026-09-13: DRE-2668, 2,000 comments, 8 requests.
 `sweep-spend: report_epic_growth <n> request(s)` is where that cost shows up
 per pass (DRE-3639), so a cut can be made against a number rather than a guess.
 
