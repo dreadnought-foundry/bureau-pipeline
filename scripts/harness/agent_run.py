@@ -157,6 +157,15 @@ def agent_task_prompt(workflow_path) -> str:
     return prompts[0]
 
 
+def _decide_by(turns: int) -> int:
+    """`turn_budget.decide_by`, read from the scripts beside this package.
+    stdlib only, so the bare-runner discovery note above still holds."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import turn_budget  # noqa: PLC0415 — path-dependent by design
+
+    return turn_budget.decide_by(turns)
+
+
 def build_prompt(
     card: SeededCard,
     workflow_path=None,
@@ -189,6 +198,11 @@ def build_prompt(
         "steps.card.outputs.description": card.description,
         "steps.gate.outputs.role || 'engineer'": role,
         "steps.gate.outputs.role": role,
+        # DRE-4370: the ceiling the prompt names is the one this harness runs
+        # the agent at, and the decide-by turn is turn_budget's for it — the
+        # same `Select model` arithmetic, so the prompt tells the truth here.
+        "steps.model.outputs.turns": str(MAX_TURNS),
+        "steps.model.outputs.decide_by": str(_decide_by(MAX_TURNS)),
     }
 
     def replace(match):

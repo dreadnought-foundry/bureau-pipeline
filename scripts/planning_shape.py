@@ -41,6 +41,16 @@ them would be inventing the decision.
 A stamp written before DRE-3029 carries no `by:` line at all. It reads as
 `hand`, which is what it was: the CLI was the only writer there had ever been.
 
+## A card sent back to Planning is read again (DRE-4370)
+
+A shape is a reading of the card as it was sent in. A build run that hands the
+card back (`agent-task.yml`) or a turn death read as size (`dead_run`'s replan)
+is evidence that reading was wrong: the work did not fit one run. So a stamp
+OLDER than the latest return receipt is void — every reader here reads the
+thread from that receipt on, the classifier stamps the card afresh, and the
+card never carries two shapes from one reader's point of view and one from
+another's. A stamp newer than the receipt stands, a hand stamp included.
+
 ## One shape, and three ways a card can fail to carry one
 
 Exactly one shape is stamped per card. The three faults are separate on purpose,
@@ -386,15 +396,59 @@ def shape_comment(
     return "\n".join(lines)
 
 
+def return_marks() -> tuple:
+    """The first words of a comment that sends a card back to Planning.
+
+    Imported from the modules that own each receipt, never retyped: the build
+    run's hand-back (`planner_score.HANDBACK_RECEIPT_PREFIX`, which the scorer
+    and the split ledger already key on) and the turn death read as size
+    (`dead_run.REPLAN_MARK`, DRE-4366). Local imports: this module is read by
+    nearly everything, and neither of those is needed until a thread is read.
+    """
+    import dead_run
+    import planner_score
+
+    return (planner_score.HANDBACK_RECEIPT_PREFIX, dead_run.REPLAN_MARK)
+
+
+def return_receipt(comment_bodies) -> str | None:
+    """The newest comment that OPENS with a return mark, or None.
+
+    Opens with, the same anchoring every marker here follows: a comment that
+    merely quotes the mark returns nothing.
+    """
+    marks = return_marks()
+    for body in reversed(list(comment_bodies or ())):
+        if (body or "").lstrip().startswith(marks):
+            return body
+    return None
+
+
+def live(comment_bodies) -> list:
+    """The thread a shape is read from: everything from the newest return
+    receipt on, or the whole thread when the card was never sent back.
+
+    A stamp before that receipt read the card as it was sent in, and the
+    receipt says that reading did not survive a run (DRE-4370).
+    """
+    bodies = list(comment_bodies or ())
+    marks = return_marks()
+    for i in range(len(bodies) - 1, -1, -1):
+        if (bodies[i] or "").lstrip().startswith(marks):
+            return bodies[i:]
+    return bodies
+
+
 def _stamped(comment_bodies) -> list:
     """Every shape stamped on the card as `(name, by)`, lower-cased, in the
     order first seen. Unfiltered — recognising them is the caller's next step.
+    Read from the `live` thread, so a stamp a return receipt voided is not one.
 
     A stamp with no `**Stamped by:**` line predates DRE-3029 and reads as
     `hand`: the CLI was the only writer there had ever been.
     """
     seen: list[tuple] = []
-    for body in comment_bodies or ():
+    for body in live(comment_bodies):
         text = (body or "").lstrip()
         match = _SHAPE_LINE.match(text)
         if not match:
@@ -411,9 +465,10 @@ def stamped_by(comment_bodies) -> tuple:
     """`(who, model)` for the FIRST stamp on the card, or `(None, None)`.
 
     Read by DRE-3016's scorer, which grades the classifier separately from the
-    plan and so must be able to tell a model's call from a person's.
+    plan and so must be able to tell a model's call from a person's. A stamp a
+    return receipt voided is not the first one (DRE-4370).
     """
-    for body in comment_bodies or ():
+    for body in live(comment_bodies):
         text = (body or "").lstrip()
         if not _SHAPE_LINE.match(text):
             continue

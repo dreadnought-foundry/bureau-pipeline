@@ -635,8 +635,37 @@ def prompt_for(card: dict, *, doc: dict | None = None, brief: str | None = None,
         body,
         "===== END UNTRUSTED CARD TEXT =====",
         "",
+        *_returned_section(card.get("returned")),
         "Answer with ONE JSON object and nothing else.",
     ])
+
+
+#: The heading the return receipt is handed to the model under (DRE-4370).
+RETURNED_HEADING = "## Why this card is back in Planning"
+
+
+def _returned_section(receipt: str | None) -> list:
+    """The return receipt as evidence, or nothing for a card never sent back.
+
+    Fenced and sanitized like the body: the receipt carries a run's own words —
+    the agent's split proposal, its progress markers — and is data to weigh,
+    never an instruction. Absent, the prompt is byte for byte what it was.
+    """
+    if not (receipt or "").strip():
+        return []
+    return [
+        RETURNED_HEADING,
+        "",
+        "This card was classified once already and then came back to Planning: "
+        "a build run handed it back, or ran out of turns before its "
+        "implementation was green. That is evidence the work did not fit one "
+        "run. The receipt it came back with is below — read the pieces and "
+        "progress it names before you decide the shape again.",
+        "===== BEGIN UNTRUSTED CARD TEXT =====",
+        sanitize_untrusted.sanitize_body(receipt),
+        "===== END UNTRUSTED CARD TEXT =====",
+        "",
+    ]
 
 
 def problems() -> list:
@@ -1540,6 +1569,13 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     stamp is an override, and an override the classifier could talk over is not
     one. That is also why nothing here writes over an existing stamp — the
     refusal lives in `planning_shape.stamp_refusal`, one seam for both writers.
+
+    Unless the card came BACK (DRE-4370). A stamp older than the newest return
+    receipt — a build run's hand-back, or a turn death read as size — is void,
+    because `planning_shape` reads the thread from that receipt on. Before
+    that, a one-off handed back kept its stamp, routed to Backlog and was
+    dispatched again at the same budget. Now the card is read afresh with the
+    receipt as evidence, and the new stamp quotes it as its why.
     """
     import critic_score
 
@@ -1557,6 +1593,9 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         return Decision(shape=existing, already=True, why="already classified")
 
     card = critic_score.read_card(lops, identifier)
+    receipt = planning_shape.return_receipt(bodies)
+    if receipt is not None:
+        card = dict(card, returned=receipt)
     decision = classify(card, call=call, model=model, doc=doc)
     if decision.transport:
         # DRE-3074. A call that never reached a model buys one more run, off the
@@ -1575,8 +1614,11 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         return decision
 
     try:
+        why = stamp_why(decision)
+        if receipt is not None:
+            why += f" — {returned_why(receipt)}"
         refusal = planning_shape.stamp(
-            lops, identifier, decision.shape, stamp_why(decision),
+            lops, identifier, decision.shape, why,
             by=planning_shape.BY_PLANNER, model=decision.model, doc=doc,
         )
     except (planning_shape.ShapeError, ClassifyError) as e:
@@ -1593,6 +1635,33 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         # classified either way, and theirs is the one that stands.
         print(f"{identifier}: not stamping — {refusal}")
     return decision
+
+
+def returned_why(receipt: str) -> str:
+    """The stamp's quote of the receipt that sent the card back (DRE-4370).
+
+    The receipt's first line, WITHOUT its mark: `linear_ops.py count-comments`
+    counts a substring, and the turn-death cap and the split ledger both count
+    that way — a stamp repeating the mark would be one more death, or one more
+    hand-back, that never happened.
+    """
+    import dead_run
+    import planner_score
+
+    kinds = {
+        planner_score.HANDBACK_RECEIPT_PREFIX: "a build run handed it back",
+        dead_run.REPLAN_MARK: "a run ran out of turns before implementation green",
+    }
+    first = ((receipt or "").strip().splitlines() or [""])[0]
+    kind = "it was sent back"
+    for mark, said in kinds.items():
+        if first.startswith(mark):
+            kind, first = said, first[len(mark):]
+            break
+    for mark in (*kinds, dead_run.TURN_TAG):
+        first = first.replace(mark, "")
+    quote = " ".join(first.split())
+    return f"re-read after its last stamp because {kind}: “{quote}”"
 
 
 def _two_stamps(error: Exception) -> str:
