@@ -93,7 +93,9 @@ POST_REVIEW_RETRY_CAP = 180
 
 #: How many deaths one plan gets before a person is asked. Two, and the second
 #: parks — the operator rule that two turn-cap deaths on one card mean SPLIT
-#: rather than a third attempt (standards/card-quality.md).
+#: rather than a third attempt (standards/card-quality.md). That covers
+#: plan-review deaths only; a build run's turn-cap death is read by its
+#: progress instead (DRE-4366, scripts/dead_run.py).
 MAX_DEATHS = 2
 
 #: What `after_death` answers.

@@ -24,10 +24,16 @@ TURN EXHAUSTION IS ITS OWN CLASS (DRE-2312), on its own tag and its own cap:
                with a `model-error: claude-opus-5` marker that armed the
                DRE-1354 fallback to switch models for a reason that did not
                exist. A budget ceiling is not a model fault and not an outage:
-               it spends NO dead-run strike, writes NO model-error marker, is
-               requeued ONCE (the two DRE-2695 attempts diverged by ~10 minutes
+               it spends NO dead-run strike and writes NO model-error marker.
+               And it is READ before it is retried (DRE-4366), off the last
+               run's furthest `⏳ n/5` marker (`turn_budget.runs_progress()`):
+               a death at or past implementation green is requeued ONCE at the
+               same budget (the two DRE-2695 attempts diverged by ~10 minutes
                at the same milestone — the cap is a race the retry can win),
-               and the SECOND one holds saying the card needs splitting.
+               and a second one there holds for a human saying budget, not
+               size. A death BEFORE implementation green — or with no marker
+               at all — is size, not budget: it goes to Planning to be cut
+               smaller, with no retry, no park and no hold label.
 
 A CREDENTIAL EXPIRY IS NOT A DEATH EITHER (DRE-3043):
 
