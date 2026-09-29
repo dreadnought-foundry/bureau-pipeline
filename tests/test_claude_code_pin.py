@@ -582,7 +582,8 @@ def test_pinned_reads_the_installer_and_the_one_vendor_sha():
 
 def test_apply_raises_every_place_and_the_repos_own_guards_pass(tmp_path):
     repo = _copy_repo(tmp_path)
-    pin = {"model": "claude-opus-5", "answer": "found", "why": "",
+    # A candidate the config does not know yet — the case the raise exists for.
+    pin = {"model": "claude-sonnet-6", "answer": "found", "why": "",
            "from": _live_pin(), "to": NEW, "limits": FULL,
            "listed": {"context_window": 1_000_000, "max_output_tokens": 128_000}}
     changed = ccp.apply(pin, root=repo, today="2026-10-01")
@@ -611,7 +612,8 @@ def test_apply_raises_every_place_and_the_repos_own_guards_pass(tmp_path):
     assert f'"{NEW["sha"]}": "{NEW["claude_code"]}",  # {NEW["action"]}' in pins_test
     assert f'"{pin["from"]["sha"]}": "{pin["from"]["claude_code"]}"' in pins_test
     support = (repo / "tests" / "test_model_cli_support.py").read_text()
-    assert f'"claude-opus-5": "{NEW["claude_code"]}"' in support
+    ahead = support[support.index("AHEAD_OF_ADOPTION = {"):]
+    assert f'"claude-sonnet-6": "{NEW["claude_code"]}"' in ahead[:ahead.index("}")]
 
     # And the repo's own guards agree, run against the raised copy.
     proc = subprocess.run(
@@ -624,6 +626,16 @@ def test_apply_raises_every_place_and_the_repos_own_guards_pass(tmp_path):
     check = subprocess.run([sys.executable, "scripts/check_action_pins.py"],
                            cwd=repo, capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_apply_puts_a_known_models_row_in_the_minimum_table(tmp_path):
+    repo = _copy_repo(tmp_path)
+    pin = dict(FOUND, **{"model": "claude-fable-5-1", "from": _live_pin(), "to": NEW})
+    ccp.apply(pin, root=repo, today="2026-10-01")
+    support = (repo / "tests" / "test_model_cli_support.py").read_text()
+    minimum = support[support.index("MINIMUM_CLAUDE_CODE = {"):]
+    assert f'"claude-fable-5-1": "{NEW["claude_code"]}"' in minimum[:minimum.index("}")]
+    assert support.count('"claude-fable-5-1": "') == 1
 
 
 def test_apply_updates_an_existing_minimum_row_rather_than_adding_a_second(tmp_path):
