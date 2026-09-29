@@ -167,3 +167,23 @@ def test_the_hand_back_comment_header_names_the_split_proposal():
     # The prefix the classifier, the scorer and the split ledger all key on
     # still opens the comment.
     assert f'echo "{planner_score.HANDBACK_RECEIPT_PREFIX}' in header
+
+
+# --------------------------------------------------------------------------- #
+# the harness renders the same prompt                                          #
+# --------------------------------------------------------------------------- #
+
+def test_the_harness_feeds_its_own_ceiling_and_decide_by_turn():
+    """scripts/harness renders the shipped prompt and refuses an expression it
+    has no value for. It runs the agent at its own MAX_TURNS, so that is the
+    ceiling the prompt must name there — and turn_budget's checkpoint for it."""
+    sys.path.insert(0, str(ROOT / "scripts" / "harness"))
+    import agent_run  # noqa: PLC0415
+    import turn_budget  # noqa: PLC0415
+
+    card = agent_run.SeededCard("harness-x", "t", "d", "u")
+    prompt = _norm(agent_run.build_prompt(card, workflow_path=WF))
+    ceiling = agent_run.MAX_TURNS
+    assert f"ceiling of {ceiling} turns" in prompt
+    assert f"By turn {turn_budget.decide_by(ceiling)} " in prompt
+    assert "${{" not in prompt
