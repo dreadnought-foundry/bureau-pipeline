@@ -24,7 +24,9 @@
 # go red by design, nothing in the fleet fixes a `dependabot/*` branch, and
 # the safe bumps grouped beside it never land (live: PR #452, 2026-09-19).
 # tests/test_dependabot_config.py::HeldVendorPinTest keeps every such rule to
-# the dependencies it declares, and fails when a hold outlives its pin.
+# the dependencies it declares, and fails when a hold outlives its pin. A
+# STANDING hold (DRE-5121, `claude-code-action` below) is the one exception:
+# no pin move lifts it, because its pin moves only through a trial-gated PR.
 #
 # STABLE-ONLY DEFAULTS (documented on purpose — we rely on them):
 #   • Dependabot only proposes STABLE releases; pre-releases (alpha/beta/rc)
@@ -100,3 +102,15 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # HELD, STANDING (DRE-5121): the Claude Code pin moves only through a
+      # trial-gated pin-raise PR made with scripts/claude_code_pin.py — never
+      # through a bare Dependabot bump. The model adoption workflow (DRE-3898)
+      # is to open that PR; it is not built yet, so until it lands the hold
+      # freezes automated bumps on purpose and the pin moves by hand. No
+      # `update-types` on purpose: the bumps it refuses are patches. Unlike
+      # DRE-4336's hold (placed for DRE-3416, lifted by DRE-3417), no pin move
+      # lifts this one: the raise moves the sha and leaves the rule. Without it
+      # every weekly sweep proposes the next vendor release past the pinned
+      # sha, the pin guards go red by design, and the grouped PR wedges exactly
+      # as #452 did. Declared in HELD_PINS in tests/test_dependabot_config.py.
+      - dependency-name: "anthropics/claude-code-action"

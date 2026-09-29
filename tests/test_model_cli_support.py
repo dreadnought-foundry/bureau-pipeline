@@ -38,6 +38,15 @@ that runs the model AS the fleet means to run it, and the pin moved to 2.1.284
 The table below is the only place a minimum is written. Add a row when the API
 starts refusing a model from an older Claude Code, with the version its 400
 names.
+
+DRE-5121 made the raise automatic, and the order it happens in needs a second
+table. The model adoption workflow raises the pin FIRST, in its own trial-gated
+pull request (`scripts/claude_code_pin.py apply`), and adopts the model on its
+next run. For that day the candidate is on no ladder and `config/models.yaml`
+does not know it, so its minimum cannot sit in `MINIMUM_CLAUDE_CODE`, whose rows
+must name a model the config knows. It goes in `AHEAD_OF_ADOPTION` instead, and
+the ladder check reads both — so the row guards the ladder from the moment the
+adoption puts the model on one.
 """
 
 import re
@@ -66,6 +75,13 @@ MINIMUM_CLAUDE_CODE = {
     "claude-sonnet-5-5": "2.1.284",
 }
 
+# model id → the Claude Code an automatic pin raise was made for, ahead of the
+# model's adoption (DRE-5121): the id is a Models API id no ladder names YET.
+# `claude_code_pin.py apply` writes a row here for a model the config does not
+# know, and into MINIMUM_CLAUDE_CODE for one it does.
+AHEAD_OF_ADOPTION = {
+}
+
 _EXACT_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -73,6 +89,16 @@ def _version(text: str) -> tuple[int, ...]:
     """`"2.1.263"` → `(2, 1, 263)`. Compared as numbers, never as strings:
     `"2.1.1000" < "2.1.280"` is True lexically and wrong."""
     return tuple(int(part) for part in text.split("."))
+
+
+def _minimums() -> dict[str, str]:
+    """Both tables, as the ladder check reads them. A model in both is held to
+    the higher floor."""
+    merged = dict(AHEAD_OF_ADOPTION)
+    for model, floor in MINIMUM_CLAUDE_CODE.items():
+        if model not in merged or _version(floor) > _version(merged[model]):
+            merged[model] = floor
+    return merged
 
 
 def _pinned_version() -> str:
@@ -93,7 +119,7 @@ def _unsupported(ladders: dict[str, list[str]], pinned: str) -> list[str]:
     found = []
     for name, models in ladders.items():
         for model in models:
-            floor = MINIMUM_CLAUDE_CODE.get(model)
+            floor = _minimums().get(model)
             if floor and _version(pinned) < _version(floor):
                 found.append(
                     f"ladders.{name}: {model} needs Claude Code {floor} or newer, "
@@ -134,8 +160,25 @@ class MinimumTableTest(unittest.TestCase):
             )
 
     def test_every_minimum_is_an_exact_version(self):
-        for model, floor in MINIMUM_CLAUDE_CODE.items():
+        for model, floor in {**MINIMUM_CLAUDE_CODE, **AHEAD_OF_ADOPTION}.items():
             self.assertRegex(floor, _EXACT_VERSION, model)
+
+    def test_every_ahead_row_is_a_model_id(self):
+        # No config to check it against yet: the shape of an Anthropic id is
+        # what is left to hold a typo to.
+        for model in AHEAD_OF_ADOPTION:
+            self.assertRegex(model, r"^claude-[a-z0-9][a-z0-9.-]*$")
+
+    def test_an_ahead_row_guards_the_ladder_once_the_model_is_on_it(self):
+        # The point of the table: the adoption that follows the raise cannot
+        # land the model on a pin older than the one raised for it.
+        AHEAD_OF_ADOPTION["claude-test-9"] = "2.1.290"
+        try:
+            errors = _unsupported({"workhorse": ["claude-test-9"]}, "2.1.284")
+        finally:
+            del AHEAD_OF_ADOPTION["claude-test-9"]
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("2.1.290", errors[0])
 
 
 class LadderSupportTest(unittest.TestCase):

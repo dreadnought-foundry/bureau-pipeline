@@ -983,8 +983,17 @@ whole fleet a build like that. Until 2026-09-25 both halves sat at v1.0.217 /
 Claude Opus 5.5 from any Claude Code older than 2.1.280 (DRE-4852) and the
 fleet builds on it. DRE-5116 moved them again, to v1.0.236 / 2.1.284 on
 2026-09-28, because 2.1.282 did not know Claude Sonnet 5.5 and ran it on a
-200K context window instead of its 1M. The next move is a Dependabot PR for the vendor release
-plus this default, in one PR — `tests/test_check_action_pins.py` and
+200K context window instead of its 1M. DRE-5121 built the tooling to make the
+next move automatic: a model trial now comes back `degraded` when the run gave
+the model less context or output than the Models API lists, and
+`scripts/claude_code_pin.py` answers whether the pinned Claude Code lists a
+model at full limits (`supports`), finds the release that does
+(`latest-supporting`), and makes the raise of the vendor release and this
+default together (`apply`). Nothing calls it yet. The model adoption workflow
+(DRE-3898) is meant to, opening ONE pin-raise pull request trialled on the
+current top rungs before it merges, and it is not built. Dependabot holds
+`claude-code-action` for every update type, so until that workflow lands the
+pin moves by hand, as DRE-5116 moved it — `tests/test_check_action_pins.py` and
 `tests/test_model_cli_support.py` hold the pair.
 
 **Why it exists.** On 2026-09-08 the vendor's own installer exited clean and

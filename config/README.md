@@ -477,8 +477,15 @@ context window and a 32K output ceiling, against the model's 1M and 128K. The
 critic tops the advisory ladder, so that would have cost it four fifths of its
 context with nothing failing. DRE-5116 raised the pin to 2.1.284
 (`claude-code-action` v1.0.236), the first release that knows the model, in the
-same PR as the ladder move, and the table's row for it names 2.1.284. Read a
-trial's `modelUsage.<model>.contextWindow`, not only its pass/fail.
+same PR as the ladder move, and the table's row for it names 2.1.284.
+
+`model-trial.yml` now reads that for itself (DRE-5121): it compares the context
+window and output cap the run recorded in `modelUsage.<model>` with the Models
+API's `max_input_tokens` and `max_tokens`, and a run below either is
+`degraded`, never `passed`. The model adoption workflow (DRE-3898, not built
+yet) is to treat `degraded` like `failed` for the ladders and raise the Claude
+Code pin first, through its own trial-gated PR (`scripts/claude_code_pin.py`).
+Until it lands, a `degraded` trial is read and the pin raised by hand.
 
 ## Changing a model
 

@@ -97,7 +97,13 @@ agent-bureau repo; the third clause added by DRE-2103).
   stood in between: on 2026-09-08 the floating `claude-code-action@v1` tag
   moved to v1.0.218 and every Claude-running job in the fleet died for 72
   minutes (DRE-3416). A floating major also gave Dependabot nothing to bump,
-  since a patch release moves the tag silently.
+  since a patch release moves the tag silently. `claude-code-action` is the
+  one vendor action Dependabot does not propose: `.github/dependabot.yml`
+  holds it for every update type (DRE-5121). Its pin is meant to move only
+  through the model adoption workflow's pin-raise PR
+  (`scripts/claude_code_pin.py`), trialled on the current top rungs before the
+  harness and the channel see it. That workflow (DRE-3898) is not built yet,
+  so until it lands the pin moves by hand.
 
 ## Queue behind, never cancel (DRE-3070)
 
