@@ -4,10 +4,11 @@
 # registers it and merge-gate.yml consumes its verdict (a PRESENT "QA Verifier"
 # verdict must be PASS to merge; an ABSENT verdict — verify skipped / out of
 # scope — is NOT a gate). It runs ONLY on in-scope PRs (see the scope gate
-# below): UI cards (a **Design:** line) or multi-system diffs; everything else
-# SKIPs without posting a verdict or blocking. The system file-bucket globs in
-# the scope gate are heuristic and are tuned per-repo at each project kickoff
-# against that repo's real layout — review them when onboarding a new repo.
+# below): UI cards (a **Design:** line, or a UI role label on a frontend diff)
+# or multi-system diffs; everything else SKIPs without posting a verdict or
+# blocking. The system file-bucket globs in scripts/verify_scope.py are
+# heuristic and are tuned per-repo at each project kickoff against that repo's
+# real layout — review them when onboarding a new repo.
 # A product repo opts in by adding the thin stub that calls this workflow.
 # ─────────────────────────────────────────────────────────────────────────────
 #
@@ -182,14 +183,21 @@ jobs:
       # wrongly gate a merge. So we decide up front whether this card is in
       # scope, and if not we SKIP the whole job (no verdict posted, no block).
       #
-      # In scope when EITHER:
-      #   • the card description carries a **Design:** line (a UI card), OR
+      # In scope when ANY of:
+      #   • the card description carries a **Design:** line (a UI card with a
+      #     screen to build to), OR
+      #   • the card wears a UI role label (agent:frontend / ux / ui) AND the
+      #     diff touches the frontend bucket — UI work with no new screen,
+      #     which card-quality.md forbids a Design line on (DRE-4389), OR
       #   • the diff touches ≥2 systems (touch-count: backend/GraphQL/REST,
       #     frontend/UI, auth proxy, migration/schema, infra/config).
-      # The card description is the AUTHORITATIVE **Design:** source (the PR
+      # The live card is the AUTHORITATIVE source for the first two (the PR
       # body is agent-authored and may not quote it verbatim); the changed-file
-      # set is the authoritative multi-system signal. When in doubt → SKIP
-      # (degrade, never block), mirroring the visual-QA stage's conservatism.
+      # set is the authoritative multi-system signal. The decision and the
+      # bucket globs live in scripts/verify_scope.py, pinned by
+      # tests/test_verify_scope.py. When in doubt → SKIP (degrade, never
+      # block): an unreadable card gives no card signal, and a gate that
+      # crashes decides out of scope, mirroring the visual-QA stage.
       - name: Decide scope (multi-system / UI?)
         id: scope
         continue-on-error: true
@@ -201,51 +209,20 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/verify
-          : > /tmp/verify/card.txt
-          if [ -n "$CARD" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD" > /tmp/verify/card.txt 2>/dev/null || : > /tmp/verify/card.txt
-          fi
           gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
-
-          # UI signal: a **Design:** ref on the authoritative card description.
-          IS_UI=false
-          grep -qiE '^\s*\*\*Design:\*\*' /tmp/verify/card.txt && IS_UI=true
-
-          # Multi-system signal: changed files span ≥2 of the system buckets.
-          # Heuristic + conservative; this is a DRAFT and the bucket globs are
-          # the first thing to tune against a real repo at kickoff.
-          python3 - <<'PY' > /tmp/verify/multi.txt 2>/dev/null
-          import re
-          buckets = {
-            "backend":  [r"backend/", r"/graphql/", r"/api/", r"schema\.py$", r"resolvers"],
-            "frontend": [r"web/", r"\.tsx?$", r"/components/", r"/pages/"],
-            "proxy":    [r"proxy\.(ts|mjs|js)$", r"build-proxy"],
-            "migration":[r"alembic", r"migrations?/", r"models?/"],
-            "infra":    [r"infra/", r"\.github/", r"cdk", r"Dockerfile", r"\.ya?ml$"],
-          }
-          hit = set()
-          for line in open("/tmp/verify/changed.txt"):
-              f = line.strip()
-              if not f:
-                  continue
-              for name, pats in buckets.items():
-                  if any(re.search(p, f) for p in pats):
-                      hit.add(name)
-          print("true" if len(hit) >= 2 else "false")
-          PY
-          IS_MULTI=$(cat /tmp/verify/multi.txt 2>/dev/null || echo false)
-          [ -n "$IS_MULTI" ] || IS_MULTI=false
-
-          IN_SCOPE=false
-          if [ "$IS_UI" = "true" ] || [ "$IS_MULTI" = "true" ]; then IN_SCOPE=true; fi
-          echo "in_scope=$IN_SCOPE" >> "$GITHUB_OUTPUT"
-          echo "is_ui=$IS_UI" >> "$GITHUB_OUTPUT"
-          echo "scope decision: in_scope=$IN_SCOPE (ui=$IS_UI multi=$IS_MULTI)"
+          if python3 .bureau-pipeline/scripts/verify_scope.py --card "$CARD" --changed /tmp/verify/changed.txt > /tmp/verify/scope.txt \
+             && grep -qE '^in_scope=(true|false)$' /tmp/verify/scope.txt; then
+            cat /tmp/verify/scope.txt >> "$GITHUB_OUTPUT"
+          else
+            echo "in_scope=false" >> "$GITHUB_OUTPUT"
+            echo "is_ui=false" >> "$GITHUB_OUTPUT"
+            echo "scope decision: the gate could not decide — SKIP (degrade, never block)"
+          fi
 
       - name: Out of scope — skip (no verdict, no block)
         if: steps.scope.outputs.in_scope != 'true'
         run: |
-          echo "Card ${{ steps.pr.outputs.card }} is single-system, non-UI — Verifier does not run. No verdict posted; merge is not gated on a Verifier PASS for this PR."
+          echo "Card ${{ steps.pr.outputs.card }} is single-system with no UI signal (no **Design:** line, no UI role label on a frontend diff) — Verifier does not run. No verdict posted; merge is not gated on a Verifier PASS for this PR."
 
       # ---- Dispatch-pool worker selection (DRE-2013, wired here by DRE-2429) ----
       # Four worker-identical GitHub Apps (agent-bureau-bot + -2/-3/-4) give

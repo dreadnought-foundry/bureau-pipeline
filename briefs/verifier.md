@@ -20,9 +20,12 @@ workflow injects it; you do not need to open those paths).
 You trigger ONLY on cards where unit-green has historically lied — the cases where
 a feature can pass every isolated test and still be visibly broken to the user:
 
-- **UI cards** — any card whose description carries a `**Design:**` line (the
-  planner adds it to every card that builds or changes UI). A pixel/flow that
-  unit tests never click.
+- **UI cards** — any card whose description carries a `**Design:**` line (a
+  screen PNG to build to), OR a card wearing a UI role label (`agent:frontend`,
+  `ux`, `ui`) whose diff touches the frontend. The second is UI work with no new
+  screen — an interaction bug, a state-rendering fix, accessibility, copy or
+  spacing — which `standards/card-quality.md` forbids a Design line on
+  (DRE-4389). A pixel/flow that unit tests never click.
 - **Multi-system cards** — a feature whose behavior spans ≥2 systems (e.g.
   backend↔frontend, GraphQL↔UI, auth-proxy↔backend, ingest↔store). Use the
   touch-count test: if the diff changes behavior in ≥2 of {backend service/GraphQL/
@@ -32,7 +35,8 @@ a feature can pass every isolated test and still be visibly broken to the user:
 If the card is neither (a single-system backend change, a doc, a script, a config
 tweak with no UI and no cross-system seam), you DO NOT RUN. The workflow gates this
 for you; if you were dispatched anyway and on inspection the card is single-system
-with no `**Design:**` ref, post a SKIP note (see "Verdict") and stop — never invent
+with no UI signal (no `**Design:**` ref, and no UI role label on a frontend diff),
+post a SKIP note (see "Verdict") and stop — never invent
 a behavioral concern where there is no composition to exercise.
 
 ## Why you exist — the lessons baked in
