@@ -644,3 +644,91 @@ def test_recovery_and_promotion_read_one_wip_room(monkeypatch):
     active_count = mocks["promote_ready"].call_args.kwargs["active_count"]
     assert active_count == 3
     assert seen["wip_room"] == reconcile.MAX_WIP - active_count
+
+
+# --------------------------------------------------------------------------
+# a classify or plan death in Planning is re-entered (DRE-4211)
+# --------------------------------------------------------------------------
+def _linear_board(board):
+    """Linear's side of the sweep's ONE board read: the cards in the lanes the
+    read asked for, and a record of every read made. Patched in beneath
+    `active_cards`, so the lanes the recovery pass is handed are the lanes it
+    asked for — a stub of `active_cards` itself would answer any question with
+    the whole board and could never see the defect."""
+    reads: list[tuple[str, ...]] = []
+
+    def fetch(states):
+        reads.append(tuple(states))
+        return [c for c in board if c["state"]["name"] in states]
+
+    return fetch, reads
+
+
+def _drive_recovery(board):
+    fetch, reads = _linear_board(board)
+    with patch.object(reconcile, "_fetch_active_cards", side_effect=fetch), \
+         patch.object(reconcile.linear_ops, "cmd_state") as cmd_state, \
+         patch.object(reconcile.linear_ops, "cmd_comment") as cmd_comment:
+        reconcile.recover_limit_deaths()
+    moves = [tuple(c.args) for c in cmd_state.call_args_list]
+    receipts = [c.args[0] for c in cmd_comment.call_args_list]
+    return moves, receipts, reads
+
+
+def test_a_classify_death_in_planning_is_reentered_by_the_sweep():
+    """RED on `main`: the pass was handed `active_cards()` — Todo, In Progress
+    and In Review — so a card whose classify run died on the Linear allowance
+    sat in Planning and nothing ever re-entered it (2026-09-28, 13:35 to 15:02
+    PT: the planner runs that died were re-sent by hand)."""
+    dead = card(ident="DRE-4678", lane="Planning",
+                bodies=[marker(kind="linear", stage="classify",
+                               reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    theirs = card(ident="DRE-4679", lane="Planning", labels=("repo:portico",),
+                  bodies=[marker(kind="linear", stage="classify",
+                                 reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    moves, receipts, _ = _drive_recovery([dead, theirs])
+    assert moves == [("DRE-4678", "Intake"), ("DRE-4678", "Planning")], moves
+    assert receipts == ["DRE-4678"], "another repo's Planning card is its own sweep's"
+    assert reconcile._write_failures == []
+
+
+def test_a_classify_death_in_intake_is_reentered_by_the_sweep():
+    dead = card(ident="DRE-4680", lane="Intake",
+                bodies=[marker(kind="linear", stage="classify",
+                               reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    moves, receipts, _ = _drive_recovery([dead])
+    assert moves == [("DRE-4680", "Planning")], moves
+    assert receipts == ["DRE-4680"]
+
+
+def test_widening_the_pass_costs_no_extra_linear_read():
+    """The lanes the pass now reads are all inside SWEPT_LANES, which the
+    sweep's one board read already covers — so the pass buys nothing."""
+    board = [card(ident="DRE-4678", lane="Planning",
+                  bodies=[marker(kind="linear", stage="plan",
+                                 reset=datetime(2026, 1, 1, tzinfo=UTC))])]
+    _, _, reads = _drive_recovery(board)
+    assert reads == [reconcile.SWEPT_LANES], reads
+
+
+def test_planning_cards_do_not_spend_the_wip_room(monkeypatch, capsys):
+    """The WIP room stays promotion's own (DRE-4934) now that the pass sees
+    Planning and Intake: a card waiting on a plan occupies no build slot, and
+    promotion never counts one. MUTATION CHECK: count the room over the
+    widened list and the six Planning cards spend it, so the dead build card
+    sits in Todo printing "WIP room is spent" beside a promotion with room."""
+    monkeypatch.setattr(reconcile, "MAX_WIP", 3)
+    dead = card(ident="DRE-4811", lane="Todo",
+                bodies=[marker(kind="linear", reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    working = card(ident="DRE-101")
+    planning = [card(ident=f"DRE-{500 + n}", lane="Planning") for n in range(6)]
+    fetch, _ = _linear_board([dead, working, *planning])
+    dispatched = []
+    with patch.object(reconcile, "_fetch_active_cards", side_effect=fetch), \
+         patch.object(reconcile, "redispatch",
+                      side_effect=lambda c: dispatched.append(c["identifier"]) or True), \
+         patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile.recover_limit_deaths()
+    out = capsys.readouterr().out
+    assert "WIP room is spent" not in out, out
+    assert dispatched == ["DRE-4811"]
