@@ -19,8 +19,9 @@
 # model (`modelUsage.<model>`) and compares them with the Models API's
 # `max_input_tokens` and `max_tokens`, read after the trial by
 # `claude_code_pin.py limits`. A run below either is `degraded` — never
-# `passed` — and the adoption workflow raises the Claude Code pin first
-# (`claude_code_pin.py latest-supporting`) instead of adopting the model.
+# `passed` — and the adoption workflow (DRE-3898, not built yet) is to raise
+# the Claude Code pin first (`claude_code_pin.py latest-supporting`) instead of
+# adopting the model.
 #
 # WHAT IT REPORTS, AND WHAT IT DOES NOT DO. Three outputs — `outcome`,
 # `run_url`, `summary` — and nothing else. It never fails the calling workflow

@@ -86,9 +86,10 @@ inputs:
     # MOVE THIS WITH THE VENDOR PIN. The version the pinned release installs
     # is the version this line takes; `tests/test_check_action_pins.py` holds
     # the other half of the pair, and `tests/test_model_cli_support.py` fails
-    # when a model on a ladder needs a newer Claude Code than this line. Since
-    # DRE-5121 the model adoption workflow moves both halves itself, in one
-    # trial-gated PR (`scripts/claude_code_pin.py apply`), when a model needs it.
+    # when a model on a ladder needs a newer Claude Code than this line.
+    # `scripts/claude_code_pin.py apply` (DRE-5121) moves both halves in one
+    # trial-gated PR. The model adoption workflow (DRE-3898) is to call it when
+    # a model needs it; until that workflow is built, run it by hand.
     default: "2.1.284"
   installer-url:
     description: >-

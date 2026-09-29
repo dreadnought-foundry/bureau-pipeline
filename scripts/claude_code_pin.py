@@ -14,7 +14,8 @@ hand. This module is that raise made automatic, and the CEO's ask of
 2026-09-28 13:53 PT is the reason: "It should just automatically go up to use
 the new ones."
 
-THE CLI, as the adoption workflow calls it:
+THE CLI, as the model adoption workflow (DRE-3898) is to call it. That
+workflow is not built yet, so nothing calls it today and the pin moves by hand:
 
     supports <model-id> [--root DIR] [--limits FILE]
         `answer=yes|no|unknown`, `version=<pinned Claude Code>`, `why=…` as
@@ -93,7 +94,7 @@ from planning_classify import answered_model  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The CLI, exactly as the adoption workflow calls it.
+#: The CLI, exactly as the adoption workflow (DRE-3898, not built yet) is to call it.
 COMMANDS = ("supports", "latest-supporting", "limits", "render", "apply")
 RENDER_TARGETS = ("pr-title", "pr-body")
 
@@ -668,9 +669,11 @@ def pr_body(pin, trial=None) -> str:
     gate = "\n".join([
         "## The gate",
         "",
-        "`model-trial.yml` runs on this pin against the current top rung of every "
-        "ladder, so a release that breaks a model the fleet runs today fails here, "
-        "loudly, before it reaches any agent. The critic and the merge gate are the "
+        "Whoever opens this pull request owes it a `model-trial.yml` run on this "
+        "pin against the current top rung of every ladder, reported in the trial "
+        "result above, so a release that breaks a model the fleet runs today fails "
+        "loudly before it reaches any agent. With no passed trial above, this raise "
+        "is untrialled and must not merge. The critic and the merge gate are the "
         "rest of the review.",
         "",
         "This is the one sanctioned path for raising the Claude Code pin by "
@@ -736,8 +739,8 @@ def _installer_text(text: str, pin: dict, today: str) -> str:
             indent = line[: len(line) - len(line.lstrip())]
             note = [
                 f"Then {new['claude_code']} / {new['action']} on {today} (DRE-5121), "
-                "raised by the model",
-                f"adoption workflow for {pin['model']}: Claude Code {old['claude_code']} "
+                "raised by",
+                f"`claude_code_pin.py apply` for {pin['model']}: Claude Code {old['claude_code']} "
                 "does not run it",
                 f"at full strength, and {new['claude_code']} is the oldest release that does.",
             ]
@@ -809,7 +812,7 @@ def _support_test_text(text: str, pin: dict, today: str, known: set[str]) -> str
     _, close = blocks[0] if model in known else blocks[1]
     indent = "    "
     lines[close:close] = [
-        f"{indent}# Raised by the model adoption workflow on {today} (DRE-5121): Claude\n",
+        f"{indent}# Raised by claude_code_pin.py apply on {today} (DRE-5121): Claude\n",
         f"{indent}# Code {old['claude_code']} does not run it at full strength.\n",
         f'{indent}"{model}": "{new["claude_code"]}",\n',
     ]

@@ -121,13 +121,15 @@ One, standing:
 
 | Dependency | Ecosystem | Held at | Placed by | Lifted by | Rule added |
 | -- | -- | -- | -- | -- | -- |
-| `anthropics/claude-code-action` | github-actions | every sha — **standing** | DRE-5121 — the Claude Code pin moves only through the trial-gated pin-raise PR the model adoption workflow opens (`scripts/claude_code_pin.py`), never through a bare Dependabot bump | nothing: the pin-raise PR moves the sha and keeps the rule | DRE-5121 |
+| `anthropics/claude-code-action` | github-actions | every sha — **standing** | DRE-5121 — the Claude Code pin moves only through a trial-gated pin-raise PR (`scripts/claude_code_pin.py`), never through a bare Dependabot bump. The model adoption workflow that will open it (DRE-3898) is not built yet, so until then that PR is raised by hand | nothing: the pin-raise PR moves the sha and keeps the rule | DRE-5121 |
 
-Dependabot does not propose `claude-code-action` releases. A release reaches
-the fleet when a model needs it: the model adoption workflow finds the oldest
-release whose Claude Code runs the model at full strength, and opens one pull
-request that raises the vendor pin and the installer together, trialled on the
-current top rungs before it merges.
+Dependabot does not propose `claude-code-action` releases. A release is meant
+to reach the fleet when a model needs it: the model adoption workflow (DRE-3898)
+finds the oldest release whose Claude Code runs the model at full strength
+(`scripts/claude_code_pin.py latest-supporting`), and opens one pull request
+that raises the vendor pin and the installer together, trialled on the current
+top rungs before it merges. That workflow is not built yet. Until it lands, the
+hold freezes automated bumps on purpose, and the pin moves by hand.
 
 The ledger's earlier hold, lifted:
 

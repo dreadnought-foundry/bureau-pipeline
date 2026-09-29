@@ -482,9 +482,10 @@ same PR as the ladder move, and the table's row for it names 2.1.284.
 `model-trial.yml` now reads that for itself (DRE-5121): it compares the context
 window and output cap the run recorded in `modelUsage.<model>` with the Models
 API's `max_input_tokens` and `max_tokens`, and a run below either is
-`degraded`, never `passed`. The adoption workflow treats `degraded` like
-`failed` for the ladders and raises the Claude Code pin first, through its own
-trial-gated PR (`scripts/claude_code_pin.py`).
+`degraded`, never `passed`. The model adoption workflow (DRE-3898, not built
+yet) is to treat `degraded` like `failed` for the ladders and raise the Claude
+Code pin first, through its own trial-gated PR (`scripts/claude_code_pin.py`).
+Until it lands, a `degraded` trial is read and the pin raised by hand.
 
 ## Changing a model
 
