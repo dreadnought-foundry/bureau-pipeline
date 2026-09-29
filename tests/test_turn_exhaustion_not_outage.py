@@ -458,6 +458,9 @@ class BuildRunTurnExhaustionTest(unittest.TestCase):
     FACTS = "the 60-turn cap after 60 turns and $4.72"
 
     def decide(self, prior=0, **kw):
+        # Past implementation green unless a test says otherwise: that is the
+        # reading under which a turn-cap death is retried at all (DRE-4366).
+        kw.setdefault("last_progress", 3)
         return dead_run.decide(
             prior, turn_exhaustion=True, turn_facts=self.FACTS, **kw
         )
@@ -495,7 +498,10 @@ class BuildRunTurnExhaustionTest(unittest.TestCase):
         self.assertEqual(d.action, "hold")
         body = d.comments[0]
         self.assertIn("ran out of steps", body)
-        self.assertIn("split", body)
+        # DRE-4366: a run that reached implementation green is budget, not
+        # size — the receipt never diagnoses it as a split.
+        self.assertIn("budget, not size", body)
+        self.assertNotIn("split", body.lower())
         self.assertNotIn(dead_run.DEAD_TAG, body)
         self.assertNotIn(dead_run.ERROR_MARKER_PREFIX, body)
         assert_no_outage_claim(self, body)
@@ -545,6 +551,15 @@ class BuildRunTurnExhaustionTest(unittest.TestCase):
             "claude-opus-5",
         )
 
+    def test_a_death_before_green_is_not_retried(self):
+        # DRE-4366: the reading comes first, and a run that never reached
+        # implementation green goes to Planning instead of back to Todo.
+        d = self.decide(0, last_progress=2)
+        self.assertEqual(d.action, "replan")
+        self.assertIn(dead_run.TURN_TAG, d.comments[0])
+        self.assertNotIn(dead_run.DEAD_TAG, d.comments[0])
+        assert_no_outage_claim(self, d.comments[0])
+
     def test_cli_turn_exhaustion_reads_the_execution_file(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "out.json")
@@ -559,7 +574,9 @@ class BuildRunTurnExhaustionTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         lines = p.stdout.split("\n")
         action, body = lines[0], "\n".join(lines[2:])
-        self.assertEqual(action, "requeue")
+        # No --comments-file: no marker was read, so nothing says the work
+        # was finished, and the card goes to Planning (DRE-4366).
+        self.assertEqual(action, "replan")
         self.assertIn(dead_run.TURN_TAG, body)
         self.assertIn("60-turn cap", body)
         assert_no_outage_claim(self, body)

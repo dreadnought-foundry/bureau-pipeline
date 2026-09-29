@@ -332,13 +332,14 @@ class DiagnosisTest(unittest.TestCase):
 #: The exact wording the card asks the budget receipt to carry.
 BUDGET_PHRASE = "budget, not size"
 
-#: What the receipt has always said, and must keep saying when the evidence
-#: does not support the budget reading.
-SPLIT_PHRASE = "splits it into smaller pieces"
+#: What a death before implementation green reads as (DRE-4366).
+SIZE_PHRASE = "size, not budget"
 
 
 def _hold(**kwargs) -> str:
-    """The turn-cap hold receipt: the SECOND turn exhaustion on a card."""
+    """The turn-cap hold receipt: the SECOND turn exhaustion on a card, past
+    implementation green (DRE-4366 — the only death that is retried)."""
+    kwargs.setdefault("last_progress", turn_budget.IMPLEMENTATION_GREEN)
     d = dead_run.decide(
         dead_run.TURN_REQUEUE_CAP,
         turn_exhaustion=True,
@@ -350,25 +351,19 @@ def _hold(**kwargs) -> str:
 
 
 class ParkReceiptTest(unittest.TestCase):
+    """DRE-4366 replaced the DRE-3097 fork: the first death is read, a death
+    before implementation green goes to Planning and is never retried, so a
+    park only ever follows two deaths past green — and its reading is budget."""
 
-    def test_three_implementation_green_deaths_are_reported_as_a_budget_problem(self):
-        body = _hold(budget_not_size=True, raise_to="turns:250")
+    def test_the_park_is_reported_as_a_budget_problem(self):
+        body = _hold()
         self.assertIn(BUDGET_PHRASE, body)
-        self.assertIn("turns:250", body)
-        self.assertNotIn(SPLIT_PHRASE, body)
-
-    def test_the_budget_receipt_says_the_work_finishes_but_the_run_does_not(self):
-        """The sentence the card specifies, because it is the sentence that
-        stops the next reader re-splitting a card that is already XS."""
-        body = _hold(budget_not_size=True, raise_to="turns:250")
         self.assertIn("the work finishes but the run does not", body)
 
-    def test_the_split_receipt_is_unchanged_when_the_evidence_says_size(self):
-        body = _hold()
-        self.assertIn(SPLIT_PHRASE, body)
-        self.assertNotIn(BUDGET_PHRASE, body)
+    def test_the_park_never_calls_a_green_run_a_split(self):
+        self.assertNotIn("split", _hold().lower())
 
-    def test_both_receipts_keep_the_marker_the_medic_and_the_ledger_read(self):
+    def test_the_park_keeps_the_marker_the_medic_and_the_ledger_read(self):
         """`medic_retry.HELD_RECEIPT_MARK` and `split_ledger.TURN_HOLD_MARK`
         both match on this prefix. A receipt that reworded it would be a park
         the medic no longer honours — it would retry a turn-cap death, which
@@ -376,28 +371,22 @@ class ParkReceiptTest(unittest.TestCase):
         import medic_retry
         import split_ledger
 
-        for body in (_hold(), _hold(budget_not_size=True, raise_to="turns:250")):
-            self.assertIn(medic_retry.HELD_RECEIPT_MARK, body)
-            self.assertIn(split_ledger.TURN_HOLD_MARK, body)
-            self.assertIn(dead_run.TURN_TAG, body)
-            self.assertIn(dead_run.HOLD_LABEL, body)
+        body = _hold()
+        self.assertIn(medic_retry.HELD_RECEIPT_MARK, body)
+        self.assertIn(split_ledger.TURN_HOLD_MARK, body)
+        self.assertIn(dead_run.TURN_TAG, body)
+        self.assertIn(dead_run.HOLD_LABEL, body)
 
-    def test_the_requeue_receipt_after_ONE_death_still_offers_both_remedies(self):
-        """The first death has no pattern to read, so it must not pick a
-        side — it says the next death decides."""
-        d = dead_run.decide(0, turn_exhaustion=True, turn_facts="the 150-turn cap")
-        self.assertEqual("requeue", d.action)
-        self.assertIn("turn budget", d.comments[0])
-
-    def test_the_budget_receipt_survives_a_diagnosis_with_no_label(self):
-        """Fail-soft: an unreadable thread must never crash the park."""
-        body = _hold(budget_not_size=True)
-        self.assertIn(BUDGET_PHRASE, body)
+    def test_a_second_death_before_green_is_not_a_park(self):
+        d = dead_run.decide(dead_run.TURN_REQUEUE_CAP, turn_exhaustion=True,
+                            last_progress=2)
+        self.assertEqual("replan", d.action)
+        self.assertIn(SIZE_PHRASE, d.comments[0])
 
 
 class DeadRunCliTest(unittest.TestCase):
     """The workflow calls `dead_run.py decide` and reads line 1 for the
-    branch. The diagnosis has to survive that seam."""
+    branch. The reading has to survive that seam."""
 
     def _decide(self, comments, prior=dead_run.TURN_REQUEUE_CAP):
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,26 +400,30 @@ class DeadRunCliTest(unittest.TestCase):
         action, _, body = out.partition("\n\n")
         return action.strip(), body
 
-    def test_the_cli_reads_the_thread_and_reports_a_budget_problem(self):
+    def test_dre_3088_second_green_death_parks_as_budget(self):
         action, body = self._decide(DRE_3088)
         self.assertEqual("hold", action)
         self.assertIn(BUDGET_PHRASE, body)
-        self.assertIn("turns:250", body)
 
-    def test_the_cli_reports_a_size_problem_on_early_deaths(self):
+    def test_dre_3088_first_green_death_is_retried(self):
+        action, body = self._decide(_thread(3), prior=0)
+        self.assertEqual("requeue", action)
+        self.assertIn(BUDGET_PHRASE, body)
+
+    def test_early_deaths_go_to_planning(self):
         action, body = self._decide(_thread(1, 1))
-        self.assertEqual("hold", action)
-        self.assertIn(SPLIT_PHRASE, body)
+        self.assertEqual("replan", action)
+        self.assertIn(SIZE_PHRASE, body)
 
-    def test_an_unreadable_comments_file_falls_back_to_the_split_text(self):
-        """A missing/garbled thread is not evidence of a budget problem. The
-        safe direction is the message the pipeline has always sent."""
+    def test_an_unreadable_comments_file_retries_nothing(self):
+        """A missing/garbled thread is not evidence the work finished, so it
+        is not a reason to spend another run."""
         out = subprocess.run(
             [sys.executable, str(SCRIPTS / "dead_run.py"), "decide", "1",
              "--turn-exhaustion", "--comments-file", "/nonexistent/x.json"],
             capture_output=True, text=True, check=True,
         ).stdout
-        self.assertIn(SPLIT_PHRASE, out)
+        self.assertEqual("replan", out.splitlines()[0])
 
 
 class TurnBudgetCliTest(unittest.TestCase):
@@ -864,6 +857,29 @@ class StandardIsCurrentTest(unittest.TestCase):
         text = (ROOT / "standards" / "card-quality.md").read_text()
         self.assertIn("turns:", text)
         self.assertIn(BUDGET_PHRASE, text)
+
+    def _turn_cap_sections(self) -> str:
+        """The two turn-cap subsections, from the first one's heading to the
+        `### How to split` heading that follows them, line wrapping collapsed."""
+        text = (ROOT / "standards" / "card-quality.md").read_text()
+        start = text.index("### A turn-cap death is read")
+        end = text.index("### How to split", start)
+        return " ".join(text[start:end].split())
+
+    def test_the_standard_describes_the_reading_dre_4366_made(self):
+        """The first death is READ: past implementation green it is retried
+        once at the same budget, before it the card goes to Planning."""
+        section = self._turn_cap_sections()
+        self.assertIn("implementation green", section)
+        self.assertIn("same budget", section)
+        self.assertIn("Planning", section)
+        self.assertIn(dead_run.REPLAN_MARK, section)
+        self.assertIn(SIZE_PHRASE, section)
+
+    def test_the_standard_no_longer_says_every_second_death_parks(self):
+        section = self._turn_cap_sections()
+        self.assertNotIn("the second death parks it in `Backlog`", section)
+        self.assertNotIn("names the label to apply", section)
 
 
 if __name__ == "__main__":

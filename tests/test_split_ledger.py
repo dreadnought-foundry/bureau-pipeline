@@ -199,10 +199,12 @@ def test_tells_is_pure_and_takes_no_argument_but_the_body():
 
 
 def _requeue_receipt(cost: str = "$20.10") -> str:
-    """The turn-cap requeue receipt, from `dead_run` itself."""
+    """The turn-cap requeue receipt, from `dead_run` itself: a run that died
+    past implementation green (DRE-4366 — only that death is retried)."""
     decision = dead_run.decide(
         0, turn_exhaustion=True,
         turn_facts=f"the 150-turn cap after 151 turns and {cost}",
+        last_progress=3,
     )
     assert decision.action == "requeue"
     return decision.comments[0]
@@ -212,8 +214,21 @@ def _hold_receipt(cost: str = "$19.12") -> str:
     decision = dead_run.decide(
         dead_run.TURN_REQUEUE_CAP, turn_exhaustion=True,
         turn_facts=f"the 150-turn cap after 151 turns and {cost}",
+        last_progress=3,
     )
     assert decision.action == "hold"
+    return decision.comments[0]
+
+
+def _replan_receipt(cost: str = "$12.50") -> str:
+    """DRE-4366: a death before implementation green sends the card to
+    Planning, and that is a turn-cap death as much as the other two."""
+    decision = dead_run.decide(
+        0, turn_exhaustion=True,
+        turn_facts=f"the 400-turn cap after 401 turns and {cost}",
+        last_progress=2,
+    )
+    assert decision.action == "replan"
     return decision.comments[0]
 
 
@@ -221,6 +236,40 @@ def test_both_turn_cap_receipts_count_as_deaths():
     deaths = split_ledger.turn_cap_deaths([_requeue_receipt(), _hold_receipt()])
     assert len(deaths) == 2
     assert [d["dollars"] for d in deaths] == [20.10, 19.12]
+
+
+def test_the_replan_receipt_counts_as_a_turn_cap_death():
+    deaths = split_ledger.turn_cap_deaths([_replan_receipt()])
+    assert len(deaths) == 1
+    assert deaths[0]["dollars"] == 12.50
+
+
+def test_the_receipts_that_used_to_be_missed_count_as_deaths():
+    """The cancelled turn-cap death and the unlanded park both carry the tag
+    on their first line now, and the ledger counts each once."""
+    facts = "the 400-turn cap after 401 turns and $9.00"
+    cancelled = dead_run.decide(0, turn_exhaustion=True, cancelled=True,
+                                turn_facts=facts, last_progress=3)
+    assert cancelled.action == "defer"
+    unlanded = dead_run.park_unlanded_comment("https://r", dead_run.TURN_TAG)
+    noted = dead_run.turn_noted_comment("escalation", facts, "https://r")
+    deaths = split_ledger.turn_cap_deaths(
+        [cancelled.comments[0], unlanded, noted])
+    assert len(deaths) == 3
+
+
+def test_a_limit_death_is_not_a_turn_cap_death():
+    wall = dead_run.LimitDeath(kind="claude", stage="build", reset=None,
+                               run_id="35500000000")
+    decision = dead_run.decide(0, turn_exhaustion=True, last_progress=3,
+                               limit=wall)
+    assert decision.action == "limit"
+    assert split_ledger.turn_cap_deaths(decision.comments) == []
+
+
+def test_a_comment_quoting_the_replan_receipt_is_not_one():
+    quoted = f"The critic notes: {_replan_receipt()}"
+    assert split_ledger.turn_cap_deaths([quoted]) == []
 
 
 def test_an_ordinary_dead_run_receipt_is_not_a_turn_cap_death():

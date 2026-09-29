@@ -19,9 +19,12 @@ of it is ever a runtime lookup.
   never names a number, so a label cannot vote itself an unbounded run — the
   same rule `models.yaml` states for membership of a ladder, and the job's
   120-minute wall clock is the real ceiling either way. The module also
-  reads the other direction: `diagnose()` tells a turn-cap park caused by the
-  BUDGET (every dead run reached implementation green and died after it) from
-  one caused by SIZE, which is what the park receipt now says — and
+  reads the other direction: `runs_progress()` is how far each run on the card
+  got, and since DRE-4366 `scripts/dead_run.py` reads every turn-cap death off
+  it before retrying — a death at or past implementation green is BUDGET
+  (one retry at the same budget, then a park, which is always a budget park),
+  and a death short of it is SIZE, which goes to Planning with no retry
+  (`diagnose()` is the older two-death reading, no longer called) — and
   `decide_by(turns)` (`decide_by_fraction` × the ceiling, floored at 10) is
   the turn by which a build agent must have decided to continue or hand back,
   which is what replaces the ceiling as the guard on a lost run at 400.

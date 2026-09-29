@@ -1417,6 +1417,14 @@
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its body is written by scripts/dead_run.py, which owns the `dead-run-requeue` and `turn-exhaustion-requeue` tags the budget counts, so converting it also moves a seam this card does not own."
     },
     {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "dead_run.py turn-noted",
+      "step": "Report result to Linear",
+      "kind": "undeclared-act",
+      "means": "A turn-cap death that also took another exit (an escalation, a blocker, an unreadable PR state, a rescue delivery) is recorded with the turn-exhaustion tag; the card follows that exit and nothing here moves it (DRE-4366).",
+      "why": "The same receipt family as `dead_run.py decide` above and undeclared for the same reason: giving it a row is a REGISTRY change, not an emission change. Its body is written by scripts/dead_run.py, which owns the `turn-exhaustion-requeue` tag the turn-cap count and the split ledger read — that tag, on the first line, is the whole point of the receipt — so composing it through pipeline_act would move a seam this card does not own."
+    },
+    {
       "file": ".github/workflows/channel-watch.yml",
       "anchor": "🔔 Still true today:",
       "step": "Raise the alarm where a human will see it",

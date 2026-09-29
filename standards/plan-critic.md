@@ -469,6 +469,9 @@ answers:
   BOTH dead runs. Two turn-cap deaths on one card is the operator's signal to
   split, not a queue position (`standards/card-quality.md`), and what an
   operator needs to see is why the review cannot finish at either ceiling.
+  This rule covers plan-review deaths only — a build run's turn-cap death is
+  read by its progress instead (`standards/card-quality.md`, "A turn-cap
+  death is read before it is retried", DRE-4366).
 * **leave** — a death that is not the turn cap. That death belongs to the
   medic, which retries a non-turn death once already and refuses a turn-cap one
   outright (`medic_retry.RULE_TURN_EXHAUSTION`). This rail retries only the

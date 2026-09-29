@@ -32,11 +32,16 @@ THREE QUESTIONS, ONE MODULE, because they are the same fact from three ends:
      Called from the step that selects the model, so a run cannot read the
      card one way for its model and another for its budget.
 
-  2. **Was the death a budget or a size problem?** `diagnose(comments)`, read
-     off the card's own thread. Every dead run reached the same progress
-     marker or a later one, and the last is `implementation green` or later ⇒
-     the work finishes and the RUN does not: budget. Anything else ⇒ split, as
-     the receipt has always said.
+  2. **Was the death a budget or a size problem?** `runs_progress(comments)`,
+     read off the card's own thread — how far each run got. Since DRE-4366
+     `dead_run.main` reads the LAST run's furthest marker from it and decides
+     on every turn-cap death, not only at the park: at or past `implementation
+     green` ⇒ the work finished and the RUN did not: budget, so one retry at
+     the same budget, then a park. Short of it, or no marker ⇒ size, and the
+     card goes to Planning with no retry. `diagnose()`, `budget_not_size()`
+     and the `diagnose` CLI below are DRE-3097's two-death reading, which no
+     production path calls any more; they stay, tested, until a card
+     removes them.
 
   3. **By which turn must the agent have decided?** `decide_by(turns)` —
      `decide_by_fraction` (0.2) × the ceiling, rounded down, never below
