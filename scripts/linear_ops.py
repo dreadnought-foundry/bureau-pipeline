@@ -64,6 +64,15 @@ Subcommands:
                                          --label <name>   (repeatable) extra label
                                          --blocked-by DRE-N,DRE-M  (also parsed
                                                           from the body line)
+                                         --epic           the child is itself an
+                                                          epic (DRE-4698): title
+                                                          must start `[EPIC]`,
+                                                          role agent:planner and
+                                                          no build role, and a
+                                                          --label repo:<slug>
+                                                          replaces the parent's.
+                                                          An `[EPIC]` title with-
+                                                          out it is REJECTED.
   oneoff <title> <description-file>    create a PARENTLESS card (Planning) — the
                                        one-off route's producer (DRE-2754). Same
                                        body guard, validate_card gate and
@@ -1746,7 +1755,15 @@ def parse_blocked_by(body: str) -> list[str]:
     return blocker_prose.blocker_ids(body)
 
 
-def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
+# A child epic (DRE-4698): the one role it wears, the title prefix that says
+# what it is, and the flag that asks for both. One spelling each, read by the
+# refusals and the label rule below.
+EPIC_CHILD_ROLE = "agent:planner"
+EPIC_TITLE_PREFIX = "[EPIC]"
+EPIC_FLAG = "--epic"
+
+
+def parent_inherited_labels(parent_labels: list[str], epic: bool = False) -> list[str]:
     """The labels a child must inherit from its parent epic (rule 2): the
     `repo:<slug>` label (so the child routes to the same repo), the parent's
     `initiative:<x>` label(s), and a role label.
@@ -1770,6 +1787,12 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     an infra/pipeline epic (its slug is the shared pipeline repo, or it carries
     agent:devops itself). A child is NEVER label-less. The parent's own
     agent:planner is intentionally NOT inherited — children are work, not epics.
+
+    `epic=True` is the exception (DRE-4698): a CHILD EPIC — the seam rule's
+    remedy, `subissue --epic` — is a container the planner owns, so its role is
+    `agent:planner` and no build role is applied at all. Stripping one after
+    the create (what `wave_commitment.py` does) leaves a window in which the
+    relay can dispatch an engineer at the container.
     """
     low = [l.lower() for l in (parent_labels or [])]
     out: list[str] = []
@@ -1781,6 +1804,9 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     for l in low:
         if l.startswith("initiative:") and l.split(":", 1)[1].strip() and l not in out:
             out.append(l)
+    if epic:
+        out.append(EPIC_CHILD_ROLE)
+        return out
     # devops iff the parent is a pipeline/infra epic.
     pipeline_repo = repo in ("repo:bureau-pipeline",)
     if "agent:devops" in low or pipeline_repo:
@@ -1863,6 +1889,64 @@ def _card_body(description_file: str) -> str:
     return description_file
 
 
+def _title_after_epic_tag(title: str) -> str:
+    """The title with a leading `[EPIC]` tag removed, for the repo-prefix check
+    (DRE-4698). `validate_card.title_repo_slug` reads a `<slug>: …` prefix
+    anchored at the START of the title, so `[EPIC] agent-bureau: …` named no
+    repo at all and a child epic labelled for another one sailed through."""
+    stripped = (title or "").lstrip()
+    if stripped.upper().startswith(EPIC_TITLE_PREFIX):
+        return stripped[len(EPIC_TITLE_PREFIX):]
+    return title
+
+
+def epic_child_refusal(title: str, epic: bool, extra_labels: list[str]) -> str | None:
+    """Why a child must not be created as asked, judged on the title, the
+    `--epic` flag and the explicit labels alone — or None (DRE-4698).
+
+    Both directions are refused, because the title is what every sweep reads
+    (`validate_card.infer_agent_label`, `mid_epic.is_epic`) and the labels are
+    what the relay dispatches on:
+
+      * `--epic` on a title that does not start with `[EPIC]` — a container
+        the board would read as work;
+      * an `[EPIC]` title without `--epic` — a card the board reads as an
+        epic, wearing the build role the flag keeps off it, which the fleet
+        would be dispatched to build. `--label agent:planner` is not the
+        flag: the inherited build role would still ride along beside it.
+
+    And a child epic carries exactly ONE role, `agent:planner`, so a second
+    `agent:*` label beside the flag is refused rather than attached.
+    """
+    tagged = (title or "").lstrip().upper().startswith(EPIC_TITLE_PREFIX)
+    if epic and not (title or "").lstrip().startswith(EPIC_TITLE_PREFIX):
+        return (
+            f"{EPIC_FLAG} creates a child EPIC, and its title must start with "
+            f"{EPIC_TITLE_PREFIX!r} — the title is what the board reads to know "
+            f"a card is an epic. Re-title it `{EPIC_TITLE_PREFIX} <slug>: …`, or "
+            f"drop {EPIC_FLAG} if this child is a work card."
+        )
+    if not epic and tagged:
+        return (
+            f"the title starts with {EPIC_TITLE_PREFIX!r} but {EPIC_FLAG} was not "
+            f"given — without {EPIC_FLAG} the child inherits a build role, and an "
+            "epic-titled card wearing one is a container the fleet would be "
+            f"dispatched to build. Pass {EPIC_FLAG} to file a child epic "
+            f"({EPIC_CHILD_ROLE}, no build role), or drop the tag from the title."
+        )
+    if epic:
+        roles = [l for l in extra_labels or []
+                 if l.lower().startswith("agent:") and l.lower() != EPIC_CHILD_ROLE]
+        if roles:
+            return (
+                f"a child epic carries exactly one role, {EPIC_CHILD_ROLE!r}, and "
+                f"{', '.join(repr(r) for r in roles)} was given beside {EPIC_FLAG}. "
+                "Drop the role label — the planner owns a container; the cards "
+                "under it carry the build roles."
+            )
+    return None
+
+
 def _reject_unless_creatable(kind: str, title: str, description: str,
                              labels: list[str], hint: str,
                              blockers: list[str] | None = None) -> None:
@@ -1908,7 +1992,7 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
             + hint
         )
 
-    mismatch = validate_card.repo_title_mismatch(title, labels)
+    mismatch = validate_card.repo_title_mismatch(_title_after_epic_tag(title), labels)
     if mismatch is not None:
         raise LinearError(
             f"{kind} REJECTED ({title!r}): {mismatch} Re-label the card (or "
@@ -1967,18 +2051,29 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
 
 
 def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> dict:
+    # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M, and
+    # --epic (DRE-4698) — the child is itself an epic, owned by the planner.
+    epic = EPIC_FLAG in flags
+    extra_labels, cli_blockers = _parse_flags(tuple(f for f in flags if f != EPIC_FLAG))
+
+    # 0 — A CHILD EPIC IS ASKED FOR BY THE FLAG AND THE TITLE TOGETHER, or not
+    # at all (DRE-4698). Judged on the arguments alone, so it refuses before
+    # anything is read or written.
+    refusal = epic_child_refusal(title, epic, extra_labels)
+    if refusal is not None:
+        raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
+
     parent = get_issue(parent_identifier)
 
     # 1 — INLINE REAL CONTENTS (never the path).
     description = _card_body(description_file)
 
-    # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M.
-    extra_labels, cli_blockers = _parse_flags(flags)
-
     # 2 — LABELS: inherit repo:<slug> + role from the parent epic, plus any
-    # explicit --label. No child is ever created label-less.
+    # explicit --label. No child is ever created label-less. A child epic
+    # inherits agent:planner in place of the build role, and an explicit repo:
+    # label replaces the parent's.
     parent_labels = _issue_label_names(parent["id"])
-    child_labels = child_labels_from(parent_labels, list(extra_labels))
+    child_labels = child_labels_from(parent_labels, list(extra_labels), epic=epic)
 
     # 2b — A CARD HAS NO CHILDREN (DRE-2739). Refuse BEFORE any write: giving a
     # plain card sub-issues silently reclassifies it as an epic (validate_card
@@ -2852,14 +2947,30 @@ def agent_label_refusal(label_name: str) -> str | None:
     return None
 
 
-def child_labels_from(parent_labels: list[str], extra_labels: list[str]) -> list[str]:
+def child_labels_from(parent_labels: list[str], extra_labels: list[str],
+                      epic: bool = False) -> list[str]:
     """The full label set for a planner-created child: what it inherits from
     its parent epic plus any explicit --label, minus anything no agent may
     apply. One operator action must not open the gate for a whole epic's worth
     of cards nobody looked at, so the marker is dropped here (loudly) rather
-    than inherited or passed through."""
+    than inherited or passed through.
+
+    For a child EPIC (`epic=True`, DRE-4698) an explicit `repo:` label
+    REPLACES the inherited one rather than joining it: a child epic's files may
+    live in another repo than its parent's (DRE-4669's children were cut
+    across two), and a container labelled for two repos routes to neither
+    cleanly."""
+    extra = list(extra_labels or [])
+    inherited = parent_inherited_labels(parent_labels, epic=epic)
+    repos = [l for l in extra if l.lower().startswith("repo:")] if epic else []
+    if repos:
+        inherited = repos + [l for l in inherited if not l.startswith("repo:")]
+    if epic:
+        # The role is already inherited; `--label agent:planner` beside the
+        # flag is the same fact twice, not a second label.
+        extra = [l for l in extra if l not in repos and l.lower() != EPIC_CHILD_ROLE]
     out: list[str] = []
-    for label in parent_inherited_labels(parent_labels) + list(extra_labels or []):
+    for label in inherited + extra:
         refusal = agent_label_refusal(label)
         if refusal is not None:
             print(f"  ! dropping label {label!r} from the child: {refusal}", file=sys.stderr)
