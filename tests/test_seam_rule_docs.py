@@ -44,7 +44,7 @@ SEAM_HEADING = "## When a plan is two epics — the observation-gated seam (DRE-
 
 # The sentence the pre-approval critic emits, verbatim in the standard and in
 # the seam reader's code. Whitespace-insensitive: the standard hard-wraps.
-FINDING = r"wait\s+on\s+observing\b.*?\blive\s+—\s+that\s+is\s+a\s+second\s+epic,\s+not\s+a\s+later\s+step\."
+FINDING = r"wait\s+on\s+observing\b.*?\blive\s+—\s+that\s+is\s+a\s+child\s+epic\s+under\s+this\s+one,\s+not\s+a\s+later\s+step\."
 
 
 def _read(path: Path) -> str:
@@ -187,9 +187,52 @@ class TestTheWorkedExample:
 class TestWhatThePlannerFilesInstead:
     """The remedy, in the words the sibling critics emit."""
 
-    def test_the_shape_is_a_wave(self):
-        assert re.search(r"\bwave\b", _seam_section(), re.I), (
-            "the seam section never says the shape is `wave`"
+    def test_the_remedy_is_child_epics_under_a_parent_never_a_wave(self):
+        # DRE-4697: the CEO retired waves on 2026-09-23. A plan too big for
+        # one epic becomes child epics under the original, which stays as the
+        # parent that rolls them up.
+        section = _seam_section()
+        assert not re.search(r"\bwaves?\b", section, re.I), (
+            "the seam section still says `wave` — waves are retired; the "
+            "remedy is child epics under a parent"
+        )
+        assert _loose("child epics under").search(section), (
+            "the seam section never says the plan splits into child epics "
+            "under the original"
+        )
+        assert re.search(r"\bparent\b", section), (
+            "the seam section never names the parent the children roll up to"
+        )
+        assert "`roll-up`" in section, (
+            "the seam section must name `roll-up`, the shape the classifier "
+            "stamps for a plan split into child epics"
+        )
+
+    def test_each_child_is_an_epic_of_its_own(self):
+        section = _seam_section()
+        assert "[EPIC]" in section, "a child epic is titled `[EPIC] <slug>: …`"
+        assert "agent:planner" in section, "a child epic carries agent:planner"
+        assert "blockedBy" in section, (
+            "the children's order is `blockedBy` relations, not prose"
+        )
+        assert _loose("sub-issue").search(section), (
+            "a child epic is a native Linear sub-issue of the parent"
+        )
+        assert _loose("planned and green-lit on its own").search(section), (
+            "each child is planned and green-lit on its own like any epic"
+        )
+
+    def test_the_parent_is_never_built_and_closes_on_its_children(self):
+        section = _seam_section()
+        assert _loose("never approved for building").search(section), (
+            "the section must say the parent is never approved for building"
+        )
+        assert _loose("never builds anything").search(section)
+        assert _loose("when every child is Done").search(section), (
+            "the section must say the parent closes when every child is Done"
+        )
+        assert _loose("nesting is allowed").search(section), (
+            "the section must say an epic whose children are epics may nest"
         )
 
     def test_the_second_epic_is_filed_at_the_gate(self):

@@ -44,7 +44,7 @@ import plan_seam  # noqa: E402
 #: words for humans; `plan_seam.FINDING` carries them for the pipeline.
 DRE_3164_FINDING = (
     "DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — "
-    "that is a second epic, not a later step."
+    "that is a child epic under this one, not a later step."
 )
 
 #: The seven children DRE-3164 kept when DRE-3245 took the other eight. Named
@@ -108,13 +108,16 @@ class TheFindingSentence(unittest.TestCase):
             DRE_3164_FINDING,
         )
 
-    def test_the_sentence_names_a_second_epic_not_a_later_step(self):
+    def test_the_sentence_names_a_child_epic_not_a_later_step(self):
         # Pinned separately from the format call: the two halves of the
         # sentence are what makes it a send-back rather than advice, and a
         # reword that keeps the shape would still change the meaning.
         self.assertIn("wait on observing", plan_seam.FINDING)
-        self.assertIn("that is a second epic, not a later step.",
+        self.assertIn("that is a child epic under this one, not a later step.",
                       plan_seam.FINDING)
+        # DRE-4697: waves are retired, and so is the free-standing second
+        # epic — the far side of a seam is filed UNDER the epic it came from.
+        self.assertNotIn("second epic", plan_seam.FINDING)
 
 
 class TheThreeSets(unittest.TestCase):
