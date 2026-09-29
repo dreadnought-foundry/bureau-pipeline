@@ -1796,3 +1796,141 @@ class TestThePromptDoesNotTransitArgv:
         )
         assert calls[0]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
         assert "shell" not in calls[0], "no shell — the argv list is the call"
+
+
+# ===========================================================================
+# DRE-4370. A card that came BACK to Planning is read again, not waved through
+# ===========================================================================
+def _handback_receipt(proposal="1. the prompt names the ceiling — agent-task.yml — "
+                               "does not depend on piece 2") -> str:
+    """The comment agent-task.yml's hand-back branch posts, in its shape."""
+    import planner_score
+
+    return (
+        f"{planner_score.HANDBACK_RECEIPT_PREFIX} this card was dispatched as "
+        "one piece of work and is an epic's worth.\n\n"
+        f"{proposal}\n\nRun: https://github.com/o/r/actions/runs/1"
+    )
+
+
+def _replan_receipt() -> str:
+    """The comment `dead_run.decide` posts for a turn death before green."""
+    import dead_run
+
+    return (
+        f"{dead_run.REPLAN_MARK} the agent ran out of steps — it hit 400 of "
+        "400 turns — and the run stopped at ⏳ 2/5 failing tests written, "
+        "before implementation green.\n\n"
+        "⏳ 1/5 plan — continuing within 400 turns\n⏳ 2/5 failing tests written"
+    )
+
+
+def _planner_stamp(shape: str, why: str = "the classifier's first read") -> str:
+    return planning_shape.shape_comment(
+        shape, why, by=planning_shape.BY_PLANNER, model=MODEL)
+
+
+class TestAReturnedCardIsClassifiedAfresh:
+    """`run` left a card that already carried a stamp alone — so a one-off a
+    build run handed back, or a turn death sent to Planning, kept `one-off`,
+    routed back to Backlog and was dispatched again at the same budget. A
+    return receipt NEWER than the latest stamp voids it."""
+
+    def _rerun(self, receipt: str, answer_shape: str = "epic"):
+        probe = _probe("DRE-3018")
+        lops = _Lops(probe, bodies=[_planner_stamp("one-off"), receipt])
+        call = _caller(_answer(
+            shape=answer_shape, tells=(1, 3),
+            why="three pieces with a contract between them"))
+        decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+        return lops, call, decision
+
+    @pytest.mark.parametrize("receipt", [_handback_receipt(), _replan_receipt()],
+                             ids=["hand-back", "replan"])
+    def test_a_stamp_older_than_a_return_receipt_is_void(self, receipt):
+        lops, call, decision = self._rerun(receipt)
+
+        assert decision.already is False, "the old stamp was returned as the answer"
+        assert decision.shape == "epic"
+        assert len(call.seen) == 1, "the returned card was never read again"
+        stamps = [c for c in lops.comments
+                  if c.startswith(planning_shape.SHAPE_MARK)]
+        assert len(stamps) == 1, "the fresh classification was not stamped"
+        # Every reader of the thread — the router included — sees the new
+        # shape, not a card carrying two.
+        assert planning_shape.shape_on(lops.bodies) == "epic"
+        assert planning_shape.fault("DRE-3018", lops.bodies) is None
+
+    @pytest.mark.parametrize("receipt", [_handback_receipt(), _replan_receipt()],
+                             ids=["hand-back", "replan"])
+    def test_the_receipt_is_evidence_in_the_classification_input(self, receipt):
+        _, call, _ = self._rerun(receipt)
+        prompt = call.seen[0][1]
+        body = receipt.split("\n\n", 1)[1]
+        assert body.splitlines()[0] in prompt, (
+            "the split proposal / progress markers never reached the classifier"
+        )
+
+    @pytest.mark.parametrize("receipt", [_handback_receipt(), _replan_receipt()],
+                             ids=["hand-back", "replan"])
+    def test_the_new_stamp_quotes_the_return_receipt_as_its_why(self, receipt):
+        lops, _, _ = self._rerun(receipt)
+        stamp = next(c for c in lops.comments
+                     if c.startswith(planning_shape.SHAPE_MARK))
+        why = next(line for line in stamp.splitlines() if line.startswith("**Why:**"))
+        # The receipt's own words, after its mark.
+        first = receipt.splitlines()[0]
+        quoted = first.split(":", 1)[1].strip()
+        assert quoted[:60] in why, "the stamp does not say why the card was re-read"
+
+    def test_the_quote_does_not_re_count_the_death_or_the_hand_back(self):
+        """`linear_ops.py count-comments` counts a SUBSTRING — the turn-death cap
+        and the split ledger both read that way — so the stamp quoting a
+        receipt must not carry the receipt's own mark."""
+        import dead_run
+        import planner_score
+
+        for receipt in (_handback_receipt(), _replan_receipt()):
+            lops, _, _ = self._rerun(receipt)
+            stamp = next(c for c in lops.comments
+                         if c.startswith(planning_shape.SHAPE_MARK))
+            assert dead_run.TURN_TAG not in stamp
+            assert planner_score.HANDBACK_RECEIPT_PREFIX not in stamp
+
+    def test_a_returned_card_read_as_one_off_again_is_stamped_again(self):
+        """The fresh read may still say one-off; that answer is written, with
+        the receipt quoted, rather than refused as 'already stamped'."""
+        lops, _, decision = self._rerun(_handback_receipt(), answer_shape="one-off")
+        assert decision.shape == "one-off" and decision.already is False
+        assert len([c for c in lops.comments
+                    if c.startswith(planning_shape.SHAPE_MARK)]) == 1
+
+    def test_a_stamp_newer_than_the_receipt_still_wins(self):
+        probe = _probe("DRE-3018")
+        bodies = [_planner_stamp("one-off"), _handback_receipt(),
+                  _planner_stamp("epic", "the split, read after the hand-back")]
+        lops = _Lops(probe, bodies=bodies)
+        decision = planning_classify.run(
+            lops, probe["card"], call=_never_called, model=MODEL)
+        assert decision.already is True
+        assert decision.shape == "epic"
+        assert lops.comments == []
+
+    def test_a_comment_that_only_mentions_the_mark_voids_nothing(self):
+        """The receipt must OPEN the comment — the same anchoring every other
+        marker here follows. A person quoting it mid-sentence returns nothing."""
+        import planner_score
+
+        probe = _probe("DRE-3018")
+        bodies = [_planner_stamp("one-off"),
+                  f"fyi, a run may post {planner_score.HANDBACK_RECEIPT_PREFIX} later"]
+        lops = _Lops(probe, bodies=bodies)
+        decision = planning_classify.run(
+            lops, probe["card"], call=_never_called, model=MODEL)
+        assert decision.already is True and decision.shape == "one-off"
+
+    def test_an_unreturned_card_prompt_is_unchanged(self):
+        """No receipt, no new section — the prompt every other card gets does
+        not move because this reader exists."""
+        card = _card(_probe("DRE-3018"))
+        assert "BEGIN UNTRUSTED RETURN RECEIPT" not in planning_classify.prompt_for(card)
