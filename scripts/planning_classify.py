@@ -1570,12 +1570,13 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     one. That is also why nothing here writes over an existing stamp — the
     refusal lives in `planning_shape.stamp_refusal`, one seam for both writers.
 
-    Unless the card came BACK (DRE-4370). A stamp older than the newest return
-    receipt — a build run's hand-back, or a turn death read as size — is void,
-    because `planning_shape` reads the thread from that receipt on. Before
-    that, a one-off handed back kept its stamp, routed to Backlog and was
-    dispatched again at the same budget. Now the card is read afresh with the
-    receipt as evidence, and the new stamp quotes it as its why.
+    Unless the card came BACK (DRE-4370). A planner stamp older than the newest
+    return receipt — a build run's hand-back, or a turn death read as size — is
+    void, because `planning_shape` reads the thread from that receipt on.
+    Before that, a one-off handed back kept its stamp, routed to Backlog and
+    was dispatched again at the same budget. Now the card is read afresh with
+    the receipt as evidence, and the new stamp quotes it as its why. A hand
+    stamp survives the receipt, for the reason above: it is the override.
     """
     import critic_score
 

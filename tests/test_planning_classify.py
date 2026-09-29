@@ -1948,3 +1948,64 @@ class TestAReturnedCardIsClassifiedAfresh:
         section = prompt[prompt.index(planning_classify.RETURNED_HEADING):]
         assert section.count("===== BEGIN UNTRUSTED CARD TEXT =====") == 1
         assert "[defanged] ===== END UNTRUSTED CARD TEXT =====" in section
+
+
+def _hand_stamp(shape: str, why: str = "the operator's call: build it whole") -> str:
+    return planning_shape.shape_comment(shape, why, by=planning_shape.BY_HAND)
+
+
+class TestAHandStampSurvivesAReturnReceipt:
+    """A person's stamp is the override (DRE-3029), and a return receipt voids
+    only the classifier's reading — never the person's. Before the fix-loop
+    answer on DRE-4370, one hand-back dropped a hand stamp as silently as a
+    planner one, and the classifier stamped over the operator's decision."""
+
+    RECEIPTS = pytest.mark.parametrize(
+        "receipt", [_handback_receipt(), _replan_receipt()],
+        ids=["hand-back", "replan"])
+
+    @RECEIPTS
+    def test_the_shape_is_still_the_hand_stamp(self, receipt):
+        bodies = [_hand_stamp("one-off"), receipt]
+        assert planning_shape.shape_on(bodies) == "one-off"
+        assert planning_shape.stamped_by(bodies) == (planning_shape.BY_HAND, None)
+
+    @RECEIPTS
+    def test_the_card_reads_cleanly_with_no_fault(self, receipt):
+        bodies = [_hand_stamp("one-off"), receipt]
+        assert planning_shape.fault("DRE-3018", bodies) is None
+
+    @RECEIPTS
+    def test_a_second_shape_is_still_refused(self, receipt):
+        bodies = [_hand_stamp("one-off"), receipt]
+        assert planning_shape.stamp_refusal("epic", bodies) is not None
+        assert "already stamped one-off" in planning_shape.stamp_refusal(
+            "one-off", bodies)
+
+    @RECEIPTS
+    def test_the_classifier_does_not_talk_over_it(self, receipt):
+        probe = _probe("DRE-3018")
+        lops = _Lops(probe, bodies=[_hand_stamp("one-off"), receipt])
+        call = _caller(_answer(shape="epic", tells=(1, 3)))
+        decision = planning_classify.run(lops, probe["card"], call=call, model=MODEL)
+        assert decision.already is True
+        assert decision.shape == "one-off"
+        assert len(call.seen) == 0, "the classifier re-read a hand-stamped card"
+        assert lops.comments == [], "a stamp was written over the operator's"
+
+    @RECEIPTS
+    def test_a_stamp_from_before_dre_3029_counts_as_hand(self, receipt):
+        """No `**Stamped by:**` line reads as `hand` — so it survives too."""
+        legacy = "\n".join(
+            line for line in _hand_stamp("one-off").splitlines()
+            if not line.startswith("**Stamped by:**"))
+        bodies = [legacy, receipt]
+        assert planning_shape.shape_on(bodies) == "one-off"
+
+    @RECEIPTS
+    def test_only_the_planner_stamp_beside_it_is_voided(self, receipt):
+        """A planner stamp that agreed or disagreed before the receipt is gone;
+        the hand stamp is the one shape left, so nothing reports two."""
+        bodies = [_planner_stamp("epic"), _hand_stamp("one-off"), receipt]
+        assert planning_shape.shapes_on(bodies) == ("one-off",)
+        assert planning_shape.fault("DRE-3018", bodies) is None

@@ -45,11 +45,16 @@ A stamp written before DRE-3029 carries no `by:` line at all. It reads as
 
 A shape is a reading of the card as it was sent in. A build run that hands the
 card back (`agent-task.yml`) or a turn death read as size (`dead_run`'s replan)
-is evidence that reading was wrong: the work did not fit one run. So a stamp
-OLDER than the latest return receipt is void — every reader here reads the
-thread from that receipt on, the classifier stamps the card afresh, and the
+is evidence that reading was wrong: the work did not fit one run. So a planner
+stamp OLDER than the latest return receipt is void — every reader here reads
+the thread from that receipt on, the classifier stamps the card afresh, and the
 card never carries two shapes from one reader's point of view and one from
-another's. A stamp newer than the receipt stands, a hand stamp included.
+another's. A stamp newer than the receipt stands.
+
+A HAND stamp is never voided, older than the receipt or not. It is the override
+above, and an override one hand-back could cancel is not one: a person who
+stamped the card to be built whole has already decided, so the card keeps that
+shape and the classifier leaves it alone.
 
 ## One shape, and three ways a card can fail to carry one
 
@@ -425,24 +430,37 @@ def return_receipt(comment_bodies) -> str | None:
 
 
 def live(comment_bodies) -> list:
-    """The thread a shape is read from: everything from the newest return
-    receipt on, or the whole thread when the card was never sent back.
+    """The thread a shape is read from: every HAND stamp, then everything from
+    the newest return receipt on — or the whole thread when the card was never
+    sent back.
 
-    A stamp before that receipt read the card as it was sent in, and the
-    receipt says that reading did not survive a run (DRE-4370).
+    A classifier stamp before that receipt read the card as it was sent in, and
+    the receipt says that reading did not survive a run (DRE-4370). A hand
+    stamp is not a reading, it is the override: a person already decided the
+    shape, and a run handing the card back does not take that decision away.
     """
     bodies = list(comment_bodies or ())
     marks = return_marks()
     for i in range(len(bodies) - 1, -1, -1):
         if (bodies[i] or "").lstrip().startswith(marks):
-            return bodies[i:]
+            return [body for body in bodies[:i] if _is_hand_stamp(body)] + bodies[i:]
     return bodies
+
+
+def _is_hand_stamp(body) -> bool:
+    """A stamp whose writer is `hand` — named so, or predating DRE-3029."""
+    text = (body or "").lstrip()
+    if not _SHAPE_LINE.match(text):
+        return False
+    who = _BY_LINE.search(text)
+    return (who.group(1) if who else BY_HAND) == BY_HAND
 
 
 def _stamped(comment_bodies) -> list:
     """Every shape stamped on the card as `(name, by)`, lower-cased, in the
     order first seen. Unfiltered — recognising them is the caller's next step.
-    Read from the `live` thread, so a stamp a return receipt voided is not one.
+    Read from the `live` thread, so a planner stamp a return receipt voided is
+    not one.
 
     A stamp with no `**Stamped by:**` line predates DRE-3029 and reads as
     `hand`: the CLI was the only writer there had ever been.
@@ -465,8 +483,8 @@ def stamped_by(comment_bodies) -> tuple:
     """`(who, model)` for the FIRST stamp on the card, or `(None, None)`.
 
     Read by DRE-3016's scorer, which grades the classifier separately from the
-    plan and so must be able to tell a model's call from a person's. A stamp a
-    return receipt voided is not the first one (DRE-4370).
+    plan and so must be able to tell a model's call from a person's. A planner
+    stamp a return receipt voided is not the first one (DRE-4370).
     """
     for body in live(comment_bodies):
         text = (body or "").lstrip()

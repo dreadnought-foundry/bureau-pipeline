@@ -1681,7 +1681,8 @@ jobs:
             # Since DRE-4370 the note is a split proposal written by the
             # decide-by turn the prompt names, and the header's first words are
             # a return receipt: planning_classify reads the card afresh past
-            # it rather than trusting the stamp it arrived with.
+            # it rather than trusting the planner stamp it arrived with. A
+            # hand stamp is the operator's override and still stands.
             {
               echo "🤖 Handed back to Planning: this card was dispatched as one piece of work and is an epic's worth. The agent stopped rather than sprawl it into one unreviewable pull request. The pieces below are its plan for the split (the agent's split proposal, written at its decide-by turn)."
               echo ""
