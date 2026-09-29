@@ -1473,6 +1473,14 @@
       "why": "Act-shaped — it is a hold — and the registry has no row for it, the same standing as the waiting-for-human note beside it. Giving it a row is a REGISTRY change, not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; a trailer here is a change to that contract, and the card that converts the human note owns this one with it."
     },
     {
+      "file": ".github/workflows/merge-gate.yml",
+      "anchor": "--body-file /tmp/refresh-note.md",
+      "step": "Evaluate and merge",
+      "kind": "undeclared-act",
+      "means": "The gate did not merge because this PR and main each added a file under a path the repo declares order-sensitive, so it updated the branch from main for CI to re-check the pair, and says so once per main tip (DRE-4912, DRE-5070).",
+      "why": "Act-shaped — it is a recovery — and the registry has no row for it, the same standing as the gate's waiting-for-human and stack notes beside it. Giving it a row is a REGISTRY change, not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; here the marker is also the receipt scripts/order_sensitive_refresh.py reads back to hold the gate to one refresh per main tip, so a trailer is a change to both contracts, and the card that converts the human note owns this one with it."
+    },
+    {
       "file": "scripts/code_owner_hold.py",
       "anchor": "linear_ops.cmd_comment(card, card_comment(pr, sentence))",
       "kind": "undeclared-act",
