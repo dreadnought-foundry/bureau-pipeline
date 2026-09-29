@@ -482,10 +482,11 @@ same PR as the ladder move, and the table's row for it names 2.1.284.
 `model-trial.yml` now reads that for itself (DRE-5121): it compares the context
 window and output cap the run recorded in `modelUsage.<model>` with the Models
 API's `max_input_tokens` and `max_tokens`, and a run below either is
-`degraded`, never `passed`. The model adoption workflow (DRE-3898, not built
-yet) is to treat `degraded` like `failed` for the ladders and raise the Claude
-Code pin first, through its own trial-gated PR (`scripts/claude_code_pin.py`).
-Until it lands, a `degraded` trial is read and the pin raised by hand.
+`degraded`, never `passed`. The model adoption workflow
+(`.github/workflows/model-adoption.yml`, DRE-3898) treats `degraded` like
+`failed` for the ladders and raises the Claude Code pin first, through its own
+trial-gated PR (`scripts/claude_code_pin.py`); the adoption follows on the
+first daily run after that PR merges.
 
 ## Changing a model
 
@@ -494,6 +495,14 @@ Edit `models.yaml`, run the sync script, commit both. Merging to `main` is
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
 membership is the spend decision, and it is made here.
+
+One kind of edit is made for you. The daily model adoption workflow
+(`.github/workflows/model-adoption.yml`, DRE-3898) classifies every model the
+catalog offers that no ladder names: a newer version of a family we run, at the
+same or a lower declared price, is trialled and then proposed as an ordinary
+pull request editing this file, which the critic and the merge gate review like
+any other; a new family or a pricier tier becomes one question card for the CEO;
+an older or superseded model gets a line in the run summary and nothing else.
 
 ---
 

@@ -104,7 +104,7 @@ DOCUMENTED_EXCEPTIONS = {
         "workflow declares exactly two workflow_call secrets, both Anthropic "
         "credentials, so the widest credential this run holds is the model "
         "token it is there to exercise. Reporting is the CALLER's job "
-        "(model-adoption.yml, DRE-3903) — it reads the three outputs."
+        "(model-adoption.yml, DRE-3898) — it reads the three outputs."
     ),
     (
         "groomer.yml",

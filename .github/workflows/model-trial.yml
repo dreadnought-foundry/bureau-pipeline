@@ -19,14 +19,15 @@
 # model (`modelUsage.<model>`) and compares them with the Models API's
 # `max_input_tokens` and `max_tokens`, read after the trial by
 # `claude_code_pin.py limits`. A run below either is `degraded` — never
-# `passed` — and the adoption workflow (DRE-3898, not built yet) is to raise
+# `passed` — and the adoption workflow (`model-adoption.yml`, DRE-3898) raises
 # the Claude Code pin first (`claude_code_pin.py latest-supporting`) instead of
-# adopting the model.
+# adopting the model, trialling the candidate again on the raised pin by
+# pointing `pipeline_ref` at the pin-raise branch.
 #
 # WHAT IT REPORTS, AND WHAT IT DOES NOT DO. Three outputs — `outcome`,
 # `run_url`, `summary` — and nothing else. It never fails the calling workflow
 # on a failed trial: a model that dies is the ANSWER this run exists to
-# produce, so the caller (`model-adoption.yml`, DRE-3903) decides what to do
+# produce, so the caller (`model-adoption.yml`, DRE-3898) decides what to do
 # with it. A trial that went red would take the adoption rail down with the
 # candidate.
 #

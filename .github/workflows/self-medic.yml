@@ -53,11 +53,18 @@
 # concurrency lane holds the second run behind the first and it reads current —
 # which is the same property that lets the stubs keep their own crons while the
 # per-repo follow-up cards land.
+#
+# Model adoption (DRE-3898) is watched on the same terms. Retrying it is safe
+# because every write it makes is looked up before it is made: the question,
+# record and trial-failure cards by exact title, the adoption and pin-raise
+# pull requests by title and head branch, and each branch by name — a branch
+# pushed with no pull request is reused, not re-cut. A retry costs at most one
+# more bounded trial run and mints nothing twice.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake, Model adoption]
     types: [completed]
 
 permissions:

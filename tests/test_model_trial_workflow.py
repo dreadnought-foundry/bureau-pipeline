@@ -25,7 +25,7 @@ WHAT `model-trial.yml` IS.
     ladders it declares, and writes `ladders=<n>` to `trial-answer.txt`. The
     job recomputes the count with PyYAML and compares.
   * DATA, not a verdict on the run. A failed trial must leave the job GREEN and
-    say so in its outputs — the caller (`model-adoption.yml`, DRE-3903) is what
+    say so in its outputs — the caller (`model-adoption.yml`, DRE-3898) is what
     acts on it. A trial that failed the calling workflow would be a model
     outage taking the adoption rail down with it.
 

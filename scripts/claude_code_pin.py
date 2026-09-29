@@ -14,8 +14,9 @@ hand. This module is that raise made automatic, and the CEO's ask of
 2026-09-28 13:53 PT is the reason: "It should just automatically go up to use
 the new ones."
 
-THE CLI, as the model adoption workflow (DRE-3898) is to call it. That
-workflow is not built yet, so nothing calls it today and the pin moves by hand:
+THE CLI, as the model adoption workflow (`.github/workflows/model-adoption.yml`,
+DRE-3898) calls it — `supports` before a trial, and `latest-supporting`,
+`render` and `apply` for the pin-raise pull request:
 
     supports <model-id> [--root DIR] [--limits FILE]
         `answer=yes|no|unknown`, `version=<pinned Claude Code>`, `why=…` as
@@ -94,7 +95,7 @@ from planning_classify import answered_model  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The CLI, exactly as the adoption workflow (DRE-3898, not built yet) is to call it.
+#: The CLI, exactly as the adoption workflow (`model-adoption.yml`, DRE-3898) calls it.
 COMMANDS = ("supports", "latest-supporting", "limits", "render", "apply")
 RENDER_TARGETS = ("pr-title", "pr-body")
 
