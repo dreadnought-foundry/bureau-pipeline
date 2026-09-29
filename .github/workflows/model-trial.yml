@@ -11,6 +11,17 @@
 # would kill a bounded, tool-using Claude Code turn loop. So that loop is the
 # test, and this workflow is it.
 #
+# FULL STRENGTH, NOT JUST AN ANSWER (DRE-5121). On 2026-09-28 Claude Sonnet
+# 5.5 passed this trial on Claude Code 2.1.282 (run 36479502126), which has no
+# entry for the model and ran it on its unknown-model defaults: a 200K context
+# window and a 32K output cap, against the 1M and 128K the Models API lists.
+# So the score also reads the window and output cap the run recorded for the
+# model (`modelUsage.<model>`) and compares them with the Models API's
+# `max_input_tokens` and `max_tokens`, read after the trial by
+# `claude_code_pin.py limits`. A run below either is `degraded` — never
+# `passed` — and the adoption workflow raises the Claude Code pin first
+# (`claude_code_pin.py latest-supporting`) instead of adopting the model.
+#
 # WHAT IT REPORTS, AND WHAT IT DOES NOT DO. Three outputs — `outcome`,
 # `run_url`, `summary` — and nothing else. It never fails the calling workflow
 # on a failed trial: a model that dies is the ANSWER this run exists to
@@ -37,7 +48,9 @@
 #      `claude-code-action`, NEVER a raw POST to the Messages API, because a
 #      subscription OAuth token answers 429 to every one of those at any load
 #      (DRE-3074 — three planner runs escalated to the CEO inside twenty
-#      seconds on that exact mistake).
+#      seconds on that exact mistake). The one raw read is the limits step's
+#      GET on the Models API (`/v1/models/<id>`), through the same auth seam
+#      `model-drift.yml` has read the catalog with, OAuth token included.
 #   Q3 re-run — the trial is stateless. It writes no card, no receipt and no
 #      marker, pushes nothing, and leaves `trial-answer.txt` on a runner that
 #      is destroyed. Re-running it costs one more bounded run and nothing else.
@@ -72,15 +85,19 @@ on:
         required: true
     outputs:
       outcome:
-        description: '"passed" when the answer file matched AND the run did not die; "failed" otherwise.'
+        description: >-
+          "passed" when the answer file matched, the run did not die AND it ran
+          the model at the Models API's full context window and output cap;
+          "degraded" when it worked but ran below either (DRE-5121); "failed"
+          otherwise, including when its strength could not be read.
         value: ${{ jobs.trial.outputs.outcome }}
       run_url:
         description: This run, so the caller's PR body can link the evidence.
         value: ${{ jobs.trial.outputs.run_url }}
       summary:
         description: >-
-          One line: "<model>: <passed|failed> — <death class or 'completed'>,
-          <turns> turns, <seconds>s".
+          One line: "<model>: <passed|degraded|failed> — <death class,
+          'completed', or the strength numbers>, <turns> turns, <seconds>s".
         value: ${{ jobs.trial.outputs.summary }}
     secrets:
       # Optional on purpose, and exactly as agent-task.yml declares them: a
@@ -207,13 +224,41 @@ jobs:
             and do not open a pull request. When trial-answer.txt holds that
             one line, you are done — stop.
 
-      # THE VERDICT, and it is DATA the caller acts on. Two independent
-      # questions, and `passed` needs both:
+      # THE MODEL'S OWN LIMITS (DRE-5121), off the Models API: its
+      # `max_input_tokens` and `max_tokens`, written to a file outside the
+      # repository. AFTER the trial, deliberately — the candidate's tools can
+      # write the workspace, and nothing it writes may reach the file the score
+      # below trusts. The credential is the one the trial step holds, selected
+      # the same way. `continue-on-error` + `always()`: a Models API that
+      # cannot answer is an UNKNOWN the score reports as `failed`, never a job
+      # failure and never a pass.
+      - name: Read the candidate's limits
+        id: limits
+        if: always()
+        continue-on-error: true
+        env:
+          MODEL: ${{ inputs.model }}
+          LIMITS_FILE: ${{ runner.temp }}/model-limits.json
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          python3 .bureau-pipeline/scripts/claude_code_pin.py limits "$MODEL" > "$LIMITS_FILE"
+          cat "$LIMITS_FILE"
+
+      # THE VERDICT, and it is DATA the caller acts on. Three independent
+      # questions, and `passed` needs all three:
       #
       #   1. did the agent get the answer right — the count recomputed HERE
       #      with PyYAML, compared against the line it wrote; and
       #   2. did the run die — from `check_agent_result.py classify`, the ONE
-      #      shared death predicate (DRE-2312), never a test of its own.
+      #      shared death predicate (DRE-2312), never a test of its own; and
+      #   3. did it run at full strength — the context window and output cap
+      #      the run recorded for the model against the Models API's numbers
+      #      (`claude_code_pin.strength`, DRE-5121). Asked only of a run that
+      #      passed the first two: `degraded` means "it worked, below
+      #      strength", and a run that did not work is `failed` whatever it ran
+      #      at. Strength that cannot be read — no limits, no `modelUsage`
+      #      entry — is `failed` with the reason named, never `passed`.
       #
       # AND IT WANTS A RECORD TO HAVE READ. `classify` returns `none` both for
       # "it did not die" and for "there is no result record to say so" — its
@@ -245,6 +290,8 @@ jobs:
           # and the tests cannot drift apart.
           ANSWER_FILE: trial-answer.txt
           CONFIG_FILE: config/models.yaml
+          # What the limits step above wrote.
+          LIMITS_FILE: ${{ runner.temp }}/model-limits.json
           BUREAU_SERVER_URL: ${{ github.server_url }}
           BUREAU_REPOSITORY: ${{ github.repository }}
           BUREAU_RUN_ID: ${{ github.run_id }}
@@ -304,8 +351,25 @@ jobs:
               matched and death == "none" and record and step_outcome != "failure"
           ) else "failed"
 
+          # 4. Full strength, for a run that otherwise passed (DRE-5121). Our
+          #    own tooling breaking reads as "could not confirm", never a pass.
+          try:
+              import claude_code_pin
+              limits, limits_why = claude_code_pin.load_limits(
+                  os.environ.get("LIMITS_FILE") or "", model)
+              strength = claude_code_pin.strength(record, model, limits, limits_why)
+          except Exception as exc:
+              strength = {"status": "unknown",
+                          "why": f"could not confirm full strength: {exc}"}
+          if outcome == "passed" and strength["status"] == "below":
+              outcome = "degraded"
+          elif outcome == "passed" and strength["status"] != "full":
+              outcome = "failed"
+
           if outcome == "passed":
               why = "completed"
+          elif matched and death == "none" and record and step_outcome != "failure":
+              why = strength["why"]
           elif death != "none":
               why = death
           elif step_outcome == "failure":
@@ -336,9 +400,10 @@ jobs:
           step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if step_summary:
               with open(step_summary, "a") as fh:
-                  fh.write(f"### Model trial\n\n{summary}\n\n{run_url}\n")
+                  fh.write(f"### Model trial\n\n{summary}\n\n"
+                           f"Strength: {strength['why']}\n\n{run_url}\n")
           # Never silent, and never red: the caller acts on the outcome.
-          if outcome == "failed":
+          if outcome != "passed":
               print(f"::warning::{summary}")
           PY
 

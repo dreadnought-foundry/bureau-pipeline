@@ -269,3 +269,32 @@ def test_the_score_reads_the_limits_file_the_step_wrote():
     )
     run = str(_step("limits").get("run") or "")
     assert "LIMITS_FILE" in run or "model-limits.json" in run
+
+
+def test_strength_tooling_that_breaks_is_failed_not_a_crash(tmp_path):
+    # The pipeline checkout the score imports from, with the strength module
+    # broken: our own tooling failing must read as "could not confirm", never
+    # as a pass and never as a red job with no outputs.
+    pipeline = tmp_path / "pipeline"
+    (pipeline / "scripts").mkdir(parents=True)
+    for script in (ROOT / "scripts").glob("*.py"):
+        (pipeline / "scripts" / script.name).write_text(script.read_text())
+    (pipeline / "scripts" / "claude_code_pin.py").write_text(
+        "raise ImportError('the strength module is broken')\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".bureau-pipeline").symlink_to(pipeline)
+    out, _ = _score(work, FULL_RUN)
+    assert out["outcome"] == "failed"
+    assert "strength module is broken" in out["summary"]
+
+
+def test_the_score_speaks_the_modules_status_words():
+    # The score compares against literals so a broken import cannot take the
+    # constants down with it; these are the literals it compares against.
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import claude_code_pin as ccp
+    run = str(_step("verify")["run"])
+    assert (ccp.FULL, ccp.BELOW) == ("full", "below")
+    assert '"below"' in run and '"full"' in run

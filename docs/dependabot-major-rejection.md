@@ -104,6 +104,12 @@ The hold is an ignore rule naming the dependency with **no `update-types`**:
   hand, deletes the rule and its `HELD_PINS` row, and Dependabot resumes
   proposing that dependency on the next weekly run.
 
+**A standing hold is the one exception (DRE-5121).** Where a pin moves only
+through a trial-gated PR of our own, the hold is never lifted: that PR moves the
+sha and leaves the rule. Its `HELD_PINS` row carries no held sha and no lifting
+card, and the test requires the rule on every tree instead of removing it once
+the pin moves.
+
 The order is the same as for a major: the rule merges **first**, then the
 stuck Dependabot PR gets a plain GitHub close. Where the grouped PR carried a
 safe bump as well, land that bump by hand in the same PR as the rule, so it
@@ -111,15 +117,23 @@ does not wait a week to be proposed again.
 
 ## Currently held pins
 
-None. The one hold this ledger has carried is lifted:
+One, standing:
+
+| Dependency | Ecosystem | Held at | Placed by | Lifted by | Rule added |
+| -- | -- | -- | -- | -- | -- |
+| `anthropics/claude-code-action` | github-actions | every sha — **standing** | DRE-5121 — the Claude Code pin moves only through the trial-gated pin-raise PR the model adoption workflow opens (`scripts/claude_code_pin.py`), never through a bare Dependabot bump | nothing: the pin-raise PR moves the sha and keeps the rule | DRE-5121 |
+
+Dependabot does not propose `claude-code-action` releases. A release reaches
+the fleet when a model needs it: the model adoption workflow finds the oldest
+release whose Claude Code runs the model at full strength, and opens one pull
+request that raises the vendor pin and the installer together, trialled on the
+current top rungs before it merges.
+
+The ledger's earlier hold, lifted:
 
 | Dependency | Ecosystem | Held at | Placed by | Lifted by | Rule added |
 | -- | -- | -- | -- | -- | -- |
 | `anthropics/claude-code-action` | github-actions | v1.0.217 (`9c5ddab2e6d17b83ea679153b31f1d5f023cf636`) — **lifted 2026-09-25**, pin moved to v1.0.234 (Claude Code 2.1.282), then to v1.0.236 (Claude Code 2.1.284) by DRE-5116 on 2026-09-28 | DRE-3416 — v1.0.218's installer left no launcher and every Claude-running job in the fleet died for 72 minutes | DRE-3417, in the same PR that deleted the rule and its `HELD_PINS` row | DRE-4336, after PR #452 |
-
-Dependabot now proposes `claude-code-action` releases again, inside the
-weekly minor/patch group, and each one is a PR the critic reviews and the
-harness proves before the channel carries it.
 
 ## Currently rejected majors
 
