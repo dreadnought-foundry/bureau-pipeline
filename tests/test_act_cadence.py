@@ -78,7 +78,11 @@ _PROGRESS = "progress"
 # this file means, and the console renders it as complete rather than overdue.
 # Named, not inferred: a second progress act quietly going null is exactly what
 # this list has to fail on.
-_TERMINAL_PROGRESS = frozenset({"release-live"})
+#
+# DRE-4717 named the second one: a roll-up's split is recorded once, when the
+# parent's children are sent to be planned, and nothing times what follows — a
+# planner run per child and then the CEO's green light on each.
+_TERMINAL_PROGRESS = frozenset({"release-live", "roll-up-activated"})
 
 
 def _doc() -> dict:
@@ -95,7 +99,7 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_thirty_acts(self):
+    def test_the_registry_still_declares_thirty_one_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
         field being data rather than a default.
@@ -108,8 +112,9 @@ class TestEveryActDeclaresItsCadence:
         reviewer outage; back to twenty-nine since DRE-4141 removed the Intake
         age-out, which was the one act nothing performs any more; thirty since
         DRE-4378 added the hold a pull request gets in a repo that has no fix
-        agent to dispatch."""
-        assert len(pipeline_act.acts()) == 30
+        agent to dispatch; thirty-one since DRE-4717 added the receipt a
+        roll-up's split leaves on its parent."""
+        assert len(pipeline_act.acts()) == 31
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
