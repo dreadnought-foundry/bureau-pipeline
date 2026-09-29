@@ -52,6 +52,7 @@ import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import routing_verdict  # noqa: E402
+import sync_model_config  # noqa: E402
 import validate_card  # noqa: E402
 
 import model_adoption_actions as maa  # noqa: E402
@@ -285,13 +286,24 @@ class TestApply:
             )
 
     def test_the_result_passes_policy_and_the_separation_rule_moved(self, tmp_path,
-                                                                    capsys):
+                                                                    capsys,
+                                                                    adopt_sonnet6):
         config, prices, snap = self._setup(tmp_path)
         assert self._apply(capsys, config, prices, snap)[0] == 0
         after = yaml.safe_load(config.read_text())
         assert mf.policy_errors(after, ma.load_prices(prices)) == []
+        # Read off the committed config, never a literal (DRE-5138): a rule
+        # naming a rung that left every ladder moves to the candidate, and a
+        # rule naming a rung still on both ladders — Sonnet 5.5 since DRE-5116 —
+        # still describes a real overlap and stays, or policy refuses the bare
+        # overlap it leaves behind.
+        on_a_ladder = {r["model"] for rungs in after["ladders"].values() for r in rungs}
+        gone = {r["model"] for r in adopt_sonnet6["replaces"]} - on_a_ladder
+        was = yaml.safe_load(CONFIG_PATH.read_text())["review_separation"]["rules"]
+        assert any(r["built_on"] in gone for r in was), "a rule has to move"
         rules = after["review_separation"]["rules"]
-        assert [r["built_on"] for r in rules] == [SONNET6]
+        assert [r["built_on"] for r in rules] == [
+            SONNET6 if r["built_on"] in gone else r["built_on"] for r in was]
 
     def test_sync_model_config_regenerates_both_mirrors(self, tmp_path, capsys):
         # A throwaway copy of the tree the generator writes into, so the
@@ -312,12 +324,32 @@ class TestApply:
         wrote = subprocess.run(sync, capture_output=True, text=True, cwd=tree)
         assert wrote.returncode == 0, wrote.stderr
         assert "wrote: scripts/model_fallback.py" in wrote.stdout
-        assert "wrote: agents.yaml" in wrote.stdout
+        # agents.yaml mirrors each agent's ladder TOP, so it is rewritten only
+        # when the adoption moved a top — read off the two configs, never a
+        # literal (DRE-5138: since DRE-5116 Sonnet 5 is no ladder's top).
+        before = self._agent_tops(CONFIG_PATH)
+        after = self._agent_tops(tree / "config" / "models.yaml")
+        registry = {a["name"]: a["model"] for a in
+                    yaml.safe_load((tree / "agents.yaml").read_text())["agents"]}
+        mirrored = sorted(set(after) & set(registry))
+        assert mirrored
+        assert [registry[a] for a in mirrored] == [after[a] for a in mirrored]
+        if before != after:
+            assert "wrote: agents.yaml" in wrote.stdout
+        else:
+            assert "ok:    agents.yaml" in wrote.stdout
         check = subprocess.run(sync + ["--check"], capture_output=True, text=True,
                                cwd=tree)
         assert check.returncode == 0, check.stderr
-        assert SONNET6 in (tree / "agents.yaml").read_text()
         assert SONNET6 in (tree / "scripts" / "model_fallback.py").read_text()
+
+    @staticmethod
+    def _agent_tops(path) -> dict[str, str]:
+        """`{agent: the top of its kind's ladder}` in a models.yaml, read
+        through the generator's own normalizing loader."""
+        cfg = sync_model_config.load_config(Path(path))
+        return {agent: cfg["ladders"][cfg["kinds"].get(kind) or cfg["default_ladder"]][0]
+                for agent, kind in cfg["agents"].items()}
 
     def test_check_prints_a_diff_and_writes_nothing(self, tmp_path, capsys):
         config, prices, snap = self._setup(tmp_path)
@@ -370,12 +402,19 @@ class TestApply:
         decision = copy.deepcopy(adopt_sonnet6)
         decision["replaces"] = [r for r in decision["replaces"]
                                 if r["ladder"] == "workhorse"]
+        (old,) = [r["model"] for r in decision["replaces"]]
+        before = yaml.safe_load(CONFIG_PATH.read_text())
+        advisory = [r["model"] for r in before["ladders"]["advisory"]]
+        assert old in advisory, "the workhorse rung is on the advisory ladder too"
         text = maa.apply_text(CONFIG_PATH.read_text(), decision, "2026-11-02")
         after = yaml.safe_load(text)
-        assert [r["model"] for r in after["ladders"]["advisory"]][0] == SONNET5
+        # The advisory ladder is read off the committed config, never a literal
+        # top (DRE-5138), and comes through untouched, rung for rung.
+        assert [r["model"] for r in after["ladders"]["advisory"]] == advisory
         assert SONNET6 in [r["model"] for r in after["ladders"]["workhorse"]]
-        # Sonnet 5 is still on the advisory ladder, so it is NOT retired.
-        assert SONNET5 not in [r["model"] for r in after["retired"]]
+        assert old not in [r["model"] for r in after["ladders"]["workhorse"]]
+        # The old id is still on the advisory ladder, so it is NOT retired.
+        assert old not in [r["model"] for r in after["retired"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -463,10 +502,17 @@ class TestQuestionBody:
                       write_json(tmp_path, "d.json", ask_new_family))
         first = body.strip().split("\n\n")[0]
         assert "$3.00" in first and "$15.00" in first
-        # The advisory ladder is the one discovery lets a new model join, and
-        # its top rung is the nearest thing we run there.
-        assert "advisory" in first
-        assert SONNET5 in first and "$2.00" in first and "$10.00" in first
+        # The ladder discovery lets a new model join, and its top rung is the
+        # nearest thing we run there — both read off the committed config, never
+        # a literal (DRE-5138): `claude-sonnet-5` stopped being the advisory top
+        # at DRE-5116 and this line only passed by being a prefix of the new one.
+        config = yaml.safe_load(CONFIG_PATH.read_text())
+        ladder = config["discovery"]["on_new_model"]
+        top = config["ladders"][ladder][0]["model"]
+        price = ma.load_prices()[top]
+        assert ladder in first
+        assert f"The nearest model we run is {top}," in first
+        assert f"${price['input']:.2f}" in first and f"${price['output']:.2f}" in first
 
     def test_no_declared_price_is_said_plainly(self, tmp_path, capsys, ask_no_price):
         body = render(capsys, "question-body",
