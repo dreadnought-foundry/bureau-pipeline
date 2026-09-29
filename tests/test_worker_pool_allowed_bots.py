@@ -169,13 +169,13 @@ class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
     verify, so both must admit agent-bureau-qa-bot or every gate-freshened PR
     got a crashed critic instead of a fresh review.
 
-    DRE-2416 removed that push — the gate no longer writes to any branch —
-    so the entries are now DEFENCE IN DEPTH rather than load-bearing. They
-    stay: they cost nothing, and the next qa-bot-authored push (a new gate
-    arm, a sweep) would otherwise crash the review it triggers, which is
-    exactly the 2026-07-12 class. The qa-bot must never author builds, so
-    agent-task and plan must NOT admit it (two-robot authorship
-    separation)."""
+    DRE-2416 removed that push, and for a while the entries were defence in
+    depth. Since DRE-4912 they are LOAD-BEARING again: the merge gate's
+    order-sensitive refresh (DRE-5070) updates a branch whose merge would
+    fork `main`, under the qa-bot token, and the `synchronize` it fires must
+    reach a review and CI that refuse the second head. The qa-bot must never
+    author builds, so agent-task and plan must NOT admit it (two-robot
+    authorship separation)."""
 
     def test_qa_review_and_verify_admit_the_qa_bot(self):
         expected = {"qa-review.yml": 2, "verify.yml": 2}
