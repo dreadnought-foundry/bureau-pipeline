@@ -490,10 +490,10 @@ weeks because it was everyone's assumption and nobody's card.
 
 The section above is one criterion a card cannot satisfy before merge. This is
 the same fault a whole plan wide: **a plan whose later cards depend on
-OBSERVING its earlier cards live is not one epic but two.** The shape is a
-`wave` — the first epic ends at the observation, the second is filed at the
-same gate, blocked on the first, and planned in detail only when the first is
-Done.
+OBSERVING its earlier cards live is not one epic but two.** The plan is split
+into child epics under the original, which stays as the parent that rolls them
+up — the first child ends at the observation, the second is filed at the same
+gate, blocked on the first, and planned in detail only when the first is Done.
 
 The tells below are readable before the plan is written, in the same grammar as
 the size tells above. Any ONE of them means the plan is cut at a seam.
@@ -543,25 +543,42 @@ took eight, blocked on it, sitting in Backlog until part 1 is Done.
 
 ### What the planner files instead
 
-The shape is `wave`, not `epic`. The first epic ends at the observation. The
-second is filed at the same time, blocked on the first, and planned in detail
-only when the first is Done — so its plan is written against the thing that
-exists rather than the thing that was imagined.
+Child epics under the parent, not one epic. The original epic stays where it is
+and becomes the parent, and the plan is split into child epics under it. The
+shape the classifier stamps for this is `roll-up`.
 
-The wave plan for a seam is short: two epics in order, and the detail belongs in
-the first epic's own artifact, written when its turn comes.
+- **Each child is an epic of its own.** A native Linear sub-issue of the
+  parent, titled `[EPIC] <slug>: …`, carrying `agent:planner`, with a short
+  statement of its slice. The order between children is `blockedBy` relations:
+  the first child ends at the observation, and the second is filed at the same
+  time, blocked on the first, and planned in detail only when the first is
+  Done — so its plan is written against the thing that exists rather than the
+  thing that was imagined.
+- **Each child is planned and green-lit on its own**, like any epic: its own
+  cards, its own proof card, its own trip past both critics to the CEO.
+- **The parent is never approved for building and never builds anything.** It
+  holds the children and rolls them up, and it closes when every child is Done.
+- **Nesting is allowed.** An epic whose children are epics is a roll-up, and a
+  child can be one in turn.
+
+The parent's plan for a seam is short: its children in order, and the detail
+belongs in each child's own artifact, written when its turn comes.
 
 **The pre-approval critic treats a seam inside one epic as a mechanical
-send-back**, in exactly these words: *cards N.. wait on observing cards 1..M
-live — that is a second epic, not a later step.* It is mechanical because it is
-readable off the cards, not a judgement about ambition.
+send-back**, in exactly these words:
+
+    {waiting}: wait on observing {observation} live — that is a child epic under this one, not a later step.
+
+`{waiting}` is the cards past the seam and `{observation}` is the card somebody
+has to watch run. It is mechanical because it is readable off the cards, not a
+judgement about ambition.
 
 **A seam is NOT the DRE-3075 case.** That one is a single acceptance criterion
 that cannot be proved before merge, and the remedy is two CARDS. This is the
 epic-level analogue: a whole half of a plan that cannot be written, let alone
-proved, before the other half runs, and the remedy is two EPICS. Same fault,
-different unit — and applying the card remedy to the epic case leaves twelve
-cards nobody can plan.
+proved, before the other half runs, and the remedy is two child EPICS under a
+parent. Same fault, different unit — and applying the card remedy to the epic
+case leaves twelve cards nobody can plan.
 
 ## Dead — do not use
 The 8-section XML tags, `**Size:**`, and `scripts/orch/v4` references — v1
