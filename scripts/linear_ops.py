@@ -132,7 +132,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -859,7 +859,7 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
         return _card_memo[identifier]
     data = gql(
         """query($id: String!) { issue(id: $id) {
-             id identifier title team { id } state { name type }
+             id identifier title team { id } state { id name type }
              labels { nodes { name } }
              children(first: 1) { nodes { id } }
            } }""",
@@ -945,25 +945,56 @@ def _label_names(issue: dict) -> list[str]:
     ]
 
 
-def _clobbered_terminal_state(identifier: str, target_id: str) -> dict | None:
+# How far before its own mutation the read-back starts accepting history
+# entries (DRE-5142). `since` is taken off the runner's clock and `createdAt` off
+# Linear's, so a write's own entry can be stamped a little BEFORE the instant
+# the runner took; this margin keeps skew from hiding it. It stays small because
+# anything older is somebody else's move — the person's reopen the planner's run
+# "restored" Done over on DRE-5034 was 40 seconds old.
+_READ_BACK_SKEW = timedelta(seconds=5)
+
+
+def _history_at(node: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat((node.get("createdAt") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _clobbered_terminal_state(
+    identifier: str, target_id: str, since: datetime
+) -> dict | None:
     """Read our own write back out of Linear's issue history and return the
     TERMINAL state it overwrote, if it overwrote one.
 
     Linear records `fromState` on every state transition, so the entry we just
     created answers the only question a pre-write check cannot: what the card
     ACTUALLY was at the instant of the mutation. Newest entry whose `toState`
-    is the state we just set is ours.
+    is the state we just set, created at or after `since`, is ours.
+
+    `history(first: n)` is the n NEWEST entries, newest first; `last: n` is the
+    n OLDEST, ascending — recorded on DRE-5034 (tests/fixtures/
+    dre-5034-history-2026-09-29.json), the same shape DRE-3250 measured for
+    `comments`. Reading `last:` here is what closed DRE-5034 twice (DRE-5142):
+    on a card with more than ten entries the window never held our write, and
+    the newest match inside it was a person's Done → Planning reopen.
+
+    An entry older than `since` is never ours, whatever its `toState`: with none
+    at or after it, this write left nothing to repair.
     """
     data = gql(
         """query($id: String!) { issue(id: $id) {
-             history(last: 10) { nodes {
+             history(first: 10) { nodes {
                createdAt fromState { id name type } toState { id name type }
              } } } }""",
         {"id": identifier},
     )
     nodes = (((data.get("issue") or {}).get("history") or {}).get("nodes")) or []
-    for node in reversed(nodes):  # newest last in Linear's history(last: n)
+    for node in nodes:
         if ((node.get("toState") or {}).get("id")) != target_id:
+            continue
+        at = _history_at(node)
+        if at is None or at < since:
             continue
         frm = node.get("fromState") or {}
         return frm if frm.get("type") in _TERMINAL_TYPES else None
@@ -1022,15 +1053,25 @@ def guarded_state_write(
     The read-back is best effort: it verifies a write that already succeeded,
     so an unreadable history degrades to "narrowed window, no repair" (printed
     loudly) rather than failing the transition.
+
+    A write to the lane the card is already in is a NO-OP (DRE-5142): nothing
+    is sent and nothing is read back, and it returns True. plan.yml writes
+    Planning onto an epic that is already in Planning; that write changed
+    nothing, so its read-back had no entry of its own to find and "restored"
+    Done from a person's reopen instead.
     """
     terminal_target = target_type in _TERMINAL_TYPES
+    # A terminal target skips the pre-write read below, so its no-op check uses
+    # the issue already in hand.
+    current = issue.get("state") or {}
     if not terminal_target:
         # (1) The pre-write re-read. Skipped for a terminal target: closing a
         # card is always allowed, so there is nothing to refuse. LIVE, never
         # the command's memo (DRE-3236): this read is the race fix.
         fresh = get_issue(identifier, fresh=True)
-        fresh_state = (fresh.get("state") or {}).get("type")
-        fresh_name = (fresh.get("state") or {}).get("name", fresh_state)
+        current = fresh.get("state") or {}
+        fresh_state = current.get("type")
+        fresh_name = current.get("name", fresh_state)
         if fresh_state in _TERMINAL_TYPES:
             print(
                 f"{identifier} became {fresh_name!r} (terminal) between this "
@@ -1039,12 +1080,18 @@ def guarded_state_write(
                 f"reopened by an automated transition."
             )
             return False
+    if current.get("id") == target_id:
+        print(f"{identifier} is already in {state_name!r} — nothing to write.")
+        return True
+    # Taken just before the mutation, less the skew margin: the read-back
+    # accepts only an entry created at or after it (DRE-5142).
+    since = datetime.now(UTC) - _READ_BACK_SKEW
     _set_state(identifier, issue["id"], target_id)
     if terminal_target:
         return True
     # (2) The read-back repair.
     try:
-        clobbered = _clobbered_terminal_state(identifier, target_id)
+        clobbered = _clobbered_terminal_state(identifier, target_id, since)
     except Exception as e:  # noqa: BLE001 — best-effort verification of a done write
         print(
             f"WARNING: {identifier} → {state_name} written, but the verification "

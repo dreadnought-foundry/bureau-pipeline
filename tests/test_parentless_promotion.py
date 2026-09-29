@@ -114,7 +114,7 @@ class _Board:
             self.epic_gate_reads.append(epic)
             return False
 
-        def green_light(_ops, epic):
+        def green_light(_ops, epic, *, issue=None):
             self.green_light_reads.append(epic)
             return GREEN_LIGHT
 

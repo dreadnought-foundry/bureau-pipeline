@@ -470,9 +470,16 @@ jobs:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ github.token }}
-          # Copied verbatim from model-trial.yml's agent step — a second,
-          # drifting list is how DRE-2020/DRE-2053 happened.
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # model-trial.yml's agent step verbatim — a second, drifting list is
+          # how DRE-2020/DRE-2053 happened — PLUS `agent-bureau-qa-bot`
+          # (DRE-5123). A `schedule` run initiates as whoever last changed the
+          # workflow on the default branch, and the qa-bot merges every PR
+          # here, so all 29 legs of the first scheduled morning (run
+          # 36426267250) aborted on the actor gate. Safe to admit: it is our
+          # own merger, the input is our own board, and this step is
+          # read-only (Read/Glob/Grep/Write, no token that can write).
+          # Pinned in tests/test_scheduled_claude_allowed_bots.py.
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,github-actions
           claude_args: |
             --max-turns 40
             --model ${{ steps.model.outputs.model }}

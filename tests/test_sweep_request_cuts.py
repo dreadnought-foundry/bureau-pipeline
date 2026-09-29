@@ -397,7 +397,7 @@ class FakeLinear:
                     "nodes": list(reversed(list(older))),
                 }}}
             return {"viewer": {"id": FLEET}, "issue": {"comments": conn}}
-        if "history(last: 10)" in q:
+        if "history(first: 10)" in q:
             return {"issue": {"history": {"nodes": []}}}
         if "id identifier title team" in q or "state { name type }" in q:
             return {"issue": {

@@ -60,9 +60,17 @@ the whitelist the gate prints under `FAILURE_HEADER` — carries `subtype`,
 `api_error_status`, `stop_reason`, `terminal_reason`, `errors` and `result`,
 and none of the three NUMBERS the outage signature reads. So a real log
 carries the credential record only when those numbers are in the block, and
-until they are, a refused credential is caught by `authentication-error` off
-the `result`/`errors` line instead. Widening that whitelist is a change to the
-gate, which this card does not own.
+until they are, a refused credential is caught off the `result`/`errors` line
+instead. Widening that whitelist is a change to the gate, which this card does
+not own.
+
+That line changed under us (DRE-5056). Claude Code 2.1.28x reports a dead
+credential as `Failed to authenticate. API Error: 401 …` and no longer says
+`authentication_error` at all, so on 2026-09-25 a revoked token detected as
+nothing and the review was never held. That sentence now names
+`credential-refused` directly, at any duration — an explicit 401 is the
+credential, where the record's sub-second limit is only inferring it — and
+`authentication-error` stays for the older logs that carry its word.
 
 ## 3. The two bodies
 
@@ -135,8 +143,9 @@ import review_rerun  # noqa: E402
 class Signature(NamedTuple):
     """One way this runner can fail to run Claude.
 
-    `pattern` is None for exactly one of them: a refused credential leaves no
-    phrase in the log, it leaves a RECORD — see `_credential_refused`.
+    `pattern` is None for exactly one of them: a refused credential is read
+    off the run's RECORD, or off the one sentence the vendor prints for an
+    explicit 401 — see `_credential_refused`.
     """
 
     slug: str
@@ -201,6 +210,20 @@ SIGNATURES: tuple[Signature, ...] = (
         "the API rejected the credential outright",
         _CREDENTIAL_CHECK,
     ),
+)
+
+# DRE-5056. The sentence Claude Code 2.1.28x prints for a dead credential, as
+# the gate's `result:` line and the execution file's `"result"` both carry it:
+# `Failed to authenticate. API Error: 401 OAuth access token is invalid.` It
+# no longer says `authentication_error`, and the gate prints none of the
+# numbers the record reads, so on 2026-09-25 a revoked token named nothing.
+# An explicit 401 is the credential and nothing else, at any duration: a 429
+# is a rate limit or an exhausted account and a 5xx is capacity, so the status
+# is matched whole. Not backticked, and a line opening with a quotation marker
+# never reaches it — the same rules every row above obeys. The double quote
+# stays allowed because the execution file's JSON puts one right before it.
+_REFUSED_401 = re.compile(
+    _NOT_BACKTICKED + r"Failed to authenticate\. API Error: 401(?!\d)"
 )
 
 
@@ -270,11 +293,18 @@ def execution_record(log_text: str | None) -> dict | None:
 def _credential_refused(log_text: str | None) -> bool:
     """Did Claude start and get refused before its first turn?
 
-    Both halves are the shipped readers': the record is `medic_retry`'s and the
-    shape is `check_agent_result`'s. `is_error` is checked explicitly because
-    the contract names it — `execution_from_log` sets it by construction, and
-    a future reader should not have to know that to see the rule.
+    The run's own sentence decides first: a line saying the API answered 401
+    (`_REFUSED_401`) names the credential whatever the record's numbers say,
+    because it names the cause instead of inferring it from a shape.
+
+    Otherwise both halves are the shipped readers': the record is
+    `medic_retry`'s and the shape is `check_agent_result`'s, sub-second limit
+    and all. `is_error` is checked explicitly because the contract names it —
+    `execution_from_log` sets it by construction, and a future reader should
+    not have to know that to see the rule.
     """
+    if any(_REFUSED_401.search(line) for line in _message_lines(log_text)):
+        return True
     record = execution_record(log_text)
     if not record or record.get("is_error") is not True:
         return False

@@ -95,9 +95,18 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: this pass really spends. The ceiling is what was measured, never what was
 #: projected — a number nobody measured is the defect this file replaced.
 #:
+#: It was 52 until DRE-3644 (measured 2026-09-28: 37) put the growth report and
+#: the green light on that same record: the pass read the single-epic shape
+#: fifteen times over this board — nine in `report_epic_growth`, six for the
+#: gate's green light in `promote_ready` — for epics the batch had already
+#: answered, and 52 − 9 − 6 = 37. The nudge loop's 18 are exhausted comment
+#: windows this board builds on purpose and are not that card's. The fake here
+#: serves the whole batch as one page; the live board's 13 epics take two at
+#: `EPIC_RECORD_PAGE` = 8, which this number does not see.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 52
+REAL_BOARD_SWEEP_BUDGET = 37
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -146,6 +155,30 @@ class ReplayLinear(FakeLinear):
         return sum(
             1 for q, _ in self.queries if "mutation" not in " ".join(q.split())
         )
+
+    def _epic_record(self, card: dict) -> dict:
+        """The base record, plus the two fields DRE-3644 added to the
+        selection: the epic's UUID and its first page of comment ids.
+
+        The page lists every comment the board holds for the epic and says
+        there is no next page. The inline 50-comment window's `hasNextPage`
+        is NOT carried over: that flag means "more than fifty", and the
+        record's page is 250 wide — no epic on this board comes near it, so
+        the growth report's comment count is answered off the page, as it is
+        for every live epic under 250 comments.
+        """
+        comments = [
+            *((card.get("comments") or {}).get("nodes") or []),
+            *(card.get("older_comments") or []),
+        ]
+        return {
+            **super()._epic_record(card),
+            "id": card["id"],
+            "comments": {
+                "nodes": [{"id": f"{card['id']}-c{n}"} for n in range(len(comments))],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            },
+        }
 
     def gql(self, query, variables=None):
         q = " ".join((query or "").split())
@@ -517,12 +550,34 @@ def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
     )
 
 
+def test_no_epic_is_read_alone_for_its_growth_or_its_green_light(replay):
+    """DRE-3644's cut: the growth report and every green light read the pass's
+    batched epic record. On 2026-09-17 this pass read the single-epic shape
+    (`mid_epic._EPIC_QUERY`) fifteen times — nine for the growth report, six
+    for the gate's green light — for epics the batch had already answered.
+
+    Zero across the WHOLE pass, which is stronger than zero inside those two
+    phases, and the batch guard in the test above still proves the record was
+    read for the full active set rather than for nobody.
+    """
+    alone = [
+        v.get("id") for q, v in replay.fake.queries
+        if "issue(id: $id)" in q and "history(last: 50)" in q
+        and "inverseRelations" not in q
+    ]
+    assert not alone, (
+        f"{len(alone)} epic(s) read alone for their growth or green light: "
+        f"{sorted(alone)}\n{replay.table()}"
+    )
+
+
 def test_the_expensive_phases_really_ran(replay):
     """Guard the guard: a ceiling met by a pass that skipped the expensive
     phases measures nothing. The phases the 2026-09-12 measurement found the
-    spend in are in this pass's own attribution, and the Intake phase — which
-    spends nothing at all, because it counts a lane the board read already
-    carried — is proved by the line it printed instead.
+    spend in are in this pass's own attribution, and the two phases that
+    spend nothing at all — the Intake phase, which counts a lane the board
+    read already carried, and since DRE-3644 the growth report, which reads
+    the pass's epic record — are proved by the lines they printed instead.
 
     The age-out used to be proved by the cards it MOVED, and three of this
     board's Intake cards used to reach Green Light on every replay. DRE-4141
@@ -535,11 +590,20 @@ def test_the_expensive_phases_really_ran(replay):
     escalation — so "nothing escalates" would no longer state the age-out's
     absence, it would forbid a different rule. Scoped to Intake it still fails
     as loudly if the timer is ever restored, which is the thing it guards."""
-    for name in ("promote_ready", "report_epic_growth", "close_finished_epics",
-                 "nudge_loop"):
+    for name in ("promote_ready", "close_finished_epics", "nudge_loop"):
         assert name in replay.phases, (
             f"{name} spent nothing — it did not run: {replay.spend_lines}"
         )
+    # The growth report spends NOTHING since DRE-3644 — it reads the record
+    # the close already bought — so, like the Intake phase, it is proved by
+    # what it printed: one growth line per active epic this repo swept.
+    growth = [
+        line for line in replay.printed
+        if line.startswith("epic-growth: ") and " green-lit at " in line
+    ]
+    assert len(growth) >= 9, (
+        f"the growth report reported {len(growth)} epic(s): {replay.spend_lines}"
+    )
     depth = [
         line for line in replay.printed
         if line.startswith(f"{reconcile.INTAKE_DEPTH_PREFIX}:")

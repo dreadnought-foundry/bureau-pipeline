@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import sys
 from contextlib import redirect_stdout
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -78,7 +80,9 @@ class _RacingLinear:
         self.labels = labels or []
         self.reads = 0
         self.updates = []  # stateIds passed to issueUpdate, in order
-        self.history = []  # newest LAST, like Linear's history(last: n)
+        # NEWEST FIRST, the order Linear answers `history(first: n)` in —
+        # `last: n` is the OLDEST n, ascending (recorded on DRE-5034, DRE-5142).
+        self.history = []
 
     # -- helpers ----------------------------------------------------------
     def _node(self, name):
@@ -92,12 +96,15 @@ class _RacingLinear:
         raise AssertionError(f"unknown stateId {state_id!r}")
 
     def _write(self, name):
-        self.history.append(
+        # Stamped with the moment it lands: the read-back accepts only an
+        # entry created after its own write began (DRE-5142).
+        self.history.insert(
+            0,
             {
-                "createdAt": "2026-08-08T22:22:30.629Z",
+                "createdAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "fromState": self._node(self.current),
                 "toState": self._node(name),
-            }
+            },
         )
         self.current = name
 
@@ -125,7 +132,11 @@ class _RacingLinear:
             self._maybe_flip()  # the race lands JUST AFTER this read
             return {"issue": issue}
         if "history" in q:
-            return {"issue": {"history": {"nodes": list(self.history)}}}
+            m = re.search(r"history\((first|last):\s*(\d+)", q)
+            n = int(m.group(2))
+            nodes = (self.history[:n] if m.group(1) == "first"
+                     else list(reversed(self.history[-n:])))
+            return {"issue": {"history": {"nodes": nodes}}}
         if "workflowStates" in q:
             return {
                 "workflowStates": {

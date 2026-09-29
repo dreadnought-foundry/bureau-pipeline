@@ -388,6 +388,12 @@ class TestTheSweepPath:
                 return {"comments": {"nodes": [{"id": "c1"}],
                                      "pageInfo": {"hasNextPage": False,
                                                   "endCursor": "c1"}}}
+            if "$numbers" in query:
+                # The pass's batched epic record, which the report reads the
+                # epic off since DRE-3644 — the epic's one read.
+                return {"issues": {"nodes": [epic.record()],
+                                   "pageInfo": {"hasNextPage": False,
+                                                "endCursor": None}}}
             return {"issue": epic.record()}
 
         with patch.object(linear_ops, "gql", gql), \
