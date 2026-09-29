@@ -29,11 +29,20 @@ file keeps is the honest record of the trade:
     which is where the 2026-07-11 incident was actually caught. medic.yml
     files the repair card off that red run
     (`architecture/decisions/adr-red-main-auto-repair.md`).
-  • WiringTest — the update mutation is gone from merge-gate.yml, and the
-    conflict arm that replaced it is behind the machine-readable decision.
+  • WiringTest — the DRE-1924 update arm is gone from merge-gate.yml, and
+    the conflict arm that replaced it is behind the machine-readable
+    decision. The gate's ONE branch write left is the DRE-4912
+    order-sensitive refresh (DRE-5070), and it is not this retired gate:
+    currency is still not a gate. It fires only when the pull request AND
+    `main` since the merge base each added a file under a path the repo
+    declares order-sensitive (`.github/bureau/merge-recheck.json`) — the
+    one state in which merging forks `main` — at most once per `main` tip,
+    and each refresh replaces a fork rather than freshening a branch for
+    its own sake. A behind head with no such addition merges untouched.
 """
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -75,6 +84,23 @@ def decide(compare_status, checks=None, comments=None):
         comments=CRITIC_OK if comments is None else comments,
         compare_status=compare_status,
     )
+
+
+def _refresh_branch(block: str) -> str:
+    """The `decision=refresh` branch of the fork-refresh block (DRE-5070):
+    from its `if` line to the `fi`/`else` at the same indentation."""
+    opener = 'if [ "$REFRESH" = "refresh" ]; then'
+    lines = block.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.strip() == opener),
+                 None)
+    assert start is not None, "no `decision=refresh` branch in the step"
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    for end in range(start + 1, len(lines)):
+        ln = lines[end]
+        if (len(ln) - len(ln.lstrip()) == indent
+                and ln.strip().split(" ")[0] in ("fi", "else", "elif")):
+            return "\n".join(lines[start:end + 1])
+    raise AssertionError("unterminated `decision=refresh` branch")
 
 
 class CurrencyIsNotAGateTest(unittest.TestCase):
@@ -285,8 +311,11 @@ class CliContractTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
-    """merge-gate.yml no longer mutates a branch, and the conflict arm that
-    replaced the update arm sits behind the script's decision."""
+    """merge-gate.yml no longer updates a branch for being behind, and the
+    conflict arm that replaced the update arm sits behind the script's
+    decision. Its one branch write is the DRE-4912 order-sensitive refresh,
+    guarded by `order_sensitive_refresh.py`'s `decision=refresh` — bounded
+    to a same-prefix addition on both sides, once per `main` tip."""
 
     def setUp(self):
         doc = yaml.safe_load(WORKFLOW.read_text())
@@ -307,10 +336,30 @@ class WiringTest(unittest.TestCase):
         self.assertIn("baseRefName", self.run_block)
 
     def test_no_update_mutation_remains(self):
-        """The DRE-1924 update push is gone — matched on the API path and
-        the mutating verb, not on prose."""
-        self.assertNotIn("/update-branch", self.run_block)
-        self.assertNotIn("-X PUT", self.run_block)
+        """The DRE-1924 update arm is gone — matched on the decision, the API
+        path and the mutating verb, not on prose.
+
+        The one `update-branch` left is the DRE-4912 fork refresh
+        (DRE-5070), and it is not currency: it fires only when the pull
+        request and `main` since the merge base BOTH added a file under a
+        declared order-sensitive path — where merging would fork `main` —
+        at most once per `main` tip. So the step holds exactly one PUT, only
+        inside the branch taken on `decision=refresh` from the decision
+        module's stdout, bound to the evaluated head by `expected_head_sha`,
+        and no other mutating verb."""
+        rb = self.run_block
+        self.assertNotIn('"$DECISION" = "update"', rb)
+        self.assertEqual(rb.count("/update-branch"), 1)
+        self.assertEqual(rb.count("-X PUT"), 1)
+        self.assertEqual(re.findall(r"(?:-X|--method)\s+[A-Z]+", rb),
+                         ["-X PUT"], "a mutating verb besides the refresh")
+        read = rb.find("grep -m1 '^decision=' /tmp/refresh-decision")
+        self.assertGreater(read, -1, "the order-sensitive decision is not read")
+        arm = _refresh_branch(rb)
+        self.assertGreater(rb.find(arm), read)
+        put = next(ln for ln in arm.splitlines() if "-X PUT" in ln)
+        self.assertIn("/update-branch", put)
+        self.assertIn("expected_head_sha", put)
 
     def test_shell_behind_fast_path_still_absent(self):
         """BEHIND is reported only when branch protection's up-to-date

@@ -2826,8 +2826,9 @@ def verdict_bound(pr: dict) -> bool:
     and commit records when the SHA binding is stale (DRE-2340).
 
     Without this the sweep would fight the gate: after a base merge into
-    the branch (the fix agent reconciling a conflict; before DRE-2416, the
-    gate's own `update-branch`) the standing verdict still binds the PR's
+    the branch (the fix agent reconciling a conflict; the gate's own
+    `update-branch` — on any behind branch before DRE-2416, and since
+    DRE-4912 only on an order-sensitive fork) the standing verdict still binds the PR's
     content, the gate is about to merge on it, and reconcile would spend a
     re-review (In Review nudge) or report a false "a fresh review is needed" on
     the card (crashed-review recovery) roughly every 15 minutes.

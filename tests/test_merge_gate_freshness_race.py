@@ -357,8 +357,12 @@ class CliContractTest(unittest.TestCase):
 
 
 class WiringTest(unittest.TestCase):
-    """merge-gate.yml: the re-merge is gone, and the conflict arm is behind
-    the script's machine-readable decision."""
+    """merge-gate.yml: the currency re-merge is gone, and the conflict arm is
+    behind the script's machine-readable decision. The gate's one branch
+    write is the DRE-4912 order-sensitive refresh (DRE-5070) — not a
+    currency gate: it fires only on a same-prefix addition on both sides,
+    at most once per `main` tip, and replaces a fork rather than freshening
+    a branch for its own sake."""
 
     def setUp(self):
         doc = yaml.safe_load(WORKFLOW.read_text())
@@ -369,13 +373,39 @@ class WiringTest(unittest.TestCase):
 
     def test_the_update_branch_call_is_gone(self):
         """THE fix: `gh api -X PUT .../pulls/$PR/update-branch` (the old
-        merge-gate.yml:350) was the freshening call this card removes.
-        Nothing in the gate may re-merge a base into a branch — matched on
-        the API path and the mutating verb, not the prose, so the arm's
-        rationale can still name the API it no longer calls."""
-        self.assertNotIn("/update-branch", self.run_block)
-        self.assertNotIn("-X PUT", self.run_block)
-        self.assertNotIn('"$DECISION" = "update"', self.run_block)
+        merge-gate.yml:350) was the freshening call this card removed, and
+        `decision=update` stays out of the vocabulary — nothing re-merges a
+        base into a branch for being behind. Matched on the decision, the
+        API path and the mutating verb, not the prose.
+
+        The step's ONE branch write since DRE-5070 is the DRE-4912
+        order-sensitive refresh, and it cannot restart the DRE-2393 race:
+        it fires only when the pull request and `main` since the merge base
+        both added a file under a declared order-sensitive path — the state
+        in which merging forks `main` — once per `main` tip at most, and it
+        cannot see a base move that adds nothing there. So exactly one PUT,
+        inside the `decision=refresh` branch read from the decision
+        module's stdout, carrying `expected_head_sha`."""
+        rb = self.run_block
+        self.assertNotIn('"$DECISION" = "update"', rb)
+        self.assertEqual(rb.count("/update-branch"), 1)
+        self.assertEqual(rb.count("-X PUT"), 1)
+        read = rb.find("grep -m1 '^decision=' /tmp/refresh-decision")
+        self.assertGreater(read, -1, "the order-sensitive decision is not read")
+        opener = 'if [ "$REFRESH" = "refresh" ]; then'
+        lines = rb.splitlines()
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.strip() == opener), None)
+        self.assertIsNotNone(start, "no `decision=refresh` branch")
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = next(i for i in range(start + 1, len(lines))
+                   if len(lines[i]) - len(lines[i].lstrip()) == indent
+                   and lines[i].strip().split(" ")[0] in ("fi", "else"))
+        arm = "\n".join(lines[start:end])
+        self.assertGreater(rb.find(opener), read)
+        self.assertIn("/update-branch", arm)
+        put = next(ln for ln in arm.splitlines() if "-X PUT" in ln)
+        self.assertIn("expected_head_sha", put)
 
     def test_merge_state_is_read_once_and_passed_to_the_script(self):
         self.assertIn("mergeStateStatus", self.run_block)
