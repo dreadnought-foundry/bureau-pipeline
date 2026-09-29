@@ -495,7 +495,7 @@ def needed_a_person(comment_bodies) -> bool:
 
 
 def died_at_the_turn_cap(comment_bodies) -> bool:
-    """Two turn-cap deaths on one card means SPLIT (standards/card-quality.md).
+    """A turn-cap death is read before it is retried (standards/card-quality.md).
     One is already the plan being wrong about the size."""
     return any(TURN_CAP_TAG in (body or "") for body in comment_bodies or [])
 

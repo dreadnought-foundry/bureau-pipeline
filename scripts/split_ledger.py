@@ -149,6 +149,14 @@ TURN_TAG = dead_run.TURN_TAG
 #: module matching a string nobody writes any more.
 TURN_HOLD_MARK = f"held-for-human ({TURN_TAG} cap reached)"
 
+#: `dead_run.decide`'s replan branch (DRE-4366) — a turn-cap death before
+#: implementation green, which sends the card to Planning instead of retrying.
+TURN_REPLAN_MARK = dead_run.REPLAN_MARK
+
+#: `dead_run.park_unlanded_comment` for the turn cap — the hold whose writes
+#: Linear refused. Still a death, and its receipt still carries the tag.
+TURN_UNLANDED_MARK = f"🚨 {TURN_TAG} cap reached"
+
 #: `agent-task.yml` — the agent found an epic inside a one-off card. Shared
 #: with `planner_score`, which reads the same receipt for a different question.
 HANDBACK_RECEIPT_PREFIX = planner_score.HANDBACK_RECEIPT_PREFIX
@@ -579,16 +587,22 @@ def _is_turn_cap_receipt(body: str) -> bool:
     """Anchored at the START of the comment, the rule every receipt reader in
     this repo follows: a comment QUOTING a receipt is not one."""
     first = (body or "").lstrip()
-    return first.startswith(f"🪦 {TURN_TAG}") or first.startswith(
-        f"🚨 {TURN_HOLD_MARK}")
+    return first.startswith((
+        f"🪦 {TURN_TAG}",  # the requeue, and the deferred and noted records
+        f"🚨 {TURN_HOLD_MARK}",
+        TURN_REPLAN_MARK,
+        TURN_UNLANDED_MARK,
+    ))
 
 
 def turn_cap_deaths(comment_bodies, executions=()) -> list:
     """Every run that died at the turn cap, with what it spent.
 
-    Three signals, all named by the card: the requeue receipt, the hold receipt
-    the second death posts, and `error_max_turns` in a run's own execution
-    record. Each row carries `dollars` or None — None being "the receipt
+    Three signals, all named by the card: the turn-cap receipts `dead_run`
+    writes (the requeue, the hold the second death posts, and since DRE-4366
+    the replan to Planning, the unlanded park and the deferred and noted
+    records of a death that took another exit), and `error_max_turns` in a
+    run's own execution record. Each row carries `dollars` or None — None being "the receipt
     carried no figure", which `dollars_spent` refuses to add up.
     """
     deaths: list[dict] = []

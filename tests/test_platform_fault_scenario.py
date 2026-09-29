@@ -166,6 +166,9 @@ def main(argv):
         elif cmd == "count-comments":
             _log("count-comments", *rest)
             print(os.environ.get("LINEAR_STUB_PRIOR", "0"))
+        elif cmd == "dump-comments":
+            _log("dump-comments", *rest)
+            print(os.environ.get("LINEAR_STUB_THREAD_JSON", "[]"))
         else:
             _log(cmd, *rest)
     except LinearError as exc:
@@ -401,12 +404,26 @@ class PlatformFaultScenario(unittest.TestCase):
         self.assertNotIn(dead_run.DEAD_TAG, body)
 
 
+#: The card's thread as the Report step dumps it after a run that got past
+#: implementation green — the reading under which a turn-cap death is retried
+#: at all, and parked on the second (DRE-4366).
+PAST_GREEN_THREAD = json.dumps([
+    "🧠 model-attempt: claude-opus-5 — engineer agent starting (turns=150). "
+    "Run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/1",
+    "⏳ 1/5 plan formed",
+    "⏳ 2/5 failing tests written",
+    "⏳ 3/5 implementation green",
+])
+
+
 class TurnCapDeathScenario(unittest.TestCase):
     """Attempt 1: it ran, it counted, and the receipt says what it spent."""
 
     def report(self, **kw):
         with tempfile.TemporaryDirectory() as td:
-            return run_report(td, execution=TURN_CAP_DEATH, **kw)
+            return run_report(
+                td, execution=TURN_CAP_DEATH,
+                env_extra={"LINEAR_STUB_THREAD_JSON": PAST_GREEN_THREAD}, **kw)
 
     def test_the_receipt_carries_the_turns_and_the_dollars(self):
         proc, journal = self.report()
@@ -512,6 +529,7 @@ class UnlandedTurnExhaustionParkScenario(unittest.TestCase):
                 execution=TURN_CAP_DEATH,
                 prior=str(dead_run.TURN_REQUEUE_CAP),
                 fail="state",
+                env_extra={"LINEAR_STUB_THREAD_JSON": PAST_GREEN_THREAD},
                 **kw,
             )
 

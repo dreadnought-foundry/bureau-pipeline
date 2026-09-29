@@ -140,6 +140,17 @@ RULE_OUT_OF_MEMORY = "out-of-memory"
 # `dead_run.decide()` hold, so a reword there fails at the diff.
 HELD_RECEIPT_MARK = "held-for-human ("
 
+# DRE-4366. The receipt a turn-cap death BEFORE implementation green writes:
+# no retry, the card goes to Planning to be split. Beside the park marker
+# because it is the same question one lane over — a card the pipeline has
+# just decided not to retry is not the medic's to re-run a minute later.
+# `dead_run`'s own constant, so a reword there cannot leave this matching a
+# string nobody writes.
+REPLAN_RECEIPT_MARK = dead_run.REPLAN_MARK
+
+# The lane that receipt sends the card to.
+REPLAN_STATE = "Planning"
+
 # The DRE-N a head ref carries. Same shape `reconcile.branch_card` reads and the
 # same shape medic.yml's own back-off step greps for; a branch with no card
 # (repair/*, main, a scheduled sweep's ref) has no park to consult.
@@ -416,11 +427,26 @@ def park_reason(
       2. the park LANE plus the hold receipt that put the card there, newer
          than the run. The receipt is required because Backlog is not by itself
          a hold — it is also where a blocked card and a PARKED routing verdict
-         sit, and neither of those is this run's business.
+         sit, and neither of those is this run's business;
+      3. Planning plus the replan receipt that sent the card there, newer
+         than the run (DRE-4366). Required for the same reason: Planning is
+         also where a hand-back and a NEEDS WORK verdict send a card.
     """
     hold = dead_run.HOLD_LABEL.lower()
     if any((name or "").strip().lower() == hold for name in labels or ()):
         return f"the '{dead_run.HOLD_LABEL}' label is on it"
+    if (state or "").strip().lower() == REPLAN_STATE.lower():
+        replanned = _newest_after(receipts, REPLAN_RECEIPT_MARK, run_started_at)
+        if not replanned:
+            return ""
+        when = (replanned.get("created_at") or "").strip()
+        at = f" at {when}" if when else ""
+        return (
+            f"it was sent to {REPLAN_STATE}{at} by the pipeline's own "
+            f"turn-cap reading, after this run started — the run stopped "
+            f"before implementation green, so the card owes a split, not a "
+            f"rerun"
+        )
     if (state or "").strip().lower() != dead_run.PARK_STATE.lower():
         return ""
     held = _newest_after(receipts, HELD_RECEIPT_MARK, run_started_at)

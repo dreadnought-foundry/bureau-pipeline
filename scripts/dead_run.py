@@ -509,10 +509,14 @@ class Decision:
     """What to do about a dead run.
 
     action   — "requeue" (→ Todo), "hold" (→ Backlog + needs-human label),
+               "replan" (DRE-4366: a turn-cap death before implementation
+               green — → Planning, no label, no retry),
                "defer" (cancelled run: post the receipt, change NOTHING —
-               the reconcile sweep requeues off the run's real conclusion), or
+               the reconcile sweep requeues off the run's real conclusion),
                "infra" (DRE-2931: the run died before the agent started —
-               post the receipt against the RUN, count nothing, move nothing)
+               post the receipt against the RUN, count nothing, move nothing),
+               or "limit" (DRE-3171: the run hit a wall — post the marker,
+               move nothing, label nothing)
     comments — comment bodies to post, in order (each one that contains DEAD_TAG
                also increments the shared cap for the NEXT death)
     """
@@ -532,6 +536,39 @@ class Decision:
         return f"Decision({self.action!r}, {self.comments!r})"
 
 
+#: DRE-4366. The first line of the receipt a turn-cap death BEFORE
+#: implementation green writes: no retry, the card goes to Planning. It carries
+#: TURN_TAG so `linear_ops.py count-comments` and the split ledger count it,
+#: and `medic_retry.REPLAN_RECEIPT_MARK` is this string, so the medic never
+#: re-runs a card this receipt has just sent to be split.
+REPLAN_MARK = f"✂️ {TURN_TAG} → Planning:"
+
+#: Where the agent writes its hand-back before it stops (the THIRD exit,
+#: DRE-2727). agent-task.yml's hand-back branch reads the same path; a
+#: turn-cap death that left one attaches it to the replan receipt, because
+#: the pieces the agent already found are what the planner needs first.
+HANDBACK_PATH = "/tmp/agent-handback.txt"
+
+#: The five `⏳ n/5` phases, as the engineering standard names them. Only for
+#: the words a receipt prints beside the number — the reading itself is the
+#: NUMBER, never the label, because the three build briefs spell phase 3
+#: three different ways (turn_budget.progress_of).
+PHASE_NAMES = {
+    1: "plan",
+    2: "failing tests written",
+    3: "implementation green",
+    4: "local checks",
+    5: "PR opened",
+}
+
+
+def _marker(last_progress: int) -> str:
+    """A `⏳ n/5` marker with its phase name, the way a receipt prints it."""
+    name = PHASE_NAMES.get(last_progress, "")
+    marker = f"`⏳ {last_progress}/5`"
+    return f"{marker} ({name})" if name else marker
+
+
 def decide(
     prior_dead: int,
     *,
@@ -539,8 +576,7 @@ def decide(
     error_model: str | None = None,
     turn_exhaustion: bool = False,
     turn_facts: str = "",
-    budget_not_size: bool = False,
-    raise_to: str = "",
+    last_progress: int | None = None,
     cancelled: bool = False,
     pre_agent: bool = False,
     failed_step: str = "",
@@ -569,24 +605,32 @@ def decide(
     check_agent_result.turn_exhaustion_facts() builds — the cap it hit and what
     it spent — so the message names real numbers instead of a shrug.
 
-    `budget_not_size`/`raise_to` (DRE-3097): the hold has TWO causes and used
-    to name one. `turn_budget.diagnose()` reads the card's own thread — every
-    dead run reached the same progress marker or a later one, and the last is
-    `implementation green` or later — and when that holds, the evidence says
-    the work FINISHES and the run does not. DRE-3088 died three times at the
-    150-turn cap, each run reaching `⏳ 3/5 implementation green`, the third
-    AFTER the card had been split to XS: the receipt told a human to split a
-    card that splitting had already failed to fix. `raise_to` is the label to
-    apply (`turns:250`), and it is empty when the card is already on the top
-    rung — the receipt then reports the diagnosis without naming a label the
-    selector would refuse.
+    `last_progress` (DRE-4366): the furthest `⏳ n/5` marker the run that just
+    died posted — the last element of `turn_budget.runs_progress()` over the
+    card's thread — or None when it posted none. The death is READ before
+    anything is retried, off this and `prior_dead` and nothing else:
+
+      1. at or past implementation green (3) with the retry unspent →
+         "requeue", once, at the same budget. The work was finished and the
+         run was not: budget, not size.
+      2. at or past implementation green with the retry spent → "hold", the
+         DRE-3097 budget-not-size park. Never called a split — DRE-3088 was
+         split to XS and died a third time at the same marker.
+      3. before implementation green, or no marker at all → "replan": no
+         retry, the card goes to Planning to be cut smaller. Size, not
+         budget: another run at the same ceiling buys more of the same. There
+         is one ceiling since DRE-4361 (400 for every run), so there is no
+         rung to raise to and no fact about one.
 
     `cancelled` (DRE-2074): the agent step was cancelled — killed by the job
     timeout or an external cancel while still working, NOT a death. Wins over
     every other input, including a prior count at the cap: the answer is
     always "defer" with a no-DEAD_TAG receipt, and the reconcile sweep
     requeues (with the existing cap) only after the run has actually
-    concluded without a PR.
+    concluded without a PR. When the step ALSO classified the run as turn
+    exhaustion, the receipt's first line carries TURN_TAG (DRE-4366): a kill
+    at the turn cap is a turn-cap death, and the untagged receipt is how such
+    deaths went missing from the count and the split ledger.
 
     `pre_agent`/`failed_step`/`rate_limited` (DRE-2931): the run never reached
     the agent, so it consumed no attempt at the card's work. Wins over every
@@ -626,15 +670,24 @@ def decide(
     if cancelled:
         # The receipt must not carry DEAD_TAG (it would increment the shared
         # cap) and must not start with a ⏳/🧠 proof-of-life prefix (it would
-        # suppress the reconcile sweep's eventual requeue).
+        # suppress the reconcile sweep's eventual requeue). A turn-cap death
+        # that was then killed opens with TURN_TAG instead (DRE-4366), so the
+        # death is counted where every other turn-cap death is.
+        opener = (
+            f"🪦 {TURN_TAG} (deferred): the agent ran out of steps — it hit "
+            f"{turn_facts or 'the turn cap'} — and the "
+            if turn_exhaustion
+            else "🤖 "
+        )
         return Decision(
             "defer",
             [
-                "🤖 run cancelled mid-build (GitHub job timeout or an external "
-                "cancel) — the agent was killed while still working, so this "
-                "does NOT count as a dead run (DRE-2074). If the run concluded "
-                "without a PR, the reconcile sweep requeues it from GitHub's "
-                f"own conclusion — never over a live run.{run_suffix}"
+                f"{opener}run cancelled mid-build (GitHub job timeout or an "
+                "external cancel) — the agent was killed while still working, "
+                "so this does NOT count as a dead run (DRE-2074). If the run "
+                "concluded without a PR, the reconcile sweep requeues it from "
+                "GitHub's own conclusion — never over a live run."
+                f"{run_suffix}"
             ],
         )
     if limit is not None:
@@ -685,63 +738,67 @@ def decide(
         )
     if turn_exhaustion:
         # A failed ATTEMPT, reported as one: no dead-run strike, no
-        # model-error marker, one retry, then an escalation that names the
-        # actual remedy (DRE-2312).
+        # model-error marker (DRE-2312). And READ before it is retried
+        # (DRE-4366, whose count was seven in ten of 110 turn-cap deaths
+        # already past implementation green): the first death used to be
+        # retried blind from nothing, and the second parked for a human
+        # whatever the reading said.
+        import turn_budget  # local: only this branch reads the milestone
+
         facts = turn_facts or "the turn cap"
+        if last_progress is None or last_progress < turn_budget.IMPLEMENTATION_GREEN:
+            stopped = (
+                f"at {_marker(last_progress)}" if last_progress
+                else "before posting any progress marker"
+            )
+            # SIZE, NOT BUDGET. The run stopped before the work was finished,
+            # and another run at the same ceiling buys more of the same — the
+            # DRE-2838 shape. No retry at any count: the card goes to the lane
+            # that owes a decomposition, with nothing parked and no label.
+            return Decision(
+                "replan",
+                [
+                    f"{REPLAN_MARK} the agent ran out of steps — it hit {facts} "
+                    f"— and the run stopped {stopped}, before implementation "
+                    f"green. That is size, not budget: the run never got the "
+                    f"work finished, and another run at the same budget buys "
+                    f"more of the same. Not retried — the card is back in "
+                    f"Planning to be cut into smaller pieces, with nothing "
+                    f"parked and no hold label.{run_suffix}"
+                ],
+            )
         if prior_dead >= turn_cap:
-            if budget_not_size:
-                # DRE-3097. Same hold, same lane, same label — a different
-                # DIAGNOSIS, because the card's own thread carries one. The
-                # prefix is load-bearing: medic_retry.HELD_RECEIPT_MARK and
-                # split_ledger.TURN_HOLD_MARK both match on it, and a park the
-                # medic does not recognise is a turn-cap death it retries.
-                remedy = (
-                    f"label it `{raise_to}` and return it to Todo"
-                    if raise_to
-                    else "this card is already on the largest budget the "
-                         "pipeline offers, so the next move really is a "
-                         "smaller card"
-                )
-                return Decision(
-                    "hold",
-                    [
-                        f"🚨 held-for-human ({TURN_TAG} cap reached): the agent "
-                        f"ran out of steps {prior_dead + 1} times in a row — "
-                        f"the last run hit {facts} and stopped mid-task. Every "
-                        f"one of those runs reached the same progress marker "
-                        f"or a later one, and the last got as far as "
-                        f"implementation green. That is budget, not size: the "
-                        f"work finishes but the run does not — raise `turns:` "
-                        f"rather than splitting the card again. Parked in "
-                        f"Backlog with the '{HOLD_LABEL}' label; {remedy}."
-                        f"{run_suffix}"
-                    ],
-                )
+            # DRE-3097's reading, now the only one a park can make: every
+            # death that reaches here got past implementation green. The
+            # prefix is load-bearing: medic_retry.HELD_RECEIPT_MARK and
+            # split_ledger.TURN_HOLD_MARK both match on it, and a park the
+            # medic does not recognise is a turn-cap death it retries.
             return Decision(
                 "hold",
                 [
                     f"🚨 held-for-human ({TURN_TAG} cap reached): the agent ran "
                     f"out of steps {prior_dead + 1} times in a row — the last "
-                    f"run hit {facts} and stopped mid-task. Both were full runs "
-                    f"doing real work, so the evidence says this card does not "
-                    f"fit inside one run: parked in Backlog with the "
-                    f"'{HOLD_LABEL}' label until a human splits it into smaller "
-                    f"pieces (or raises the turn budget with a `turns:` label — "
-                    f"the runs did not get far enough, consistently enough, for "
-                    f"the budget to be the reading).{run_suffix}"
+                    f"run hit {facts}, having reached {_marker(last_progress)}. "
+                    f"That is budget, "
+                    f"not size: the work finishes but the run does not, and the "
+                    f"one retry at the same budget did not land it either. "
+                    f"Parked in Backlog with the '{HOLD_LABEL}' label for a "
+                    f"person to read what the runs left behind and decide how "
+                    f"the card gets finished.{run_suffix}"
                 ],
             )
         return Decision(
             "requeue",
             [
-                f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts} "
-                f"and stopped before opening a PR. That was a full run doing "
-                f"real work, not a credentials or connection problem. "
-                f"Requeued to Todo for one more attempt (turn exhaustion "
-                f"{prior_dead + 1}/{turn_cap + 1}); how far an agent gets "
-                f"varies run to run. If the next run hits the cap too, the card "
-                f"needs splitting into smaller pieces or a larger turn "
-                f"budget.{run_suffix}"
+                f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts}, "
+                f"having reached {_marker(last_progress)}. That is budget, not "
+                f"size: the work "
+                f"was finished and the run was not. Requeued to Todo for one "
+                f"more attempt at the same budget (turn exhaustion "
+                f"{prior_dead + 1}/{turn_cap + 1}). If that run also dies past "
+                f"implementation green, the card parks in Backlog with the "
+                f"'{HOLD_LABEL}' label; if it dies short of it, the card goes "
+                f"to Planning.{run_suffix}"
             ],
         )
     if credential_expiry:
@@ -949,6 +1006,72 @@ def park_unlanded_comment(run_url: str = "", tag: str = DEAD_TAG) -> str:
     )
 
 
+def last_run_markers(comment_bodies) -> list[str]:
+    """The `⏳ n/5` markers the LAST run on the card posted, oldest first.
+
+    Grouped exactly the way `turn_budget.runs_progress` groups them — a run
+    begins at its `🧠 model-attempt` heartbeat, and anything before the first
+    one belongs to no run — so the markers a replan receipt lists are the
+    markers its `last_progress` was read from. The Report step dumps the thread
+    after the run, so the last block is the run that just died.
+    """
+    import turn_budget  # local: the grouping rule has one owner
+
+    runs: list[list[str]] = []
+    for body in comment_bodies or []:
+        text = (body or "").strip()
+        if text.startswith(turn_budget._RUN_MARKER):
+            runs.append([])
+            continue
+        if runs and turn_budget.progress_of(text) is not None:
+            runs[-1].append(text.splitlines()[0])
+    return runs[-1] if runs else []
+
+
+def replan_evidence(markers, handback: str = "") -> str:
+    """What a replan receipt carries below its first line (DRE-4366): the run's
+    own progress markers, and the agent's hand-back when it wrote one before
+    it died. The planner reads both before it cuts the card."""
+    listed = "\n".join(f"- {m}" for m in markers) if markers else (
+        "- none: the run posted no progress marker before it died")
+    out = f"\n\nThis run's progress markers:\n{listed}"
+    note = (handback or "").strip()
+    if note:
+        out += f"\n\nThe agent's hand-back, written before the run died:\n{note}"
+    return out
+
+
+def _read_handback(path: str) -> str:
+    """The hand-back note, or "" when there is none or it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def turn_noted_comment(exit_name: str = "", facts: str = "", run_url: str = "") -> str:
+    """The turn-cap death's own record when the run ALSO took another exit.
+
+    DRE-4366. The Report step classifies every run, and a turn-cap death that
+    left an escalation or a blocker note, or whose PR state GitHub would not
+    report, or whose work went to a rescue delivery, takes that branch and
+    never reaches `decide`. That is correct for the card — the exit owns it —
+    and it is how such deaths went uncounted: no receipt carried TURN_TAG, so
+    the count and the split ledger never saw them. This receipt moves nothing
+    and says so; it exists so the death is on the card.
+    """
+    run_suffix = f" Run: {run_url}" if run_url else ""
+    exit_clause = f" the {exit_name} posted above" if exit_name else " the exit posted above"
+    return (
+        f"🪦 {TURN_TAG} (noted): this run also ran out of steps — it hit "
+        f"{facts or 'the turn cap'} — before it ended. The card follows"
+        f"{exit_clause} and nothing here moves it; this line is the death's "
+        f"own record, so the turn-cap count and the split ledger see it."
+        f"{run_suffix}"
+    )
+
+
 def reset_comment(note: str = "") -> str:
     """The un-park receipt: it starts this card's death budget over.
 
@@ -1027,15 +1150,22 @@ def main(argv: list[str]) -> int:
              [--credential-expiry [--push-status N] [--artifact NAME]]
       park <CARD>
       park-unlanded [--run-url U] [--turn-exhaustion]
+      turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]
 
     With --turn-exhaustion, <prior_dead> is the card's `turn-exhaustion-requeue`
     count (its own budget) and --execution-file names the run's result JSON —
     read here, so decide() stays the no-I/O core, for the cap and spend the
     message quotes. --comments-file names the card's thread (the JSON array
     `linear_ops.py dump-comments` prints), read the same way and for the same
-    reason: `turn_budget.diagnose()` answers budget-vs-size off the phase
-    receipts in it, and an unreadable thread falls back to the split text
-    rather than claiming a diagnosis it has no evidence for (DRE-3097).
+    reason: `last_progress` is the last run's furthest `⏳ n/5` marker in it
+    (DRE-4366). An unreadable thread leaves it None — no evidence the work was
+    finished is not a reason to spend another run, so that death is read as
+    size and nothing is retried.
+
+    A "replan" body is completed here, not in decide(): the run's own markers
+    and, when the agent wrote one before it died, the hand-back at
+    HANDBACK_PATH are listed under the first line. They are receipt text, not
+    facts the decision branches on.
 
     `decide` prints (to stdout) the action on the first line, then a blank
     line, then the comment body. The workflow reads line 1 for the branch and
@@ -1043,6 +1173,8 @@ def main(argv: list[str]) -> int:
     (DRE-2931) and exits nonzero when it wrote NEITHER; `park-unlanded` prints
     the receipt to post in that case, tagged with the budget the hold came
     from (`--turn-exhaustion` for the turn cap, the dead-run cap otherwise).
+    `turn-noted` prints the tagged record of a turn-cap death that took one of
+    the other exits (DRE-4366).
     """
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
@@ -1051,7 +1183,8 @@ def main(argv: list[str]) -> int:
              "[--push-status N] [--artifact NAME] [--run-url U] "
              "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
              "[--now ISO]] | "
-             "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion]")
+             "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion] | "
+             "turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]")
     if not argv:
         print(usage)
         return 2
@@ -1069,6 +1202,18 @@ def main(argv: list[str]) -> int:
             _flag_value(rest, "--run-url"),
             TURN_TAG if "--turn-exhaustion" in rest else DEAD_TAG,
         ))
+        return 0
+    if cmd == "turn-noted":
+        facts = ""
+        exec_path = _flag_value(rest, "--execution-file")
+        if exec_path:
+            import check_agent_result  # local: only this branch needs the loader
+
+            facts = check_agent_result.turn_exhaustion_facts(
+                check_agent_result._load_execution(exec_path)
+            )
+        print(turn_noted_comment(
+            _flag_value(rest, "--exit"), facts, _flag_value(rest, "--run-url")))
         return 0
     if cmd != "decide":
         print(f"unknown command {cmd!r}")
@@ -1124,12 +1269,13 @@ def main(argv: list[str]) -> int:
         turn_facts = check_agent_result.turn_exhaustion_facts(
             check_agent_result._load_execution(exec_path)
         )
-    # DRE-3097: budget-vs-size, off the card's own phase receipts. Every step
-    # of this is fail-soft — an unreadable or absent thread leaves
-    # `budget_not_size` False, which is the message the pipeline has always
-    # sent. A diagnosis is a claim, and no evidence is not a claim.
-    budget_not_size = False
-    raise_to = ""
+    # DRE-4366: how far the run that just died got, off the card's own phase
+    # receipts. Every step of this is fail-soft — an unreadable or absent
+    # thread leaves `last_progress` None, which reads as "no marker at all":
+    # a claim that the work was finished needs evidence, and without it no
+    # further run is spent.
+    last_progress = None
+    markers: list[str] = []
     if turn_exhaustion and comments_path:
         try:
             import json as _json
@@ -1138,13 +1284,13 @@ def main(argv: list[str]) -> int:
 
             with open(comments_path) as fh:
                 bodies = _json.load(fh)
-            found = turn_budget.diagnose(bodies if isinstance(bodies, list) else [])
-            budget_not_size = bool(found["budget_not_size"])
-            raise_to = found["label"]
+            bodies = bodies if isinstance(bodies, list) else []
+            runs = turn_budget.runs_progress(bodies)
+            last_progress = runs[-1] if runs else None
+            markers = last_run_markers(bodies)
         except Exception as exc:
-            print(f"dead_run: could not diagnose budget-vs-size from "
-                  f"{comments_path} ({exc}) — reporting the split remedy, "
-                  f"which is what this receipt has always said",
+            print(f"dead_run: could not read the run's progress from "
+                  f"{comments_path} ({exc}) — reading it as no marker at all",
                   file=sys.stderr)
     d = decide(
         prior_dead,
@@ -1152,8 +1298,7 @@ def main(argv: list[str]) -> int:
         error_model=error_model,
         turn_exhaustion=turn_exhaustion,
         turn_facts=turn_facts,
-        budget_not_size=budget_not_size,
-        raise_to=raise_to,
+        last_progress=last_progress,
         cancelled=cancelled,
         pre_agent=pre_agent,
         failed_step=failed_step,
@@ -1164,9 +1309,12 @@ def main(argv: list[str]) -> int:
         run_url=run_url,
         limit=limit,
     )
+    body = d.comments[0]
+    if d.action == "replan":
+        body += replan_evidence(markers, _read_handback(HANDBACK_PATH))
     print(d.action)
     print()
-    print(d.comments[0])
+    print(body)
     return 0
 
 

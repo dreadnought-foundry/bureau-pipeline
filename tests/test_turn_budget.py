@@ -862,7 +862,7 @@ class StandardIsCurrentTest(unittest.TestCase):
         """The two turn-cap subsections, from the first one's heading to the
         `### How to split` heading that follows them, line wrapping collapsed."""
         text = (ROOT / "standards" / "card-quality.md").read_text()
-        start = text.index("### Two turn-cap deaths")
+        start = text.index("### A turn-cap death is read")
         end = text.index("### How to split", start)
         return " ".join(text[start:end].split())
 

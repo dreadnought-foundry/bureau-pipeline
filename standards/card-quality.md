@@ -388,15 +388,38 @@ the same codebase.
 not only on the original.** DRE-2871 was itself one third of an earlier split of
 DRE-2837, and was still too big.
 
-### Two turn-cap deaths on one card means SPLIT (operator rule, 2026-09-01)
-There is **no third attempt**, and nothing starts one for you. On turn
-exhaustion the pipeline requeues the card once (counted by the
-`turn-exhaustion-requeue` tag; the cap is in `scripts/dead_run.py`), and the
-second death parks it in `Backlog` with the `needs-human` label. The reconcile
-sweep skips a held card entirely — no requeue, no nudge, no dispatch — and
-since DRE-2954 the medic asks the same question before its one automatic
-retry, so nothing retries it until a human acts. **That park is the signal to
-split**, not a queue position.
+### A turn-cap death is read before it is retried (DRE-4366)
+The first death is **read**, not retried blind. When a run hits the turn
+ceiling — 400 turns for every run since DRE-4361, so there is no higher rung to
+raise it to — the pipeline looks at how far that run got, the furthest
+`⏳ n/5` marker it posted, and acts on the reading (`decide` in
+`scripts/dead_run.py`):
+
+- **Past implementation green** (`⏳ 3/5` or later) — budget, not size: the
+  work was finished and the run was not. The pipeline requeues the card once,
+  at the same budget (counted by the `turn-exhaustion-requeue` tag; the cap is
+  in `scripts/dead_run.py`), and the retry resumes the dead run's own branch
+  once DRE-4368 lands. If that run also dies past implementation green, the
+  card parks in `Backlog` with the `needs-human` label — the next section.
+- **Before implementation green, or no marker at all** — size, not budget:
+  another run at the same ceiling buys more of the same. **Nothing is
+  retried, at any count.** The card goes to `Planning` with no label and
+  nothing parked, under a receipt that opens
+  `✂️ turn-exhaustion-requeue → Planning:`, names the marker the run stopped
+  at, lists that run's progress markers, and carries the agent's hand-back
+  when it wrote one before it died. **That receipt is the signal to split**,
+  not a queue position.
+
+There is **no third attempt**, and nothing starts one for you: two turn-cap
+deaths on one card are the most it ever gets. Every one of those receipts
+carries `turn-exhaustion-requeue` on its first line — so does the record of a
+run the job timeout then killed, of a park Linear refused to write, and of a
+death that also took the agent's escalation or blocker exit — so the count and
+the split ledger see every death, which they did not before. The reconcile sweep
+skips a held card entirely — no requeue, no nudge, no dispatch — and since
+DRE-2954 the medic asks the same question before its one automatic retry, of a
+card just sent to `Planning` as much as of a parked one, so nothing re-runs
+either until a person or the planner acts.
 
 "Nothing retries it" was an aspiration for one day: on 2026-09-01 the medic
 re-ran DRE-2937's first dead run sixty seconds after the turn cap parked the
@@ -405,25 +428,22 @@ called unbuildable until an operator killed it by hand. The medic now reads
 the card before retrying, and refuses a turn-cap death outright — that is a
 budget ceiling, not a flake, and the same run re-run hits the same wall.
 
-### …unless the park says BUDGET, not size (DRE-3097)
-The park is still the signal, but it now names **which of two remedies** it is,
-and the second one has a handle. The turn budget is no longer a literal 150:
-a card can carry a `turns:<n>` label — a rung from the reviewed set in
-`config/turn-budgets.json` — or let its `size:` label pick one, and the budget
-it ran with is printed in the `🧠 model-attempt` receipt as `turns=250`.
+### …and a park says BUDGET, not size (DRE-3097)
+A park only ever follows two deaths that both got past implementation green,
+so its receipt reads **budget, not size: the work finishes but the run does
+not** — and it never calls that card a split. Splitting it is the move that
+already failed — DRE-3088's third death, at $17.53, came *after* it had been
+cut down to XS (two edits inside two existing steps of `plan.yml` plus tests),
+because the cost was the ~1,850-line file the agent had to keep re-reading,
+not the size of the change. The budget a run had is printed in its
+`🧠 model-attempt` receipt as `turns=400`. A card can still carry a
+`turns:<n>` label — a rung from the reviewed set in `config/turn-budgets.json`
+— but since DRE-4361 only to ask for LESS than the default, so there is no
+label that raises it. A person reads what the two runs left behind and decides
+how the card gets finished.
 
-So read the park receipt before splitting. When every dead run reached the same
-progress marker or a later one and the last got as far as `⏳ 3/5 implementation
-green`, the receipt says **budget, not size: the work finishes but the run does
-not** and names the label to apply. Splitting that card again is the move that
-already failed — DRE-3088's third death, at $17.53, came *after* it had been cut
-down to XS (two edits inside two existing steps of `plan.yml` plus tests),
-because the cost was the ~1,850-line file the agent had to keep re-reading, not
-the size of the change. Label it, return it to `Todo`, and let it run.
-
-When the receipt says split, split: the runs did not get far enough, or
-consistently enough, for a ceiling to be the reading, and more turns buys more
-of the same.
+When the receipt is the replan above, split: the run did not get far enough
+for a ceiling to be the reading, and more turns buys more of the same.
 
 ### How to split
 - **Cut on independence, not size.** Each piece must be shippable and reviewable
