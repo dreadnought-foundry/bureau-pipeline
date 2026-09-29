@@ -313,6 +313,26 @@ def test_a_branch_whose_card_is_terminal_is_not_reported():
         assert sweep(states={CARD: state})[0] == [], state
 
 
+def test_a_branch_whose_card_waits_in_todo_is_not_reported():
+    """DRE-4368: a dead run's card is requeued to Todo, and the resume run it
+    is waiting for continues this very branch — so "open a pull request from
+    it" names the wrong action and invites a duplicate PR. A Todo card that
+    was never dispatched is flag_stranded's no-run case, not this alarm's."""
+    stale = reconcile.UNLANDED_MINUTES + 1
+    assert sweep(compare={BRANCH: (3, stale)}, states={CARD: "Todo"})[0] == []
+
+
+def test_a_branch_whose_card_is_in_progress_in_the_same_shape_still_speaks():
+    """The Todo skip is a lane skip, not a blanket one: the same aged,
+    PR-less branch on an In Progress card is still reported."""
+    stale = reconcile.UNLANDED_MINUTES + 1
+    comments, _, _ = sweep(
+        compare={BRANCH: (3, stale)}, states={CARD: "In Progress"},
+    )
+    assert len(comments) == 1
+    assert BRANCH in comments[0][1]
+
+
 def test_an_unreadable_card_state_reports_nothing():
     """Linear being unreadable is not evidence the card is live."""
     comments, _, _ = sweep(states={CARD: RuntimeError("linear down")})

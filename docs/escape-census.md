@@ -76,7 +76,12 @@ Branch lists and PR lists are one API call each and the sweep already runs
 every fifteen minutes, so none of these is expensive.
 
 1. **Branch with commits, no PR** (A) — *built, DRE-2682*:
-   `reconcile.flag_unlanded_work`.
+   `reconcile.flag_unlanded_work`. It skips a card in Todo (DRE-4368): a
+   dead run's card waits there for the resume run that continues the same
+   branch, so "open a pull request" would name the wrong action. A dispatched
+   Todo card that never ran is still reported by `flag_stranded`'s no-run
+   class. A hand-built Todo card with a PR-less branch is reported by
+   neither — a known gap.
 2. **Card working, nothing to point at** (C) — *built for hand-built cards,
    DRE-2682*; dispatched cards were already covered by `flag_stranded`. It
    reports what is missing, not that the card is "stalled".

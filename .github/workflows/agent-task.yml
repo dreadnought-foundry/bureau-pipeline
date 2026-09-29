@@ -324,6 +324,32 @@ jobs:
       # permitted form in this file and in agent-fix.yml is now the bare
       # `${{ steps.model.outputs.turns }}`, guarded by
       # `tests/test_no_literal_turn_ceiling.py`.
+      #
+      # RESUME THE DEAD RUN'S BRANCH (DRE-4368). A run that died at the turn
+      # ceiling usually left a branch — often with finished work on it — and
+      # the requeued run used to ignore it and rebuild the card from a clean
+      # checkout. This step looks for this card's `agent/<CARD>-*` branch and
+      # answers `resume=true` only when it has commits of its own AND merges
+      # cleanly onto the default; the prompt's process step 1 and the
+      # heartbeat read the answer, and `sha` plus the snapshot are what the
+      # four branch-as-proof reads below discount, so a branch that was
+      # already there proves nothing about THIS run until it moves. Stdlib and
+      # fail-soft: any git error is `resume=false`, and continue-on-error so
+      # it can never fail a build.
+      - name: Resume branch
+        id: resume
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          python3 .bureau-pipeline/scripts/resume_branch.py decide \
+            --card "$CARD" --default "$DEFAULT_BRANCH" \
+            --github-output "$GITHUB_OUTPUT" \
+            --note "$RUNNER_TEMP/resume-note.md" \
+            --snapshot "$RUNNER_TEMP/resume-branches.json"
+
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -426,6 +452,9 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
+          # DRE-4368: the card's thread says whether this run resumed the dead
+          # run's branch or started clean, and why.
+          RESUME_CLAUSE: ${{ steps.resume.outputs.resume == 'true' && format('resume={0}', steps.resume.outputs.branch) || format('resume=none ({0})', steps.resume.outputs.reason || 'no resume decision') }}
         run: |
           set -o pipefail
           {
@@ -440,7 +469,7 @@ jobs:
             ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
             python3 .bureau-pipeline/scripts/linear_ops.py comment \
               "${{ github.event.client_payload.identifier }}" \
-              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}). ${{ steps.model.outputs.why }} ${{ steps.model.outputs.turns_why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}, $RESUME_CLAUSE). ${{ steps.model.outputs.why }} ${{ steps.model.outputs.turns_why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } 2>&1 | tee "$PRE_AGENT_LOG"
 
       # A LOUD FLOOR, NOT A SILENT CEILING (DRE-3043). The re-mint below makes
@@ -581,7 +610,7 @@ jobs:
             the decision rule — it is a HIGH bar; do not over-escalate.
 
             Process (mandatory):
-            1. Create branch agent/${{ github.event.client_payload.identifier }}-<short-slug> off the default branch.
+            1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
             3. Run the local checks listed in .github/bureau/overrides.md —
                all must pass locally before you push.
@@ -658,6 +687,11 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # DRE-4368: the tips the card's branches had before this run, so the
+          # branch-as-proof read below discounts one that has not moved.
+          RESUME_BRANCH: ${{ steps.resume.outputs.branch }}
+          RESUME_SHA: ${{ steps.resume.outputs.sha }}
+          RESUME_SNAPSHOT: ${{ runner.temp }}/resume-branches.json
           ATTEMPT: "1"
           # The same list attempt 1 hands the vendor action, because the
           # probe asks about the first name on it.
@@ -667,6 +701,9 @@ jobs:
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way the Report step reads it.
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # DRE-4368: a branch that was already there when this run started
+          # (the dead run's, resumed or not) proves nothing until it moves.
+          BRANCH=$(python3 .bureau-pipeline/scripts/resume_branch.py proof --card "$CARD" --branch "$RESUME_BRANCH" --sha "$RESUME_SHA" --snapshot "$RESUME_SNAPSHOT" --fallback "$BRANCH")
           python3 .bureau-pipeline/scripts/claude_rate_limit_retry.py decide \
             --attempt "$ATTEMPT" --max-attempts 3 \
             --claude-outcome "$CLAUDE_OUTCOME" \
@@ -767,7 +804,7 @@ jobs:
             the decision rule — it is a HIGH bar; do not over-escalate.
 
             Process (mandatory):
-            1. Create branch agent/${{ github.event.client_payload.identifier }}-<short-slug> off the default branch.
+            1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
             3. Run the local checks listed in .github/bureau/overrides.md —
                all must pass locally before you push.
@@ -844,6 +881,11 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude_retry1.outcome }}
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_retry1.outputs.execution_file }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # DRE-4368: the tips the card's branches had before this run, so the
+          # branch-as-proof read below discounts one that has not moved.
+          RESUME_BRANCH: ${{ steps.resume.outputs.branch }}
+          RESUME_SHA: ${{ steps.resume.outputs.sha }}
+          RESUME_SNAPSHOT: ${{ runner.temp }}/resume-branches.json
           ATTEMPT: "2"
           # The same list attempt 1 hands the vendor action, because the
           # probe asks about the first name on it.
@@ -853,6 +895,9 @@ jobs:
           # A pushed branch is the other proof the agent ran, and it is read
           # the same way the Report step reads it.
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # DRE-4368: a branch that was already there when this run started
+          # (the dead run's, resumed or not) proves nothing until it moves.
+          BRANCH=$(python3 .bureau-pipeline/scripts/resume_branch.py proof --card "$CARD" --branch "$RESUME_BRANCH" --sha "$RESUME_SHA" --snapshot "$RESUME_SNAPSHOT" --fallback "$BRANCH")
           python3 .bureau-pipeline/scripts/claude_rate_limit_retry.py decide \
             --attempt "$ATTEMPT" --max-attempts 3 \
             --claude-outcome "$CLAUDE_OUTCOME" \
@@ -950,7 +995,7 @@ jobs:
             the decision rule — it is a HIGH bar; do not over-escalate.
 
             Process (mandatory):
-            1. Create branch agent/${{ github.event.client_payload.identifier }}-<short-slug> off the default branch.
+            1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
             3. Run the local checks listed in .github/bureau/overrides.md —
                all must pass locally before you push.
@@ -1324,12 +1369,20 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # DRE-4368: the tips the card's branches had before this run, so the
+          # branch-as-proof read below discounts one that has not moved.
+          RESUME_BRANCH: ${{ steps.resume.outputs.branch }}
+          RESUME_SHA: ${{ steps.resume.outputs.sha }}
+          RESUME_SNAPSHOT: ${{ runner.temp }}/resume-branches.json
           # DRE-2074: 'cancelled' = the agent was killed (job timeout /
           # external cancel) while still working — not a silent death; a red
           # gate here would summon the medic to re-run a healthy-but-slow card.
           CLAUDE_OUTCOME: ${{ steps.claude_result.outputs.outcome }}
         run: |
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # DRE-4368: a branch that was already there when this run started
+          # (the dead run's, resumed or not) proves nothing until it moves.
+          BRANCH=$(python3 .bureau-pipeline/scripts/resume_branch.py proof --card "$CARD" --branch "$RESUME_BRANCH" --sha "$RESUME_SHA" --snapshot "$RESUME_SNAPSHOT" --fallback "$BRANCH")
           # card_pr.py is the ONE PR-existence predicate (DRE-2316): --state
           # all (a PR that just MERGED is still a PR), \b-anchored to this
           # card (DRE-1343/2025). Exit 3 = the answer was UNREADABLE, which is
@@ -1371,6 +1424,11 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # DRE-4368: the tips the card's branches had before this run, so the
+          # branch-as-proof read below discounts one that has not moved.
+          RESUME_BRANCH: ${{ steps.resume.outputs.branch }}
+          RESUME_SHA: ${{ steps.resume.outputs.sha }}
+          RESUME_SNAPSHOT: ${{ runner.temp }}/resume-branches.json
           MODEL_USED: ${{ steps.model.outputs.model }}
           # DRE-2074: a cancelled agent step (job timeout / external cancel)
           # is a KILLED run, not a dead agent — the no-PR branch below must
@@ -1443,6 +1501,9 @@ jobs:
           # attributed another card's PR to a dead run and sent it to the review lane
           # with a false "PR opened" receipt (DRE-1343, 2026-06-12).
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # DRE-4368: a branch that was already there when this run started
+          # (the dead run's, resumed or not) proves nothing until it moves.
+          BRANCH=$(python3 .bureau-pipeline/scripts/resume_branch.py proof --card "$CARD" --branch "$RESUME_BRANCH" --sha "$RESUME_SHA" --snapshot "$RESUME_SNAPSHOT" --fallback "$BRANCH")
           # Then ask card_pr.py — the ONE PR-existence predicate the reconcile
           # sweep shares (DRE-2316). It queries --state all, so a PR that
           # MERGED seconds ago is visible; this step used to run a bare

@@ -5256,6 +5256,12 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
         return
     if state in structural_repair.TERMINAL_STATES:
         return  # a finished card's leftover branch is route F/I, not this alarm
+    if state == "Todo":
+        # DRE-4368: a dead run's card waits here for the resume run that
+        # continues THIS branch, so "open a pull request from it" names the
+        # wrong action. A Todo card never dispatched at all is flag_stranded's
+        # no-run class (it carries no run receipt), not this alarm's.
+        return
     # Keyed on the BRANCH, not the card: a card whose first attempt was
     # reported must still speak when a second branch strands the same way.
     marker = f"{UNLANDED_TAG} branch {name}:"

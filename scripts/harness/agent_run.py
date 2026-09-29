@@ -79,6 +79,19 @@ BLOCKER_PATH = "/tmp/agent-blocker.txt"  # nosec B108 — the prompt's own path
 
 _EXPRESSION_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
+# The prompt's process step 1 (DRE-4368): resume the dead run's branch, or
+# start clean. A harness sandbox is a fresh repository with no card branch, so
+# the `Resume branch` step would answer `resume=false` with `no card branch` —
+# and the start-clean text rendered here is read out of the shipped expression
+# itself, so the harness never carries a second copy of it.
+_RESUME_EXPRESSION_RE = re.compile(
+    r"^steps\.resume\.outputs\.resume == 'true' && .* \|\| "
+    r"format\('(?P<clean>[^']*)', github\.event\.client_payload\.identifier, "
+    r"steps\.resume\.outputs\.reason \|\| '[^']*'\)$",
+    re.DOTALL,
+)
+NO_CARD_BRANCH = "no card branch"
+
 
 @dataclass
 class SeededCard:
@@ -180,6 +193,11 @@ def build_prompt(
 
     def replace(match):
         expression = match.group(1).strip()
+        resume = _RESUME_EXPRESSION_RE.match(expression)
+        if resume:
+            return (resume.group("clean")
+                    .replace("{0}", card.identifier)
+                    .replace("{1}", NO_CARD_BRANCH))
         if expression not in values:
             raise ValueError(
                 f"{workflow_path}: unknown prompt expression ${{{{ "
