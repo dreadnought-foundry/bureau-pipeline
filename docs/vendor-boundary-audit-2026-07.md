@@ -174,7 +174,8 @@ agent/repair/dependabot/DRE-carrying branches. `allowed_bots`
 (the merge gate's update-branch push fired `synchronize` as qa-bot, DRE-2037 —
 **SUPERSEDED 2026-08-20 (DRE-2416):** that push is gone, so the entry is now
 defence in depth, not a live justification, matching the workflow's own inline
-comment), `dependabot` (its own opens/rebases, DRE-2039), and `github-actions`
+comment; **load-bearing again since DRE-4912 (DRE-5070):** the gate's
+order-sensitive refresh pushes as qa-bot), `dependabot` (its own opens/rebases, DRE-2039), and `github-actions`
 (reconcile's `gh workflow run` dispatches, DRE-2053).
 
 **Q2 — secrets.** The dependabot self-skip lives on the REUSABLE's job-if
@@ -214,7 +215,9 @@ the logic that reviews itself).
 update-branch push, dependabot) — all admitted downstream.
 **SUPERSEDED 2026-08-20 (DRE-2416):** the gate no longer pushes to any branch,
 so qa-bot is no longer among the pushing identities here; its downstream
-admission stays as defence in depth. `workflow_dispatch`
+admission stays as defence in depth. **Since DRE-4912 (DRE-5070)** the gate
+pushes again in one case only — an order-sensitive fork, refreshed as qa-bot —
+so that admission is load-bearing again. `workflow_dispatch`
 from reconcile initiates as `github-actions` — admitted.
 
 **Q2 — secrets.** Dependabot-actor'd `pull_request` runs are skipped at the
@@ -245,7 +248,8 @@ surface here), and merge_gate.py treats an absent verifier as a non-gate.
 `agent/` head). `allowed_bots` (verify.yml:225/336) carries the full roster
 including qa-bot (DRE-1924 skew guard — **SUPERSEDED 2026-08-20 (DRE-2416):**
 the skew guard's update-branch push is retired, so the entry is now defence in
-depth, matching verify.yml's own inline comment), dependabot, and
+depth, matching verify.yml's own inline comment; load-bearing again since
+DRE-4912's order-sensitive refresh, DRE-5070), dependabot, and
 `github-actions`.
 
 **Q2 — secrets.** Same leading-conjunct dependabot self-skip as qa-review
@@ -300,6 +304,10 @@ currency — the fleet does not require up-to-date branches and the gate no
 longer pushes to any branch, so the qa-bot `synchronize` path described here
 no longer occurs (the allowlist entries stay as defence in depth). The Q1/Q2
 answers for that path are unchanged where it still exists via the fix agent.
+**Since DRE-4912 (DRE-5070)** the gate updates a branch again in one case: the
+pull request and `main` both added a file under a declared order-sensitive
+path, at most once per `main` tip — the qa-bot `synchronize` path above, with
+the same answers.
 DIRTY dependabot PRs are never sent to the fix agent (Dependabot
 rebases/recreates its own conflicts, DRE-2039). Closed PRs exit early;
 reopened PRs re-evaluate statelessly. **The residual hole:** the final

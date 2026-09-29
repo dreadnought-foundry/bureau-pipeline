@@ -24,6 +24,24 @@
 # together; the push-to-main run going red plus medic.yml's repair card
 # catches that in minutes.
 #
+# The one exception is a FORK, not currency (DRE-4912, DRE-5070). What
+# DRE-2416 retired was updating any branch that had fallen behind. What the
+# gate does now is refresh a branch only where merging it would fork `main`:
+# the pull request adds a file under a path the repo declares order-sensitive
+# (`.github/bureau/merge-recheck.json` — alembic's versions directory), AND
+# `main` has added one there since the branch's merge base. On 2026-09-25 the
+# gate merged agent-bureau #2773 on a CI run two hours stale, after #2777 had
+# added a sibling `0062_*` migration, and every open PR, the release train and
+# a console deploy paid for the second head. So right before merging, the
+# gate asks scripts/order_sensitive_refresh.py; on `refresh` it updates the
+# branch from `main` instead, CI re-runs on a fresh merge ref, and the repo's
+# own head check refuses the second head before it lands. The cost is
+# bounded where DRE-2393's was not: it fires only on a same-prefix addition
+# on both sides, at most once per `main` tip, never for a base move that adds
+# nothing there, and each refresh buys the CI run the fork would otherwise
+# have cost every open PR after the merge. A repo with no declaration pays
+# nothing, and a behind head with no such addition merges as it stands.
+#
 # The DECISION itself lives in scripts/merge_gate.py (DRE-1992) with the
 # full rules and their history (DRE-1987 authorship, DRE-1990 SHA binding,
 # DRE-1991 SKIP arm, anchored verdict parsing) — tested by the decision-
@@ -492,8 +510,9 @@ jobs:
           # so on the PR. Nobody here reads diffs, so the audit trail has
           # to explain itself — portico #205's six merge commits had
           # nothing in the timeline explaining them. Since DRE-2416 the
-          # gate never moves a head itself, so the head change this records
-          # is the FIX AGENT's conflict merge.
+          # head change this records is the FIX AGENT's conflict merge, or
+          # the gate's own order-sensitive refresh below (DRE-4912) — the
+          # one head the gate still moves.
           # Idempotent on the CONTENT ID (one record per readiness cycle,
           # not per head), checked against the comments record already
           # fetched above — the same shape the `human` arm uses. The needle
@@ -637,6 +656,85 @@ jobs:
             exit 0
           fi
           [ "$DECISION" = "merge" ] || exit 0
+
+          # DRE-4912 / DRE-5070: the fork refresh — the gate's ONE branch
+          # write, and not the currency gate DRE-2416 retired (the header
+          # says why). It sits BEFORE the card advance on purpose: a refresh
+          # or a wait is a merge that did not happen, so it exits here with
+          # no lane write and the card stays where the gate found it. Only
+          # `proceed` falls through to the merge arm, unchanged.
+          #
+          # What `main` gained since this branch's merge base is read only
+          # when the branch is behind AND the repo declares order-sensitive
+          # paths, so a current head or an undeclared repo costs no extra
+          # call. A blip leaves `{}`, which the module answers `wait` on — a
+          # blip is never "safe to merge".
+          BEHIND=$(python3 -c 'import json, sys; b = json.load(open(sys.argv[1])).get("behind_by"); print(b if type(b) is int and b > 0 else 0)' /tmp/compare.json 2>/dev/null || echo 0)
+          echo '{}' > /tmp/base-advance.json
+          if [ "$BEHIND" -gt 0 ] && [ -f .github/bureau/merge-recheck.json ]; then
+            MERGE_BASE=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("merge_base_commit") or {}).get("sha") or "")' /tmp/compare.json 2>/dev/null || true)
+            if [ -n "$MERGE_BASE" ]; then
+              gh api "repos/$REPO_FULL/compare/$MERGE_BASE...$BASE" > /tmp/base-advance.json 2>/dev/null \
+                || echo '{}' > /tmp/base-advance.json
+            fi
+          fi
+          # The receipts are the comments record fetched above, flattened:
+          # `--slurp` wrote one array per page, and the module reads one list
+          # of comments. A record that will not flatten is written as
+          # unreadable, and the module waits rather than refresh twice.
+          python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import merge_gate; json.dump(merge_gate.flatten_pages(json.load(open("/tmp/comments.json"))), sys.stdout)' \
+            > /tmp/receipts.json 2>/dev/null || echo 'unreadable' > /tmp/receipts.json
+          REFRESH_RC=0
+          python3 .bureau-pipeline/scripts/order_sensitive_refresh.py decide \
+            --compare-file /tmp/compare.json \
+            --base-advance-file /tmp/base-advance.json \
+            --declaration-file .github/bureau/merge-recheck.json \
+            --receipts-file /tmp/receipts.json \
+            > /tmp/refresh-decision || REFRESH_RC=$?
+          # Exit 2 is the module refusing an unreadable compare record, which
+          # the contract reads as `wait`. Any other failure is a crash, and a
+          # crash stays loud rather than merging past the question.
+          if [ "$REFRESH_RC" = 2 ]; then
+            printf 'decision=wait\nreason=the compare record could not be read\n' > /tmp/refresh-decision
+          elif [ "$REFRESH_RC" != 0 ]; then
+            echo "order_sensitive_refresh.py failed (exit $REFRESH_RC) — not merging"
+            exit 1
+          fi
+          sed 's/^/fork-refresh: /' /tmp/refresh-decision
+          REFRESH=$(grep -m1 '^decision=' /tmp/refresh-decision | cut -d= -f2- || true)
+          REFRESH_REASON=$(grep -m1 '^reason=' /tmp/refresh-decision | cut -d= -f2- || true)
+          # `refresh`: update the branch from `main` under the qa-bot token
+          # (this step's GH_TOKEN) — the same loud write reconcile.py's
+          # stale-merge-ref refresh makes (DRE-3138). The `synchronize` it
+          # fires initiates as the qa-bot, which qa-review.yml and verify.yml
+          # admit (DRE-2037); the workflow's own token would fire nothing.
+          # `expected_head_sha` turns a push landing since $SHA was read into
+          # a 422 rather than an update of a head nothing here evaluated.
+          # Then ONE note through gate_note.py, whose marker is the decision
+          # module's receipt — at most one refresh per `main` tip. A refused
+          # update posts no note, so the next evaluation decides again; a
+          # crash between the two leaves a moved head and no receipt, and the
+          # next evaluation reads `behind_by: 0` and proceeds to CI's answer.
+          if [ "$REFRESH" = "refresh" ]; then
+            TIP=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("base_commit") or {}).get("sha") or "")' /tmp/compare.json 2>/dev/null || true)
+            if gh api -X PUT "repos/$REPO_FULL/pulls/$PR/update-branch" -f expected_head_sha="$SHA" >/dev/null; then
+              REFRESH_MARK="Merge gate: refreshed onto $TIP"
+              printf '♻️ %s — %s\n\n%s\n' "$REFRESH_MARK" "$REFRESH_REASON" \
+                "Not merged: $BASE gained a file under the same order-sensitive path since this branch's merge base, so merging now could fork $BASE (DRE-4912). The branch was updated from $BASE and CI re-runs on the result, where the repo's own check sees both files together. The standing review carries if this pull request's own changes are unchanged (DRE-2340)." \
+                > /tmp/refresh-note.md
+              python3 .bureau-pipeline/scripts/gate_note.py \
+                --repo "$REPO_FULL" \
+                --pr "$PR" \
+                --author "$QA_LOGIN" \
+                --marker "$REFRESH_MARK" \
+                --body-file /tmp/refresh-note.md \
+                || echo "the refresh note did not post — the branch update stands"
+            else
+              echo "update-branch refused for $SHA — not merging; the next evaluation decides again"
+            fi
+            exit 0
+          fi
+          [ "$REFRESH" = "proceed" ] || { echo "fork refresh: waiting — ${REFRESH_REASON:-no decision read}"; exit 0; }
 
           # Both gates green: advance card, merge as qa-bot.
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress" || true

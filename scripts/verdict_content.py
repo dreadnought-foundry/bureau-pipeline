@@ -18,8 +18,9 @@ destroy the verdict.
 
 STILL LOAD-BEARING AFTER DRE-2416, which removed the gate's own
 update-branch: the head still moves whenever the FIX AGENT reconciles a
-conflicted branch, and that merge must not throw away a verdict for a diff
-it did not touch. The gate, should_review_pr and reconcile all read this
+conflicted branch, and — since DRE-4912 — when the gate refreshes a branch
+whose merge would fork `main` under an order-sensitive path. Neither merge
+may throw away a verdict for a diff it did not touch. The gate, should_review_pr and reconcile all read this
 one module so they cannot drift about what a verdict binds.
 
 TWO PROPERTIES — the whole design rests on them, so they are proved
