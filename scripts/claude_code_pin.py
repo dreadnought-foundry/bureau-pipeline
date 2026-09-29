@@ -173,15 +173,24 @@ def _grouped(n: int) -> str:
 # --------------------------------------------------------------------------- #
 
 def _http_get(url: str, headers: Mapping | None = None) -> bytes:
-    """The real read: one HTTPS GET, stdlib only. Raises on any failure."""
+    """The real read: one HTTPS GET, stdlib only. Raises on any failure; an
+    HTTP error carries the server's body, the only place its reason survives."""
+    import urllib.error
     import urllib.request
 
     if not url.startswith("https://"):
         raise ValueError(f"refusing a non-https URL: {url}")
     request = urllib.request.Request(
         url, headers={"user-agent": "bureau-pipeline-claude-code-pin", **(headers or {})})
-    with urllib.request.urlopen(request, timeout=300) as resp:  # nosec B310 - https only
-        return resp.read()
+    try:
+        with urllib.request.urlopen(request, timeout=300) as resp:  # nosec B310 - https only
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:  # pragma: no cover - defensive
+            body = "<body unreadable>"
+        raise RuntimeError(f"HTTP {exc.code}: {body[:500]!r}") from exc
 
 
 def _github_headers() -> dict:

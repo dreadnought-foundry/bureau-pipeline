@@ -393,6 +393,21 @@ def test_every_read_that_fails_is_unknown(tmp_path, capsys, url):
     assert pin["why"]
 
 
+def test_an_http_error_carries_the_servers_reason(monkeypatch):
+    """A refused read names why, not just the status (DRE-2923's audit)."""
+    import urllib.error
+    import urllib.request
+
+    def refuse(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "Forbidden", {},
+            io.BytesIO(b'{"message": "API rate limit exceeded"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(RuntimeError, match="403.*API rate limit exceeded"):
+        ccp._http_get(ccp.ACTION_RELEASES_URL)
+
+
 def test_no_release_lists_it_is_none(tmp_path, capsys):
     routes = _registry(tables={"2.1.282": TABLE_282, "2.1.283": TABLE_282,
                                "2.1.284": TABLE_282, "2.1.285": TABLE_282})
