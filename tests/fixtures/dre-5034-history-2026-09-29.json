@@ -1,0 +1,419 @@
+{
+ "_recorded": "Linear GraphQL, issue DRE-5034, read 2026-09-29 by the DRE-5142 build run. `history_first_100` is `history(first: 100)` paged to the end, exactly as Linear answered it; `history_first_12` and `history_last_12` are the two windows asked for in ONE query, kept to pin which end of the history each argument returns (DRE-5142).",
+ "history_first_12": [
+  {
+   "createdAt": "2026-09-29T00:53:31.628Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-29T00:53:31.253Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-29T00:52:47.316Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-29T00:52:33.285Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T23:50:17.079Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T23:49:55.414Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T23:49:51.733Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T23:49:51.095Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T22:17:00.288Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T22:16:59.939Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T22:16:18.720Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T22:16:17.512Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  }
+ ],
+ "history_last_12": [
+  {
+   "createdAt": "2026-09-27T17:48:31.316Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:48:31.452Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:48:31.460Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:49:01.118Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:49:03.027Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T18:12:22.560Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T21:00:02.276Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-27T21:00:02.562Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:28:13.491Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:28:22.735Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T15:28:23.001Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:29:22.977Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  }
+ ],
+ "history_first_100": [
+  {
+   "createdAt": "2026-09-29T00:53:31.628Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-29T00:53:31.253Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-29T00:52:47.316Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-29T00:52:33.285Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T23:50:17.079Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T23:49:55.414Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T23:49:51.733Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T23:49:51.095Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T22:17:00.288Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T22:16:59.939Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T22:16:18.720Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T22:16:17.512Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T22:16:16.514Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:29:23.271Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:29:22.977Z",
+   "fromState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T15:28:23.001Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-28T15:28:22.735Z",
+   "fromState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   },
+   "toState": {
+    "id": "4980c9ea-1676-4fce-aa69-b3407ac424dd",
+    "name": "Planning",
+    "type": "unstarted"
+   }
+  },
+  {
+   "createdAt": "2026-09-28T15:28:13.491Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T21:00:02.562Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T21:00:02.276Z",
+   "fromState": {
+    "id": "b1020ed8-97bf-40d4-a3ac-d36adf4b8abf",
+    "name": "Intake",
+    "type": "unstarted"
+   },
+   "toState": {
+    "id": "2b6c0bcb-382d-401c-8701-728a1f361f96",
+    "name": "Done",
+    "type": "completed"
+   }
+  },
+  {
+   "createdAt": "2026-09-27T18:12:22.560Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:49:03.027Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:49:01.118Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:48:31.460Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:48:31.452Z",
+   "fromState": null,
+   "toState": null
+  },
+  {
+   "createdAt": "2026-09-27T17:48:31.316Z",
+   "fromState": null,
+   "toState": null
+  }
+ ]
+}
