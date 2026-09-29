@@ -388,6 +388,11 @@ jobs:
           echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"
           echo "$TURNS_WHY"
           echo "$TURNS_WHY" >> "$GITHUB_STEP_SUMMARY"
+          # DRE-4370: the turn by which the agent has decided — continue, or
+          # hand back with a split proposal. The prompt names it beside the
+          # ceiling; the arithmetic is turn_budget.py's (DRE-4361).
+          DECIDE_BY=$(python3 .bureau-pipeline/scripts/turn_budget.py decide-by "$TURNS")
+          echo "decide_by=$DECIDE_BY" >> "$GITHUB_OUTPUT"
 
       # Assemble the agent's context = the role's shared standards + role brief
       # (DRE-1646). The build agents run headless and cannot load Skills, so
@@ -609,6 +614,16 @@ jobs:
             "Build by default; escalate by exception" section of your brief for
             the decision rule — it is a HIGH bar; do not over-escalate.
 
+            This run has a ceiling of ${{ steps.model.outputs.turns }} turns; every
+            tool call is a turn, and a run that reaches the ceiling is killed with
+            its work unshipped. By turn ${{ steps.model.outputs.decide_by }} — your
+            `⏳ 1/5 plan` checkpoint — you must have decided one of two things:
+            continue, because the card fits in the turns you have, or HAND BACK
+            (exit 8 below) with a split proposal. After that turn you do not hand
+            back; you build, or you stop with a blocker. The decision goes in that
+            heartbeat: `⏳ 1/5 plan — continuing within ${{ steps.model.outputs.turns }} turns`
+            or `⏳ 1/5 plan — handing back`.
+
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
@@ -662,9 +677,11 @@ jobs:
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT
                sprawl it into one unreviewable PR and do NOT silently build a
-               fragment. Open no PR, and write to /tmp/agent-handback.txt the
-               pieces you found, one line each, in plain English. The workflow
-               hands the card back to Planning with your list so the planner
+               fragment. Decide it by turn ${{ steps.model.outputs.decide_by }}, never later.
+               Open no PR, and write a split proposal to /tmp/agent-handback.txt:
+               for each piece, one line in plain English — a title, the files it
+               edits, and the sibling it does not depend on. The workflow hands
+               the card back to Planning with your proposal so the planner
                decomposes it instead of re-deriving it.
                Write at most ONE of escalation / blocker / hand-back.
 
@@ -803,6 +820,16 @@ jobs:
             "Build by default; escalate by exception" section of your brief for
             the decision rule — it is a HIGH bar; do not over-escalate.
 
+            This run has a ceiling of ${{ steps.model.outputs.turns }} turns; every
+            tool call is a turn, and a run that reaches the ceiling is killed with
+            its work unshipped. By turn ${{ steps.model.outputs.decide_by }} — your
+            `⏳ 1/5 plan` checkpoint — you must have decided one of two things:
+            continue, because the card fits in the turns you have, or HAND BACK
+            (exit 8 below) with a split proposal. After that turn you do not hand
+            back; you build, or you stop with a blocker. The decision goes in that
+            heartbeat: `⏳ 1/5 plan — continuing within ${{ steps.model.outputs.turns }} turns`
+            or `⏳ 1/5 plan — handing back`.
+
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
@@ -856,9 +883,11 @@ jobs:
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT
                sprawl it into one unreviewable PR and do NOT silently build a
-               fragment. Open no PR, and write to /tmp/agent-handback.txt the
-               pieces you found, one line each, in plain English. The workflow
-               hands the card back to Planning with your list so the planner
+               fragment. Decide it by turn ${{ steps.model.outputs.decide_by }}, never later.
+               Open no PR, and write a split proposal to /tmp/agent-handback.txt:
+               for each piece, one line in plain English — a title, the files it
+               edits, and the sibling it does not depend on. The workflow hands
+               the card back to Planning with your proposal so the planner
                decomposes it instead of re-deriving it.
                Write at most ONE of escalation / blocker / hand-back.
 
@@ -994,6 +1023,16 @@ jobs:
             "Build by default; escalate by exception" section of your brief for
             the decision rule — it is a HIGH bar; do not over-escalate.
 
+            This run has a ceiling of ${{ steps.model.outputs.turns }} turns; every
+            tool call is a turn, and a run that reaches the ceiling is killed with
+            its work unshipped. By turn ${{ steps.model.outputs.decide_by }} — your
+            `⏳ 1/5 plan` checkpoint — you must have decided one of two things:
+            continue, because the card fits in the turns you have, or HAND BACK
+            (exit 8 below) with a split proposal. After that turn you do not hand
+            back; you build, or you stop with a blocker. The decision goes in that
+            heartbeat: `⏳ 1/5 plan — continuing within ${{ steps.model.outputs.turns }} turns`
+            or `⏳ 1/5 plan — handing back`.
+
             Process (mandatory):
             1. ${{ steps.resume.outputs.resume == 'true' && format('Branch {0} exists from a previous run of this card that ran out of turns. Check it out; if it is behind the default branch, merge origin/{1} into it. Do not create a new branch. Read the note at $RUNNER_TEMP/resume-note.md first: it lists what is already committed. Continue from there.', steps.resume.outputs.branch, github.event.repository.default_branch || 'main') || format('Create branch agent/{0}-<short-slug> off the default branch ({1}).', github.event.client_payload.identifier, steps.resume.outputs.reason || 'no resume decision') }}
             2. TDD: write failing tests first, commit, then implement until green.
@@ -1047,9 +1086,11 @@ jobs:
                piece of work and is really an epic's worth — several
                independently shippable PRs, contracts between them — do NOT
                sprawl it into one unreviewable PR and do NOT silently build a
-               fragment. Open no PR, and write to /tmp/agent-handback.txt the
-               pieces you found, one line each, in plain English. The workflow
-               hands the card back to Planning with your list so the planner
+               fragment. Decide it by turn ${{ steps.model.outputs.decide_by }}, never later.
+               Open no PR, and write a split proposal to /tmp/agent-handback.txt:
+               for each piece, one line in plain English — a title, the files it
+               edits, and the sibling it does not depend on. The workflow hands
+               the card back to Planning with your proposal so the planner
                decomposes it instead of re-deriving it.
                Write at most ONE of escalation / blocker / hand-back.
 
@@ -1636,8 +1677,14 @@ jobs:
             # death branch below sends it to Planning just the same when the
             # run stopped short of implementation green, and its replan
             # receipt carries this note — tagged, so the death is counted.
+            #
+            # Since DRE-4370 the note is a split proposal written by the
+            # decide-by turn the prompt names, and the header's first words are
+            # a return receipt: planning_classify reads the card afresh past
+            # it rather than trusting the planner stamp it arrived with. A
+            # hand stamp is the operator's override and still stands.
             {
-              echo "🤖 Handed back to Planning: this card was dispatched as one piece of work and is an epic's worth. The agent stopped rather than sprawl it into one unreviewable pull request."
+              echo "🤖 Handed back to Planning: this card was dispatched as one piece of work and is an epic's worth. The agent stopped rather than sprawl it into one unreviewable pull request. The pieces below are its plan for the split (the agent's split proposal, written at its decide-by turn)."
               echo ""
               cat /tmp/agent-handback.txt
               echo ""
