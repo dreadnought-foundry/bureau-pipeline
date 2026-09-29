@@ -456,6 +456,15 @@ class TestTheLaneContract:
             assert epic_split.WRITER in lane_contract.lane_writers(lanes[key]), key
         assert epic_split.contract_problems() == []
 
+    def test_the_published_destinations_are_the_two_lanes_it_writes(self):
+        """`ready_lane_writers.py` reads this rather than the call site, so it
+        has to name exactly where `activate` puts cards — neither of which is
+        ready work."""
+        import ready_lane_writers
+        lanes = epic_split.lanes()
+        assert set(epic_split.destinations()) == {lanes["child_to"], lanes["parent_to"]}
+        assert not set(epic_split.destinations()) & set(ready_lane_writers.ready_lanes())
+
     def test_a_contract_that_drops_the_writer_is_a_problem(self):
         import copy
         doc = copy.deepcopy(lane_contract.load())

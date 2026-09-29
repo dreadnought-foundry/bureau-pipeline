@@ -233,6 +233,37 @@ still loud — the DRE-2525 line, unmoved. The listing is read at most once per
 sweep (`reconcile._workflows_listing`), shared by all five dispatch sites and
 the busy-guard.
 
+## The row that records a roll-up's split — `🧩 roll-up-split` (DRE-4717)
+
+| Field | Value |
+| -- | -- |
+| tag | `roll-up-split` |
+| act name | `roll-up-activated` |
+| kind · state · next actor | `progress` · `unchanged` · `plan.yml` |
+| discharges | nothing |
+| cadence | `null` — each child's planner run and then the CEO's green light on it, which no workflow times |
+| emitted by | `scripts/epic_split.py`, `activate()` |
+
+A card too big for one epic is a roll-up: the planner splits it into child
+epics under itself, and each child is planned and green-lit on its own
+(`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
+split that is not one. `activate` then posts this receipt ONCE on the parent,
+naming every child in `blockedBy` order with its slice's first sentence and
+what blocks it. After that it sends each child still in Backlog to Planning,
+where the relay starts that child's planner run, and moves the parent to
+In Progress, where the sweep's ordinary epic close finds it.
+
+**It is a `progress` act whose tag IS a live key**, and that is the one way it
+differs from the heartbeats above. Nothing is held and nothing is repaired: the
+planning goes on, one run per child. But the receipt is posted once per parent,
+and a retried planning run must post nothing twice. So `epic_split.py` counts
+the tag on the parent before it posts, and the row declares `adopted: true`
+because the code emits the tag. It declares a `null` cadence and is listed
+beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
+
+It ships console-first like every other row. The console's `ACTS` has to carry
+`roll-up-split` before this row can merge.
+
 ## Why this exists
 
 The console has always checked this. Its
