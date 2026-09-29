@@ -376,8 +376,16 @@ default_ladder: workhorse
 """
 SYNTHETIC_LADDERS = 2
 
+# A clean run records the limits Claude Code ran the model at, and since
+# DRE-5121 the score reads them: a run below the Models API's numbers is
+# `degraded`, and one that recorded none cannot be called full strength.
+# tests/test_model_trial.py owns those cases; here every clean run is at full.
+FULL_LIMITS = {"max_input_tokens": 1_000_000, "max_tokens": 128_000}
 CLEAN_RUN = {"is_error": False, "subtype": "success", "num_turns": 7,
-             "duration_ms": 42000, "total_cost_usd": 0.11}
+             "duration_ms": 42000, "total_cost_usd": 0.11,
+             "modelUsage": {"candidate-model": {"outputTokens": 40,
+                                                "contextWindow": 1_000_000,
+                                                "maxOutputTokens": 128_000}}}
 TURN_CAP_RUN = {"is_error": True, "subtype": "error_max_turns", "num_turns": 10,
                 "duration_ms": 91000}
 API_DEATH_RUN = {"is_error": True, "subtype": "success", "num_turns": 1,
@@ -400,6 +408,8 @@ def _score(tmp_path: Path, *, answer: str | None, execution: dict | None,
     exec_file = tmp_path / "execution.json"
     if execution is not None:
         exec_file.write_text(json.dumps(execution))
+    limits_file = tmp_path / "model-limits.json"
+    limits_file.write_text(json.dumps({"model": model, **FULL_LIMITS}))
 
     script = tmp_path / "verify.sh"
     script.write_text(str(_step_by_id(_doc(), "verify")["run"]))
@@ -415,6 +425,7 @@ def _score(tmp_path: Path, *, answer: str | None, execution: dict | None,
         "CLAUDE_EXECUTION_FILE": str(exec_file),
         "ANSWER_FILE": ANSWER_FILE,
         "CONFIG_FILE": CONFIG_FILE,
+        "LIMITS_FILE": str(limits_file),
         "BUREAU_SERVER_URL": "https://github.com",
         "BUREAU_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
         "BUREAU_RUN_ID": "12345",

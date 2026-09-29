@@ -53,7 +53,28 @@ ACTIONS = ROOT / ".github" / "actions"
 # — was lifted by DRE-3417, which moved the pin to v1.0.234 and deleted the rule
 # and this row in the same PR, as `test_the_hold_is_removed_with_the_pin_it_protects`
 # asks. The playbook's "Currently held pins" section keeps the history.
-HELD_PINS = {}
+#
+# A STANDING hold is the second kind, and DRE-5121 placed the first: its
+# `held_sha` and `lifted_by` are None, because no pin move lifts it. The action
+# is held for good, and the pin moves only through the trial-gated pin-raise PR
+# the model adoption workflow opens (`scripts/claude_code_pin.py`) — never a
+# bare Dependabot bump, which is how the 2026-09-08 outage arrived (DRE-3416)
+# and how #452 wedged the weekly sweep. That PR moves the sha and keeps the
+# rule, so the two sha-bound tests below skip a standing hold and the rule is
+# required on every tree.
+HELD_PINS = {
+    "anthropics/claude-code-action": {
+        "ecosystem": "github-actions",
+        "held_sha": None,
+        "held_by": "DRE-5121",
+        "lifted_by": None,
+    },
+}
+
+
+def _standing(hold):
+    """A hold no pin move lifts (DRE-5121)."""
+    return hold["held_sha"] is None
 
 
 def updates_by_ecosystem():
@@ -323,12 +344,13 @@ class HeldVendorPinTest(unittest.TestCase):
 
     def test_a_held_pin_is_ignored_for_every_update_type_while_it_stands(self):
         for dependency, hold in HELD_PINS.items():
-            if _live_shas(dependency) != {hold["held_sha"]}:
+            if not _standing(hold) and _live_shas(dependency) != {hold["held_sha"]}:
                 continue  # the pin has moved; the next test owns that case
             rules = self._rules_for(dependency, hold["ecosystem"])
             self.assertEqual(
                 len(rules), 1,
-                f"{dependency} is held at {hold['held_sha'][:8]} by "
+                f"{dependency} is held at "
+                f"{(hold['held_sha'] or 'every sha')[:8]} by "
                 f"{hold['held_by']}, but .github/dependabot.yml carries "
                 f"{len(rules)} ignore rule(s) naming it — Dependabot will "
                 "propose past the pin in every weekly sweep (bureau-pipeline"
@@ -342,7 +364,7 @@ class HeldVendorPinTest(unittest.TestCase):
 
     def test_the_hold_is_removed_with_the_pin_it_protects(self):
         for dependency, hold in HELD_PINS.items():
-            if _live_shas(dependency) == {hold["held_sha"]}:
+            if _standing(hold) or _live_shas(dependency) == {hold["held_sha"]}:
                 continue
             self.assertEqual(
                 self._rules_for(dependency, hold["ecosystem"]), [],
@@ -384,12 +406,24 @@ class HeldVendorPinTest(unittest.TestCase):
         config = CONFIG.read_text()
         playbook = PLAYBOOK.read_text()
         for dependency, hold in HELD_PINS.items():
-            if _live_shas(dependency) != {hold["held_sha"]}:
+            if not _standing(hold) and _live_shas(dependency) != {hold["held_sha"]}:
                 continue
             for where, text in ((".github/dependabot.yml", config),
                                 ("docs/dependabot-major-rejection.md", playbook)):
                 for needle in (dependency, hold["held_by"], hold["lifted_by"]):
+                    if needle is None:
+                        continue  # a standing hold has no lifting card
                     self.assertIn(needle, text, f"{where} never mentions {needle}")
+
+    def test_a_standing_hold_survives_a_pin_move(self):
+        """DRE-5121: the pin-raise PR moves the sha and must leave the hold in
+        place. A standing row carries no sha, so there is nothing a move could
+        make stale — and the rule is asked for on every tree."""
+        standing = {d: h for d, h in HELD_PINS.items() if _standing(h)}
+        self.assertIn("anthropics/claude-code-action", standing)
+        for dependency, hold in standing.items():
+            self.assertIsNone(hold["lifted_by"])
+            self.assertEqual(len(self._rules_for(dependency, hold["ecosystem"])), 1)
 
 
 if __name__ == "__main__":
