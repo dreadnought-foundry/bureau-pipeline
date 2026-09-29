@@ -210,6 +210,18 @@ Before this, those runs concluded `skipped` with nothing else on them: on
 2026-09-03 four consecutive PR-head runs each produced one, and learning that
 nothing was wrong meant opening all four.
 
+Since DRE-5214 the same runs also leave two GitHub deployment records, so the
+console's Train Yard can see the pipeline beside every other train
+(`scripts/channel_record.py`). Every main or by-hand run records one
+release-train decision under the `pipeline-channel` surface: `release` when
+`stable` moved, `no-op` when it already carried the candidate
+(`not-ahead-of-channel`), and `held` for every other outcome above, with the
+gating run and its failing scenarios in the reason. Each tag move also posts
+one `release` deployment to the `pipeline-channel` environment, versioned
+`stable@<short sha>` and carrying `from_sha` / `to_sha`. Both are
+best-effort: they are written after the tag move, and a refused post never
+changes the run's result or whether `stable` moved.
+
 ### Moving the channel by hand (DRE-4111)
 
 Until 2026-09-17 `promote-channel.yml` was triggered by exactly one thing — a

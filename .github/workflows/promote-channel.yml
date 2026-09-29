@@ -126,6 +126,10 @@ permissions:
   # DRE-3568: the channel receipt names the failing scenarios of the harness
   # run that declined to promote, read from that run's own log.
   actions: read
+  # DRE-5214: the two records the console's Train Yard reads — one train
+  # decision per evaluation, one `release` deployment per tag move. Posted
+  # with `github.token`, so neither can start a workflow.
+  deployments: write
 
 jobs:
   promote:
@@ -355,6 +359,22 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/stable" -f sha="${CANDIDATE}"
 
+      # The tag moved, so the Train Yard gets its `release` deployment
+      # (DRE-5214) — the Portico contract (DRE-5099) plus the two shas.
+      # After the move and only on success of it, and best-effort twice
+      # over: the script exits 0 on a refused post, and `continue-on-error`
+      # means not even a crash here can turn the run red. Nothing reads it.
+      - name: Record the release
+        if: steps.decide.outputs.promote == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_SHA: ${{ steps.ancestry.outputs.head }}
+          TO_SHA: ${{ steps.resolve.outputs.candidate }}
+        run: |
+          python3 scripts/channel_record.py --repo "$GITHUB_REPOSITORY" \
+            release --from-sha "$FROM_SHA" --to-sha "$TO_SHA"
+
       # Where the channel stands, as the ONE receipt line the release train
       # also prints (DRE-3568) — through release_train.py, so the console
       # parses one format from either run. Main runs only: a PR-head run is
@@ -385,6 +405,35 @@ jobs:
         run: |
           python3 scripts/release_train.py --repo "$GITHUB_REPOSITORY" \
             channel --default-branch "$DEFAULT_BRANCH" --gate-run "$GATE_RUN"
+
+      # ONE release-train decision per evaluation (DRE-5214), under the
+      # `pipeline-channel` surface release.json declares: `release` when the
+      # tag moved, `held` when it did not — naming the gating run and the
+      # scenarios the step above read, the `## Did not promote` words — and
+      # `no-op` when `stable` already carries the candidate. The same runs
+      # the loud block below speaks for: main and dispatch, never a PR head.
+      # Best-effort like the train's own record, and nothing reads it.
+      - name: Record the decision
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.head_branch == 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTED: ${{ steps.decide.outputs.promote }}
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          ANCESTRY: ${{ steps.ancestry.outputs.status }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
+          FROM_SHA: ${{ steps.ancestry.outputs.head }}
+          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          SCENARIOS: ${{ steps.channel.outputs.scenarios }}
+        run: |
+          python3 scripts/channel_record.py --repo "$GITHUB_REPOSITORY" \
+            decision --promoted "$PROMOTED" --outcome "$OUTCOME" \
+            --reason "$REASON" --ancestry "$ANCESTRY" \
+            --candidate "$CANDIDATE" --from-sha "$FROM_SHA" \
+            --gating-run "$HARNESS_RUN" --scenarios "$SCENARIOS"
 
       # A no-op is the ordinary outcome and must not read as a failure. The
       # reason is printed either way so "why did the channel not move?" is

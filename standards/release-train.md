@@ -296,4 +296,6 @@ advances — this repo's own `pipeline-channel` (the `stable` channel,
 advanced by `promote-channel.yml`) is the first. It is declared so deploy-lag
 and the receipts read it like every other surface, and the release train exits
 a no-op saying so. A `channel` surface names no script; the schema check
-refuses one that does.
+refuses one that does. The train that does advance it writes the surface's
+decisions and `release` deployments itself — for `pipeline-channel` that is
+`promote-channel.yml`, through `scripts/channel_record.py` (DRE-5214).
