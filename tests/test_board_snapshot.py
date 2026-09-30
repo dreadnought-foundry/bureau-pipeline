@@ -416,7 +416,8 @@ def test_the_nested_shapes_are_the_ones_the_sweep_reads():
     assert card["relations"] == {"pageInfo": {"hasNextPage": True}, "nodes": [
         {"type": "blocks", "issue": {"identifier": "DRE-1"},
          "relatedIssue": {"identifier": "DRE-3"}}]}
-    assert card["inverseRelations"] == {"nodes": [
+    # and the promotion gate reads it to know the page was full (DRE-5379)
+    assert card["inverseRelations"] == {"pageInfo": {"hasNextPage": False}, "nodes": [
         {"type": "blocks", "issue": {"identifier": "DRE-4",
                                      "state": {"name": "Done"}}}]}
     assert card["history"] == {"nodes": [
@@ -644,7 +645,9 @@ def test_every_card_in_the_fixture_validates_against_the_contract(snapshot):
             assert rel["relatedIssue"] is None or _valid_ref(
                 rel["relatedIssue"], {"identifier"})
 
-        assert set(card["inverseRelations"]) == {"nodes"}, where
+        assert set(card["inverseRelations"]) == {"pageInfo", "nodes"}, where
+        assert _valid_ref(card["inverseRelations"]["pageInfo"], {"hasNextPage"}), where
+        assert isinstance(card["inverseRelations"]["pageInfo"]["hasNextPage"], bool)
         for rel in card["inverseRelations"]["nodes"]:
             assert _valid_ref(rel, {"type", "issue"}), where
             assert rel["issue"] is None or (

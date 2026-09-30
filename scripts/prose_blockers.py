@@ -92,6 +92,12 @@ TERMINAL = ("Done", "Canceled", "Duplicate")
 CARD_TAG = "prose-blocker-no-relation"
 EPIC_TAG = "epic-prose-defect"
 
+# What the sweep log says about a card whose relation page is still full after
+# the sweep read as far as it may (DRE-5379): its blockers are UNKNOWN, and the
+# card is neither refused nor promoted on half a page. Under the same rule as
+# the two tags above — none of the three may contain another.
+UNKNOWN_TAG = "relations-unknown"
+
 # The three phrases a declaration may open with, named in both notices so the
 # author can see what the detector reads (`blocker_prose.BLOCKER_LINE` is the
 # grammar; these are how a human recognises it).
@@ -172,12 +178,32 @@ def prose_claims(card: dict) -> set:
     }
 
 
+def relations_unknown(card: dict) -> bool:
+    """True when the card's inverse relations were NOT read to the end
+    (DRE-5379).
+
+    The page counts every relation type, so a card with many `related` links
+    loses `blocks` ones off the end of it. `reconcile.complete_inverse_relations`
+    reads a full page to the end, and leaves `hasNextPage` true only when it
+    could not — past its bound, or on a failed read. Then neither answer is
+    safe: the prose may name a blocker the page does not hold, and the page may
+    hold no live blocker while the card has one.
+    """
+    page = (card.get("inverseRelations") or {}).get("pageInfo") or {}
+    return page.get("hasNextPage") is True
+
+
 def undeclared_claims(card: dict) -> set:
     """The defect: what the prose claims and the board does not hold.
 
     Empty on all 293 live cards as of 2026-08-31 — including all 44 corroborated
     declarations, which stay exactly as they are.
+
+    Empty, too, when the card's relations are UNKNOWN (DRE-5379): a claim the
+    unread rest of the page may hold is not a defect anyone can prove.
     """
+    if relations_unknown(card):
+        return set()
     return prose_claims(card) - relation_ids(card)
 
 
