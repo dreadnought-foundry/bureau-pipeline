@@ -34,7 +34,7 @@ of it is ever a runtime lookup.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
 - **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):
-  one-off, epic, wave, and per shape the lane it goes to, the actor accountable
+  one-off, epic, roll-up, and per shape the lane it goes to, the actor accountable
   for it there, whether the sweep may promote it and the marks it applies. Read
   through `scripts/planning_shape.py`. Shape is **not** size — `size:XS`…`size:XL`
   mean effort, and a `size:L` one-off is legitimate. `scripts/planning_route.py`

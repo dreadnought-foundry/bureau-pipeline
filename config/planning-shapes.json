@@ -5,7 +5,7 @@
     "A shape answers *how is this work structured, and what gate does it owe*.",
     "Planning treats every card the same today — a full plan artifact, and a",
     "stop for a green light — because there was no way to say 'this one is a",
-    "one-liner' or 'this one is a whole wave' anywhere a machine could read.",
+    "one-liner' or 'this one is a whole roll-up' anywhere a machine could read.",
     "",
     "Per shape: what it means, the LANE a card of that shape goes to, the ACTOR",
     "accountable for it there, whether the sweep may promote it, and the marks",
@@ -21,7 +21,7 @@
     "",
     "SHAPE IS NOT SIZE, AND THE NEXT READER MUST NOT MERGE THEM.",
     "`size:XS` through `size:XL` already exist and mean EFFORT — how much work",
-    "this is. One-off / epic / wave is a different axis: how the work is",
+    "this is. One-off / epic / roll-up is a different axis: how the work is",
     "STRUCTURED and what gate it owes. A `size:L` one-off is perfectly",
     "legitimate — a large single card that still ships in one pull request and",
     "still needs no green light. Reusing the `size:` prefix would put two",
@@ -67,13 +67,13 @@
       "why": "The plan artifact and the green light are what an epic owes, and Green Light is the CEO's `needs you` queue where that decision is made — the epic waits there until a human moves it, and its children inherit that approval. The sweep must never promote it: `agent:planner` is the existing label that already stops `reconcile.promote_ready`, so the stamp applies that rather than inventing a second signal (the same reuse WORKBENCH makes of `hand-built`)."
     },
     {
-      "name": "wave",
-      "means": "A programme of epics — more than one plan: too big for one, or cut at an observation-gated seam — so what it owes first is a decomposition into epics.",
+      "name": "roll-up",
+      "means": "A plan too big for one epic. It is split into child epics under this card — each a native sub-issue titled [EPIC], planned and green-lit on its own — and this card is the parent that rolls them up: never approved for building, never built, closed when every child is Done.",
       "destination": "Planning",
       "actor": "plan.yml",
       "promotable": false,
       "marks": ["agent:planner"],
-      "why": "A wave cannot be green-lit as one plan, because the thing a CEO would be approving is not written yet: the first work it owes is being split into epics, and Planning is the lane that owes a decomposition. So it goes to the planner, not to the CEO — asking for approval of a wave-sized card is asking someone to approve a title. Marked `agent:planner` for the same reason an epic is: nothing dispatched builds a container. DRE-3244 added the second way in: a plan whose later cards depend on OBSERVING its earlier cards live is two epics rather than one, and a wave is the shape that holds them in order — the tells are in standards/card-quality.md."
+      "why": "The CEO's rule of 2026-09-23: a plan too big for one epic is not green-lit as one plan, and it is not a programme with a plan of its own either — it is split into child epics under the original card, which stays as the parent that rolls them up. Planning is the lane that owes that decomposition, so it goes to the planner, not to the CEO — asking for approval of a roll-up-sized card is asking someone to approve a title. Each child epic is planned and green-lit on its own; the parent never is. Marked `agent:planner` for the same reason an epic is: nothing dispatched builds a container. DRE-3244's seam is the second way in: a plan whose later cards depend on OBSERVING its earlier cards live is two epics rather than one, and the roll-up is the parent that holds them in order — the tells are in standards/card-quality.md."
     }
   ]
 }

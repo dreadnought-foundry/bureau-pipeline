@@ -48,7 +48,7 @@ the size tests from the `too big for one run` section of
 standard renames it in the prompt and in the stamp's reason. A prompt that
 restated any of the three would be a second copy, and the copy is what drifts.
 
-## The seam is read too, and it makes an epic a wave (DRE-3394)
+## The seam is read too, and it makes an epic a roll-up (DRE-3394, DRE-4699)
 
 DRE-3244 found the fault a whole plan wide: **a plan whose later cards depend
 on OBSERVING its earlier cards live is not one epic but two.** DRE-3391 wrote
@@ -63,14 +63,17 @@ and by the same reader (`seam_tells` / `seam_block`); the answer carries a
 `seam` key; and `seam_evidence` is a deterministic, under-reporting read of the
 card body — a phrase list of what real cards write, each phrase named with the
 card it was read from, outside fenced code. Where either says seam, an `epic`
-becomes a `wave` and the stamp's **Why:** line names it after the literal
+becomes a `roll-up` and the stamp's **Why:** line names it after the literal
 `observation-gated seam:`. A `one-off` is never upgraded: that is a
 contradiction the model has to resolve, and an upgrade here would be a default.
 No seam anywhere and the decision is what it was, byte for byte.
 
-Nothing downstream of the stamp changes. `planning_route` → the wave planner →
-`wave_commitment` already file the committed epics blocked in sequence on
-approval; this card only makes them the route DRE-3164 would have taken.
+The CEO's rule of 2026-09-23 (DRE-4699): a roll-up is never approved as a plan
+of its own. `planning_route` hands it to the planner, which splits it into child
+epics under the card (each a native `[EPIC]` sub-issue, the second blocked on
+the first, each planned and green-lit on its own), and the card stays as the
+parent that rolls them up. This module only stamps the shape and names the
+seam; the split is the planner's.
 
 ## The transport is the Claude Code path (DRE-3074)
 
@@ -246,16 +249,16 @@ ANSWER_KEYS = ("shape", "why", "tells", "seam", "decision", "question")
 # The shapes this module reasons ABOUT rather than merely passes through. The
 # vocabulary still owns the list (`planning_shape.shapes`); these two are named
 # because the seam rule is a statement about them — an `epic` over a seam is a
-# `wave`, and a `one-off` over a seam is never touched.
+# `roll-up`, and a `one-off` over a seam is never touched.
 SHAPE_EPIC = "epic"
-SHAPE_WAVE = "wave"
+SHAPE_ROLL_UP = "roll-up"
 
 # The literal the stamp's **Why:** line carries, followed by the seam itself.
-# `planning_route`, the wave planner and a person reading the card all find the
+# `planning_route`, the roll-up planner and a person reading the card all find the
 # seam by this string, so it is written once (DRE-3394's shared contract).
 SEAM_MARK = "observation-gated seam:"
-SEAM_RULE = ("the seam rule (DRE-3244) files this as two epics, the second "
-             "blocked on the first")
+SEAM_RULE = ("the seam rule (DRE-3244) splits this into child epics under this "
+             "card, the second blocked on the first")
 
 # How much of the sentence that fired comes back as evidence. A sentence, not a
 # section: it rides a Linear comment a person reads, beside the model's own
@@ -1500,16 +1503,17 @@ def classify(card: dict, *, call=None, model: str | None = None,
 def seam_decision(decision: Decision, body: str) -> Decision:
     """The seam rule applied to a read answer (DRE-3244, DRE-3394).
 
-    An `epic` cut at an observation-gated seam is a `wave`: the first epic ends
-    at the observation, the second is filed at the same gate, blocked on the
-    first, and planned only when the first is Done. The wave route that follows
-    already files it that way, so all this owes is the shape and the reason.
+    An `epic` cut at an observation-gated seam is a `roll-up`: it is split into
+    child epics under the card, the first ending at the observation, the second
+    filed at the same gate, blocked on the first, and planned only when the
+    first is Done. The planner the roll-up is handed to files that split, so
+    all this owes is the shape and the reason.
 
     Three rules, and the third is the one that matters:
 
       * a seam the MODEL named outranks the phrase list — it read the whole
         card, and `seam_evidence` deliberately reads only what real cards write;
-      * a `wave` the model already named keeps its shape and gains the same
+      * a `roll-up` the model already named keeps its shape and gains the same
         suffix, so the seam is on the card whichever way it was found;
       * a `one-off` is NEVER upgraded. A one-off with a seam is a contradiction
         the model has to resolve, and upgrading it here would be exactly the
@@ -1520,7 +1524,7 @@ def seam_decision(decision: Decision, body: str) -> Decision:
     the `why`: the stamp on an ordinary epic must not move because this reader
     exists.
     """
-    if decision.shape not in (SHAPE_EPIC, SHAPE_WAVE):
+    if decision.shape not in (SHAPE_EPIC, SHAPE_ROLL_UP):
         return decision
     seam = decision.seam or seam_evidence(body)
     if not seam:
@@ -1528,7 +1532,7 @@ def seam_decision(decision: Decision, body: str) -> Decision:
     seam = " ".join(str(seam).split())
     return dataclasses.replace(
         decision,
-        shape=SHAPE_WAVE,
+        shape=SHAPE_ROLL_UP,
         seam=seam,
         why=f"{decision.why.strip()} — {SEAM_MARK} {seam}; {SEAM_RULE}",
     )

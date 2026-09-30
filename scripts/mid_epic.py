@@ -147,6 +147,13 @@ AMENDMENT_STATE = "Planning"
 # means nothing.
 EPIC_SHAPE = "epic"
 
+# The planning shape (DRE-4699) of a plan too big for one epic: it is split into
+# child epics under the card, so a roll-up is an epic whose children are epics.
+# `is_epic` reads it as one — `linear_ops.py subissue` then accepts it as the
+# parent of its first `[EPIC]` child, and the sweep never promotes it. Bound to
+# the vocabulary by `tests/test_mid_epic.py`, the same way as `EPIC_SHAPE`.
+ROLL_UP_SHAPE = "roll-up"
+
 # The lanes that mean a human has green-lit this epic — the same pair
 # reconcile.EPIC_ACTIVE_STATES treats as activated (DRE-1893: the CEO's
 # activation action is moving an approved epic to Todo; In Progress is the
@@ -383,7 +390,9 @@ def is_epic(parent_title, has_children: bool, shape: str | None = None) -> bool:
     """Is this card already an epic?
 
     Reads the SHAPE STAMP first (DRE-2843) and the title/children second. The
-    stamp is what says what a card IS; a caller that has read it passes it, and
+    stamp is what says what a card IS, and both `epic` and `roll-up` say epic —
+    a roll-up is an epic whose children are epics (DRE-4699). A caller that has
+    read the stamp passes it, and
     a card nothing has classified falls back to the two facts that reclassify a
     card on their own — `validate_card.infer_agent_label` returns
     `agent:planner` for `[EPIC]` in the title or ANY children at all.
@@ -398,7 +407,7 @@ def is_epic(parent_title, has_children: bool, shape: str | None = None) -> bool:
     DRE-3018 and DRE-3020, both with zero criteria, both stamped FLEET).
     """
     if shape:
-        return shape.strip().lower() == EPIC_SHAPE
+        return shape.strip().lower() in (EPIC_SHAPE, ROLL_UP_SHAPE)
     return "[epic]" in (parent_title or "").lower() or bool(has_children)
 
 
