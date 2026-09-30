@@ -19,8 +19,9 @@ WHAT THIS PINS, one section per acceptance criterion:
   2. A card stamped **epic** takes the existing artifact-and-children path,
      unchanged — asserted against the CURRENT behaviour of `plan.yml`, so this
      card cannot quietly alter it.
-  3. A card stamped **wave** is handed to the wave route (DRE-2845 builds what
-     is on the other side of that hand-off; this card only hands off).
+  3. A card stamped **roll-up** is handed to the planner to be split into
+     child epics (DRE-4699; the plan.yml route on the other side of that
+     hand-off is DRE-4718's — this card only hands off).
   4. A card with **no shape** takes no default route. It is refused, and the
      reason names the missing stamp.
   5. A one-off with **no parent epic** is OBSERVED being promoted — the
@@ -149,12 +150,12 @@ class TestTheThreeRoutes:
         assert route.owes_plan_artifact is True
         assert route.promotable is False
 
-    def test_a_wave_is_handed_off_and_stops_for_nobody(self):
-        """A wave cannot be green-lit as one plan — the thing a CEO would be
-        approving is not written yet. It goes to the planner, not the CEO."""
-        route = planning_route.route_for("wave")
-        assert route.destination == planning_shape.destination("wave")
-        assert route.actor == planning_shape.actor("wave")
+    def test_a_roll_up_is_handed_off_and_stops_for_nobody(self):
+        """A roll-up cannot be green-lit as one plan — it is split into child
+        epics, each green-lit on its own. It goes to the planner, not the CEO."""
+        route = planning_route.route_for("roll-up")
+        assert route.destination == planning_shape.destination("roll-up")
+        assert route.actor == planning_shape.actor("roll-up")
         assert route.owes_green_light is False
         assert route.owes_plan_artifact is False
 
@@ -346,22 +347,30 @@ class TestTheOneOffExit:
 
 
 # ===========================================================================
-# 3: the wave is handed off
+# 3: the roll-up is handed off
 # ===========================================================================
-class TestTheWaveIsHandedOff:
+class TestTheRollUpIsHandedOff:
     def test_it_goes_where_the_file_sends_it_and_names_who_takes_it(self):
-        exit_plan = planning_route.exit_plan(_read_card(), [_stamp("wave")])
-        assert exit_plan.destination == planning_shape.destination("wave")
-        assert planning_shape.actor("wave") in exit_plan.note
+        exit_plan = planning_route.exit_plan(_read_card(), [_stamp("roll-up")])
+        assert exit_plan.destination == planning_shape.destination("roll-up")
+        assert planning_shape.actor("roll-up") in exit_plan.note
 
-    def test_a_wave_is_given_no_routing_verdict(self):
-        """A verdict answers "who builds this card". Nobody builds a wave —
-        it owes a decomposition first."""
-        exit_plan = planning_route.exit_plan(_read_card(), [_stamp("wave")])
+    def test_a_roll_up_is_given_no_routing_verdict(self):
+        """A verdict answers "who builds this card". Nobody builds a roll-up —
+        it is split into child epics, and it is never built itself."""
+        exit_plan = planning_route.exit_plan(_read_card(), [_stamp("roll-up")])
         assert exit_plan.verdict is None
 
     def test_the_hand_off_never_reaches_the_ceo(self):
-        assert planning_route.route_for("wave").reaches_ceo is False
+        assert planning_route.route_for("roll-up").reaches_ceo is False
+
+    def test_the_note_says_it_is_split_into_child_epics(self):
+        exit_plan = planning_route.exit_plan(_read_card(), [_stamp("roll-up")])
+        assert "split into child epics under this card" in exit_plan.note
+        assert not re.search(r"\bwaves?\b", exit_plan.note, re.I), (
+            "the hand-off note still says wave — waves are retired"
+        )
+        assert "child epics" in exit_plan.reason
 
 
 # ===========================================================================
@@ -522,16 +531,16 @@ class TestTheExitCommand:
         assert card.posted == first, "the second pass posted a comment again"
         assert card.states == [(CARD, "Backlog"), (CARD, "Backlog")]
 
-    def test_a_wave_is_moved_and_given_no_verdict(self):
-        card = _Card([_stamp("wave")])
+    def test_a_roll_up_is_moved_and_given_no_verdict(self):
+        card = _Card([_stamp("roll-up")])
         assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
-        assert card.states == [(CARD, planning_shape.destination("wave"))]
+        assert card.states == [(CARD, planning_shape.destination("roll-up"))]
         assert routing_verdict.verdicts_on([b for _, b in card.posted]) == ()
 
     def test_the_marks_the_shape_declares_are_applied(self):
-        card = _Card([_stamp("wave")])
+        card = _Card([_stamp("roll-up")])
         card.run(lambda: planning_route.main(["exit", CARD]))
-        assert [label for _, label in card.labelled] == list(planning_shape.marks("wave"))
+        assert [label for _, label in card.labelled] == list(planning_shape.marks("roll-up"))
 
 
 class TestTheDecideCommand:
@@ -613,12 +622,11 @@ class TestPlanYmlBranchesThreeWays:
     def test_each_of_the_three_shapes_has_its_own_gated_step(self):
         assert "steps.shape.outputs.route == 'epic'" in _step("Route — plan or activate")["if"]
         assert "steps.shape.outputs.route == 'one-off'" in _step("One-off route")["if"]
-        assert "steps.shape.outputs.route == 'wave'" in _step("Wave route")["if"]
 
-    def test_the_one_off_and_wave_steps_name_no_lane_of_their_own(self):
+    def test_the_one_off_step_names_no_lane_of_its_own(self):
         """The destination is the file's. A lane written into the YAML is the
         routing repeated in code that this card exists to remove."""
-        for fragment in ("One-off route", "Wave route"):
+        for fragment in ("One-off route",):
             body = _step(fragment)["run"]
             for lane in lane_contract.lane_names(status="live"):
                 assert lane not in body, (

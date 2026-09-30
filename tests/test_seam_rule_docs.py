@@ -1,14 +1,15 @@
 """The observation-gated seam rule, as the documents must carry it (DRE-3391).
 
 The CEO's rule on 2026-09-06: a plan whose later cards depend on OBSERVING its
-earlier cards live is not one epic but two — a wave. This card lands that rule
-in `standards/card-quality.md`, the planner brief and the shape vocabulary, and
-three sibling cards build the mechanism against the text, so the heading, the
-tell grammar and the answer key are contracts rather than prose choices.
+earlier cards live is not one epic but two — child epics under a roll-up.
+This card lands that rule in `standards/card-quality.md`, the planner brief and
+the shape vocabulary, and three sibling cards build the mechanism against the
+text, so the heading, the tell grammar and the answer key are contracts rather
+than prose choices.
 
 Every assertion here binds a document to something that is NOT that document:
 the regex `planning_classify` already uses to parse the size tells, the shape
-vocabulary's own destination for `wave`, and `planning_classify.problems()` —
+vocabulary's own destination for `roll-up`, and `planning_classify.problems()` —
 the check that refuses a brief which has stopped naming a key the parser reads.
 A test that only read the standard back to itself would pass on a section the
 classifier can no longer find, which is the whole thing the siblings depend on.
@@ -303,14 +304,25 @@ class TestThePlannerBrief:
             "or a model invents one"
         )
 
-    def test_a_seam_makes_it_a_wave_not_an_epic(self):
-        assert re.search(r"`?wave`?", self._classification(), re.I)
-        assert _loose("not an `epic`").search(self._classification()) or _loose(
+    def test_a_seam_makes_it_a_roll_up_not_an_epic(self):
+        prompt = self._classification()
+        assert re.search(r"`roll-up`", prompt), (
+            "the fourth rule must say a tripped seam test means `roll-up`"
+        )
+        assert not re.search(r"\bwaves?\b", prompt, re.I), (
+            "the classification prompt still names the retired `wave` shape"
+        )
+        assert _loose("not an `epic`").search(prompt) or _loose(
             "not an epic"
-        ).search(self._classification()), (
-            "the fourth rule must say a tripped seam test means `wave`, not "
+        ).search(prompt), (
+            "the fourth rule must say a tripped seam test means `roll-up`, not "
             "`epic`"
         )
+
+    def test_the_prompt_asks_one_off_epic_or_roll_up(self):
+        assert _loose("is this one-off, epic, or roll-up?").search(
+            self._classification()
+        ), "the classification question must name the three shapes"
 
     def test_every_existing_answer_key_survives(self):
         # planning_classify.problems() refuses a brief that stops naming one.
@@ -321,24 +333,24 @@ class TestThePlannerBrief:
     def test_the_prompt_and_its_sources_still_compose(self):
         assert planning_classify.problems() == []
 
-    def test_the_wave_row_carries_the_destination_the_vocabulary_declares(self):
+    def test_the_roll_up_row_carries_the_destination_the_vocabulary_declares(self):
         body = _read(BRIEF)
-        wave = next(s for s in _shapes() if s["name"] == "wave")
-        row = _row(body, "wave")
-        assert row, "planner.md has no table row for the `wave` shape"
-        assert wave["destination"] in row, (
-            f"the wave row does not name its destination "
-            f"{wave['destination']!r}"
+        roll_up = next(s for s in _shapes() if s["name"] == "roll-up")
+        row = _row(body, "roll-up")
+        assert row, "planner.md has no table row for the `roll-up` shape"
+        assert roll_up["destination"] in row, (
+            f"the roll-up row does not name its destination "
+            f"{roll_up['destination']!r}"
         )
-        assert wave["actor"] in row or "plan.yml" in row, (
-            "the wave row lost the actor accountable for it"
+        assert roll_up["actor"] in row, (
+            "the roll-up row lost the actor accountable for it"
         )
 
-    def test_the_wave_row_names_the_seam(self):
-        row = _row(_read(BRIEF), "wave")
+    def test_the_roll_up_row_names_the_seam(self):
+        row = _row(_read(BRIEF), "roll-up")
         assert re.search(r"seam", row, re.I), (
-            "the wave row must say a wave is ALSO the shape for a plan cut at "
-            "an observation-gated seam"
+            "the roll-up row must say a roll-up is ALSO the shape for a plan "
+            "cut at an observation-gated seam"
         )
 
     def test_the_brief_points_at_the_section_by_name(self):
@@ -347,57 +359,69 @@ class TestThePlannerBrief:
             "than restating it — the copy is what drifts"
         )
 
-    def test_the_artifact_section_carries_the_seam_wave(self):
+    def test_the_artifact_section_carries_the_roll_up_split(self):
         body = _read(BRIEF)
         headings = [m for m in re.finditer(r"^## .*$", body, re.M)]
         section = ""
         for i, m in enumerate(headings):
-            if "wave plan" in m.group(0).lower():
+            if "roll-up split" in m.group(0).lower():
                 end = headings[i + 1].start() if i + 1 < len(headings) else len(body)
                 section = body[m.start():end]
-        assert section, "planner.md no longer has a plan-artifact/wave section"
+        assert section, "planner.md no longer has a plan-artifact/roll-up section"
         assert re.search(r"seam", section, re.I), (
-            "the artifact section says nothing about the seam-wave's two epics"
+            "the artifact section says nothing about the seam's child epics"
         )
-        assert "depends_on" in section, (
-            "the artifact section must say the wave plan's `epics` block gives "
-            "the second epic `depends_on` the first"
+        assert "subissue" in section and "--epic" in section, (
+            "the artifact section must name `linear_ops.py subissue … --epic`, "
+            "the command each child epic is filed with (DRE-4698)"
         )
-        assert "wave_commitment" in section, (
-            "the artifact section must name the filer that turns the epics "
-            "block into blocked-in-sequence epics (DRE-2846)"
+        assert "epic_split.py" in section, (
+            "the artifact section must name the checker and activator the "
+            "split is run through (DRE-4717)"
         )
+        for retired in ("depends_on", "wave_commitment"):
+            assert retired not in section, (
+                f"the artifact section still names {retired!r} — the wave "
+                "filer is retired with the wave"
+            )
 
 
 class TestTheVocabulary:
-    """`config/planning-shapes.json` is what every reader means by `wave`."""
+    """`config/planning-shapes.json` is what every reader means by `roll-up`."""
 
-    def test_the_wave_means_names_the_seam(self):
-        means = planning_shape.means("wave")
-        assert _loose("observation-gated seam").search(means), (
-            "the wave record's `means` must say a wave is also a plan cut at "
-            "an observation-gated seam"
+    def test_there_is_no_wave_shape_any_more(self):
+        assert "wave" not in planning_shape.shapes(), (
+            "the CEO retired waves on 2026-09-23 — the vocabulary still "
+            "carries one"
         )
-        assert _loose("more than one plan").search(means), (
-            "the wave record's `means` must still say a wave is more than one "
-            "plan"
+
+    def test_the_roll_up_means_names_child_epics(self):
+        means = planning_shape.means("roll-up")
+        assert _loose("child epics").search(means), (
+            "the roll-up record's `means` must say it is split into child epics"
+        )
+        assert _loose("too big for one epic").search(means), (
+            "the roll-up record's `means` must say it is a plan too big for "
+            "one epic"
         )
 
     def test_the_why_names_the_card_the_rule_came_from(self):
-        assert "DRE-3244" in planning_shape.record("wave")["why"]
+        why = planning_shape.record("roll-up")["why"]
+        assert "DRE-3244" in why
+        assert "2026-09-23" in why, "the why must cite the CEO's rule"
 
     def test_the_briefs_copy_of_means_matches_the_vocabulary(self):
         # The table in a document is a copy, and the copy is what drifts.
-        row = _row(_read(BRIEF), "wave")
-        means = planning_shape.means("wave").rstrip(".")
-        assert _loose(means).search(row), (
-            "planner.md's wave row no longer carries the `means` the "
+        row = _row(_read(BRIEF), "roll-up")
+        means = planning_shape.means("roll-up").rstrip(".")
+        assert _loose(means).search(row or ""), (
+            "planner.md's roll-up row no longer carries the `means` the "
             "vocabulary declares:\n"
             f"  vocabulary: {means}\n  brief:      {row}"
         )
 
     def test_the_destination_actor_and_marks_are_untouched(self):
-        record = planning_shape.record("wave")
+        record = planning_shape.record("roll-up")
         assert record["destination"] == "Planning"
         assert record["actor"] == "plan.yml"
         assert record["promotable"] is False

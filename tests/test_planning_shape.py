@@ -1,9 +1,9 @@
-"""RED-first tests: the planning shape vocabulary — one-off, epic, wave — as
+"""RED-first tests: the planning shape vocabulary — one-off, epic, roll-up — as
 data (DRE-2843).
 
 Planning treats every card the same today: it owes a full plan artifact and it
 stops for a green light. There is no way to say "this one is a one-liner" or
-"this one is a whole wave", because the vocabulary does not exist anywhere a
+"this one is a whole roll-up", because the vocabulary does not exist anywhere a
 machine can read. `config/planning-shapes.json` is that vocabulary, and it is
 built to the shape of `config/routing-verdicts.json` rather than to a second
 one invented here.
@@ -55,7 +55,7 @@ CONFIG = ROOT / "config" / "planning-shapes.json"
 
 # The three shapes, written out ONCE here as the thing the module is compared
 # against. Every other list in the pipeline is derived from the config file.
-THE_THREE = ("one-off", "epic", "wave")
+THE_THREE = ("one-off", "epic", "roll-up")
 
 
 def _mutated() -> dict:
@@ -158,9 +158,9 @@ class TestBoundToTheLaneContract:
     def test_a_shape_missing_a_field_is_a_config_problem(self):
         for key in ("means", "destination", "actor", "why"):
             doc = _mutated()
-            _entry(doc, "wave")[key] = "  "
+            _entry(doc, "roll-up")[key] = "  "
             assert any(
-                "wave" in p and key in p for p in planning_shape.config_problems(doc)
+                "roll-up" in p and key in p for p in planning_shape.config_problems(doc)
             ), f"an empty {key!r} passed the check"
 
     def test_a_shape_that_does_not_say_whether_it_promotes_is_a_config_problem(self):
@@ -186,7 +186,7 @@ class TestPromotabilityAndMarks:
     def test_the_one_off_is_the_only_shape_the_sweep_may_promote(self):
         promotable = [n for n in planning_shape.shapes() if planning_shape.is_promotable(n)]
         assert promotable == ["one-off"], (
-            "an epic and a wave are moved by the people who approve them; the "
+            "an epic and a roll-up are moved by the people who approve them; the "
             "sweep promotes neither"
         )
 
@@ -195,7 +195,7 @@ class TestPromotabilityAndMarks:
         _entry(doc, "epic")["promotable"] = True
         assert any("promot" in p for p in planning_shape.config_problems(doc))
 
-    @pytest.mark.parametrize("name", ["epic", "wave"])
+    @pytest.mark.parametrize("name", ["epic", "roll-up"])
     def test_the_planned_shapes_carry_the_planner_ownership_mark(self, name):
         """`agent:planner` is the existing signal that a card is a container the
         planner OWNS — reuse it rather than invent a second one, exactly as
@@ -215,7 +215,7 @@ class TestPromotabilityAndMarks:
         vocabulary is lying."""
         source = inspect.getsource(reconcile.card_is_epic)
         assert "mid_epic.is_epic" in source, (
-            "the sweep no longer asks the one epic helper — the epic and wave "
+            "the sweep no longer asks the one epic helper — the epic and roll-up "
             "shapes no longer mean what this file says they mean"
         )
         assert "card_is_epic" in inspect.getsource(reconcile.promote_ready), (
@@ -249,7 +249,7 @@ class TestShapeIsNotSize:
         the naming failure the Plan/Entitlement rule exists to prevent
         (DRE-1494)."""
         doc = _mutated()
-        _entry(doc, "wave")["name"] = "size:XL"
+        _entry(doc, "roll-up")["name"] = "size:XL"
         assert any("size" in p for p in planning_shape.config_problems(doc))
 
     def test_a_shape_that_applies_a_size_label_is_a_config_problem(self):
@@ -286,7 +286,7 @@ class TestExactlyOneShape:
 
     def test_a_shape_comment_requires_a_reason(self):
         with pytest.raises(planning_shape.ShapeError):
-            planning_shape.shape_comment("wave", "   ")
+            planning_shape.shape_comment("roll-up", "   ")
 
     def test_a_card_with_no_shape_reads_as_none(self):
         assert planning_shape.shape_on(["🤖 dispatched", "looks like an epic to me"]) is None
@@ -297,13 +297,13 @@ class TestExactlyOneShape:
         anywhere in the body would read a complaint back as the stamp."""
         chatty = (
             "🚨 planning-two-shapes: this card carries planning-shape: epic and "
-            "planning-shape: wave, so nothing is reading a shape off it."
+            "planning-shape: roll-up, so nothing is reading a shape off it."
         )
         assert planning_shape.shape_on([chatty]) is None
 
     def test_the_same_shape_twice_is_still_one_shape(self):
-        body = planning_shape.shape_comment("wave", "a programme of epics")
-        assert planning_shape.shape_on([body, body]) == "wave"
+        body = planning_shape.shape_comment("roll-up", "split into child epics")
+        assert planning_shape.shape_on([body, body]) == "roll-up"
 
     def test_a_stamp_written_in_mixed_case_still_reads(self):
         """Tolerant on read, strict on write — a human retyping the marker in
@@ -318,7 +318,7 @@ class TestTwoShapesAreRefused:
     def _two(self):
         return [
             planning_shape.shape_comment("one-off", "one card, one PR"),
-            planning_shape.shape_comment("wave", "a programme of epics"),
+            planning_shape.shape_comment("roll-up", "split into child epics"),
         ]
 
     def test_two_shapes_are_a_conflict_not_a_pick(self):
@@ -329,12 +329,12 @@ class TestTwoShapesAreRefused:
         with pytest.raises(planning_shape.ConflictingShapes) as caught:
             planning_shape.shape_on(self._two())
         message = str(caught.value)
-        assert "one-off" in message and "wave" in message
+        assert "one-off" in message and "roll-up" in message
 
     def test_the_fault_notice_names_both_shapes(self):
         fault = planning_shape.fault("DRE-1", self._two())
         assert fault is not None
-        assert "one-off" in fault and "wave" in fault
+        assert "one-off" in fault and "roll-up" in fault
 
     def test_the_write_path_refuses_a_second_conflicting_shape(self):
         existing = [planning_shape.shape_comment("one-off", "one card, one PR")]
@@ -396,7 +396,7 @@ class TestNoneIsNotUnrecognised:
     def test_a_conflict_is_a_third_fault_with_a_third_tag(self):
         both = [
             planning_shape.shape_comment("epic", "a set of cards"),
-            planning_shape.shape_comment("wave", "a programme of epics"),
+            planning_shape.shape_comment("roll-up", "split into child epics"),
         ]
         conflict = planning_shape.fault("DRE-1", both)
         assert planning_shape.fault_tag(conflict) == planning_shape.TWO_SHAPES_TAG
@@ -487,16 +487,16 @@ class _Card:
 
 class TestTheReadCommand:
     def test_a_clean_card_reads_the_whole_record(self, capsys):
-        card = _Card([planning_shape.shape_comment("wave", "a programme of epics")])
+        card = _Card([planning_shape.shape_comment("roll-up", "split into child epics")])
         assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 0
         out = capsys.readouterr()
         assert json.loads(out.out) == {
-            "shape": "wave",
-            "means": planning_shape.means("wave"),
-            "destination": planning_shape.destination("wave"),
-            "actor": planning_shape.actor("wave"),
-            "promotable": planning_shape.is_promotable("wave"),
-            "marks": list(planning_shape.marks("wave")),
+            "shape": "roll-up",
+            "means": planning_shape.means("roll-up"),
+            "destination": planning_shape.destination("roll-up"),
+            "actor": planning_shape.actor("roll-up"),
+            "promotable": planning_shape.is_promotable("roll-up"),
+            "marks": list(planning_shape.marks("roll-up")),
         }
         assert out.err == "", "a card with nothing wrong with it says nothing"
 
@@ -528,7 +528,7 @@ class TestTheReadCommand:
     def test_two_shapes_fail_the_read_rather_than_one_being_picked(self, capsys):
         card = _Card([
             planning_shape.shape_comment("epic", "a set of cards"),
-            planning_shape.shape_comment("wave", "a programme of epics"),
+            planning_shape.shape_comment("roll-up", "split into child epics"),
         ])
         assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 1
         out = capsys.readouterr()
@@ -547,12 +547,12 @@ class TestTheStampCommand:
         assert [label for _, label in card.labelled] == list(planning_shape.marks("epic"))
 
     def test_a_card_already_stamped_is_refused_and_nothing_is_written(self, capsys):
-        card = _Card([planning_shape.shape_comment("wave", "a programme of epics")])
+        card = _Card([planning_shape.shape_comment("roll-up", "split into child epics")])
         assert card.run(
             lambda: planning_shape._cmd_stamp("DRE-1", "epic", "a set of cards")
         ) == 1
         assert card.posted == [] and card.labelled == []
-        assert "wave" in capsys.readouterr().err
+        assert "roll-up" in capsys.readouterr().err
 
     def test_a_stamp_written_over_a_stray_word_reads_back(self, capsys):
         """The round trip the two halves have to agree on: an unrecognised stray
@@ -584,12 +584,12 @@ class TestTheCommandLine:
         card = _Card([])
         assert card.run(
             lambda: planning_shape.main(
-                ["stamp", "DRE-1", "wave", "--why", "a programme of epics"]
+                ["stamp", "DRE-1", "roll-up", "--why", "split into child epics"]
             )
         ) == 0
-        assert planning_shape.shape_on([body for _, body in card.posted]) == "wave"
+        assert planning_shape.shape_on([body for _, body in card.posted]) == "roll-up"
         with pytest.raises(SystemExit):
-            planning_shape.main(["stamp", "DRE-1", "wave"])
+            planning_shape.main(["stamp", "DRE-1", "roll-up"])
 
 
 if __name__ == "__main__":

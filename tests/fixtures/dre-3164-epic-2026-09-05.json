@@ -26,7 +26,7 @@
   "cards": [
     {
       "card": "DRE-3164",
-      "expect": "wave",
+      "expect": "roll-up",
       "why": "the relay and the website join second, after a week of clean console releases — the second half of the plan waits on watching the first half run, which is two epics",
       "title": "[EPIC] The release train — one reusable train in bureau-pipeline, a thin stub per repo, every deploy surface in the fleet rolling out by itself: one lane per surface, triggers collapse, spaced, inside the hours, on each repo's own rollout script and rollback",
       "labels": [

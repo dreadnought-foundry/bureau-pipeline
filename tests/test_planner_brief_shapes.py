@@ -153,19 +153,30 @@ class TestWhatEachShapeProduces:
             "Planning"
         )
 
-    def test_the_wave_owes_a_wave_plan_and_the_epics_it_commits_to(self):
-        body = _brief()
-        assert (ROOT / "standards" / "wave-plan.md").exists()
-        assert "standards/wave-plan.md" in body, (
-            "planner.md never points the wave route at the standard its plan "
-            "is checked against"
+    def test_the_roll_up_owes_a_split_into_child_epics(self):
+        """Waves are retired (the CEO, 2026-09-23). A roll-up owes no artifact
+        and no green light of its own: the planner files two or more child
+        epics with `subissue --epic`, and the run checks and activates the
+        split with `epic_split.py` (DRE-4717)."""
+        section = _section(_brief(), "roll-up split")
+        assert section, (
+            "planner.md has no artifact section naming the roll-up split"
         )
-        assert "wave_plan.py" in body, (
-            "planner.md must name the checker the wave plan is read by"
+        assert re.search(r"subissue\s+<PARENT>.*--epic", section, re.S), (
+            "planner.md must name the command a roll-up's children are filed "
+            "with — `linear_ops.py subissue <PARENT> … --epic` (DRE-4698)"
         )
-        assert re.search(r"epics it commits to|in order", body, re.I), (
-            "planner.md must say a wave plan names the epics it commits to, "
-            "in order"
+        assert "epic_split.py check" in section, (
+            "planner.md must name the checker the split is read by"
+        )
+        assert "epic_split.py activate" in section, (
+            "planner.md must name the activator the split is started by"
+        )
+        assert re.search(
+            r"no\s+artifact\s+and\s+no\s+green\s+light", section, re.I
+        ), "planner.md must say the parent owes no artifact and no green light"
+        assert not re.search(r"\bwaves?\b", section, re.I), (
+            "the artifact section still says wave — waves are retired"
         )
 
 

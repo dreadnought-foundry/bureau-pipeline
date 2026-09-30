@@ -20,8 +20,8 @@ WHAT THIS PINS, one section per acceptance criterion:
      the phrases real cards write, each named with the card it was read from,
      outside fenced code. None for the four DRE-3013 probes; None for a body
      whose only match is inside a fence.
-  C. The decision. An `epic` answer over a seam becomes `wave`, with the seam
-     named in the reason. A `wave` answer carries the same suffix. A `one-off`
+  C. The decision. An `epic` answer over a seam becomes `roll-up`, with the
+     seam named in the reason. A `roll-up` answer carries the same suffix. A `one-off`
      is NEVER upgraded — a one-off with a seam is a contradiction the model has
      to resolve, and an upgrade here would be exactly the default DRE-2843
      refuses. No seam anywhere and the decision is byte-for-byte what it was.
@@ -62,7 +62,7 @@ PROBES = ROOT / "tests" / "fixtures" / "planning-probes-dre3013.json"
 
 MODEL = "claude-opus-5"
 
-#: The literal the contract shares with `planning_route`, the wave planner and
+#: The literal the contract shares with `planning_route`, the roll-up planner and
 #: anybody reading the card: the stamp's **Why:** line carries it, followed by
 #: the seam.
 MARK = "observation-gated seam:"
@@ -310,7 +310,7 @@ class TestTheDecision:
             _answer(shape="epic", seam=seam), model=MODEL)
         assert decision.seam is None
 
-    def test_an_epic_over_a_seam_becomes_a_wave(self):
+    def test_an_epic_over_a_seam_becomes_a_roll_up(self):
         card = _fixture("DRE-3164")
         decision = planning_classify.classify(
             {"identifier": card["card"], "title": card["title"],
@@ -318,23 +318,27 @@ class TestTheDecision:
             call=_caller(_answer(shape="epic", why="thirteen build cards")),
             model=MODEL,
         )
-        assert decision.shape == "wave"
+        assert decision.shape == "roll-up"
         assert MARK in decision.why
         assert "clean console releases" in decision.why
         assert "DRE-3244" in decision.why, (
             "the reason must cite the rule that files this as two epics"
         )
+        assert "child epics under this card" in decision.why, (
+            "the reason must say the seam splits the card into child epics "
+            "under it — waves are retired"
+        )
 
-    def test_a_wave_the_model_named_carries_the_same_suffix(self):
+    def test_a_roll_up_the_model_named_carries_the_same_suffix(self):
         card = _fixture("DRE-3164")
         seam = "the relay and the website wait on a week of clean console releases"
         decision = planning_classify.classify(
             {"identifier": card["card"], "title": card["title"],
              "description": card["body"]},
-            call=_caller(_answer(shape="wave", seam=seam)),
+            call=_caller(_answer(shape="roll-up", seam=seam)),
             model=MODEL,
         )
-        assert decision.shape == "wave"
+        assert decision.shape == "roll-up"
         assert f"{MARK} {seam}" in decision.why
         assert decision.seam == seam
 
@@ -390,18 +394,18 @@ class TestTheDecision:
 # D. the stamp carries the seam, and the hand stamp still wins
 # ===========================================================================
 class TestTheStamp:
-    def test_the_epic_answer_over_dre3164_stamps_a_wave(self):
+    def test_the_epic_answer_over_dre3164_stamps_a_roll_up(self):
         card = _fixture("DRE-3164")
-        assert card["expect"] == "wave"
+        assert card["expect"] == "roll-up"
         lops = _Lops(card)
         decision = planning_classify.run(
             lops, card["card"],
             call=_caller(_answer(shape="epic", why="thirteen build cards", tells=(1,))),
             model=MODEL,
         )
-        assert decision.shape == "wave"
-        assert planning_shape.shape_on(lops.bodies) == "wave"
-        assert lops.labels == list(planning_shape.marks("wave"))
+        assert decision.shape == "roll-up"
+        assert planning_shape.shape_on(lops.bodies) == "roll-up"
+        assert lops.labels == list(planning_shape.marks("roll-up"))
 
         why = _why_line(lops.comments[0])
         assert MARK in why, "the 🧩 stamp does not name the seam"
@@ -415,11 +419,11 @@ class TestTheStamp:
         lops = _Lops(card)
         decision = planning_classify.run(
             lops, card["card"],
-            call=_caller(_answer(shape="wave", seam=seam, why="two epics in order")),
+            call=_caller(_answer(shape="roll-up", seam=seam, why="two epics in order")),
             model=MODEL,
         )
-        assert decision.shape == "wave"
-        assert planning_shape.shape_on(lops.bodies) == "wave"
+        assert decision.shape == "roll-up"
+        assert planning_shape.shape_on(lops.bodies) == "roll-up"
         assert f"{MARK} {seam}" in _why_line(lops.comments[0])
 
     def test_the_ordinary_epic_why_line_is_what_it_always_was(self):
