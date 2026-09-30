@@ -756,6 +756,59 @@ def test_decide_exits_3_and_writes_the_unread_receipt(board, capsys, tmp_path):
     assert body == epic_cap.unread_receipt("linear error: HTTP 400 query too complex")
 
 
+def test_decide_exits_3_and_writes_the_unread_receipt_when_the_key_is_missing(
+        monkeypatch, capsys, tmp_path):
+    # The real gql, as the gate runs it: inside Actions a missing key is a bare
+    # KeyError from linear_ops.api_key(), not a LinearError.
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    receipt = tmp_path / "receipt.md"
+    assert epic_cap.main(["decide", "--epic", "DRE-900",
+                          "--receipt-file", str(receipt)]) == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "Linear could not be read" in err and "LINEAR_API_KEY" in err
+    body = receipt.read_text(encoding="utf-8")
+    assert body.startswith("⏸️ epic-queued:") and "LINEAR_API_KEY" in body
+
+
+def test_decide_exits_3_when_linear_answers_with_something_not_json(board, capsys,
+                                                                   tmp_path):
+    board(fail=json.JSONDecodeError("Expecting value", "<html>", 0))
+    receipt = tmp_path / "receipt.md"
+    assert epic_cap.main(["decide", "--epic", "DRE-900",
+                          "--receipt-file", str(receipt)]) == 3
+    out, err = capsys.readouterr()
+    assert out == "" and "Linear could not be read" in err
+    assert receipt.read_text(encoding="utf-8").startswith("⏸️ epic-queued:")
+
+
+def test_decide_still_surfaces_a_keyerror_that_is_not_the_missing_key(board):
+    board(fail=KeyError("cap"))
+    with pytest.raises(KeyError):
+        epic_cap.main(["decide", "--epic", "DRE-900"])
+
+
+def test_decide_says_the_receipt_could_not_be_written(board, capsys, tmp_path):
+    board(fail=linear_ops.LinearError("linear error: HTTP 400 query too complex"))
+    receipt = tmp_path / "no-such-dir" / "receipt.md"
+    assert epic_cap.main(["decide", "--epic", "DRE-900",
+                          "--receipt-file", str(receipt)]) == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "query too complex" in err
+    assert "receipt could not be written" in err
+    assert str(receipt) in err
+
+
+def test_show_exits_3_when_the_key_is_missing(board, capsys):
+    board(fail=KeyError("LINEAR_API_KEY"))
+    assert epic_cap.main(["show"]) == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "Linear could not be read" in err and "LINEAR_API_KEY" in err
+
+
 def test_decide_exits_3_when_the_asked_epic_is_not_found(board, capsys):
     board(in_progress=_fourteen_in_motion(), epics=[])
     assert epic_cap.main(["decide", "--epic", "DRE-900"]) == 3
