@@ -21,10 +21,18 @@
     "cadence, so a repo's next sweep finds the window open again; long enough",
     "to cover every repo's sweep that fired on the same schedule tick.",
     "",
+    "`max_attempts` bounds a move that does not land. The receipt goes up",
+    "BEFORE the move, because it is what the cap counts, so a move Linear",
+    "then refuses leaves a receipt on a card still in Intake. Once that",
+    "receipt's window has passed, a later sweep tries the card again, posting",
+    "a fresh receipt each time, until the card carries this many; after that",
+    "the rule leaves it to the groomer and the run log says so.",
+    "",
     "scripts/reconcile.py reads this file; tests/test_intake_urgent_fast_path.py",
     "reads it as a file too."
   ],
   "ships_at": "2026-10-01T07:00:00Z",
   "per_sweep_cap": 3,
-  "window_minutes": 10
+  "window_minutes": 10,
+  "max_attempts": 3
 }

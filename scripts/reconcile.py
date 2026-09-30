@@ -565,12 +565,13 @@ URGENT_SHIPS_AT = datetime.fromisoformat(
     _URGENT_FAST_PATH["ships_at"].replace("Z", "+00:00"))
 URGENT_SWEEP_CAP = int(_URGENT_FAST_PATH["per_sweep_cap"])
 URGENT_WINDOW_MINUTES = int(_URGENT_FAST_PATH["window_minutes"])
+URGENT_MAX_ATTEMPTS = int(_URGENT_FAST_PATH["max_attempts"])
 
 # Urgent is priority 1 in Linear (0 is "no priority", 4 is "low").
 URGENT_PRIORITY = 1
 
-# The receipt the moved card carries, the idempotency key that keeps the move
-# to one per card, AND the marker the cross-repo cap counts. One string, three
+# The receipt the moved card carries, the attempt count that bounds a move that
+# did not land, AND the marker the cross-repo cap counts. One string, three
 # jobs, so none of them can drift from the others.
 #
 # An OPENER, not yet an act tag, and the name says which: a new act reaches the
@@ -2544,12 +2545,14 @@ def intake_depth_line(waiting: int, oldest_minutes: float | None) -> str:
         return (
             f"{INTAKE_DEPTH_PREFIX}: 0 cards waiting in Intake, so there is no "
             "oldest — nothing leaves this lane on age; the groomer's approved "
-            "batch is the way out"
+            "batch is the way out, and the Urgent fast path for a card raised "
+            "to Urgent since it shipped"
         )
     return (
         f"{INTAKE_DEPTH_PREFIX}: {waiting} card{'' if waiting == 1 else 's'} "
         f"waiting in Intake, oldest {oldest_minutes / 1440:.1f} days — nothing "
-        "leaves this lane on age; the groomer's approved batch is the way out"
+        "leaves this lane on age; the groomer's approved batch is the way out, "
+        "and the Urgent fast path for a card raised to Urgent since it shipped"
     )
 
 
@@ -2559,7 +2562,10 @@ def report_intake_depth() -> None:
     THE RULE IS THE CEO'S SIGNED CONSOLE ANSWER of 2026-09-17 09:57 PT, point
     1: no card leaves Intake because it is old. No 48 hours, no timer. Cards
     leave Intake when the groomer proposes them and he approves the batch in
-    Green Light, and `groomer.py drain` is the one writer that performs it.
+    Green Light, and `groomer.py drain` performs that. The one move this sweep
+    makes out of Intake is point 2 of the same answer, and it is not this
+    phase: `advance_urgent_intake` below, for a card raised to Urgent after
+    that rule shipped (DRE-4150).
 
     This phase is what DRE-2687's age-out became. That gate moved any Intake
     card past the lane contract's `stale_minutes` into Green Light, oldest
@@ -2632,7 +2638,8 @@ _URGENT_HISTORY_QUERY = """query($ids: [ID!], $after: String) {
   issues(first: 25, after: $after, filter: {id: {in: $ids}}) { nodes {
     id identifier priority createdAt
     parent { identifier state { name } }
-    history(first: 50) { nodes { createdAt fromPriority toPriority } }
+    history(first: 50) { nodes {
+      createdAt fromPriority toPriority toState { name } } }
   } pageInfo { hasNextPage endCursor } } }"""
 
 _URGENT_RECEIPTS_QUERY = """query($since: DateTimeOrDuration!, $after: String) {
@@ -2675,17 +2682,45 @@ def urgent_raised_at(issue: dict) -> datetime | None:
     return _moment(issue.get("createdAt"))
 
 
-def urgent_fast_path_note(identifier: str, raised: datetime) -> str:
-    """What the moved card carries — the rule, named, once."""
+def urgent_reached_planning(issue: dict, since: datetime | None) -> bool:
+    """Did this card enter Planning at or after `since` — its first receipt —
+    off its own history, the one record of a move that the receipt, posted
+    BEFORE the move, cannot be. A card that did and is back in Intake was put
+    there by a person; one that never did carries a receipt for a move that
+    did not land. A receipt with no readable moment reads as the ship moment:
+    any Planning entry since the rule shipped counts, the side that leaves the
+    card where it is.
+    """
+    since = since or URGENT_SHIPS_AT
+    for node in ((issue.get("history") or {}).get("nodes") or []):
+        if ((node.get("toState") or {}).get("name")) != "Planning":
+            continue
+        at = _moment(node.get("createdAt"))
+        if at is not None and at >= since:
+            return True
+    return False
+
+
+def urgent_fast_path_note(identifier: str, raised: datetime,
+                          attempt: int = 1) -> str:
+    """What the card carries, posted just BEFORE the move — so a claim, never
+    a report that the move happened. A retry says which attempt it is."""
+    retry = (
+        f" This is attempt {attempt} of {URGENT_MAX_ATTEMPTS} — the earlier "
+        "move did not land, and the card was still in Intake."
+        if attempt > 1 else ""
+    )
     return (
         f"{URGENT_FAST_PATH_OPENER}: {identifier} was raised to Urgent at "
         f"{dead_run.pacific(raised)}, after the Urgent fast path shipped "
         f"({dead_run.pacific(URGENT_SHIPS_AT)}), so it skips the groom queue "
-        f"and moves from Intake to Planning now (DRE-4150).\n\n"
+        f"and the sweep is moving it from Intake to Planning (DRE-4150).{retry}"
+        "\n\n"
         "Urgency skips the queue, not the checks — Planning's classifier and "
         "critic read this card exactly as they read any other. The rule is "
         "point 2 of the CEO's signed console answer of 2026-09-17 09:57 PT, "
-        "recorded on DRE-4141. It moves a card once, and this is that once."
+        "recorded on DRE-4141. It takes a card out of Intake once: a card that "
+        "reached Planning and is put back is left where it is put."
     )
 
 
@@ -2752,11 +2787,20 @@ def advance_urgent_intake() -> set[str]:
     the groomer's drain, and an Urgent card waiting behind a pause is the
     opposite of the rule.
 
-    One receipt per card, posted BEFORE the move, and a card carrying it is
-    never touched by this rule again: a second sweep adds nothing, and a card
-    a person puts back in Intake stays where they put it. The move is guarded
-    on the from-lane and refuses an epic. A write that fails is recorded on the
-    fail-loudly rail and the sweep carries on with the next card.
+    The receipt is posted BEFORE the move — it is the claim the cross-repo
+    cap counts — and the move is then read BACK off the card's lane, because
+    `cmd_advance` returns normally when it stands down (an epic, a card no
+    longer in Intake, a guarded write that refused). Only a card read back in
+    Planning is reported as moved. One still in Intake is a write failure on
+    the fail-loudly rail; one that left Intake some other way is said so.
+    Either way the sweep carries on with the next card.
+
+    A card that reached Planning is never touched by this rule again: a second
+    sweep adds nothing, and a card a person puts back in Intake stays where
+    they put it — its history shows the move. A card whose receipt claims a
+    move its history never shows is tried again once that receipt's window has
+    passed, with a fresh receipt, until it carries URGENT_MAX_ATTEMPTS of them;
+    then it is left to the groomer.
 
     Returns the identifiers moved this sweep. Raises whatever a Linear READ
     raises — `main` records it as a read failure, never as "nothing eligible".
@@ -2765,6 +2809,8 @@ def advance_urgent_intake() -> set[str]:
     tag = URGENT_FAST_PATH_OPENER
     ship = URGENT_SHIPS_AT
     candidates = []
+    attempts: dict[str, int] = {}
+    first_receipt: dict[str, datetime | None] = {}
     for card in active_cards(INTAKE_LANE):
         if card["state"]["name"] != "Intake":
             continue
@@ -2779,10 +2825,19 @@ def advance_urgent_intake() -> set[str]:
             print(f"{tag}: {ident} is an epic — an epic is never fast-pathed; "
                   "the CEO moves an epic")
             continue
-        if any(_is_urgent_receipt(body) for body in bodies):
-            print(f"{tag}: {ident} already carries this rule's receipt — it "
-                  "moves a card once, so it is left where it is")
+        receipts = [
+            _moment(node.get("createdAt"))
+            for node in linear_ops.window_nodes(card.get("comments"))
+            if _is_urgent_receipt(node.get("body"))
+        ]
+        if receipts:
+            first_receipt[ident] = receipts[0]
+        if len(receipts) >= URGENT_MAX_ATTEMPTS:
+            print(f"{tag}: {ident} carries {len(receipts)} of this rule's receipts "
+                  "and is still in Intake — no more attempts; it goes through "
+                  "the groomer")
             continue
+        attempts[ident] = len(receipts) + 1
         candidates.append(card)
     if not candidates:
         print(f"{tag}: no card in Intake has been raised to Urgent since "
@@ -2806,6 +2861,12 @@ def advance_urgent_intake() -> set[str]:
         if raised is None or raised <= ship:
             print(f"{tag}: {ident} was already Urgent before "
                   f"{dead_run.pacific(ship)} — it goes through the groomer")
+            continue
+        if attempts[ident] > 1 and urgent_reached_planning(
+                issue, first_receipt.get(ident)):
+            print(f"{tag}: {ident} already carries this rule's receipt and "
+                  "reached Planning — it moves a card once, so it is left "
+                  "where it is")
             continue
         parent = issue.get("parent")
         if parent:
@@ -2838,12 +2899,26 @@ def advance_urgent_intake() -> set[str]:
         try:
             # The receipt first: it is the claim the cross-repo cap counts,
             # and a move that then fails still leaves the reason on the card.
-            linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised))
+            linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised, attempts[ident]))
             linear_ops.cmd_advance(ident, "Planning", "Intake", "--not-epic")
+            # Read back: `cmd_advance` returns normally when it stands down.
+            lane = linear_ops.get_issue(ident)["state"]["name"]
         except linear_ops.LinearError as e:
             _write_failures.append(f"{ident} urgent fast path: {e}")
             print(f"ERROR: {tag}: failed to move {ident} to Planning: {e}",
                   file=sys.stderr)
+            continue
+        if lane == "Intake":
+            _write_failures.append(
+                f"{ident} urgent fast path: the move stood down and the card "
+                "is still in Intake")
+            print(f"ERROR: {tag}: {ident} is still in Intake after the move "
+                  "to Planning — a later sweep tries it again",
+                  file=sys.stderr)
+            continue
+        if lane != "Planning":
+            print(f"{tag}: {ident} left Intake for {lane} before this sweep "
+                  "moved it — not moved by this rule")
             continue
         moved.add(ident)
         print(f"{tag}: {ident} raised to Urgent {dead_run.pacific(raised)} — "

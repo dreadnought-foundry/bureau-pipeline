@@ -28,10 +28,12 @@ on:
         type: string
         required: false
       # RETIRED BY DRE-4141, AND STILL DECLARED. The sweep no longer moves a
-      # card out of Intake for any reason, so none of these three reaches the
-      # script: THE PEN'S SWITCH LIVES ON `groomer.yml` NOW, where the one
-      # remaining exit is (the approved batch's drain), and the window and the
-      # cap bounded a move that no longer happens.
+      # card out of Intake on age, so none of these three reaches the script:
+      # THE PEN'S SWITCH LIVES ON `groomer.yml` NOW, where the groomer's exit
+      # is (the approved batch's drain), and the window and the cap bounded a
+      # move that no longer happens. The sweep's one move out of Intake, the
+      # Urgent fast path (DRE-4150), ignores the hold by the CEO's own word and
+      # takes its knobs from config/urgent-fast-path.json.
       #
       # They stay declared because a `workflow_call` input a caller passes and
       # the reusable does not declare is a HARD ERROR — "Invalid input, X is
