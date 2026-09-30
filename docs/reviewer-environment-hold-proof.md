@@ -13,12 +13,20 @@ card claims, and §1 plus the checklist at the end is the whole of its proof.
 owned by
 [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570), not by this
 card.** DRE-3421 was split on 2026-09-21 at 20:25 PT: DRE-3432 keeps the replay,
-DRE-4570 takes the live run and is blocked by DRE-3432. DRE-4570 is scheduled
-for a weekend window, because setting the review credential to a dead value on
-purpose trips the DRE-4219 CRITICAL credential alarm, and that alarm must not
-fire during a working day. §2 is a forward pointer to that work — nothing in it
-is claimed here, and nothing in it blocks this card. DRE-4570 appends its
-observations to this same file when it runs.
+DRE-4570 takes the live run and is blocked by DRE-3432. *The rest of this
+paragraph is the plan as written before the run, left unchanged:* DRE-4570 is
+scheduled for a weekend window, because setting the review credential to a dead
+value on purpose trips the DRE-4219 CRITICAL credential alarm, and that alarm
+must not fire during a working day. §2 is a forward pointer to that work —
+nothing in it is claimed here, and nothing in it blocks this card. DRE-4570
+appends its observations to this same file when it runs.
+
+**Update, 2026-09-29: observation 2 has run.** It was made live on 2026-09-29,
+18:43–20:46 PT, and is recorded in §3. Criteria 1 and 2 and the credential
+restore were observed. The console criterion was not met. It ran on a Tuesday
+evening, not in the planned weekend window, and no approval of that change is
+recorded, so §3 records it as a deviation from the card (see "What else
+happened").
 
 **The replay script is committed beside this record** at
 [`docs/evidence/DRE-3432/replay_2370.py`](evidence/DRE-3432/replay_2370.py).
@@ -212,7 +220,7 @@ So the standing of criterion 1 is: a method anyone can audit, over material only
 an operator can obtain, with a result this repository takes on the operator's
 word. That is weaker than a test and stronger than an assertion, and it is worth
 being exact about which. The live half of the proof — observed by hand rather
-than replayed — is DRE-4570's, in §2.
+than replayed — is DRE-4570's, planned in §2 and recorded in §3.
 
 #### Two latent traps in the script, recorded rather than fixed
 
@@ -358,7 +366,9 @@ Read on app.agent-bureau.com, signed in as the operator, on the Demo tenant.
   stopped at merge gate · Operator · **Built by hand — nothing for you to do**".
 - **The card drawer** (screenshot above): "#25 · **CI running**", "**Stuck —
   needs you**", then *Who acts next*: "Operator · hand-work — nothing is
-  dispatched", then *Critic verdict*: "The critic hasn't ruled yet."
+  dispatched", then *Critic verdict*: "The critic hasn't ruled yet." That last
+  line was read off the live drawer. The crop ends just below the *Critic
+  verdict* heading, so the image does not show it.
 - **Nowhere** did the console say the review was held, name
   `credential-refused`, or point to `make cred-doctor`. **Nowhere** did it show
   a fix agent working.
@@ -408,8 +418,28 @@ showed other projects' private cards, and this repository is public.
   draft" on each (20:27:10 and 20:45:58). #26 was kept open until the release
   sweep, because the sweep finds the releasing verdict in the open-PR listing
   (`_newest_repo_verdict`).
-- **The DRE-4219 CRITICAL expired-credential alarm was not watched.** The CEO
-  accepted it before the sitting. Whether it fired is not recorded here.
+- **The run was on a weekday evening, not in the card's weekend window. This is
+  a deviation from the card.** 2026-09-29 is a Tuesday. DRE-4570's title still
+  reads "(WEEKEND WINDOW)", because a dead credential trips the DRE-4219
+  CRITICAL alarm, and §2 and the top of this record say that alarm must not fire
+  during a working day. The approvals on record are both for a weekend:
+  - DRE-4570's comment of 2026-09-27 15:34 PT says the CEO approved running it
+    that night, Sunday 2026-09-27. That sitting stopped in pre-flight, and the
+    comment names the next weekend window as Saturday 2026-10-03.
+  - The CEO's signed console answer on
+    [DRE-5057](https://linear.app/dreadnoughtfoundry/issue/DRE-5057) at
+    2026-09-28 13:41 PT approves breaking the sandbox's credential for this
+    proof, for the sandbox only and only through the DRE-5057 controls, and
+    says to build them "so the proof can run on Saturday, October 3."
+
+  No approval of a weekday run is recorded on DRE-4570, DRE-5057, DRE-5056,
+  DRE-3421 or DRE-4219, read on 2026-09-30. Who decided to run on 2026-09-29,
+  and when, is therefore not on record. This record does not claim the weekend
+  constraint was lifted.
+- **The DRE-4219 CRITICAL expired-credential alarm was not watched.** Whether it
+  fired is not recorded here. The operator's account is that the CEO accepted
+  this before the sitting. That acceptance is not recorded on any of the cards
+  named above.
 
 ### Verdict against DRE-4570's criteria
 
@@ -445,8 +475,10 @@ showed other projects' private cards, and this repository is public.
 
 ### Owed by [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570) — not by this card
 
-Listed for the reader's benefit only. These are DRE-4570's acceptance criteria,
-and DRE-4570 ticks them here when the weekend run happens. See §2.
+Listed for the reader's benefit only. These are DRE-4570's acceptance criteria.
+The ones observed were ticked on 2026-09-29 against §3, the live run, which was
+made on a weekday rather than in the planned weekend window. §2 is the plan they
+were written from.
 
 - [x] The dead credential, observed live on the sandbox repository: one evidence
   note, one re-dispatch, one hold with `credential-refused` and its check named,
@@ -459,7 +491,8 @@ and DRE-4570 ticks them here when the weekend run happens. See §2.
   *Not met on 2026-09-29: never shown as a fix agent, but the hold and its reason
   were never named, and the Activity feed showed the crash as an APPROVE — §3.*
 - [ ] This record on `main` carrying the run ids and PT timestamps of those
-  observations, beside observation 1's.
+  observations, beside observation 1's. *Left unticked until it is true: the
+  merge of the pull request that adds §3 is the act that completes it.*
 - [x] The credential restored and `make cred-doctor` clean at the end of the
   sitting. *Observed 2026-09-29 20:22–20:23 PT — §3.*
 - [ ] The CEO closes DRE-4570 after reading this record.
