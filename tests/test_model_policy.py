@@ -747,8 +747,11 @@ class SelectionIsRecordedTest(unittest.TestCase):
 
 
 class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
-    """A model id the system sees that is absent from config raises an alert
-    and, at most, joins the advisory ladder — never the build path."""
+    """A model id the system sees that is absent from config is found by the
+    catalog library, and the discovery policy still reads `advisory` — a NEW
+    FAMILY may join the advisory ladder at most, and only after the CEO answers
+    the question the adoption workflow files. The drift watch files no card of
+    its own any more (DRE-3899); the 2026-08-09 schema guard is unchanged."""
 
     def test_a_model_absent_from_config_is_discovered(self):
         catalog = [
@@ -783,83 +786,26 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
             ["claude-nova-9"],
         )
 
-    def test_the_title_is_deterministic_so_the_card_dedupes(self):
-        # linear_ops.py find-open matches an EXACT title. Two runs seeing the
-        # same set of models in a different order must produce the SAME title,
-        # or the weekly watch mints a duplicate card every Monday.
-        a = [
-            {"id": "claude-nova-9", "display_name": None, "created_at": None},
-            {"id": "claude-aria-2", "display_name": None, "created_at": None},
-        ]
-        self.assertEqual(mc.new_model_title(a), mc.new_model_title(list(reversed(a))))
-
-    def test_a_long_finding_still_makes_a_readable_title(self):
-        entries = [
-            {"id": f"claude-model-{i}", "display_name": None, "created_at": None}
-            for i in range(12)
-        ]
-        title = mc.new_model_title(entries)
-        self.assertLess(len(title), 160, f"unreadable card title: {title}")
-        # The body stays complete even when the title elides.
-        body = mc.new_model_body(entries)
-        for entry in entries:
-            self.assertIn(entry["id"], body)
-
-    def test_the_workflow_compares_against_the_previous_snapshot(self):
-        # The snapshot refresh runs FIRST, so comparing the new catalog against
-        # the file it just wrote would find nothing, ever. The baseline is the
-        # snapshot as it stood BEFORE the refresh.
-        drift = (WORKFLOWS / "model-drift.yml").read_text()
-        self.assertIn("--baseline", drift, "check-new has no previous-state baseline")
-
-    def test_the_baseline_suppresses_a_model_already_recorded(self):
-        payload = {"data": [{"id": "claude-nova-9", "display_name": "Nova 9",
-                             "created_at": "2026-09-01T00:00:00Z"}]}
-        with tempfile.TemporaryDirectory() as td:
-            baseline = Path(td) / "previous.json"
-            baseline.write_text(json.dumps(
-                {"source": "x", "models": [{"id": "claude-nova-9",
-                                            "display_name": "Nova 9",
-                                            "created_at": None,
-                                            "in_catalog": True}]}
-            ))
-            env = dict(os.environ, BUREAU_FAKE_CATALOG=json.dumps(payload))
-
-            def run(*args):
-                return subprocess.run(
-                    [sys.executable, str(ROOT / "scripts" / "model_catalog.py"),
-                     "check-new", *args],
-                    capture_output=True, text=True, env=env,
-                )
-
-            # Control: with no baseline this model IS a discovery…
-            self.assertEqual(run().returncode, 3)
-            # …and with the baseline that already records it, it is not.
-            proc = run("--baseline", str(baseline))
-            self.assertEqual(
-                proc.returncode, 0,
-                f"an already-recorded model must not re-alert: {proc.stdout}",
-            )
-
     def test_the_discovery_target_is_the_advisory_ladder(self):
         self.assertEqual(mc.discovery_policy()["on_new_model"], ADVISORY)
 
-    def test_the_alert_proposes_advisory_and_forbids_the_build_path(self):
-        entries = [
-            {"id": "claude-nova-9", "display_name": "Nova 9",
-             "created_at": "2026-09-01T00:00:00Z"}
-        ]
-        title = mc.new_model_title(entries)
-        body = mc.new_model_body(entries)
-        self.assertIn("claude-nova-9", title)
-        self.assertIn("claude-nova-9", body)
-        self.assertIn(ADVISORY, body.lower())
-        # It must say, in words, that the build path is off limits.
-        self.assertRegex(
-            body.lower(), r"never.{0,80}(workhorse|build path|build ladder)"
+    def test_the_discovery_targets_are_unchanged(self):
+        # DRE-3899 removed the alert card, not the guard: a discovery may still
+        # be pointed at the advisory ladder or at nothing, and never at a build
+        # or a planning ladder.
+        self.assertEqual(mf.DISCOVERY_TARGETS, (ADVISORY, "none"))
+
+    def test_the_drift_watch_files_no_discovery_card(self):
+        # The adoption workflow asks the CEO about a new family; the weekly
+        # snapshot job no longer files a second, contradicting card.
+        drift = (WORKFLOWS / "model-drift.yml").read_text()
+        self.assertNotIn("check-new", drift)
+        self.assertNotIn("linear_ops.py", drift)
+        proc = subprocess.run(
+            [sys.executable, str(MODEL_CATALOG), "check-new"],
+            capture_output=True, text=True,
         )
-        # And it must not claim anything was adopted.
-        self.assertIn("nothing has been changed automatically", body.lower())
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
 
     def test_discovery_never_writes_the_config(self):
         # Structural: the discovery path is data + an alert. Nothing in it can
@@ -871,33 +817,8 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
         )
         self.assertNotRegex(
             source, r"write_text\(|\.write\([^)]*ladder",
-            "the catalog writes data and cards, never a ladder",
+            "the catalog writes data, never a ladder",
         )
-
-    def test_the_cli_reports_a_new_model_and_the_workflow_alerts(self):
-        payload = {
-            "data": [
-                {"id": "claude-nova-9", "display_name": "Nova 9",
-                 "created_at": "2026-09-01T00:00:00Z"},
-            ]
-        }
-        with tempfile.TemporaryDirectory() as td:
-            title = Path(td) / "t.txt"
-            body = Path(td) / "b.md"
-            env = dict(os.environ, BUREAU_FAKE_CATALOG=json.dumps(payload))
-            proc = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "model_catalog.py"),
-                 "check-new", "--title-file", str(title), "--body-file", str(body)],
-                capture_output=True, text=True, env=env,
-            )
-            self.assertEqual(proc.returncode, 3, f"{proc.stdout}\n{proc.stderr}")
-            self.assertIn("claude-nova-9", title.read_text())
-            self.assertIn(ADVISORY, body.read_text().lower())
-
-        drift = (WORKFLOWS / "model-drift.yml").read_text()
-        self.assertIn("check-new", drift, "the discovery alert is not wired up")
-        self.assertIn("find-open", drift, "the alert must be idempotent")
-
 
 class DocumentedPolicyTest(unittest.TestCase):
     """The rule is written down where the next well-meaning edit will read it."""
