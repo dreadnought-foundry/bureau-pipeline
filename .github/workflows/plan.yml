@@ -1292,7 +1292,7 @@ jobs:
             2. Decompose into the SMALLEST number of independently-shippable
                sub-issues (each one PR, each with clear acceptance criteria).
                If two sub-issues would share an interface, schema field, or
-               name string, define that contract explicitly in BOTH descriptions.
+               name string, define that contract explicitly in BOTH descriptions.${{ steps.shape.outputs.returned_child == 'true' && format(' THIS CARD IS A RETURNED CHILD of the epic {0} (DRE-5242): it came back to Planning with a return receipt — the newest comment on it that opens with the hand-back or turn-exhaustion mark — and was read afresh as an epic. A card has no children, so its pieces are SIBLINGS under {0} and this card is canceled. Steps 3, 3b, 3c, 4 and 5 below do not apply to it: never run `linear_ops.py subissue` on {1}, file no proof card, write no plan artifact and post no plan — the original does not go to Green Light. Instead: (a) decompose the work the receipt describes into the smallest number of independently-shippable pieces, each one PR with its own `## Acceptance criteria`, each naming the sibling it does not depend on, and a `**Blocked by:**` line only where a piece truly waits for another; (b) write each description to a file and file the piece with: python3 .bureau-pipeline/scripts/mid_epic.py discovery {0} --kind addition --because "<one line quoting the return receipt>" --title "<title>" --body <desc-file> --verdict FLEET ; (c) then cancel the original, never Done: post one comment naming every sibling you filed, with python3 .bureau-pipeline/scripts/linear_ops.py comment {1} "<comment>" , and move it with python3 .bureau-pipeline/scripts/linear_ops.py state {1} Canceled . If the pieces cannot be cut safely, take step 6 (ESCALATE) instead and cancel nothing.', steps.shape.outputs.parent, github.event.client_payload.identifier) || '' }}
             3. Create each sub-issue with:
                  python3 .bureau-pipeline/scripts/linear_ops.py subissue \
                    "${{ github.event.client_payload.identifier }}" "<title>" <desc-file>
@@ -1508,7 +1508,7 @@ jobs:
             2. Decompose into the SMALLEST number of independently-shippable
                sub-issues (each one PR, each with clear acceptance criteria).
                If two sub-issues would share an interface, schema field, or
-               name string, define that contract explicitly in BOTH descriptions.
+               name string, define that contract explicitly in BOTH descriptions.${{ steps.shape.outputs.returned_child == 'true' && format(' THIS CARD IS A RETURNED CHILD of the epic {0} (DRE-5242): it came back to Planning with a return receipt — the newest comment on it that opens with the hand-back or turn-exhaustion mark — and was read afresh as an epic. A card has no children, so its pieces are SIBLINGS under {0} and this card is canceled. Steps 3, 3b, 3c, 4 and 5 below do not apply to it: never run `linear_ops.py subissue` on {1}, file no proof card, write no plan artifact and post no plan — the original does not go to Green Light. Instead: (a) decompose the work the receipt describes into the smallest number of independently-shippable pieces, each one PR with its own `## Acceptance criteria`, each naming the sibling it does not depend on, and a `**Blocked by:**` line only where a piece truly waits for another; (b) write each description to a file and file the piece with: python3 .bureau-pipeline/scripts/mid_epic.py discovery {0} --kind addition --because "<one line quoting the return receipt>" --title "<title>" --body <desc-file> --verdict FLEET ; (c) then cancel the original, never Done: post one comment naming every sibling you filed, with python3 .bureau-pipeline/scripts/linear_ops.py comment {1} "<comment>" , and move it with python3 .bureau-pipeline/scripts/linear_ops.py state {1} Canceled . If the pieces cannot be cut safely, take step 6 (ESCALATE) instead and cancel nothing.', steps.shape.outputs.parent, github.event.client_payload.identifier) || '' }}
             3. Create each sub-issue with:
                  python3 .bureau-pipeline/scripts/linear_ops.py subissue \
                    "${{ github.event.client_payload.identifier }}" "<title>" <desc-file>
@@ -1778,14 +1778,37 @@ jobs:
       # NOT Triage. An escalated card is not broken — it is correct and waiting
       # on a judgement, and mixing the two is what turned Triage into a dead end
       # the first time (DRE-2723, DRE-2776).
+      #
+      # A RETURNED CHILD of an epic (DRE-5242) also creates no children of its
+      # own: its pieces are siblings under its parent and the card itself is
+      # canceled. That is a split, not a question — so when Linear says the
+      # card reads Canceled and no reason was written, there is nothing to
+      # park. The missing reason alone proves nothing: a planner that ignored
+      # the prompt, had a `mid_epic.py discovery` refused, or stopped before
+      # the cancel writes no reason either, and that card must not sit in
+      # Planning with nobody told. It escalates with a default reason. A
+      # returned child the planner could not cut safely wrote a reason, and
+      # escalates exactly like any other.
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RETURNED_CHILD: ${{ steps.shape.outputs.returned_child }}
+          PARENT: ${{ steps.shape.outputs.parent }}
         run: |
+          CARD="${{ github.event.client_payload.identifier }}"
+          REASON="${{ runner.temp }}/planner-escalation.txt"
+          if [ "$RETURNED_CHILD" = "true" ] && [ ! -s "$REASON" ]; then
+            STATE=$(python3 .bureau-pipeline/scripts/linear_ops.py state-of "$CARD") || STATE=""
+            if [ "$STATE" = "Canceled" ]; then
+              echo "a returned child split into siblings under $PARENT and canceled — nothing to escalate"
+              exit 0
+            fi
+            echo "returned child was not split or canceled: it is a child of $PARENT, no escalation reason was written, and it reads '${STATE:-unreadable}' in Linear rather than Canceled" > "$REASON"
+          fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
-            "${{ github.event.client_payload.identifier }}" \
-            --reason-file "${{ runner.temp }}/planner-escalation.txt"
+            "$CARD" \
+            --reason-file "$REASON"
       # --- The plan artifact (DRE-2720) ------------------------------------
       #
       # What the CEO green-lights. The planner wrote ONE markdown file with

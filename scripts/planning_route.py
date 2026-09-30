@@ -13,7 +13,11 @@ This module is the branch. It reads the shape stamped by `planning_shape.py`
     no green light, and it never reaches the CEO. Unless the check cannot route
     it at all, which is the one case where it does — see below.
   * **epic** — the existing path, unchanged: plan artifact, children, green
-    light. `plan.yml` performs it; nothing here re-implements it.
+    light. `plan.yml` performs it; nothing here re-implements it. One case
+    inside it is told apart (DRE-5242): a RETURNED CHILD of an epic —
+    `returned_child()` below — is split into siblings under its parent and
+    canceled, because a card has no children. `decide` says so as a step
+    output and the planner prompt reads it.
   * **roll-up** — handed to the planner, which splits it into child epics under
     the card, each planned and green-lit on its own; the card itself is never
     approved for building (DRE-4699; the plan.yml route is DRE-4718's).
@@ -311,6 +315,130 @@ def decide(identifier: str, comment_bodies, doc: dict | None = None) -> Route:
     return route_for(shape, doc)
 
 
+@dataclass(frozen=True)
+class ReturnedChild:
+    """Is this card a child of an epic that came back to Planning and was read
+    afresh as an epic? `parent` is the epic's identifier when it is, else ""."""
+
+    returned: bool
+    parent: str
+    reason: str
+
+
+#: Every way a thread's shape can fail to read as one shape. Not one family:
+#: the two card faults are not `ShapeError`s, which is a vocabulary fault.
+_UNREADABLE_SHAPE = (planning_shape.ShapeError, planning_shape.ConflictingShapes,
+                     planning_shape.UnknownShape)
+
+
+def _not_returned(reason: str) -> ReturnedChild:
+    return ReturnedChild(returned=False, parent="", reason=reason)
+
+
+def returned_child(comment_bodies, parent: dict | None, *,
+                   has_children: bool = False,
+                   doc: dict | None = None) -> ReturnedChild:
+    """Is this card a RETURNED CHILD of an epic (DRE-5242)?
+
+    Four facts, all of them, or it is not:
+
+      * its live shape is `epic` (DRE-4370 reads it from the newest return
+        receipt on), and that `epic` stamp is NEWER than the receipt — the
+        fresh read the return caused. `plan.yml` classifies before it routes,
+        so that is every returned card by the time this runs. An `epic` stamp
+        from before the receipt can only be a hand stamp, since a planner one
+        there is void: a person's decision made before the card came back,
+        and splitting on it would overrule them;
+      * `planning_shape.return_receipt` finds a receipt;
+      * it has a parent, and `mid_epic.is_epic` says the parent is an epic;
+      * it has no children of its own. A card whose pieces were already filed
+        under it is the epic it became, and canceling it would strand them.
+
+    Such a card is split into SIBLINGS under its parent and canceled
+    (standards/card-quality.md: "A card has no children", and "How to split").
+    Everything else keeps the epic route as it was: a returned card with no
+    parent becomes an epic whose children are the pieces.
+
+    `parent` is `{"identifier", "title", "has_children", "shape"}` or None.
+    """
+    import mid_epic
+
+    try:
+        shape = planning_shape.shape_on(comment_bodies, doc)
+    except _UNREADABLE_SHAPE as e:
+        return _not_returned(f"its shape cannot be read: {e}")
+    if shape != mid_epic.EPIC_SHAPE:
+        return _not_returned(f"it is shaped {shape or 'nothing'}, not {mid_epic.EPIC_SHAPE}")
+
+    bodies = list(comment_bodies or ())
+    receipt = planning_shape.return_receipt(bodies)
+    if receipt is None:
+        return _not_returned("it was never sent back to Planning")
+    newest = max(i for i, body in enumerate(bodies) if body is receipt)
+    after = bodies[newest + 1:]
+    try:
+        read_afresh = mid_epic.EPIC_SHAPE in planning_shape.shapes_on(after, doc)
+    except _UNREADABLE_SHAPE:
+        read_afresh = False
+    if not read_afresh:
+        return _not_returned(
+            "its epic stamp predates the return receipt, so the return is not "
+            "what made it an epic"
+        )
+
+    if has_children:
+        return _not_returned("it already has children of its own")
+    if not parent or not (parent.get("identifier") or "").strip():
+        return _not_returned("it has no parent — it becomes an epic of its own")
+    if not mid_epic.is_epic(parent.get("title"), bool(parent.get("has_children")),
+                            parent.get("shape")):
+        return _not_returned(f"its parent {parent['identifier']} is not an epic")
+    return ReturnedChild(
+        returned=True,
+        parent=parent["identifier"].strip(),
+        reason=(
+            f"it came back to Planning, was read afresh as an epic, and is a "
+            f"child of the epic {parent['identifier']} — so its pieces are "
+            "siblings under that epic and it is canceled"
+        ),
+    )
+
+
+#: The card's own children and its parent, in one read. `children(first: 1)`
+#: answers "has any" — the count is not needed.
+_FAMILY_QUERY = """query($id: String!) { issue(id: $id) {
+  children(first: 1) { nodes { id } }
+  parent { identifier title children(first: 1) { nodes { id } } }
+} }"""
+
+
+def _read_returned_child(lops, identifier: str, comment_bodies,
+                         doc: dict | None = None) -> ReturnedChild:
+    """`returned_child` for a live card. The family is read only for a card
+    that could be one — shaped epic, carrying a receipt — so the epic route
+    pays nothing new for a card that never came back."""
+    import routing_verdict
+
+    try:
+        shape = planning_shape.shape_on(comment_bodies, doc)
+    except _UNREADABLE_SHAPE:
+        shape = None
+    if shape is None or planning_shape.return_receipt(comment_bodies) is None:
+        return returned_child(comment_bodies, None, doc=doc)
+    issue = (lops.gql(_FAMILY_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    has_children = bool((issue.get("children") or {}).get("nodes"))
+    node = issue.get("parent")
+    parent = None
+    if node and node.get("identifier"):
+        parent = {
+            "identifier": node["identifier"],
+            "title": node.get("title") or "",
+            "has_children": bool((node.get("children") or {}).get("nodes")),
+            "shape": routing_verdict.shape_of(lops.comment_bodies(node["identifier"])),
+        }
+    return returned_child(comment_bodies, parent, has_children=has_children, doc=doc)
+
+
 # --------------------------------------------------------------------------- #
 # leaving Planning                                                             #
 # --------------------------------------------------------------------------- #
@@ -598,10 +726,14 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         # classified is owed a message, not a failed workflow that summons the
         # medic. The notice names the missing stamp and how to write it.
         _say_once(linear_ops, identifier, refusal.tag, refusal.notice)
-        _write_outputs(github_output, [("refused", "true"), ("route", "")])
+        _write_outputs(github_output, [
+            ("refused", "true"), ("route", ""),
+            ("returned_child", "false"), ("parent", ""),
+        ])
         print(refusal.notice, file=sys.stderr)
         return 0
 
+    child = _read_returned_child(linear_ops, identifier, bodies)
     _write_outputs(github_output, [
         ("refused", "false"),
         ("route", route.shape),
@@ -609,6 +741,9 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         ("actor", route.actor),
         ("plan_artifact", "true" if route.owes_plan_artifact else "false"),
         ("green_light", "true" if route.owes_green_light else "false"),
+        # DRE-5242: the epic route's planner prompt reads these two.
+        ("returned_child", "true" if child.returned else "false"),
+        ("parent", child.parent),
     ])
     print(json.dumps({
         "shape": route.shape,
@@ -618,6 +753,9 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         "marks": list(route.marks),
         "plan_artifact": route.owes_plan_artifact,
         "green_light": route.owes_green_light,
+        "returned_child": child.returned,
+        "parent": child.parent,
+        "returned_child_reason": child.reason,
     }, indent=2))
     return 0
 
