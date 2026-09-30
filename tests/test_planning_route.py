@@ -622,6 +622,11 @@ class TestPlanYmlBranchesThreeWays:
     def test_each_of_the_three_shapes_has_its_own_gated_step(self):
         assert "steps.shape.outputs.route == 'epic'" in _step("Route — plan or activate")["if"]
         assert "steps.shape.outputs.route == 'one-off'" in _step("One-off route")["if"]
+        # DRE-4718: the roll-up's hand-off, gated on the shape name DRE-4699
+        # stamps, still exits through planning_route.py.
+        hand_off = _step("Roll-up route — hand off")
+        assert hand_off["if"] == "steps.shape.outputs.route == 'roll-up'"
+        assert "planning_route.py exit" in hand_off["run"]
 
     def test_the_one_off_step_names_no_lane_of_its_own(self):
         """The destination is the file's. A lane written into the YAML is the
@@ -634,6 +639,21 @@ class TestPlanYmlBranchesThreeWays:
                     "destination comes from config/planning-shapes.json"
                 )
 
+    def test_no_roll_up_step_names_a_lane_of_its_own(self):
+        """DRE-4718: the roll-up's lanes are written by planning_route.py (the
+        hand-off) and epic_split.py (the activation), each reading them off
+        the vocabulary and the contract — never by the YAML around them."""
+        rollup = [s for s in _steps()
+                  if (s.get("name") or "").startswith("Roll-up route")]
+        assert rollup, "plan.yml carries no Roll-up route step"
+        for step in rollup:
+            body = step.get("run") or ""
+            for lane in lane_contract.lane_names(status="live"):
+                assert lane not in body, (
+                    f"the {step['name']!r} step names the lane {lane!r} — the "
+                    "destination comes from the script it calls"
+                )
+
     def test_a_one_off_run_writes_no_artifact_and_asks_one_model(self):
         """Everything the epic route owes — the planner, both critics, the
         artifact check, the publish job — hangs off the plan/activate mode that
@@ -643,7 +663,7 @@ class TestPlanYmlBranchesThreeWays:
         Two steps run on a critic's DECISION rather than on the mode directly,
         so the chain is walked: the decision steps themselves are mode-gated.
 
-        The wave route's own agent (DRE-2845) hangs off the SHAPE instead —
+        The roll-up route's own agent (DRE-4718) hangs off the SHAPE instead —
         there is no mode on that branch — so an agent step qualifies either
         way, as long as the shape it waits for is not the one-off.
 

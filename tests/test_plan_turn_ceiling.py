@@ -86,13 +86,13 @@ CEILINGS = {
     "replan": 60,        # Re-plan after send-back
     "preb": 60,          # First critic — round 2        (40 → 60, DRE-2785)
     "postreplan": 60,    # Re-plan after the second critic sent it back
-    "wave": 80,          # Wave route — write the wave plan
+    "rollup": 80,        # Roll-up route — split into child epics (DRE-4718)
     # DRE-3970: each planner step's re-run on the next rung carries the SAME
     # ceiling as the step it re-runs — it is that step, on another model.
     "claude_retry": EPIC_CEILING,
     "replan_retry": 60,
     "postreplan_retry": 60,
-    "wave_retry": 80,
+    "rollup_retry": 80,
 }
 
 # The steps whose ceiling is chosen at RUN TIME rather than written here, and

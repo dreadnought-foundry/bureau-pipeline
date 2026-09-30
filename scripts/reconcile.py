@@ -7115,17 +7115,66 @@ def recover_crashed_reviews() -> None:
 #: mechanism exists to remove.
 FLEET_OUTAGE_SWEEP_CAP = int(os.environ.get("FLEET_OUTAGE_SWEEP_CAP", "1"))
 
+#: The lane an outage card is CREATED in (DRE-5292). Created there, never moved
+#: there: Planning entry is what the relay dispatches the planner on, and
+#: DRE-5273 — created in Planning, moved to Triage one second later — got an
+#: Agent Plan run (36658173529) off that one second. The relay dispatches from
+#: Triage only for an `agent:planner` card (the DRE-3013 probe's reading of
+#: it), and this card wears no `agent:*` role at all.
+FLEET_OUTAGE_LANE = "Triage"
+
+
+def _fleet_outage_crashed_run(sha: str) -> tuple[str, str]:
+    """(run id, run url) of the head's first crashed review run, or ("", "").
+
+    Read off the Actions run listing for the review workflow at the crashed
+    head's commit — the run itself, in the repository it crashed in. NEVER off
+    the review check run's `details_url`: when the posting App sets none,
+    GitHub fills in the App's homepage, which is not a run (DRE-5292 — DRE-5273
+    sent its reader to https://github.com/dreadnought-foundry/agent-bureau).
+
+    The earliest FAILED run is the crash: a head also collects the green
+    re-review that ends an outage and runs still in flight, and neither of
+    those has a log that ended on the error. An unreadable listing is `None`
+    from `gh_actions_read` (already recorded there) and answers the same as an
+    empty one — no run found — because naming a run nobody read would be the
+    guess this card is filed to remove.
+    """
+    if not sha:
+        return "", ""
+    out = gh_actions_read(
+        "run", "list", "--repo", REPO, "--workflow", review_workflow(),
+        "--commit", sha, "--limit", "20",
+        "--json", "databaseId,url,conclusion,createdAt",
+    )
+    try:
+        runs = json.loads(out or "[]")
+    except ValueError:
+        return "", ""
+    crashed = sorted(
+        (r for r in runs if isinstance(r, dict)
+         and r.get("conclusion") == "failure" and r.get("databaseId")),
+        key=lambda r: r.get("createdAt") or "",
+    )
+    for run in crashed:
+        url = str(run.get("url") or "")
+        match = _RUN_ID.search(url)
+        if match and match.group(1) == str(run["databaseId"]):
+            return match.group(1), url
+    return "", ""
+
 
 def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
     """The evidence the FIRST crashed run leaves, for the card's body.
 
-    Read only when the decision is `file` — this is three reads (a check-run
+    Read only when the decision is `file` — this is three reads (a run
     listing, an Actions log, a file) and an outage card is filed once. Every
     one of them degrades to a stated absence rather than to a guess:
 
-      * the run url comes off the head's own review check run, the record
-        qa-review publishes against the reviewed sha (HEAD_REVIEW_CHECK_NAME,
-        DRE-2291) — not off the run that happens to be newest;
+      * the run url is the head's own crashed review workflow run
+        (`_fleet_outage_crashed_run`, DRE-5292) — not the run that happens to
+        be newest, and never a check run's `details_url`. No run found is
+        said as exactly that, with no url printed in its place;
       * the log tail goes through `gh_actions_read`, i.e. the GH_DISPATCH_TOKEN
         swap, because the App token 403s the Actions API (DRE-2525). `None`
         there means UNREADABLE, and an unreadable log says so and points at the
@@ -7138,19 +7187,18 @@ def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
     """
     pr = next((p for p in prs if p.get("number") == outcome.pr), None)
     sha = (pr or {}).get("headRefOid") or ""
-    run_url = ""
-    if sha:
-        run_url = gh(
-            "api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
-            "[.check_runs[] | select(.name == %s) | .details_url][0] // \"\""
-            % json.dumps(HEAD_REVIEW_CHECK_NAME),
-        ).strip()
-    log_line = f"log tail unreadable — see {run_url}" if run_url else "log tail unreadable"
-    run_id = _RUN_ID.search(run_url)
+    run_id, run_url = _fleet_outage_crashed_run(sha)
     if run_id:
-        tail = gh_actions_read("run", "view", run_id.group(1), "--log-failed")
+        log_line = f"log tail unreadable — see {run_url}"
+        tail = gh_actions_read("run", "view", run_id, "--repo", REPO,
+                               "--log-failed")
         if tail is not None:
             log_line = reviewer_down.error_line(tail)
+    else:
+        log_line = (
+            f"no run found — no failed {review_workflow()} run on this head's "
+            "commit could be read, so there is no log to quote"
+        )
     workflow = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         ".github", "workflows", "qa-review.yml",
@@ -7173,7 +7221,8 @@ def _fleet_outage_failed(what: str, exc: BaseException) -> None:
     DRE-1254 discipline), and its caller stops rather than carrying on: a sweep
     that kept going after a failed create would comment onto an identifier it
     does not have. Nothing is lost by stopping — a card created but not yet
-    moved to Triage is found by prefix on the next sweep and moved then.
+    receipted is found by prefix on the next sweep, which appends to it
+    rather than filing a second.
 
     Only the FAILURE is a helper. Every `linear_ops.cmd_comment` on this path
     is written out as its own call with `pipeline_act.receipt()` around its
@@ -7394,8 +7443,19 @@ def report_fleet_reviewer_outage() -> None:
         first_run=_fleet_outage_first_run(first, prs) if first else None,
     )
     try:
+        # Triage, the red-main-repair precedent: the CARD is not broken, the
+        # pipeline is, and this is the lane a person scans for a pipeline that
+        # cannot run. reconcile.py is a permitted Triage writer in
+        # config/lane-contract.json. CREATED there in the one write that mints
+        # it (DRE-5292): creating in the default lane and moving it afterwards
+        # passed the card through Planning, and the relay dispatched the
+        # planner at an alarm. `no-code` and no `agent:*` role — this is not
+        # work to build or plan, and every gate reads `no-code` as "no run is
+        # coming for this card".
         issue = linear_ops.create_card(decision.title, decision.body,
-                                       repo_slug=REPO_SLUG)
+                                       repo_slug=REPO_SLUG,
+                                       labels=(linear_ops.NO_CODE_LABEL,),
+                                       lane=FLEET_OUTAGE_LANE)
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _fleet_outage_failed("create", e)
         return
@@ -7405,13 +7465,6 @@ def report_fleet_reviewer_outage() -> None:
             "reviewer-outage-fleet-wide", reviewer_down.outage_receipt(decision)))
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _fleet_outage_failed(f"outage receipt on {identifier}", e)
-    else:
-        # Triage, the red-main-repair precedent: the CARD is not broken, the
-        # pipeline is, and this is the lane a person scans for a pipeline that
-        # cannot run. reconcile.py is a permitted Triage writer in
-        # config/lane-contract.json. A crash between the create and this move
-        # is recovered by the next sweep, which finds the card by prefix.
-        _fleet_outage_state(f"triage {identifier}", identifier, "Triage")
     print(f"fleet-reviewer-outage: filed {identifier} — {decision.title}")
 
 
