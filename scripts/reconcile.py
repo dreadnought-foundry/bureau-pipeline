@@ -1684,6 +1684,10 @@ def carry_epics_out_of_todo() -> None:
     board; an epic with no `repo:` label is everybody's (`_another_repos_card`).
     """
     for card in active_cards((epic_todo_gate.TODO,)):
+        # The lane this read says the card is in, asked again: every write
+        # below is made on the strength of it, so it is never taken on trust.
+        if (card.get("state") or {}).get("name") != epic_todo_gate.TODO:
+            continue
         if _another_repos_card(card):
             continue
         ident = card["identifier"]
