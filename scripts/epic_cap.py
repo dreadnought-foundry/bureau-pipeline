@@ -557,15 +557,38 @@ def _write(path: str | None, body: str) -> None:
             fh.write(body)
 
 
+#: Every way a Linear read fails. `KeyError` is here for one key only —
+#: `linear_ops.api_key()` raises a bare `KeyError("LINEAR_API_KEY")` inside
+#: Actions — and `_unreadable` sends any other `KeyError` back up as the code
+#: defect it is. `JSONDecodeError` is `gql` handed a body that is not JSON.
+_READ_FAILURES = (linear_ops.LinearError, OSError, KeyError, json.JSONDecodeError)
+
+
+def _unreadable(e: BaseException) -> str | None:
+    """Why Linear could not be read, or None when `e` is not a read failure."""
+    if isinstance(e, KeyError):
+        return "LINEAR_API_KEY is not set" if e.args == ("LINEAR_API_KEY",) else None
+    if isinstance(e, json.JSONDecodeError):
+        return f"Linear's answer was not JSON: {e}"
+    return str(e)
+
+
 def _cmd_decide(args) -> int:
     identifier = args.epic
     load()  # exit 2 before any Linear read when the cap is unreadable
     try:
         fleet = fleet_state()
         epic = read_epic(identifier)
-    except (linear_ops.LinearError, OSError) as e:
-        print(f"epic-cap: Linear could not be read: {e}", file=sys.stderr)
-        _write(args.receipt_file, unread_receipt(str(e)))
+    except _READ_FAILURES as e:
+        reason = _unreadable(e)
+        if reason is None:
+            raise
+        print(f"epic-cap: Linear could not be read: {reason}", file=sys.stderr)
+        try:
+            _write(args.receipt_file, unread_receipt(reason))
+        except OSError as w:
+            print(f"epic-cap: the unread receipt could not be written to "
+                  f"{args.receipt_file}: {w}", file=sys.stderr)
         return 3
     answer = decision(fleet, identifier, epic)
     print(answer)
@@ -589,8 +612,11 @@ def main(argv=None) -> int:
     except EpicCapError as e:
         print(f"epic-cap: {e}", file=sys.stderr)
         return 2
-    except (linear_ops.LinearError, OSError) as e:
-        print(f"epic-cap: Linear could not be read: {e}", file=sys.stderr)
+    except _READ_FAILURES as e:
+        reason = _unreadable(e)
+        if reason is None:
+            raise
+        print(f"epic-cap: Linear could not be read: {reason}", file=sys.stderr)
         return 3
 
 
