@@ -1,14 +1,19 @@
-"""TDD for epic activation at Todo, ADDITIVE to In Progress (DRE-1893).
+"""An epic in Todo activates nothing; the sweep carries it out (DRE-5347).
 
-CEO decision: an epic activates the moment the CEO moves it to **Todo**
-(lifecycle Backlog → Planning → Todo). In Progress / In QA are card states +
-system progression, not the CEO's activation action. The dependency gate
-historically promoted a Backlog child only when its parent epic was **In
-Progress**; this widens "active" to Todo OR In Progress, purely ADDITIVE — In
-Progress keeps working exactly as before, MAX_WIP and the blocker checks are
-unchanged.
+DRE-1893 once let an epic activate at Todo as well as In Progress. This epic
+retires that convention: approval is the move to **In Progress** and only that
+(DRE-5316 says why a Green Light to Todo drag is re-planned rather than read as
+approval). An epic found in Todo is carried out of it on every full sweep
+(`reconcile.carry_epics_out_of_todo`, tested in test_reconcile_epic_carry.py)
+— to In Progress when it was approved, to Planning when it was not.
 
-FIX UNDER TEST: reconcile.EPIC_ACTIVE_STATES = ("Todo", "In Progress") and the
+The case that makes the activation set matter is the window before the carry.
+An epic dragged from Green Light to Todo is unapproved, and with Todo in the set
+the promoter would release its verdict-carrying children in that window. With
+In Progress alone, an approved epic dragged to Todo pauses its children for at
+most one sweep, and an unapproved one releases nothing.
+
+FIX UNDER TEST: reconcile.EPIC_ACTIVE_STATES = ("In Progress",) and the
 promote_ready parent check `parent["state"]["name"] not in EPIC_ACTIVE_STATES`.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/ -v
@@ -72,48 +77,48 @@ def _child(parent_state: str, *, blocked_by: str = "", identifier: str = "DRE-2"
 # --------------------------------------------------------------------------
 # EPIC_ACTIVE_STATES — the activation set
 # --------------------------------------------------------------------------
-def test_active_states_include_todo_and_in_progress():
-    assert "Todo" in reconcile.EPIC_ACTIVE_STATES
-    assert "In Progress" in reconcile.EPIC_ACTIVE_STATES
+def test_only_in_progress_activates_an_epic():
+    assert reconcile.EPIC_ACTIVE_STATES == ("In Progress",)
+    assert "Todo" not in reconcile.EPIC_ACTIVE_STATES
 
 
 # --------------------------------------------------------------------------
-# promote_ready — Todo parent is now activation (additive)
+# promote_ready — a Todo parent releases nothing
 # --------------------------------------------------------------------------
-def test_todo_epic_promotes_unblocked_child():
-    """The new behavior: an epic in Todo (the CEO's activation) promotes its
-    unblocked Backlog children to Todo."""
+def _promote(card):
     reconcile._write_failures.clear()
-    card = _child("Todo")
     with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
         reconcile, "epic_blockers_unmet", return_value=False
     ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
         reconcile.linear_ops, "cmd_comment"
     ):
         promoted = reconcile.promote_ready(active_count=0)
+    return promoted, advance
+
+
+def test_a_fleet_child_of_an_epic_in_todo_is_not_released(capsys):
+    """The window before the carry: an epic dragged into Todo — from Green
+    Light, unapproved — must not release a child carrying a FLEET verdict.
+    The sweep says why, in the parent-not-active words."""
+    promoted, advance = _promote(_child("Todo"))
+    assert promoted == 0
+    advance.assert_not_called()
+    assert "is not active (Todo)" in capsys.readouterr().out
+
+
+def test_a_fleet_child_of_an_epic_in_progress_is_still_released():
+    """Regression: approval is the move to In Progress, and it still releases
+    the unblocked children."""
+    promoted, advance = _promote(_child("In Progress"))
     assert promoted == 1
     advance.assert_called_once_with("DRE-2", "Todo", "Backlog")
 
 
-def test_in_progress_epic_still_promotes_unblocked_child():
-    """Regression: the pre-existing In Progress trigger is untouched."""
+def test_in_progress_epic_with_unfinished_blocker_does_not_promote():
+    """An active epic's child whose own blocker (DRE-9) is NOT yet Done stays
+    parked — activation does not bypass the blocker checks (unchanged)."""
     reconcile._write_failures.clear()
-    card = _child("In Progress")
-    with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
-        reconcile, "epic_blockers_unmet", return_value=False
-    ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
-        reconcile.linear_ops, "cmd_comment"
-    ):
-        promoted = reconcile.promote_ready(active_count=0)
-    assert promoted == 1
-    advance.assert_called_once_with("DRE-2", "Todo", "Backlog")
-
-
-def test_todo_epic_with_unfinished_blocker_does_not_promote():
-    """A Todo epic's child whose own blocker (DRE-9) is NOT yet Done stays
-    parked — Todo activation does not bypass the blocker checks (unchanged)."""
-    reconcile._write_failures.clear()
-    card = _child("Todo", blocked_by="DRE-9")
+    card = _child("In Progress", blocked_by="DRE-9")
     with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
         reconcile, "epic_blockers_unmet", return_value=False
     ), patch.object(reconcile, "card_state", return_value="In Progress"), patch.object(
@@ -124,17 +129,10 @@ def test_todo_epic_with_unfinished_blocker_does_not_promote():
     advance.assert_not_called()
 
 
-def test_backlog_epic_still_does_not_promote():
-    """Scope guard: a not-yet-activated epic (still Backlog/Planning) never
-    promotes its children — only Todo and In Progress count as active."""
-    reconcile._write_failures.clear()
-    for inactive in ("Backlog", "Planning", "Green Light", "Done"):
-        card = _child(inactive)
-        with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
-            reconcile, "epic_blockers_unmet", return_value=False
-        ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
-            reconcile.linear_ops, "cmd_comment"
-        ):
-            promoted = reconcile.promote_ready(active_count=0)
+def test_no_lane_but_in_progress_activates_children():
+    """Scope guard: an epic anywhere but In Progress — Todo included — never
+    promotes its children."""
+    for inactive in ("Todo", "Backlog", "Planning", "Green Light", "Done"):
+        promoted, advance = _promote(_child(inactive))
         assert promoted == 0, f"epic in {inactive} must not activate children"
         advance.assert_not_called()
