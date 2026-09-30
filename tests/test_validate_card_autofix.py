@@ -175,7 +175,9 @@ class GateFixFirstTest(unittest.TestCase):
     # --- epic / normal agent-label inference ---
 
     def test_epic_missing_agent_label_gets_planner_and_proceeds(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="[EPIC] Big thing")
+        # Triage, not Todo: an epic in Todo is carried out of it and never
+        # repaired (DRE-5319, tests/test_validate_card_epic_gate.py).
+        fake = FakeLinear("Triage", "**Repo:** atlas", [], title="[EPIC] Big thing")
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:planner"), fake.added_labels)
         self.assertEqual(fake.states, [])  # not bounced
@@ -281,8 +283,9 @@ class GateFixFirstTest(unittest.TestCase):
     # --- combined repair: missing BOTH label and repo, both inferable ---
 
     def test_missing_both_repaired_and_proceeds(self):
+        # Triage: an epic in Todo is carried out, not repaired (DRE-5319).
         fake = FakeLinear(
-            "Todo", "Build the allergen program.", ["initiative:atlas"],
+            "Triage", "Build the allergen program.", ["initiative:atlas"],
             title="[EPIC] Allergen",
         )
         self.assertFalse(self._run(fake))

@@ -47,6 +47,19 @@ checks — and every actor that can reach the lane is one the contract declared.
 A writer that is in neither is a path into ready work that nobody signed off,
 and that is the one that skips Planning.
 
+## An epic never enters Todo through the door (DRE-5319)
+
+DRE-5316 put `epic_todo_gate.refusal` in every seam function that can write
+Todo; nothing held it there. `epic_gate_problems()` reads the seam functions'
+bodies and names, as `epic-can-enter-todo`, any that can write Todo and neither
+calls the refusal nor hands its write to a seam function that does. The set it
+holds is discovered like everything else here — a function that places a card
+(builds the `stateId` mutation or calls one that does) and takes its lane by
+NAME, from a parameter or a lookup — so a seam nobody remembered is exactly the
+one reported. A finding lands on the function that owns the hole: `cmd_state`
+and `cmd_advance` write through `guarded_state_write`, so a refusal missing
+there is one finding, not three.
+
 ## WHAT THIS CANNOT SEE
 
 Stated here rather than left to be discovered, because a check that implies
@@ -89,6 +102,7 @@ import sys
 from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import epic_todo_gate  # noqa: E402 — the rule the Todo seams must call (DRE-5316)
 import lane_contract  # noqa: E402
 import planning_escalation  # noqa: E402
 
@@ -806,6 +820,175 @@ def default_problems(default: str | None, *, contract: dict | None = None,
 
 
 # --------------------------------------------------------------------------- #
+# the epic refusal, held in every seam that can write Todo (DRE-5319)          #
+# --------------------------------------------------------------------------- #
+
+#: The finding's name, in the output and on the standard.
+EPIC_GATE_FINDING = "epic-can-enter-todo"
+
+
+def _is_refusal_call(node) -> bool:
+    """`epic_todo_gate.refusal(...)` — the module and the function named off
+    the module itself, never restated."""
+    func = node.func
+    return (isinstance(func, ast.Attribute)
+            and func.attr == epic_todo_gate.refusal.__name__
+            and isinstance(func.value, ast.Name)
+            and func.value.id == epic_todo_gate.__name__)
+
+
+def _string_constants(fn) -> list:
+    """Every string literal in `fn` but its docstring — a docstring that names
+    the mutation and its field (guarded_state_write's does) writes nothing."""
+    doc = None
+    if fn.body and isinstance(fn.body[0], ast.Expr) \
+            and isinstance(fn.body[0].value, ast.Constant):
+        doc = fn.body[0].value
+    return [n.value for n in ast.walk(fn)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and n is not doc]
+
+
+def _mutates_state(fn) -> bool:
+    """`fn` builds a Linear issue mutation that carries `stateId` itself."""
+    consts = _string_constants(fn)
+    return (any(_ISSUE_MUTATION.search(c) for c in consts)
+            and any(re.search(r"\bstateId\b", c) for c in consts))
+
+
+def _local_calls(fn, funcs: dict) -> list:
+    """The calls in `fn` of another module-level function of the same module."""
+    return [n for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id in funcs]
+
+
+def _lane_name_parameters(funcs: dict, lane_params: dict, live: set) -> dict:
+    """Function → (positions, names) of its parameters that carry a lane NAME.
+
+    `lane_parameters()` grows these UP from the two lookups. A seam function can
+    also be HANDED a name it never looks up — `guarded_state_write` receives the
+    lane its caller resolved, for its messages and its Todo check — so they are
+    grown DOWN here too: a parameter a caller fills with a lane literal, or with
+    one of its own lane-name parameters, carries a lane name.
+    """
+    known = {name: (set(pos), set(names)) for name, (pos, names) in lane_params.items()}
+    changed = True
+    while changed:
+        changed = False
+        for caller, fn in funcs.items():
+            caller_names = known.get(caller, (set(), set()))[1]
+            for call in _local_calls(fn, funcs):
+                callee = funcs[call.func.id]
+                positional = _positional_names(callee)
+                pos, names = known.setdefault(call.func.id, (set(), set()))
+                pairs = [(i, positional[i], a) for i, a in enumerate(call.args)
+                         if i < len(positional)]
+                pairs += [(positional.index(kw.arg) if kw.arg in positional else None,
+                           kw.arg, kw.value) for kw in call.keywords if kw.arg]
+                for index, param, arg in pairs:
+                    carries = (
+                        (isinstance(arg, ast.Constant) and arg.value in live)
+                        or (isinstance(arg, ast.Name) and arg.id in caller_names)
+                    )
+                    if not carries or param in names:
+                        continue
+                    names.add(param)
+                    if index is not None:
+                        pos.add(index)
+                    changed = True
+    return {k: v for k, v in known.items() if v[0] or v[1]}
+
+
+def _seam_analysis(root: str, contract: dict | None):
+    """(parsed write layer's functions, the Todo seams, the placers), or None
+    when the write layer cannot be read."""
+    tree, _ = _parse(os.path.join(root, "scripts", SEAM_MODULE))
+    if tree is None:
+        return None
+    funcs = _functions(tree)
+    seam = set(seam_functions(root)) & set(funcs)
+    live = set(lane_contract.lane_names(status="live", contract=contract))
+    lane_params = _lane_name_parameters(funcs, lane_parameters(root), live)
+
+    placers = {name for name in seam if _mutates_state(funcs[name])}
+    changed = True
+    while changed:
+        changed = False
+        for name in seam - placers:
+            if any(c.func.id in placers for c in _local_calls(funcs[name], funcs)):
+                placers.add(name)
+                changed = True
+
+    repo = _Repo(root)
+    module_name = SEAM_MODULE[:-3]
+    todo = epic_todo_gate.TODO
+    todo_seams = set()
+    for name in placers:
+        fn = funcs[name]
+        if lane_params.get(name, ((), ()))[1]:
+            todo_seams.add(name)  # its caller names the lane: Todo among them
+            continue
+        sources = []
+        for call in ast.walk(fn):
+            if not isinstance(call, ast.Call):
+                continue
+            callee = _called_name(call.func)
+            if callee in lane_params and callee != name:
+                sources += _lane_arguments(call, lane_params[callee])
+        for arg in sources:
+            lanes = _resolve(arg, repo, module_name, fn)
+            if not lanes or todo in lanes:  # unread is never a pass
+                todo_seams.add(name)
+                break
+    return funcs, todo_seams, placers
+
+
+def todo_seams(root: str = ROOT, contract: dict | None = None) -> tuple:
+    """Every seam function that can put a card in Todo: it places a card, and it
+    takes the lane by name — handed one by its caller, or looking one up that
+    is Todo or cannot be read. `_set_state` places a card too, but it is handed
+    a state id and never a name, so the answer to "is this Todo" is its
+    caller's to give."""
+    found = _seam_analysis(root, contract)
+    return tuple(sorted(found[1])) if found else ()
+
+
+def epic_gate_problems(root: str = ROOT, contract: dict | None = None) -> list:
+    """Every Todo seam that could put an epic there (`epic-can-enter-todo`).
+
+    A seam function that can write Todo must call `epic_todo_gate.refusal`, or
+    hand its write to one that does. The finding lands on the function that
+    owns the hole — the one that places the card itself, building the mutation
+    or calling a placer that takes no lane name — so a delegator like
+    `cmd_state` is not named again for the refusal `guarded_state_write` lost.
+    """
+    found = _seam_analysis(root, contract)
+    call = f"{epic_todo_gate.__name__}.{epic_todo_gate.refusal.__name__}"
+    if found is None:
+        return [
+            f"{EPIC_GATE_FINDING}: scripts/{SEAM_MODULE} could not be read, so "
+            f"nothing here can say that every seam that writes Todo calls "
+            f"`{call}` — unread is not a pass"
+        ]
+    funcs, seams, placers = found
+    problems: list[str] = []
+    for name in sorted(seams):
+        fn = funcs[name]
+        if any(isinstance(n, ast.Call) and _is_refusal_call(n) for n in ast.walk(fn)):
+            continue
+        delegates = {c.func.id for c in _local_calls(fn, funcs)} & placers
+        if not _mutates_state(fn) and delegates and delegates <= seams:
+            continue  # its write goes through a Todo seam, which answers for it
+        problems.append(
+            f"{EPIC_GATE_FINDING}: `{name}` (scripts/{SEAM_MODULE}:{fn.lineno}) "
+            f"can put a card in {epic_todo_gate.TODO!r} and neither calls "
+            f"`{call}` nor hands its write to a seam that does — an epic can "
+            "enter Todo through it, and nothing builds an epic (DRE-5316)"
+        )
+    return problems
+
+
+# --------------------------------------------------------------------------- #
 # the check                                                                    #
 # --------------------------------------------------------------------------- #
 
@@ -823,8 +1006,10 @@ def writes(root: str = ROOT, contract: dict | None = None) -> tuple:
 def writer_problems(root: str = ROOT, contract: dict | None = None,
                     doc: dict | None = None) -> list:
     """Every writer in this repository that can reach a ready-work lane it has
-    not been declared for, and every one whose destination could not be read."""
+    not been declared for, every one whose destination could not be read, and
+    every Todo seam that does not refuse an epic (DRE-5319)."""
     problems = list(seam_problems(root))
+    problems += epic_gate_problems(root, contract)
     ready = ready_lanes(contract, doc)
     everywhere = set.intersection(
         *[set(lane_contract.lane_writers(n, contract=contract)) for n in ready]

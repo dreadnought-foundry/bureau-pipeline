@@ -23,6 +23,12 @@ label) or the inference yields a slug that isn't a real repo — the one case
 where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
 mapping (mirrors the relay's REPO_MAP, single source).
 
+One other card is stopped, and before any repair: an EPIC in Todo (DRE-5319).
+Nothing builds an epic, so the gate carries it to `epic_todo_gate`'s lane — In
+Progress when it came from there, Planning otherwise — posts the
+`epic-not-todo` refusal, emits bounced=true and repairs no label. See
+`_carried_epic`.
+
 The initiative label is the ONE route, and there is deliberately nothing behind
 it (DRE-2874). A second route used to read the prefix of the card's Linear
 project name — "Bureau: Console" → agent-bureau — which made a product's
@@ -69,6 +75,7 @@ from pathlib import Path
 
 import break_glass
 import dead_run  # the hold label has ONE definition (dead_run.HOLD_LABEL)
+import epic_todo_gate  # ONE rule: an epic is never put in Todo (DRE-5316)
 
 # IMPORTANT: this regex MUST stay in lockstep with the relay's _card_repo_slug
 # (cloud/relay/lambda_function.py in agent-bureau) so routing and validation
@@ -511,6 +518,9 @@ def cmd_gate(identifier: str) -> None:
     card = _fetch_card(linear_ops, identifier)
     description, labels = card["description"], card["labels"]
 
+    if current == "todo" and _carried_epic(linear_ops, identifier, card):
+        return  # an epic is never built — carried to its lane, build stopped
+
     gaps = missing(description, labels)
     if WANT_KNOWN_REPO in gaps:
         gaps = _resolve_unknown_slug(linear_ops, identifier, card, gaps)
@@ -585,6 +595,49 @@ def cmd_gate(identifier: str) -> None:
     # only ever yields engineer/planner, so this is engineer unless the card
     # already carried an agent:devops label alongside the gap we just repaired.
     _emit_role(_role_from_labels(labels + new_labels))
+
+
+def _carried_epic(linear_ops, identifier: str, card: dict) -> bool:
+    """Stop a build dispatched at an epic, and carry the epic to its lane
+    (DRE-5319). True when the card was an epic and the build is stopped.
+
+    The relay dispatches nothing for an epic in Todo that wears
+    `agent:planner`, so the epic this meets is one that does not: a hand-made
+    card with children, or an `[EPIC]` title nobody labelled. The fix-first
+    path below would find it clean or add its missing role, and an engineer
+    would build a whole epic as one pull request.
+
+    Epic-ness is `epic_todo_gate.is_epic_card` over the title, the children and
+    the comment bodies — never the labels, because every planner-owned one-off
+    wears `agent:planner` too. Where it goes is `epic_todo_gate`'s answer: In
+    Progress when it came to Todo from there (approved), Planning otherwise —
+    never straight to Green Light, whose only road in is through both critics
+    (DRE-5268). Each branch writes its lane as a literal so the lane-writer
+    check reads both. No label is repaired: the card is not going to be built.
+    """
+    try:
+        bodies = linear_ops.comment_bodies(identifier)
+    except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read its comments ({exc})", file=sys.stderr)
+        bodies = []
+    if not epic_todo_gate.is_epic_card(card["title"], card["has_children"], bodies):
+        return False
+    before = epic_todo_gate.lane_before_todo(linear_ops, identifier)
+    if epic_todo_gate.approved(before):
+        carried_to = epic_todo_gate.IN_PROGRESS
+        linear_ops.cmd_state(identifier, "In Progress")
+    else:
+        carried_to = epic_todo_gate.PLANNING
+        linear_ops.cmd_state(identifier, "Planning")
+    body = epic_todo_gate.refusal(
+        identifier, epic_todo_gate.TODO, card["title"], card["has_children"],
+        bodies, before, carried_to=carried_to,
+    )
+    epic_todo_gate.post_refusal(linear_ops, identifier, body)
+    print(f"{identifier} is an epic in Todo — carried to {carried_to}, not built")
+    _emit(True)
+    _emit_role("engineer")
+    return True
 
 
 def _resolve_unknown_slug(linear_ops, identifier: str, card: dict,

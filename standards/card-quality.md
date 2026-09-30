@@ -36,8 +36,21 @@ duplicates.
 
 The Todo gate is **fix-first**: it auto-repairs a missing piece when it can infer
 it (from an `initiative:<x>` label — the one route, since DRE-2874 deleted the
-Linear project-name-prefix fallback) and only **bounces** to Planning when the
-repo can't be inferred deterministically. Get it right and the gate is a no-op.
+Linear project-name-prefix fallback) and **bounces** in exactly two cases. The
+first is a repo it can't infer deterministically, which goes to Planning. The
+second is an **epic in Todo** (DRE-5319) — a card with children, an `[EPIC]`
+title or an `epic`/`roll-up` stamp, read off the card and never off its labels.
+Nothing builds an epic, so the gate repairs no label, stops the build and
+carries it out under a `🚫 epic-not-todo` refusal: back to `In Progress` when
+that is where it came to Todo from (the CEO had approved it), to `Planning`
+otherwise. The relay already dispatches nothing for an epic wearing
+`agent:planner`; this stops the one it does dispatch — an epic nobody labelled.
+The pipeline's own writers cannot put an epic in Todo at all (DRE-5316), and
+`python3 scripts/ready_lane_writers.py check` names any Todo seam that lost that
+refusal as `epic-can-enter-todo`. Nothing in this repository can stop a person
+dragging an epic into Todo in Linear or the console; one that wears
+`agent:planner` is never dispatched, so the gate never meets it, and moving it
+out is the sweep's carry (DRE-5347). Get it right and the gate is a no-op.
 
 ## Optional — only when applicable
 - **`**Design:** <png path>`** — UI cards ONLY (e.g.
