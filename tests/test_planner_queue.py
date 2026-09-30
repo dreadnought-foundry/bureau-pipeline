@@ -818,6 +818,36 @@ class Handover(_Base):
                          ("claimed", "run-C", None))
         self.assertNotIn("from run", self.board.nodes(card)[0]["body"])
 
+    def test_unreadable_card_still_posts_the_claim(self):
+        _, card = self._four_running_with_sender()
+
+        def boom(*a, **k):
+            raise linear_ops.LinearError("card read failed")
+
+        with mock.patch.object(linear_ops, "gql", boom):
+            rc, out, stdout, _ = cli_claim(card, "run-C", "in progress",
+                                           "--sent-by-run", "run-S")
+        self.assertEqual(rc, 0)
+        self.assertIn("::warning::", stdout)
+        # The run is on the ledger: its claim was posted, as an ordinary one,
+        # and the board read still sees its sender's slot passing on — not a
+        # duplicate, which would lose the review.
+        claims = [r for r in self.board.receipts(card)
+                  if r.state == "claimed" and r.run == "run-C"]
+        self.assertEqual(len(claims), 1)
+        self.assertIsNone(claims[0].from_run)
+        self.assertEqual((out["admitted"], out["duplicate"], out["inherited"]),
+                         ("true", "false", "true"))
+        self.assertFalse(any(r.state == "released" for r in self.board.receipts(card)))
+        led = self.board.ledger()
+        self.assertEqual(len(led.running), 4)
+        # S's release at its end leaves C's claim holding the card's one slot.
+        pq.post_released(linear_ops, card, run_id="run-S", repo=REPO,
+                         trigger_state="in progress", because="finished")
+        led = self.board.ledger()
+        self.assertIn(card, [r.card for r in led.running])
+        self.assertEqual(len(led.running), 4)
+
     def test_iii_sent_by_a_run_with_no_claim(self):
         fill_running(self.board, 4)
         card = self.board.add("DRE-EP", lane="In Progress")

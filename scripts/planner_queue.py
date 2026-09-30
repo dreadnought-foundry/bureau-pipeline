@@ -762,9 +762,15 @@ def _answer(admitted: bool, place: int = 0, waiting: int = 0, duplicate: bool = 
 
 
 def settle_claim(linear_ops, identifier, *, run_id, repo, trigger_state, reason=None,
-                 cards=None, now=None, config=None) -> dict:
+                 cards=None, now=None, config=None, sent_by_run=None) -> dict:
     """The read half of a claim, after this run's `claimed` receipt is posted:
-    admitted, a duplicate, or waiting at its place (and the receipt for it)."""
+    admitted, a duplicate, or waiting at its place (and the receipt for it).
+
+    `sent_by_run` covers the handover whose card read failed: an earlier open
+    claim on this card held by the run that asked for this one is that run's
+    slot passing on, not a duplicate. The card holds one slot either way —
+    the ledger counts a card once — and the sender's release leaves this
+    run's claim standing."""
     cfg = config or load()
     if cards is None:
         cards = read_board(linear_ops)
@@ -778,7 +784,11 @@ def settle_claim(linear_ops, identifier, *, run_id, repo, trigger_state, reason=
         raise PlannerQueueError(
             f"{identifier}: this run's claim is not on the ledger read")
     mine_key = led.slot_key(mine)
-    if any(r.run != mine.run and led.slot_key(r) < mine_key for r in view.open_claims()):
+    earlier = [r for r in view.open_claims()
+               if r.run != mine.run and led.slot_key(r) < mine_key]
+    if earlier and sent_by_run and all(r.run == str(sent_by_run) for r in earlier):
+        return _answer(True, waiting=len(led.waiting), inherited=True)
+    if earlier:
         post_released(linear_ops, identifier, run_id=run_id, repo=repo,
                       trigger_state=trigger_state, because="duplicate")
         return _answer(False, waiting=len(led.waiting), duplicate=True)
@@ -794,14 +804,23 @@ def _handover(linear_ops, identifier, *, run_id, repo, trigger_state, sent_by_ru
               cfg) -> str:
     """`inherited`, `posted` (the claim is written but its sender's claim had
     already closed), or `ordinary` (nothing written: claim as any run does)."""
-    view = _View.of(_nodes(_read_card(linear_ops, identifier)), _utcnow(), cfg, identifier)
-    held = view.open_claims()
+    try:
+        card = _read_card(linear_ops, identifier)
+    except Exception as exc:  # noqa: BLE001 — the claim must still be posted
+        _warn(f"planner slot for {identifier}: could not read the card for the "
+              f"handover, claiming as any run does — {exc}")
+        return "ordinary"
+    held = _View.of(_nodes(card), _utcnow(), cfg, identifier).open_claims()
     if not held or held[-1].run != str(sent_by_run):
         return "ordinary"
     post_claim(linear_ops, identifier, run_id=run_id, repo=repo,
                trigger_state=trigger_state, from_run=sent_by_run)
     # Read back: S may have released between the read above and the write.
-    view = _View.of(_nodes(_read_card(linear_ops, identifier)), _utcnow(), cfg, identifier)
+    try:
+        card = _read_card(linear_ops, identifier)
+    except Exception:  # noqa: BLE001 — the claim is posted; settle it the long way
+        return "posted"
+    view = _View.of(_nodes(card), _utcnow(), cfg, identifier)
     for i, r in enumerate(view.receipts):
         if (r.state == "claimed" and r.run == str(run_id)
                 and r.from_run == str(sent_by_run) and i in view.inherited
@@ -842,7 +861,8 @@ def claim(linear_ops, identifier, *, run_id, repo, trigger_state, sent_by_run=No
             post_claim(linear_ops, identifier, run_id=run_id, repo=repo,
                        trigger_state=trigger_state)
         return settle_claim(linear_ops, identifier, run_id=run_id, repo=repo,
-                            trigger_state=trigger_state, reason=reason, config=cfg)
+                            trigger_state=trigger_state, reason=reason, config=cfg,
+                            sent_by_run=sent_by_run)
     except Exception as exc:  # noqa: BLE001 — fail open, loudly
         _warn(f"planner slot for {identifier}: admitted without a ledger read — {exc}")
         return _answer(True)
