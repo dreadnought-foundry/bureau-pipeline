@@ -372,8 +372,8 @@ class TestThePlannerPromptSplitsIntoSiblings:
     @PROMPTS
     def test_the_instruction_sits_beside_the_subissue_line(self, sid):
         prompt = _planner_prompts()[sid]
-        start, _, _ = _gated(prompt)
-        assert 0 < prompt.index("linear_ops.py subissue") - start < 400
+        _, end, _ = _gated(prompt)
+        assert 0 < prompt.index("linear_ops.py subissue", end) - end < 200
 
     @PROMPTS
     def test_it_is_gated_on_the_step_output(self, sid):

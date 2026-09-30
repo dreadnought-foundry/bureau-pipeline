@@ -1905,6 +1905,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "linear_ops.py comment {1} \"<comment>\"",
+      "step": "Plan epic",
+      "kind": "not-an-act",
+      "means": "The line in the planner's prompt that tells it, for a returned child of an epic split into siblings under its parent (DRE-5242), where to post the note naming those siblings before it cancels the original.",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own note naming the siblings it filed. The act the pipeline takes on that card is the cancel beside it, and the card-quality standard's split rule is its reason; a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "linear_ops.py comment {1} \"<comment>\"",
+      "step": "Plan epic — on the next rung",
+      "kind": "not-an-act",
+      "means": "The line in the planner's prompt that tells it, for a returned child of an epic split into siblings under its parent (DRE-5242), where to post the note naming those siblings before it cancels the original. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own note naming the siblings it filed. The act the pipeline takes on that card is the cancel beside it, and the card-quality standard's split rule is its reason; a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
       "step": "Wave route — write the wave plan — on the next rung",
       "kind": "not-an-act",
