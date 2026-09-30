@@ -291,6 +291,44 @@ class TestAmendmentReturnsToPlanning:
         notices = [c for c in ops.comments_on("DRE-2700") if mid_epic.REAPPROVAL_TAG in c]
         assert len(notices) == 1
 
+    def test_an_amended_epic_dragged_to_todo_is_not_re_approved(self):
+        """DRE-5347: Todo is not an approval. An amended epic someone drags from
+        Planning to Todo still owes its re-approval — the sweep carries it back
+        out, and the artifact must not already say it was re-green-lit."""
+        ops = _FakeOps(epic_description="The epic.", epic_state="In Progress")
+        mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.AMENDMENT,
+                           because="the fix must be split and its order reversed")
+        ops.epic_state = "Todo"
+        report = mid_epic.refresh_epic_growth(ops, "DRE-2700")
+        assert report["re_approved"] == []
+        assert mid_epic.parse_artifact(ops.epic_description)["amendments"][0][
+            "re_green_lit"
+        ] is None
+        assert mid_epic.REAPPROVAL_TAG not in "\n".join(ops.comments_on("DRE-2700"))
+
+
+class TestTodoIsNotAGreenLight:
+    """DRE-5347: the move to In Progress is the only approval. A history entry
+    into Todo — an epic dragged there from Green Light unapproved — must not
+    stamp a green light, or the children filed after it read as approved."""
+
+    def test_a_todo_entry_is_not_a_green_light(self):
+        history = [{"createdAt": GREEN_LIGHT, "toState": {"name": "Todo"}}]
+        assert mid_epic.green_light_from(history) is None
+
+    def test_the_in_progress_entry_is_the_green_light_not_a_later_todo(self):
+        history = [
+            {"createdAt": GREEN_LIGHT, "toState": {"name": "In Progress"}},
+            {"createdAt": LATER, "toState": {"name": "Todo"}},
+        ]
+        assert mid_epic.green_light_from(history) == GREEN_LIGHT
+
+    def test_the_green_light_lanes_are_the_promoters_activation_set(self):
+        """Two readers of one fact: what reconcile promotes under and what this
+        module records as a green light. Pinned together so they cannot drift."""
+        assert mid_epic.EPIC_ACTIVE_LANES == reconcile.EPIC_ACTIVE_STATES
+        assert "Todo" not in mid_epic.EPIC_ACTIVE_LANES
+
 
 # ===========================================================================
 # 5: the artifact moves in the same motion, and silent growth is surfaced
