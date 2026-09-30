@@ -72,7 +72,7 @@ writes this makes: `plan.yml` — the run that splits a roll-up — must be a
 permitted writer of both destinations.
 
 Every Linear-touching function takes the `linear_ops` MODULE as its first
-argument — the convention `wave_commitment` and `mid_epic` use — so the pure
+argument — the convention `mid_epic` uses — so the pure
 core needs no API key and the tests need no network.
 
 CLI:

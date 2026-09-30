@@ -1791,7 +1791,7 @@ def parent_inherited_labels(parent_labels: list[str], epic: bool = False) -> lis
     `epic=True` is the exception (DRE-4698): a CHILD EPIC — the seam rule's
     remedy, `subissue --epic` — is a container the planner owns, so its role is
     `agent:planner` and no build role is applied at all. Stripping one after
-    the create (what `wave_commitment.py` does) leaves a window in which the
+    the create (what the retired wave filer did) leaves a window in which the
     relay can dispatch an engineer at the container.
     """
     low = [l.lower() for l in (parent_labels or [])]

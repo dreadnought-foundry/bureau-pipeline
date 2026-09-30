@@ -1088,13 +1088,6 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "arrival.note + wave_commitment.lane_starts_the_run()",
-      "kind": "undeclared-act",
-      "means": "An epic whose blocker epics all finished arrives in the planning lane. The lane entry is what starts its planner run (the relay's dispatch, DRE-3664), so the note names that and the stalled-planning alarm rather than claiming a run the sweep did not start.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Since DRE-3664 the sweep no longer dispatches the run itself — the relay does, on the lane entry, as it already did for the wave's first epic since DRE-3659 — so the receipt carries no started/not-started half: a receipt that vouched for the relay's dispatch would be the DRE-1254 false-receipt class."
-    },
-    {
-      "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-advanced Backlog → Triage",
       "kind": "undeclared-act",
       "means": "The last blocker epic reached Done, so the dependent epic advances on its own.",
@@ -1246,41 +1239,6 @@
       "kind": "undeclared-act",
       "means": "The Todo gate refuses a card it cannot repair and returns it to Planning.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is asserted byte for byte by `tests/test_writers_point_at_planning.py`, so a trailer here has to be additive in the way this epic means it — which is an argument for a row, not against one."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "adopted, commitment_comment(",
-      "kind": "not-an-act",
-      "means": "An epic adopted into an approved wave carries its position in the approved sequence.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The sequence was approved by a human; this records where each epic sits in it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "child[\"identifier\"],",
-      "kind": "not-an-act",
-      "means": "Each child epic of a committed wave carries its position in the approved sequence.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The sequence was approved by a human; this records where each epic sits in it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "arrival_note(card, wave) + lane_starts_the_run()",
-      "kind": "undeclared-act",
-      "means": "An epic whose turn has come arrives in the lane that owes it a plan. The lane entry is what starts its planner run (the relay's dispatch, DRE-3659), so the note names that and the stalled-planning alarm rather than claiming a run it did not start.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Since DRE-3659 the commit no longer dispatches the run itself — the relay does, on the lane entry — so the receipt carries no started/not-started half: a receipt that vouched for the relay's dispatch would be the DRE-1254 false-receipt class."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "The wave's sequence changed:",
-      "kind": "not-an-act",
-      "means": "The record that an approved wave's order or membership changed, and why.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Approving a wave approves the shape and the order, and both were always going to move — what a change owes is a record for the approver, and this is it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "drop_comment(wave, entry(updated, key), because)",
-      "kind": "not-an-act",
-      "means": "An epic dropped from an approved wave is told so on its own card, with the reason.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The other half of the change record above, said where the dropped epic's own readers will see it."
     },
     {
       "file": ".github/workflows/agent-fix.yml",

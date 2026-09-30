@@ -96,11 +96,8 @@ EPICS. Before promoting an epic's children, it checks that EPIC's own
 not Done, none of that epic's children promote this sweep — regardless of the
 epic's own state. And when a blocker epic reaches Done, every epic blocked-by
 it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
-(which re-triggers the planner), or, for an epic recorded committed-in-sequence
-inside an approved wave, to the lane no epic leaves without a plan artifact, so
-it writes its own plan now and comes back for its own green light (DRE-2846).
-Never to In Progress either way, so the Green Light human-approval gate is
-preserved. Both behaviors fail SAFE on unreadable relation data (don't promote /
+(which re-triggers the planner). Never to In Progress, so the Green Light
+human-approval gate is preserved. Both behaviors fail SAFE on unreadable relation data (don't promote /
 don't advance on uncertainty).
 
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
@@ -224,9 +221,6 @@ import stranded_fix  # noqa: E402
 import structural_repair  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
-# DRE-2846: ONE source for "is this epic committed in sequence inside an
-# approved wave, and has it had a green light of its own?"
-import wave_commitment  # noqa: E402
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -3304,12 +3298,10 @@ def advance_unblocked_epics(done_epic: str) -> None:
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
     that epic's own blocker epics are now Done AND it is still in Backlog, move
-    it to **Triage** (which triggers the planner) — or, when the epic carries a
-    committed-in-sequence record, to the lane that owes a plan artifact, which
-    is what an epic inside an approved wave is waiting its turn for (DRE-2846).
-    NEVER to In Progress — the Green Light approval gate stays human-owned, and
-    a wave's approval was never an approval of the epics under it. Idempotent
-    and safe:
+    it to **Triage** (which triggers the planner). Every dependent takes that
+    one path — the wave route that sent some elsewhere is retired (DRE-4700).
+    NEVER to In Progress — the Green Light approval gate stays human-owned.
+    Idempotent and safe:
       * only acts on epics still in Backlog (never re-advances one already past
         it, never thrashes an operator-parked or already-running epic);
       * never revives a Canceled/Duplicate/Done dependent;
@@ -3339,45 +3331,6 @@ def advance_unblocked_epics(done_epic: str) -> None:
             continue  # idempotent: only ever advance a still-Backlog epic
         if epic_blockers_unmet(dep):
             continue  # another blocker epic isn't Done yet — hold
-        # Progressive commitment (DRE-2846). An epic committed in sequence
-        # inside an approved wave has NOT been approved to build — the wave's
-        # approval covered the shape and the order. Its turn sends it to the
-        # lane no epic leaves without a plan artifact, so the document the CEO
-        # green-lights is written NOW, not when the wave was approved. Only a
-        # card carrying the record pays for the green-light read.
-        # Fails SAFE like the rest of this function: a record we cannot read is
-        # not a record we may act on, so the epic takes the unchanged Triage
-        # path rather than the sweep guessing or freezing.
-        # The green light is read off the pass's epic record (DRE-3644): the
-        # epic gate just above read `dep` into it, so this costs nothing; a
-        # miss passes None and reads the epic alone, as before.
-        try:
-            bodies = linear_ops.comment_bodies(dep)
-            arrival = wave_commitment.turn_arrival(
-                dep, bodies,
-                mid_epic.last_green_light(
-                    linear_ops, dep, issue=epic_records([dep]).get(dep),
-                )
-                if wave_commitment.state(bodies) is not None else None,
-            )
-        except Exception as e:  # noqa: BLE001 — an unreadable record is unknown
-            print(f"epic-advance: could not read {dep}'s wave commitment: {e}")
-            arrival = None
-        if arrival is not None:
-            # The move IS the trigger. The relay dispatches `agent-plan` for
-            # every card entering the lane (agent-bureau's lambda_function.py
-            # — DRE-1913, label or no label since DRE-3030), so the sweep asks
-            # for nothing itself. It used to (DRE-2846), on the belief that
-            # nothing dispatched off the lane, and every
-            # epic after a wave's first then cost two Agent Plan runs — the
-            # second starting a hosted runner to learn it was the duplicate.
-            # One dispatcher per transition (DRE-3659 for the wave's own turn,
-            # DRE-3664 here); `dedupe_dispatch.py plan-gate` stays as the
-            # backstop, not the common path.
-            linear_ops.cmd_advance(dep, arrival.lane, "Backlog")
-            linear_ops.cmd_comment(
-                dep, arrival.note + wave_commitment.lane_starts_the_run())
-            continue
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
             dep,
@@ -3656,22 +3609,13 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     # On a full sweep the close ran first and every one of them is already in
     # the record, so this line spends nothing at all.
     #
-    # The same read serves both green lights below (DRE-3644): the epic's, and
-    # the one a candidate carrying a wave-commitment record is checked against
-    # — named here off comment bodies the Backlog read already carried, so a
-    # committed card costs the batch one identifier rather than a read of its
-    # own.
+    # The same read serves the epic's green light below (DRE-3644).
     epic_records({
         (card.get("parent") or {}).get("identifier")
         for card in candidates
         if card_repo(card) == REPO_SLUG
         and ((card.get("parent") or {}).get("state") or {}).get("name")
         in EPIC_ACTIVE_STATES
-    } | {
-        card["identifier"]
-        for card in candidates
-        if card_repo(card) == REPO_SLUG
-        and wave_commitment.state(card_comment_bodies(card)) is not None
     })
     for index, card in enumerate(candidates):
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
@@ -3681,9 +3625,9 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         if card_repo(card) != REPO_SLUG:
             continue  # deliberately silent: another repo's card, see above
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-        # The comments come free with the candidates query (DRE-2929), and three
-        # gates below read them — the epic test, the wave record and the
-        # verdict. One comprehension, hoisted to the first of them.
+        # The comments come free with the candidates query (DRE-2929), and two
+        # gates below read them — the epic test and the verdict. One
+        # comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
         # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
         # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
@@ -3730,31 +3674,6 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 f"('{HOLD_LABEL}' label) — never auto-promoted; skipping"
             )
             continue
-        # Progressive commitment (DRE-2846). An epic inside an approved wave is
-        # recorded `committed-in-sequence`: the wave's approval covered the
-        # SHAPE and the ORDER and nothing else, so it is not an approval to
-        # build. Read off the card's own RECORD, deliberately not off the epic
-        # skip above — a wave's epic is skipped there for BEING an epic, and
-        # that is a different fact from "the wave approved its order". The
-        # green-light history is bought only for a card that carries the record.
-        if wave_commitment.state(bodies) is not None:
-            committed = wave_commitment.promotion_refusal(
-                card["identifier"], bodies,
-                mid_epic.last_green_light(
-                    linear_ops, card["identifier"],
-                    issue=epic_records([card["identifier"]]).get(card["identifier"]),
-                ),
-            )
-            if committed is not None:
-                print(
-                    f"promotion: {card['identifier']} is not being promoted — "
-                    f"{committed.splitlines()[0]}"
-                )
-                _surface_once(
-                    card["identifier"], wave_commitment.refusal_tag(committed),
-                    committed,
-                )
-                continue
         parent = card.get("parent")
         if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
             # DRE-1893 unchanged: a child must not build while its epic is
@@ -3871,9 +3790,9 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             # light is. An epic whose green light Linear cannot report abstains
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
             # There is no green light to read for a card with no epic.
-            # `bodies` is read once above, before the wave-commitment gate — a
-            # pure comprehension over the query's own inline comments, so
-            # hoisting it buys the second reader nothing and costs nothing.
+            # `bodies` is read once above, at the epic test — a pure
+            # comprehension over the query's own inline comments, so hoisting
+            # it buys the second reader nothing and costs nothing.
             if epic_id is not None:
                 if epic_id not in green_light:
                     # Off the record the epic gate above just read (DRE-3644).
