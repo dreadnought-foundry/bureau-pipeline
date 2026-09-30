@@ -19,7 +19,8 @@ WHAT IS UNDER TEST:
   * The age gate runs BEFORE anything reads the card's comments, in both
     watchdogs.
   * `active_cards()` is read ONCE per sweep, shared across its call sites —
-    `SWEPT_LANES` already unions the lane sets those callers ask for.
+    `SWEPT_LANES` already unions the lane sets those callers ask for. The one
+    sanctioned read outside it is the planner line's Green Light (DRE-5178).
   * A whole sweep over a fixed fake board stays inside a stated request budget,
     and tripling the board does not move it. The next N+1 fails this suite
     rather than the quota.
@@ -143,6 +144,8 @@ class FakeLinear:
         self.active = list(active)
         self.backlog = list(backlog)
         self.queries: list[str] = []
+        #: The variables every board read was sent with, in order.
+        self.board_variables: list[dict] = []
 
     # -- counters ---------------------------------------------------------
     @property
@@ -161,6 +164,7 @@ class FakeLinear:
     def gql(self, query, variables=None):
         self.queries.append(query)
         if _BOARD_READ in query:
+            self.board_variables.append(dict(variables or {}))
             wanted = set((variables or {}).get("states") or ())
             nodes = [c for c in self.active if c["state"]["name"] in wanted]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
@@ -424,12 +428,25 @@ def _fixed_board(scale: int = 1):
 def test_the_board_is_read_once_per_sweep():
     """Four call sites — both watchdogs, the Intake gate and the nudge loop —
     and SWEPT_LANES already unions the lanes they ask for, so one read serves
-    all of them."""
+    all of them.
+
+    ONE sanctioned exception (DRE-5178): the planner line's backstop reads
+    Green Light, which is outside SWEPT_LANES on purpose — widening the union
+    would hand the CEO's queue to every reader of it, the hand-built move to
+    In Review first. That read is its own paged query, it is the only one, and
+    it is of Green Light and nothing else."""
     active, backlog = _fixed_board()
     fake = _run_sweep(FakeLinear(active=active, backlog=backlog))
-    assert fake.board_reads == 1, (
-        f"{fake.board_reads} board reads in one sweep — active_cards() must be "
-        "read once and shared"
+    lanes = [tuple(v["states"]) for v in fake.board_variables]
+    swept = [s for s in lanes if s == tuple(reconcile.SWEPT_LANES)]
+    others = [s for s in lanes if s != tuple(reconcile.SWEPT_LANES)]
+    assert len(swept) == 1, (
+        f"{len(swept)} reads of SWEPT_LANES in one sweep — active_cards() must "
+        "be read once and shared"
+    )
+    assert others == [("Green Light",)], (
+        f"the only board read outside SWEPT_LANES is the planner line's Green "
+        f"Light: {others}"
     )
 
 
@@ -449,14 +466,22 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # --------------------------------------------------------------------------
 # 6: the budget itself
 # --------------------------------------------------------------------------
-# What one full sweep may spend on Linear, over ANY board. TWO paged reads —
-# the active lanes and the Backlog — and nothing else. It used to be two plus
-# the Intake age-out's per-card stated-reason reads, capped per sweep by
-# construction; DRE-4141 deleted the age-out, so the lane costs the count it
-# takes off the board read it already paid for and nothing more. Raising this
-# number is a decision, and it is made here rather than discovered by a quota
-# exhaustion at 11am (2026-09-01: 2,500/hr, seven hours of a stopped fleet).
-SWEEP_REQUEST_BUDGET = 2
+# What one full sweep may spend on Linear, over ANY board. THREE paged reads —
+# the active lanes, the Backlog and Green Light — and nothing else. It used to
+# be two plus the Intake age-out's per-card stated-reason reads, capped per
+# sweep by construction; DRE-4141 deleted the age-out, so the lane costs the
+# count it takes off the board read it already paid for and nothing more.
+# Raising this number is a decision, and it is made here rather than discovered
+# by a quota exhaustion at 11am (2026-09-01: 2,500/hr, seven hours of a stopped
+# fleet).
+#
+# 2 -> 3 (DRE-5178): the planner line's backstop reads Green Light, because a
+# run whose epic has just moved there still holds its planner slot until its
+# release step, and a line that could not see that claim would hand the slot
+# out twice. It is one paged read per sweep, a function of the lane and never of
+# the cards in it, and Green Light stays outside SWEPT_LANES so no other reader
+# starts acting on the CEO's queue.
+SWEEP_REQUEST_BUDGET = 3
 
 
 def test_one_sweep_stays_within_the_request_budget():

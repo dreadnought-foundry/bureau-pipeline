@@ -50,10 +50,12 @@ import reconcile  # noqa: E402
 THIS = "dreadnought-foundry/agent-bureau"
 OTHER = "dreadnought-foundry/portico"
 CFG = planner_queue.load()
-CAP = CFG["max_running"]
+# The cap and the line's bound through their one reader each — only
+# planner_queue spells those two keys (test_planner_queue.TheCap).
+CAP = planner_queue.cap()
 TTL = CFG["claim_ttl_minutes"]
 GRACE = CFG["dispatched_grace_minutes"]
-BOUND = CFG["waiting_max_minutes"]
+BOUND = planner_queue.waiting_max()
 
 
 @pytest.fixture(autouse=True)
