@@ -112,6 +112,28 @@ class TestTheLabelIsNotTheClassification:
             "the shape that stops for a human is the shape that is an epic"
         )
 
+    def test_a_roll_up_is_an_epic(self):
+        """A roll-up is an epic whose children are epics (DRE-4699): the
+        planner hangs `[EPIC]` children off it, and the sweep must never
+        promote it. The stamp alone carries that — no title, no children yet."""
+        assert mid_epic.is_epic("the fleet programme", False, "roll-up") is True
+        assert mid_epic.is_epic("the fleet programme", False, shape="roll-up") is True
+
+    def test_the_roll_up_shape_it_reads_is_a_shape_the_vocabulary_carries(self):
+        """Bound the same way as `EPIC_SHAPE`: rename the shape in
+        `config/planning-shapes.json` and this fails rather than the stamp
+        quietly ceasing to mean anything. The roll-up is the route that is
+        neither the one-off nor the epic."""
+        import planning_route
+
+        assert mid_epic.ROLL_UP_SHAPE == "roll-up"
+        assert mid_epic.ROLL_UP_SHAPE in planning_shape.shapes()
+        others = [
+            r.shape for r in planning_route.routes()
+            if r.shape not in (planning_route.ONE_OFF_SHAPE, mid_epic.EPIC_SHAPE)
+        ]
+        assert others == [mid_epic.ROLL_UP_SHAPE]
+
     def test_no_cycle_stands_in_the_way(self):
         """The claim the `EPIC_SHAPE` comment used to make, tested rather than
         asserted in prose: importing `planning_shape` back into `mid_epic` would
@@ -217,6 +239,13 @@ class TestEveryCallerIsWalked:
     def test_subissue_refusal_lets_a_stamped_epic_through(self):
         assert mid_epic.subissue_refusal(
             "the intake front door", False, shape="epic"
+        ) is None
+
+    def test_subissue_refusal_lets_a_stamped_roll_up_through(self):
+        """The roll-up planner files its child epics with `subissue --epic`
+        under a parent with no `[EPIC]` title and no children yet."""
+        assert mid_epic.subissue_refusal(
+            "the fleet programme", False, shape="roll-up"
         ) is None
 
     def _sweep_card(self, stamp: str, *, children: int = 0) -> dict:
@@ -340,6 +369,19 @@ class TestEveryCallerIsWalked:
             title="the intake front door",
             labels=["agent:planner", "repo:atlas", "initiative:bureau"],
             comments=[_stamp("epic")],
+        )
+        with card.patched():
+            created = linear_ops.cmd_subissue("DRE-3013", "a child", "## What\n- work")
+        assert created["identifier"] == "DRE-3040"
+
+
+    def test_cmd_subissue_creates_the_first_child_of_a_stamped_roll_up(self):
+        """DRE-4699: a roll-up-stamped parent with no `[EPIC]` title and no
+        children is where the planner files its first child epic."""
+        card = _FakeParent(
+            title="the fleet programme",
+            labels=["agent:planner", "repo:atlas", "initiative:bureau"],
+            comments=[_stamp("roll-up")],
         )
         with card.patched():
             created = linear_ops.cmd_subissue("DRE-3013", "a child", "## What\n- work")

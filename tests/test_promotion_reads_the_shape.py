@@ -67,6 +67,7 @@ PARKED = routing_verdict.verdict_comment("PARKED", "we decided not to build this
 # here would let the vocabulary drift without this file noticing.
 ONE_OFF_STAMP = planning_shape.shape_comment("one-off", "one card, one pull request")
 EPIC_STAMP = planning_shape.shape_comment("epic", "a decomposition the planner owns")
+ROLL_UP_STAMP = planning_shape.shape_comment("roll-up", "split into child epics")
 
 # The label at the heart of the defect: the relay requires it before it will
 # dispatch the planner, so EVERY card off the front door wears it.
@@ -252,6 +253,20 @@ class TestAnEpicIsStillSkipped:
         assert board.promote() == 0
         assert board.lane_of("DRE-3019") == "Backlog"
         held = _lines_naming(capsys, "DRE-3019")
+        assert len(held) == 1, f"expected exactly one line, got {held}"
+        assert "epics are promoted by humans, never by the sweep" in held[0]
+
+    def test_a_card_stamped_roll_up_is_skipped_with_the_human_promotes_message(self, capsys):
+        """DRE-4699. A roll-up is the parent its child epics roll up to — never
+        approved for building, never built — so the sweep skips it exactly as
+        it skips an epic, on the stamp alone."""
+        board = _Board(
+            _card(identifier="DRE-3023", title="the fleet programme",
+                  comments=[ROLL_UP_STAMP, FLEET])
+        )
+        assert board.promote() == 0
+        assert board.lane_of("DRE-3023") == "Backlog"
+        held = _lines_naming(capsys, "DRE-3023")
         assert len(held) == 1, f"expected exactly one line, got {held}"
         assert "epics are promoted by humans, never by the sweep" in held[0]
 

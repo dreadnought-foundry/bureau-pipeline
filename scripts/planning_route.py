@@ -14,8 +14,9 @@ This module is the branch. It reads the shape stamped by `planning_shape.py`
     it at all, which is the one case where it does — see below.
   * **epic** — the existing path, unchanged: plan artifact, children, green
     light. `plan.yml` performs it; nothing here re-implements it.
-  * **wave** — handed to the wave route, which owes a decomposition into epics
-    before anything can be approved (DRE-2845 builds the far side).
+  * **roll-up** — handed to the planner, which splits it into child epics under
+    the card, each planned and green-lit on its own; the card itself is never
+    approved for building (DRE-4699; the plan.yml route is DRE-4718's).
 
 ## The routing is the file's, not this module's
 
@@ -82,7 +83,7 @@ CLI:
 
     python3 scripts/planning_route.py check           # validate the routes
     python3 scripts/planning_route.py decide DRE-N [--github-output F]
-    python3 scripts/planning_route.py exit DRE-N      # the one-off / wave exit
+    python3 scripts/planning_route.py exit DRE-N      # the one-off / roll-up exit
 """
 
 from __future__ import annotations
@@ -510,14 +511,12 @@ def _one_off_note(route: Route, verdict: str | None, reason: str) -> str:
     return "\n".join(lines)
 
 
-def _wave_note(route: Route) -> str:
+def _roll_up_note(route: Route) -> str:
     return "\n".join([
         f"{ROUTE_MARK} {ROUTE_TAG}: **{route.shape}** — {planning_shape.means(route.shape)}",
         "",
-        "This is too big to approve as one plan: what a green light would be "
-        "given on is not written yet. So it is handed to the wave route, which "
-        "owes a decomposition into epics before anyone is asked to approve "
-        "anything.",
+        "This is too big to approve as one plan: it is split into child epics "
+        "under this card, each planned and green-lit on its own.",
         "",
         f"**Where it goes:** {route.destination}. "
         f"**Who takes it from there:** {route.actor}.",
@@ -552,8 +551,8 @@ def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
             )
         note = _one_off_note(route, verdict, reason)
     else:
-        verdict, reason = None, "a wave owes a decomposition before anything is built"
-        note = _wave_note(route)
+        verdict, reason = None, "a roll-up is split into child epics before anything is built"
+        note = _roll_up_note(route)
     return Exit(
         route=route,
         destination=route.destination,
