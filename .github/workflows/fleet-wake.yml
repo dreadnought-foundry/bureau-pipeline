@@ -13,11 +13,12 @@
 # HOLDS it, and `release-train.yml` is `workflow_call` — a cron inside it
 # never fires for a caller. So "the schedule in the train" is this: one
 # workflow, in the train's own repo, whose two cron lines are DERIVED from
-# `release_train.FLEET_WINDOW` (`python3 scripts/release_train.py wake`), and
-# which dispatches every roster repo's own stub at the opening. The fleet's
-# hours are one edit, in one file, in one repo — the window every surface
-# inherits and the crons that wake it read the same constant, and
-# tests/test_fleet_wake.py fails if either moves alone.
+# `release_train.FLEET_WAKE` (05:00 PT; `python3 scripts/release_train.py
+# wake`), and which dispatches every roster repo's own stub at that sweep. The
+# sweep is one edit, in one file, in one repo, and tests/test_fleet_wake.py
+# fails if the constant and these crons move apart. It was derived from
+# `release_train.FLEET_WINDOW`'s opening until DRE-5266 made the fleet default
+# window `always` — round the clock, with no opening to derive a cron from.
 #
 # WHAT IT DECIDES: NOTHING. It wakes trains; each train then applies its own
 # rules — the brake, the window, the spacing, green-at-SHA — exactly as it

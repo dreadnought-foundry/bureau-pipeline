@@ -221,29 +221,38 @@ place."* Before that it was written twice in every repo with a train — the
 — and on 2026-09-21 Portico's train slept until 07:03 PT because DRE-4357 had
 moved one copy and not the other.
 
-The one declaration is `FLEET_WINDOW` in `scripts/release_train.py`, today
-`05:00-21:00 PT`:
+The one declaration is `FLEET_WINDOW` in `scripts/release_train.py`, and it is
+`always` — round the clock (DRE-5266). The CEO, on 2026-09-29: *"They should
+all default to the round-the-clock. … They can change it if they want but they
+should default to round the clock."*
 
 * **A surface that omits `window` inherits it.** The schema check accepts the
   omission, and the train's lines name it as the fleet default. Omitting it is
   what a surface on the fleet's hours should do.
-* **A surface that declares its own keeps it**, and every line the train prints
-  about that window says it overrides the fleet default — so a surface that is
-  deliberately different reads as deliberate, and one that is accidentally
-  stale is visible on its own run.
+* **A surface that declares a different window keeps it**, and every line the
+  train prints about that window says it overrides the fleet default — so a
+  surface that is deliberately different reads as deliberate, and one that is
+  accidentally stale is visible on its own run.
+* **A surface that declares `always` anyway is on the fleet default**, and its
+  lines say so. Declaring the default overrides nothing.
+
+The wake-up's sweep is a second declaration, `FLEET_WAKE` in the same file, at
+`05:00 PT` — the CEO's 2026-09-20 *"the train should start at 5 am"*. It was the
+opening of `FLEET_WINDOW` until that window became `always`, which has no
+opening to derive a cron from.
 
 **The wake-up is a workflow in bureau-pipeline, not a cron in the train.**
 GitHub runs a `schedule:` trigger only from a workflow file on the default
 branch of the repo that HOLDS it, and this train is `workflow_call` — a cron
 inside it never fires for a caller. So `.github/workflows/fleet-wake.yml` in
 bureau-pipeline carries the schedule for the whole fleet. Its two cron lines
-are derived from `FLEET_WINDOW` with `zoneinfo` (`python3
+are derived from `FLEET_WAKE` with `zoneinfo` (`python3
 scripts/release_train.py wake-owners` / `wake`), never typed: UTC has no
 timezone field, so one line is standard time and the other daylight time, and
-`tests/test_fleet_wake.py` fails if either moves alone or if the window moves
+`tests/test_fleet_wake.py` fails if either moves alone or if the sweep moves
 without them.
 
-At the opening it reads `config/repo-map.json` and dispatches
+At the sweep it reads `config/repo-map.json` and dispatches
 `release-train.yml` in every roster repo that carries a caller stub —
 `gh workflow run release-train.yml -R <repo>`, the DRE-3559 re-arm's own
 primitive, here cross-repo under a bot App token minted per owner (an

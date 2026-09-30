@@ -138,9 +138,11 @@ the shape that buys it, and they apply to every repo in the fleet.
    `main` that runs every suite.** Narrowing is only safe where something still
    runs the whole thing: agent-bureau (DRE-3656), Portico (DRE-4804), and
    bureau-pipeline in `.github/workflows/tests.yml` under its own card. Crons
-   stay off the hour and apart from each other, and outside the release window
-   (`FLEET_WINDOW` in `scripts/release_train.py`, `standards/release-train.md`)
-   — a nightly competing with a train for runners delays both.
+   stay off the hour and apart from each other, and at least an hour clear of
+   the fleet wake-up's sweep (`FLEET_WAKE` in `scripts/release_train.py`,
+   `standards/release-train.md`) — the fleet default window is round the clock
+   (DRE-5266), so the sweep that wakes every train at once is the minute to
+   stay clear of, and a nightly competing with a train for runners delays both.
 
 3. **A red nightly is repaired.** The repo's Red-Main Repair stub
    (`.github/workflows/red-main-repair.yml`) is the rail, and it **must not

@@ -262,16 +262,21 @@ def _utc_minute(cron: str) -> int:
     return hour * 60 + minute
 
 
+def _gap_minutes(cron_a: str, cron_b: str) -> int:
+    """How many minutes apart two daily crons fire. The distance wraps
+    midnight: 23:50 and 00:10 are twenty minutes apart, not a day."""
+    gap = abs(_utc_minute(cron_a) - _utc_minute(cron_b))
+    return min(gap, 24 * 60 - gap)
+
+
 @pytest.mark.parametrize("wake", release_train.wake_crons())
 def test_the_nightly_stays_clear_of_the_fleet_wake_up(wake):
     # A nightly competing with the release trains for runners delays both
     # (standards/engineering.md rule 2). The fleet default window is `always`
     # (DRE-5266), so the minute every train is woken at once is the fleet
     # wake-up's sweep — read from its one declaration, both cron lines, never
-    # a restated offset. The distance wraps midnight: 23:50 and 00:10 are
-    # twenty minutes apart, not a day.
-    gap = abs(_utc_minute(_tests_crons()[0]) - _utc_minute(wake))
-    gap = min(gap, 24 * 60 - gap)
+    # a restated offset.
+    gap = _gap_minutes(_tests_crons()[0], wake)
     assert gap >= WAKE_MARGIN_MINUTES, (
         f"the nightly {_tests_crons()[0]!r} fires {gap} minutes from the fleet "
         f"wake-up's {wake!r} ({release_train.FLEET_WAKE} PT) — keep it at "
@@ -279,11 +284,22 @@ def test_the_nightly_stays_clear_of_the_fleet_wake_up(wake):
     )
 
 
-def test_the_wake_margin_rejects_a_nightly_at_the_sweep():
-    # The non-vacuous half: the same distance, measured for a nightly sitting
-    # on the sweep itself, is inside the margin.
-    wake = release_train.wake_crons()[0]
-    assert abs(_utc_minute(wake) - _utc_minute(wake)) < WAKE_MARGIN_MINUTES
+@pytest.mark.parametrize("wake", release_train.wake_crons())
+def test_the_wake_margin_rejects_a_nightly_at_the_sweep(wake):
+    # The non-vacuous half: a nightly sitting on either wake-up line is
+    # inside the margin, and one an hour or more away is outside it.
+    assert _gap_minutes(wake, wake) == 0 < WAKE_MARGIN_MINUTES
+    minute, hour = (int(f) for f in wake.split()[:2])
+    later = f"{minute} {(hour + 1) % 24} * * *"
+    assert _gap_minutes(later, wake) == WAKE_MARGIN_MINUTES
+
+
+def test_the_gap_wraps_midnight():
+    # Without the wraparound, 23:50 and 00:10 UTC read as 1420 minutes apart
+    # and a nightly twenty minutes from a wake-up would pass the margin.
+    assert _gap_minutes("50 23 * * *", "10 0 * * *") == 20
+    assert _gap_minutes("10 0 * * *", "50 23 * * *") == 20
+    assert _gap_minutes("50 23 * * *", "10 0 * * *") < WAKE_MARGIN_MINUTES
 
 
 def test_the_schedule_comment_states_the_rule_against_the_wake_up():
