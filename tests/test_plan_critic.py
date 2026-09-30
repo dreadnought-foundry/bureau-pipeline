@@ -1773,6 +1773,110 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
                           f"{name} never says what a Done child means")
 
 
+#: What the nightly regeneration did to this module on 2026-09-30 (DRE-5314):
+#: bureau-pipeline #584 added a DRE-5280 death row whose declared files are
+#: SHIPPED_CARD's own, and `test_the_state_block_is_input_and_never_a_finding_
+#: of_its_own` — which read the live file — gained a finding it never expected.
+#: The rows here carry every file a fixture card in this module declares, in
+#: pairs, and every tell carries a rate, so a test still reading the live
+#: ledger has something to trip over.
+REGENERATED_ROWS = (
+    ("DRE-5280", ["turn-cap-death"], 1,
+     ["scripts/plan_critic.py", "tests/test_plan_critic.py"], "UNKNOWN", 9.0),
+    ("DRE-5281", ["turn-cap-death"], 1,
+     ["scripts/reconcile.py", "standards/plan-critic.md", "a/b.py"],
+     "UNKNOWN", 9.0),
+    ("DRE-5282", ["turn-cap-death"], 1,
+     ["README.md", "CHANGELOG.md"], "UNKNOWN", 9.0),
+)
+REGENERATED_TELLS = [
+    {"tell": tell, "of": 2, "died": 2,
+     "sentence": f"cards carrying the {tell} tell died 2 of 2 times"}
+    for tell in split_ledger.TELLS
+]
+
+#: The calls that read the split ledger. A test whose source makes one of them
+#: is a test whose expectations the ledger can change.
+LEDGER_READERS = ("mechanical_findings(", "findings_note(", "ledger_findings(",
+                  "ledger_footprint_matches(", "ledger_tell_matches(",
+                  "ledger_death_rows(")
+
+
+class TheLiveLedgerCannotChangeTheseTests(unittest.TestCase):
+    """DRE-5314. `config/split-ledger.json` is regenerated every night, so a
+    test that reads it for its expected findings goes red the night a row
+    lands on its fixture's files — and the ledger PR that added the row cannot
+    merge. Every test here passes its ledger explicitly; this class writes an
+    overlapping row into a temporary ledger, points the default read at it,
+    and runs those tests again."""
+
+    def setUp(self):
+        from unittest import mock
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "split-ledger.json")
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(_ledger(*REGENERATED_ROWS, by_tell=REGENERATED_TELLS), f)
+        self.default_reads = []
+        real_load = split_ledger.load
+
+        def load(path=None):
+            if path is None:
+                self.default_reads.append(path)
+            return real_load(path)
+
+        for patch in (mock.patch.object(split_ledger, "LEDGER_PATH", self.path),
+                      mock.patch.object(split_ledger, "load", load)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _run(self, tests):
+        result = unittest.TestResult()
+        unittest.TestSuite(tests).run(result)
+        return [f"{test.id()}: " + next(
+                    (line for line in trace.splitlines() if "Error:" in line),
+                    trace.splitlines()[-1])
+                for test, trace in result.failures + result.errors]
+
+    def test_the_regenerated_row_reaches_a_caller_that_passes_no_ledger(self):
+        """The premise, so the rest cannot pass vacuously: the temporary file
+        is the one the production default reads, and its row does produce the
+        finding #584's run reported."""
+        done = _cards(("DRE-3210", SHIPPED_CARD), state="Done")
+        self.assertTrue(
+            [f for f in pc.mechanical_findings(done) if "DRE-5280" in f])
+        self.assertTrue(self.default_reads)
+
+    def test_the_state_block_test_is_unchanged_by_the_row(self):
+        test = ACriticReadsTheChildsStateAndNotOnlyItsText(
+            "test_the_state_block_is_input_and_never_a_finding_of_its_own")
+        self.assertEqual(self._run([test]), [])
+        self.assertEqual(self.default_reads, [],
+                         "the state-block test still reads the live ledger")
+
+    def test_no_test_in_this_module_reads_the_live_ledger(self):
+        """Discovered off each test's source, never listed, so a test added
+        tomorrow that forgets its ledger is caught here rather than by the
+        next night's regeneration."""
+        import inspect
+
+        loader = unittest.TestLoader()
+        tests = [
+            case(name)
+            for case in vars(sys.modules[__name__]).values()
+            if isinstance(case, type) and issubclass(case, unittest.TestCase)
+            and case is not type(self)
+            for name in loader.getTestCaseNames(case)
+            if any(call in inspect.getsource(getattr(case, name))
+                   for call in LEDGER_READERS)
+        ]
+        self.assertGreater(len(tests), 20, "the discovery found nothing to run")
+        self.assertEqual(self._run(tests), [])
+        self.assertEqual(self.default_reads, [],
+                         "a test in this module still reads the live ledger")
+
+
 class ThePostMarkerReleasesTheChildren(unittest.TestCase):
     """DRE-3059 — the second half of DRE-2721's sentence gets a reader.
 
