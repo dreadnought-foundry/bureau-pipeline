@@ -7296,7 +7296,8 @@ def report_fleet_reviewer_outage() -> None:
          neutral receipt and verdicts, so every hold the sweep above now posts
          is invisible here by that module's own rule.
       2. THE FLEET WITNESS — a second repository's crashes reach this sweep
-         only through the medic's note on the Linear card, and `active_cards()`
+         only through the medic's note on the Linear card, attributed to the
+         repository its run link names (DRE-5291), and `active_cards()`
          has already been read once for this sweep and is served from the pass
          cache. So this step costs ZERO Linear requests, which is the whole
          reason the fleet half is affordable at all.
@@ -7322,11 +7323,12 @@ def report_fleet_reviewer_outage() -> None:
         local.extend(reviewer_down.outcomes_from_pr(pr, REPO_SLUG))
     witness = []
     for card in active_cards():
-        repo = card_repo(card)
-        if not repo:
-            continue
+        # THIS sweep's repository, never the card's `repo:` label (DRE-5291):
+        # a note is attributed to the run it links, and one naming this repo
+        # is skipped — its crashes are already counted off the listing above.
         witness.extend(reviewer_down.witness_from_comments(
-            repo, card["identifier"], linear_ops.window_nodes(card.get("comments")),
+            REPO_SLUG, card["identifier"],
+            linear_ops.window_nodes(card.get("comments")),
         ))
     threshold = reviewer_down.threshold_from_registry()
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")

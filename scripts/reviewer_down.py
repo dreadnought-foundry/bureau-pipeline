@@ -46,6 +46,24 @@ note has two shapes:
 A detector that read only the generic literal would have been blind to exactly
 the outage this epic exists to catch.
 
+## A witness belongs to the repository its run link names (DRE-5291)
+
+Never to the `repo:` label of the card the medic happened to post it on. On
+2026-09-29 one crash — agent-bureau-demo #25 — was counted twice by the
+sandbox's own sweep: once off the pull request's notice, and once off the
+medic's note on DRE-4570, a `repo:bureau-pipeline` card, as a crash in a
+SECOND repository. The spread rule fired on a single crash (DRE-5273), and
+most of the "2 repos" outage cards filed since 2026-09-12 read the same way.
+
+The pull request's notice carries no run link, so the two sightings cannot be
+paired by run id or by time (operator, 2026-09-29, answering the pre-approval
+critic). Instead: a sweep skips a note whose run link names ITS OWN
+repository, because it already counts that repository's crashes from its
+pull requests; a note naming another repository is one run there; and a note
+with no readable run link — the generic 429 line carries none — is a run in
+`UNKNOWN_REPO`, which never counts toward the spread rule. Ledger lines
+already written stay exactly as they were.
+
 NOT a witness, and both absences are load-bearing. The hold receipt
 (`reviewer_environment.HOLD_TAG`) records a SECOND crash whose evidence note is
 already counted, and for a non-review workflow it is not about the reviewer at
@@ -56,8 +74,13 @@ already seen, so counting it would count one outage twice.
 
 `decide()` answers with exactly one of `close`, `append`, `file`, `nothing`.
 Close comes first because a reviewer that is back makes every other answer
-wrong; append before file because a second card for one outage is the noise
-this module exists to remove; and `file` only once the threshold is met.
+wrong — and "back" means a verdict in a repository the card counted a crash
+in, posted after that repository's last counted crash (DRE-5291), because a
+healthy repository's verdict says nothing about the one that is down. A card
+whose ledger names no repository has none to be wrong about, so a verdict
+anywhere after its last counted crash closes it; append
+before file because a second card for one outage is the noise this module
+exists to remove; and `file` only once the threshold is met.
 
 CLI:
 
@@ -97,6 +120,12 @@ TITLE_PREFIX = "Reviewer down since "
 #: Every run the card has counted is one line, and the line is the record: the
 #: sweep re-reads them next time instead of re-deriving what it already knew.
 LEDGER_PREFIX = "run repo="
+
+#: The repository of a witness note that carries no readable run link. It is
+#: a run, and it is never a repository: the spread rule counts real ones only
+#: (DRE-5291). `-` because the ledger line needs a non-blank token, and it is
+#: what the line already writes for a missing pull request.
+UNKNOWN_REPO = "-"
 
 # --------------------------------------------------------------------------- #
 # the witness markers                                                          #
@@ -162,6 +191,13 @@ _LOG_PREFIX = reviewer_environment._LOG_PREFIX
 # a reader would want them: the class DRE-3416 was, then the phrase, then the
 # two generic shapes.
 _ERROR_PHRASES = ("ReferenceError", "native binary not found", "Error:", "error:")
+
+# The run a medic note is about: `evidence_note` ends `The failed run: <url>`.
+# The REPOSITORY is the url's second path segment, lowercased the way
+# reconcile.yml slugs its own (`basename "$GITHUB_REPOSITORY" | tr …`).
+_RUN_URL = re.compile(
+    r"https://github\.com/[^/\s()<>\[\]]+/(?P<repo>[^/\s()<>\[\]]+)/actions/runs/\d+"
+)
 
 _ACTION_REF = re.compile(r"(anthropics/claude-code-action@\S+)([ \t]*#[^\n]*)?")
 
@@ -321,17 +357,38 @@ def outcomes_from_pr(pr: dict, repo: str) -> list:
     return out
 
 
-def witness_from_comments(repo: str, identifier: str, comments: list) -> list:
+def witness_repo(body: str) -> str:
+    """The repository a medic note's run link names, or `UNKNOWN_REPO`.
+
+    The LAST link, because the note ends with the failed run and anything
+    earlier is prose the note quotes.
+    """
+    found = _RUN_URL.findall(body or "")
+    return found[-1].lower() if found else UNKNOWN_REPO
+
+
+def witness_from_comments(local_repo: str, identifier: str, comments: list) -> list:
     """A second repository's crashes, seen through the card every sweep reads.
 
     One outcome per comment whose FIRST LINE carries either witness marker —
     per COMMENT, not per marker, because the environment note opens with both
     and one crashed run is one outcome.
+
+    `local_repo` is the SWEEP's repository, never the card's `repo:` label
+    (DRE-5291). Each note is attributed to the repository its run link names,
+    and a note naming `local_repo` is skipped: this sweep already counts that
+    repository's crashes off its pull requests, and the notice there carries
+    no run link to pair the two by.
     """
+    local = (local_repo or "").lower()
     out = []
     for comment in comments or []:
-        line = merge_gate.first_line(comment.get("body") or "")
+        body = comment.get("body") or ""
+        line = merge_gate.first_line(body)
         if not any(marker in line for marker in WITNESS_MARKERS):
+            continue
+        repo = witness_repo(body)
+        if repo == local:
             continue
         at = comment.get("createdAt") or ""
         out.append(Outcome(repo, at, COULD_NOT_RUN,
@@ -420,26 +477,53 @@ def _dedupe(outcomes) -> list:
     return kept
 
 
+def _repos(outcomes) -> set:
+    """The repositories a set of crashes names — `UNKNOWN_REPO` is none."""
+    return {o.repo for o in outcomes if o.repo != UNKNOWN_REPO}
+
+
 def _counts(outcomes) -> tuple:
     """(runs, repos, first_at) over a de-duplicated set of crashed runs."""
     unique = _dedupe(outcomes)
     if not unique:
         return 0, 0, ""
-    return len(unique), len({o.repo for o in unique}), unique[0].at
+    return len(unique), len(_repos(unique)), unique[0].at
 
 
-def _first_verdict_after(local, filed_at: str) -> Outcome | None:
-    """The earliest LOCAL verdict posted after the card was filed.
+def _first_verdict_after(local, filed_at: str, crashes,
+                         anywhere: bool = False) -> Outcome | None:
+    """The earliest LOCAL verdict that says a crashed repository is back.
 
     Local only: a verdict is proof the reviewer ran HERE, and a witness outcome
-    is a note about somewhere else. Earliest, because the card should record
-    the moment the reviewer came back, not the most recent time it was seen up.
+    is a note about somewhere else. And only in a repository the card's ledger
+    counts a crash in, posted after that repository's last counted crash and
+    after the card was filed (DRE-5291): DRE-5273 was closed 22 seconds after
+    filing by a verdict in bureau-pipeline, whose reviewer was never down, while
+    the sandbox's was still dead. Earliest, because the card should record the
+    moment the reviewer came back, not the most recent time it was seen up.
+
+    `anywhere` is the card whose ledger names no repository — three generic
+    medic notes with no run link meet the run rule alone. There is no
+    repository to be wrong about, so any local verdict after the card was
+    filed and after the last counted crash closes it; without that, the card
+    could never close itself and no later outage could file its own.
     """
     filed = _dt(filed_at)
     if filed is None:
         return None
+    last = {}
+    for crash in crashes:
+        key = UNKNOWN_REPO if anywhere else crash.repo
+        when = _dt(crash.at)
+        if when is not None and (key not in last or when > last[key]):
+            last[key] = when
+
+    def edge(repo):
+        return max(filed, last.get(UNKNOWN_REPO if anywhere else repo, filed))
+
     candidates = [o for o in local
-                  if o.kind == VERDICT and (_dt(o.at) or filed) > filed]
+                  if o.kind == VERDICT and (anywhere or o.repo in last)
+                  and (_dt(o.at) or filed) > edge(o.repo)]
     return min(candidates, key=_sort_key) if candidates else None
 
 
@@ -453,7 +537,7 @@ def _threshold_met(window, threshold: Threshold) -> bool:
     evidence is that nothing has succeeded since.
     """
     crashes = [o for o in window if o.kind == COULD_NOT_RUN]
-    if len({o.repo for o in crashes}) >= threshold.repos:
+    if len(_repos(crashes)) >= threshold.repos:
         return True
     last_verdict = None
     for outcome in window:
@@ -482,16 +566,28 @@ def decide(local, witness, open_card, now, threshold, first_run=None) -> Decisio
     new_lines = [ledger_line(o) for o in new]
 
     if open_card is not None:
-        back = _first_verdict_after(local, open_card.filed_at)
+        # The repositories are the LEDGER's; the last crash in each also
+        # counts one this sweep sees but has not appended yet. A ledger that
+        # names none is closed by a verdict anywhere after its last crash.
+        ledger = ledger_from_text(text)
+        crashed = _repos(ledger)
+        if crashed:
+            counted = [o for o in ledger + new if o.repo in crashed]
+        else:
+            counted = ledger + new
+        back = _first_verdict_after(local, open_card.filed_at, counted,
+                                    anywhere=not crashed)
         if back is not None:
             # First, and before anything else: a reviewer that is back makes
             # every other answer on this card wrong.
+            whose = "its" if crashed else "the"
             return Decision(
                 CLOSE,
                 first_at=back.at,
                 resolve_note=(
                     f"reviewer back at {pt(back.at)} — first successful "
-                    f"verdict after this card was filed ({back.src})"
+                    f"verdict in {back.repo} after {whose} last counted crash "
+                    f"and after this card was filed ({back.src})"
                 ),
             )
         if new_lines:
@@ -570,7 +666,10 @@ def card_body(first_run, lines) -> str:
     body.extend([
         "",
         "The sweep closes this card by itself on the first successful verdict "
-        "posted after it was filed. Nothing else needs to happen here.",
+        "posted after it was filed in a repository listed above, once that "
+        "repository's last crash is behind it — or, when no line names a "
+        "repository, in any repository once the last crash is behind it. "
+        "Nothing else needs to happen here.",
     ])
     return "\n".join(body)
 

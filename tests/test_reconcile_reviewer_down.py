@@ -160,10 +160,14 @@ def _medic_note():
     )
 
 
-def _environment_note():
+def _environment_note(run_url=RUN_URL):
     """DRE-3430's evidence note, built by its own WRITER — never restated."""
     signature = reviewer_environment.SIGNATURES[0]
-    return reviewer_environment.evidence_note(signature, SHA, RUN_URL)
+    return reviewer_environment.evidence_note(signature, SHA, run_url)
+
+
+#: A run in ANOTHER repository than this sweep's own (`agent-bureau`).
+ATLAS_RUN_URL = "https://github.com/EveryBite/atlas/actions/runs/34512000777"
 
 
 def _hold_receipt():
@@ -454,21 +458,24 @@ def _file_world(witness_body):
 
 
 @pytest.mark.parametrize(
-    "witness", ["generic", "environment"],
+    "witness, repos", [("generic", 1), ("environment", 2)],
     ids=["generic-medic-note", "environment-evidence-note"],
 )
-def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness):
-    """ACCEPTANCE: two local receipts plus one witness on a card labelled
-    another repo → ONE card, titled from the decision, described by
-    `card_body`, receipted once, and CREATED in Triage — never moved there
-    (DRE-5292)."""
-    body = _medic_note() if witness == "generic" else _environment_note()
+def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness, repos):
+    """ACCEPTANCE: two local receipts plus one witness → ONE card, titled from
+    the decision, described by `card_body`, receipted once, and CREATED in
+    Triage — never moved there (DRE-5292). The environment note names a run
+    in atlas, so it is a second repository; the generic note names no run, so
+    it is a third run and no repository at all (DRE-5291) — the run rule
+    files it either way."""
+    body = (_medic_note() if witness == "generic"
+            else _environment_note(ATLAS_RUN_URL))
     written, _ = _run_outage(**_file_world(body))
 
     assert len(written.created) == 1, "ONE card for one outage — never two"
     title, description, slug = written.created[0]
     assert title.startswith(reviewer_down.TITLE_PREFIX)
-    assert title.endswith("— 3 runs, 2 repos"), title
+    assert title.endswith(f"— 3 runs, {repos} repos"), title
     assert slug == reconcile.REPO_SLUG
     assert "The three usual suspects" in description, "the body is card_body's"
     assert reviewer_down.LEDGER_PREFIX in description
@@ -482,6 +489,18 @@ def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness):
     )
     assert written.created_kw[0].get("lane") == "Triage"
     assert written.states == [], "created in its lane, so nothing moves it"
+
+
+def test_a_note_naming_this_sweeps_own_repository_is_not_counted_again():
+    """DRE-5291: the note is attributed to the repository in its run link —
+    here this sweep's own — never to the card's `repo:` label. This sweep
+    already counts its own crashes off its pull requests, so the note adds
+    nothing: two crashes in one repository, below both rules."""
+    world = _file_world(_environment_note(RUN_URL))
+    world["cards"] = [_card(repo="bureau-pipeline",
+                            bodies=[(_environment_note(RUN_URL), _iso(6))])]
+    written, _ = _run_outage(**world)
+    assert written.created == [], "one repository's two crashes file nothing"
 
 
 def test_the_filed_card_carries_the_first_runs_evidence():
