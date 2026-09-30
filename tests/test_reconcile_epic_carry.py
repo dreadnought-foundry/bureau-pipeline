@@ -204,6 +204,28 @@ def test_an_epic_in_another_lane_is_not_read():
     assert lin.comments == []
 
 
+def test_a_card_handed_over_outside_todo_is_never_written():
+    """The carry writes on the strength of the lane its read reports, so it
+    asks that lane itself: a read that hands it an In Progress epic — a stub
+    that ignores the lane asked for, or a snapshot gone stale — moves nothing."""
+    lin = _Linear({EPIC: "Green Light"})
+    reconcile._write_failures.clear()
+    with mock.patch.object(
+        reconcile, "active_cards", return_value=[_card(state="In Progress")]
+    ), mock.patch.object(
+        reconcile.linear_ops, "gql", side_effect=lin.gql
+    ), mock.patch.object(
+        reconcile.linear_ops, "cmd_state", side_effect=lin.cmd_state
+    ), mock.patch.object(
+        reconcile.linear_ops, "cmd_comment", side_effect=lin.cmd_comment
+    ), mock.patch.object(
+        reconcile.linear_ops, "count_comments", side_effect=lin.count_comments
+    ):
+        reconcile.carry_epics_out_of_todo()
+    assert lin.states == []
+    assert lin.comments == []
+
+
 def test_another_repos_epic_is_left_to_its_own_sweep():
     lin = _Linear({EPIC: "In Progress"})
     _sweep([_card(labels=("repo:portico", "agent:planner"))], lin)
@@ -270,7 +292,7 @@ def test_the_two_destinations_are_literals_the_lane_check_reads():
         and first <= int(w.where.rsplit(":", 1)[1]) <= last
     }
     assert found == {"In Progress", "Planning"}
-    assert ready_lane_writers.problems() == []
+    assert ready_lane_writers.writer_problems() == []
 
 
 # --------------------------------------------------------------------------
