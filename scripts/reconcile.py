@@ -2358,7 +2358,8 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
     2. FREE SLOTS. While one is free, the earliest waiting card recorded
        against THIS repo is fired through `plan_run.fire` with the card
        record the board read returned, its recorded trigger and its recorded
-       reason — never `sent_by_run`: the sweep is not the card's planner run,
+       reason, on the plan event whatever its labels (DRE-5366) — never
+       `sent_by_run`: the sweep is not the card's planner run,
        and the run it starts must be judged as any dispatch. The `dispatched`
        receipt follows only a confirmed dispatch (`redispatch`'s rule); a
        failure goes on the write ledger, the card stays waiting, and nothing
@@ -2443,7 +2444,7 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
             continue
         try:
             ok, err = plan_run.fire(records[ident], REPO, trigger_state=stand.trigger,
-                                    reason=stand.reason)
+                                    reason=stand.reason, event=plan_run.PLAN_EVENT)
         except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
             ok, err = False, f"redispatch {ident}: {e}"
         if not ok:
