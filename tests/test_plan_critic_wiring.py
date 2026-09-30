@@ -448,10 +448,14 @@ class TheBoundIsWired(unittest.TestCase):
         retries = [s for s in agent_steps()
                    if str(s.get("id") or "").endswith("_retry")]
         for step in retries:
-            turns.remove(int(re.search(r"--max-turns\s+(\d+)",
-                                       step["with"]["claude_args"]).group(1)))
-        # TWO of the agent steps carry an EXPRESSION rather than a literal, so
-        # the literal scan above cannot see either; each one's worst case is
+            # A re-run whose ceiling is an expression (the re-plans, DRE-5288)
+            # was never in the literal scan, so there is nothing to take out.
+            literal = re.search(r"--max-turns\s+(\d+)",
+                                step["with"]["claude_args"])
+            if literal:
+                turns.remove(int(literal.group(1)))
+        # FOUR of the agent steps carry an EXPRESSION rather than a literal, so
+        # the literal scan above cannot see them; each one's worst case is
         # added by name so the arithmetic keeps counting it.
         #
         #   * the post-approval review, sized per plan since DRE-3241 — and
@@ -462,14 +466,17 @@ class TheBoundIsWired(unittest.TestCase):
         #   * the one-off read, sized per card since DRE-4381, whose worst case
         #     is likewise its retry cap — the re-read after a turn-ceiling
         #     death.
+        #   * the two re-plans — after the first critic and after the second —
+        #     sized per plan since DRE-5288, whose worst case is the cap.
         #
-        # A THIRD expression would drop out of this arithmetic, which is what
+        # A FIFTH expression would drop out of this arithmetic, which is what
         # the count below refuses.
-        expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP)
+        expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP,
+                       pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP)
         self.assertEqual(
             len(turns), len(agent_steps()) - len(retries) - len(expressions),
-            "every agent step but the two sized reads carries a literal "
-            "ceiling; a third expression would drop out of this arithmetic",
+            "every agent step but the four sized ones carries a literal "
+            "ceiling; a fifth expression would drop out of this arithmetic",
         )
         turns.extend(expressions)
         # 7 s/turn is the upper end measured on completed portico runs, plus

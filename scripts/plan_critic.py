@@ -133,6 +133,10 @@ CLI:
                                      and raised ONCE after a turn-ceiling death
                                      recorded on the card's own thread (JSON
                                      array on stdin). Never exits non-zero.
+  replan-turns [--children N] [--github-output F]
+                                     `max_turns=<int>` for a re-plan, sized
+                                     from the plan's child count (DRE-5288).
+                                     Never exits non-zero.
   sight --this <EPIC>                epics in flight (JSON array) on stdin
   cycle-start --epic <EPIC> [--record]
                                      the note that opens a planning attempt,
@@ -356,6 +360,52 @@ def post_review_turns(children) -> int:
         return POST_REVIEW_TURNS_DEFAULT
     sized = POST_REVIEW_TURNS_BASE + POST_REVIEW_TURNS_PER_CARD * n
     return max(POST_REVIEW_TURNS_FLOOR, min(POST_REVIEW_TURNS_CAP, sized))
+
+
+# ── The re-plan's turn ceiling (DRE-5288) ─────────────────────────────────────
+#
+# Every re-plan step — after the first critic, after the second, and each one's
+# re-run on the next rung — carried a literal `--max-turns 60`. Epic DRE-5268's
+# ten-card revision FINISHED at 86 turns (`is_error: false`, run 36657291632)
+# and the action failed the step anyway; the retry hit the same wall, because a
+# turn ceiling is deterministic, and the epic sat in Planning. A revision
+# re-reads the critic's findings and rewrites cards, so its work is the size of
+# the plan — the same shape as `post_review_turns` above, one agent over.
+#
+#   * BASE 50 — the fixed reading before any card is touched: the context, the
+#     planner brief and card standard re-read, the critic's findings, the
+#     epic's children listed.
+#   * PER CARD 6 — a read and an edit of each card, and a re-check against the
+#     standard. Ten cards get 110, 1.28x the 86 DRE-5268's revision took.
+#   * FLOOR 60 — nothing gets less room than the literal it had.
+#   * CAP 120 — under the planner's own 140: a revision of a plan that exists
+#     is never more work than writing it from nothing. It is also what the job
+#     clock is budgeted against, two re-plans at the cap
+#     (tests/test_plan_critic_wiring.py).
+REPLAN_TURNS_BASE = 50       # context, brief, standard, findings, the children
+REPLAN_TURNS_PER_CARD = 6    # a read, an edit and a re-check per card
+#: The smallest budget a re-plan gets — the literal every re-plan step had.
+REPLAN_TURNS_FLOOR = 60
+#: Above this a bigger number only moves the wall (DRE-2924).
+REPLAN_TURNS_CAP = 120
+#: What an UNKNOWN child count gets — the most room there is, never the floor
+#: a ten-card revision died at. A Linear read that failed is unknown, not zero
+#: (standards/console-honesty.md rule 2).
+REPLAN_TURNS_DEFAULT = REPLAN_TURNS_CAP
+
+
+def replan_turns(children) -> int:
+    """`--max-turns` for a re-plan of a plan with `children` cards. Never
+    raises, for `post_review_turns`' reason: the workflow interpolates this,
+    and a bare `--max-turns` is a run that never starts."""
+    try:
+        n = int(str(children).strip())
+    except (TypeError, ValueError):
+        return REPLAN_TURNS_DEFAULT
+    if n < 0:
+        return REPLAN_TURNS_DEFAULT
+    sized = REPLAN_TURNS_BASE + REPLAN_TURNS_PER_CARD * n
+    return max(REPLAN_TURNS_FLOOR, min(REPLAN_TURNS_CAP, sized))
 
 
 # --- The ONE-OFF critic's ceiling, sized from the card (DRE-4381) ------------
@@ -3365,6 +3415,16 @@ def _cmd_post_turns(args) -> int:
     return 0
 
 
+def _cmd_replan_turns(args) -> int:
+    """The re-plan's ceiling as a step output, sized from the plan (DRE-5288).
+    Always 0, for `post-turns`' reason — and the workflow carries a static
+    fallback on top of this."""
+    turns = replan_turns(args.children)
+    _write_outputs(args.github_output, [("max_turns", str(turns))])
+    print(f"re-plan ceiling: {turns} turns (children={args.children!r})")
+    return 0
+
+
 def _cmd_one_off_turns(args) -> int:
     """The one-off read's ceiling as a step output, sized from the card and
     raised once after a turn-ceiling death (DRE-4381). Always 0, for
@@ -3526,6 +3586,13 @@ def main(argv: list[str]) -> int:
     t.add_argument("--children", default="")
     t.add_argument("--github-output", default=None)
     t.set_defaults(fn=_cmd_post_turns)
+
+    p = sub.add_parser("replan-turns",
+                       help="the re-plan's turn ceiling, sized from the plan")
+    # A string, for `post-turns --children`' reason.
+    p.add_argument("--children", default="")
+    p.add_argument("--github-output", default=None)
+    p.set_defaults(fn=_cmd_replan_turns)
 
     o = sub.add_parser(
         "one-off-turns",
