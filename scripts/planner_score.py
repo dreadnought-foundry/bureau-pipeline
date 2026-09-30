@@ -1016,7 +1016,7 @@ def _proof_and_demo_rows(epic, children) -> list:
 
 
 def score(epic: dict, children: list, *, doc: dict | None = None,
-          replay: dict | None = None) -> dict:
+          replay: dict | None = None, ledger=None) -> dict:
     """Score one epic's plan against what its children actually did.
 
     Every row comes out carrying exactly one outcome — agree, disagree,
@@ -1027,6 +1027,9 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
     `replay`, when given, is `{"epic", "context", "plan"}` from a replay run.
     A replay whose context contains the historical plan is DISCARDED: `score`
     raises `LeakedPlan` rather than reporting a number it cannot stand behind.
+
+    `ledger` is the split ledger `split-rate` reads; `None` reads the shipped
+    `config/split-ledger.json` (DRE-5314).
     """
     doc = doc if doc is not None else load()
     leaks: list[str] = []
@@ -1039,7 +1042,7 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
     rows = (_footprint_rows(children) + _collision_rows(children)
             + _size_rows(children) + _readiness_rows(children)
             + _routing_rows(children) + _approval_rows(epic, children)
-            + _split_rows(children) + _proof_and_demo_rows(epic, children))
+            + _split_rows(children, ledger) + _proof_and_demo_rows(epic, children))
 
     declared = dimensions(doc)
     final: list[dict] = []
@@ -1661,6 +1664,18 @@ def _stdin_json(default):
     return json.loads(raw) if raw else default
 
 
+#: `--ledger` on the two commands that read the split ledger (DRE-5314).
+LEDGER_HELP = ("read this split ledger instead of the shipped "
+               "config/split-ledger.json")
+
+
+def _ledger_arg(path):
+    """The ledger `--ledger` names, or `None` for the shipped file. A path
+    that was named and cannot be read fails loudly: falling back to the
+    shipped file would score against a ledger nobody asked for."""
+    return _split_ledger().load(path) if path else None
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
@@ -1675,6 +1690,7 @@ def main(argv=None) -> int:
     scoring.add_argument("--epic", required=True)
     scoring.add_argument("--out", help="write the result as JSON")
     scoring.add_argument("--report", help="write the markdown report")
+    scoring.add_argument("--ledger", help=LEDGER_HELP)
 
     monthly = sub.add_parser(
         "collect-month",
@@ -1688,6 +1704,7 @@ def main(argv=None) -> int:
     rate.add_argument("--month", help="read the month live instead of stdin")
     rate.add_argument("--out", help="write the result as JSON")
     rate.add_argument("--report", help="write the markdown report")
+    rate.add_argument("--ledger", help=LEDGER_HELP)
 
     card = sub.add_parser("replay-card",
                           help="build and CHECK the throwaway replay epic")
@@ -1736,7 +1753,8 @@ def main(argv=None) -> int:
         payload = _stdin_json({})
         result = score(payload.get("epic") or {"identifier": args.epic},
                        payload.get("children") or [],
-                       replay=payload.get("replay"))
+                       replay=payload.get("replay"),
+                       ledger=_ledger_arg(args.ledger))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2)
@@ -1756,7 +1774,8 @@ def main(argv=None) -> int:
                    else _stdin_json({}))
         children = (payload.get("children") if isinstance(payload, dict)
                     else payload) or []
-        result = split_rate(children, injected_at=ledger_injected_at())
+        result = split_rate(children, injected_at=ledger_injected_at(),
+                            ledger=_ledger_arg(args.ledger))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2)

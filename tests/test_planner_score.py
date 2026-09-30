@@ -183,6 +183,7 @@ class ContaminationTest(unittest.TestCase):
             epic(),
             [child("DRE-1"), child("DRE-2", title="PROOF: watch it run")],
             doc=doc,
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "proof-and-demo"]
         self.assertEqual(len(rows), 1)
@@ -198,6 +199,7 @@ class ContaminationTest(unittest.TestCase):
             epic(),
             [child("DRE-1"), child("DRE-2", title="PROOF: watch it run")],
             doc=doc,
+            ledger=NO_SPLITS,
         )
         row = next(r for r in result["rows"] if r["dimension"] == "proof-and-demo")
         self.assertEqual(row["claimed"], "present")
@@ -217,13 +219,13 @@ class ContaminationTest(unittest.TestCase):
             child("DRE-3", title="DEMO: show the CEO", files=("d.py",),
                   pr=("d.py", "b.py")),
         ]
-        honest = planner_score.score(epic(), children, doc=doc)
+        honest = planner_score.score(epic(), children, doc=doc, ledger=NO_SPLITS)
         self.assertEqual(honest["counts"]["excluded"], 1)
 
         flattering = copy.deepcopy(doc)
         flattering["dimensions"]["proof-and-demo"]["scored"] = True
         flattering["dimensions"]["proof-and-demo"].pop("contaminated")
-        cooked = planner_score.score(epic(), children, doc=flattering)
+        cooked = planner_score.score(epic(), children, doc=flattering, ledger=NO_SPLITS)
         self.assertEqual(cooked["counts"]["excluded"], 0)
         self.assertEqual(
             cooked["counts"]["agree"] - honest["counts"]["agree"], 1,
@@ -232,7 +234,7 @@ class ContaminationTest(unittest.TestCase):
 
     def test_the_excluded_row_is_named_never_dropped(self):
         doc = reference()
-        result = planner_score.score(epic(), [child("DRE-1")], doc=doc)
+        result = planner_score.score(epic(), [child("DRE-1")], doc=doc, ledger=NO_SPLITS)
         report = planner_score.render_report(result, doc=doc)
         self.assertIn("proof-and-demo", report)
         self.assertIn("Excluded as contaminated", report)
@@ -265,6 +267,7 @@ class FootprintTest(unittest.TestCase):
         result = planner_score.score(
             epic(), [child("DRE-1", files=("a.py", "b.py"), pr=("a.py",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = outcomes_by_card(result, "file-footprint")
         self.assertEqual(row["DRE-1"], "agree")
@@ -273,6 +276,7 @@ class FootprintTest(unittest.TestCase):
         result = planner_score.score(
             epic(), [child("DRE-1", files=("a.py",), pr=("a.py", "surprise.py"))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "file-footprint"]
         self.assertEqual(rows[0]["outcome"], "disagree")
@@ -285,7 +289,7 @@ class FootprintTest(unittest.TestCase):
         cannot be right."""
         naked = child("DRE-1")
         naked["body"] = "Build the thing. No footprint anywhere."
-        result = planner_score.score(epic(), [naked], doc=reference())
+        result = planner_score.score(epic(), [naked], doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
         self.assertEqual(row["outcome"], "unclaimed")
         self.assertIsNone(row["observed"])
@@ -315,7 +319,8 @@ class UnknownTest(unittest.TestCase):
 
     def test_an_unreadable_pr_is_unknown_not_agreement(self):
         result = planner_score.score(
-            epic(), [child("DRE-1", pr=None)], doc=reference()
+            epic(), [child("DRE-1", pr=None)], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
         self.assertEqual(row["outcome"], "unknown")
@@ -325,13 +330,13 @@ class UnknownTest(unittest.TestCase):
     def test_a_pr_whose_file_list_would_not_load_is_unknown(self):
         blind = child("DRE-1")
         blind["pr"] = {"number": 7, "merged": True, "files": None}
-        result = planner_score.score(epic(), [blind], doc=reference())
+        result = planner_score.score(epic(), [blind], doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
         self.assertEqual(row["outcome"], "unknown")
 
     def test_unknown_rows_are_left_out_of_the_number_and_still_printed(self):
         doc = reference()
-        result = planner_score.score(epic(), [child("DRE-1", pr=None)], doc=doc)
+        result = planner_score.score(epic(), [child("DRE-1", pr=None)], doc=doc, ledger=NO_SPLITS)
         self.assertEqual(result["scored"],
                          result["counts"]["agree"] + result["counts"]["disagree"])
         report = planner_score.render_report(result, doc=doc)
@@ -349,6 +354,7 @@ class CollisionTest(unittest.TestCase):
             [child("DRE-1", files=("console/App.tsx",), pr=("console/App.tsx",)),
              child("DRE-2", files=("console/App.tsx",), pr=("console/App.tsx",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "collision"]
         self.assertEqual(len(rows), 1)
@@ -365,6 +371,7 @@ class CollisionTest(unittest.TestCase):
              child("DRE-2", files=("console/App.tsx",), pr=("console/App.tsx",),
                    blocked_by=("DRE-1",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "collision"]
         self.assertEqual(rows[0]["outcome"], "agree")
@@ -378,6 +385,7 @@ class CollisionTest(unittest.TestCase):
             [child("DRE-1", files=("a.py",), pr=("a.py",)),
              child("DRE-2", files=("b.py",), pr=("b.py",), blocked_by=("DRE-1",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "collision"]
         self.assertEqual(rows[0]["outcome"], "disagree")
@@ -391,6 +399,7 @@ class CollisionTest(unittest.TestCase):
             [child("DRE-1", files=("a.py",), pr=("a.py",)),
              child("DRE-2", files=("b.py",), pr=("b.py",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         self.assertEqual(
             [r for r in result["rows"] if r["dimension"] == "collision"], []
@@ -402,6 +411,7 @@ class CollisionTest(unittest.TestCase):
             [child("DRE-1", files=("a.py",), pr=None),
              child("DRE-2", files=("a.py",), pr=("a.py",), blocked_by=("DRE-1",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "collision"]
         self.assertEqual(rows[0]["outcome"], "unknown")
@@ -413,13 +423,14 @@ class SizeAndReadinessTest(unittest.TestCase):
             epic(),
             [child("DRE-1", comments=(planner_score.TURN_CAP_RECEIPT_SAMPLE,))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "size"][0]
         self.assertEqual(row["outcome"], "disagree")
         self.assertEqual(row["observed"], "too-big")
 
     def test_a_card_that_merged_without_a_turn_cap_agrees_on_size(self):
-        result = planner_score.score(epic(), [child("DRE-1")], doc=reference())
+        result = planner_score.score(epic(), [child("DRE-1")], doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "size"][0]
         self.assertEqual(row["outcome"], "agree")
 
@@ -430,6 +441,7 @@ class SizeAndReadinessTest(unittest.TestCase):
                 planner_score.READINESS_BOUNCE_PREFIX
                 + " repo: label. Returned to Planning;",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "readiness"][0]
         self.assertEqual(row["outcome"], "disagree")
@@ -437,7 +449,8 @@ class SizeAndReadinessTest(unittest.TestCase):
 
     def test_a_card_that_never_ran_is_unknown_on_size_and_readiness(self):
         result = planner_score.score(
-            epic(), [child("DRE-1", pr=None)], doc=reference()
+            epic(), [child("DRE-1", pr=None)], doc=reference(),
+            ledger=NO_SPLITS,
         )
         for dimension in ("size", "readiness"):
             row = [r for r in result["rows"] if r["dimension"] == dimension][0]
@@ -451,6 +464,7 @@ class RoutingTest(unittest.TestCase):
             [child("DRE-1", comments=(
                 planner_score.ESCALATION_RECEIPT_PREFIX + " should we charge?",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "routing"][0]
         self.assertEqual(row["claimed"], "dispatchable")
@@ -458,13 +472,14 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(row["outcome"], "disagree")
 
     def test_a_fleet_card_that_shipped_agrees(self):
-        result = planner_score.score(epic(), [child("DRE-1")], doc=reference())
+        result = planner_score.score(epic(), [child("DRE-1")], doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "routing"][0]
         self.assertEqual(row["outcome"], "agree")
 
     def test_a_card_carrying_no_routing_verdict_is_unclaimed(self):
         result = planner_score.score(
-            epic(), [child("DRE-1", verdict=None)], doc=reference()
+            epic(), [child("DRE-1", verdict=None)], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "routing"][0]
         self.assertEqual(row["outcome"], "unclaimed")
@@ -475,6 +490,7 @@ class RoutingTest(unittest.TestCase):
             [child("DRE-1", verdict="WORKBENCH", comments=(
                 planner_score.ESCALATION_RECEIPT_PREFIX + " which way?",))],
             doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "routing"][0]
         self.assertEqual(row["claimed"], "needs-a-person")
@@ -489,6 +505,7 @@ class ApprovalTest(unittest.TestCase):
             epic(comments=(plan_critic.marker(
                 "pre", 1, plan_critic.SEND_BACK, "two cards own one file"),)),
             [child("DRE-1")], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "disagree")
@@ -503,6 +520,7 @@ class ApprovalTest(unittest.TestCase):
         result = planner_score.score(
             epic(comments=(plan_critic.marker("pre", 1, plan_critic.PASS),)),
             [child("DRE-1")], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "agree")
@@ -512,18 +530,20 @@ class ApprovalTest(unittest.TestCase):
             epic(comments=(f"🔁 {planner_score.AMENDMENT_TAG}: the plan no longer "
                            "describes the work",)),
             [child("DRE-1")], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "disagree")
 
     def test_a_plan_that_ran_untouched_agrees(self):
-        result = planner_score.score(epic(), [child("DRE-1")], doc=reference())
+        result = planner_score.score(epic(), [child("DRE-1")], doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "agree")
 
     def test_an_epic_whose_children_never_shipped_is_unknown(self):
         result = planner_score.score(
-            epic(), [child("DRE-1", pr=None)], doc=reference()
+            epic(), [child("DRE-1", pr=None)], doc=reference(),
+            ledger=NO_SPLITS,
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "unknown")
@@ -539,6 +559,14 @@ def ledger(*cards):
                       "deaths": 2, "declared_files": "UNKNOWN",
                       "piece_files": "UNKNOWN", "tells": []} for c in cards],
             "rates": {"by_tell": []}}
+
+
+#: The ledger every test passes when the split ledger is not what it is
+#: testing (DRE-5314). `config/split-ledger.json` is regenerated every night,
+#: and a row naming a fixture card would score it `split` — so a test that
+#: read the live file asserted whatever last night's run wrote.
+#: `TheLiveLedgerCannotChangeTheseScores` holds every test here to it.
+NO_SPLITS = ledger()
 
 
 HANDBACK = (planner_score.HANDBACK_RECEIPT_PREFIX
@@ -664,7 +692,7 @@ class SplitRateTest(unittest.TestCase):
         result = planner_score.score(
             epic(), [child("DRE-1", state="Done"),
                      child("DRE-2", state="Done", comments=(HANDBACK,))],
-            doc=reference())
+            doc=reference(), ledger=NO_SPLITS)
         self.assertEqual(outcomes_by_card(result, "split-rate"),
                          {"DRE-1": "agree", "DRE-2": "disagree"})
 
@@ -674,7 +702,7 @@ class SplitRateTest(unittest.TestCase):
         population."""
         result = planner_score.score(
             epic(), [child("DRE-2", state="Done", comments=(HANDBACK,))],
-            doc=reference())
+            doc=reference(), ledger=NO_SPLITS)
         self.assertEqual(outcomes_by_card(result, "size"), {"DRE-2": "agree"})
         self.assertEqual(outcomes_by_card(result, "split-rate"), {"DRE-2": "disagree"})
 
@@ -745,19 +773,52 @@ class SplitRateTest(unittest.TestCase):
 
     def test_the_cli_reports_a_month_from_children_on_stdin(self):
         import subprocess
+        import tempfile
 
         payload = json.dumps({"children": [
             child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done",
                   comments=(HANDBACK,)),
             child("DRE-2", created_at="2026-08-03T09:00:00Z", state="Done"),
         ]})
-        out = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "planner_score.py"),
-             "split-rate"],
-            input=payload, capture_output=True, text=True, check=True,
-        ).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "split-ledger.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(NO_SPLITS, fh)
+            out = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "planner_score.py"),
+                 "split-rate", "--ledger", path],
+                input=payload, capture_output=True, text=True, check=True,
+            ).stdout
         self.assertIn("2026-08", out)
         self.assertIn("1 of 2", out)
+
+    def test_the_cli_reads_the_ledger_it_is_given(self):
+        """`--ledger` is read, not merely accepted: a row naming DRE-2 makes
+        it the month's second split."""
+        import subprocess
+        import tempfile
+
+        payload = json.dumps({"children": [
+            child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done",
+                  comments=(HANDBACK,)),
+            child("DRE-2", created_at="2026-08-03T09:00:00Z", state="Done"),
+        ]})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "split-ledger.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(ledger("DRE-2"), fh)
+            out = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "planner_score.py"),
+                 "split-rate", "--ledger", path],
+                input=payload, capture_output=True, text=True, check=True,
+            ).stdout
+        self.assertIn("2 of 2", out)
+
+    def test_the_scorer_reads_the_ledger_it_is_given(self):
+        result = planner_score.score(epic(), [child("DRE-1", state="Done")],
+                                     doc=reference(), ledger=ledger("DRE-1"))
+        self.assertEqual(outcomes_by_card(result, "split-rate"),
+                         {"DRE-1": "disagree"})
 
 
 #: The calls that read the split ledger when no ledger is passed. A test whose
@@ -852,7 +913,7 @@ class TheLiveLedgerCannotChangeTheseScores(unittest.TestCase):
 class ReportTest(unittest.TestCase):
     def test_both_halves_are_printed_even_when_one_is_empty(self):
         doc = reference()
-        result = planner_score.score(epic(), [child("DRE-1")], doc=doc)
+        result = planner_score.score(epic(), [child("DRE-1")], doc=doc, ledger=NO_SPLITS)
         report = planner_score.render_report(result, doc=doc)
         self.assertEqual(result["counts"]["disagree"], 0)
         for heading in ("## Agreement", "## Disagreement"):
@@ -861,13 +922,14 @@ class ReportTest(unittest.TestCase):
 
     def test_the_report_names_the_epic_it_scored(self):
         doc = reference()
-        result = planner_score.score(epic("DRE-1234"), [child("DRE-1")], doc=doc)
+        result = planner_score.score(epic("DRE-1234"), [child("DRE-1")], doc=doc, ledger=NO_SPLITS)
         self.assertIn("DRE-1234", planner_score.render_report(result, doc=doc))
 
     def test_a_disagreement_is_never_printed_under_agreement(self):
         doc = reference()
         result = planner_score.score(
-            epic(), [child("DRE-9", files=("a.py",), pr=("a.py", "b.py"))], doc=doc
+            epic(), [child("DRE-9", files=("a.py",), pr=("a.py", "b.py"))], doc=doc,
+            ledger=NO_SPLITS,
         )
         report = planner_score.render_report(result, doc=doc)
         agreement, _, rest = report.partition("## Disagreement")
@@ -971,7 +1033,7 @@ class LeakTest(unittest.TestCase):
         doc = reference()
         replay = {"epic": "DRE-1000", "context": self.PLAN, "plan": self.PLAN}
         with self.assertRaises(planner_score.LeakedPlan):
-            planner_score.score(epic(), [child("DRE-1")], doc=doc, replay=replay)
+            planner_score.score(epic(), [child("DRE-1")], doc=doc, replay=replay, ledger=NO_SPLITS)
 
     def test_the_leak_is_recorded_not_just_refused(self):
         record = planner_score.leak_record("DRE-1000", ["a leaked line"])
@@ -1006,7 +1068,7 @@ class LeakTest(unittest.TestCase):
         replay = {"epic": "DRE-1000", "context": "the epic as the CEO wrote it",
                   "plan": self.PLAN}
         result = planner_score.score(epic(), [child("DRE-1")], doc=doc,
-                                     replay=replay)
+                                     replay=replay, ledger=NO_SPLITS)
         self.assertEqual(result["replay"]["leaks"], [])
 
 
@@ -1068,7 +1130,7 @@ class CollectTest(unittest.TestCase):
         self.assertIn("cannot read", history["children"][0]["pr_unreadable"])
 
         result = planner_score.score(history["epic"], history["children"],
-                                     doc=reference())
+                                     doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
         self.assertEqual(row["outcome"], "unknown")
         self.assertEqual(result["counts"]["agree"], 0)
@@ -1084,7 +1146,7 @@ class CollectTest(unittest.TestCase):
             readable=lambda _repo: True,
         )
         result = planner_score.score(history["epic"], history["children"],
-                                     doc=reference())
+                                     doc=reference(), ledger=NO_SPLITS)
         row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
         self.assertEqual(row["outcome"], "agree")
 
