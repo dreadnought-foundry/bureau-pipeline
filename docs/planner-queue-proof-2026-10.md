@@ -4,7 +4,8 @@
 
 - **What held:** four planners at most, the rest waiting with their place written on them, and each finish starting the next within seconds.
 - **The key:** it hit 0 at 07:47 PT, earlier than the 2026-09-28 baseline of 08:06 PT, and again at 08:22, 08:28, 08:45 and 13:38–13:40 PT. From 08:05 to 09:23 PT no planner finished.
-- **The 8 cards:** seven were built straight from Planning with no plan, and one was canceled.
+- **The 8 cards:** seven were built straight from Planning with no plan, and one was canceled. A ninth card, DRE-5213, had its planner run, but its retry was then left in line for six hours (§6).
+- **The cap changed mid-window.** It was 4 from the drain until DRE-5326 lowered it to 2, at 08:57 PT on `main` and about 09:06 PT on `stable`. DRE-5326 was filed in response to this morning's drain. Both caps held: at most 4 before, at most 2 after (§3).
 
 The batch is the groom drain of proposal `3677632fc10a` at **2026-09-30 07:05 PT**, which moved **19 cards** into Planning. Every time below is Pacific Time on 2026-09-30.
 
@@ -19,8 +20,8 @@ The spot checks against raw run logs are listed in §8.
 | Criterion | Result |
 |---|---|
 | The record exists, from the live board and the live Actions run lists during one real batch, and names the batch, its cards, its run ids and its times | **Met.** Reconstructed from the live records, not watched (§0–§2) |
-| At most 4 planners running at once, counted as cards holding an open planner-slot claim | **Met.** The maximum was 4, reached at 07:06:11, 07:19:26, 07:35:28, 07:38:40 and 07:45:41 (§3) |
-| …and every card in the batch reached a planner, none canceled, skipped or receipt-less | **Not met.** 11 of 19 cards held a planner slot. 7 were dispatched from the line as builds and built unplanned (DRE-5366). 1 (DRE-4272) was dispatched the same way and then canceled at 10:32. Every card has receipts (§2, §6) |
+| At most 4 planners running at once, counted as cards holding an open planner-slot claim | **Met.** The maximum was 4, reached at 07:06:11, 07:19:26, 07:35:28, 07:38:40 and 07:45:41. After the cap dropped to 2 (08:57 PT on `main`, about 09:06 PT on `stable`) the maximum was 2 (§3) |
+| …and every card in the batch reached a planner, none canceled, skipped or receipt-less | **Not met.** 11 of 19 cards held a planner slot. 7 were dispatched from the line as builds and built unplanned (DRE-5366). 1 (DRE-4272) was dispatched the same way and then canceled at 10:32. DRE-5213's retry waited from 07:35 until it was escalated at 13:40, and later arrivals were served ahead of it. Every card has receipts (§2, §6) |
 | At least three next-in-line dispatches from a finishing run's own end, with measured gaps | **Met.** 30 such dispatches: 29 at 2.3–5.5 s and one at 24.5 s (§4) |
 | The `linear-budget:` readings across the window beside the 2026-09-28 baseline | **Met as a reading. The outcome is adverse:** the key drained earlier than the baseline (§7) |
 | The CEO closes this card after reading the record | Open: the CEO's step |
@@ -41,13 +42,21 @@ The spot checks against raw run logs are listed in §8.
 - Portico's 07:18 Reconcile shows the same `2268dc5`.
 - bureau-pipeline's own plan runs ride `main` (`pipeline_ref: main`), which already held `2268dc5`.
 
+**The cap changed during the window.** `config/planner-queue.json` at `2268dc5` reads `"max_running": 4`. DRE-5326 ("the planner cap drops to 2 and a groom drain releases no more cards than there are free planner slots") merged as PR #593, `b1b7c39`, at **08:57:53 PT**, and set `"max_running": 2`. Promote Channel run [36741785304](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36741785304) moved `stable` from `b722e9a` to `b1b7c39` at about 09:06 PT, and the next promote run reads `tag=b1b7c39`. So:
+
+- bureau-pipeline's plan runs read a cap of 2 from 08:57;
+- the `stable` repos (agent-bureau, portico) read a cap of 2 from about 09:06;
+- everything before read 4.
+
+The batch is therefore evidence for the CEO's cap of 4 from 07:05 to 08:57, and for the lowered cap of 2 after.
+
 ## 1. The 19 cards and where each ended
 
 In the proposal's order. "Held a slot" means the card had an admitted planner-slot claim: a `claimed` receipt that was not answered at once by a `waiting` receipt from the same run.
 
 | # | Card | Held a slot? | Where it ended (state read from Linear) |
 |---|---|---|---|
-| 1 | DRE-5213 | yes, 07:05:58–07:34:52 | Green Light (13:40) |
+| 1 | DRE-5213 | yes, 07:05:58–07:34:52. The plan critic sent the plan back at 07:18. The run's retry was refused a slot at 07:35:56 and never served (§6) | Green Light, by the six-hour waiting escalation at 13:40:48 |
 | 2 | DRE-5247 | yes, 07:06:11–07:09:43 | Done |
 | 3 | DRE-3681 | yes, 10:17:06–10:17:17 | Green Light. The planner found it "cannot be classified… already escalated" and parked it |
 | 4 | DRE-5240 | yes, 07:12:46–07:47:54 | In Progress |
@@ -111,6 +120,8 @@ Read off Linear. `run` is the run that posted the receipt. For `dispatched`, tha
 | 07:38:40 | DRE-5240 (36727337728), DRE-5268 (36730197529), DRE-5129 (36729579603), DRE-3621 (36730625286) |
 | 07:45:41 | DRE-5240 (36727337728), DRE-5268 (36730197529), DRE-5129 (36729579603), DRE-4626 (36731503026) |
 
+All five are before 08:57, under the cap of 4. **From 08:57 on, under the cap of 2, the open-claim count never went above 2.** It was 2 at, among other times, 09:25:09, 10:17:06, 11:21:29, 12:22:20 and 13:10:11.
+
 Counting the refused claims too, during the one to three seconds before each one's `waiting` receipt, the count momentarily reaches 6. None of those runs ran a model step (below).
 
 **The Actions run lists.** Across every repo in `config/repo-map.json` from 06:55 to 14:00:
@@ -168,7 +179,7 @@ The run is an `Agent Plan` run on `repository_dispatch`, not a Reconcile run.
 
 ## 5. Planners the sweep started
 
-**A killed run, backfilled by the sweep.** At 08:46 bureau-pipeline's Reconcile [36739170124](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36739170124) found every slot free. The two planners admitted since 08:05 had both died on the Linear quota, and earlier sweeps had expired their claims:
+**A killed run, backfilled by the sweep.** At 08:46 bureau-pipeline's Reconcile [36739170124](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36739170124) found every slot free. The last two claims still open after 08:05 belonged to planners that had died on the Linear quota, and earlier sweeps had expired them:
 
 - DRE-5129's claim, `run-gone`, by bureau-pipeline Reconcile [36734156568](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36734156568) at 08:06:59. Its log reads `planner line: released DRE-5129 run 36729579603 — because run-gone`.
 - DRE-5034's claim, `run-gone`, by agent-bureau Reconcile [36736973074](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36736973074) at 08:29:02.
@@ -190,6 +201,11 @@ The epic forbids any answer but "none". **The answer is not "none".**
   - Each such dispatch also spent a next-in-line turn without filling the slot. That is why the 07:19 sweep found a slot free (§5).
   - DRE-4150 was served a second time at 07:52:11, while it was already being built. That run posted `Duplicate dispatch skipped` at 07:55:51 and did nothing.
 - **Canceled: DRE-4272.** It was served by the 08:46 sweep and dispatched the same way, as a build. That run died on the quota at "Card → In Progress" (08:47:13). It was canceled at 10:32:29, while its parent epic DRE-4267's planner was running (claim 10:18:27–10:58:57). Its title now reads "Superseded — re-filed as DRE-5355 so the proof card is the epic's last child". So it was a deliberate re-file, not a card lost by the line. The history records no actor, so this record does not say who canceled it.
+- **Left in line for six hours: DRE-5213.** Its planner ran from 07:06 to 07:34 on run 36726491495 and posted a plan at 07:16. The first critic sent the plan back (round 1 of 2) at 07:18. The run released its slot at 07:34:52, and attempt 1 then failed at 07:35:08.
+  - `github-actions[bot]` re-ran it as attempt 2 at 07:35:38. That attempt claimed at 07:35:55 and was refused at 07:35:56 with `waiting for a planner: place 24 of 24`.
+  - **The line never served it after that.** Cards that joined later were served first. DRE-5327, for example, joined at 10:16:22 as `place 18 of 18` and was dispatched at 11:21:02.
+  - At 13:40:48 `planning-escalation` parked DRE-5213 in Green Light: "this card has been waiting in line for a planner for about 6 hours and nothing has started it" (the config's `waiting_max_minutes: 360`). That escalation is the designed backstop, and its "two planners" wording matches the cap after DRE-5326.
+  - Why the line skipped the card is **not established** by this record. The one visible difference is that its waiting receipt carries the same run id as that run's earlier `released` receipt. **No card tracks this yet.**
 - **Planned but not delivered: DRE-3622.** Its planner started at 08:47:06 and died on the quota. `planning-escalation` parked it in Green Light at 11:07 as "planning has produced nothing". That is correct under DRE-5177's rule, which measures from the planner's start, but the card left the batch without a plan.
 
 ## 7. The fleet's Linear key across the window
@@ -229,7 +245,11 @@ Today, from the `linear-budget:` lines of every Reconcile run: 107 readings, 06:
 
 **The line stalled while the key was dry.** No planner finished between DRE-4626's release at 08:05:11 and DRE-5034's at 09:23:48. The two planners admitted in that stretch, DRE-5034 at 08:05:42 and DRE-3622 at 08:47:06, both died and were expired `run-gone`. Plan runs dispatched at 08:29 and 08:46 died on the quota before they could claim (§3).
 
-**What the cap did and did not do.** It did what DRE-5167 asked: four at a time, a written place in line, and the next starting within seconds. It did **not** keep the key from draining, which the CEO's question also asked for. Four planners plus background traffic (sweeps across three repos, merge syncs, the medic, the relay and the console) still empty 2,500 requests an hour on a busy morning.
+**What the cap did and did not do.** It did what DRE-5167 asked: four at a time, a written place in line, and the next starting within seconds. It did **not** keep the key from draining, which the CEO's question also asked for.
+
+- Four planners plus background traffic (sweeps across three repos, merge syncs, the medic, the relay and the console) still emptied 2,500 requests an hour on a busy morning.
+- DRE-5326's own commit message measured "four planners spent ~185-260 Linear requests a minute against a ~42/minute refill". This record did not re-derive that number. That measurement is why the cap is now 2.
+- **The key still reached 0 at 13:38–13:40 PT under the cap of 2.** Lowering the cap has not by itself stopped the drain.
 
 **The card that owns the drained key** is the epic **DRE-3530**, "The fleet's Linear traffic fits one user's 2,500 an hour". It is in **Intake**. Its remaining child is **DRE-3624**, "A burst reserves its headroom before it starts, and a limit-dead run re-enters on its own", in **Backlog**, blocked by DRE-3622 and DRE-3623. DRE-3622 ("fence", the sandbox's own seat) is one of this batch's cards, and it sits in Green Light after its planner died on this morning's quota. DRE-5201 (sweep spend) is Done and did not stop the drain. On the console's share of the key, DRE-4721 (In Progress) and DRE-4666 (in this batch) apply. This record changes none of them.
 
@@ -249,3 +269,5 @@ Checked between 14:15 and 14:25 PT with `gh run view <id> --log`. Each matched t
 
 - **The CEO reads this record and closes DRE-5181.** This record does not claim the epic's goal of "the key is no longer drained". That goal is not met, and it belongs to DRE-3530 / DRE-3624.
 - **DRE-5366** has to land before a batch can meet "every card reached a planner". Seven of today's cards were built unplanned because of it.
+- **DRE-5213's six-hour wait** (§6) has no card. The line skipped a waiting card whose claim came from a re-run of a run that had already released.
+- **The CEO's cap is now 2, not 4** (DRE-5326). The next proof of the line reads against 2.
