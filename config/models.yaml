@@ -99,8 +99,12 @@
 #                  `none`. `workhorse` is REJECTED by schema validation — that
 #                  value is precisely the incident — and so is `judgement`:
 #                  a newly-discovered model may never land on a BUILD or a
-#                  PLANNING ladder by itself. `alert` must be true: a newly
-#                  discovered model always raises a card for a human.
+#                  PLANNING ladder by itself. `alert` must be true: discovery
+#                  is never silent. The daily `model-adoption` workflow sorts
+#                  every newly seen id by the CEO's rule of 2026-09-14 and
+#                  asks the CEO one question per new family; the weekly
+#                  `model-drift` workflow refreshes the snapshot and files no
+#                  card (DRE-3899).
 #   retired        ids that have rotated OUT of every ladder. READABLE, never
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
@@ -416,7 +420,9 @@ discovery:
   # same way — the planning ladder is now the strongest one we run, which makes
   # it the most attractive place for an unattended promotion to land.
   on_new_model: advisory
-  # Never silent. A newly discovered model always opens a card for a human.
+  # Never silent. A newly discovered model is sorted by the CEO's rule of
+  # 2026-09-14 in the daily `model-adoption` workflow, which asks the CEO about
+  # a new family; the weekly `model-drift` workflow files no card (DRE-3899).
   alert: true
 
 retired:
