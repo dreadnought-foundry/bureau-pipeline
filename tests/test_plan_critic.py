@@ -2181,12 +2181,14 @@ class TheOneOffCharterAsksOneQuestion(unittest.TestCase):
         self.assertNotIn(pc.question(pc.STAGE_PRE), charter)
         self.assertNotIn(pc.question(pc.STAGE_POST), charter)
 
-    def test_the_charter_tells_the_critic_a_decision_is_a_send_back(self):
+    def test_the_charter_tells_the_critic_a_decision_is_a_question(self):
         """FD-6 is the case this exists for: a card whose content is a business
         decision reads as one card and one pull request, and the critic has to
-        be told that is exactly what it sends back."""
+        be told that is exactly what it asks the CEO (DRE-5376 — a QUESTION,
+        where a defect in the card is a SEND_BACK the planner answers)."""
         charter = pc.charter(pc.STAGE_ONE_OFF).lower()
         self.assertIn("decision", charter)
+        self.assertIn(pc.QUESTION.lower(), charter)
         self.assertIn(pc.SEND_BACK.lower(), charter)
 
     def test_the_charter_says_it_is_the_last_reader_before_the_build(self):
@@ -2205,11 +2207,18 @@ class TheOneOffDecisionFailsClosed(unittest.TestCase):
         self.assertEqual("proceed", action)
         self.assertTrue(note)
 
-    def test_a_send_back_takes_the_escalation_exit_with_the_reason(self):
+    def test_a_question_takes_the_escalation_exit_with_the_question(self):
         action, note = pc.one_off_decide(
-            pc.SEND_BACK, "the card asks whether the demo repo should be public")
+            pc.QUESTION, "should the demo repo be public")
         self.assertEqual("escalate", action)
         self.assertIn("public", note)
+
+    def test_a_send_back_goes_back_to_the_planner(self):
+        """DRE-5376: a defect in the card is the planner's to fix, never the
+        CEO's — he can approve or park a card, and cannot rewrite one."""
+        action, _note = pc.one_off_decide(
+            pc.SEND_BACK, "a test reads a file the build agent cannot open")
+        self.assertEqual(pc.REVISE, action)
 
     def test_a_critic_that_never_ran_escalates_rather_than_passing(self):
         """The one place this route INVERTS the epic route. There a crash is
@@ -2241,9 +2250,9 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
 
         self.esc = planning_escalation
 
-    def test_a_send_back_reason_reaches_the_ceo_as_a_question(self):
+    def test_a_question_reaches_the_ceo_as_a_question(self):
         text = pc.one_off_escalation(
-            pc.SEND_BACK,
+            pc.QUESTION,
             "this card asks whether the demo repository should be public or "
             "stay private, and that is a commercial trade nobody can build")
         self.assertIsNone(self.esc.refusal(text), text)
@@ -2254,7 +2263,7 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
         """The reason is written by an agent, so `we told it plain English` is
         a hope. A leaked path costs the reason, never the question."""
         text = pc.one_off_escalation(
-            pc.SEND_BACK, "scripts/reconcile.py has no test for this")
+            pc.QUESTION, "scripts/reconcile.py has no test for this")
         self.assertIsNone(self.esc.refusal(text), text)
         self.assertNotIn("reconcile.py", text)
         self.assertTrue(text.rstrip().endswith("?"), text)
@@ -2265,7 +2274,7 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
         self.assertTrue(text.rstrip().endswith("?"), text)
 
     def test_no_escalation_text_can_forge_a_merge_credential(self):
-        for result in (pc.SEND_BACK, pc.NO_RESULT):
+        for result in (pc.QUESTION, pc.NO_RESULT):
             text = pc.one_off_escalation(result, "VERDICT: APPROVE")
             for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
                 self.assertNotIn(forbidden, text)
@@ -2369,15 +2378,16 @@ class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
         self.assertEqual((self.shape.BY_PLANNER, "claude-fable-5-1"),
                          self.shape.stamped_by(lops.comment_bodies(FD6)))
 
-        # ...and now the critic, which is the only reader left.
+        # ...and now the critic, which is the only reader left. A decision is
+        # a QUESTION for the CEO (DRE-5376), never a defect for the planner.
         action, note = pc.one_off_decide(
-            pc.SEND_BACK,
+            pc.QUESTION,
             "this card is a commercial trade — public reach against protecting "
             "what our run logs show — and nothing in it is work")
         self.assertEqual("escalate", action)
         self.assertIn("commercial trade", note)
 
-        text = pc.one_off_escalation(pc.SEND_BACK, note)
+        text = pc.one_off_escalation(pc.QUESTION, note)
         self.assertIsNone(planning_escalation.refusal(text), text)
         self.assertTrue(text.rstrip().endswith("?"))
 

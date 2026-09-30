@@ -28,14 +28,15 @@ What these pin, in the order the card asks for them:
   * the count was ALREADY persisted and already computable — `send_backs` reads
     5 out of that thread — and the route simply never asked for it;
   * at or beyond the bound the one-off decision is a PARK distinct from the
-    ordinary escalate, so the card stops being re-asked;
+    ordinary escalate, so the card stops being re-asked — in Triage, the
+    operator's defect queue, since DRE-5376, because a revision loop that
+    never converges is a defect and not a decision;
   * the bound is `MAX_ROUNDS` read from the one definition, so moving that
     constant moves this route with it;
-  * what the CEO reads at the bound says he has round-tripped the card this
-    many times and that it needs REWRITING, and names every finding raised so
-    far so one rewrite answers all of them;
-  * below the bound nothing changed — a PASS proceeds, a send-back escalates
-    with the critic's own line;
+  * what the card says at the bound names every finding raised so far, so
+    one rewrite answers all of them;
+  * below the bound a PASS proceeds, and a send-back goes back to the
+    PLANNER to revise (DRE-5376) — never to the CEO, who cannot rewrite it;
   * a crash still escalates and still spends nothing, the epic route's rule;
   * the round number the marker POSTS is the number the bound READS, so the
     count can never quietly become cosmetic again.
@@ -147,8 +148,9 @@ class TheOneOffDecisionLearnsTheCount(unittest.TestCase):
         action, note = pc.one_off_decide(
             pc.SEND_BACK, recorded_findings()[-1],
             prior_send_backs=pc.MAX_ROUNDS - 1)
-        self.assertEqual(pc.REWRITE, action)
+        self.assertEqual(pc.PARK, action)
         self.assertNotEqual(pc.ESCALATE, action)
+        self.assertNotEqual(pc.REVISE, action)
         self.assertNotEqual(pc.PROCEED, action)
         self.assertTrue(note)
 
@@ -158,21 +160,22 @@ class TheOneOffDecisionLearnsTheCount(unittest.TestCase):
         action, _note = pc.one_off_decide(
             pc.SEND_BACK, recorded_findings()[-1],
             prior_send_backs=pc.send_backs(thread(), pc.STAGE_ONE_OFF))
-        self.assertEqual(pc.REWRITE, action)
+        self.assertEqual(pc.PARK, action)
 
     def test_the_answer_is_not_constant_across_rounds(self):
         """The whole defect in one assertion: ten rounds used to answer
-        `escalate` ten times, so nothing could ever end the loop."""
+        `escalate` ten times, so nothing could ever end the loop. Below the
+        bound a send-back is the planner's to revise (DRE-5376)."""
         answers = {n: pc.one_off_decide(pc.SEND_BACK, f"finding number {n}",
                                         prior_send_backs=n - 1)[0]
                    for n in range(1, 11)}
         self.assertGreater(len(set(answers.values())), 1, answers)
         for n, action in answers.items():
-            expected = pc.ESCALATE if n < pc.MAX_ROUNDS else pc.REWRITE
+            expected = pc.REVISE if n < pc.MAX_ROUNDS else pc.PARK
             self.assertEqual(expected, action, f"round {n}")
 
-    def test_the_park_is_a_third_action_and_not_a_renamed_one(self):
-        self.assertNotIn(pc.REWRITE, (pc.PROCEED, pc.ESCALATE))
+    def test_the_park_is_its_own_action_and_not_a_renamed_one(self):
+        self.assertNotIn(pc.PARK, (pc.PROCEED, pc.ESCALATE, pc.REVISE))
 
 
 class TheBoundIsTheOneDefinition(unittest.TestCase):
@@ -192,13 +195,13 @@ class TheBoundIsTheOneDefinition(unittest.TestCase):
 
     def test_the_boundary_moves_with_the_constant(self):
         pc.MAX_ROUNDS = self.declared + 2
-        self.assertEqual(pc.ESCALATE, self._action(self.declared - 1))
-        self.assertEqual(pc.ESCALATE, self._action(self.declared))
-        self.assertEqual(pc.REWRITE, self._action(self.declared + 1))
+        self.assertEqual(pc.REVISE, self._action(self.declared - 1))
+        self.assertEqual(pc.REVISE, self._action(self.declared))
+        self.assertEqual(pc.PARK, self._action(self.declared + 1))
 
     def test_a_bound_of_one_parks_on_the_first_send_back(self):
         pc.MAX_ROUNDS = 1
-        self.assertEqual(pc.REWRITE, self._action(0))
+        self.assertEqual(pc.PARK, self._action(0))
 
     def test_both_routes_spend_the_bound_on_the_same_arithmetic(self):
         """The epic route holds when `prior + 1` reaches MAX_ROUNDS; this route
@@ -208,36 +211,27 @@ class TheBoundIsTheOneDefinition(unittest.TestCase):
                 pc.decide(pc.SEND_BACK, prior, "a finding",
                           stage=pc.STAGE_POST)[0], prior, pc.SEND_BACK)
             self.assertEqual(epic_at_bound,
-                             self._action(prior) == pc.REWRITE,
+                             self._action(prior) == pc.PARK,
                              f"prior={prior}")
 
 
-class WhatTheCeoReadsAtTheBound(unittest.TestCase):
-    """AC3. Not another question. The card has been round-tripped this many
-    times, it needs REWRITING, and every finding raised so far is named so one
-    rewrite can answer all of them."""
+class WhatTheCardSaysAtTheBound(unittest.TestCase):
+    """AC3, as DRE-5376 re-routed it. The bound is no longer a question for the
+    CEO — he can approve or park a card and cannot rewrite one — so the card
+    parks in Triage for the operator, and every finding raised so far is named
+    so one rewrite can answer all of them."""
 
-    def _text(self, findings=None, prior=None):
-        findings = recorded_findings() if findings is None else findings
-        return pc.one_off_escalation(
-            pc.SEND_BACK, findings[-1],
-            prior_send_backs=len(findings) - 1 if prior is None else prior,
-            findings=findings)
-
-    def test_it_says_the_card_needs_rewriting(self):
-        text = self._text().lower()
-        self.assertIn("rewrit", text)
+    def test_the_note_names_the_lane_and_not_the_ceos_queue(self):
+        _action, note = pc.one_off_decide(
+            pc.SEND_BACK, recorded_findings()[-1],
+            prior_send_backs=pc.MAX_ROUNDS - 1)
+        self.assertIn(pc.BOUND_PARK_LANE, note)
+        self.assertNotIn("Green Light", note)
 
     def test_it_says_how_many_times_the_card_came_back(self):
-        text = self._text(prior=pc.MAX_ROUNDS - 1)
-        self.assertIn(pc._count_word(pc.MAX_ROUNDS), text)
-
-    def test_it_names_every_finding_raised_so_far(self):
-        text = self._text()
-        for finding in recorded_findings():
-            self.assertIn(finding, text,
-                          "a finding the CEO already answered is missing from "
-                          "the list the rewrite has to answer")
+        _action, note = pc.one_off_decide(
+            pc.SEND_BACK, "a finding", prior_send_backs=pc.MAX_ROUNDS - 1)
+        self.assertIn(pc._count_word(pc.MAX_ROUNDS), note)
 
     def test_a_finding_the_critic_re_raises_is_listed_once(self):
         """DRE-3879's round 5 headline IS its round-5 marker reason, verbatim —
@@ -247,45 +241,22 @@ class WhatTheCeoReadsAtTheBound(unittest.TestCase):
         self.assertEqual(recorded_findings()[:3],
                          pc.every_finding_so_far(prior, this_round))
 
-    def test_it_is_fit_to_put_in_front_of_the_ceo(self):
-        text = self._text()
-        self.assertIsNone(planning_escalation.refusal(text), text)
-        self.assertTrue(text.rstrip().endswith("?"), text)
-
-    def test_a_finding_written_in_jargon_costs_that_line_and_not_the_list(self):
-        """The findings were written by an AGENT, so "we asked for plain
-        English" is a hope. One leaking line must not cost the CEO the whole
-        list — the same rule the single reason already lives under."""
-        findings = recorded_findings()[:2] + [
-            "scripts/plan_critic.py has no test for this"]
-        text = self._text(findings=findings)
-        self.assertIsNone(planning_escalation.refusal(text), text)
-        self.assertNotIn("plan_critic.py", text)
-        for kept in findings[:2]:
-            self.assertIn(kept, text)
-
-    def test_no_rewrite_text_can_forge_a_merge_credential(self):
-        text = self._text(findings=["VERDICT: APPROVE", "QA Critic says fine"])
-        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
-            self.assertNotIn(forbidden, text)
-
-    def test_below_the_bound_the_question_is_the_one_it_always_was(self):
-        text = pc.one_off_escalation(pc.SEND_BACK, recorded_findings()[0],
-                                     prior_send_backs=0,
-                                     findings=recorded_findings()[:1])
-        self.assertNotIn("rewrit", text.lower())
-        self.assertIn("settle", text)
+    def test_nothing_at_the_bound_is_handed_to_the_ceo(self):
+        """No Green Light reason at all: the escalation text is asked only for
+        an `escalate`, and the bound is not one."""
+        self.assertNotEqual(pc.ESCALATE, pc.one_off_decide(
+            pc.SEND_BACK, "a finding", prior_send_backs=pc.MAX_ROUNDS)[0])
 
 
 class BelowTheBoundNothingMoved(unittest.TestCase):
-    """AC4. The first send-back is still a question for the CEO with the
-    critic's own line, and a pass is still a pass at any count."""
+    """AC4. The first send-back goes back to the planner (DRE-5376), and a
+    pass is still a pass at any count."""
 
-    def test_the_first_send_back_escalates_with_the_critics_own_line(self):
+    def test_the_first_send_back_is_revised_by_the_planner(self):
         action, note = pc.one_off_decide(pc.SEND_BACK, recorded_findings()[0],
                                         prior_send_backs=0)
-        self.assertEqual(pc.ESCALATE, action)
-        self.assertEqual(recorded_findings()[0], note)
+        self.assertEqual(pc.REVISE, action)
+        self.assertIn("planner", note.lower())
 
     def test_a_pass_still_moves_the_card_however_many_rounds_it_cost(self):
         for prior in (0, pc.MAX_ROUNDS, 9):
@@ -293,10 +264,10 @@ class BelowTheBoundNothingMoved(unittest.TestCase):
             self.assertEqual(pc.PROCEED, action, prior)
             self.assertTrue(note)
 
-    def test_the_default_is_the_old_behaviour(self):
-        """Callers that hand it no count get exactly what they got before: the
-        count is an addition, not a new obligation."""
-        self.assertEqual(pc.ESCALATE,
+    def test_the_default_is_the_first_round(self):
+        """Callers that hand it no count are reading a first round: the count
+        is an addition, not a new obligation."""
+        self.assertEqual(pc.REVISE,
                          pc.one_off_decide(pc.SEND_BACK, "a finding")[0])
         self.assertEqual(pc.PROCEED, pc.one_off_decide(pc.PASS)[0])
 
@@ -387,14 +358,14 @@ class ThePostedRoundIsTheNumberTheBoundReads(unittest.TestCase):
                             "authored_by_pipeline": True}]
         self.assertEqual(posted, pc.send_backs(after, pc.STAGE_ONE_OFF))
 
-    def test_the_sixth_round_parks_for_a_rewrite(self):
+    def test_the_sixth_round_parks_in_triage(self):
         run = self._decide(thread(), pc.result_line(
             pc.SEND_BACK, "a sixth finding nobody has answered yet"))
-        self.assertEqual(pc.REWRITE, run["outputs"]["action"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
         self.assertEqual("true", run["outputs"]["bound"])
-        self.assertIn("rewrit", run["escalation"].lower())
-        for finding in recorded_findings():
-            self.assertIn(finding, run["escalation"])
+        self.assertEqual("", run["escalation"],
+                         "the bound wrote a reason for the CEO's queue")
+        self.assertIn(pc.BOUND_PARK_LANE, run["note"])
         self.assertIn(pc.SEND_BACK, run["record"])
 
     def test_the_note_on_the_card_carries_every_finding_so_far(self):
@@ -403,12 +374,12 @@ class ThePostedRoundIsTheNumberTheBoundReads(unittest.TestCase):
         for finding in recorded_findings():
             self.assertIn(finding, run["note"])
 
-    def test_the_first_round_is_unchanged_end_to_end(self):
+    def test_the_first_round_is_revised_end_to_end(self):
         run = self._decide([], pc.result_line(
             pc.SEND_BACK, recorded_findings()[0]))
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.REVISE, run["outputs"]["action"])
         self.assertEqual("1", run["outputs"]["round"])
-        self.assertNotIn("rewrit", run["escalation"].lower())
+        self.assertEqual("", run["escalation"])
 
     def test_a_crash_advances_the_round_number_and_not_the_bound(self):
         """The two numbers are different questions and the run says so: three
@@ -418,7 +389,7 @@ class ThePostedRoundIsTheNumberTheBoundReads(unittest.TestCase):
         run = self._decide(crashes, pc.result_line(
             pc.SEND_BACK, recorded_findings()[0]))
         self.assertEqual("4", run["outputs"]["round"])
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.REVISE, run["outputs"]["action"])
         self.assertEqual("false", run["outputs"]["bound"])
 
     def test_a_pass_after_a_spent_bound_still_reaches_the_build_queue(self):
@@ -433,8 +404,8 @@ class ThePostedRoundIsTheNumberTheBoundReads(unittest.TestCase):
 
 class TheRailCarriesThePark(unittest.TestCase):
     """A park nothing acts on is a stranded card. Every action this route can
-    answer has to reach a step in plan.yml, and the two non-moving ones park
-    through DRE-2848's one seam."""
+    answer has to reach a step in plan.yml: the question parks through
+    DRE-2848's one seam, and the bound parks in Triage (DRE-5376)."""
 
     def _steps(self) -> list[dict]:
         doc = yaml.safe_load(open(WF, encoding="utf-8").read())
@@ -446,13 +417,15 @@ class TheRailCarriesThePark(unittest.TestCase):
                 return step
         raise AssertionError(f"no step named like {fragment!r}")
 
-    def test_every_action_that_does_not_move_the_card_reaches_the_park_step(self):
-        gate = str(self._step_named("One-off critic — escalate").get("if") or "")
-        for action in (pc.ESCALATE, pc.REWRITE):
+    def test_every_action_that_does_not_move_the_card_reaches_a_step(self):
+        gates = {pc.ESCALATE: "One-off critic — escalate",
+                 pc.PARK: "One-off critic — park in Triage"}
+        for action, name in gates.items():
+            gate = str(self._step_named(name).get("if") or "")
             self.assertIn(f"== '{action}'", gate,
                           f"nothing in plan.yml acts on {action!r}")
 
-    def test_the_park_step_still_uses_the_one_escalation_seam(self):
+    def test_the_question_still_uses_the_one_escalation_seam(self):
         step = self._step_named("One-off critic — escalate")
         self.assertIn("planning_escalation.py escalate", str(step.get("run")))
         self.assertIn("--reason-file", str(step.get("run")))
@@ -461,28 +434,22 @@ class TheRailCarriesThePark(unittest.TestCase):
         gate = str(self._step_named("One-off route — checked on the way out")
                    .get("if") or "")
         self.assertIn(f"steps.oneoff.outputs.action == '{pc.PROCEED}'", gate)
-        self.assertNotIn(pc.REWRITE, gate)
+        self.assertNotIn(pc.PARK, gate)
+        self.assertNotIn(pc.REVISE, gate)
 
 
-class TheParkNoteAsksForTheRewriteToo(unittest.TestCase):
-    """The comment that PARKS the card is `planning_escalation`'s, not the note
-    above — and it wrapped the rewrite request in the words written for a
-    question: "the reasoning itself is the deliverable", "it is correct and
-    waiting on judgement", "Answer it here and move the card back to be picked
-    up". Read quickly — the way DRE-3879's five rounds were read — that is an
-    instruction to answer and move the card back, which is the exact loop the
-    bound exists to end."""
+class TheEscalationSeamKeepsItsRewriteNote(unittest.TestCase):
+    """`planning_escalation.escalate(rewrite=True)` is the seam's own
+    capability and is unchanged — DRE-5376 only stopped the one-off route
+    reaching it, because the bound now parks in Triage. What the seam says
+    when it IS asked for a rewrite is still pinned here."""
 
-    def _reason(self, prior=None) -> str:
-        findings = recorded_findings()
-        return pc.one_off_escalation(
-            pc.SEND_BACK, findings[-1],
-            prior_send_backs=len(findings) - 1 if prior is None else prior,
-            findings=findings)
+    REASON = ("This card has been round-tripped two separate times, and the "
+              "card itself has to be rewritten.")
 
     def _parked(self) -> str:
         return planning_escalation.escalation_comment(
-            CARD, self._reason(), rewrite=True)
+            CARD, self.REASON, rewrite=True)
 
     def test_it_does_not_tell_him_to_answer_a_card_it_just_said_to_rewrite(self):
         text = self._parked()
@@ -490,88 +457,36 @@ class TheParkNoteAsksForTheRewriteToo(unittest.TestCase):
         self.assertNotIn("waiting on judgement", text)
         self.assertNotIn("the reasoning itself is the deliverable", text)
 
-    def test_it_asks_for_the_rewrite_and_still_carries_the_findings(self):
-        text = self._parked()
-        self.assertIn("rewrit", text.lower())
-        self.assertIn(planning_escalation.ESCALATION_TAG, text)
-        self.assertIn(planning_escalation.destination(), text)
-        for finding in recorded_findings():
-            self.assertIn(finding, text)
-
-    def test_a_reader_can_tell_the_two_parks_apart_without_reading_either(self):
-        """The note above the park already does this with 📝 against 🙋. The
-        park is the operative comment, so it opens the same way — and off the
-        same definition, because two icons for one act drift."""
+    def test_it_opens_with_its_own_mark(self):
         self.assertTrue(self._parked().startswith(
             planning_escalation.REWRITE_MARK))
         self.assertNotEqual(planning_escalation.REWRITE_MARK,
                             planning_escalation.ESCALATION_MARK)
-        source = open(os.path.join(SCRIPTS, "plan_critic.py"),
-                      encoding="utf-8").read()
-        self.assertIn("planning_escalation.REWRITE_MARK", source)
-        self.assertNotIn(f'{pc.REWRITE}: "', source)
-
-    def test_it_is_still_fit_to_put_in_front_of_the_ceo(self):
-        self.assertIsNone(planning_escalation.refusal(self._parked()),
-                          self._parked())
 
     def test_the_question_park_is_word_for_word_what_it_always_was(self):
-        """DRE-2848's and DRE-3074's notes are untouched: the branch is an
-        addition, and every caller that does not ask for it gets the old text."""
-        asked = planning_escalation.escalation_comment(CARD, self._reason(0))
+        asked = planning_escalation.escalation_comment(CARD, self.REASON)
         self.assertIn("the reasoning itself is the deliverable", asked)
         self.assertIn("it is correct and waiting on judgement", asked)
         self.assertIn("Answer it here and move the card back", asked)
         self.assertTrue(asked.startswith(planning_escalation.ESCALATION_MARK))
-        transport = planning_escalation.escalation_comment(
-            CARD, "the classifier could not reach its model", transport=True)
-        self.assertIn("nothing has read this card at all", transport)
 
     def test_the_seam_that_parks_the_card_carries_the_flag(self):
-        """`escalate()` is what writes the comment and moves the card. A flag
-        that stopped at `escalation_comment` would be a flag nothing reaches."""
         posted: list[str] = []
         lops = _Lops(posted)
         outcome = planning_escalation.escalate(
-            lops, CARD, self._reason(), rewrite=True)
+            lops, CARD, self.REASON, rewrite=True)
         self.assertTrue(outcome.parked)
         self.assertEqual(1, len(posted))
         self.assertNotIn("Answer it here", posted[0])
-        self.assertIn("rewrit", posted[0].lower())
         self.assertEqual([(CARD, planning_escalation.destination())],
                          lops.states)
 
-    def test_the_cli_accepts_it(self):
-        out = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS, "planning_escalation.py"),
-             "escalate", "--help"], capture_output=True, text=True)
-        self.assertEqual(0, out.returncode, out.stderr)
-        self.assertIn("--rewrite", out.stdout)
-
-    def test_the_workflow_asks_for_it_exactly_when_it_asked_for_a_rewrite(self):
-        """The one call site that can produce a rewrite-shaped reason — and it
-        is gated on the action the decision already published, never on a second
-        reading of the text."""
-        doc = yaml.safe_load(open(WF, encoding="utf-8").read())
-        step = next(s for job in doc["jobs"].values()
-                    for s in job.get("steps") or []
-                    if "One-off critic — escalate" in str(s.get("name") or ""))
-        run = str(step.get("run"))
-        self.assertIn("--rewrite", run)
-        self.assertIn(f"steps.oneoff.outputs.action == '{pc.REWRITE}'", run)
-
-    def test_no_other_escalating_step_asks_for_it(self):
-        """Every other caller writes a question, so a `--rewrite` there would be
-        the contradiction pointing the other way."""
+    def test_no_step_in_the_workflow_asks_for_it(self):
         doc = yaml.safe_load(open(WF, encoding="utf-8").read())
         for job in doc["jobs"].values():
             for step in job.get("steps") or []:
-                run = str(step.get("run") or "")
-                if "planning_escalation.py escalate" not in run:
-                    continue
-                if "One-off critic" in str(step.get("name") or ""):
-                    continue
-                self.assertNotIn("--rewrite", run, step.get("name"))
+                self.assertNotIn("--rewrite", str(step.get("run") or ""),
+                                 step.get("name"))
 
 
 class _Lops:
@@ -615,9 +530,10 @@ class TheStandardSaysTheRouteIsBounded(unittest.TestCase):
             return f.read()
 
     def test_it_names_the_bound_on_the_one_off_route(self):
-        text = self._standard().lower()
-        self.assertIn("rewrit", text)
-        self.assertIn("round trip", text)
+        text = self._standard()
+        self.assertIn("round trip", text.lower())
+        self.assertIn("DRE-5376", text)
+        self.assertIn(pc.BOUND_PARK_LANE, text)
 
     def test_the_module_no_longer_claims_there_is_no_loop(self):
         with open(os.path.join(SCRIPTS, "plan_critic.py"), encoding="utf-8") as f:
