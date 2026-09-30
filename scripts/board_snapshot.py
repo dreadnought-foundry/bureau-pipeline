@@ -80,8 +80,8 @@ Each card: `id`, `identifier`, `title`, `description`, `createdAt`,
 `comments {pageInfo {hasNextPage, endCursor}, nodes [{body, createdAt,
 user {id} | null}]}` (NEWEST FIRST, exactly as Linear answers a `first: 50`
 window), `relations {pageInfo {hasNextPage}, nodes [{type, issue
-{identifier}, relatedIssue {identifier}}]}`, `inverseRelations {nodes [{type,
-issue {identifier, state {name}}}]}`, `history {nodes [{createdAt, toState
+{identifier}, relatedIssue {identifier}}]}`, `inverseRelations {pageInfo
+{hasNextPage}, nodes [{type, issue {identifier, state {name}}}]}`, `history {nodes [{createdAt, toState
 {name}}]}`.
 
 Exit codes: 0 the snapshot was taken and is within both ceilings · 1 it was
@@ -131,13 +131,14 @@ PAGE = 100
 #: snapshot cannot hold more of a card than the sweep can see:
 #:   children  — `mid_epic._EPIC_QUERY`, the epic's green-light read;
 #:   relations — `merge_sweep_gate.RELATION_PAGE`, the dependents read;
-#:   inverse   — `reconcile.backlog_children`, the dependency gate's read;
+#:   inverse   — `reconcile.INVERSE_PAGE`, the first page of the dependency
+#:               gate's read, named once there (DRE-5379);
 #:   history   — `mid_epic._EPIC_QUERY`.
 #: The comment window is not here: it is `linear_ops.COMMENT_WINDOW_GQL`, the
 #: ONE definition of which fifty comments and which way round (DRE-3250).
 CHILD_PAGE = 250
 RELATION_PAGE = 50
-INVERSE_PAGE = 20
+INVERSE_PAGE = reconcile.INVERSE_PAGE
 HISTORY_PAGE = 50
 
 #: A comment body is cut to this many characters. Every marker this pipeline
@@ -187,9 +188,10 @@ CARD_QUERY = """query($states: [String!]!, $after: String) {
          pageInfo { hasNextPage }
          nodes { type issue { identifier } relatedIssue { identifier } }
        }
-       inverseRelations(first: %d) { nodes {
-         type issue { identifier state { name } }
-       } }
+       inverseRelations(first: %d) {
+         pageInfo { hasNextPage }
+         nodes { type issue { identifier state { name } } }
+       }
        history(last: %d) { nodes { createdAt toState { name } } }
      } pageInfo { hasNextPage endCursor } } }""" % (
     PAGE, TEAM, CHILD_PAGE, linear_ops.COMMENT_WINDOW_GQL,
@@ -301,6 +303,7 @@ def scrub_card(card: dict) -> dict:
     comments = card.get("comments") or {}
     window = comments.get("pageInfo") or {}
     relations = card.get("relations") or {}
+    inverse = card.get("inverseRelations") or {}
     parent = card.get("parent")
     return {
         "id": card.get("id"),
@@ -352,12 +355,16 @@ def scrub_card(card: dict) -> dict:
             ],
         },
         "inverseRelations": {
+            # the promotion gate reads this to know the page was full (DRE-5379)
+            "pageInfo": {
+                "hasNextPage": bool((inverse.get("pageInfo") or {}).get("hasNextPage")),
+            },
             "nodes": [
                 {"type": n.get("type"), "issue": None if n.get("issue") is None else {
                     "identifier": n["issue"].get("identifier"),
                     "state": _named(n["issue"].get("state")),
                 }}
-                for n in (card.get("inverseRelations") or {}).get("nodes") or []
+                for n in inverse.get("nodes") or []
             ],
         },
         "history": {
@@ -518,7 +525,8 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
                          "nodes": comments},
             "relations": {"pageInfo": {"hasNextPage": i % 35 == 0},
                           "nodes": relations},
-            "inverseRelations": {"nodes": inverse},
+            "inverseRelations": {"pageInfo": {"hasNextPage": False},
+                                 "nodes": inverse},
             "history": {"nodes": [{"createdAt": at(i), "toState": {"name": lane[i]}}]},
         })
     return {

@@ -1605,6 +1605,7 @@ def reset_sweep_cards() -> None:
     _build_job_names.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
+    _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
 
@@ -3659,6 +3660,108 @@ def redeliver_rescued_work(identifier: str, bodies: list[str]) -> bool:
     return True
 
 
+#: A card's inverse relations, as the sweep's batched reads ask for them
+#: (DRE-5379). The page counts EVERY relation type — `related`, `duplicate`,
+#: `blocks` — so a card with many `related` links loses blockers off its end:
+#: live on 2026-09-30, DRE-4580's page carried 11 of its 13 `blocks` relations
+#: and DRE-5136's 11 of 16. So the page says whether it is full, and a full one
+#: is read to the end by `complete_inverse_relations`. Twenty, not more: every
+#: card on the board pays for this page in the batched reads' node weight, and
+#: almost none of them fill it. `board_snapshot` reads this one number.
+INVERSE_PAGE = 20
+
+#: How many further pages one card's relations are read for, and how deep
+#: each is — Linear's own maximum. Twenty plus three hundred relations; a card
+#: past that is a card whose blockers the sweep says it does not know.
+INVERSE_TOPUP_PAGES = 3
+INVERSE_TOPUP_PAGE = 100
+
+INVERSE_RELATIONS_GQL = """inverseRelations(first: %d) {
+               pageInfo { hasNextPage endCursor }
+               nodes { type issue { identifier state { name } } }
+             }""" % INVERSE_PAGE
+
+_INVERSE_TOPUP_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
+             inverseRelations(first: %d, after: $after) {
+               pageInfo { hasNextPage endCursor }
+               nodes { type issue { identifier state { name } } }
+             } } }""" % INVERSE_TOPUP_PAGE
+
+#: Set once a top-up read is refused by the quota, for the rest of the pass:
+#: more requests against a spent bucket cannot answer and deepen it (DRE-1921).
+#: Dropped by `reset_sweep_cards()`.
+_inverse_topup_refused: list[str] = []
+
+
+def complete_inverse_relations(cards: list[dict]) -> None:
+    """Read every card whose relation page came back FULL to the end, in place
+    (DRE-5379).
+
+    A card whose page is not full costs nothing. One that is costs one request
+    per hundred further relations, up to `INVERSE_TOPUP_PAGES`. A card still
+    full after that, or whose read failed, keeps `hasNextPage: True` — which
+    `prose_blockers.relations_unknown` reads as UNKNOWN, and the gates neither
+    refuse nor promote it. Never raises: this runs inside the reads every gate
+    takes its candidates from, and one card's relations must not cost the rest
+    of the board its sweep.
+    """
+    for card in cards:
+        page = card.get("inverseRelations")
+        if not isinstance(page, dict) or not prose_blockers.relations_unknown(card):
+            continue
+        identifier = card.get("identifier")
+        if _inverse_topup_refused:
+            print(
+                f"inverse-relations: {identifier}'s relation page is full and not "
+                f"read to the end — the quota is spent ({_inverse_topup_refused[0]}); "
+                "its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+            continue
+        nodes = list(page.get("nodes") or [])
+        after = (page.get("pageInfo") or {}).get("endCursor")
+        if not after:
+            nodes = []  # no cursor to resume from: read the set from its start
+        more_pages, failed = True, False
+        try:
+            for _ in range(INVERSE_TOPUP_PAGES):
+                data = linear_ops.gql(_INVERSE_TOPUP_QUERY, {"id": identifier, "after": after})
+                rest = ((data or {}).get("issue") or {}).get("inverseRelations") or {}
+                nodes.extend(rest.get("nodes") or [])
+                info = rest.get("pageInfo") or {}
+                more_pages = info.get("hasNextPage") is True
+                after = info.get("endCursor")
+                if not more_pages or not after:
+                    break
+        except linear_ops.LinearRateLimited as e:
+            _inverse_topup_refused.append(str(e) or type(e).__name__)
+            more_pages, failed = True, True
+            print(
+                f"inverse-relations: could not read the rest of {identifier}'s "
+                f"relations — the quota refused it ({e}); no further card's is "
+                "read this sweep, and their blockers are UNKNOWN",
+                file=sys.stderr,
+            )
+        except Exception as e:  # noqa: BLE001 — unknown, said, and the sweep goes on
+            more_pages, failed = True, True
+            print(
+                f"inverse-relations: could not read the rest of {identifier}'s "
+                f"relations ({e}) — its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+        card["inverseRelations"] = {
+            "pageInfo": {"hasNextPage": more_pages, "endCursor": after},
+            "nodes": nodes,
+        }
+        if more_pages and not failed:
+            print(
+                f"inverse-relations: {identifier} holds more than "
+                f"{len(nodes)} inverse relation(s) and was not read to the end — "
+                "its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+
+
 def backlog_children(only: list[str] | None = None) -> list[dict]:
     """EVERY Backlog card, not the first page of them (DRE-2681).
 
@@ -3697,16 +3800,15 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
              %s
-             inverseRelations(first: 20) { nodes {
-               type issue { identifier state { name } }
-             } }
+             %s
            } pageInfo { hasNextPage endCursor } } }""" % (
-            declared, scope, linear_ops.COMMENT_WINDOW_GQL,
+            declared, scope, linear_ops.COMMENT_WINDOW_GQL, INVERSE_RELATIONS_GQL,
         ),
         {"numbers": numbers} if only is not None else None,
     )
     for card in cards:
         linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    complete_inverse_relations(cards)
     return cards
 
 
@@ -3735,10 +3837,10 @@ EPIC_RECORD_GQL = """
              id identifier description state { name }
              children(first: 250) { nodes { identifier createdAt state { name } } }
              history(last: 50) { nodes { createdAt toState { name } } }
-             inverseRelations(first: 20) { nodes {
-               type issue { identifier state { name } }
-             } }
-             comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }"""
+             %s
+             comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }""" % (
+    INVERSE_RELATIONS_GQL,
+)
 
 #: How many epics one PAGE of the record asks for. Eight, not the 100 every
 #: other paged read here uses, because this selection is far heavier per node:
@@ -3867,6 +3969,7 @@ def _read_epic_records(identifiers: list[str]) -> None:
             )
         else:
             _epic_records[ident] = record
+    complete_inverse_relations([_epic_records[i] for i in askable if i in _epic_records])
 
 
 def _read_one_epic_record(identifier: str) -> None:
@@ -3881,6 +3984,7 @@ def _read_one_epic_record(identifier: str) -> None:
     if not issue:
         _epic_record_gaps[identifier] = "Linear returned no issue for it"
         return
+    complete_inverse_relations([issue])
     _epic_records[identifier] = issue
 
 
@@ -3944,6 +4048,17 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         return True  # ambiguous/unreadable -> fail safe (blocked)
     epic.setdefault("parent", None)
     epic.setdefault("identifier", epic_identifier)
+    # Half a page decides nothing (DRE-5379): the unread rest may hold the
+    # blocker the prose names, or a live one the page does not show. Held, and
+    # never called a defect — no notice, no stale clock.
+    if prose_blockers.relations_unknown(epic):
+        print(
+            f"epic-gate: {epic_identifier}'s blockers are UNKNOWN "
+            f"({prose_blockers.UNKNOWN_TAG}) — its inverse relations were not "
+            "read to the end; holding its children, and no prose defect is "
+            "recorded on half a page"
+        )
+        return True
     # The defect first: an epic can be BOTH legitimately blocked and wrong about
     # itself, and the wrong sentence is the one nobody is coming to fix unless
     # something says so.
@@ -4447,6 +4562,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # computation over the card this sweep already fetched: no Linear read,
         # and the sentence is wrong whatever the card's epic, verdict or
         # blockers say.
+        #
+        # Unless the card's relations were not read to the end (DRE-5379). Then
+        # neither answer is safe — the prose may name a blocker the unread rest
+        # holds, and the page may show no live blocker while the card has one —
+        # so the card is neither refused nor promoted, and the log says why.
+        if prose_blockers.relations_unknown(card):
+            print(
+                f"promotion: {card['identifier']}'s blockers are UNKNOWN "
+                f"({prose_blockers.UNKNOWN_TAG}) — its inverse relations were "
+                "not read to the end; neither refused nor promoted — skipping"
+            )
+            continue
         undeclared = prose_blockers.undeclared_claims(card)
         if undeclared:
             notice = prose_blockers.card_refusal(card["identifier"], undeclared)
