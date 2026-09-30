@@ -85,7 +85,8 @@ Subcommands:
   create <title> <description-file> --repo <slug>
                                        create a standalone card in Planning —
                                        the medic / red-main-repair / channel-
-                                       watch / model-drift failure-report seam.
+                                       watch / model-adoption failure-report
+                                       seam.
                                        `--repo` is REQUIRED and becomes the
                                        card's repo:<slug> label: without it the
                                        card carries no product key and the
@@ -2282,7 +2283,7 @@ def validated_repo_slug(slug: str) -> str:
 
 def cmd_create(title: str, description_file: str, *flags: str) -> None:
     """Create a standalone card in Planning — the seam the medic, red-main-repair,
-    channel-watch and model-drift mint a card through.
+    channel-watch and model-adoption mint a card through.
 
     `--repo <slug>` is REQUIRED and becomes the card's `repo:<slug>` label; see
     `required_repo_slug` for why it is required rather than defaulted. The
@@ -2293,8 +2294,8 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
 
     Planning, not Triage (DRE-2858). Triage is the BROKEN-CARD lane and only
     that: an unroutable `repo:` label, an archived repo, a card the readiness
-    guard has returned three times. A pipeline failure or a drifted model is new
-    WORK, correctly formed and owing a classification — which is Planning's
+    guard has returned three times. A pipeline failure or a failed model trial is
+    new WORK, correctly formed and owing a classification — which is Planning's
     question, not Triage's. A caller that genuinely wants the broken-card lane
     still says so itself, in its own step (red-main-repair.yml does).
 
