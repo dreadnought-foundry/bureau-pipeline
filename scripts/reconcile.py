@@ -107,6 +107,7 @@ Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import json
 import math
@@ -2277,6 +2278,157 @@ def repair_frozen_planning_holds() -> set[str]:
             f"'{HOLD_LABEL}' label removed"
         )
     return repaired
+
+
+def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
+    """The planner line's backstop (DRE-5178, epic DRE-5167). Full sweeps only.
+
+    The end-of-run dispatch in `plan.yml` is the line's fast path, and it does
+    not run when a runner is killed, when a job hits its timeout (its
+    `always()` steps are skipped), or when the finishing run cannot mint a
+    token for the waiting card's owner. This is the promise behind it: no
+    waiting card outlives two sweeps of its own repo while a slot is free.
+
+    WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`): the ones
+    inside SWEPT_LANES come off the board read this sweep already paid for,
+    and Green Light — outside it — is one real paged query, the one extra
+    request this phase costs, paid because a run whose epic has just moved
+    there still holds its slot until its release step. The ledger itself, the
+    order of the line and every receipt's text are `planner_queue`'s; nothing
+    here decides who is next.
+
+    1. DEAD CLAIMS. Only open claims are read — a claim closed by its own
+       release or by a handover is never released twice. One past the TTL is
+       released fleet-wide `because expired`, with no GitHub read: no plan job
+       outlives its timeout. One of THIS repo whose run GitHub reports
+       `completed` is released `because run-gone` — the fast path for a killed
+       runner, own-repo only because the sweep's token reaches only its own
+       owner. An unreadable status keeps the claim: the slot is held for at
+       most the TTL, and a second dispatch is never the fallback.
+    2. FREE SLOTS. While one is free, the earliest waiting card recorded
+       against THIS repo is fired through `plan_run.fire` with the card
+       record the board read returned, its recorded trigger and its recorded
+       reason — never `sent_by_run`: the sweep is not the card's planner run,
+       and the run it starts must be judged as any dispatch. The `dispatched`
+       receipt follows only a confirmed dispatch (`redispatch`'s rule); a
+       failure goes on the write ledger, the card stays waiting, and nothing
+       else is dispatched this pass. A card escalated out of Planning earlier
+       in this pass (`skip`) is still waiting on this pass's board read, and
+       is not served.
+    3. DEPTH. One line per pass, as a `::warning::` once the oldest card has
+       waited over half the line's bound. Passing the whole bound is the
+       Planning watchdog's to escalate (DRE-5177); this phase never does.
+
+    A config that cannot be read is the fleet cap switched off everywhere —
+    every planner run's claim step admits uncapped with only a warning — so
+    here it is a `::error::` and a read failure: the sweep exits red for the
+    medic.
+    """
+    try:
+        limit = planner_queue.cap()
+        bound = planner_queue.waiting_max()
+    except planner_queue.PlannerQueueError as e:
+        print(
+            f"::error::planner line: the planner queue config could not be read "
+            f"— {e}. Every planner run is admitting without a cap until it is fixed."
+        )
+        _read_failures.append(f"planner-line: {e}")
+        return
+    swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
+    extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
+    cards = active_cards(swept) + (active_cards(extra) if extra else [])
+    records = {card["identifier"]: card for card in cards}
+    now = datetime.now(UTC)
+    line = planner_queue.ledger(cards, now)
+
+    def release(claim, because: str) -> bool:
+        try:
+            planner_queue.post_released(
+                linear_ops, claim.card, run_id=claim.run, repo=claim.repo,
+                trigger_state=claim.trigger, because=because,
+            )
+        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+            _write_failures.append(f"{claim.card} planner-slot release: {e}")
+            print(f"ERROR: planner line: {claim.card} run {claim.run} was not "
+                  f"released: {e}", file=sys.stderr)
+            return False
+        print(f"planner line: released {claim.card} run {claim.run} — because {because}")
+        return True
+
+    for claim in planner_queue.expired_claims(line, now):
+        release(claim, "expired")
+    running = []
+    for claim in line.running:
+        # A run id is digits; anything else on the ledger is not a run GitHub
+        # can answer for, and the TTL ends it instead.
+        if claim.repo.lower() != REPO.lower() or not claim.run.isdigit():
+            running.append(claim)
+            continue
+        status = gh_actions_read(
+            "api", f"repos/{REPO}/actions/runs/{claim.run}", "--jq", ".status"
+        )
+        if status != "completed" or not release(claim, "run-gone"):
+            running.append(claim)
+    line = dataclasses.replace(line, running=running)
+
+    free = line.free_slots(limit)
+    served: list[str] = []
+    halted = False
+    for stand in line.waiting:
+        ident = stand.card
+        if ident in skip:
+            why = "escalated out of Planning this pass"
+        elif stand.repo.lower() != REPO.lower():
+            why = f"recorded against {stand.repo} — that repo's sweep serves it"
+        elif halted:
+            why = "a dispatch failed this pass — it stays waiting for the next sweep"
+        elif free <= 0:
+            why = "no free slot — it keeps its place in line"
+        elif ident not in records:
+            why = "not on this pass's board read"
+        else:
+            why = None
+        if why:
+            print(f"planner line: {ident} skipped — {why}")
+            continue
+        try:
+            ok, err = plan_run.fire(records[ident], REPO, trigger_state=stand.trigger,
+                                    reason=stand.reason)
+        except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
+            ok, err = False, f"redispatch {ident}: {e}"
+        if not ok:
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+            print(f"planner line: {ident} skipped — its dispatch failed; it stays waiting")
+            halted = True
+            continue
+        free -= 1
+        served.append(ident)
+        try:
+            planner_queue.post_dispatched(
+                linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
+                repo=stand.repo, trigger_state=stand.trigger, reason=stand.reason,
+            )
+        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+            _write_failures.append(f"{ident} planner-slot dispatched receipt: {e}")
+            print(f"ERROR: planner line: {ident} was dispatched but its receipt did "
+                  f"not post: {e}", file=sys.stderr)
+        print(f"planner line: {ident} served — dispatched at {REPO} "
+              f"(trigger {stand.trigger}, reason {stand.reason or 'none'})")
+
+    waiting = [stand for stand in line.waiting if stand.card not in served]
+    oldest = max(
+        (planner_queue.waited_minutes(
+            (records[stand.card].get("comments") or {}).get("nodes"), now) or 0.0
+         for stand in waiting if stand.card in records),
+        default=0.0,
+    )
+    depth = (
+        f"planner line: {len(waiting)} waiting, oldest {oldest:.0f} minutes, "
+        f"{len(line.running)} running and {len(line.reserved) + len(served)} "
+        f"dispatched of {limit}"
+    )
+    print(f"::warning::{depth}" if oldest > bound / 2 else depth)
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -8693,15 +8845,33 @@ def main(
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
+        repaired: set[str] = set()
         try:
             with _phase("repair_frozen_planning_holds"):
-                repair_frozen_planning_holds()
+                repaired = repair_frozen_planning_holds()
         except ReconcileWriteError as e:
             _write_failures.append(str(e))
             print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
         except linear_ops.LinearError as e:
             _read_failures.append(f"planning-repair: {e}")
             print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
+        # The planner line's backstop (DRE-5178): dead claims released, free
+        # slots filled, the line's depth said. After the watchdog and the
+        # repair, so a card either of them escalated this pass — still waiting
+        # on this pass's board read — is not dispatched on its way out. Full
+        # sweeps only: the event paths have returned or skip this block.
+        try:
+            with _phase("serve_planner_line"):
+                serve_planner_line(flagged | (repaired or set()))
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"planner-line: {e}")
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"planner-line: {e}")
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`

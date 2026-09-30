@@ -343,24 +343,33 @@ def test_an_unreadable_status_keeps_the_claim():
 # --------------------------------------------------------------------------- #
 
 
+S, C = "4001", "4002"  # the sender run and the run it handed its slot to
+
+
 def _handover_card() -> dict:
     return _card("DRE-400", "Planning",
-                 _r("claimed", 20.0, run="S"),
-                 _r("claimed", 10.0, run="C", from_run="S"))
+                 _r("claimed", 20.0, run=S),
+                 _r("claimed", 10.0, run=C, from_run=S))
 
 
 def test_a_handed_over_claim_is_one_running_card_and_released_on_nothing(capsys):
-    world = _serve([_handover_card()], {"S": "completed", "C": "in_progress"})
+    world = _serve([_handover_card()], {S: "completed", C: "in_progress"})
     assert world.receipts("released") == []
-    assert "S" not in world.gh_runs_read(), "S's claim is closed by the handover"
+    assert S not in world.gh_runs_read(), "S's claim is closed by the handover"
     assert _depth_lines(capsys.readouterr().out) == [
         f"planner line: 0 waiting, oldest 0 minutes, 1 running and 0 dispatched of {CAP}"]
 
 
 def test_a_handed_over_claim_whose_run_is_gone_is_released_under_its_own_run():
-    world = _serve([_handover_card()], {"S": "completed", "C": "completed"})
+    world = _serve([_handover_card()], {S: "completed", C: "completed"})
     assert [(i, r.run, r.because) for i, r in world.receipts("released")] == [
-        ("DRE-400", "C", "run-gone")]
+        ("DRE-400", C, "run-gone")]
+
+
+def test_a_claim_whose_run_is_no_run_id_is_left_to_the_ttl():
+    world = _serve([_claimed("DRE-410", "not-a-run")], {"not-a-run": "completed"})
+    assert world.gh_reads == []
+    assert world.posts == []
 
 
 # --------------------------------------------------------------------------- #
