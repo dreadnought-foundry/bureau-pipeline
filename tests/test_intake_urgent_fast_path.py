@@ -29,7 +29,9 @@ WHAT THESE TESTS PIN, one block per acceptance criterion:
      names the two that waited;
   6. the move happens with `INTAKE_HOLD` set;
   7. two sweeps from two repos over the same board move three cards between
-     them, not six.
+     them, not six;
+  8. a move that did not land is never reported as one, and a card whose move
+     failed is tried again on a later sweep, at most `max_attempts` times.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_intake_urgent_fast_path.py -v
 """
@@ -164,7 +166,19 @@ class Board:
         card = self.cards[identifier]
         allowed = [s.strip().lower() for s in from_states_csv.split(",")]
         if card["state"]["name"].lower() in allowed:
+            self.history_move(identifier, to_state)
             card["state"]["name"] = to_state
+
+    def history_move(self, identifier, to_state):
+        """A lane change, as Linear records it in the card's history."""
+        self.cards[identifier]["history"].append({
+            "createdAt": _iso(datetime.now(UTC)),
+            "fromState": {"name": self.cards[identifier]["state"]["name"]},
+            "toState": {"name": to_state},
+        })
+
+    def get_issue(self, identifier):
+        return copy.deepcopy(self.cards[identifier])
 
     # --- the clock -----------------------------------------------------
     def age(self, minutes):
@@ -256,6 +270,8 @@ def wired(board, *, snapshot=None):
             reconcile.linear_ops, "cmd_comment", side_effect=board.cmd_comment))
         stack.enter_context(mock.patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=board.cmd_advance))
+        stack.enter_context(mock.patch.object(
+            reconcile.linear_ops, "get_issue", side_effect=board.get_issue))
         yield board
 
 
@@ -325,9 +341,9 @@ def test_a_second_sweep_adds_nothing():
 
 
 def test_a_card_carrying_the_receipt_is_never_moved_again():
-    """The receipt is the idempotency key. A card that carries it and is back
-    in Intake — a person put it there — is left alone: the rule takes a card
-    out once."""
+    """A card that carries the receipt AND whose history shows it reached
+    Planning, back in Intake — a person put it there — is left alone: the rule
+    takes a card out once."""
     board = Board([card("DRE-101", raised=_ship() + timedelta(hours=2))])
     sweep(board)
     board.cards["DRE-101"]["state"]["name"] = "Intake"
@@ -636,6 +652,116 @@ def test_a_failed_move_is_a_write_failure_never_a_silent_one():
         reconcile.advance_urgent_intake()
     assert any("DRE-801" in f for f in reconcile._write_failures)
     reconcile._write_failures.clear()
+
+
+def _refusing(board, *, times):
+    """`cmd_advance` raising a Linear failure `times` times, then working."""
+    left = [times]
+
+    def advance(identifier, *a):
+        if left[0] > 0:
+            left[0] -= 1
+            board.advances.append((identifier, *a))
+            raise reconcile.linear_ops.LinearError("Linear said no")
+        return board.cmd_advance(identifier, *a)
+
+    return advance
+
+
+def test_a_failed_move_is_retried_on_a_later_sweep_not_skipped_forever():
+    """The receipt goes up BEFORE the move — the cross-repo cap counts it — so
+    a move that then fails leaves a receipt on a card still in Intake. That
+    receipt is a claim, not a move: once its window has passed, the next sweep
+    tries the card again rather than reading it as moved once."""
+    board = Board([card("DRE-811", raised=_ship() + timedelta(hours=1))])
+    with wired(board), mock.patch.object(
+            reconcile.linear_ops, "cmd_advance",
+            side_effect=_refusing(board, times=1)):
+        assert reconcile.advance_urgent_intake() == set()
+        assert any("DRE-811" in f for f in reconcile._write_failures)
+    assert board.lane("DRE-811") == "Intake"
+
+    board.age(15)
+    assert sweep(board) == {"DRE-811"}
+    assert board.lane("DRE-811") == "Planning"
+    assert len(board.rule_comments("DRE-811")) == 2, "one receipt per attempt"
+
+
+def test_a_card_whose_move_failed_is_not_retried_inside_the_window():
+    """The retry waits out the window its own receipt is counted in, so a
+    second repo sweeping the same minute does not pile a second attempt on."""
+    board = Board([card("DRE-812", raised=_ship() + timedelta(hours=1))])
+    with wired(board), mock.patch.object(
+            reconcile.linear_ops, "cmd_advance",
+            side_effect=_refusing(board, times=1)):
+        reconcile.advance_urgent_intake()
+    sweep(board)
+    assert board.lane("DRE-812") == "Intake"
+    assert len(board.rule_comments("DRE-812")) == 1
+
+
+def test_a_move_that_keeps_failing_stops_at_the_attempt_cap(capsys):
+    """Bounded, so a card Linear keeps refusing cannot loop forever: after
+    `max_attempts` receipts the rule leaves it to the groomer and says so."""
+    attempts = json.loads(CONFIG.read_text())["max_attempts"]
+    assert attempts == reconcile.URGENT_MAX_ATTEMPTS == 3
+    board = Board([card("DRE-813", raised=_ship() + timedelta(hours=1))])
+    with wired(board), mock.patch.object(
+            reconcile.linear_ops, "cmd_advance",
+            side_effect=_refusing(board, times=99)):
+        for _ in range(attempts + 2):
+            reconcile.advance_urgent_intake()
+            board.age(15)
+    assert board.lane("DRE-813") == "Intake"
+    assert len(board.rule_comments("DRE-813")) == attempts
+    lines = _fast_path_lines(capsys.readouterr().out)
+    assert any("DRE-813" in line and "groomer" in line for line in lines), lines
+
+
+def test_an_advance_that_moved_nothing_is_not_reported_as_moved(capsys):
+    """`cmd_advance` returns normally without writing when it refuses — an
+    epic, a card no longer in Intake, a guarded write that stood down. The
+    sweep reads the lane back, so a move that did not happen is never
+    printed as one, and a card still in Intake is a write failure."""
+    board = Board([card("DRE-814", raised=_ship() + timedelta(hours=1))])
+
+    def nothing(identifier, *a):
+        board.advances.append((identifier, *a))
+
+    with wired(board), mock.patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=nothing):
+        assert reconcile.advance_urgent_intake() == set()
+        assert any("DRE-814" in f for f in reconcile._write_failures)
+    lines = _fast_path_lines(capsys.readouterr().out)
+    assert not any("moved Intake → Planning" in line for line in lines), lines
+
+
+def test_a_card_that_left_intake_another_way_is_not_reported_as_moved(capsys):
+    """The groomer drained it between the board read and the move: the
+    guarded advance stands down, the card is not in Intake, and that is
+    nobody's failure — but it is not this rule's move either."""
+    board = Board([card("DRE-815", raised=_ship() + timedelta(hours=1))])
+
+    def drained_first(identifier, *a):
+        board.history_move(identifier, "Green Light")
+        board.cards[identifier]["state"]["name"] = "Green Light"
+        return board.cmd_advance(identifier, *a)
+
+    with wired(board), mock.patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=drained_first):
+        assert reconcile.advance_urgent_intake() == set()
+        assert not reconcile._write_failures
+    assert board.lane("DRE-815") == "Green Light"
+    lines = _fast_path_lines(capsys.readouterr().out)
+    assert not any("moved Intake → Planning" in line for line in lines), lines
+    assert any("DRE-815" in line and "Green Light" in line for line in lines), lines
+
+
+def test_the_receipt_is_a_claim_not_a_report_of_a_finished_move():
+    """It is posted before the move, so it cannot say the move happened."""
+    note = reconcile.urgent_fast_path_note("DRE-816", _ship() + timedelta(hours=1))
+    assert "now (DRE-4150)" not in note
+    assert "moving" in note
 
 
 def test_the_fast_path_is_a_full_sweep_phase_only():
