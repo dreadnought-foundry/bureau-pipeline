@@ -1781,22 +1781,33 @@ jobs:
       #
       # A RETURNED CHILD of an epic (DRE-5242) also creates no children of its
       # own: its pieces are siblings under its parent and the card itself is
-      # canceled. That is a split, not a question — so with no reason written
-      # there is nothing to park. A returned child the planner could not cut
-      # safely wrote a reason, and escalates exactly like any other.
+      # canceled. That is a split, not a question — so when Linear says the
+      # card reads Canceled and no reason was written, there is nothing to
+      # park. The missing reason alone proves nothing: a planner that ignored
+      # the prompt, had a `mid_epic.py discovery` refused, or stopped before
+      # the cancel writes no reason either, and that card must not sit in
+      # Planning with nobody told. It escalates with a default reason. A
+      # returned child the planner could not cut safely wrote a reason, and
+      # escalates exactly like any other.
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           RETURNED_CHILD: ${{ steps.shape.outputs.returned_child }}
+          PARENT: ${{ steps.shape.outputs.parent }}
         run: |
+          CARD="${{ github.event.client_payload.identifier }}"
           REASON="${{ runner.temp }}/planner-escalation.txt"
           if [ "$RETURNED_CHILD" = "true" ] && [ ! -s "$REASON" ]; then
-            echo "a returned child split into siblings under its parent — nothing to escalate"
-            exit 0
+            STATE=$(python3 .bureau-pipeline/scripts/linear_ops.py state-of "$CARD") || STATE=""
+            if [ "$STATE" = "Canceled" ]; then
+              echo "a returned child split into siblings under $PARENT and canceled — nothing to escalate"
+              exit 0
+            fi
+            echo "returned child was not split or canceled: it is a child of $PARENT, no escalation reason was written, and it reads '${STATE:-unreadable}' in Linear rather than Canceled" > "$REASON"
           fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
-            "${{ github.event.client_payload.identifier }}" \
+            "$CARD" \
             --reason-file "$REASON"
       # --- The plan artifact (DRE-2720) ------------------------------------
       #

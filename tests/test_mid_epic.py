@@ -42,6 +42,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402
+import planning_route  # noqa: E402
 import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -198,6 +199,7 @@ WALKED = {
     ("reconcile", "card_is_epic"),
     ("linear_ops", "epic_branch_refusal"),
     ("linear_ops", "cmd_advance"),
+    ("planning_route", "returned_child"),
 }
 
 
@@ -386,6 +388,41 @@ class TestEveryCallerIsWalked:
         with card.patched():
             created = linear_ops.cmd_subissue("DRE-3013", "a child", "## What\n- work")
         assert created["identifier"] == "DRE-3040"
+
+    def _returned_thread(self) -> list:
+        """A card handed back and read afresh as an epic (DRE-5242)."""
+        import planner_score
+
+        return [
+            planning_shape.shape_comment(
+                "one-off", "first read", by=planning_shape.BY_PLANNER,
+                model="claude-fable-5-1"),
+            f"{planner_score.HANDBACK_RECEIPT_PREFIX} an epic's worth of work.",
+            planning_shape.shape_comment(
+                "epic", "read after the hand-back", by=planning_shape.BY_PLANNER,
+                model="claude-fable-5-1"),
+        ]
+
+    def test_returned_child_does_not_read_a_planner_owned_one_off_parent_as_an_epic(self):
+        """`planning_route.returned_child` (DRE-5242) — the newest caller. A
+        returned card under a one-off wearing `agent:planner` is not a child
+        of an epic, so it is not split into siblings under that one-off."""
+        answer = planning_route.returned_child(
+            self._returned_thread(),
+            {"identifier": "DRE-3018", "title": PROBE_TITLE,
+             "has_children": False, "shape": "one-off"},
+        )
+        assert answer.returned is False
+        assert "not an epic" in answer.reason
+
+    def test_returned_child_still_reads_a_stamped_epic_parent_as_one(self):
+        answer = planning_route.returned_child(
+            self._returned_thread(),
+            {"identifier": "DRE-3013", "title": "the intake front door",
+             "has_children": False, "shape": "epic"},
+        )
+        assert answer.returned is True
+        assert answer.parent == "DRE-3013"
 
 
 # ===========================================================================

@@ -2484,6 +2484,15 @@ def find_by_pr_url(pr_url: str) -> str | None:
     return exact[0]["identifier"] if exact else None
 
 
+def cmd_state_of(identifier: str) -> None:
+    """The card's workflow state name, read fresh — a read, never a write.
+
+    `plan.yml` asks it whether a returned child of an epic really was canceled
+    after its split (DRE-5242): the absence of an escalation reason is not
+    proof the planner did anything, and the card's own state is."""
+    print((get_issue(identifier, fresh=True).get("state") or {}).get("name") or "")
+
+
 def cmd_children(identifier: str) -> None:
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
@@ -3308,6 +3317,7 @@ if __name__ == "__main__":
             "find-open": cmd_find_open,
             "find-open-prefix": cmd_find_open_prefix,
             "children": cmd_children,
+            "state-of": cmd_state_of,
             "count-comments": cmd_count_comments,
             "unpark": cmd_unpark,
             "dump-comments": cmd_dump_comments,

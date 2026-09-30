@@ -422,6 +422,94 @@ class TestTheSplitCardIsNotParkedForTheCEO:
         assert run.index('"$RETURNED_CHILD"') < run.index("planning_escalation.py escalate")
 
 
+_FAKE_LINEAR_OPS = """\
+import os, sys
+assert sys.argv[1:] == ["state-of", os.environ["EXPECT_CARD"]], sys.argv
+print(os.environ.get("FAKE_STATE", ""))
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+"""
+
+_FAKE_ESCALATION = """\
+import json, os, sys
+args = sys.argv[1:]
+reason = args[args.index("--reason-file") + 1]
+body = open(reason, encoding="utf-8").read() if os.path.exists(reason) else None
+with open(os.environ["ESCALATION_LOG"], "w", encoding="utf-8") as f:
+    json.dump({"args": args, "reason": body}, f)
+"""
+
+
+def _run_escalation_step(tmp_path, *, returned: bool, state: str = "",
+                         reason: str | None = None, lookup_fails: bool = False):
+    """Run the escalation step's own shell, with `linear_ops.py` and
+    `planning_escalation.py` faked. Returns (exit code, escalation or None)."""
+    import json
+    import subprocess
+
+    step = next(s for s in _steps()
+                if "hand-planning parks" in (s.get("name") or ""))
+    temp = tmp_path / "runner-temp"
+    temp.mkdir()
+    if reason is not None:
+        (temp / "planner-escalation.txt").write_text(reason, encoding="utf-8")
+    scripts = tmp_path / ".bureau-pipeline" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "linear_ops.py").write_text(_FAKE_LINEAR_OPS, encoding="utf-8")
+    (scripts / "planning_escalation.py").write_text(_FAKE_ESCALATION, encoding="utf-8")
+    script = (step["run"]
+              .replace("${{ runner.temp }}", str(temp))
+              .replace("${{ github.event.client_payload.identifier }}", CARD))
+    assert "${{" not in script
+    log = tmp_path / "escalation.json"
+    env = {**os.environ, "RETURNED_CHILD": "true" if returned else "false",
+           "PARENT": PARENT, "EXPECT_CARD": CARD, "FAKE_STATE": state,
+           "FAKE_EXIT": "1" if lookup_fails else "0", "ESCALATION_LOG": str(log)}
+    # GitHub runs a `run:` block as `bash -e {0}`.
+    done = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=60)
+    escalation = json.loads(log.read_text(encoding="utf-8")) if log.exists() else None
+    return done.returncode, escalation
+
+
+class TestTheStepProvesTheSplitBeforeStandingDown:
+    """The missing reason file is not proof of a split: the card's state in
+    Linear is. A returned child left in Planning with no reason must escalate,
+    not go green with nobody told."""
+
+    def test_a_canceled_returned_child_exits_green_without_escalating(self, tmp_path):
+        code, escalation = _run_escalation_step(tmp_path, returned=True, state="Canceled")
+        assert code == 0
+        assert escalation is None
+
+    def test_a_returned_child_left_in_planning_escalates_with_a_default_reason(self, tmp_path):
+        code, escalation = _run_escalation_step(tmp_path, returned=True, state="Planning")
+        assert code == 0
+        assert escalation is not None
+        assert escalation["args"][:2] == ["escalate", CARD]
+        assert "returned child was not split or canceled" in escalation["reason"]
+        assert "Planning" in escalation["reason"] and PARENT in escalation["reason"]
+
+    def test_an_unreadable_state_escalates_rather_than_passing(self, tmp_path):
+        code, escalation = _run_escalation_step(tmp_path, returned=True, lookup_fails=True)
+        assert escalation is not None
+        assert "returned child was not split or canceled" in escalation["reason"]
+
+    def test_a_returned_child_with_a_reason_escalates_with_that_reason(self, tmp_path):
+        code, escalation = _run_escalation_step(
+            tmp_path, returned=True, state="Planning", reason="cannot cut this safely")
+        assert escalation is not None
+        assert escalation["reason"] == "cannot cut this safely"
+
+    def test_an_ordinary_card_escalates_exactly_as_before(self, tmp_path):
+        code, escalation = _run_escalation_step(
+            tmp_path, returned=False, reason="a question for the CEO")
+        assert escalation == {
+            "args": ["escalate", CARD, "--reason-file",
+                     str(tmp_path / "runner-temp" / "planner-escalation.txt")],
+            "reason": "a question for the CEO",
+        }
+
+
 class TestTheLaneContractNamesTheWriter:
     def test_the_planner_may_write_canceled(self):
         assert "plan.yml" in lane_contract.lane_writers("Canceled")
