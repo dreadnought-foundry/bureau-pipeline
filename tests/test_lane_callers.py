@@ -247,8 +247,9 @@ class CallsFromOtherModules(unittest.TestCase):
 
     def test_a_call_from_another_modules_main_or_main_block_is_reported(self):
         # Only the DEFINING module's `main` is dispatch, answered by the steps
-        # that run its subcommands. Another module's `main` is a def like any
-        # other, and its `__main__` block is code at module level.
+        # that run its subcommands. A call from ANOTHER module's `main` or its
+        # `__main__` block is a real caller, reported as `<file>#main`
+        # (operator decision on PR #599, finding 1(b)).
         with _Copy() as root:
             _write(root / "scripts" / "zz_probe_main.py", '''
                 import sys
@@ -274,8 +275,42 @@ class CallsFromOtherModules(unittest.TestCase):
         self.assertEqual(mine, {
             "scripts/zz_probe_main.py#helper",
             "scripts/zz_probe_main.py#main",
-            "scripts/zz_probe_main.py#<module>",
         })
+
+    def test_another_modules_main_block_alone_is_reported_as_main(self):
+        with _Copy() as root:
+            _write(root / "scripts" / "zz_probe_main_block.py", '''
+                from code_owner_hold import park
+
+                if __name__ == "__main__":
+                    park("DRE-1", "1", "why")
+            ''')
+            report = lane_callers.callers_of(HOLD, "park", root=str(root))
+        mine = {c for c in report.callers if c.startswith("scripts/zz_probe_main_block.py#")}
+        self.assertEqual(mine, {"scripts/zz_probe_main_block.py#main"})
+
+    def test_reconciles_main_calling_the_target_is_reported_and_own_dispatch_is_not(self):
+        with _Copy() as root:
+            path = root / "scripts" / "reconcile.py"
+            before = lane_callers.callers_of(ESCALATION, "escalate", root=str(root))
+            text = path.read_text(encoding="utf-8")
+            main = next(n for n in ast.parse(text).body
+                        if isinstance(n, ast.FunctionDef) and n.name == "main")
+            first = main.body[1] if ast.get_docstring(main) else main.body[0]
+            lines = text.splitlines(keepends=True)
+            indent = " " * first.col_offset
+            lines.insert(first.lineno - 1,
+                         f'{indent}planning_escalation.escalate(None, "DRE-1", "probe")\n')
+            path.write_text("".join(lines), encoding="utf-8")
+            ast.parse(path.read_text(encoding="utf-8"))
+            after = lane_callers.callers_of(ESCALATION, "escalate", root=str(root))
+            exits = lane_callers.callers_of(ROUTE, "_cmd_exit", root=str(root))
+        self.assertNotIn("scripts/reconcile.py#main", before.callers)
+        self.assertIn("scripts/reconcile.py#main", after.callers)
+        # planning_route's own `main` dispatching its own `_cmd_exit` is still
+        # a subcommand's dispatch: the route steps are the callers.
+        self.assertNotIn("scripts/planning_route.py#main", exits.callers)
+        self.assertLessEqual(EXIT_CALLERS, exits.callers)
 
 
 class WorkflowSteps(unittest.TestCase):
@@ -422,6 +457,62 @@ class TheThreeMapForms(unittest.TestCase):
         ''',
     }
 
+    MODULES["zz_form_inline_via.py"] = '''
+        import argparse
+        import sys
+
+
+        def target(card):
+            return card
+
+
+        def _cmd_go(args):
+            return target(args.card)
+
+
+        def main(argv=None):
+            parser = argparse.ArgumentParser()
+            sub = parser.add_subparsers(dest="command")
+            sub.add_parser("via").add_argument("card")
+            args = parser.parse_args(argv)
+            command = args.command
+            if command == "via":
+                _cmd_go(args)
+                return 0
+            return 2
+
+
+        if __name__ == "__main__":
+            sys.exit(main())
+    '''
+    MODULES["zz_form_inline_unknown.py"] = '''
+        import argparse
+        import sys
+
+
+        def target(card):
+            return card
+
+
+        HANDLERS = {"go": target}
+
+
+        def main(argv=None):
+            parser = argparse.ArgumentParser()
+            sub = parser.add_subparsers(dest="command")
+            sub.add_parser("go").add_argument("card")
+            args = parser.parse_args(argv)
+            command = args.command
+            if command == "go":
+                HANDLERS[command](args.card)
+                return 0
+            return 2
+
+
+        if __name__ == "__main__":
+            sys.exit(main())
+    '''
+
     WORKFLOW = '''
         name: probe
         on: workflow_dispatch
@@ -439,6 +530,10 @@ class TheThreeMapForms(unittest.TestCase):
                 run: python3 .bureau-pipeline/scripts/zz_form_inline.py go "$CARD"
               - name: Inline other step
                 run: python3 .bureau-pipeline/scripts/zz_form_inline.py other
+              - name: Inline via step
+                run: python3 .bureau-pipeline/scripts/zz_form_inline_via.py via "$CARD"
+              - name: Inline unknown step
+                run: python3 .bureau-pipeline/scripts/zz_form_inline_unknown.py go "$CARD"
               - name: Parser step
                 run: |
                   python3 "$PIPELINE_DIR"/scripts/zz_form_parser.py \\
@@ -479,6 +574,21 @@ class TheThreeMapForms(unittest.TestCase):
         self.assertEqual(self._steps(report), {".github/workflows/zz-probe.yml#Inline step"})
         self.assertNotIn("scripts/zz_form_inline.py#main", report.callers)
         self.assertEqual(report.unread, frozenset())
+
+    def test_an_inline_branch_calling_an_in_module_caller_is_read(self):
+        # `via` calls `_cmd_go`, which calls `target`, in place: the step is
+        # the caller even with no `return <handler>(…)`.
+        report = self._report("zz_form_inline_via.py")
+        self.assertEqual(self._steps(report),
+                         {".github/workflows/zz-probe.yml#Inline via step"})
+        self.assertEqual(report.unread, frozenset())
+
+    def test_an_inline_branch_that_cannot_be_resolved_is_unread(self):
+        # `HANDLERS[command](…)` names no callee: whether `go` reaches the
+        # target cannot be read, so the module is unread, never dropped.
+        report = self._report("zz_form_inline_unknown.py")
+        self.assertEqual(self._steps(report), set())
+        self.assertEqual(report.unread, frozenset({"scripts/zz_form_inline_unknown.py"}))
 
     def test_add_parser_with_set_defaults_is_read(self):
         report = self._report("zz_form_parser.py")
