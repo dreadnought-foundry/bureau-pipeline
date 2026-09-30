@@ -228,14 +228,19 @@ def config_file(doc, raw: str | None = None):
         os.unlink(path)
 
 
-COMMITTED = {"max_running": 2, "claim_ttl_minutes": 105,
+#: The claim TTL follows the plan job's clock (`Bounds` below): 115 since
+#: DRE-5288 sized the two re-plan ceilings per plan and the job clock rose with
+#: them.
+COMMITTED = {"max_running": 2, "claim_ttl_minutes": 115,
              "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
 
 #: The ledger's behavior is tested at the four slots it was written against
 #: (DRE-5176). The committed number is `TheCap`'s contract alone: DRE-5326
 #: dropped it to two on 2026-09-30, when four planners out-spent Linear's
-#: refill, and the rules below do not change with the number.
-FOUR_SLOTS = dict(COMMITTED, max_running=4)
+#: refill, and the rules below do not change with the number. The same for the
+#: TTL: the lifetimes below are written either side of 105 minutes, and the
+#: committed TTL moving with the plan job's clock (DRE-5288) does not move them.
+FOUR_SLOTS = dict(COMMITTED, max_running=4, claim_ttl_minutes=105)
 
 
 class _Base(unittest.TestCase):
