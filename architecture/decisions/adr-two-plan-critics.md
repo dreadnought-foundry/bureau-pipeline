@@ -173,6 +173,11 @@ that you need to go look at it again, but to go."* So the second critic now
 reads the plan after the first critic passes it and before the CEO does, and
 the CEO's Approve means go. This supersedes the placement above, and with it
 the second critic's rows of the table on what a send-back and the bound do.
+It also supersedes the second critic's cross-epic scope row: that critic sees
+every other epic under review in Planning as well, so two plans read at the
+same moment see each other. That part lands with
+[DRE-5276](https://linear.app/dreadnoughtfoundry/issue/DRE-5276), and until
+then the row above is still what the critic sees.
 
 **Why the premise did not hold.** This record put the second critic after the
 approval because an adversarial pass needs a fixed target, and it read the

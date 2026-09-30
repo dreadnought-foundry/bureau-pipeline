@@ -20,7 +20,16 @@ route after the CEO's approval and parks its bound and its second death in
 Green Light, a re-plan that changed the card set still returns the epic to
 Green Light, `plan_critic.REAPPROVE_HOW` still asks for an approval until
 DRE-5280 rewrites it, and the promoter still reads a `NO_RESULT` post round as
-a release. DRE-5281, the last of those cards, deletes this paragraph.
+a release. Four more things below are not built yet either. The second critic
+does not see Planning epics, and `plan_critic.SIGHT_STATES` does not exist
+until DRE-5276 adds it — today its sight is `IN_FLIGHT_EPIC_STATES`, Green
+Light, Todo and In Progress. The turn-cap retry still dispatches the activate
+route (`trigger_state: in progress`) and its second death still parks in Green
+Light until DRE-5277. The re-review watcher does not ask for a review nobody
+started, or park that epic in Triage, until DRE-5278 — today it only posts an
+overdue notice about a SEND_BACK after approval. And the Planning stall
+watchdog does not park in Triage until DRE-5286. DRE-5281, the last of those
+cards, deletes this paragraph.
 
 ## The first critic reviews a moving document
 

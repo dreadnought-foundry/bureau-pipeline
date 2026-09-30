@@ -414,7 +414,7 @@ agents:
     kind: advisory
     model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
-    trigger: "Review route (agent-plan dispatch) — runs after the first critic passes the plan, before Green Light"
+    trigger: "Review route (agent-plan dispatch) — runs after the first critic passes the plan, before Green Light (from DRE-5281; until then on the activate route)"
     # The FLOOR of a band, not a literal: this review's ceiling is sized per
     # plan (`plan_critic.post_review_turns` — base + 4/card, floored, capped),
     # so the roster reports the smallest budget it can run with. DRE-2785
