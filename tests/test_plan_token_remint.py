@@ -66,6 +66,11 @@ START_MINT_ID = "app"
 # steps, which are mints but not re-mints.
 READER_MINT_ID = "reader"
 POOL_STEP_IDS = {READER_MINT_ID, "probe_2", "probe_3", "probe_4"}
+# The end-of-run mint for the NEXT card's owner (DRE-5180): a mint, not a
+# re-mint. It sits after every model step, is scoped to another owner's
+# installation, and is `continue-on-error` by design — a failed mint leaves
+# the card waiting for the sweep. Pinned in tests/test_planner_queue_wiring.py.
+OWNER_MINT_IDS = {"next_token"}
 
 
 def _steps() -> list[dict]:
@@ -166,10 +171,21 @@ class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
             if _action(s) == MINT_ACTION
             and s.get("id") != START_MINT_ID
             and s.get("id") not in POOL_STEP_IDS
+            and s.get("id") not in OWNER_MINT_IDS
         ]
 
     def test_there_are_re_mints(self):
         self.assertTrue(self._re_mints())
+
+    def test_the_owner_mint_is_no_re_mint_it_follows_every_model_step(self):
+        # Excluded above only because no model step runs after it: a mint
+        # that moved above one would be a token some model run could spend.
+        steps = _steps()
+        last_model = max(i for i, s in enumerate(steps) if _action(s) == MODEL_ACTION)
+        for step_id in OWNER_MINT_IDS:
+            at = _index_of_id(step_id)
+            self.assertEqual(_action(steps[at]), MINT_ACTION, step_id)
+            self.assertGreater(at, last_model, step_id)
 
     def test_same_pin_and_same_inputs_as_the_reader_mint(self):
         reader = _steps()[_index_of_id(READER_MINT_ID)]
