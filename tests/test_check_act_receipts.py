@@ -832,10 +832,17 @@ class TestTheShippedTree:
         left as a hole. A progress act's tag is not an idempotency key — a
         heartbeat repeats five times a build — so putting a trailer on one
         would hand a repeating comment a key that `tag in body` suppresses on.
-        This card posts nothing new, and this is what says so next year."""
+        This card posts nothing new, and this is what says so next year.
+
+        A progress act that declares `adopted: true` is the one exception: its
+        tag IS a live key, counted before posting so a retry posts nothing
+        twice (DRE-4717's `roll-up-activated`), so composing it is the point.
+        Every heartbeat still declares `adopted: false` and is still caught."""
         composed = {s.composed_as for s in guard.sites() if s.composed_as}
         flagged = {act for _, _, act in guard.shell_act_flags()}
-        progress = [n for n in pipeline_act.acts() if pipeline_act.kind(n) == _PROGRESS]
+        progress = [n for n in pipeline_act.acts()
+                    if pipeline_act.kind(n) == _PROGRESS
+                    and not pipeline_act.record(n).get("adopted")]
         assert progress, "the registry declares no progress act at all"
         for name in progress:
             assert name not in composed and name not in flagged, (
