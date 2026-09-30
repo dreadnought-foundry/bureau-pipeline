@@ -22,7 +22,10 @@
 # effort) and can double the bill (Fable 5 is ~2x Opus per token — the reason
 # Fable is off the workhorse ladder). The commit step below stages one path and
 # then PROVES the staged set, so this workflow is structurally incapable of
-# adopting anything.
+# adopting anything. The one automated path to a ladder change is a different
+# workflow, `model-adoption.yml` (DRE-3898): a same-family newer version at no
+# higher price is trialled and PROPOSED as an ordinary pull request that the
+# critic and the merge gate review; everything else stays a human decision.
 #
 # IT DOES NOT PUSH TO `main` (DRE-3879). The commit step used to end in
 # `git push origin HEAD:main`, and branch protection refused it — `GH006:

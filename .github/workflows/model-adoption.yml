@@ -1,0 +1,801 @@
+# Model adoption (DRE-3898) — the CEO's three rules, run without him.
+#
+# The CEO on 2026-09-14 gave three rules for a model the catalog offers that
+# the pipeline has never configured, and `scripts/model_adoption.py` (DRE-3895)
+# sorts every such model into one of them:
+#
+#   * `adopt`  — a newer version of a family already on a ladder, at the same
+#                or a lower declared price: one real trial run, a record card,
+#                and an ordinary pull request to config/models.yaml;
+#   * `ask`    — a new family, a pricier tier, or no declared price: ONE
+#                plain-English question card for the CEO;
+#   * `ignore` — older than, or superseded by, what we run: a summary line and
+#                nothing else. No card, no comment (the class DRE-3881 was).
+#
+# DAILY, and cheap on a quiet day. The CEO on 2026-09-28: "the way models are
+# coming out, it needs to look at it almost every day. A quick hit." A day with
+# no `adopt` candidate is one catalog read, one classification and a summary
+# table — no trial job and no model call. `supports` (below) reads npm and the
+# Models API, never a model.
+#
+# IT READS THE LIVE CATALOG, NEVER THE COMMITTED SNAPSHOT. The snapshot in the
+# repo root stopped updating when its push to `main` began failing on
+# 2026-08-10 (DRE-3879), so classifying against it would classify against a
+# month-old list. The catalog is fetched ONCE into $RUNNER_TEMP, and `apply`
+# reads that same file, so the rule and the edit see one catalog.
+#
+# ONE ADOPTION IN FLIGHT AT A TIME. Only the FIRST `adopt` decision is acted
+# on, and not at all while an adoption pull request is open. The next one
+# waits for the next run.
+#
+# FULL STRENGTH FIRST (DRE-5121). A trial that comes back `degraded` — the
+# model ran below the context window or output cap the Models API lists,
+# because the pinned Claude Code does not know it — is no adoption, and neither
+# is a candidate `claude_code_pin.py supports` says the pin cannot run. Either
+# way the run opens the pin-raise pull request instead (one in flight at a
+# time), trialled on the raised pin, and the adoption follows on the first run
+# after that merges. That is the path Sonnet 5.5 needed on 2026-09-28
+# (DRE-5116).
+#
+# NOTHING HERE PUSHES TO `main`. The adoption and the pin raise each ride an
+# `agent/*` branch and an ordinary pull request authored by the bureau App, so
+# the critic reviews it on `pull_request` and the merge gate merges it on CI
+# green plus a bound APPROVE — the same gates as any agent's work.
+#
+# `dry_run: true` (workflow_dispatch) produces the summary table, the trial and
+# every rendered text, and writes no card, no branch and no pull request. It is
+# what the PROOF card dispatches.
+#
+# NO ${{ }} INSIDE A `run:` BLOCK (DRE-3484): every value arrives through
+# `env:`, which also lets tests/test_model_adoption_workflow.py execute the
+# scripts below as written.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`. Every push and pull
+#      request is made with the bureau App token minted first, so the branch
+#      and the pull request are `agent-bureau-bot`'s, an identity qa-review.yml's
+#      `allowed_bots` already admits: the critic runs on `pull_request` and the
+#      merge gate merges an `agent/*` head. The trial is model-trial.yml, whose
+#      own `allowed_bots` admits `github-actions`.
+#   Q2 secrets — a scheduled or dispatched run in this repo reads the repo's
+#      normal secrets store, never the Dependabot one, so the App key, the
+#      Linear key and the Anthropic credential all resolve; `secrets: inherit`
+#      hands the trial the same store. The Anthropic credential is only ever
+#      used for the catalog and the Models API read and inside claude-code-action,
+#      never for a raw Messages API call (DRE-3074).
+#   Q3 re-run — every write is deduped: the question card, the record card and
+#      the trial-failure card on their exact titles (`find-open` ignores
+#      terminal cards), the adoption on its PR title and any open
+#      `agent/*-adopt-*` head, the pin raise on its title prefix, and each
+#      branch by name. A rerun finds what the first run made and mints nothing.
+#   Q4 command limits — `gh pr create` needs the branch pushed and a token that
+#      may push it, which is why the App token is minted before checkout. A
+#      pull request listing GitHub will not answer fails the run rather than
+#      opening a duplicate. The pin raise edits `.github/workflows/`, which a
+#      token may push only with the App's `workflows` permission.
+#   Q5 our crash — a crash between the push and `gh pr create` leaves a branch
+#      with no pull request. The next run finds the branch, reuses it as it
+#      stands and opens the pull request; nothing else was recorded to unstick.
+#      A red run goes to the medic (self-medic.yml), and its one retry repeats
+#      the same deduped writes.
+name: Model adoption
+
+on:
+  schedule:
+    # Daily, 07:17 UTC (00:17 PDT). Off the hour — GitHub delays scheduled
+    # jobs hardest at :00 — and outside the release window.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Produce the summary, the trial and the rendered texts, and write no
+          card, branch or pull request.
+        type: boolean
+        default: false
+
+# One run at a time, and a queued one waits rather than cancelling a run that
+# may be between a push and its pull request.
+concurrency:
+  group: model-adoption
+  cancel-in-progress: false
+
+# The App token does every write to GitHub; this run's own token only reads
+# the repo and the open pull requests.
+permissions:
+  contents: read
+  pull-requests: read
+
+# A scheduled run has no inputs, so this is 'false' there.
+env:
+  DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+
+jobs:
+  # One catalog read, one classification, one summary table. The questions for
+  # the CEO are filed here; the one adoption candidate is handed on.
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      candidate: ${{ steps.pick.outputs.candidate }}
+      route: ${{ steps.route.outputs.route }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      # ONE live read. An outage degrades to an empty catalog, which classifies
+      # to nothing — a vendor outage is not a finding.
+      - name: Fetch the live catalog once
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python3 scripts/model_catalog.py snapshot "$RUNNER_TEMP/catalog.json"
+
+      - name: Classify every candidate
+        run: python3 scripts/model_adoption.py classify --snapshot "$RUNNER_TEMP/catalog.json" > "$RUNNER_TEMP/decisions.json"
+
+      # Every candidate's id, rule and reason, as a table — an `ignore` gets
+      # its line here and nothing anywhere else. Each `ask` is written to its
+      # own file for the question step; the FIRST `adopt` only is handed on.
+      - name: Summarize every candidate and pick what to act on
+        id: pick
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import pathlib
+
+          tmp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          try:
+              decisions = json.loads((tmp / "decisions.json").read_text())
+          except (OSError, ValueError) as exc:
+              raise SystemExit(f"::error::the classification is unreadable: {exc}")
+          if not isinstance(decisions, list):
+              raise SystemExit("::error::the classification is not a list of Decision records")
+
+          def cell(value):
+              return " ".join(str(value or "").split()).replace("|", "\\|")
+
+          lines = ["### Model adoption", ""]
+          if decisions:
+              lines += ["| Candidate | Rule | Reason |", "|---|---|---|"]
+              lines += [f"| `{cell(d.get('candidate'))}` | {cell(d.get('rule'))} "
+                        f"| {cell(d.get('reason'))} |" for d in decisions]
+          else:
+              lines.append("No candidate today: the catalog offers nothing the "
+                           "ladders have not already configured.")
+
+          asks = [d for d in decisions if d.get("rule") == "ask"]
+          for n, decision in enumerate(asks, 1):
+              (tmp / f"ask-{n}.json").write_text(json.dumps(decision))
+          adopts = [d for d in decisions if d.get("rule") == "adopt"]
+          candidate = ""
+          if adopts:
+              candidate = str(adopts[0].get("candidate") or "")
+              (tmp / "decision.json").write_text(json.dumps(adopts[0]))
+              lines += ["", f"Acting on the first `adopt` candidate: `{candidate}`."]
+              if len(adopts) > 1:
+                  waiting = ", ".join(f"`{d.get('candidate')}`" for d in adopts[1:])
+                  lines.append(f"Waiting for a later run (one adoption at a time): {waiting}.")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"candidate={candidate}\n")
+              fh.write(f"asks={len(asks)}\n")
+          text = "\n".join(lines) + "\n"
+          print(text)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write(text)
+          PY
+
+      # One adoption in flight at a time: an open pull request carrying this
+      # candidate's title, or any open adoption head, holds the rail.
+      - name: Is an adoption already in flight
+        id: inflight
+        if: steps.pick.outputs.candidate != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE=$(python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json")
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+            --json title,headRefName > "$RUNNER_TEMP/open-prs.json"
+          export TITLE
+          python3 <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
+
+          # Both head shapes an adoption opens on — the record card's and the
+          # card-owed fallback's — read from the module that names them.
+          sys.path.insert(0, "scripts")
+          from model_adoption_actions import fallback_branch, record_branch
+
+          heads = (record_branch("*", "*"), fallback_branch("*"))
+          title = os.environ["TITLE"]
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "open-prs.json")) as fh:
+              prs = json.load(fh)
+          held = [pr for pr in prs
+                  if pr.get("title") == title
+                  or any(fnmatch.fnmatchcase(pr.get("headRefName") or "", head)
+                         for head in heads)]
+          line = ("An adoption is already in flight "
+                  f"(`{held[0].get('headRefName')}`) — skipped, one at a time."
+                  if held else "No adoption in flight.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"in_flight={'true' if held else 'false'}\n")
+          print(line)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write(f"\n{line}\n")
+          PY
+
+      # Does the PINNED Claude Code list the candidate at the Models API's
+      # limits (DRE-5121)? `no` sends the run to the pin raise without a trial
+      # on a pin already known to run it below strength; `unknown` still
+      # trials, because the trial measures strength for itself.
+      - name: Does the pinned Claude Code run it at full strength
+        id: pin
+        if: steps.pick.outputs.candidate != '' && steps.inflight.outputs.in_flight != 'true'
+        env:
+          CANDIDATE: ${{ steps.pick.outputs.candidate }}
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/claude_code_pin.py supports "$CANDIDATE" >> "$GITHUB_OUTPUT"
+
+      - name: Route the adoption candidate
+        id: route
+        env:
+          CANDIDATE: ${{ steps.pick.outputs.candidate }}
+          IN_FLIGHT: ${{ steps.inflight.outputs.in_flight }}
+          SUPPORTS: ${{ steps.pin.outputs.answer }}
+          SUPPORTS_WHY: ${{ steps.pin.outputs.why }}
+        run: |
+          route=""
+          if [ -n "$CANDIDATE" ] && [ "$IN_FLIGHT" != "true" ]; then
+            if [ "$SUPPORTS" = "no" ]; then
+              route=pin
+              line="The pinned Claude Code does not run $CANDIDATE at full strength ($SUPPORTS_WHY) — raising the pin first."
+            else
+              route=trial
+              line="Trialling $CANDIDATE (pinned Claude Code support: ${SUPPORTS:-unknown})."
+            fi
+            echo "$line"
+            printf '\n%s\n' "$line" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          fi
+          echo "route=$route" >> "$GITHUB_OUTPUT"
+
+      # `ask`: ONE decision card per candidate, deduped on its title. It lands
+      # in Planning with needs-human + no-code + agent:devops, and the planning
+      # run parks it in Green Light, the CEO's queue.
+      - name: Ask the CEO — one question card per candidate
+        if: steps.pick.outputs.asks != '0' && env.DRY_RUN != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          for DECISION in "$RUNNER_TEMP"/ask-*.json; do
+            python3 scripts/model_adoption_actions.py open-question-card --decision "$DECISION" \
+              > "$RUNNER_TEMP/question-card.txt"
+            cat "$RUNNER_TEMP/question-card.txt"
+          done
+
+      - name: Dry run — print the questions
+        if: steps.pick.outputs.asks != '0' && env.DRY_RUN == 'true'
+        run: |
+          for DECISION in "$RUNNER_TEMP"/ask-*.json; do
+            python3 scripts/model_adoption_actions.py render question-title --decision "$DECISION"
+            python3 scripts/model_adoption_actions.py render question-body --decision "$DECISION"
+          done
+
+      # The catalog travels with the decision, so `apply` edits against the
+      # exact list the rule classified — never a second fetch.
+      - name: Hand the catalog and the decision on
+        if: steps.pick.outputs.candidate != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-adoption-decision
+          path: |
+            ${{ runner.temp }}/catalog.json
+            ${{ runner.temp }}/decision.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ONE real, bounded agent run on the candidate (DRE-3897). It never goes red
+  # on a failed trial: `outcome` is the answer.
+  trial:
+    needs: classify
+    if: needs.classify.outputs.route == 'trial'
+    uses: ./.github/workflows/model-trial.yml
+    with:
+      model: ${{ needs.classify.outputs.candidate }}
+      pipeline_ref: ${{ github.sha }}
+    secrets: inherit
+
+  # A failed trial — on the pinned Claude Code, or on a raised one — is no
+  # adoption and ONE card saying so, never silence and never a CEO card.
+  trial-failed:
+    needs: [classify, trial, pin-trial]
+    if: >-
+      !cancelled() && (needs.trial.outputs.outcome == 'failed'
+      || (needs.pin-trial.outputs.outcome != '' && needs.pin-trial.outputs.outcome != 'passed'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Write the trial-failure card
+        env:
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+          SUMMARY: ${{ needs.pin-trial.outputs.summary || needs.trial.outputs.summary }}
+          TRIAL_RUN_URL: ${{ needs.pin-trial.outputs.run_url || needs.trial.outputs.run_url }}
+          ON_RAISED_PIN: ${{ needs.pin-trial.outputs.outcome != '' && 'true' || 'false' }}
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+
+          candidate = os.environ["CANDIDATE"]
+          summary = " ".join((os.environ.get("SUMMARY") or "").split())
+          run_url = os.environ.get("TRIAL_RUN_URL") or "not recorded"
+          # "<model>: <outcome> — <death class or reason>, <turns> turns, <s>s"
+          death = summary.split(" — ", 1)[1] if " — " in summary else summary
+          death = death.rsplit(", ", 2)[0] if death.count(", ") >= 2 else death
+          where = ("on the raised Claude Code pin, in its pin-raise branch"
+                   if os.environ.get("ON_RAISED_PIN") == "true"
+                   else "on the pinned Claude Code")
+          body = "\n".join([
+              f"The model adoption workflow trialled `{candidate}` {where}, and the "
+              "trial did not pass, so nothing was adopted.",
+              "",
+              f"- Trial run: {run_url}",
+              f"- Death class: {death or 'not recorded'}",
+              f"- Summary: {summary or 'not recorded'}",
+              "",
+              "The daily run tries again on its own; this card is the record that "
+              "the candidate failed and why.",
+              "",
+              "## Acceptance criteria",
+              "",
+              f"- [ ] The cause of the failed trial of `{candidate}` is named, and "
+              "either fixed or recorded as a reason not to adopt it.",
+          ])
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "trial-failed.md"
+          path.write_text(body + "\n")
+          print(body)
+          PY
+
+      - name: File ONE trial-failure card (idempotent)
+        if: env.DRY_RUN != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: |
+          TITLE="Model trial failed: $CANDIDATE"
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+          else
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/trial-failed.md" --repo "$REPO_SLUG" --label agent:devops
+          fi
+
+  # A PASSED trial: the record card, the edit, and an ordinary pull request.
+  # `passed` guards every step of this job.
+  adopt:
+    needs: [classify, trial]
+    if: ${{ !cancelled() && needs.trial.outputs.outcome == 'passed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Minted FIRST: the checkout's push credential and `gh pr create` both
+      # need it, and a pull request authored by the App is one the critic runs
+      # on (Q1, Q4).
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      - name: Fetch the catalog and the decision
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: model-adoption-decision
+          path: ${{ runner.temp }}
+
+      - name: Record the trial result
+        env:
+          TRIAL_MODEL: ${{ needs.classify.outputs.candidate }}
+          TRIAL_OUTCOME: ${{ needs.trial.outputs.outcome }}
+          TRIAL_RUN_URL: ${{ needs.trial.outputs.run_url }}
+          TRIAL_SUMMARY: ${{ needs.trial.outputs.summary }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+
+          trial = {
+              "model": os.environ.get("TRIAL_MODEL", ""),
+              "outcome": os.environ.get("TRIAL_OUTCOME", ""),
+              "run_url": os.environ.get("TRIAL_RUN_URL", ""),
+              "summary": os.environ.get("TRIAL_SUMMARY", ""),
+          }
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "trial.json"), "w") as fh:
+              json.dump(trial, fh)
+          print(json.dumps(trial, indent=2))
+          PY
+
+      # Rendered, never written inline: the title is what the in-flight check
+      # dedupes on, and the body is the critic's evidence.
+      - name: Render the adoption pull request
+        run: |
+          python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json"
+          python3 scripts/model_adoption_actions.py render pr-body --decision "$RUNNER_TEMP/decision.json" \
+            --trial "$RUNNER_TEMP/trial.json" > "$RUNNER_TEMP/pr-body.md"
+          cat "$RUNNER_TEMP/pr-body.md"
+
+      # The board's record of the adoption, and the name of its branch. A
+      # Linear failure owes the card and the adoption proceeds on the fallback
+      # branch, which the pull request says.
+      - name: Open the record card
+        id: record
+        if: env.DRY_RUN != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/model_adoption_actions.py open-record-card \
+            --decision "$RUNNER_TEMP/decision.json" --run-url "$RUN_URL" >> "$GITHUB_OUTPUT"
+
+      # Q5: a branch that already exists with no pull request is a run that
+      # crashed after its push. It is reused as it stands, and the pull
+      # request is opened below.
+      - name: Create the adoption branch off origin/main, or reuse it
+        id: branch
+        if: env.DRY_RUN != 'true'
+        env:
+          BRANCH: ${{ steps.record.outputs.branch }}
+        run: |
+          [ -n "$BRANCH" ] || { echo "::error::the record card step named no branch"; exit 1; }
+          git fetch --quiet origin main
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            git fetch --quiet origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "$BRANCH already exists — reusing it as it stands"
+          else
+            git checkout -B "$BRANCH" origin/main
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the adoption to config/models.yaml
+        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
+        env:
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json"
+
+      - name: Regenerate the derived model regions
+        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
+        run: |
+          python3 scripts/sync_model_config.py
+          python3 scripts/sync_model_config.py --check
+
+      # INFORMATIONAL. A red result is stated in the pull request, not a reason
+      # to withhold it: the critic and the fix agent own the repair, and both
+      # act on an `agent/*` branch.
+      - name: Run the model tests (informational)
+        id: tests
+        if: env.DRY_RUN != 'true'
+        run: |
+          set +e
+          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py -q \
+            > "$RUNNER_TEMP/model-tests.txt" 2>&1
+          rc=$?
+          set -e
+          tail -n 40 "$RUNNER_TEMP/model-tests.txt"
+          if [ "$rc" -eq 0 ]; then result=passed; else result=failed; fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "model tests: $result"
+
+      # The staged set is PROVED before the commit: config/models.yaml,
+      # agents.yaml and the generated region of scripts/model_fallback.py, and
+      # nothing else — the three paths the TDD gate reads as data and a
+      # generated region (DRE-3896).
+      - name: Commit and push the adoption branch
+        if: env.DRY_RUN != 'true' && steps.branch.outputs.reuse != 'true'
+        env:
+          BRANCH: ${{ steps.record.outputs.branch }}
+          CARD: ${{ steps.record.outputs.card }}
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: |
+          git add -- config/models.yaml agents.yaml scripts/model_fallback.py
+          STAGED=$(git diff --cached --name-only)
+          for path in $STAGED; do
+            case "$path" in
+              config/models.yaml|agents.yaml|scripts/model_fallback.py) ;;
+              *) echo "::error::refusing to commit $path — an adoption touches only the model config"; exit 1 ;;
+            esac
+          done
+          [ -n "$STAGED" ] || { echo "::error::the adoption changed nothing"; exit 1; }
+          git -c user.name="agent-bureau-bot[bot]" \
+            -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore(${CARD:-models}): adopt $CANDIDATE through the model adoption workflow"
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+      - name: Open the adoption pull request
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BRANCH: ${{ steps.record.outputs.branch }}
+          TESTS: ${{ steps.tests.outputs.result }}
+          CARD_OWED: ${{ steps.record.outputs.card_owed }}
+        run: |
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json url --jq '.[0].url // ""')
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+            exit 0
+          fi
+          {
+            echo
+            echo "## Model tests"
+            echo
+            echo "\`tests/test_model_policy.py\` and \`tests/test_model_config.py\` on this branch: **${TESTS:-not run}**."
+            if [ "$CARD_OWED" = "true" ]; then
+              echo
+              echo "The record card could not be filed, so it is owed: this branch carries no card id."
+            fi
+          } >> "$RUNNER_TEMP/pr-body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "$(python3 scripts/model_adoption_actions.py render pr-title --decision "$RUNNER_TEMP/decision.json")" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
+
+      - name: Dry run — preview the config edit
+        if: env.DRY_RUN == 'true'
+        env:
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+        run: python3 scripts/model_adoption_actions.py apply "$CANDIDATE" --snapshot "$RUNNER_TEMP/catalog.json" --check
+
+  # DEGRADED, or a pin the candidate is known not to run on: raise the Claude
+  # Code pin first (DRE-5121), one raise in flight at a time.
+  pin-raise:
+    needs: [classify, trial]
+    if: >-
+      !cancelled() && needs.classify.result == 'success'
+      && (needs.classify.outputs.route == 'pin' || needs.trial.outputs.outcome == 'degraded')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      branch: ${{ steps.push.outputs.branch }}
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      # Every pin-raise title opens with the module's own prefix, read from it
+      # rather than restated here.
+      - name: Is a pin raise already in flight
+        id: inflight
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+            --json title,headRefName > "$RUNNER_TEMP/open-prs.json"
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from claude_code_pin import PR_TITLE_PREFIX
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "open-prs.json")) as fh:
+              prs = json.load(fh)
+          held = [pr for pr in prs if (pr.get("title") or "").startswith(PR_TITLE_PREFIX)]
+          line = (f"A pin raise is already in flight (`{held[0].get('headRefName')}`) — "
+                  "the adoption follows once it merges." if held else "No pin raise in flight.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"in_flight={'true' if held else 'false'}\n")
+          print(line)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write(f"\n{line}\n")
+          PY
+
+      - name: Find the oldest release that runs it at full strength
+        id: find
+        if: steps.inflight.outputs.in_flight != 'true'
+        env:
+          CANDIDATE: ${{ needs.classify.outputs.candidate }}
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/claude_code_pin.py latest-supporting "$CANDIDATE" > "$RUNNER_TEMP/pin.json"
+          python3 <<'PY'
+          import json
+          import os
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "pin.json")) as fh:
+              pin = json.load(fh)
+          answer = pin.get("answer") or "unknown"
+          branch = ""
+          if answer == "found":
+              branch = f"agent/claude-code-pin-{pin['to']['claude_code']}"
+          line = (f"Pin raise for {os.environ['CANDIDATE']}: {answer} — "
+                  + " ".join(str(pin.get("why") or "").split()))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"answer={answer}\nbranch={branch}\n")
+          print(line)
+          if answer != "found":
+              print(f"::warning::{line}")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write(f"\n{line}\n")
+          PY
+
+      - name: Render the pin-raise pull request
+        if: steps.find.outputs.answer == 'found'
+        run: |
+          python3 scripts/claude_code_pin.py render pr-title --pin "$RUNNER_TEMP/pin.json"
+          python3 scripts/claude_code_pin.py render pr-body --pin "$RUNNER_TEMP/pin.json"
+
+      # The raise edits `.github/` and `tests/` only — an ops change the TDD
+      # gate exempts. Its branch is pushed so the trial below can run on it.
+      - name: Raise the pin on its branch and push it
+        id: push
+        if: steps.find.outputs.answer == 'found' && env.DRY_RUN != 'true'
+        env:
+          BRANCH: ${{ steps.find.outputs.branch }}
+        run: |
+          git fetch --quiet origin main
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "$BRANCH already exists — reusing it as it stands"
+          else
+            git checkout -B "$BRANCH" origin/main
+            python3 scripts/claude_code_pin.py apply --pin "$RUNNER_TEMP/pin.json" > "$RUNNER_TEMP/pin-changed.txt"
+            cat "$RUNNER_TEMP/pin-changed.txt"
+            while IFS= read -r path; do
+              [ -n "$path" ] && git add -- "$path"
+            done < "$RUNNER_TEMP/pin-changed.txt"
+            git -c user.name="agent-bureau-bot[bot]" \
+              -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+              commit --quiet -m "chore(models): $(python3 scripts/claude_code_pin.py render pr-title --pin "$RUNNER_TEMP/pin.json")"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Hand the pin record on
+        if: steps.find.outputs.answer == 'found'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-adoption-pin
+          path: ${{ runner.temp }}/pin.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The raise, trialled: the candidate on the Claude Code the branch installs.
+  # model-trial.yml installs Claude Code from its `pipeline_ref` checkout, so
+  # pointing it at the pin-raise branch is a trial on the raised pin.
+  pin-trial:
+    needs: [classify, pin-raise]
+    if: ${{ !cancelled() && needs.pin-raise.outputs.branch != '' }}
+    uses: ./.github/workflows/model-trial.yml
+    with:
+      model: ${{ needs.classify.outputs.candidate }}
+      pipeline_ref: ${{ needs.pin-raise.outputs.branch }}
+    secrets: inherit
+
+  # A raise whose trial passed is opened for review. One that did not is a
+  # failed trial, and `trial-failed` records it.
+  pin-pr:
+    needs: [classify, pin-raise, pin-trial]
+    if: ${{ !cancelled() && needs.pin-trial.outputs.outcome == 'passed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Install the pipeline's Python tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+
+      - name: Fetch the pin record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: model-adoption-pin
+          path: ${{ runner.temp }}
+
+      - name: Record the trial on the raised pin
+        env:
+          TRIAL_MODEL: ${{ needs.classify.outputs.candidate }}
+          TRIAL_OUTCOME: ${{ needs.pin-trial.outputs.outcome }}
+          TRIAL_RUN_URL: ${{ needs.pin-trial.outputs.run_url }}
+          TRIAL_SUMMARY: ${{ needs.pin-trial.outputs.summary }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+
+          trial = {
+              "model": os.environ.get("TRIAL_MODEL", ""),
+              "outcome": os.environ.get("TRIAL_OUTCOME", ""),
+              "run_url": os.environ.get("TRIAL_RUN_URL", ""),
+              "summary": os.environ.get("TRIAL_SUMMARY", ""),
+          }
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "trial.json"), "w") as fh:
+              json.dump(trial, fh)
+          print(json.dumps(trial, indent=2))
+          PY
+
+      - name: Open the pin-raise pull request
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BRANCH: ${{ needs.pin-raise.outputs.branch }}
+        run: |
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json url --jq '.[0].url // ""')
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+            exit 0
+          fi
+          python3 scripts/claude_code_pin.py render pr-body --pin "$RUNNER_TEMP/pin.json" \
+            --trial "$RUNNER_TEMP/trial.json" > "$RUNNER_TEMP/pin-pr-body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "$(python3 scripts/claude_code_pin.py render pr-title --pin "$RUNNER_TEMP/pin.json")" \
+            --body-file "$RUNNER_TEMP/pin-pr-body.md"

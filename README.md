@@ -990,11 +990,13 @@ the model less context or output than the Models API lists, and
 `scripts/claude_code_pin.py` answers whether the pinned Claude Code lists a
 model at full limits (`supports`), finds the release that does
 (`latest-supporting`), and makes the raise of the vendor release and this
-default together (`apply`). Nothing calls it yet. The model adoption workflow
-(DRE-3898) is meant to, opening ONE pin-raise pull request trialled on the
-current top rungs before it merges, and it is not built. Dependabot holds
-`claude-code-action` for every update type, so until that workflow lands the
-pin moves by hand, as DRE-5116 moved it — `tests/test_check_action_pins.py` and
+default together (`apply`). The daily model adoption workflow
+(`.github/workflows/model-adoption.yml`, DRE-3898) calls it: when a candidate's
+trial comes back `degraded`, or `supports` says the pin cannot run it, the run
+opens ONE pin-raise pull request, trialled on the raised pin, instead of
+adopting the model. Dependabot holds `claude-code-action` for every update
+type, so that pull request (or a hand raise, as DRE-5116 made) is the only way
+the pin moves — `tests/test_check_action_pins.py` and
 `tests/test_model_cli_support.py` hold the pair.
 
 **Why it exists.** On 2026-09-08 the vendor's own installer exited clean and

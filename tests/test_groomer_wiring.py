@@ -1079,11 +1079,13 @@ class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
 
     def test_the_bots_are_the_fleet_list_plus_the_qa_bot(self):
         """The fleet list verbatim, plus the qa-bot a scheduled morning
-        initiates as (DRE-5123, tests/test_scheduled_claude_allowed_bots.py)."""
+        initiates as (DRE-5123, tests/test_scheduled_claude_allowed_bots.py).
+        Read off agent-task.yml's `Implement card` step — the model trial now
+        carries the qa-bot too, so it is no longer the fleet list verbatim."""
         ours = (_verify_step(self.job, "claude").get("with") or {}).get(
             "allowed_bots")
-        trial = _step(_load("model-trial.yml"), "Trial the candidate model")
-        fleet = str((trial.get("with") or {}).get("allowed_bots")).split(",")
+        implement = _step(_load("agent-task.yml"), "Implement card")
+        fleet = str((implement.get("with") or {}).get("allowed_bots")).split(",")
         self.assertEqual(sorted(str(ours).split(",")),
                          sorted(fleet + ["agent-bureau-qa-bot"]))
 

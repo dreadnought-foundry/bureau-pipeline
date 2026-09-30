@@ -57,8 +57,8 @@ ACTIONS = ROOT / ".github" / "actions"
 # A STANDING hold is the second kind, and DRE-5121 placed the first: its
 # `held_sha` and `lifted_by` are None, because no pin move lifts it. The action
 # is held for good, and the pin moves only through a trial-gated pin-raise PR
-# (`scripts/claude_code_pin.py`; the model adoption workflow, DRE-3898, is to
-# open it and is not built yet, so until then it is raised by hand) — never a
+# (`scripts/claude_code_pin.py`, which the model adoption workflow,
+# `model-adoption.yml` / DRE-3898, calls when a model needs it) — never a
 # bare Dependabot bump, which is how the 2026-09-08 outage arrived (DRE-3416)
 # and how #452 wedged the weekly sweep. That PR moves the sha and keeps the
 # rule, so the two sha-bound tests below skip a standing hold and the rule is

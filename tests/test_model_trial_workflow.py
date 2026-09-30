@@ -25,7 +25,7 @@ WHAT `model-trial.yml` IS.
     ladders it declares, and writes `ladders=<n>` to `trial-answer.txt`. The
     job recomputes the count with PyYAML and compares.
   * DATA, not a verdict on the run. A failed trial must leave the job GREEN and
-    say so in its outputs — the caller (`model-adoption.yml`, DRE-3903) is what
+    say so in its outputs — the caller (`model-adoption.yml`, DRE-3898) is what
     acts on it. A trial that failed the calling workflow would be a model
     outage taking the adoption rail down with it.
 
@@ -293,11 +293,16 @@ def test_the_trial_holds_no_credential_beyond_the_model_token():
 def test_credentials_follow_agent_tasks_implement_card_step():
     mine = _model_step(_doc()).get("with") or {}
     theirs = _agent_task_model_step().get("with") or {}
-    for key in ("anthropic_api_key", "claude_code_oauth_token", "allowed_bots"):
+    for key in ("anthropic_api_key", "claude_code_oauth_token"):
         assert mine.get(key) == theirs.get(key), (
             f"{key} must be copied from agent-task.yml verbatim — "
             f"{mine.get(key)!r} != {theirs.get(key)!r}"
         )
+    # agent-task's list plus the qa-bot, a scheduled run's actor (DRE-5123).
+    bots = str(mine.get("allowed_bots")).split(",")
+    assert [b for b in bots if b != "agent-bureau-qa-bot"] == \
+        str(theirs.get("allowed_bots")).split(",")
+    assert "agent-bureau-qa-bot" in bots
 
 
 # --------------------------------------------------------------------------- #

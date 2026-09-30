@@ -30,9 +30,11 @@ WHAT THIS MODULE DOES NOT DO (do not "improve" it into doing them)
 It edits no config, renders no card or PR text, and never touches Linear. Its
 CLI is `classify` and nothing else — `apply`, `render`, `open-record-card` and
 `open-question-card` live in DRE-3903's own module, which imports
-`classify_catalog` and `load_prices` from here. Adoption itself stays what it
-has always been: a deliberate human edit of `config/models.yaml` in a reviewed
-PR. This module says which of the three buckets a candidate falls in, and why.
+`classify_catalog` and `load_prices` from here. Adoption itself is an edit of
+`config/models.yaml` in a reviewed PR — proposed by the adoption workflow
+(`.github/workflows/model-adoption.yml`, DRE-3898) after a trial for `adopt`,
+and left to a person for everything else. This module says which of the three
+buckets a candidate falls in, and why.
 
 PRICE IS NEVER GUESSED
 ----------------------

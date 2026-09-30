@@ -104,9 +104,9 @@ updates:
         update-types: ["version-update:semver-major"]
       # HELD, STANDING (DRE-5121): the Claude Code pin moves only through a
       # trial-gated pin-raise PR made with scripts/claude_code_pin.py — never
-      # through a bare Dependabot bump. The model adoption workflow (DRE-3898)
-      # is to open that PR; it is not built yet, so until it lands the hold
-      # freezes automated bumps on purpose and the pin moves by hand. No
+      # through a bare Dependabot bump. The model adoption workflow
+      # (`model-adoption.yml`, DRE-3898) opens that PR when a model needs a
+      # newer Claude Code; the hold freezes every other bump on purpose. No
       # `update-types` on purpose: the bumps it refuses are patches. Unlike
       # DRE-4336's hold (placed for DRE-3416, lifted by DRE-3417), no pin move
       # lifts this one: the raise moves the sha and leaves the rule. Without it
