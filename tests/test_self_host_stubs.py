@@ -23,12 +23,18 @@ These tests LIVE-EXTRACT the stub YAML (no fixtures, no copies) and pin:
     (workflow_run matches on names — a collision poisons the watch lists).
 """
 
+import sys
 import unittest
 from pathlib import Path
 
 import yaml
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import medic_wake  # noqa: E402
+
+WORKFLOWS = ROOT / ".github" / "workflows"
 PIPELINE = "dreadnought-foundry/bureau-pipeline"
 
 
@@ -283,6 +289,21 @@ class WatchListTest(unittest.TestCase):
 
     def test_medic_does_not_watch_itself(self):
         self.assertNotIn("Pipeline Medic", self._watch("self-medic.yml"))
+
+    def test_medic_stub_declines_at_the_door(self):
+        """DRE-3626: the stub is woken for every completion in its watch list,
+        and a call for a conclusion outside the wake set leaves a run record
+        with every reusable job nested and skipped under it. The `call` job
+        reads the same wake set the reusable's gates do (DRE-3625), so an
+        empty wake-up is one skipped job — and the stub and the reusable can
+        never disagree about what wakes the medic."""
+        jobs = _load("self-medic.yml").get("jobs") or {}
+        self.assertEqual(list(jobs), ["call"], "call is the medic stub's only job")
+        self.assertEqual(
+            jobs["call"].get("if"), medic_wake.expression(),
+            "self-medic.yml's call job must carry medic_wake.expression() as "
+            "its `if:`, byte for byte",
+        )
 
     def test_no_dangling_watch_entries(self):
         """Every watched name must be a real workflow name here — a rename
