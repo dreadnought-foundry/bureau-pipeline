@@ -1090,6 +1090,7 @@ class MechanicalChecksReuseDesignParity(unittest.TestCase):
             _cards(("DRE-1", GOOD_CARD)),
             plan_comment="We will build the board.",
             surfaces=["console/design/images/screens/desktop/board.png"],
+            ledger=NO_DEATHS,
         )
         self.assertTrue(any("board" in f for f in findings), findings)
 
@@ -1098,11 +1099,13 @@ class MechanicalChecksReuseDesignParity(unittest.TestCase):
             _cards(("DRE-1", GOOD_CARD)),
             plan_comment="deferred: board — waiting on the lane contract",
             surfaces=["console/design/images/screens/desktop/board.png"],
+            ledger=NO_DEATHS,
         )
         self.assertEqual(findings, [])
 
     def test_no_surfaces_in_scope_is_not_a_finding(self):
-        self.assertEqual(pc.mechanical_findings(_cards(("DRE-1", GOOD_CARD))), [])
+        self.assertEqual(pc.mechanical_findings(_cards(("DRE-1", GOOD_CARD)),
+                                                 ledger=NO_DEATHS), [])
 
 
 class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
@@ -1112,7 +1115,8 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
     def test_a_card_with_no_acceptance_criteria_is_a_finding(self):
         cards = _cards(("DRE-9001", "Do the thing.\n**Files:** `a/b.py`\n"))
         self.assertEqual(pc.cards_without_acceptance(cards), ["DRE-9001"])
-        self.assertTrue(any("DRE-9001" in f for f in pc.mechanical_findings(cards)))
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
+        self.assertTrue(any("DRE-9001" in f for f in findings))
 
     def test_an_empty_acceptance_section_does_not_count(self):
         cards = _cards(("DRE-9001", "**Files:** `a/b.py`\n## Acceptance criteria\n\nsoon\n"))
@@ -1138,7 +1142,8 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
                          "## Acceptance criteria\n- [ ] done\n"),
         )
         self.assertEqual(pc.shared_files(cards), {"scripts/reconcile.py": ["DRE-9004", "DRE-9005"]})
-        self.assertTrue(any("reconcile.py" in f for f in pc.mechanical_findings(cards)))
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
+        self.assertTrue(any("reconcile.py" in f for f in findings))
 
     def test_one_card_naming_a_file_twice_is_not_a_collision(self):
         cards = _cards(("DRE-9006", "**Files:** `scripts/reconcile.py`, `scripts/reconcile.py`\n"
@@ -1151,7 +1156,7 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
             ("DRE-9008", "Write the standard.\n**Files:** `standards/plan-critic.md`\n"
                          "## Acceptance criteria\n- [ ] the standard exists\n"),
         )
-        self.assertEqual(pc.mechanical_findings(cards), [])
+        self.assertEqual(pc.mechanical_findings(cards, ledger=NO_DEATHS), [])
 
 
 class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
@@ -1180,7 +1185,7 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         """The third acceptance criterion: a missing section is a refusal, not
         a silent empty set that reads like a checked, clean footprint."""
         cards = _cards(("DRE-9010", "Do it.\n## Acceptance criteria\n- [ ] done\n"))
-        findings = pc.mechanical_findings(cards)
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
         self.assertTrue(
             any("DRE-9010" in f and "footprint" in f for f in findings), findings
         )
@@ -1192,13 +1197,15 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         as a LABEL, which is what the standard requires — and the standard
         FORBIDS the body stamp the old regex looked for."""
         self.assertEqual(pc.cards_without_repo(self.children), [])
-        findings = pc.mechanical_findings(self.children)
+        findings = pc.mechanical_findings(self.children, ledger=NO_DEATHS)
         self.assertEqual([f for f in findings if "names no repo" in f], [])
 
     def test_the_posted_note_lists_the_footprint_it_checked(self):
         """First acceptance criterion, second half: the root-level files the
         old regex could not see are named in the list the epic gets."""
-        note = pc.findings_note(self.children, pc.mechanical_findings(self.children))
+        note = pc.findings_note(
+            self.children, pc.mechanical_findings(self.children, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         self.assertIn("README.md", note)
         self.assertIn("CHANGELOG.md", note)
         self.assertIn("DRE-3026", note)
@@ -1206,7 +1213,7 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
     def test_two_children_declaring_one_root_file_are_reported_as_a_collision(self):
         """Second acceptance criterion. DRE-3026 and DRE-3031 both declare
         `README.md`; before this card neither was visible to the check."""
-        findings = pc.mechanical_findings(self.children)
+        findings = pc.mechanical_findings(self.children, ledger=NO_DEATHS)
         self.assertTrue(
             any(f.startswith("README.md:") and "DRE-3026" in f and "DRE-3031" in f
                 for f in findings),
@@ -1231,7 +1238,8 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         posted note distinguishes "no findings" from "never ran"
         (standards/console-honesty.md rule 2)."""
         clean = _cards(("DRE-9011", GOOD_CARD))
-        note = pc.findings_note(clean, pc.mechanical_findings(clean))
+        note = pc.findings_note(clean, pc.mechanical_findings(clean, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertIn("DRE-9011", note)
         self.assertIn("no structural findings", note.lower())
 
@@ -1253,6 +1261,15 @@ def _ledger(*rows, by_tell=()):
     }
 
 
+#: The ledger every test passes when the ledger is not what it is testing
+#: (DRE-5314). `config/split-ledger.json` is regenerated every night, so a test
+#: that read it for its expected findings went red the night a row landed on
+#: its fixture's files — bureau-pipeline #584, a DRE-5280 row over
+#: SHIPPED_CARD's two files. `TheLiveLedgerCannotChangeTheseTests` holds every
+#: test here to it.
+NO_DEATHS = _ledger()
+
+
 #: A card body that trips exactly one of the four tells — one backend file and
 #: one console file, which is `two-languages-or-tiers`.
 TIERS_CARD = """One backend defect and one console surface.
@@ -1269,6 +1286,11 @@ DEAD_ROW = ("DRE-2937", ["turn-cap-death", "split"], 4,
             ["scripts/alerts.py", "console/src/Board.tsx"], "UNKNOWN", 63.9)
 LIVE_ROW = ("DRE-3029", ["named-as-a-seed"], 0,
             ["scripts/planning_shape.py", "briefs/planner.md"], "UNKNOWN", 0.0)
+#: DRE-3016's row as `config/split-ledger.json` carried it on 2026-09-28.
+DRE_3016_ROW = ("DRE-3016", ["turn-cap-death"], 1,
+                ["scripts/planner_score.py", "config/planner-audit.json",
+                 "tests/test_planner_score.py", "docs/planner-audit.md",
+                 "plan.yml", "planner-replay.yml"], "UNKNOWN", 22.57)
 
 
 class AFootprintThatHasDiedBefore(unittest.TestCase):
@@ -1446,9 +1468,13 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
                                 ledger=pc.LEDGER_UNREADABLE)
         self.assertIn("could not be read", note)
 
-    # -- against the shipped ledger, not a fixture ---------------------------
+    # -- against a real row, copied rather than read -------------------------
+    #
+    # These two read the shipped ledger until DRE-5314. The file is
+    # regenerated every night, so a test that reads it asserts whatever last
+    # night's run wrote; the row is copied here from it instead.
 
-    def test_the_shipped_ledger_flags_this_very_cards_footprint(self):
+    def test_dre_3016s_row_flags_this_very_cards_footprint(self):
         """DRE-3079 declares `scripts/planner_score.py`,
         `config/planner-audit.json` and `tests/test_planner_score.py` — three
         of the six files DRE-3016 declared before it died at the turn cap. The
@@ -1457,12 +1483,17 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
             "scripts/plan_critic.py", "scripts/planner_score.py",
             "config/planner-audit.json", "tests/test_plan_critic.py",
             "tests/test_planner_score.py", identifier="DRE-3079")
-        matches = pc.ledger_footprint_matches(cards)
+        matches = pc.ledger_footprint_matches(cards, ledger=_ledger(DRE_3016_ROW))
         self.assertIn("DRE-3016", [m["row"] for m in matches], matches)
 
-    def test_a_one_file_card_is_still_clean_against_the_shipped_ledger(self):
-        """The noise floor, against the real file rather than a fixture."""
-        self.assertEqual(pc.mechanical_findings(_cards(("DRE-9105", GOOD_CARD))), [])
+    def test_a_one_file_card_is_clean_against_a_row_holding_that_file(self):
+        """The noise floor: one shared file is below `LEDGER_MIN_OVERLAP`,
+        however many deaths the row records."""
+        row = ("DRE-9106", ["turn-cap-death"], 3,
+               ["scripts/plan_critic.py", "scripts/reconcile.py"], "UNKNOWN", 30.0)
+        self.assertEqual(
+            pc.mechanical_findings(_cards(("DRE-9105", GOOD_CARD)),
+                                   ledger=_ledger(DRE_3016_ROW, row)), [])
 
 
 def _plan_yml_steps():
@@ -1660,7 +1691,9 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
     # -- The mechanical pass says so, in its output ---------------------------
 
     def test_the_note_names_the_delivered_child_as_a_non_finding(self):
-        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        note = pc.findings_note(
+            self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         self.assertIn("delivered child", note.lower())
         self.assertIn("DRE-3210", note)
         self.assertIn("Done", note)
@@ -1674,7 +1707,9 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         note has always said "which is what the collision check reads" a few
         lines up, and a search of the whole text would pass against a note
         that never mentioned a delivered card at all."""
-        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        note = pc.findings_note(
+            self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         sentence = [line for line in note.splitlines()
                     if "delivered child" in line.lower()]
         self.assertEqual(len(sentence), 1, note)
@@ -1692,11 +1727,11 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         collision check."""
         cards = _cards(("DRE-3210", SHIPPED_CARD), state="Done") + _cards(
             ("DRE-9999", SHIPPED_CARD), state="Backlog")
-        findings = pc.mechanical_findings(cards)
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
         self.assertEqual(
             [f for f in findings if "disjoint files" in f], [], findings)
         self.assertEqual(pc.shared_files(cards), {})
-        note = pc.findings_note(cards, findings)
+        note = pc.findings_note(cards, findings, ledger=NO_DEATHS)
         self.assertNotIn("disjoint files", note)
 
     def test_two_active_children_over_one_file_are_still_a_collision(self):
@@ -1708,7 +1743,8 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
             sorted(pc.shared_files(cards)),
             ["scripts/plan_critic.py", "tests/test_plan_critic.py"])
         self.assertTrue(
-            [f for f in pc.mechanical_findings(cards) if "disjoint files" in f])
+            [f for f in pc.mechanical_findings(cards, ledger=NO_DEATHS)
+             if "disjoint files" in f])
 
     def test_the_state_block_is_input_and_never_a_finding_of_its_own(self):
         """It is INPUT to the critic's judgement. A Done child must be named in
@@ -1717,14 +1753,17 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         self.assertTrue(
             any("DRE-3210" in line and "delivered child" in line.lower()
                 for line in pc.findings_note(
-                    self.done, pc.mechanical_findings(self.done)).splitlines()))
+                    self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+                    ledger=NO_DEATHS).splitlines()))
         self.assertEqual(
-            [f for f in pc.mechanical_findings(self.done) if "DRE-3210" in f],
+            [f for f in pc.mechanical_findings(self.done, ledger=NO_DEATHS) if "DRE-3210" in f],
             [],
         )
 
     def test_the_backlog_child_gets_no_such_line(self):
-        note = pc.findings_note(self.backlog, pc.mechanical_findings(self.backlog))
+        note = pc.findings_note(self.backlog,
+                                pc.mechanical_findings(self.backlog, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertNotIn("delivered child", note.lower())
         self.assertIn("Backlog", note)
 
@@ -1733,7 +1772,8 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         (standards/console-honesty.md rule 2), and only the first clears a
         card the critic is about to call already-shipped."""
         stateless = _cards(("DRE-9003", SHIPPED_CARD))
-        note = pc.findings_note(stateless, pc.mechanical_findings(stateless))
+        note = pc.findings_note(stateless, pc.mechanical_findings(stateless, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertIn("no child carried a state", note.lower())
 
     # -- Both charters say what a state means ---------------------------------
