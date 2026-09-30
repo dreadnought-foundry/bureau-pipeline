@@ -424,15 +424,22 @@ class TestDecideCloses(unittest.TestCase):
         d = rd.decide([earlier], [], self.card, NOW, _threshold())
         self.assertNotEqual(d.action, rd.CLOSE)
 
-    def test_a_card_whose_ledger_counts_no_crash_is_never_closed(self):
-        """No repository on the card crashed, so no repository's verdict can
-        say the reviewer came back (DRE-5291)."""
+    def test_a_card_whose_ledger_names_no_repository_closes_on_any_verdict(self):
+        """No line names a repository, so there is no repository to be wrong
+        about: the first local verdict after filing says it is back — or the
+        card could never close itself (DRE-5291)."""
         bare = rd.OpenCard(identifier="DRE-3500",
                            filed_at="2026-09-08T22:27:00Z",
                            text="Reviewer down since 15:19 PT")
         later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z", "v")
-        self.assertNotEqual(rd.decide([later], [], bare, NOW, _threshold()).action,
-                            rd.CLOSE)
+        d = rd.decide([later], [], bare, NOW, _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(
+            d.resolve_note,
+            "reviewer back at 15:32 PT — first successful verdict in "
+            "bureau-pipeline after the last counted crash and after this card "
+            "was filed (v)",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -587,6 +594,36 @@ class TestUnknownRepository(unittest.TestCase):
         b = _cnr(rd.UNKNOWN_REPO, "2026-09-30T01:51:00Z", "linear:DRE-2:b")
         self.assertEqual(rd._counts([a, b])[:2], (2, 0))
         self.assertFalse(rd._threshold_met([a, b], _threshold()))
+
+    def _unknown_card(self):
+        """Three generic medic notes — no run link, so no repository — meet
+        the run rule on their own, and the card they file names none."""
+        notes = [_cnr(rd.UNKNOWN_REPO, f"2026-09-08T22:2{i}:00Z",
+                      f"linear:DRE-{4600 + i}:2026-09-08T22:2{i}:00Z")
+                 for i in range(3)]
+        filed = rd.decide([], notes, None, NOW, _threshold())
+        self.assertEqual(filed.action, rd.FILE)
+        self.assertEqual((filed.runs, filed.repos), (3, 0))
+        return rd.OpenCard(identifier="DRE-3500",
+                           filed_at="2026-09-08T22:27:00Z",
+                           text=filed.title + "\n\n" + filed.body)
+
+    def test_a_card_filed_from_unknown_notes_alone_closes_itself(self):
+        """The critic's repro on PR #583: this card used to stay open for
+        good, and every later sweep could only append to it."""
+        later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z",
+                         "https://example.invalid/v")
+        d = rd.decide([later], [], self._unknown_card(), NOW, _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, "2026-09-08T22:32:00Z")
+
+    def test_a_verdict_before_the_last_unknown_crash_is_not_a_close(self):
+        card = self._unknown_card()
+        late_crash = _cnr(rd.UNKNOWN_REPO, "2026-09-08T22:33:00Z",
+                          "linear:DRE-4700:2026-09-08T22:33:00Z")
+        between = _verdict("bureau-pipeline", "2026-09-08T22:30:00Z", "v")
+        d = rd.decide([between], [late_crash], card, NOW, _threshold())
+        self.assertEqual(d.action, rd.APPEND)
 
 
 class TestOldLedgerLines(unittest.TestCase):
