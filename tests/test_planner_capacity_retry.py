@@ -441,8 +441,8 @@ def test_the_plan_epic_finish_fails_the_job_on_a_genuine_failure(tmp_path):
 def test_every_capacity_retry_step_carries_its_planner_steps_route(site):
     """The re-run steps belong to their planner step's route and no other.
 
-    tests/test_wave_plan_wiring.py caught `wave_cap` and `wave_done` gated only
-    on the wave step's outcome; nothing pinned the same for the plan epic and
+    The retired wave route's own wiring test caught `wave_cap` and `wave_done`
+    gated only on the wave step's outcome; nothing pinned the same for the plan epic and
     the two re-plans, so dropping the route from any of their four steps would
     have passed. A step off its route runs for a card on another one — a
     finished? step that fails the job, or a re-run nobody's route asked for."""

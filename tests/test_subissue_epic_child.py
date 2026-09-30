@@ -5,7 +5,7 @@ waits on an observation as CHILD EPICS under the original, and the planner
 files them through the same door it files work cards through. That door gave
 every child a build role — `agent:engineer`, or `agent:devops` under a
 pipeline epic — and a child epic wearing one is a container the relay would
-dispatch an engineer at. `wave_commitment.py` stripped the role after the
+dispatch an engineer at. The retired wave filer stripped the role after the
 create; `--epic` never applies it in the first place.
 
 Two refusals close the door both ways, before anything is written:
