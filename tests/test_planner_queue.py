@@ -1369,5 +1369,295 @@ class Docstring(unittest.TestCase):
         self.assertIn("lands first", doc)
 
 
+# =========================================================================== #
+# DRE-5180 — plan.yml's end-of-run steps, driven through the same CLI calls    #
+# =========================================================================== #
+#
+# `plan.yml` ends an admitted run with `release <CARD> --run-id <id> --because
+# finished`, then `next --github-output`, then — when `next` named a card and
+# the owner's token minted — `dispatch <NEXT_CARD> … --reason <NEXT_REASON>`.
+# These walks run exactly those three commands against the fake board, and
+# count `Ledger.running` after every step.
+
+
+def end_release(card: str, run: str) -> None:
+    """plan.yml's `Planner slot — release` step."""
+    rc, *_ = run_cli(["release", card, "--run-id", run, "--because", "finished"])
+    assert rc == 0
+
+
+def end_next() -> dict:
+    """plan.yml's `Planner slot — next in line` step: its step outputs."""
+    rc, out, *_ = run_cli(["next"])
+    assert rc == 0
+    return out
+
+
+def end_dispatch(out: dict, run: str) -> list:
+    """plan.yml's `Planner slot — start the next card` step, fed `next`'s
+    outputs exactly as its `NEXT_*` env carries them. Returns the fires."""
+    fired = []
+    with mock.patch.object(plan_run, "fire",
+                           lambda c, r, **k: (fired.append((c, r, k)) or (True, ""))):
+        rc, *_ = run_cli(["dispatch", out["card"], "--run-id", run,
+                          "--repo", out["repo"], "--trigger-state", out["trigger_state"],
+                          "--reason", out["reason"]])
+    assert rc == 0
+    return fired
+
+
+class _EndOfRun(_Base):
+    def cap_held(self) -> None:
+        self.assertLessEqual(len(self.board.ledger().running), 4)
+
+
+# --------------------------------------------------------------------------- #
+# 21. a run's end frees its slot for the head of the line                      #
+# --------------------------------------------------------------------------- #
+
+
+class EndOfRunRelease(_EndOfRun):
+    def _fixture(self):
+        running = fill_running(self.board, 4)
+        w1 = self.board.add("DRE-W1")
+        self.board.seed(w1, "waiting", self.board.clock, place=1, of=2)
+        self.board.tick(60)
+        w2 = self.board.add("DRE-W2")
+        self.board.seed(w2, "waiting", self.board.clock, place=2, of=2)
+        self.board.tick(60)
+        led = self.board.ledger()
+        self.assertEqual((led.free_slots(4), pq.next_in_line(led)), (0, None))
+        return running, w1, w2
+
+    def _end(self, how: str, card: str) -> None:
+        if how == "run-gone":
+            # A death the sweep reported: the sweep's own release.
+            pq.post_released(linear_ops, card, run_id=f"run-{card}", repo=REPO,
+                             trigger_state="Planning", because="run-gone")
+        else:
+            # Success, or a failed planner step: the job's own `always()`
+            # release posts the same receipt either way.
+            end_release(card, f"run-{card}")
+
+    def test_success_failure_and_run_gone_each_free_one_slot_for_the_head(self):
+        for how in ("success", "failure", "run-gone"):
+            with self.subTest(how=how):
+                self.board = Board()
+                with self.board.live():
+                    running, w1, w2 = self._fixture()
+                    self._end(how, running[0])
+                    newest = self.board.newest(running[0])
+                    self.assertEqual((newest.state, newest.because),
+                                     ("released", "run-gone" if how == "run-gone"
+                                      else "finished"))
+                    led = self.board.ledger()
+                    self.assertEqual(pq.next_in_line(led).card, w1)
+                    self.assertEqual(led.free_slots(4), 1)
+                    out = end_next()
+                    self.assertEqual((out["card"], out["repo"]), (w1, REPO))
+                    self.assertEqual(f'{out["owner"]}/{out["name"]}', REPO)
+                    fired = end_dispatch(out, "run-finisher")
+                    self.assertEqual(len(fired), 1)
+                    self.assertEqual(self.board.newest(w1).state, "dispatched")
+                    # The dispatched card holds the slot inside the grace.
+                    led = self.board.ledger()
+                    self.assertEqual(led.free_slots(4), 0)
+                    self.assertIsNone(pq.next_in_line(led))
+                    self.assertEqual(end_next()["card"], "")
+                    self.assertEqual([r.card for r in led.reserved], [w1])
+                    self.cap_held()
+
+    def test_two_slots_free_serve_the_first_then_the_second_never_the_first_twice(self):
+        running, w1, w2 = self._fixture()
+        end_release(running[0], f"run-{running[0]}")
+        end_release(running[1], f"run-{running[1]}")
+        self.assertEqual(self.board.ledger().free_slots(4), 2)
+        first = end_next()
+        self.assertEqual(first["card"], w1)
+        end_dispatch(first, "run-a")
+        second = end_next()
+        self.assertEqual(second["card"], w2)
+        end_dispatch(second, "run-b")
+        led = self.board.ledger()
+        self.assertEqual(sorted(r.card for r in led.reserved), sorted([w1, w2]))
+        self.assertEqual((led.free_slots(4), pq.next_in_line(led)), (0, None))
+        self.cap_held()
+
+
+# --------------------------------------------------------------------------- #
+# 22. the handover through the end-of-run steps, both orders                   #
+# --------------------------------------------------------------------------- #
+
+
+class EndOfRunHandover(_EndOfRun):
+    def _sender_holds_the_fourth_slot(self, lane: str = "In Progress"):
+        others = fill_running(self.board, 3)
+        card = self.board.add("DRE-EP", lane=lane)
+        self.board.seed(card, "claimed", self.board.clock, run="run-S",
+                        trigger="in progress")
+        self.board.tick(60)
+        self.assertEqual(len(self.board.ledger().running), 4)
+        return others, card
+
+    def test_i_the_review_claims_before_its_sender_releases(self):
+        for lane in ("In Progress", "Green Light"):
+            with self.subTest(lane=lane):
+                self.board = Board()
+                with self.board.live():
+                    self._walk_i(lane)
+
+    def _walk_i(self, lane: str) -> None:
+        others, card = self._sender_holds_the_fourth_slot(lane)
+        waiter = self.board.add("DRE-WAIT")
+        self.board.seed(waiter, "waiting", self.board.clock)
+        self.board.tick()
+        # S's `review_rerun.py dispatch` (re-review) fires first; the run it
+        # asked for, C, claims with S as its sender.
+        rc, out, *_ = cli_claim(card, "run-C", "in progress",
+                                "--sent-by-run", "run-S", "--reason", "re-review")
+        self.assertEqual((rc, out["admitted"], out["inherited"]), (0, "true", "true"))
+        self.cap_held()
+        # S reaches its end: release, then next.
+        end_release(card, "run-S")
+        led = self.board.ledger()
+        self.assertEqual([r.card for r in led.running].count(card), 1)
+        self.assertEqual(led.free_slots(4), 0)
+        self.assertIsNone(pq.next_in_line(led))
+        self.assertEqual(end_next()["card"], "", "S's next must name nobody")
+        self.cap_held()
+        # C's own release frees the slot for the head of the line.
+        end_release(card, "run-C")
+        led = self.board.ledger()
+        self.assertNotIn(card, [r.card for r in led.running])
+        self.assertEqual(pq.next_in_line(led).card, waiter)
+        self.assertEqual(end_next()["card"], waiter)
+        self.cap_held()
+
+    def test_ii_the_sender_releases_and_dispatches_before_the_review_claims(self):
+        others, card = self._sender_holds_the_fourth_slot()
+        x = self.board.add("DRE-X")
+        self.board.seed(x, "waiting", self.board.clock)
+        self.board.tick(60)
+        y = self.board.add("DRE-Y")
+        self.board.seed(y, "waiting", self.board.clock)
+        self.board.tick(60)
+        # S ends first: its release, its next (X), its dispatch of X.
+        end_release(card, "run-S")
+        self.cap_held()
+        out = end_next()
+        self.assertEqual(out["card"], x)
+        end_dispatch(out, "run-S")
+        led = self.board.ledger()
+        self.assertEqual([r.card for r in led.reserved], [x])
+        self.cap_held()
+        # C arrives and finds S's claim closed: 3 running + X reserved.
+        rc, out, *_ = cli_claim(card, "run-C", "in progress",
+                                "--sent-by-run", "run-S", "--reason", "re-review")
+        self.assertEqual((rc, out["admitted"], out["inherited"]), (0, "false", "false"))
+        self.assertEqual(out["place"], "1")
+        newest = self.board.newest(card)
+        self.assertEqual((newest.state, newest.reason, newest.trigger),
+                         ("waiting", "re-review", "in progress"))
+        self.assertIn("waiting for a planner: place 1 of ", self.board.nodes(card)[0]["body"])
+        self.cap_held()
+        # X claims on its reservation; then one running card finishes.
+        rc, out, *_ = cli_claim(x, "run-x")
+        self.assertEqual(out["admitted"], "true")
+        self.assertEqual(len(self.board.ledger().running), 4)
+        end_release(others[0], f"run-{others[0]}")
+        nxt = pq.next_in_line(self.board.ledger())
+        self.assertEqual((nxt.card, nxt.reason), (card, "re-review"))
+        out = end_next()
+        self.assertEqual((out["card"], out["reason"], out["trigger_state"]),
+                         (card, "re-review", "in progress"))
+        self.cap_held()
+
+
+# --------------------------------------------------------------------------- #
+# 23. the double-finish race: two different cards for one slot                 #
+# --------------------------------------------------------------------------- #
+
+
+class DoubleFinishRace(_EndOfRun):
+    """One free slot; the finishing run dispatches X and the sweep dispatches
+    Y. Neither is a fifth planner and neither card loses its place — which of
+    the two is admitted is the foundation card's claim-order rule, over every
+    receipt on the board when each claim reads."""
+
+    def _fixture(self):
+        fill_running(self.board, 3)
+        x, y, z = (self.board.add(i) for i in ("DRE-X", "DRE-Y", "DRE-Z"))
+        entries = {}
+        for ident in (x, y, z):
+            entries[ident] = self.board.seed(ident, "waiting", self.board.clock)["createdAt"]
+            self.board.tick(60)
+        self.assertEqual(self.board.ledger().free_slots(4), 1)
+        return x, y, z, entries
+
+    def _dispatch(self, ident: str, run: str) -> None:
+        end_dispatch({"card": ident, "repo": REPO, "trigger_state": "Planning",
+                      "reason": ""}, run)
+        self.cap_held()
+
+    def _claim(self, ident: str) -> str:
+        rc, out, *_ = cli_claim(ident, f"run-{ident}")
+        self.assertEqual(rc, 0)
+        self.cap_held()
+        return out["admitted"]
+
+    def test_x_claims_first_and_is_admitted_y_waits_at_its_original_entry(self):
+        x, y, z, entries = self._fixture()
+        self._dispatch(x, "run-finisher")
+        self.assertEqual(self._claim(x), "true")
+        self._dispatch(y, "sweep")
+        self.assertEqual(self._claim(y), "false")
+        led = self.board.ledger()
+        self.assertEqual(len(led.running), 4)
+        self.assertEqual(led.waiting[0].card, y)
+        self.assertEqual([w.card for w in led.waiting], [y, z])
+        self.assertEqual(pq.line_entry(self.board.nodes(y), now=self.board.clock),
+                         entries[y])
+
+    def test_both_claims_written_before_either_reads_admit_the_earlier(self):
+        for reads in (("X", "Y"), ("Y", "X")):
+            with self.subTest(reads=reads):
+                self.board = Board()
+                with self.board.live():
+                    x, y, z, entries = self._fixture()
+                    self._dispatch(x, "run-finisher")
+                    self._dispatch(y, "sweep")
+                    claim_write(self.board, x, f"run-{x}")
+                    claim_write(self.board, y, f"run-{y}")
+                    out = {}
+                    for which in reads:
+                        ident = x if which == "X" else y
+                        out[ident] = claim_read(self.board, ident, f"run-{ident}")
+                    self.assertEqual((out[x]["admitted"], out[y]["admitted"]),
+                                     ("true", "false"))
+                    led = self.board.ledger()
+                    self.assertEqual(len(led.running), 4)
+                    self.assertEqual(led.waiting[0].card, y)
+                    self.assertEqual(pq.line_entry(self.board.nodes(y),
+                                                   now=self.board.clock), entries[y])
+
+    def test_both_dispatches_land_before_either_claim_one_is_admitted(self):
+        """Both reservations count against the first claim to read, so here the
+        FIRST claimant waits and the second is admitted — at its original line
+        entry, at the head of the line. Still one slot, one run, no card sent
+        to the back."""
+        x, y, z, entries = self._fixture()
+        self._dispatch(x, "run-finisher")
+        self._dispatch(y, "sweep")
+        admitted = {x: self._claim(x), y: self._claim(y)}
+        self.assertEqual(sorted(admitted.values()), ["false", "true"])
+        led = self.board.ledger()
+        self.assertEqual(len(led.running), 4)
+        waiter = x if admitted[x] == "false" else y
+        self.assertEqual(led.waiting[0].card, waiter)
+        self.assertEqual(pq.line_entry(self.board.nodes(waiter), now=self.board.clock),
+                         entries[waiter])
+        self.assertEqual([w.card for w in led.waiting], [waiter, z])
+
+
 if __name__ == "__main__":
     unittest.main()

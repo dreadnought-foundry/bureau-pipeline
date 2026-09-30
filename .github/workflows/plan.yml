@@ -347,8 +347,8 @@ jobs:
       # A waiting approval sits `In Progress` with no second-critic round, so
       # the promotion gate holds its children; the sweep's "the second critic
       # has not passed it" notice is DRE-5177's to keep quiet while the epic is
-      # in line, and a waiting card is served by that sweep until the
-      # end-of-run release lands.
+      # in line, and a waiting card is served by the end-of-run release at the
+      # foot of this job (DRE-5180), with that sweep as the backstop.
       #
       # Q1 (actor): unchanged — no new trigger, no new identity; the step reads
       # and writes Linear with the key this job already holds. Q2 (store): no
@@ -4078,6 +4078,125 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/epic_split.py activate "${{ github.event.client_payload.identifier }}"
+
+      # --- The fleet-wide planner slot: release, and start the next (DRE-5180)
+      #
+      # The back half of the cap (epic DRE-5167): the next card starts the
+      # moment a slot frees. An admitted run that ends — success, failure, or
+      # a death the job survives to report — releases its slot here and
+      # dispatches the head of the line itself, without waiting for the
+      # fifteen-minute sweep. Four steps, all `always()` and
+      # `continue-on-error: true`, placed directly above the death-cause
+      # receipt, which stays the last receipt in the job: below every model
+      # step whatever the route, and below both `review_rerun.py dispatch`
+      # sites — the handover only works because the sender asks for its own
+      # card's next run BEFORE it releases.
+      #
+      # THE RELEASE closes only this run's claim and no other (the foundation
+      # card's rule, `planner_queue.py`). So when this run has already handed
+      # its slot to the run it asked for on its own card — `Second critic sent
+      # the plan back` (`re-review`) or `Second critic — the review died`
+      # (`review-retry`), whose started run posts `claimed … · from run <this
+      # run>` — the release frees nothing: the card still holds one slot, and
+      # `next` does not hand that slot to anyone. A run that inherited its own
+      # slot releases the same way; its claim is the open one.
+      #
+      # `next` reads the ledger AFTER the release, over the foundation card's
+      # three lanes, so this run's own epic — which the plan route has just
+      # moved to Green Light — is read and seen released. It names the head of
+      # the line only when a slot is free; a card `dispatched` inside the grace
+      # holds a slot and is never named, and a Green Light card counts for its
+      # open claim only. The dispatch carries the waiting card's recorded
+      # trigger AND its recorded reason, so an approved epic is re-fired on the
+      # activate route and a person's approval or `re-run` that waited still
+      # opens the fresh planning attempt it is owed. It never sends
+      # `sent_by_run`: this run is not the next card's planner, so the started
+      # run's duplicate guard and slot step judge it as any dispatch. The
+      # `dispatched` receipt lands only on a confirmed dispatch.
+      #
+      # The double-finish race. Two dispatchers — this step and the sweep, or
+      # two runs finishing in the same second — can both read one free slot
+      # before either `dispatched` receipt lands. Neither outcome is a fifth
+      # planner: (1) both name the SAME card — the duplicate-dispatch guard
+      # drops the later run, and a later claim that still reaches the slot
+      # step finds the earlier one and posts `released … because duplicate`;
+      # (2) they name two DIFFERENT cards for one slot — admission is by claim
+      # order over every open claim and reserved dispatch, the loser posts
+      # `waiting` again at its original line entry, and the very next release
+      # or sweep serves it first. The cost is a runner minute; never a fifth
+      # planner, never a lost card, never a card sent to the back.
+      #
+      # A waiting run posts nothing here: every step is gated on `admitted`,
+      # and a run that was not admitted holds nothing to release. An approved
+      # epic waiting that way sits In Progress with no second-critic round and
+      # its children held by the promotion gate; the sweep's "not yet
+      # reviewed" notice is DRE-5177's to keep quiet while it is in line.
+      #
+      # Q1 (actor): the dispatch goes out as the bureau App installation for
+      # the waiting card's OWNER — an installation token is scoped to one
+      # owner and the card may live in another, the per-owner mint
+      # `fleet-wake.yml` already makes — and the started run initiates in its
+      # repo as `github-actions`, the actor every stub already admits. Q2
+      # (store): the reusable's declared `BUREAU_APP_ID` /
+      # `BUREAU_APP_PRIVATE_KEY`, no new store; Linear through the key this
+      # job holds. Q3 (retry): a re-run of this job releases and dispatches
+      # again, which is idempotent — the released card releases once, and the
+      # next card is whoever heads the line then. Q4 (limits):
+      # `repository_dispatch` needs `contents: write` on the target, which the
+      # App token holds and the stub's `github.token` does not (`plan_run.py`'s
+      # own note); a mint that fails — the App not installed on that owner, or
+      # a blip — is a warning, nothing is dispatched, the card stays `waiting`,
+      # and the sweep serves it within one pass. Q5 (our crash): a job canceled
+      # at its timeout skips these steps, and the claim it leaves is the
+      # sweep's to expire. Every `${{ }}` is in env:, never in a shell line.
+      - name: Planner slot — release
+        id: release
+        if: always() && steps.slot.outputs.admitted == 'true'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          python3 .bureau-pipeline/scripts/planner_queue.py release "$CARD" \
+            --run-id "$GITHUB_RUN_ID" --because finished
+
+      - name: Planner slot — next in line
+        id: next
+        if: always() && steps.slot.outputs.admitted == 'true'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planner_queue.py next --github-output "$GITHUB_OUTPUT"
+
+      - name: Mint bot token — the next card's owner
+        id: next_token
+        if: always() && steps.next.outputs.repo != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ steps.next.outputs.owner }}
+          repositories: ${{ steps.next.outputs.name }}
+
+      - name: Planner slot — start the next card
+        id: next_dispatch
+        if: always() && steps.next_token.outcome == 'success'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.next_token.outputs.token }}
+          NEXT_CARD: ${{ steps.next.outputs.card }}
+          NEXT_REPO: ${{ steps.next.outputs.repo }}
+          NEXT_TRIGGER: ${{ steps.next.outputs.trigger_state }}
+          # Empty when the waiting card recorded none; `dispatch` reads an
+          # empty flag as absent.
+          NEXT_REASON: ${{ steps.next.outputs.reason }}
+        run: |
+          python3 .bureau-pipeline/scripts/planner_queue.py dispatch "$NEXT_CARD" \
+            --run-id "$GITHUB_RUN_ID" --repo "$NEXT_REPO" \
+            --trigger-state "$NEXT_TRIGGER" --reason "$NEXT_REASON"
 
       # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
       # failures over 22 days — $97 of model work — could not be attributed to
