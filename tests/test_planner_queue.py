@@ -1146,7 +1146,10 @@ class Bounds(_Base):
         with open(os.path.join(ROOT, ".github", "workflows", "plan.yml"),
                   encoding="utf-8") as f:
             timeout = yaml.safe_load(f)["jobs"]["plan"]["timeout-minutes"]
-        cfg = pq.load()
+        # The COMMITTED file, not `_Base`'s pinned one: that pins the TTL the
+        # ledger's lifetimes are written against (DRE-5288), and this is the
+        # number a live claim actually gets.
+        cfg = pq.load(pq.CONFIG_PATH)
         self.assertGreaterEqual(cfg["claim_ttl_minutes"], timeout)
         self.assertGreater(cfg["waiting_max_minutes"], cfg["claim_ttl_minutes"])
 

@@ -165,7 +165,15 @@ jobs:
     # the pin sums every budget in the file rather than reasoning about
     # branches. 105 is still inside the 120-minute Planning stall window, which
     # the same test checks.
-    timeout-minutes: 105
+    #
+    # 115, raised from 105 with DRE-5288, which stops the four re-plan steps'
+    # ceilings being a literal 60 and sizes them from the plan (cap 120). The
+    # wiring test adds both re-plans' cap by name, so the sum grows by 120
+    # turns — 14 minutes at 7 s/turn — to ~112 minutes. 115 covers it, stays
+    # inside the 120-minute Planning stall window, and the planner queue's
+    # claim TTL (config/planner-queue.json) moves with it, because a claim
+    # must outlive the run that holds it.
+    timeout-minutes: 115
     # Whose Linear hour the planner spends (DRE-3321) — see reconcile.yml's
     # sweep for the why. Job level, beside the job that reads
     # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
@@ -2180,6 +2188,33 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
+      # The re-plan's turn ceiling, sized from the plan (DRE-5288). Both of
+      # this route's re-plan steps carried a literal ceiling of 60, and epic
+      # DRE-5268's ten-card revision FINISHED at 86 turns and was failed at it
+      # — the retry at the same wall, because a turn ceiling is deterministic.
+      # Gated exactly like the re-plan, and before it: an output nobody wrote
+      # interpolates as a bare `--max-turns`, which is a run that never starts.
+      # The step and its re-run on the next rung read the same output.
+      #
+      # The `||` fallbacks are load-bearing, as on `postturns`: a failed
+      # Linear read is an unknown count, which the script sizes to its
+      # default, and the script never exits non-zero — the fallback number is
+      # that same default, the belt to those braces.
+      - name: Turn ceiling — first critic's re-plan
+        id: replanturns
+        if: steps.pre1.outputs.action == 'hold'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
+          python3 .bureau-pipeline/scripts/plan_critic.py replan-turns \
+            --children "$KIDS" --github-output "$GITHUB_OUTPUT" \
+          || {
+            echo "::warning::could not size the re-plan — falling back to its cap"
+            echo "max_turns=120" >> "$GITHUB_OUTPUT"
+          }
+
       # Fresh App token for the re-plan (DRE-3940): round 1 of the critic above
       # is a model run of its own. The rule and its reasons are on
       # `Re-mint bot token — planner`.
@@ -2217,7 +2252,7 @@ jobs:
           github_token: ${{ steps.app_replan.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 60
+            --max-turns ${{ steps.replanturns.outputs.max_turns }}
             --model ${{ steps.model.outputs.model }}
             ${{ steps.model.outputs.fallback_arg }}
             ${{ steps.model.outputs.effort_arg }}
@@ -2307,7 +2342,7 @@ jobs:
           github_token: ${{ steps.app_replan_retry.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 60
+            --max-turns ${{ steps.replanturns.outputs.max_turns }}
             --model ${{ steps.replan_cap.outputs.model }}
             ${{ steps.replan_cap.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
@@ -3254,6 +3289,33 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
             > "${{ runner.temp }}/children-before.json"
 
+      # The re-plan's turn ceiling, sized from the plan (DRE-5288). Both of
+      # this route's re-plan steps carried a literal ceiling of 60, and epic
+      # DRE-5268's ten-card revision FINISHED at 86 turns and was failed at it
+      # — the retry at the same wall, because a turn ceiling is deterministic.
+      # Gated exactly like the re-plan, and before it: an output nobody wrote
+      # interpolates as a bare `--max-turns`, which is a run that never starts.
+      # The step and its re-run on the next rung read the same output.
+      #
+      # The `||` fallbacks are load-bearing, as on `postturns`: a failed
+      # Linear read is an unknown count, which the script sizes to its
+      # default, and the script never exits non-zero — the fallback number is
+      # that same default, the belt to those braces.
+      - name: Turn ceiling — second critic's re-plan
+        id: postreplanturns
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
+          python3 .bureau-pipeline/scripts/plan_critic.py replan-turns \
+            --children "$KIDS" --github-output "$GITHUB_OUTPUT" \
+          || {
+            echo "::warning::could not size the re-plan — falling back to its cap"
+            echo "max_turns=120" >> "$GITHUB_OUTPUT"
+          }
+
       # Held: the plan gets ONE revision with the critic's finding before it
       # goes back to the CEO (DRE-3088). Until this step existed, a send-back
       # parked the identical plan in Green Light, the CEO's only move was to
@@ -3288,7 +3350,7 @@ jobs:
           github_token: ${{ steps.app_post.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 60
+            --max-turns ${{ steps.postreplanturns.outputs.max_turns }}
             --model ${{ steps.model.outputs.model }}
             ${{ steps.model.outputs.fallback_arg }}
             ${{ steps.model.outputs.effort_arg }}
@@ -3383,7 +3445,7 @@ jobs:
           github_token: ${{ steps.app_post_retry.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 60
+            --max-turns ${{ steps.postreplanturns.outputs.max_turns }}
             --model ${{ steps.postreplan_cap.outputs.model }}
             ${{ steps.postreplan_cap.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
