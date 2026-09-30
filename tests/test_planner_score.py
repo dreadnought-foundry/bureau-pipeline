@@ -760,6 +760,92 @@ class SplitRateTest(unittest.TestCase):
         self.assertIn("1 of 2", out)
 
 
+#: The calls that read the split ledger when no ledger is passed. A test whose
+#: source makes one of them is a test whose expectations the ledger can change.
+LEDGER_READERS = ("planner_score.score(", "split_rate(", "split_ledger_cards(")
+
+
+def _runs_the_cli(source: str) -> bool:
+    """A test that runs a `planner_score.py` command that reads the ledger, in
+    a subprocess — out of reach of any patch this process makes."""
+    return ("sys.executable" in source and "planner_score.py" in source
+            and any(f'"{command}"' in source for command in ("split-rate", "score")))
+
+
+class TheLiveLedgerCannotChangeTheseScores(unittest.TestCase):
+    """DRE-5314. `config/split-ledger.json` is regenerated every night, and a
+    row naming a card makes `split-rate` score that card `split`. So a test
+    that scored against the live file asserted whatever last night's run
+    wrote. This class writes a row for every card this module's fixtures name
+    into a temporary ledger, points the default read at it, and runs every
+    test that scores again."""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        import split_ledger
+
+        with open(__file__, encoding="utf-8") as fh:
+            cards = sorted(set(re.findall(r"DRE-\d+", fh.read())))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "split-ledger.json")
+        with open(self.path, "w", encoding="utf-8") as fh:
+            json.dump(ledger(*cards), fh)
+        self.default_reads = []
+        real_load = split_ledger.load
+
+        def load(path=None):
+            if path is None:
+                self.default_reads.append(path)
+            return real_load(path)
+
+        for patch in (mock.patch.object(split_ledger, "LEDGER_PATH", self.path),
+                      mock.patch.object(split_ledger, "load", load)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_the_regenerated_rows_reach_a_caller_that_passes_no_ledger(self):
+        """The premise, so the test below cannot pass vacuously."""
+        result = planner_score.score(epic(), [child("DRE-1", state="Done")],
+                                     doc=reference())
+        self.assertEqual(outcomes_by_card(result, "split-rate"),
+                         {"DRE-1": "disagree"})
+        self.assertTrue(self.default_reads)
+
+    def test_no_test_in_this_module_scores_against_the_live_ledger(self):
+        """Discovered off each test's source, never listed. The CLI test runs
+        in a subprocess, which this patch cannot reach — it has to name its
+        ledger on the command line, and the discovery holds it to that."""
+        import inspect
+
+        loader = unittest.TestLoader()
+        tests = []
+        for case in list(globals().values()):
+            if not (isinstance(case, type) and issubclass(case, unittest.TestCase)
+                    and case is not type(self)):
+                continue
+            for name in loader.getTestCaseNames(case):
+                source = inspect.getsource(getattr(case, name))
+                if _runs_the_cli(source):
+                    self.assertIn('"--ledger"', source,
+                                  f"{case.__name__}.{name} runs the CLI "
+                                  "against the live ledger")
+                if any(call in source for call in LEDGER_READERS):
+                    tests.append(case(name))
+        self.assertGreater(len(tests), 30, "the discovery found nothing to run")
+        result = unittest.TestResult()
+        unittest.TestSuite(tests).run(result)
+        self.assertEqual(
+            [f"{test.id()}: " + next(
+                (line for line in trace.splitlines() if "Error:" in line),
+                trace.splitlines()[-1])
+             for test, trace in result.failures + result.errors], [])
+        self.assertEqual(self.default_reads, [],
+                         "a test in this module still scores against the live ledger")
+
+
 # --------------------------------------------------------------------------
 # the report — both halves, empty or not
 # --------------------------------------------------------------------------
