@@ -473,7 +473,8 @@ def test_a_retry_whose_run_finished_is_served_before_cards_that_joined_after_it(
             "36726491495": "completed"}
     world = _serve(cards, runs)
     assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
-        ("DRE-5213", {"trigger_state": "Planning", "reason": None})]
+        ("DRE-5213", {"trigger_state": "Planning", "reason": None,
+                      "event": reconcile.plan_run.PLAN_EVENT})]
     assert [i for i, _ in world.receipts("dispatched")] == ["DRE-5213"]
     assert world.receipts("released") == []
     assert "36726491495" not in world.gh_runs_read()
