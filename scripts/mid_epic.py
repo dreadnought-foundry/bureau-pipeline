@@ -154,11 +154,13 @@ EPIC_SHAPE = "epic"
 # the vocabulary by `tests/test_mid_epic.py`, the same way as `EPIC_SHAPE`.
 ROLL_UP_SHAPE = "roll-up"
 
-# The lanes that mean a human has green-lit this epic — the same pair
-# reconcile.EPIC_ACTIVE_STATES treats as activated (DRE-1893: the CEO's
-# activation action is moving an approved epic to Todo; In Progress is the
-# downstream progression).
-EPIC_ACTIVE_LANES = ("Todo", "In Progress")
+# The lanes that mean a human has green-lit this epic — the same set
+# reconcile.EPIC_ACTIVE_STATES treats as activated, pinned to it by
+# tests/test_mid_epic_discovery.py. The move to In Progress is the only approval
+# (DRE-2727); Todo once counted too (DRE-1893) and no longer does (DRE-5347): an
+# epic dragged there from Green Light is unapproved, and the sweep carries it
+# back out, so an entry into Todo is neither a green light nor a re-approval.
+EPIC_ACTIVE_LANES = ("In Progress",)
 
 # The human-decision lane an ADDITION deliberately does not pass through. Both
 # names, because the live board may still answer with the retired one — a rename

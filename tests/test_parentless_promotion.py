@@ -14,8 +14,9 @@ FIX UNDER TEST: the gate becomes verdict-driven where there is no parent, and
 parentage-driven where there is one.
 
 * **Has a parent** — the parent's state still gates it, exactly as before.
-  `EPIC_ACTIVE_STATES` is untouched and DRE-1893's reasoning stands: a child
-  must not build while its epic is unapproved.
+  DRE-1893's reasoning stands: a child must not build while its epic is
+  unapproved. Since DRE-5347 `EPIC_ACTIVE_STATES` is In Progress alone — an
+  epic in Todo is carried out by the sweep and activates nothing.
 * **No parent** — the verdict IS the approval. A one-off's green light happened
   at Planning, which is the design's whole claim about why a one-off needs no
   CEO review. No verdict, no approval, no promotion.
@@ -208,13 +209,14 @@ class TestTheParentCheckSurvives:
         A gate that simply dropped the parent check promotes this card — which
         is exactly the "a child must not build while its epic is unapproved"
         behaviour DRE-1893 exists for."""
-        for inactive in ("Backlog", "Planning", "Green Light", "Done"):
+        for inactive in ("Todo", "Backlog", "Planning", "Green Light", "Done"):
             board = _Board(_card(parent_state=inactive, comments=[FLEET]))
             assert board.promote() == 0, f"epic in {inactive} must not promote its child"
             assert board.lane_of("DRE-2735") == "Backlog"
 
-    def test_active_states_are_untouched(self):
-        assert reconcile.EPIC_ACTIVE_STATES == ("Todo", "In Progress")
+    def test_only_in_progress_activates_an_epic(self):
+        """Approval is the move to In Progress and only that (DRE-5347)."""
+        assert reconcile.EPIC_ACTIVE_STATES == ("In Progress",)
 
 
 # --------------------------------------------------------------------------
