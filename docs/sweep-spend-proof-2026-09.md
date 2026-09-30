@@ -9,7 +9,7 @@ live board, by an operator session. Every time below is Pacific Time.
 | Three consecutive `schedule` sweeps on bureau-pipeline at or under 30 | **Pass** — 20, 20, 20 |
 | One card-done dispatch scoped to one card, at or under 15 | **Pass** — 6 (DRE-3644's own Done) |
 | The run summary page shows `linear-budget:` and `sweep-spend:` | **Not observed** — see §3 |
-| `check_linear_budget.py --hours 1`: every bureau-pipeline reconcile row `max/run` ≤ 30 | **Fails as written** — 59, and the number measures the wrong thing (§4) |
+| `check_linear_budget.py --hours 1`: every bureau-pipeline reconcile row `max/run` ≤ 30 | **Fails as written** — 59, and the number measures the wrong thing (§4). DRE-5201 reads it per run (§6) |
 | agent-bureau: three consecutive sweeps at or under 30 after promotion | **Fails** — 39, 30, 36 |
 
 ## 0. Which code the sweeps ran
@@ -242,13 +242,13 @@ read from the code that spends them):
 
 The phases every pass runs came to 37, 30 and 31 on the three passes, before
 any event-driven phase — and 29 with each at its lowest. So at agent-bureau's
-current board, 30 is its floor, not its ceiling. The one cut visible from here
+current board, 29 is its floor, and 30 is barely above it. The one cut visible from here
 is `refresh_stale_merge_refs`'s card read, which the pass's board snapshot could
 serve for the cards it already holds. That is worth up to 6–8 a pass. Even with
 it, the 19:34 PT pass would have spent 33.
 
 **Proposed, not applied:** a target of **40** Linear requests per scheduled pass
-for agent-bureau. It covers 30, 36 and 39 on the current code, and it is still
-under half of the 74 the last pass before DRE-3644 spent. bureau-pipeline keeps 30.
+for agent-bureau. It covers 30, 36 and 39 on the current code, and it is about
+54% of the 74 the last pass before DRE-3644 spent. bureau-pipeline keeps 30.
 This run could not read agent-bureau's runs (its token is scoped to
 bureau-pipeline), so the figures above are the ones §5 recorded on 2026-09-28.

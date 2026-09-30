@@ -191,10 +191,10 @@ def test_a_marker_mid_line_is_not_read_even_without_the_gh_prefix():
 def _sweep_total_line(monkeypatch, spent: int) -> str:
     """The `sweep-spend: total` line composed by the sweep's own ledger, so
     the reader is pinned against what the producer prints."""
-    os.environ.setdefault("LINEAR_API_KEY", "test-key")
-    os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
-    os.environ.setdefault("REPO_SLUG", "agent-bureau")
-    os.environ.setdefault("GH_TOKEN", "x")
+    monkeypatch.setenv("LINEAR_API_KEY", "test-key")
+    monkeypatch.setenv("REPO", "dreadnought-foundry/agent-bureau")
+    monkeypatch.setenv("REPO_SLUG", "agent-bureau")
+    monkeypatch.setenv("GH_TOKEN", "x")
     import contextlib
     import io
 
