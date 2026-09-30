@@ -3,7 +3,7 @@
 The proof for [DRE-4371](https://linear.app/dreadnoughtfoundry/issue/DRE-4371),
 the closing card of epic [DRE-4359](https://linear.app/dreadnoughtfoundry/issue/DRE-4359).
 
-Read on **2026-09-29 between 18:40 and 19:30 PT** against live Linear and live
+Read on **2026-09-29 between 18:40 and 18:52 PT** against live Linear and live
 GitHub Actions on `dreadnought-foundry/bureau-pipeline` (plus one run in
 `dreadnought-foundry/agent-bureau`). Every time below is **Pacific (PDT, UTC−7)**.
 Where a UTC string is itself the evidence, it is quoted as written with the
