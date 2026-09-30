@@ -378,7 +378,8 @@ def detect(log_text: str | None) -> Signature | None:
 #: posts on a card today, byte-identical. A contract with epic DRE-3420: its
 #: fleet-wide detector (`reviewer_down.witness_from_comments`, DRE-3433) counts
 #: every Linear comment STARTING with this phrase as one could-not-run outcome
-#: from that repository. Reword it on either side and the alarm goes blind for
+#: from the repository its run link names (DRE-5291), never the card's `repo:`
+#: label. Reword it on either side and the alarm goes blind for
 #: exactly the crash class this epic names.
 CRITIC_UNAVAILABLE_MARKER = "\U0001f50c The code reviewer was temporarily unavailable"
 
