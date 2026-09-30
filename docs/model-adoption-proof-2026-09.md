@@ -36,7 +36,7 @@ This is the step summary, verbatim from the `Summarize every candidate and pick 
 
 **The run prints 5 rows, not 13, by design.** `classify_catalog` drops every id the pipeline already runs, retires or excludes before it classifies. So the other 8 catalog ids never reach the table. The workflow does not print them, and the run left no artifact that lists them.
 
-**Where the 8 missing ids come from.** They are taken from the most recent committed catalog snapshot, `models.json`. The model-drift run of 2026-09-27 23:58 PT ([36389164786](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36389164786)) refreshed it, and DRE-5116 (PR #548) added `claude-sonnet-5-5` to it. It holds 13 ids. Running the same `classify_catalog` over it, with the same `config/models.yaml` at `881bc1e`, gives exactly the 5 decisions above, word for word except one date. The 8 it drops are:
+**Where the 8 missing ids come from.** They are taken from the most recent committed catalog snapshot, `models.json`. The model-drift run of 2026-09-27 23:58 PT ([36389164786](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36389164786)) refreshed it, and DRE-5116 (PR #548) added `claude-sonnet-5-5` to it. It holds 13 ids. Running the same `classify_catalog` over it, with the same `config/models.yaml` at `881bc1e`, gives the same 5 candidates with the same 5 rules. Four reasons are word for word the same. The fifth, `claude-sonnet-4-5-20250929`, differs: locally it names `claude-sonnet-5` (2026-06-29) as "the newest sonnet rung we run", not `claude-sonnet-5-5`. That is because the snapshot gives `claude-sonnet-5-5` no date, and an undated rung ranks oldest. The rule is `ignore` either way. The 8 it drops are:
 
 | Catalog id | Why it is not a candidate |
 |---|---|
@@ -49,7 +49,7 @@ This is the step summary, verbatim from the `Summarize every candidate and pick 
 | `claude-opus-4-8` | `retired` ("rotated out when Opus 5 landed") |
 | `claude-fable-5` | `excluded` ("off every ladder on cost policy (2026-08-12)") |
 
-**This is an inference about the live catalog, not a reading of it.** The live run confirms the count (13) and the 5 candidates. It does not print the other 8 names. One detail shows the run read the live catalog, not the snapshot. Its `claude-sonnet-4-5-20250929` reason dates `claude-sonnet-5-5` at `2026-09-28T00:00:00Z`, but the committed snapshot has no date for that id. So the snapshot's 13 and the live 13 are not byte-identical. They agree on everything the rule reads. The scheduled run at 00:38 PT the same day ([36684872808](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36684872808)) also read 13 models and printed the same five rows.
+**This is an inference about the live catalog, not a reading of it.** The live run confirms the count (13) and the 5 candidates. It does not print the other 8 names. That same fifth reason shows the run read the live catalog, not the snapshot. The live run's reason dates `claude-sonnet-5-5` at `2026-09-28T00:00:00Z`, but the committed snapshot has no date for that id. So the snapshot's 13 and the live 13 are not byte-identical. They agree on which ids are candidates and on every rule. The scheduled run at 00:38 PT the same day ([36684872808](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36684872808)) also read 13 models and printed the same five rows.
 
 ## 2. Each row against the CEO's three rules
 
