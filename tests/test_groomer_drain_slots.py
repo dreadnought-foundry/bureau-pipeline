@@ -22,7 +22,10 @@ So:
   * an addition takes a slot like any other move; an agreed Cancel row does
     not, because a canceled card starts no planner;
   * a ledger the drain cannot read refuses the drain before any card moves,
-    written on the proposal card like every other refusal.
+    written on the proposal card like every other refusal;
+  * a drain the slots stop entirely — no card to Planning and none to
+    Canceled — refuses before any write instead of recording itself as
+    drained, so the unchanged batch can be approved again when a slot frees.
 
 `tests/conftest.py` lifts the slot read for every other drain test (their
 fixtures move fifteen cards and carry no ledger); each test here puts back the
@@ -218,3 +221,59 @@ def test_an_unreadable_ledger_refuses_before_any_card_moves(monkeypatch):
     assert len(refusals) == 1
     assert "planner slot" in refusals[0]
     assert refused.value.batch == proposal["id"]
+
+
+# --------------------------------------------------------------------------
+# a drain the slots stop entirely does not use up its batch
+# --------------------------------------------------------------------------
+def _no_cancel_list():
+    from test_groomer import CYCLES, card
+    proposal = groomer.propose([card(f"DRE-{n:03d}") for n in range(6)],
+                               cycles=CYCLES, capacity=3, batch_cycles=1)
+    assert _planning(proposal) and not _cancel(proposal), (
+        "the fixture must be a Planning list with no Cancel list")
+    return proposal, ()
+
+
+def _every_cancel_row_excluded():
+    proposal = two_lists()
+    return proposal, tuple(
+        _decision(groomer.EXCLUDE_TAG, proposal, card=i, reason="still wanted")
+        for i in _cancel(proposal))
+
+
+@pytest.mark.parametrize("morning", [_no_cancel_list, _every_cancel_row_excluded])
+def test_a_drain_no_slot_lets_move_leaves_the_batch_approvable(monkeypatch, morning):
+    """Day one: every planner slot is taken, so no card moves and none is
+    canceled — Intake is exactly as it was, and the next proposal over it is
+    the SAME batch with the same id. Had the drain written its
+    `groom-drained` record, that id would be spent: the re-proposal is not
+    re-posted and a fresh approval of it is `AlreadyDrained`, so the cards
+    "held back for the next proposal" would wait for Intake to change.
+
+    Day two: a slot frees, the CEO approves the same batch again, and the
+    cards the slots held back move."""
+    proposal, decisions = morning()
+    thread = _thread(proposal, *decisions)
+    ops = FakeOps(comments=thread)
+    _slots(monkeypatch, 0)
+    with pytest.raises(groomer.DrainRefused) as refused:
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    assert ops.state_writes == [] and ops.mutations == []
+    assert refused.value.batch == proposal["id"]
+    assert "planner slot" in str(refused.value)
+    written = [b for t, b in ops.written if t == PROPOSAL_CARD]
+    assert not [b for b in written if
+                b.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}:")], (
+        "a drain that moved nothing wrote the record that spends its batch")
+
+    # The next morning, over the same Intake: the same batch, and it is the
+    # proposal already standing on the card.
+    thread += [{"body": b, "authored_by_pipeline": True} for b in written]
+    assert groomer.already_proposed(proposal, thread)
+
+    ops = FakeOps(comments=thread + [_decision(groomer.APPROVAL_TAG, proposal)])
+    _slots(monkeypatch, 2)
+    result = groomer.drain(ops, card=PROPOSAL_CARD)
+    assert result["moved"] == _planning(proposal)[:2]
+    assert _planning_moves(ops) == _planning(proposal)[:2]
