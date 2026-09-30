@@ -321,6 +321,59 @@ class ClassifyPathTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(check_tdd_commits.classify_path(path), "code")
 
+    # --- records under architecture/ (DRE-5311) ---------------------------
+    #
+    # agent-bureau #2920 (DRE-5031, the release-brake proof record) changed two
+    # `.md` files and four screenshots under `architecture/proofs/release-brake/`.
+    # The screenshots classified as `code`, so the gate demanded a RED test for
+    # an image — a failure no added commit can clear (DRE-2694). `architecture/`
+    # is where the fleet keeps decisions, forensics and proof records; it gets
+    # the design-record rule: matched by prefix, decided by extension.
+
+    def test_a_proof_screenshot_under_architecture_is_docs(self):
+        # The exact path that stranded #2920.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "architecture/proofs/release-brake/1-before-releases-on.jpg"
+            ),
+            "docs",
+        )
+
+    def test_every_record_extension_under_architecture_is_docs(self):
+        for path in (
+            "architecture/proofs/release-brake/2-brake-pressed.png",
+            "architecture/proofs/release-brake/3-held.JPG",
+            "architecture/proofs/release-brake/4-resumed.jpeg",
+            "architecture/diagrams/relay.svg",
+            "architecture/forensics/timeline.html",
+            "architecture/forensics/runs.json",
+            "architecture/design/console.pen",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "docs")
+
+    def test_source_under_architecture_is_still_code(self):
+        # The limit of the exemption, pinned: the extension decides, so source
+        # and stylesheets stay code wherever they sit.
+        for path in (
+            "architecture/tools/render.py",
+            "architecture/x.ts",
+            "architecture/proofs/style.css",
+            "architecture/forensics/runs.csv",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_an_architecture_directory_nested_inside_source_is_not_a_record(self):
+        # Matched by PREFIX, like `design/`: an `architecture/` folder inside an
+        # application's source is part of the app.
+        for path in (
+            "web/src/architecture/diagram.svg",
+            "console/frontend/architecture/shot.png",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
     def test_the_existing_docs_rules_are_unchanged(self):
         self.assertEqual(check_tdd_commits.classify_path("docs/runbook.html"), "docs")
         self.assertEqual(check_tdd_commits.classify_path("docs/self-hosting.md"), "docs")
@@ -428,6 +481,40 @@ class CheckCommitsTest(unittest.TestCase):
         # only it still needs a preceding test commit.
         ok, reason = check_tdd_commits.check_commits([
             commit(["console/design/tokens.css"], "style: new accent"),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    # --- records under architecture/ (DRE-5311) ---------------------------
+
+    def test_a_proof_record_with_its_screenshots_passes(self):
+        # agent-bureau #2920's shape, commit for commit.
+        ok, reason = check_tdd_commits.check_commits([
+            commit([
+                "architecture/proofs/README.md",
+                "architecture/proofs/release-brake-from-the-console.md",
+            ], "docs(DRE-5031): the release-brake proof record"),
+            *(
+                commit(
+                    [f"architecture/proofs/release-brake/{name}.jpg"],
+                    f"docs(DRE-5031): screenshot {name}",
+                )
+                for name in ("1-before-releases-on", "2-brake-pressed",
+                             "3-held", "4-resumed")
+            ),
+            commit([
+                "architecture/proofs/README.md",
+                "architecture/proofs/release-brake-from-the-console.md",
+            ], "docs(DRE-5031): link the screenshots"),
+        ])
+        self.assertTrue(ok)
+        self.assertEqual(
+            reason, "exempt: no non-test code changed (docs/ops/tests only)"
+        )
+
+    def test_source_under_architecture_still_needs_a_test(self):
+        ok, reason = check_tdd_commits.check_commits([
+            commit(["architecture/tools/render.py"], "feat: render diagrams"),
         ])
         self.assertFalse(ok)
         self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
@@ -781,6 +868,33 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         p = self.run_check()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("[docs]", p.stdout)
+
+    def test_proof_record_branch_exits_0(self):
+        # DRE-5311: agent-bureau #2920, reproduced commit for commit — the
+        # record's two `.md` files, four screenshots one commit each, then an
+        # edit to the two `.md` files. No test anywhere, and none possible.
+        self.git("checkout", "-q", "-b", "docs/DRE-5031-release-brake-proof")
+        self.write("architecture/proofs/README.md", "index")
+        self.write("architecture/proofs/release-brake-from-the-console.md", "record")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs(DRE-5031): the release-brake proof record")
+        for name in ("1-before-releases-on", "2-brake-pressed", "3-held",
+                     "4-resumed"):
+            self.add_commit(
+                f"architecture/proofs/release-brake/{name}.jpg",
+                f"docs(DRE-5031): screenshot {name}",
+            )
+        self.write("architecture/proofs/README.md", "index, linked")
+        self.write("architecture/proofs/release-brake-from-the-console.md",
+                   "record, with screenshots")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs(DRE-5031): link the screenshots")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
+        self.assertIn(
+            "exempt: no non-test code changed (docs/ops/tests only)", p.stdout
+        )
 
     def test_design_record_with_code_and_no_test_exits_1(self):
         self.git("checkout", "-q", "-b", "agent/DRE-3763-mixed")
