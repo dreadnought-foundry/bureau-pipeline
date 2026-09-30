@@ -1681,5 +1681,195 @@ class DoubleFinishRace(_EndOfRun):
         self.assertEqual([w.card for w in led.waiting], [waiter, z])
 
 
+# =========================================================================== #
+# DRE-5378 — a retry keeps its place, and a park ends it                      #
+# =========================================================================== #
+#
+# DRE-5213, 2026-09-30, read off the card itself. Its planner run 36726491495
+# claimed at 14:05:58Z and was admitted. The first critic sent the plan back,
+# the planner revised it, and the run released at 14:34:52Z `because
+# finished`. The automatic retry was a GitHub RE-RUN of that run, and a re-run
+# keeps its run id: it claimed at 14:35:55Z under the same 36726491495 and was
+# told to wait at `place 24 of 24`, behind every card of the 07:05 PT groom
+# drain — cards whose own claims came after 14:05:58Z. It waited six hours and
+# the watchdog parked it in Green Light at 20:40Z.
+
+DRE5213 = "DRE-5213"
+DRE5213_RUN = "36726491495"
+
+
+def sep30(hms: str) -> datetime:
+    h, m, s = (int(x) for x in hms.split(":"))
+    return datetime(2026, 9, 30, h, m, s, tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------- #
+# 24. a re-run of a run that released keeps the place its first claim had      #
+# --------------------------------------------------------------------------- #
+
+
+class RetryKeepsItsPlace(_EndOfRun):
+    #: Cards of the groom drain that claimed AFTER DRE-5213's first claim and
+    #: were refused, at the times their own receipts carry.
+    JOINED = (("DRE-3622", "14:06:12"), ("DRE-4267", "14:06:23"),
+              ("DRE-5311", "14:19:19"), ("DRE-5314", "14:26:43"))
+
+    def _morning(self) -> dict:
+        """DRE-5213's receipts, posted by the real commands in their order:
+        claimed, released by the run that finished, claimed again by that
+        run's re-run, waiting. Returns the retry's `claim` outputs."""
+        self.board.clock = sep30("14:00:00")
+        self.running = fill_running(self.board, 3)
+        self.board.add(DRE5213)
+        self.board.clock = sep30("14:05:58")
+        rc, out, *_ = cli_claim(DRE5213, DRE5213_RUN)
+        self.assertEqual((rc, out["admitted"]), (0, "true"))
+        for ident, hms in self.JOINED:
+            self.board.add(ident)
+            self.board.clock = sep30(hms)
+            rc, out, *_ = cli_claim(ident, f"run-{ident}")
+            self.assertEqual((rc, out["admitted"]), (0, "false"), ident)
+        # The run's end: its release, its next, its dispatch of the head.
+        self.board.clock = sep30("14:34:52")
+        end_release(DRE5213, DRE5213_RUN)
+        head = end_next()
+        self.assertEqual(head["card"], "DRE-3622")
+        end_dispatch(head, DRE5213_RUN)
+        # The automatic retry: a re-run, under the same run id.
+        self.board.clock = sep30("14:35:55")
+        rc, out, *_ = cli_claim(DRE5213, DRE5213_RUN)
+        self.assertEqual(rc, 0)
+        self.cap_held()
+        return out
+
+    def test_the_receipts_are_dre5213s(self):
+        """The fixture is the card's own sequence, not a look-alike."""
+        self._morning()
+        seen = [(r.state, r.run, r.because)
+                for r in reversed(self.board.receipts(DRE5213))]
+        self.assertEqual(seen, [("claimed", DRE5213_RUN, None),
+                                ("released", DRE5213_RUN, "finished"),
+                                ("claimed", DRE5213_RUN, None),
+                                ("waiting", DRE5213_RUN, None)])
+
+    def test_the_retry_waits_at_the_place_its_first_claim_had(self):
+        out = self._morning()
+        self.assertEqual(out["admitted"], "false")
+        self.assertEqual((out["place"], out["waiting"]), ("1", "4"))
+        self.assertIn("waiting for a planner: place 1 of 4",
+                      self.board.nodes(DRE5213)[0]["body"])
+        led = self.board.ledger()
+        self.assertEqual([w.card for w in led.waiting],
+                         [DRE5213, "DRE-4267", "DRE-5311", "DRE-5314"])
+
+    def test_later_cards_join_behind_it_and_next_in_line_serves_it_first(self):
+        self._morning()
+        # DRE-3622 takes the slot it was dispatched into.
+        self.board.clock = sep30("14:36:30")
+        self.assertEqual(cli_claim("DRE-3622", "run-DRE-3622-2")[1]["admitted"], "true")
+        for ident, hms in (("DRE-5327", "15:00:00"), ("DRE-5358", "15:05:00")):
+            self.board.add(ident)
+            self.board.clock = sep30(hms)
+            rc, out, *_ = cli_claim(ident, f"run-{ident}")
+            self.assertEqual(out["admitted"], "false")
+        # Then a slot frees.
+        self.board.clock = sep30("15:10:00")
+        end_release(self.running[0], f"run-{self.running[0]}")
+        led = self.board.ledger()
+        self.assertEqual(led.free_slots(4), 1)
+        self.assertEqual(pq.next_in_line(led).card, DRE5213)
+        out = end_next()
+        self.assertEqual((out["card"], out["trigger_state"]), (DRE5213, "Planning"))
+        fired = end_dispatch(out, "run-finisher")
+        self.assertEqual([c["identifier"] for c, _, _ in fired], [DRE5213])
+        self.assertEqual(self.board.newest(DRE5213).state, "dispatched")
+        self.cap_held()
+
+    def test_its_wait_is_measured_from_the_retrys_own_waiting(self):
+        """The place is the first claim's; the clock the watchdog reads is not.
+        The card held a slot from 14:05:58 to 14:34:52 and waited from the
+        retry's `waiting` on."""
+        self._morning()
+        nodes = self.board.nodes(DRE5213)
+        now = sep30("15:35:56")
+        self.assertEqual(pq.line_entry(nodes, now=now), iso(sep30("14:35:56")))
+        self.assertEqual(pq.waited_minutes(nodes, now=now), 60.0)
+
+    def test_a_waiter_whose_claim_came_from_a_finished_run_is_still_served(self):
+        """Its run id has a `released … because finished` and GitHub reports the
+        run completed; neither makes it a dead claim, and nothing drops it."""
+        self._morning()
+        later = sep30("20:00:00")
+        led = self.board.ledger(now=later)
+        self.assertEqual(pq.state(self.board.nodes(DRE5213), now=later), "waiting")
+        self.assertNotIn(DRE5213, [r.card for r in led.running])
+        self.assertNotIn(DRE5213, [r.card for r in pq.expired_claims(led, later)])
+        self.assertEqual(led.waiting[0].card, DRE5213)
+        self.assertEqual(led.waiting[0].run, DRE5213_RUN)
+
+    def test_a_new_run_after_a_release_is_a_fresh_arrival(self):
+        """The guard on the rule: only the run that released may continue its
+        claim. A different run after a release — a re-send, a new dispatch —
+        joins at the back, exactly as before."""
+        self._morning()
+        other = self.board.add("DRE-FRESH")
+        self.board.clock = sep30("14:40:00")
+        self.board.seed(other, "claimed", sep30("14:00:30"), run="run-old")
+        self.board.seed(other, "released", sep30("14:30:00"), run="run-old",
+                        because="finished")
+        rc, out, *_ = cli_claim(other, "run-new")
+        self.assertEqual(out["admitted"], "false")
+        self.assertEqual([w.card for w in self.board.ledger().waiting][-1], other)
+
+
+# --------------------------------------------------------------------------- #
+# 25. a park out of Planning ends the place in line                            #
+# --------------------------------------------------------------------------- #
+
+
+class ParkEndsThePlace(_Base):
+    """The same card, the same afternoon (the operator's comment on
+    DRE-5378). Waiting from 14:35:56Z (07:35 PT), parked by the watchdog at
+    20:40:48Z (13:40 PT), re-sent at 20:56Z (14:00 PT). Without a release the
+    re-sent card came back 6+ hours "waited" and the 21:26Z sweep parked it
+    again — "DRE-5213 has waited 411 minutes for a planner slot"."""
+
+    def _afternoon(self, park: bool = True) -> list:
+        card = self.board.add(DRE5213)
+        self.board.seed(card, "claimed", sep30("14:35:55"), run=DRE5213_RUN)
+        self.board.seed(card, "waiting", sep30("14:35:56"), run=DRE5213_RUN,
+                        place=24, of=24)
+        if park:
+            self.board.seed(card, "released", sep30("20:40:48"),
+                            run="36774224458", because="parked")
+        self.board.seed(card, "claimed", sep30("20:56:32"), run="36776079981")
+        self.board.seed(card, "waiting", sep30("20:56:33"), run="36776079981",
+                        place=3, of=4)
+        return self.board.nodes(card)
+
+    def test_a_resend_after_a_park_starts_a_fresh_wait(self):
+        nodes = self._afternoon()
+        now = sep30("21:26:42")
+        self.assertEqual(pq.line_entry(nodes, now=now), iso(sep30("20:56:33")))
+        self.assertLess(pq.waited_minutes(nodes, now=now), 31)
+        self.assertFalse(pq.overdue(nodes, now=now))
+
+    def test_the_fixture_is_overdue_without_the_park(self):
+        """The guard against a vacuous fixture: the same card with no park
+        release IS overdue at 21:26Z — the release is what resets it."""
+        nodes = self._afternoon(park=False)
+        self.assertTrue(pq.overdue(nodes, now=sep30("21:26:42")))
+
+    def test_a_parked_card_is_out_of_line(self):
+        card = self.board.add("DRE-PARK")
+        self.board.seed(card, "waiting", sep30("14:35:56"), run="r1")
+        self.board.seed(card, "released", sep30("20:40:48"), run="sweep",
+                        because="parked")
+        nodes = self.board.nodes(card)
+        self.assertEqual(pq.state(nodes, now=sep30("20:41:00")), "released")
+        self.assertFalse(pq.in_line(nodes, now=sep30("20:41:00")))
+        self.assertIn("parked", pq.BECAUSE)
+
+
 if __name__ == "__main__":
     unittest.main()

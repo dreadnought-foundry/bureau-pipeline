@@ -280,7 +280,8 @@ class TestAWaitPastTheBoundIsEscalated:
     def test_the_whole_reason_reaches_the_card(self):
         board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
         board.watch()
-        posted = [b for i, b in board.posted if i == CARD]
+        posted = [b for i, b in board.posted
+                  if i == CARD and planner_queue.parse_receipt(b) is None]
         assert len(posted) == 1
         assert "waiting in line for a planner" in posted[0]
         assert planning_escalation.NOT_PLAIN_ENGLISH not in posted[0]
@@ -305,6 +306,48 @@ class TestAWaitPastTheBoundIsEscalated:
         (reason,) = board.reasons()
         assert "waiting in line for a planner" in reason
         assert board.states == [(CARD, reconcile.ESCALATED_STATE)]
+
+
+# ===========================================================================
+# 2b. The park ends the card's place in line (DRE-5378)
+# ===========================================================================
+class TestAParkEndsThePlaceInLine:
+    """DRE-5213, 2026-09-30: waiting from 07:35 PT, parked by this watchdog at
+    13:40 PT, re-sent to Planning by the operator at 14:00 PT — and parked
+    again at 14:26 PT as "waited 411 minutes", because the park posted no
+    release and the wait still ran from 07:35. The reason the CEO reads says
+    "Sending it back through Planning gives it a fresh place in line"; the
+    release is what makes that sentence true."""
+
+    def test_the_park_posts_a_release_for_the_card(self):
+        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
+        assert board.watch() == {CARD}
+        receipts = [planner_queue.parse_receipt(b) for i, b in board.posted if i == CARD]
+        releases = [r for r in receipts if r is not None and r.state == "released"]
+        assert [(r.card, r.because) for r in releases] == [(CARD, "parked")]
+        nodes = board._find(CARD)["comments"]["nodes"]
+        assert not planner_queue.in_line(nodes)
+
+    def test_a_card_inside_the_bound_is_not_released(self):
+        board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
+        board.watch()
+        assert board.posted == []
+
+    def test_a_resend_after_the_park_is_not_overdue(self):
+        """411 minutes after its first wait, 30 after the re-send's."""
+        park = planner_queue.format_receipt(
+            "released", card=CARD, run="36774224458",
+            repo="dreadnought-foundry/agent-bureau", trigger="Planning",
+            at=_iso(46), because="parked")
+        bodies = [_receipt("claimed", 411, run="36726491495"),
+                  _waiting(411, run="36726491495"),
+                  park,
+                  _receipt("claimed", 30, run="36776079981"),
+                  _waiting(30, run="36776079981")]
+        board = _Board(_card(minutes_stale=30, bodies=bodies))
+        assert board.watch() == set()
+        assert board.escalations == []
+        assert board.lane() == "Planning"
 
 
 # ===========================================================================
