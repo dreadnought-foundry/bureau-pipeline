@@ -3,7 +3,7 @@
 **Status: PARTIAL. The cap held and the line worked, but the fleet's Linear key still ran dry, and 8 of the 19 cards never reached a planner.**
 
 - **What held:** four planners at most, the rest waiting with their place written on them, and each finish starting the next within seconds.
-- **The key:** it hit 0 at 07:47 PT, earlier than the 2026-09-28 baseline of 08:06 PT, and again at 08:22, 08:28, 08:45 and 13:38–13:40 PT. From 08:05 to 09:23 PT no planner finished.
+- **The key:** Linear first refused it by 07:40:08 PT, 26 minutes earlier than the 2026-09-28 baseline of 08:06 PT, and it was being spent at a floor of about 138 to 163 requests a minute, at least as fast as the baseline's burst of about 130. The Reconcile runs read 0 at 07:47, 08:22, 08:28, 08:45 and 13:38–13:40 PT. From 08:05 to 09:23 PT no planner finished.
 - **The 8 cards:** seven were built straight from Planning with no plan, and one was canceled. A ninth card, DRE-5213, had its planner run, but its retry was then left in line for six hours (§6).
 - **The cap changed mid-window.** It was 4 from the drain until DRE-5326 lowered it to 2, at 08:57 PT on `main` and about 09:06 PT on `stable`. DRE-5326 was filed in response to this morning's drain. Both caps held: at most 4 before, at most 2 after (§3).
 
@@ -15,7 +15,7 @@ The batch is the groom drain of proposal `3677632fc10a` at **2026-09-30 07:05 PT
 - the Actions run lists of every repo in `config/repo-map.json`;
 - the Reconcile runs' `linear-budget:` lines, from 06:41 to 13:40.
 
-The spot checks against raw run logs are listed in §8.
+The spot checks against raw run logs are listed in §8. After the first review, at about 14:30 PT, the ledger was read again to pair every release with its claim (§2), and one more run log was checked (§8, item 9).
 
 | Criterion | Result |
 |---|---|
@@ -23,7 +23,7 @@ The spot checks against raw run logs are listed in §8.
 | At most 4 planners running at once, counted as cards holding an open planner-slot claim | **Met.** The maximum was 4, reached at 07:06:11, 07:19:26, 07:35:28, 07:38:40 and 07:45:41. After the cap dropped to 2 (08:57 PT on `main`, about 09:06 PT on `stable`) the maximum was 2 (§3) |
 | …and every card in the batch reached a planner, none canceled, skipped or receipt-less | **Not met.** 11 of 19 cards held a planner slot. 7 were dispatched from the line as builds and built unplanned (DRE-5366). 1 (DRE-4272) was dispatched the same way and then canceled at 10:32. DRE-5213's retry waited from 07:35 until it was escalated at 13:40, and later arrivals were served ahead of it. Every card has receipts (§2, §6) |
 | At least three next-in-line dispatches from a finishing run's own end, with measured gaps | **Met.** 30 such dispatches: 29 at 2.3–5.5 s and one at 24.5 s (§4) |
-| The `linear-budget:` readings across the window beside the 2026-09-28 baseline | **Met as a reading. The outcome is adverse:** the key drained earlier than the baseline (§7) |
+| The `linear-budget:` readings across the window beside the 2026-09-28 baseline | **Met as a reading. The outcome is adverse:** the key was first refused by 07:40:08, earlier than the baseline's 08:06, at a floor of about 138 to 163 requests a minute (§7) |
 | The CEO closes this card after reading the record | Open: the CEO's step |
 
 ## 0. The batch, and the code it ran on
@@ -104,9 +104,17 @@ Read off Linear. `run` is the run that posted the receipt. For `dispatched`, tha
 | 18 | DRE-4271 | 07:07:03 claimed · run 36726539025; 07:07:04 waiting (place 15 of 15) · run 36726539025; 12:21:50 dispatched · run 36761845476 (agent-bureau); 12:22:20 claimed · run 36765145444; 12:33:43 released (finished) · run 36765145444 |
 | 19 | DRE-4272 | 07:06:28 claimed · run 36726540542; 07:06:29 waiting (place 11 of 11) · run 36726540542; 08:46:44 dispatched · run 36739170124 (bureau-pipeline) |
 
-**Waiting receipts carry their place.** All 46 `waiting` receipts in the window read `waiting for a planner: place k of n`, and none lacks it. Each was posted within 3.5 s of its own run's `claimed` receipt (median 1.0 s). That is the claim-then-verify step refusing the fifth claim.
+**Waiting receipts carry their place.** All 46 `waiting` receipts in the window read `waiting for a planner: place k of n`, and none lacks it. Each was posted within 3.5 s of its own run's `claimed` receipt (median 1.0 s). That is the claim-then-verify step refusing the fifth claim. The places are not a clean ordering: claims seconds apart were given the same place three times (DRE-5240 and DRE-3622 both `place 2 of 3` at 07:06:14; DRE-4267 `place 8 of 8` at 07:06:24 and DRE-4914 `place 8 of 9` at 07:06:25; DRE-3622 and DRE-3681 both `place 1 of 19` at 08:07:37 and 08:07:39).
 
 **The ledger, whole.** 226 comments on the board match `planner-slot:` between 07:05:58 and 13:46:22. One is a critic comment quoting the phrase, so there are 225 receipts: 82 `claimed`, 46 `waiting`, 60 `dispatched` and 37 `released` (32 `finished`, 5 `run-gone`). They cover 34 cards: the 19 above, plus cards that entered Planning later in the day and joined the same line. No `claimed … · from run` hand-over receipt occurred in the window.
+
+**Why 37 releases against 36 admitted claims.** 35 of the releases pair one-to-one with an admitted claim. The other two pair with none, and one admitted claim has no release:
+
+- **One release posted twice.** DRE-5268's run [36743892101](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36743892101) posted `released (finished)` at 09:54:58 and again at 09:55:20. Both receipts carry the same stamp, `at 2026-09-30T16:54:54Z`, so they are one release of one claim (09:24:13).
+- **One expiry of a refused claim.** DRE-4626's run 36747185674 claimed at 09:51:26 and was refused at 09:51:27 (`place 2 of 19`). A sweep then expired that claim `run-gone` at 09:51:44. The claim never held a slot, so the expiry frees nothing.
+- **One claim still open.** DRE-5365's claim by run 36774923047 at 13:46:22 is the extract's last receipt. Nothing answers it inside the window, and it comes after every maximum in §3.
+
+No claim from before the window could be open. The board holds no `planner-slot:` receipt between 2026-09-29 00:00 UTC and 07:05:58 PT on 09-30. The one comment that matches the phrase in that stretch is a critic comment on DRE-5268.
 
 ## 3. At no moment more than four
 
@@ -121,6 +129,8 @@ Read off Linear. `run` is the run that posted the receipt. For `dispatched`, tha
 | 07:45:41 | DRE-5240 (36727337728), DRE-5268 (36730197529), DRE-5129 (36729579603), DRE-4626 (36731503026) |
 
 All five are before 08:57, under the cap of 4. **From 08:57 on, under the cap of 2, the open-claim count never went above 2.** It was 2 at, among other times, 09:25:09, 10:17:06, 11:21:29, 12:22:20 and 13:10:11.
+
+At 07:45:41 DRE-5129's slot was held by a run that was already dead. Run 36729579603 died on the Linear quota at 07:40:08, and its release could not post for the same reason (`the release did not post — … rate limited`). Its claim stayed open until a sweep expired it at 08:06:59 (§5). It still counts here as an open claim.
 
 Counting the refused claims too, during the one to three seconds before each one's `waiting` receipt, the count momentarily reaches 6. None of those runs ran a model step (below).
 
@@ -155,7 +165,7 @@ In each case the claim came before any model step. The run that waited longest f
 
 ## 4. The next card starts from the finishing run's own end
 
-**30 times** a planner's end-of-run step released its slot and dispatched the next card in line itself, before any sweep. The gap from the run's `released` receipt to its `dispatched` receipt was **2.3 to 5.5 s** in 29 cases, and **24.5 s** in one (09:54:58 → 09:55:23). Examples:
+**30 times** a planner's end-of-run step released its slot and dispatched the next card in line itself, before any sweep. The gap from the run's `released` receipt to its `dispatched` receipt was **2.3 to 5.5 s** in 29 cases, and **24.5 s** in one (09:54:58 → 09:55:23). That run posted its release twice (§2), and the dispatch came 3 s after the second post. Examples:
 
 | Finishing run | Released | Next card dispatched | Gap |
 |---|---|---|---|
@@ -179,10 +189,10 @@ The run is an `Agent Plan` run on `repository_dispatch`, not a Reconcile run.
 
 ## 5. Planners the sweep started
 
-**A killed run, backfilled by the sweep.** At 08:46 bureau-pipeline's Reconcile [36739170124](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36739170124) found every slot free. The last two claims still open after 08:05 belonged to planners that had died on the Linear quota, and earlier sweeps had expired them:
+**A killed run, backfilled by the sweep.** At 08:46 bureau-pipeline's Reconcile [36739170124](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36739170124) found every slot free. Two of the four had been freed by ordinary `finished` releases, and two by `run-gone` expiries of planners that died on the Linear quota. The four claims open at 07:45:41 (§3) ended as DRE-5240 `finished` at 07:47:54, DRE-5268 `finished` at 07:52:09, DRE-4626 `finished` at 08:05:11 and DRE-5129 `run-gone` at 08:06:59. DRE-5034 took one of the freed slots at 08:05:42 and was expired `run-gone` at 08:29:02. The two `run-gone` cases:
 
-- DRE-5129's claim, `run-gone`, by bureau-pipeline Reconcile [36734156568](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36734156568) at 08:06:59. Its log reads `planner line: released DRE-5129 run 36729579603 — because run-gone`.
-- DRE-5034's claim, `run-gone`, by agent-bureau Reconcile [36736973074](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36736973074) at 08:29:02.
+- DRE-5129, admitted at 07:35:27. Its run [36729579603](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36729579603) died at 07:40:08, and its release could not post for the same reason. The claim stayed open until bureau-pipeline Reconcile [36734156568](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36734156568) expired it at 08:06:59. That log reads `planner line: released DRE-5129 run 36729579603 — because run-gone`.
+- DRE-5034, admitted at 08:05:42. agent-bureau Reconcile [36736973074](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36736973074) expired its claim at 08:29:02.
 
 The 08:46 sweep served four cards into the four free slots: DRE-5268, DRE-3622, DRE-4267 and DRE-4272 (08:46:40–08:46:44). Its log reads `planner line: DRE-3622 served — dispatched at dreadnought-foundry/bureau-pipeline (trigger planning, reason none)`. DRE-3622's planner, run 36739312647, claimed its slot at 08:47:06.
 
@@ -190,7 +200,7 @@ The same sweep's log reports the line's depth, one line per waiting card. For ex
 
 **A slot a line dispatch left empty.** At 07:19:01 portico's Reconcile [36728093139](https://github.com/dreadnought-foundry/portico/actions/runs/36728093139) logged `planner line: DRE-4626 served — dispatched at dreadnought-foundry/portico (trigger in progress, reason none)`. DRE-4626's planner, run 36728195299, claimed at 07:19:26. The slot was free because the 07:07:10 end-of-run dispatch had gone to DRE-4150, which was then built, not planned (§6), so it never took the slot. This is the sweep backstopping a different gap from a killed run.
 
-Five claims in the window were expired as `run-gone`: DRE-5129 at 08:06:59, DRE-5034 at 08:29:02, DRE-3622 at 09:06:28, DRE-4626 (run 36747185674) at 09:51:44, and DRE-5327 at 10:16:01.
+Five claims in the window were expired as `run-gone`: DRE-5129 at 08:06:59, DRE-5034 at 08:29:02, DRE-3622 at 09:06:28, DRE-4626 (run 36747185674) at 09:51:44, and DRE-5327 at 10:16:01. The DRE-4626 expiry was of a claim already refused with a `waiting` receipt, so it freed no slot (§2).
 
 ## 6. Canceled, skipped or left without a receipt
 
@@ -232,6 +242,11 @@ Today, from the `linear-budget:` lines of every Reconcile run: 107 readings, 06:
 | 13:00 | 13:26 | agent-bureau | 36772673680 | 271 → 182 | |
 | 13:30 | 13:38 | agent-bureau | 36774095507 | 2 → 0 | refused after 10 calls |
 
+**The first refusal came before the first reading of 0.** DRE-5129's planner, run [36729579603](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36729579603), was refused by the fleet key at 07:40:08: `linear_ops.LinearRateLimited: … rate limited: 2500 requests/hour exhausted … budget: fleet`. The Reconcile readings between it and the 07:29 row above:
+
+- 07:30:45: bureau-pipeline [36729496767](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36729496767), 1635 → 1533;
+- 07:33:31: bureau-pipeline [36729676250](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36729676250), 1309 → 1086.
+
 **Every reading of 0:**
 
 - 07:47: agent-bureau 36731760467 and bureau-pipeline 36731816360;
@@ -241,7 +256,12 @@ Today, from the `linear-budget:` lines of every Reconcile run: 107 readings, 06:
 - 13:38: agent-bureau 36774095507;
 - 13:40: bureau-pipeline 36774224458 and portico 36774264810.
 
-**The key drained again, and faster than the baseline.** At 07:05 agent-bureau's sweep read 2,324 remaining (36726473728). By 07:47 the key was at 0: at least 2,324 requests in 42 minutes, against 59 minutes on 2026-09-28. That is a floor of about 55 a minute. The true rate is higher by whatever refilled in the rolling window. This is not the same method as the epic's "about 130 a minute", so the two numbers are not compared.
+**The key drained again, sooner than the baseline and at least as fast.** At 07:05 agent-bureau's sweep read 2,324 remaining (36726473728). By 07:40:08 Linear was refusing the key: at least 2,324 requests in 35 minutes, against 59 minutes to empty on 2026-09-28. The Reconcile runs first read 0 at 07:47. Over the last stretch the pace was far higher:
+
+- 1,521 remaining at 07:29 (agent-bureau 36729467001) to refused at 07:40:08 is at least 1,521 requests in at most 11 minutes, a floor of about **138 a minute**;
+- 1,533 remaining at 07:30:45 (bureau-pipeline 36729496767) to 07:40:08 is at least 1,533 in 9.4 minutes, about **163 a minute**.
+
+Each is a floor: the true rate is higher by whatever refilled in the rolling window. Both floors are at or above the epic's "about 130 a minute" from the 2026-09-28 13:26 PT batch. The methods are not identical, but the direction is plain: this morning's burst was no slower than the baseline's.
 
 **The line stalled while the key was dry.** No planner finished between DRE-4626's release at 08:05:11 and DRE-5034's at 09:23:48. The two planners admitted in that stretch, DRE-5034 at 08:05:42 and DRE-3622 at 08:47:06, both died and were expired `run-gone`. Plan runs dispatched at 08:29 and 08:46 died on the quota before they could claim (§3).
 
@@ -263,7 +283,9 @@ Checked between 14:15 and 14:25 PT with `gh run view <id> --log`. Each matched t
 4. **The expiry.** bureau-pipeline Reconcile [36734156568](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36734156568) logged `released DRE-5129 run 36729579603 — because run-gone` (§5).
 5. **The drain.** agent-bureau Reconcile [36731760467](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36731760467) logged `rate limited: 2500 requests/hour exhausted — refused after 4 calls … window resets 08:47 PT; budget: fleet` at 07:48 (§7).
 6. **The stable pin.** agent-bureau plan run [36726511876](https://github.com/dreadnought-foundry/agent-bureau/actions/runs/36726511876) resolved `pipeline_ref: stable` to `2268dc5` (§0).
-7. **The unplanned builds.** DRE-3681's and DRE-4666's 11-second planners (36750229919, 36750314999) logged "cannot be classified" and "already escalated". The seven built cards each carry an `engineer agent starting` comment right after their line dispatch (§1, §6).
+7. **The 11-second planners.** DRE-3681's and DRE-4666's planners (36750229919, 36750314999) logged "cannot be classified" and "already escalated" (§1).
+8. **The unplanned builds.** The seven built cards each carry an `engineer agent starting` comment right after their line dispatch (§1, §6).
+9. **The first refusal.** bureau-pipeline plan run [36729579603](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/36729579603) (DRE-5129) ran `planner_queue.py claim` at 07:35:27, printed `Auto-detected mode: agent` at 07:36:06, raised `LinearRateLimited … budget: fleet` at 07:40:08, and warned `the release did not post` (§3, §7). Checked at 14:30 PT, after the first review.
 
 ## 9. What is left
 
