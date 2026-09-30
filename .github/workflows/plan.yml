@@ -292,6 +292,100 @@ jobs:
           python3 .bureau-pipeline/scripts/dedupe_dispatch.py plan-gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # --- The fleet-wide planner slot: claim or wait (DRE-5179) ------------
+      #
+      # Every planner run in every repo shares ONE Linear key, and on
+      # 2026-09-28 nineteen `agent-plan` runs released in one minute drained
+      # it. The cap is four planners across the fleet (epic DRE-5167), and
+      # `planner_queue.py` (DRE-5176) keeps its ledger as receipts on the cards
+      # themselves. This step is where a run asks for a slot: after the two
+      # bail gates, before the pool probes, the classifier — the first model
+      # call — and the route step. It claims, then reads the ledger; under the
+      # cap it answers `admitted=true`, otherwise it posts the card's
+      # `waiting` receipt with its place and answers `admitted=false`.
+      #
+      # Every step gated on the duplicate guard is gated on `admitted` too, and
+      # every later step is gated on an output of one of those, so a refused
+      # run runs no classifier, no planner, no critic, writes no lane, and ends
+      # GREEN having posted one receipt — its `waiting` line, or `released …
+      # because duplicate` when an earlier claim on this card belongs to a run
+      # that did not ask for this one. The death-cause receipt and the working
+      # log are `always()` and still run.
+      #
+      # No `concurrency:` group implements the cap: a group keeps one pending
+      # run and cancels the rest, which is exactly the "dropped" the epic
+      # forbids. The self-plan stub's per-card group is unchanged.
+      #
+      # A planner run's own re-dispatch keeps its slot. `Second critic sent
+      # the plan back` (`re-review`) and `Second critic — the review died`
+      # (`review-retry`) ask for a second run on this card through
+      # `review_rerun.py dispatch` before their sender ends, carrying the
+      # sender's run id as `sent_by_run`. The guard above reads it to excuse
+      # that one run (DRE-4573); this step hands it on as `--sent-by-run`, and
+      # the ledger's handover rule lets the started run inherit its sender's
+      # open claim — the card holds one slot throughout. `REASON` goes through
+      # for the same reason the trigger does: a waiting run records it, and
+      # the run that finally serves the card is dispatched with it, so a
+      # person's ask that waited still opens the fresh attempt it is owed.
+      #
+      # Three consequences, stated so nobody rediscovers them:
+      #   (1) DRE-5136 edits this file after this step lands and pins every
+      #       step's `if:` after the route step against it, the slot clause
+      #       on the route step included — and puts the epic cap INSIDE the
+      #       route step's shell, which this step leaves byte-for-byte as it
+      #       was. An approval that cap answers `queued` has already claimed a
+      #       planner slot, for the seconds the route step takes.
+      #   (2) The roll-up route's steps are gated on
+      #       `steps.shape.outputs.route == 'roll-up'`, and `shape` is gated on
+      #       this step, so a waiting run reaches none of them with no edit of
+      #       their own.
+      #   (3) This step precedes the route step because the route step opens
+      #       the planning attempt the critics count their rounds from — a
+      #       waiting run that opened one would reset that count every time it
+      #       was re-dispatched.
+      #
+      # A waiting approval sits `In Progress` with no second-critic round, so
+      # the promotion gate holds its children; the sweep's "the second critic
+      # has not passed it" notice is DRE-5177's to keep quiet while the epic is
+      # in line, and a waiting card is served by that sweep until the
+      # end-of-run release lands.
+      #
+      # Q1 (actor): unchanged — no new trigger, no new identity; the step reads
+      # and writes Linear with the key this job already holds. Q2 (store): no
+      # new secret. Q3 (retry): a waiting run is a clean success, so the medic
+      # sees nothing to retry and `dead_run` nothing to requeue; every receipt
+      # is safe written twice. Q4 (limits): a claim costs about three Linear
+      # requests where a planner run costs a hundred-odd. Q5 (our crash): a
+      # crash between the claim write and the ledger read leaves a `claimed`
+      # receipt the sweep expires by TTL or by run status — the fleet runs
+      # fewer planners, never more. `claim` fails OPEN on every read and says
+      # so with a `::warning::`, the unreadable cap file included; a crash of
+      # the script before it can answer is admitted here the same way, loudly.
+      # The step exits 0 on every path and carries no `continue-on-error`,
+      # which would leave `admitted` unset and skip the whole run silently.
+      - name: Planner slot — claim or wait
+        id: slot
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          # Spelled exactly as the duplicate guard spells them, and through
+          # env, never interpolated into the shell line (DRE-1996). Both
+          # `SENT_BY_RUN` and `REASON` are empty on every dispatch but the
+          # ones that set them; `claim` reads an empty flag as absent.
+          TRIGGER_STATE: ${{ github.event.client_payload.trigger_state }}
+          SENT_BY_RUN: ${{ github.event.client_payload.sent_by_run }}
+          # Spelled exactly as the route step spells it.
+          REASON: ${{ github.event.client_payload.reason }}
+        run: |
+          python3 .bureau-pipeline/scripts/planner_queue.py claim "$CARD" \
+            --run-id "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --trigger-state "$TRIGGER_STATE" --sent-by-run "$SENT_BY_RUN" \
+            --reason "$REASON" --github-output "$GITHUB_OUTPUT" || {
+            echo "::warning::planner slot for $CARD: the claim did not answer — admitted without a cap"
+            echo "admitted=true" >> "$GITHUB_OUTPUT"
+          }
+
       # --- Planning classifies the card itself (DRE-3029) -------------------
       #
       # The shape below is the only judgement on the fast path, and until this
@@ -346,7 +440,7 @@ jobs:
       # exactly as before.
       - name: Mint pool probe token (2)
         id: probe_2
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_2 != ''
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -354,7 +448,7 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
       - name: Mint pool probe token (3)
         id: probe_3
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_3 != ''
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -362,7 +456,7 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
       - name: Mint pool probe token (4)
         id: probe_4
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_4 != ''
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -371,7 +465,7 @@ jobs:
 
       - name: Select dispatch-pool app
         id: pool
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
           BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
           BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
@@ -395,7 +489,7 @@ jobs:
       # to the original pair.
       - name: Mint read token (selected pool app)
         id: reader
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -411,7 +505,7 @@ jobs:
 
       - name: Classify the card — one-off, epic or wave
         id: classify
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
@@ -517,7 +611,7 @@ jobs:
 
       - name: Planning shape — which route this card takes
         id: shape
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -531,7 +625,7 @@ jobs:
       # planner prompt uses this value to name the slug it is planning for.
       - name: Resolve repo slug
         id: repo
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       # Model selection: the planner's OWN ladder (DRE-3015). It is the one
@@ -564,7 +658,7 @@ jobs:
       # can fall without waiting for the DRE-3824 rerun.
       - name: Select model
         id: model
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -629,7 +723,7 @@ jobs:
       # step reads as approval.
       - name: Route — plan or activate
         id: route
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.shape.outputs.route == 'epic'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
@@ -774,7 +868,7 @@ jobs:
       # route, through the same sanitizing stage (DRE-2721).
       - name: Sanitize untrusted epic text
         id: card
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
           RAW_TITLE: ${{ github.event.client_payload.title }}
           RAW_DESCRIPTION: ${{ github.event.client_payload.description }}
@@ -947,7 +1041,7 @@ jobs:
         # gate rather than on any one route's condition — all four routes
         # (one-off, plan, activate, roll-up) run a model below, and the two bail
         # paths above this line run none.
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
       - name: Pre-approval critic — the one-off exit

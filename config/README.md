@@ -40,7 +40,9 @@ of it is ever a runtime lookup.
   card may wait before the watchdog treats it as stuck. Read only through
   `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
   file rather than defaulting; `python3 scripts/planner_queue.py check`
-  validates it.
+  validates it. `plan.yml` claims against it in its `Planner slot — claim or
+  wait` step, after the duplicate-dispatch guard and before any model step
+  (DRE-5179); a run it does not admit waits in line and ends green.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
 - **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):

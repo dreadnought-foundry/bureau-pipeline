@@ -557,6 +557,20 @@ def _before_and_after() -> tuple[str, str] | None:
     return None
 
 
+def _keyed(step_list: list[dict]) -> dict[tuple, dict]:
+    """Steps keyed by name — or, for an unnamed step such as the job's two
+    `actions/checkout`s, by its `uses:` — and by occurrence, so two steps that
+    share a key are paired in order rather than collapsed into one."""
+    seen: dict[str, int] = {}
+    out = {}
+    for s in step_list:
+        base = s.get("name") or s.get("uses") or s.get("id") or ""
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        out[(base, n)] = s
+    return out
+
+
 class NoOtherShellChanged(unittest.TestCase):
     def test_the_route_steps_shell_names_no_slot(self):
         """Readable with no history: the slot clause lives in the route step's
@@ -568,15 +582,19 @@ class NoOtherShellChanged(unittest.TestCase):
     def test_the_slot_step_changed_no_shell_but_its_own(self):
         pair = _before_and_after()
         if pair is None:
+            # The unit job checks out full history and sets this, so there the
+            # missing history is a failure, never a green skip.
+            if os.environ.get("BUREAU_REQUIRE_GIT_HISTORY"):
+                self.fail("no git history for plan.yml, and this job requires it")
             self.skipTest("no git history for plan.yml (a shallow checkout)")
-        before = {s.get("name"): s for s in yaml.safe_load(pair[0])["jobs"]["plan"]["steps"]}
-        after = yaml.safe_load(pair[1])["jobs"]["plan"]["steps"]
-        added = [s for s in after if s.get("name") not in before]
+        before = _keyed(yaml.safe_load(pair[0])["jobs"]["plan"]["steps"])
+        after = _keyed(yaml.safe_load(pair[1])["jobs"]["plan"]["steps"])
+        added = [s for k, s in after.items() if k not in before]
         self.assertEqual([s.get("id") for s in added], [SLOT])
-        for s in after:
+        for key, s in after.items():
             if s.get("id") == SLOT:
                 continue
-            old = before[s.get("name")]
+            old = before[key]
             self.assertEqual(s.get("run"), old.get("run"), s.get("name"))
             self.assertEqual(s.get("with"), old.get("with"), s.get("name"))
             if s.get("name") == ROUTE:

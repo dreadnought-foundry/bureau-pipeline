@@ -1061,12 +1061,18 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         class enforces is untouched — and `planning_escalation.workflow_problems`,
         which is the general enforcer rather than this change-detector, reads
         the same workflow and says so.
+
+        DRE-5179 added the fifth, and it is about the run too: the fleet-wide
+        planner slot. A run that is not admitted waits in the planner line with
+        its card where it is — in Planning, or In Progress for an approval — and
+        is served in line order, so it skips no lane either.
         """
         steps = _steps()
         route = _step("planning_route.py decide")
         assert route["if"].strip() == (
             "steps.gate.outputs.bounced != 'true' && "
             "steps.dedupe.outputs.skip != 'true' && "
+            "steps.slot.outputs.admitted == 'true' && "
             "steps.classify.outputs.escalate != 'true' && "
             "steps.classify.outputs.requeue != 'true'"
         )
