@@ -440,8 +440,12 @@ class CriticWalk(unittest.TestCase):
         self._critic_writes("pre", pc.SEND_BACK, "the epic's cards still do not sum to the epic")
         self._shell("first critic — round 2 decision")
         out = self._outputs()
-        self.assertEqual(out["action"], "proceed",
-                         "a plan circled past the bound instead of reaching the CEO")
+        # Since DRE-5276 the first critic's bound parks rather than proceeding;
+        # DRE-5284 rewrites this walk to drive the park itself. Until then the
+        # plan route still moves the epic to Green Light below, because no step
+        # reads the second round's action.
+        self.assertEqual((out["action"], out["bound"]), ("hold", "true"),
+                         "a plan circled past the bound instead of parking")
         self.assertIn("still do not sum", self._note(),
                       "the stated reason was not attached")
         self.assertIn("two failed rounds", self._note().lower())
@@ -1235,7 +1239,7 @@ class CriticWalk(unittest.TestCase):
         self._shell("first critic — round 1 decision")
         self._critic_writes("pre", pc.SEND_BACK, "the cards still do not sum to the epic")
         self._shell("first critic — round 2 decision")
-        self.assertEqual(self._outputs()["action"], "proceed")
+        self.assertEqual(self._outputs()["action"], "hold")
         self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_PRE), 2)
 
         # The CEO sends it back to Triage; the route step re-plans it. That is
@@ -1257,10 +1261,11 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("round 1 of 2", self._note())
 
         # ...and it is still bounded: the second send-back of the NEW attempt
-        # reaches the CEO with the reason attached.
+        # parks with the reason attached (DRE-5276).
         self._critic_writes("pre", pc.SEND_BACK, "DRE-9005 still carries none")
         self._shell("first critic — round 2 decision")
-        self.assertEqual(self._outputs()["action"], "proceed")
+        self.assertEqual((self._outputs()["action"], self._outputs()["bound"]),
+                         ("hold", "true"))
         self.assertIn("two failed rounds", self._note().lower())
 
     # --- 7b: only the approval move activates (DRE-3100) --------------------
