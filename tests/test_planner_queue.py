@@ -228,17 +228,27 @@ def config_file(doc, raw: str | None = None):
         os.unlink(path)
 
 
-COMMITTED = {"max_running": 4, "claim_ttl_minutes": 105,
+COMMITTED = {"max_running": 2, "claim_ttl_minutes": 105,
              "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
+
+#: The ledger's behaviour is tested at the four slots it was written against
+#: (DRE-5176). The committed number is `TheCap`'s contract alone: DRE-5326
+#: dropped it to two on 2026-09-30, when four planners out-spent Linear's
+#: refill, and the rules below do not change with the number.
+FOUR_SLOTS = dict(COMMITTED, max_running=4)
 
 
 class _Base(unittest.TestCase):
     def setUp(self):
-        # The committed file, whatever the environment running the suite says.
+        # A pinned four-slot file, whatever the environment running the suite
+        # says; `TheCap` reads the committed one itself.
         patcher = mock.patch.dict(os.environ)
         patcher.start()
         os.environ.pop("PLANNER_QUEUE_CONFIG", None)
         self.addCleanup(patcher.stop)
+        pinned = config_file(FOUR_SLOTS)
+        pinned.__enter__()
+        self.addCleanup(pinned.__exit__, None, None, None)
         self.board = Board()
         live = self.board.live()
         live.__enter__()
@@ -1000,8 +1010,10 @@ class TheCap(_Base):
     def test_committed_file_is_the_contract(self):
         with open(os.path.join(ROOT, "config", "planner-queue.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), COMMITTED)
-        self.assertEqual(pq.cap(), 4)
-        self.assertEqual(pq.waiting_max(), 360)
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PLANNER_QUEUE_CONFIG", None)
+            self.assertEqual(pq.cap(), 2)
+            self.assertEqual(pq.waiting_max(), 360)
 
     def test_check_finds_the_file_relative_to_the_script(self):
         with tempfile.TemporaryDirectory() as tmp:

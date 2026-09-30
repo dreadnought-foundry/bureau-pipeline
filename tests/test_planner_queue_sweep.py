@@ -50,9 +50,12 @@ import reconcile  # noqa: E402
 THIS = "dreadnought-foundry/agent-bureau"
 OTHER = "dreadnought-foundry/portico"
 CFG = planner_queue.load()
-# The cap and the line's bound through their one reader each — only
-# planner_queue spells those two keys (test_planner_queue.TheCap).
-CAP = planner_queue.cap()
+# The line's bound through its one reader — only planner_queue spells those
+# two keys (test_planner_queue.TheCap). The cap is the four slots these
+# fixtures were written against (`_four_running`), pinned through the same
+# reader by `_pin`: the committed number is TheCap's contract alone, and
+# DRE-5326 dropped it to two on 2026-09-30 without changing a rule here.
+CAP = 4
 TTL = CFG["claim_ttl_minutes"]
 GRACE = CFG["dispatched_grace_minutes"]
 BOUND = planner_queue.waiting_max()
@@ -64,6 +67,7 @@ def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     monkeypatch.delenv("MERGED_CARD", raising=False)
     monkeypatch.delenv(planner_queue.CONFIG_ENV, raising=False)
+    monkeypatch.setattr(planner_queue, "cap", lambda: CAP)
     ledgers = (reconcile._write_failures, reconcile._read_failures,
                reconcile._stale_defects)
     for ledger in ledgers:
