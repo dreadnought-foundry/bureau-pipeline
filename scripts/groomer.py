@@ -280,6 +280,7 @@ import intake_controls  # noqa: E402 — ONE reading of the operator's Intake sw
 import linear_ops  # noqa: E402
 import planning_classify  # noqa: E402 — the model receipt, one definition
 import planning_escalation  # noqa: E402 — the plain-English write guard
+import planner_queue  # noqa: E402 — the ONE planner slot ledger (DRE-5176)
 import sanitize_untrusted  # noqa: E402 — ONE defang prefix for untrusted text
 
 # --------------------------------------------------------------------------- #
@@ -581,6 +582,13 @@ class CycleRefused(DrainRefused, ValueError):
     with no way to say which card is in which, or Linear carries no open cycle
     with that number. A ValueError as well, because it was one before DRE-3370
     made every refusal a written record and callers still catch it that way."""
+
+
+class SlotsUnknown(DrainRefused):
+    """The planner slot ledger could not be read, so the drain cannot say how
+    many cards Planning can take (DRE-5326). Raised BEFORE any write: a drain
+    that guessed would be guessing about the Linear budget the cap protects,
+    and UNKNOWN refuses — it never reads as room."""
 
 
 class ProposalContradiction(RuntimeError):
@@ -3367,6 +3375,21 @@ def proposal_record(pid: str, records: list[dict]) -> dict | None:
     return None
 
 
+def free_planner_slots(lops) -> tuple[int, int]:
+    """`(free, cap)`: how many cards Planning can take right now (DRE-5326).
+
+    ONE read of the planner slot ledger (`planner_queue.read_board`, a page
+    per hundred cards in its lanes). Free is the cap minus every planner
+    running, every dispatched slot, and every card already waiting in line —
+    the queue's own `free_slots` less the line, because a card released into
+    a line only lengthens it: it starts no sooner, and a line that outgrows
+    the wait bound is escalated to the CEO. Raises whatever the read raises.
+    """
+    cap = planner_queue.cap()
+    led = planner_queue.ledger(planner_queue.read_board(lops))
+    return max(0, led.free_slots(cap) - len(led.waiting)), cap
+
+
 def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     """Execute exactly what the CEO agreed: the approved Planning list to
     Planning and the approved Cancel list to Canceled — minus every exclusion
@@ -3390,10 +3413,18 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     already left the lane since the proposal is an `already gone` row naming
     the lane it is in now, and the rest of the agreement still stands.
 
+    No more cards go to Planning than there are free planner slots
+    (DRE-5326): on 2026-09-30 one drain moved nineteen at once and the
+    planners they started emptied the fleet's Linear key. The batch keeps its
+    order and the additions follow it; every card past the free slots is a
+    `held back` row naming them and stays in Intake for the next proposal. An
+    agreed Cancel row starts no planner and is not rationed.
+
     Refuses, before any card moves: a closed pen, a closing destination, a
     missing / pipeline-written / declined approval, an approval whose proposal
-    is not on the card, a batch already drained, and a cycle Linear does not
-    carry. Every refusal but the destination is written onto the card as
+    is not on the card, a batch already drained, a cycle Linear does not
+    carry, and a planner slot ledger it cannot read. Every refusal but the
+    destination is written onto the card as
     `🧺 groom-drain-refused: <id> — <reason>`.
     """
     if to in NEVER_WRITES or to == CANCEL_TO:
@@ -3466,6 +3497,18 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
     # hold written AFTER the proposal was posted never drains a card the CEO
     # has switched off.
     held = held_repos(records)
+    # The planner slots, read once and before anything moves (DRE-5326). A
+    # read that fails is a refusal, never room: the cap exists because the
+    # key it protects runs out.
+    try:
+        slots = free_planner_slots(lops)
+    except Exception as exc:  # noqa: BLE001 — any failure is UNKNOWN, and refuses
+        raise SlotsUnknown(
+            f"the drain could not read the planner slot ledger, so it cannot "
+            f"say how many cards Planning can take ({exc}) — nothing moved; "
+            f"approve the batch again once Linear answers", batch=named) from exc
+    # Unrationed here: every card the CEO agreed is read for its lane, so one
+    # that has left it frees its slot for the next in order.
     plan = _drain_plan(record, decisions, lane=lane, held=held)
 
     # Every card the drain would write to, read ONCE and before anything
@@ -3480,10 +3523,11 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
         now = ((issue or {}).get("state") or {}).get("name")
         if now != lane:
             gone[row["identifier"]] = now or "a lane this run could not read"
-    if gone:
-        # The same pure plan with those cards taken out of the writes, so each
-        # one's row says what happened to it and nothing is written to it.
-        plan = _drain_plan(record, decisions, lane=lane, held=held, gone=gone)
+    # The same pure plan with any gone card taken out of the writes, so each
+    # one's row says what happened to it and nothing is written to it — and
+    # the Planning list rationed to the free slots.
+    plan = _drain_plan(record, decisions, lane=lane, held=held, gone=gone,
+                       slots=slots)
 
     moved = []
     for row in plan["moving"]:
@@ -3522,7 +3566,8 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
 
 
 def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
-                gone: dict | None = None) -> dict:
+                gone: dict | None = None,
+                slots: tuple[int, int] | None = None) -> dict:
     """Both lists minus the exclusions and the held repos, plus the additions,
     and the table row every card involved gets.
 
@@ -3540,6 +3585,11 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
     `gone` maps a card to the lane it is in now when it has left `lane` since
     the proposal (DRE-4733): it is taken out of every write and its row says
     `already gone`, with that lane as the why.
+
+    `slots` is `(free, cap)` from `free_planner_slots` (DRE-5326): no more
+    than `free` cards go to Planning, batch first and additions after, and
+    every card past that is a `held back` row naming the slots. None rations
+    nothing. The Cancel list never takes a slot.
     """
     excluded, added = decisions["excluded"], dict(decisions["added"])
     gone = gone or {}
@@ -3587,6 +3637,16 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                      "why": gone[identifier]})
         return True
 
+    def full(row) -> bool:
+        """Past the free planner slots — held back in the lane, row written."""
+        if slots is None or len(moving) < slots[0]:
+            return False
+        held_back.append(row)
+        rows.append({"identifier": row["identifier"], "outcome": "held back",
+                     "why": f"planner slots: {slots[0]} free of {slots[1]} — "
+                            f"stays in {lane} for the next proposal"})
+        return True
+
     for row in record["batch"]:
         identifier = row["identifier"]
         if kept(row):
@@ -3598,7 +3658,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                 added.pop(identifier)["tag"],
                 f"`{ADD_TAG}` names a card already in the approved batch",
                 identifier))
-        if left(identifier):
+        if left(identifier) or full(row):
             continue
         moving.append({**row, "outcome": "moved"})
         rows.append({"identifier": identifier, "outcome": "moved",
@@ -3606,7 +3666,8 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                             f"{row['position']}"})
 
     for identifier, mark in added.items():
-        if left(identifier):
+        if left(identifier) or full({"identifier": identifier,
+                                     "position": None}):
             continue
         moving.append({"identifier": identifier, "position": None,
                        "outcome": "added"})
