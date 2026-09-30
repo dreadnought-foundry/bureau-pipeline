@@ -40,6 +40,19 @@ silently swallowed. Two guards, both cheap:
     every card body, comment and brief in this pipeline writes a machine
     string, and it is how DRE-3428's own description writes all four of these.
 
+The second adversary is the test suite that pins these signatures (DRE-5272).
+Pipeline Tests runs `pytest -v`, and its log carried
+`TestDetect::test_executable_not_found PASSED` on every run, so every red run
+was held as a runner that cannot start Claude. Two more guards:
+
+  * the two snake_case tokens must stand on their own — no word character
+    before or after — because a test name writes them as the tail of an
+    identifier;
+  * a line a test runner wrote about a test (a `pytest -v` or `unittest -v`
+    report line, pytest's short summary, its `E` explanation of a failure) is
+    the suite speaking, and is not read at all: a parametrized test id carries
+    whole action lines in its brackets.
+
 `authentication-error` additionally requires `API Error` or `"type"` on the
 SAME line, which is the shape DRE-2488 gave a 5xx: the token alone is a word,
 and prose carries words.
@@ -175,6 +188,16 @@ _CREDENTIAL_CHECK = "make cred-doctor in agent-bureau"
 _NOT_QUOTED = r"(?<![`\"'])"
 _NOT_BACKTICKED = r"(?<!`)"
 
+# DRE-5272. The two snake_case tokens are also the names of the tests that pin
+# them, and Pipeline Tests runs `pytest -v`, so every run's log carried
+# `TestDetect::test_executable_not_found PASSED` and every red run was held as
+# a runner that cannot start Claude. The action writes the token as a value of
+# its own; a test name writes it as the tail of an identifier. So the token
+# must stand on its own: no word character (or backtick) before it, none
+# after it.
+_TOKEN_START = r"(?<![\w`])"
+_TOKEN_END = r"(?!\w)"
+
 SIGNATURES: tuple[Signature, ...] = (
     Signature(
         "native-binary-missing",
@@ -185,7 +208,7 @@ SIGNATURES: tuple[Signature, ...] = (
     ),
     Signature(
         "executable-not-found",
-        re.compile(_NOT_BACKTICKED + r"executable_not_found"),
+        re.compile(_TOKEN_START + r"executable_not_found" + _TOKEN_END),
         "the action could not find a Claude executable to start",
         _ACTION_PIN_CHECK,
     ),
@@ -204,7 +227,8 @@ SIGNATURES: tuple[Signature, ...] = (
         # place to read.
         "authentication-error",
         re.compile(
-            r"^(?=.*" + _NOT_BACKTICKED + r"authentication_error)"
+            r"^(?=.*" + _TOKEN_START + r"authentication_error" + _TOKEN_END
+            + r")"
             r'(?=.*(?:API Error|"type"))'
         ),
         "the API rejected the credential outright",
@@ -250,13 +274,29 @@ _LOG_PREFIX = re.compile(r"^.*?\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?")
 # of it: a diff hunk in an agent log, a quoted comment, a shell trace.
 _QUOTATION_LINE = re.compile(r"^\s*[+\->|]")
 
+# A line a TEST RUNNER wrote about a test is the suite speaking, not the runner
+# (DRE-5272): `pytest -v`'s `path.py::name PASSED`, its `FAILED path.py::name -
+# …` summary, an xdist `[gw3] [ 79%] PASSED path.py::name`, `unittest -v`'s
+# `test_name (module.Class.test_name) ... ok`, and pytest's `E   …`
+# explanation of a failure, which prints the very fixture log it was handed. A
+# parametrized test id carries whole action lines in its brackets, so no
+# signature's own pattern can tell those apart from the real thing.
+_TEST_REPORT_LINE = re.compile(
+    r"^\s*(?:"
+    r"(?:\[[^\]]*\]\s*|(?:PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+)*"
+    r"[\w./\\-]+\.py::"
+    r"|test\w* \([\w.]+\) \.\.\. "
+    r"|E {2,}"
+    r")"
+)
+
 
 def _message_lines(log_text: str | None) -> list[str]:
     """Every log line that is the run SAYING something, prefix stripped."""
     out = []
     for raw in (log_text or "").splitlines():
         line = _LOG_PREFIX.sub("", raw, count=1)
-        if _QUOTATION_LINE.match(line):
+        if _QUOTATION_LINE.match(line) or _TEST_REPORT_LINE.match(line):
             continue
         out.append(line)
     return out
