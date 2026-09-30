@@ -167,7 +167,10 @@ def test_an_unreadable_history_reads_as_not_approved():
     assert _sweep([_card()], lin) == []
     assert lin.states == [(EPIC, "Planning")]
     assert len(lin.comments) == 1
-    assert "It was carried to Planning" in lin.comments[0][1]
+    body = lin.comments[0][1]
+    assert body.splitlines()[0] == gate.opener(EPIC, None)
+    assert "approval in Green Light" in body
+    assert "It was carried to Planning" in body
 
 
 def test_an_epic_by_title_alone_is_carried():
