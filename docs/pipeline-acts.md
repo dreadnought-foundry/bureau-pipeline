@@ -186,7 +186,11 @@ module, because that is where the body is composed; the WRITER is the reconcile
 sweep's `report_fleet_reviewer_outage()` backstop, on full sweeps only, sitting
 immediately after `recover_crashed_reviews` because the two read the same open
 pull requests — that one re-dispatching per head, this one counting across the
-fleet. It files ONE card into `Triage`, appends one comment per newly counted
+fleet. It files ONE card, CREATED in `Triage` and marked `no-code` with no
+`agent:*` role, so it never passes through `Planning` and no planner or build
+run is dispatched at it (DRE-5292). Its first crashed run is the head's own
+failed review workflow run, or "no run found" when none can be read — never a
+check run's `details_url`. It appends one comment per newly counted
 run and rewrites the title's counts, and closes the card on the first
 successful verdict posted after it was filed. Every one of those comments
 composes through this act, so the console's alert per open card is unchanged by
