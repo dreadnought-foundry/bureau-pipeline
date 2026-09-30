@@ -23,10 +23,11 @@ A caller is a UNIT, written `<file>#<unit>` with the file repo-relative:
 * **Not the defining module's `main`.** A call in the defining module's
   top-level `main`, or its `if __name__ == "__main__":` block, is a
   subcommand's dispatch. The workflow step that runs the subcommand is the
-  caller in its place, so that `main` is never reported. Any OTHER module's
-  `main` is a def like the rest, `<file>#main`, and its `__main__` block is
-  code at module level, `<file>#<module>`: `reconcile.py`'s sweep moves cards
-  through `linear_ops.cmd_state` from its `main`, and is reported so.
+  caller in its place, so that `main` is never reported. A call from ANY OTHER
+  module's `main` or `__main__` block is that module doing the work, not
+  dispatching to it, and is reported as `<file>#main` (operator decision on
+  PR #599, finding 1(b)): `reconcile.py`'s sweep moves cards through
+  `linear_ops.cmd_state` from its `main`, and is reported so.
 * **A workflow step.** In `.github/workflows/*.yml`, every step whose `run:`
   shell runs `scripts/<module>.py <subcommand>` (under any path prefix: the
   workflows run it as `.bureau-pipeline/scripts/…` or
@@ -52,7 +53,9 @@ the three forms it takes on `main` today:
    (`planning_escalation.py`, `planning_route.py`); a branch that does its work
    inline maps the subcommand to no handler, and still counts as read — if
    the branch itself calls the function, or an in-module caller of it, the
-   subcommand reaches the function;
+   subcommand reaches the function. A branch holding a call whose callee is
+   neither a name nor an attribute (`HANDLERS[command](…)`) cannot be
+   resolved, and puts the module in `unread`;
 2. `p = sub.add_parser("<name>")` followed by `p.set_defaults(fn=<handler>)`
    (`code_owner_hold.py`), read in source order because `p` is rebound;
 3. a `{"<name>": <handler>}` dict whose values are the module's own top-level
@@ -64,7 +67,8 @@ did not read: an `add_parser("<name>")` the three forms leave unmapped, a
 workflow step running the module with a literal subcommand the read map does
 not hold, or a call in `main` or the `__main__` block that reaches the
 function from outside every `if command == "<name>":` branch, so no
-subcommand can be named for it. When the module is unread, none of its steps are reported (which
+subcommand can be named for it. A chain branch with a call it cannot resolve
+is unread the same way. When the module is unread, none of its steps are reported (which
 step reaches the function is exactly what could not be read). Its script
 callers do not go through the map and are still reported.
 
@@ -148,8 +152,8 @@ def _is_main_guard(node) -> bool:
 def _call_units(tree, defining: bool) -> dict:
     """Call node id → its unit: the innermost enclosing def's name, or
     MODULE_UNIT at module level. In the defining module, a call inside `main`
-    or the `__main__` block is _DISPATCH instead; in any other module that
-    code is its own `main` and its own module level, and is reported so."""
+    or the `__main__` block is _DISPATCH instead; in any other module both are
+    that module's `main`, and are reported so."""
     out: dict = {}
 
     def walk(node, unit):
@@ -158,8 +162,8 @@ def _call_units(tree, defining: bool) -> dict:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 top_main = node is tree and child.name == "main"
                 inner = _DISPATCH if top_main and defining else child.name
-            elif node is tree and defining and _is_main_guard(child):
-                inner = _DISPATCH
+            elif node is tree and _is_main_guard(child):
+                inner = _DISPATCH if defining else "main"
             if isinstance(child, ast.Call):
                 out[id(child)] = unit
             walk(child, inner)
@@ -264,7 +268,9 @@ def _chain_form(entry, cli: dict) -> None:
 
 def _dispatch_calls(entry) -> list:
     """(name called, the chain branches it sits in) for every bare `name(…)`
-    call an entry point makes itself — a def nested in it is its own unit."""
+    call an entry point makes itself — a def nested in it is its own unit. A
+    call inside a chain branch whose callee is neither a name nor an attribute
+    is recorded with the name None: that branch cannot be resolved."""
     out = []
 
     def walk(node, branches):
@@ -281,6 +287,9 @@ def _dispatch_calls(entry) -> list:
             return
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             out.append((node.func.id, branches))
+        elif (isinstance(node, ast.Call) and branches
+              and not isinstance(node.func, ast.Attribute)):
+            out.append((None, branches))
         for child in ast.iter_child_nodes(node):
             walk(child, branches)
 
@@ -458,6 +467,9 @@ def callers_of(module_path: str, function: str, root: str = ".") -> CallerReport
     unplaced = False
     for entry in _entry_points(tree):
         for name, branches in _dispatch_calls(entry):
+            if name is None:
+                unplaced = True  # a branch whose callee cannot be named
+                continue
             if name not in reach:
                 continue
             reaching |= branches
