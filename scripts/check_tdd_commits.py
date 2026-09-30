@@ -16,7 +16,8 @@ The rule (engineering standard: "commit the failing test FIRST"):
   • Docs-only and ops-only PRs are exempt, classified by changed paths:
     docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
            design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
-           `.json` under `console/design/` or a root `design/`, DRE-3763);
+           `.json` under `console/design/` or a root `design/`, DRE-3763, or
+           under a root `architecture/`, DRE-5311);
     ops  = `.github/` + `config/` + `agents.yaml` + `models.json`
            (the catalog snapshot — data a scheduled job derives from the
            vendor's model list, added by DRE-3879 on the CEO's signed answer
@@ -177,7 +178,15 @@ _DOCS_PREFIXES = ("docs/",)
 # app. And the EXTENSION decides, not the directory: `tokens.css` feeds the app
 # build and `.ts`/`.tsx`/`.js`/`.py` are source wherever they sit, so only the
 # record formats below move out of `code` — everything else there stays code.
-_DESIGN_RECORD_PREFIXES = ("console/design/", "design/")
+#
+# A root `architecture/` is a record directory by the same rule (DRE-5311).
+# agent-bureau #2920, the release-brake proof record, was two `.md` files and
+# four screenshots under `architecture/proofs/release-brake/`; the screenshots
+# classified as code, and no RED test can precede an image. `architecture/` is
+# where the fleet keeps decisions, forensics and proof records — measured on
+# 2026-09-30 it held no source file in any repo — and the same prefix and
+# extension limits apply, so a `.py`, `.ts` or `.css` there stays code.
+_DESIGN_RECORD_PREFIXES = ("console/design/", "design/", "architecture/")
 _DESIGN_RECORD_SUFFIXES = (
     ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
 )
@@ -501,7 +510,8 @@ def is_test_path(path: str) -> bool:
 
 def is_design_record(path: str) -> bool:
     """True iff `path` is a static design record (DRE-3763): a record format
-    under `console/design/` or a root `design/`. Like `is_test_path`, this only
+    under `console/design/`, a root `design/` or a root `architecture/`
+    (DRE-5311). Like `is_test_path`, this only
     ever moves a path OUT of `code`; source and stylesheets under those
     directories stay code. The extension is compared case-insensitively — a
     screenshot saved as `.PNG` is the same record as one saved as `.png`."""
