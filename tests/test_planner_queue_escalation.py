@@ -14,7 +14,7 @@ THE RULE UNDER TEST — the watchdog reads the line before it reads the clock:
 
   1. in line (`waiting`, or `dispatched` inside the grace) and inside the
      bound: skipped, with one log line naming the card and the word waiting;
-  2. in line and past `waiting_max_minutes` (360): escalated once, through
+  2. in line and past the line's bound (360 minutes): escalated once, through
      the same seam, with the line's own reason;
   3. `claimed`: measured as today;
   4. no receipt: measured as today;
@@ -53,7 +53,7 @@ import validate_card  # noqa: E402
 CARD = "DRE-9001"
 EPIC = "DRE-9100"
 CHILD = "DRE-9101"
-BOUND = 360  # config/planner-queue.json's waiting_max_minutes, pinned below
+BOUND = 360  # the line's bound, read through planner_queue.waiting_max() below
 
 
 @pytest.fixture(autouse=True)
