@@ -174,6 +174,9 @@ import pipeline_act  # noqa: E402
 # seam the planner's own hand-planning escalation takes, so a card the sweep
 # escalates and a card the planner escalates read the same in the CEO's queue.
 import planning_escalation  # noqa: E402
+# DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
+# turn for a planner is not a dead planner, and its wait has its own bound.
+import planner_queue  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -1934,6 +1937,17 @@ def flag_stalled_planning() -> set[str]:
     escalated card is no longer in Planning, so nothing needs to remember it.
     Returns the identifiers escalated this sweep.
 
+    A CARD WAITING IN THE PLANNER LINE IS NOT A STRAND (DRE-5177). Under the
+    fleet-wide planner cap (DRE-5176) a card can sit here for hours with only
+    its `waiting` receipt on it, so the line is read before the clock: a card
+    in line inside the line's own bound (`planner_queue.overdue`) is skipped
+    and logged, and one past it is escalated through the same seam with the
+    line's own reason — once,
+    under the same WATCHDOG_TAG rule. The escalation takes it out of the line:
+    the ledger reads a Green Light card for its open claim only. A card whose
+    newest receipt is a claim, or that carries none, is measured by the stall
+    clock exactly as before.
+
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
     has no `repo:` label — assigning one is what Planning does — so filtering
@@ -1964,15 +1978,40 @@ def flag_stalled_planning() -> set[str]:
             continue
         if _another_repos_card(card):
             continue  # that repo's own sweep applies this same rule to its cards
-        # The age gate runs BEFORE anything reads what the card says (DRE-2929).
-        # It needs `updatedAt` and nothing else, and a young card is the common
-        # case — so every check below it is work the lane's own question has
-        # already made unnecessary.
-        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
-            continue  # planning is young — let it produce its classification
         # Off the card the board read already returned (DRE-2929): no per-card
         # request, however many cards Planning holds.
         bodies = card_comment_bodies(card)
+        # The line BEFORE the clock (DRE-5177). Under the fleet-wide planner
+        # cap a card can sit here for hours with only its `waiting` receipt on
+        # it, and `updatedAt` cannot tell that from a planner that died — so
+        # a card in line is judged by the line's own, longer bound instead,
+        # and never by the stall clock below. A card holding a claim, or
+        # carrying no receipt at all, falls through and is measured as before.
+        line = _planner_line(bodies)
+        if line is not None:
+            waited, overdue = line
+            if not overdue:
+                print(
+                    f"watchdog: {ident} is waiting for a planner slot "
+                    f"({_line_place(bodies)}, waited {waited:.0f} minutes) — "
+                    "not a strand"
+                )
+                continue
+            if any(WATCHDOG_TAG in b for b in bodies):
+                continue  # flagged once already — idempotent forever
+            if escalate_out_of_planning(card, waiting_too_long_reason(waited)):
+                flagged.add(ident)
+                print(
+                    f"watchdog: {ident} has waited {waited:.0f} minutes for a "
+                    "planner slot, past the line's bound — escalated to "
+                    f"{ESCALATED_STATE}"
+                )
+            continue
+        # The stall clock needs `updatedAt` and nothing else, and a young card
+        # is the common case — so every check below it is work the lane's own
+        # question has already made unnecessary.
+        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
+            continue  # planning is young — let it produce its classification
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -2007,6 +2046,77 @@ def stalled_planning_reason() -> str:
         "card in Planning owes a decision about what it is and where it goes, "
         "and none has been recorded. Why is not known from here, which is why "
         "it is in front of you rather than being guessed at."
+    )
+
+
+def _slot_receipts(bodies) -> list:
+    """The planner-slot receipts among `bodies`, oldest first — parsed by the
+    module that owns the grammar (DRE-5176), never re-read here."""
+    parsed = [planner_queue.parse_receipt(b) for b in bodies or []]
+    return sorted(
+        (r for r in parsed if r is not None),
+        key=lambda r: datetime.fromisoformat(r.created_at.replace("Z", "+00:00")),
+    )
+
+
+def _planner_line(bodies) -> tuple[float, bool] | None:
+    """`(minutes waited, past the bound)` for a card in the planner line, or
+    None for a card that is not in it (DRE-5177).
+
+    In line means the foundation card's rule and nothing else:
+    `planner_queue.in_line` — `waiting`, or `dispatched` inside the grace —
+    with the wait measured from the line entry, never from the dispatch.
+
+    An unreadable queue config answers None: the card is then measured by the
+    stall clock exactly as it was before the line existed, which can raise a
+    false alarm but can never hide a card.
+    """
+    now = datetime.now(UTC)
+    try:
+        if not planner_queue.in_line(bodies, now):
+            return None
+        waited = planner_queue.waited_minutes(bodies, now) or 0.0
+        return waited, planner_queue.overdue(bodies, now)
+    except planner_queue.PlannerQueueError as e:
+        print(f"::warning::the planner line could not be read ({e}) — "
+              "measuring by the stall clock as before")
+        return None
+
+
+def _line_place(bodies) -> str:
+    """Where the card stands, as its own newest receipt says."""
+    receipts = _slot_receipts(bodies)
+    if receipts and receipts[-1].state == "dispatched":
+        return "dispatched from the line, its run not yet started"
+    waits = [r for r in receipts if r.state == "waiting"]
+    if waits and waits[-1].place:
+        return f"place {waits[-1].place} of {waits[-1].of}"
+    return "place not stated"
+
+
+_COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten")
+
+
+def waiting_too_long_reason(waited_minutes: float) -> str:
+    """What the CEO reads on a card the planner line never served (DRE-5177).
+
+    Written for him and nothing else: `planning_escalation.refusal` reads this
+    text before it is posted and will not put a diff, a path or a command in
+    front of him. The cap is read off the queue's config rather than written
+    here, so the sentence stays true if the number moves.
+    """
+    hours = max(1, round(waited_minutes / 60))
+    running = planner_queue.cap()
+    count = _COUNT_WORDS[running] if running < len(_COUNT_WORDS) else str(running)
+    return (
+        "this card has been waiting in line for a planner for about "
+        f"{hours} hour{'s' if hours != 1 else ''} and nothing has started it. "
+        f"{count[0].upper() + count[1:]} planners run at a time across the "
+        "company and the rest wait their turn, and a wait this long means the "
+        "line has stopped moving for this card. Why is not known from here, "
+        "which is why it is in front of you rather than being guessed at. "
+        "Sending it back through Planning gives it a fresh place in line."
     )
 
 
@@ -3473,19 +3583,52 @@ def _route_to_defect_lane(identifier: str) -> None:
 POST_CRITIC_GRACE_MINUTES = int(os.environ.get("POST_CRITIC_GRACE_MINUTES", "30"))
 
 
-def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None) -> bool:
+def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
+                                bodies: list | None = None) -> bool:
     """Should this second-critic refusal be posted to the card, or only logged?
 
     Only the "no round at all" refusal waits (DRE-3059). A SEND_BACK is a
     decision the critic already made, so it speaks at once; and an unreadable
     green light speaks too — unknown must not silence a refusal.
+
+    `bodies` is the epic's own thread, and it changes WHEN the notice speaks,
+    never whether the hold holds (DRE-5177). An approved epic whose activate
+    run was not admitted waits in the planner line, and its review has not
+    started — so while its newest planner-slot receipt is in line the notice
+    is logged and not posted, since telling the CEO to re-run a review that is
+    merely queued is the wrong instruction. Once it is claimed, the grace runs
+    from the claim when that is newer than the green light, because the review
+    starts when the run is admitted. No receipt at all answers as before.
     """
     if tag != plan_critic.POST_UNREAD_TAG:
         return True
-    if not green_lit_at:
+    started_at = green_lit_at
+    if bodies:
+        try:
+            in_line = planner_queue.in_line(bodies)
+        except planner_queue.PlannerQueueError as e:
+            print(f"::warning::the planner line could not be read ({e}) — "
+                  "the hold notice is timed from the green light as before")
+            in_line = False
+        receipts = _slot_receipts(bodies)
+        if in_line:
+            epic = receipts[-1].card if receipts else "the epic"
+            print(
+                f"promotion: epic {epic} is waiting for a planner slot — its "
+                "post-approval review has not started, so the hold on its "
+                "children is logged and not posted"
+            )
+            return False
+        if green_lit_at and receipts and receipts[-1].state == "claimed":
+            try:
+                if age_minutes(receipts[-1].at) < age_minutes(green_lit_at):
+                    started_at = receipts[-1].at
+            except ValueError:
+                pass  # an unreadable claim time leaves the green light's clock
+    if not started_at:
         return True
     try:
-        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+        return age_minutes(started_at) >= POST_CRITIC_GRACE_MINUTES
     except ValueError:
         return True
 
@@ -3820,8 +3963,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 )
                 if refusal is not None:
                     refusal_tag = plan_critic.refusal_tag(refusal)
+                    # The epic's own thread, already in hand — whether its
+                    # review is still queued for a planner (DRE-5177).
                     surface_refusal = post_critic_hold_is_overdue(
-                        refusal_tag, green_light[epic_id])
+                        refusal_tag, green_light[epic_id],
+                        [r.get("body") or "" for r in post_critic[epic_id] or []])
                 else:
                     refusal = mid_epic.promotion_refusal(
                         card["identifier"],
