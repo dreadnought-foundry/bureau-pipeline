@@ -419,13 +419,23 @@ class SequentialArrival(_Base):
                     steps = ([("w", a), ("r", a), ("w", b), ("r", b)]
                              if order == "a-first" else
                              [("w", a), ("w", b), ("r", a), ("r", b)])
+                    admitted, pending = 3, set()
                     for kind, ident in steps:
                         run = f"run-{ident[-1].lower()}"
                         if kind == "w":
+                            # Between a claim's write and its read the claim
+                            # is open by definition — undecided, not admitted.
                             claim_write(self.board, ident, run)
-                        else:
-                            claim_read(self.board, ident, run)
-                        self.assertLessEqual(len(self.board.ledger().running), 4)
+                            pending.add(ident)
+                            continue
+                        out = claim_read(self.board, ident, run)
+                        pending.discard(ident)
+                        admitted += out["admitted"] == "true"
+                        self.assertLessEqual(admitted, 4)
+                        self.assertLessEqual(len(self.board.ledger().running),
+                                             4 + len(pending))
+                    self.assertEqual(admitted, 4)
+                    self.assertEqual(len(self.board.ledger().running), 4)
 
 
 # --------------------------------------------------------------------------- #

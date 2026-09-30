@@ -34,6 +34,13 @@ of it is ever a runtime lookup.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
+  "file the planner cap at 4"): how many planner runs may hold a slot at once,
+  how long a claim lives, how long a dispatch reserves a slot, and how long a
+  card may wait before the watchdog treats it as stuck. Read only through
+  `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
+  file rather than defaulting; `python3 scripts/planner_queue.py check`
+  validates it.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
 - **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):
