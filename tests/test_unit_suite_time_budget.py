@@ -65,6 +65,31 @@ shape above, one cap later. THIS BRANCH IS NOT THE CAUSE either: its three new
 test files run in 10.87s together, timed locally. The constants below are
 re-measured to that window, so these assertions are stricter now than they
 were, not looser.
+
+AND AT 20 MINUTES (DRE-5179 review round 2, measured 2026-09-30) — this time on
+`main` first. Three of main's own runs that morning were cancelled at the cap
+with their result printed or about to be:
+
+    run 36675466692  13077 passed ... in 1178.10s (0:19:38)   cancelled 20m0s
+    run 36678331201  13136 passed ... in 1181.81s (0:19:41)   cancelled 20m5s
+    run 36683794636  (still at 88%)                           cancelled 20m17s
+
+and this PR's run 36692848704 (job 109813822031) followed the same line:
+
+    2026-09-30T09:16:24Z  13222 passed, 2 skipped, 1808 subtests passed
+                          in 1195.01s (0:19:55)
+    2026-09-30T09:16:24Z  ##[error]The operation was canceled.
+    ANNOTATION: The job has exceeded the maximum execution time of 20m0s
+
+The fifteen green `main` runs before them, longest and shortest:
+
+    19m32s  run 36668478468  2026-09-30T04:21:42Z -> 04:41:14Z   cap: 20m0s
+    13m15s  run 36661280696  2026-09-30T02:45:17Z -> 02:58:32Z
+
+28 seconds of headroom against 377 seconds of spread — the same shape a third
+time. 9,594 tests then, 13,222 now. A branch whose main is already cancelled
+at the cap cannot be what crossed it; the constants below are re-measured to
+this window.
 """
 from __future__ import annotations
 
@@ -79,18 +104,18 @@ WORKFLOW = "tests.yml"
 JOB = "unit"
 
 #: Longest real `scripts unit tests` job on main in the sampled window
-#: (run 34871402677, 2026-09-15). It succeeded with 52 seconds to spare.
-OBSERVED_MAX_SECONDS = 548
+#: (run 36668478468, 2026-09-30). It succeeded with 28 seconds to spare.
+OBSERVED_MAX_SECONDS = 1172
 
-#: Shortest in the same window (run 34931087544). The gap between the two is
+#: Shortest in the same window (run 36661280696). The gap between the two is
 #: the run-to-run spread the cap has to absorb, and it is the whole argument:
 #: a budget narrower than its own variance is a coin flip, not a limit.
-OBSERVED_MIN_SECONDS = 364
+OBSERVED_MIN_SECONDS = 795
 OBSERVED_SPREAD_SECONDS = OBSERVED_MAX_SECONDS - OBSERVED_MIN_SECONDS
 
-#: Where run 34993126917 was cancelled, 13 seconds after its 9,594-test suite
-#: had finished and printed its result (10m6s against a 10m0s cap).
-CANCELLED_AT_SECONDS = 606
+#: Where run 36692848704 was cancelled, the second its 13,222-test suite had
+#: finished and printed its result (20m11s against a 20m0s cap).
+CANCELLED_AT_SECONDS = 1211
 
 
 def _timeout_minutes(workflow: str, job: str) -> int:
@@ -118,8 +143,8 @@ def test_the_cap_clears_the_point_where_a_suite_was_killed_mid_sentence():
     """
     wall = _timeout_minutes(WORKFLOW, JOB) * 60
     assert wall >= CANCELLED_AT_SECONDS + OBSERVED_SPREAD_SECONDS, (
-        f"{WORKFLOW} job {JOB!r} dies at {wall}s, but run 34993126917 reached "
-        f"{CANCELLED_AT_SECONDS}s with its 9,594-test result already printed "
+        f"{WORKFLOW} job {JOB!r} dies at {wall}s, but run 36692848704 reached "
+        f"{CANCELLED_AT_SECONDS}s with its 13,222-test result already printed "
         f"and was cancelled. Clearing that point alone is not enough — the "
         f"same suite varies by {OBSERVED_SPREAD_SECONDS}s run to run, so the "
         f"cap must clear it by at least that spread."
@@ -131,11 +156,12 @@ def test_the_cap_has_real_margin_over_the_longest_real_run():
 
     The 5m cap sat 16 seconds above the longest observed run while that run's
     own spread was 93 seconds; the 10m cap that replaced it sat 52 seconds
-    above, against a spread of 184. By DRE-2422's standard ("a run that
+    above, against a spread of 184; the 20m cap after that sat 28 seconds
+    above, against a spread of 377. By DRE-2422's standard ("a run that
     SUCCEEDS with exactly zero margin left is not a budget"), each was already
     spent before the branch that tripped it existed. Doubling the observed
     maximum is the same deliberately generous shape the turn-budget siblings
-    use, and it leaves room for a suite that has grown by ~3,300 tests since
+    use, and it leaves room for a suite that has grown by ~3,600 tests since
     the last time this was measured.
     """
     wall = _timeout_minutes(WORKFLOW, JOB) * 60

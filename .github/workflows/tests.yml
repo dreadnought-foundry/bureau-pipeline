@@ -56,7 +56,13 @@ jobs:
     # `tests/test_unit_suite_time_budget.py` holds it there and carries the
     # measurements. The clock is the remedy because the clock is what is
     # wrong: no branch has doubled this suite's runtime, it simply grew.
-    timeout-minutes: 20
+    #
+    # AND AGAIN AT 20 (DRE-5179 review round 2, measured 2026-09-30), on main
+    # first: runs 36675466692 and 36678331201 printed 13,077 and 13,136 passed
+    # in 19m38s and 19m41s and were cancelled at the cap. The fifteen green main
+    # runs before them ranged 13m15s to 19m32s: 28 seconds of headroom against
+    # 377 seconds of spread. 40 is ~2x the longest real run, same rule.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
