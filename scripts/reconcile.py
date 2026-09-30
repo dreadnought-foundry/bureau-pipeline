@@ -83,12 +83,15 @@ full sweep also refreshes each active epic's growth record on the epic itself:
 green-lit at N cards, running M, plus any card that joined without the plan
 moving with it (scripts/mid_epic.py owns the whole mechanism).
 
-An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
-activation action is moving an approved epic to **In Progress** — that is what
+An epic counts as ACTIVATED in In Progress and nowhere else (DRE-5347). The
+CEO's approval is the move of an epic to **In Progress**, and only that — what
 standards/card-quality.md and the planner brief tell them, and what the plan
-comment asks for (DRE-2727). Todo remains accepted and activates identically, so
-an epic started the old way still flows; the set of parent states that count as
-"active" is unchanged, and so are MAX_WIP and the blocker checks.
+comment asks for (DRE-2727). DRE-1893 once let Todo activate an epic too; that
+convention is retired. An epic found in Todo is carried out of it on every full
+sweep (`carry_epics_out_of_todo`) — back to In Progress when it was approved, to
+Planning when it was not — and while it sits there it activates nothing: an
+approved epic's children wait at most one sweep, and an unapproved epic's
+children are never released. MAX_WIP and the blocker checks are unchanged.
 
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
@@ -135,6 +138,7 @@ import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and it
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
+import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -382,14 +386,16 @@ MAX_WIP, MAX_WIP_SOURCE = cap_and_source(
     os.environ.get("MAX_WIP"), os.environ.get("GITHUB_WORKSPACE")
 )
 
-# Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
-# The CEO activates an approved epic by moving it to **In Progress** (DRE-2727 —
-# the verb the standard, the planner brief and the plan comment all name). Todo
-# was added by DRE-1893 and is still accepted: an epic in either state promotes
-# its unblocked Backlog children, so an epic started the old way still flows.
-# Anything else (Backlog, Planning, Green Light, Done, …) is not active and its
-# children stay parked.
-EPIC_ACTIVE_STATES = ("Todo", "In Progress")
+# Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893,
+# narrowed by DRE-5347). The CEO approves an epic by moving it to **In Progress**
+# (DRE-2727 — the verb the standard, the planner brief and the plan comment all
+# name), and that move is the only approval. An epic in Todo is carried out of
+# it every full sweep (`carry_epics_out_of_todo`) and activates nothing: one
+# dragged there from Green Light is unapproved, and counting Todo here would
+# release its verdict-carrying children in the window before the carry.
+# Anything else (Backlog, Planning, Green Light, Todo, Done, …) is not active
+# and its children stay parked.
+EPIC_ACTIVE_STATES = ("In Progress",)
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
 # crashes (counted by agent-task) or HANGS/times out (seen only here) — is
@@ -1655,6 +1661,61 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
     )
 
 
+def carry_epics_out_of_todo() -> None:
+    """Carry every epic found in Todo to its right lane (DRE-5347).
+
+    The write layer refuses to put an epic in Todo (DRE-5316), but a person can
+    still drag one there — in Linear, or from the console's epic move menu — and
+    nothing comes for it: the relay dispatches nothing for an epic in Todo, and
+    the promoter and the nudge loop skip epics. DRE-3621 sat there seventeen
+    days. So every full sweep reads the Todo cards it has already fetched and,
+    for each one `epic_todo_gate` calls an epic (never the planner-ownership
+    label), writes In Progress when the lane before Todo says it was approved
+    and Planning when it does not. A move to In Progress re-fires `plan.yml`'s
+    activate route, the intended re-activation; a move to Planning starts the
+    planner, the cost DRE-5316 accepts. Each lane is a literal, so the
+    lane-writer check reads it.
+
+    The refusal is posted through `epic_todo_gate.post_refusal`, once per card
+    and move, and only after the write landed: it names the lane the card is
+    now in. A write that fails is recorded and the next epic is still carried.
+
+    Another repo's epic is left to that repo's sweep, which reads the same
+    board; an epic with no `repo:` label is everybody's (`_another_repos_card`).
+    """
+    for card in active_cards((epic_todo_gate.TODO,)):
+        # The lane this read says the card is in, asked again: every write
+        # below is made on the strength of it, so it is never taken on trust.
+        if (card.get("state") or {}).get("name") != epic_todo_gate.TODO:
+            continue
+        if _another_repos_card(card):
+            continue
+        ident = card["identifier"]
+        title = card.get("title") or ""
+        kids = bool(((card.get("children") or {}).get("nodes")) or [])
+        bodies = card_comment_bodies(card)
+        if not epic_todo_gate.is_epic_card(title, kids, bodies):
+            continue
+        before = epic_todo_gate.lane_before_todo(linear_ops, ident)
+        try:
+            if epic_todo_gate.approved(before):
+                linear_ops.cmd_state(ident, "In Progress")
+                carried = "In Progress"
+            else:
+                linear_ops.cmd_state(ident, "Planning")
+                carried = "Planning"
+        except Exception as e:  # noqa: BLE001 — one epic must not stop the rest
+            _write_failures.append(f"epic-not-todo: carrying {ident} out of Todo: {e}")
+            print(f"ERROR: carry_epics_out_of_todo: {ident}: {e}", file=sys.stderr)
+            continue
+        print(f"epic-not-todo: {ident} found in Todo (before: {before}) — carried to {carried}")
+        body = epic_todo_gate.refusal(
+            ident, epic_todo_gate.TODO, title, kids, bodies, before, carried_to=carried
+        )
+        if body is not None:
+            epic_todo_gate.post_refusal(linear_ops, ident, body)
+
+
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     """The paged board read itself. `linear_ops.COMMENT_WINDOW_GQL` is inline —
     the shape backlog_children already uses — so every reader downstream gets
@@ -2386,7 +2447,8 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
     2. FREE SLOTS. While one is free, the earliest waiting card recorded
        against THIS repo is fired through `plan_run.fire` with the card
        record the board read returned, its recorded trigger and its recorded
-       reason — never `sent_by_run`: the sweep is not the card's planner run,
+       reason, on the plan event whatever its labels (DRE-5366) — never
+       `sent_by_run`: the sweep is not the card's planner run,
        and the run it starts must be judged as any dispatch. The `dispatched`
        receipt follows only a confirmed dispatch (`redispatch`'s rule); a
        failure goes on the write ledger, the card stays waiting, and nothing
@@ -2471,7 +2533,7 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
             continue
         try:
             ok, err = plan_run.fire(records[ident], REPO, trigger_state=stand.trigger,
-                                    reason=stand.reason)
+                                    reason=stand.reason, event=plan_run.PLAN_EVENT)
         except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
             ok, err = False, f"redispatch {ident}: {e}"
         if not ok:
@@ -9110,8 +9172,8 @@ def main(
     promote_only exists because GitHub's cron is best-effort — the "*/15"
     schedule delivers sweeps 78-100 minutes apart in practice. Eligibility
     changes at two precise events, so those workflows invoke this directly:
-      - plan.yml, the moment an epic activates (Todo or In Progress; the gate
-        counts an epic as active in EITHER state — DRE-1893)
+      - plan.yml, the moment an epic activates (In Progress, the one lane the
+        gate counts an epic as active in — DRE-5347)
       - linear-sync.yml, the moment a merge flips a card to Done
     Promotion is pure Linear (the Backlog→Todo transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
@@ -9332,6 +9394,12 @@ def main(
     if not promote_only:
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
+        # BEFORE promote_ready reads its candidates, and that order is
+        # load-bearing (DRE-5347): a child's parent lane is read after the
+        # carry, never before it, so an approved epic dragged into Todo is back
+        # in In Progress by the time its children are asked about.
+        with _phase("carry_epics_out_of_todo"):
+            carry_epics_out_of_todo()
     # The WIP base and the nudge list, from the helper limit-recovery counts
     # its room from too (DRE-4934) — so the two cannot disagree. It drops the
     # epics `repo_epics(mine)` found above, the same set on the same cards.

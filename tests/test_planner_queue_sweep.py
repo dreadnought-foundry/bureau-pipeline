@@ -292,7 +292,8 @@ def test_one_full_sweep_releases_the_gone_run_and_serves_the_first_card(capsys):
     first = next(c for c in cards if c["identifier"] == "DRE-201")
     assert record is first, "fire must get the board read's own card record"
     assert repo == THIS
-    assert kw == {"trigger_state": "Planning", "reason": "re-run"}
+    assert kw == {"trigger_state": "Planning", "reason": "re-run",
+                  "event": reconcile.plan_run.PLAN_EVENT}
     assert "sent_by_run" not in kw
     dispatched = world.receipts("dispatched")
     assert [(i, r.trigger, r.reason, r.repo) for i, r in dispatched] == [
@@ -311,7 +312,8 @@ def test_a_waiting_receipt_with_no_reason_is_fired_with_reason_none():
     assert len(world.fires) == 1
     record, _, kw = world.fires[0]
     assert record["identifier"] == "DRE-201"
-    assert kw == {"trigger_state": "Planning", "reason": None}
+    assert kw == {"trigger_state": "Planning", "reason": None,
+                  "event": reconcile.plan_run.PLAN_EVENT}
 
 
 def test_an_activate_route_card_is_refired_on_the_activate_route():
@@ -319,7 +321,8 @@ def test_an_activate_route_card_is_refired_on_the_activate_route():
                       reason="approved")]
     world = _serve(cards)
     assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
-        ("DRE-301", {"trigger_state": "in progress", "reason": "approved"})]
+        ("DRE-301", {"trigger_state": "in progress", "reason": "approved",
+                     "event": reconcile.plan_run.PLAN_EVENT})]
 
 
 def test_every_run_still_live_dispatches_nothing_and_prints_the_depth(capsys):
@@ -432,7 +435,8 @@ def test_a_lost_dispatch_past_the_grace_is_served_first():
     world = _serve(_reserved_board(GRACE + 5),
                    {r: "in_progress" for r in ("610", "611", "612")})
     assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
-        ("DRE-600", {"trigger_state": "Planning", "reason": "re-run"})]
+        ("DRE-600", {"trigger_state": "Planning", "reason": "re-run",
+                     "event": reconcile.plan_run.PLAN_EVENT})]
 
 
 def test_a_card_that_lost_its_slot_keeps_its_place_in_line():
