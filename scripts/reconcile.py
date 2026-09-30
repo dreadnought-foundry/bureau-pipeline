@@ -1995,7 +1995,9 @@ def flag_stalled_planning() -> set[str]:
     and logged, and one past it is escalated through the same seam with the
     line's own reason — once,
     under the same WATCHDOG_TAG rule. The escalation takes it out of the line:
-    the ledger reads a Green Light card for its open claim only. A card whose
+    the ledger reads a Green Light card for its open claim only, and the
+    `because parked` release posted with it (DRE-5378) ends its place, so a
+    re-send starts a fresh wait rather than an overdue one. A card whose
     newest receipt is a claim, or that carries none, is measured by the stall
     clock exactly as before.
 
@@ -2052,6 +2054,7 @@ def flag_stalled_planning() -> set[str]:
                 continue  # flagged once already — idempotent forever
             if escalate_out_of_planning(card, waiting_too_long_reason(waited)):
                 flagged.add(ident)
+                _end_line_place(ident, bodies)
                 print(
                     f"watchdog: {ident} has waited {waited:.0f} minutes for a "
                     "planner slot, past the line's bound — escalated to "
@@ -2143,6 +2146,31 @@ def _line_place(bodies) -> str:
     if waits and waits[-1].place:
         return f"place {waits[-1].place} of {waits[-1].of}"
     return "place not stated"
+
+
+def _end_line_place(ident: str, bodies) -> None:
+    """A park out of Planning ends the card's place in line (DRE-5378).
+
+    The watchdog's park is the one park no planner run follows with a release
+    of its own: the card was waiting, so no run held its claim. The
+    `because parked` release is what makes the reason's last sentence true —
+    a re-send starts a fresh wait instead of coming back already overdue, the
+    way DRE-5213 did at 14:26 PT on 2026-09-30. It carries the card's own
+    repo and trigger and this sweep's run id. A release that does not land
+    goes on the write ledger: the card is parked all the same.
+    """
+    receipts = _slot_receipts(bodies)
+    stand = receipts[-1] if receipts else None
+    try:
+        planner_queue.post_released(
+            linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
+            repo=stand.repo if stand else REPO,
+            trigger_state=stand.trigger if stand else "-", because="parked",
+        )
+    except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+        _write_failures.append(f"{ident} planner-slot park release: {e}")
+        print(f"ERROR: planner line: {ident} was parked but its place in line was "
+              f"not released: {e}", file=sys.stderr)
 
 
 _COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",

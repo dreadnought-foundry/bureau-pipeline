@@ -16,7 +16,7 @@ receipt carries a second line, `waiting for a planner: place <k> of <n>`. A
 `claimed` receipt may carry `· from run <sender>` (the handover), a `waiting`
 or `dispatched` one `· reason <word>` (the `client_payload.reason` the run
 arrived with); both sit after `trigger` and before `at`. A `released` receipt
-may end `· because <finished|expired|run-gone|duplicate>`.
+may end `· because <finished|expired|run-gone|duplicate|parked>`.
 
 This module owns the grammar, the pure decision logic and the four writes.
 Nothing here touches a workflow: the `plan.yml` and `reconcile.py` cards of the
@@ -47,6 +47,11 @@ THE RULES, in the order the ledger applies them.
     release that closes nothing (a run that held no open claim) and a
     `because duplicate` release are about a RUN, not the card: neither moves
     the card's state or its place in line.
+  * A `because parked` release is about the CARD though it closes nothing
+    (DRE-5378). The sweep posts it when the watchdog parks a waiting card
+    out of Planning: the card leaves the line, and a re-send starts a fresh
+    wait. Without it DRE-5213, parked at 13:40 PT on 2026-09-30 and re-sent
+    at 14:00, came back 411 minutes "waited" and was parked again at 14:26.
   * A card's OPEN CLAIM is its newest `claimed` receipt inside
     `claim_ttl_minutes` that no later receipt closes. A claim older than the
     TTL counts as released — the TTL is at least `plan.yml`'s
@@ -59,7 +64,20 @@ THE RULES, in the order the ledger applies them.
   * A card's LINE ENTRY is the `createdAt` of its earliest `waiting` receipt
     newer than its newest release. Nothing it posts later moves it: a card
     dispatched from the line that finds its slot taken waits again at the
-    same place, never at the back.
+    same place, never at the back. The wait is measured from the entry.
+  * A RE-RUN KEEPS ITS PLACE (DRE-5378). A card's PLACE, what orders the
+    line, is its line entry — unless the first run to claim since its newest
+    release is the run that posted that release. Only a GitHub re-run can
+    claim under a run id that has already released, because a re-run keeps
+    its run id; its place is then the place the claim it continues had,
+    and that claim's `createdAt` when it had none. On 2026-09-30 DRE-5213's
+    run 36726491495 claimed at 14:05:58Z, released at 14:34:52Z `because
+    finished`, and its automatic retry claimed under the same id at 14:35:55Z
+    and waited at place 24 of 24 — behind every card of the morning's groom
+    drain, each of which had claimed after 14:05:58Z. It waited six hours.
+    Its wait is still measured from its own `waiting`: it held a slot until
+    14:34:52Z and was not waiting then. A different run after a release — a
+    re-send, a new dispatch — is a fresh arrival and joins at the back.
   * ADMISSION IS BY CLAIM ORDER. `claim` posts the card's `claimed` receipt
     FIRST, then reads. A slot is taken by every other card's open claim with
     an earlier `(createdAt, comment id)` and by every other card's in-grace
@@ -79,7 +97,7 @@ THE RULES, in the order the ledger applies them.
     `waiting`.
   * The line: a `waiting` receipt whose trigger is `in progress` (the activate
     route, a CEO approval) sorts to the FRONT; otherwise first come, first
-    served by line entry.
+    served by place.
 
 THE LANES. The ledger reads `LEDGER_LANES`: a plan-route card sits in
 `Planning`, an activate-route epic sits `In Progress`, and `Green Light` is
@@ -182,7 +200,7 @@ LEDGER_LANES = ("Planning", "In Progress", "Green Light")
 #: claim only — it is in the CEO's queue, not in line.
 WAITING_LANES = ("Planning", "In Progress")
 STATES = ("claimed", "waiting", "dispatched", "released")
-BECAUSE = ("finished", "expired", "run-gone", "duplicate")
+BECAUSE = ("finished", "expired", "run-gone", "duplicate", "parked")
 #: The trigger that sorts to the front of the line: the activate route.
 FRONT_TRIGGER = "in progress"
 PLACE_LINE = "waiting for a planner: place {place} of {of}"
@@ -421,6 +439,7 @@ class _View:
                     self.closer[i] = j
                     break
         closing = {j: i for i, j in self.closer.items()}
+        self.closing = closing
         # A claim inherits the slot key of the claim it closed (the handover),
         # so the slot keeps its sender's place in claim order.
         self.slot: dict = {}
@@ -439,8 +458,10 @@ class _View:
         self.open = [i for i in self.unclosed if not self._expired(rs[i])]
         self.expired = [i for i in self.unclosed if self._expired(rs[i])]
         # Releases that are about the CARD: they close a claim, and not as a
-        # duplicate. Any other release is about a run and moves nothing.
+        # duplicate, or they are a park. Any other release is about a run and
+        # moves nothing.
         self.ignored = {j for j, r in enumerate(rs) if r.state == "released"
+                        and r.because != "parked"
                         and (j not in closing or r.because == "duplicate")}
         release_points = [j for j, r in enumerate(rs)
                           if r.state == "released" and j not in self.ignored]
@@ -494,6 +515,38 @@ class _View:
             if found:
                 return found[0].created_at
         return None
+
+    def _continued(self, run: str) -> Receipt | None:
+        """The claim a re-run of `run` continues (DRE-5378): the one `run`'s
+        own release closed, when that release is the card's newest. A GitHub
+        re-run keeps its run id, so only a re-run can claim again under it."""
+        p = self.release_point
+        if p < 0 or p not in self.closing:
+            return None
+        rel = self.receipts[p]
+        if rel.state != "released" or rel.run != run:
+            return None
+        return self.receipts[self.closing[p]]
+
+    def arrival(self, claim: Receipt) -> str | None:
+        """The place `claim` stands at if its run is refused: the card's own
+        place just before it, or for a re-run the place the claim it
+        continues had — that claim's own place, else its `createdAt`. None
+        for a fresh arrival, which joins at the back."""
+        prior = self.before(claim)
+        held = prior._continued(claim.run)
+        if held is not None:
+            return prior.arrival(held) or held.created_at
+        return prior.line_place()
+
+    def line_place(self) -> str | None:
+        """What orders this card in line: its line entry, unless the run that
+        joined the line is a re-run, which keeps its first claim's place."""
+        entry = self.line_entry()
+        if entry is None:
+            return None
+        first = next((r for r in self.since_release() if r.state == "claimed"), None)
+        return (self.arrival(first) if first is not None else None) or entry
 
     def line_receipt(self) -> Receipt | None:
         """The receipt that stands for this card in line: its newest `waiting`
@@ -564,7 +617,10 @@ class Ledger:
     #: Every claim no receipt has closed, open or past the TTL — what
     #: `expired_claims` filters.
     unclosed: list = field(default_factory=list)
+    #: Each waiting card's line entry (where its wait is measured from) and
+    #: its place (what orders it: `_View.line_place`).
     entries: dict = field(default_factory=dict)
+    places: dict = field(default_factory=dict)
     lanes: dict = field(default_factory=dict)
     now: datetime | None = None
     ttl_minutes: int = 0
@@ -607,11 +663,11 @@ def ledger(cards, now=None, *, config: dict | None = None) -> Ledger:
         if current == "dispatched":
             out.reserved.append(view.newest_effective())
         elif current == "waiting":
-            entry = view.line_entry()
-            out.entries[ident] = entry
+            out.entries[ident] = view.line_entry()
+            place = out.places[ident] = view.line_place()
             stand = view.line_receipt()
             if stand is not None:
-                line.append(((0 if _front(stand.trigger) else 1, _dt(entry), ident), stand))
+                line.append(((0 if _front(stand.trigger) else 1, _dt(place), ident), stand))
     out.waiting = [r for _, r in sorted(line, key=lambda pair: pair[0])]
     return out
 
@@ -654,14 +710,14 @@ def _place(led: Ledger, mine: Receipt, limit: int) -> tuple[int, int]:
     def rank(front, entry, ident):
         return (0 if front else 1, 0 if entry else 1, entry or far, ident)
 
-    my_entry = _dt(led._views[mine.card].before(mine).line_entry())
+    my_entry = _dt(led._views[mine.card].arrival(mine))
     my_rank = rank(_front(mine.trigger), my_entry, mine.card)
     ahead, total = 0, 1
     for w in led.waiting:
         if w.card == mine.card:
             continue
         total += 1
-        if rank(_front(w.trigger), _dt(led.entries.get(w.card)), w.card) < my_rank:
+        if rank(_front(w.trigger), _dt(led.places.get(w.card)), w.card) < my_rank:
             ahead += 1
     for r in led.running:
         if r.card == mine.card or led.lanes.get(r.card) not in WAITING_LANES:
@@ -673,7 +729,7 @@ def _place(led: Ledger, mine: Receipt, limit: int) -> tuple[int, int]:
         if taken + earlier_reserved < limit:
             continue  # admitted, or will be
         total += 1
-        entry = _dt(led._views[r.card].before(r).line_entry())
+        entry = _dt(led._views[r.card].arrival(r))
         if entry is None and my_entry is None and _front(r.trigger) == _front(mine.trigger):
             continue  # fresh, and posting after this card
         if rank(_front(r.trigger), entry, r.card) < my_rank:
