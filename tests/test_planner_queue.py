@@ -912,6 +912,7 @@ class Reason(_Base):
         self.assertEqual(record, self.board.records[card])
         self.assertEqual(kwargs.get("reason"), "re-run")
         self.assertNotIn("sent_by_run", kwargs)
+        self.assertEqual(kwargs.pop("event"), plan_run.PLAN_EVENT)
         self.assertNotIn("sent_by_run", plan_run.payload(record, **kwargs))
         newest = self.board.newest(card)
         self.assertEqual((newest.state, newest.run, newest.reason),
@@ -934,6 +935,7 @@ class Reason(_Base):
                      "--trigger-state", "Planning", "--reason", ""])
         record, _, kwargs = calls[0]
         self.assertIsNone(kwargs.get("reason"))
+        self.assertEqual(kwargs.pop("event"), plan_run.PLAN_EVENT)
         self.assertNotIn("reason", plan_run.payload(record, **kwargs))
 
     def test_the_earlier_grammar_parses_as_before(self):

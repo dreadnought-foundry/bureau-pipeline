@@ -955,8 +955,10 @@ def _cmd_dispatch(args) -> int:
         _warn(f"planner queue: Linear returned no card {args.card}; it stays waiting")
         return 0
     try:
+        # The plan event, whatever the labels: a card in the line is waiting
+        # to be planned, and the label rule would build a one-off (DRE-5366).
         ok, err = plan_run.fire(record, args.repo, trigger_state=args.trigger_state,
-                                reason=args.reason or None)
+                                reason=args.reason or None, event=plan_run.PLAN_EVENT)
     except Exception as exc:  # noqa: BLE001
         ok, err = False, str(exc)
     if not ok:
