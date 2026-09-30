@@ -20,16 +20,22 @@ A caller is a UNIT, written `<file>#<unit>` with the file repo-relative:
   call. Each is resolved with `ast` to the innermost enclosing `def`:
   `scripts/code_owner_hold.py#_cmd_hold`. A call at module level, outside any
   `def`, is `<file>#<module>`: it runs at import, so it is a caller too.
-* **Not a module's `main`.** A call whose enclosing unit is the module's
+* **Not the defining module's `main`.** A call in the defining module's
   top-level `main`, or its `if __name__ == "__main__":` block, is a
   subcommand's dispatch. The workflow step that runs the subcommand is the
-  caller in its place, so `main` is never reported.
+  caller in its place, so that `main` is never reported. Any OTHER module's
+  `main` is a def like the rest, `<file>#main`, and its `__main__` block is
+  code at module level, `<file>#<module>`: `reconcile.py`'s sweep moves cards
+  through `linear_ops.cmd_state` from its `main`, and is reported so.
 * **A workflow step.** In `.github/workflows/*.yml`, every step whose `run:`
   shell runs `scripts/<module>.py <subcommand>` (under any path prefix: the
   workflows run it as `.bureau-pipeline/scripts/…` or
   `"$PIPELINE_DIR"/scripts/…`), where the defining module's CLI maps that
   subcommand to the function or to an in-module caller of it. Resolved to
   `<file>#<step name>`. Shell comment lines and YAML comments are not calls.
+  A fully quoted path (`"$PIPELINE_DIR/scripts/…py" go`) reads the same.
+  Composite actions (`.github/actions/*/action.yml`) are not read: none of
+  their `run:` steps writes a lane today.
 
 Discovery is DIRECT: `callers_of` names the units that call THIS function. A
 step running `planning_route.py exit` reaches `escalate` through `_cmd_exit`, a
@@ -44,17 +50,21 @@ the three forms it takes on `main` today:
 
 1. an `if command == "<name>": return <handler>(…)` chain
    (`planning_escalation.py`, `planning_route.py`); a branch that does its work
-   inline maps the subcommand to no handler, and still counts as read;
+   inline maps the subcommand to no handler, and still counts as read — if
+   the branch itself calls the function, or an in-module caller of it, the
+   subcommand reaches the function;
 2. `p = sub.add_parser("<name>")` followed by `p.set_defaults(fn=<handler>)`
    (`code_owner_hold.py`), read in source order because `p` is rebound;
 3. a `{"<name>": <handler>}` dict whose values are the module's own top-level
    functions (`linear_ops.py`, in its `__main__` block).
 
 A module that maps subcommands in any other form is reported in `unread`,
-never silently passed. Two things show that a map exists which the reader did
-not read: an `add_parser("<name>")` the three forms leave unmapped, or a
+never silently passed. Three things show that a map exists which the reader
+did not read: an `add_parser("<name>")` the three forms leave unmapped, a
 workflow step running the module with a literal subcommand the read map does
-not hold. When the module is unread, none of its steps are reported (which
+not hold, or a call in `main` or the `__main__` block that reaches the
+function from outside every `if command == "<name>":` branch, so no
+subcommand can be named for it. When the module is unread, none of its steps are reported (which
 step reaches the function is exactly what could not be read). Its script
 callers do not go through the map and are still reported.
 
@@ -85,7 +95,8 @@ import yaml
 #: The unit a call at module level, outside any def, is reported as.
 MODULE_UNIT = "<module>"
 
-#: A call inside `main` or the `__main__` block: dispatch, never a caller.
+#: A call inside the defining module's `main` or `__main__` block: dispatch,
+#: never a caller.
 _DISPATCH = object()
 
 #: A subcommand as a workflow writes it literally. `"$CMD"` is not one.
@@ -134,10 +145,11 @@ def _is_main_guard(node) -> bool:
     return bool(names and consts)
 
 
-def _call_units(tree) -> dict:
-    """Call node id → its unit: the innermost enclosing def's name,
-    MODULE_UNIT at module level, or _DISPATCH inside `main` or the
-    `__main__` block."""
+def _call_units(tree, defining: bool) -> dict:
+    """Call node id → its unit: the innermost enclosing def's name, or
+    MODULE_UNIT at module level. In the defining module, a call inside `main`
+    or the `__main__` block is _DISPATCH instead; in any other module that
+    code is its own `main` and its own module level, and is reported so."""
     out: dict = {}
 
     def walk(node, unit):
@@ -145,8 +157,8 @@ def _call_units(tree) -> dict:
             inner = unit
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 top_main = node is tree and child.name == "main"
-                inner = _DISPATCH if top_main else child.name
-            elif node is tree and _is_main_guard(child):
+                inner = _DISPATCH if top_main and defining else child.name
+            elif node is tree and defining and _is_main_guard(child):
                 inner = _DISPATCH
             if isinstance(child, ast.Call):
                 out[id(child)] = unit
@@ -179,7 +191,7 @@ def _script_callers(tree, rel: str, module: str, function: str,
         functions.add(function)
     if not modules and not functions:
         return set()
-    units = _call_units(tree)
+    units = _call_units(tree, defining)
     found = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -219,19 +231,27 @@ def _add_parser_name(node) -> str | None:
     return None
 
 
+def _chain_name(node) -> str | None:
+    """The subcommand an `if command == "<name>":` branch is for, or None."""
+    if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+        return None
+    test = node.test
+    if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
+        return None
+    sides = [test.left, test.comparators[0]]
+    subject = [s for s in sides if isinstance(s, (ast.Name, ast.Attribute))]
+    names = [s.value for s in sides
+             if isinstance(s, ast.Constant) and isinstance(s.value, str)]
+    if not subject or len(names) != 1 or names[0] == "__main__":
+        return None
+    return names[0]
+
+
 def _chain_form(entry, cli: dict) -> None:
     """Form 1: `if command == "<name>": return <handler>(…)`."""
     for node in ast.walk(entry):
-        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
-            continue
-        test = node.test
-        if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
-            continue
-        sides = [test.left, test.comparators[0]]
-        subject = [s for s in sides if isinstance(s, (ast.Name, ast.Attribute))]
-        names = [s.value for s in sides
-                 if isinstance(s, ast.Constant) and isinstance(s.value, str)]
-        if not subject or len(names) != 1 or names[0] == "__main__":
+        name = _chain_name(node)
+        if name is None:
             continue
         handler = None
         for stmt in node.body:
@@ -239,7 +259,34 @@ def _chain_form(entry, cli: dict) -> None:
                     and isinstance(stmt.value.func, ast.Name)):
                 handler = stmt.value.func.id
                 break
-        cli[names[0]] = handler
+        cli[name] = handler
+
+
+def _dispatch_calls(entry) -> list:
+    """(name called, the chain branches it sits in) for every bare `name(…)`
+    call an entry point makes itself — a def nested in it is its own unit."""
+    out = []
+
+    def walk(node, branches):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Lambda)):
+            return
+        name = _chain_name(node)
+        if name is not None:
+            walk(node.test, branches)
+            for stmt in node.body:
+                walk(stmt, branches | {name})
+            for stmt in node.orelse:
+                walk(stmt, branches)
+            return
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            out.append((node.func.id, branches))
+        for child in ast.iter_child_nodes(node):
+            walk(child, branches)
+
+    for child in ast.iter_child_nodes(entry):
+        walk(child, frozenset())
+    return out
 
 
 def _parser_form(entry, cli: dict) -> None:
@@ -335,7 +382,10 @@ def _invocations(run: str, module: str) -> list:
     None where the invocation passes none."""
     lines = [line for line in run.splitlines() if not line.lstrip().startswith("#")]
     text = _CONTINUATION.sub(" ", "\n".join(lines))
-    pattern = re.compile(rf"(?<![\w.-])scripts/{re.escape(module)}\.py(?![\w.-])([^\n]*)")
+    # The closing quote of a fully quoted path is part of the path, not the
+    # first argument: `"$PIPELINE_DIR/scripts/<m>.py" go`.
+    pattern = re.compile(
+        rf"(?<![\w.-])scripts/{re.escape(module)}\.py[\"']?(?![\w.-])([^\n]*)")
     out = []
     for match in pattern.finditer(text):
         args = _shell_args(match.group(1))
@@ -400,12 +450,23 @@ def callers_of(module_path: str, function: str, root: str = ".") -> CallerReport
     prefix = f"{rel_module}#"
     reach = {function} | {c[len(prefix):] for c in callers if c.startswith(prefix)}
     cli, declared = cli_map(tree)
+    reaching = {name for name, handler in cli.items() if handler in reach}
+    # A dispatch call that reaches the function itself, not through a mapped
+    # handler: a chain branch doing its work inline reaches it for the
+    # subcommands whose branches hold the call. One in no branch reaches it
+    # for a subcommand the reader cannot name.
+    unplaced = False
+    for entry in _entry_points(tree):
+        for name, branches in _dispatch_calls(entry):
+            if name not in reach:
+                continue
+            reaching |= branches
+            unplaced = unplaced or not branches
     invocations = _workflow_invocations(root, module, unread)
     literal = {t for _, t in invocations if t and _LITERAL_SUBCOMMAND.match(t)}
-    if (declared - cli.keys()) or (literal - cli.keys()):
+    if (declared - cli.keys()) or (literal - cli.keys()) or unplaced:
         unread.add(rel_module)
     else:
-        reaching = {name for name, handler in cli.items() if handler in reach}
         callers |= {unit for unit, token in invocations if token in reaching}
     return CallerReport(callers=frozenset(callers), unread=frozenset(unread))
 

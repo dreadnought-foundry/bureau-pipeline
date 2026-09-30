@@ -138,7 +138,7 @@ class OverThisRepository(unittest.TestCase):
         self.assertLessEqual(EXIT_CALLERS, report.callers, sorted(report.callers))
         self.assertEqual(report.unread, frozenset())
 
-    def test_a_modules_main_is_never_a_caller(self):
+    def test_the_defining_modules_main_is_never_a_caller(self):
         for module, function in ((ESCALATION, "escalate"), (HOLD, "park"),
                                  (ROUTE, "_cmd_exit")):
             report = lane_callers.callers_of(module, function, root=str(ROOT))
@@ -155,6 +155,15 @@ class OverThisRepository(unittest.TestCase):
                                          root=str(ROOT))
         self.assertIn(".github/workflows/merge-gate.yml#Evaluate and merge",
                       report.callers)
+        self.assertEqual(report.unread, frozenset())
+
+    def test_the_sweeps_main_is_a_cmd_state_caller(self):
+        # `reconcile.py`'s `main` moves cards to Done, Todo and Backlog through
+        # `linear_ops.cmd_state`. It is ANOTHER module's `main`, not the
+        # defining module's dispatch, so it is a caller like any other def.
+        report = lane_callers.callers_of("scripts/linear_ops.py", "cmd_state",
+                                         root=str(ROOT))
+        self.assertIn("scripts/reconcile.py#main", report.callers)
         self.assertEqual(report.unread, frozenset())
 
 
@@ -236,7 +245,10 @@ class CallsFromOtherModules(unittest.TestCase):
         report = lane_callers.callers_of(HOLD, "park", root=str(ROOT))
         self.assertFalse([c for c in report.callers if c.startswith("scripts/dead_run.py#")])
 
-    def test_a_call_from_main_or_the_main_block_is_never_reported(self):
+    def test_a_call_from_another_modules_main_or_main_block_is_reported(self):
+        # Only the DEFINING module's `main` is dispatch, answered by the steps
+        # that run its subcommands. Another module's `main` is a def like any
+        # other, and its `__main__` block is code at module level.
         with _Copy() as root:
             _write(root / "scripts" / "zz_probe_main.py", '''
                 import sys
@@ -259,7 +271,11 @@ class CallsFromOtherModules(unittest.TestCase):
             ''')
             report = lane_callers.callers_of(HOLD, "park", root=str(root))
         mine = {c for c in report.callers if c.startswith("scripts/zz_probe_main.py#")}
-        self.assertEqual(mine, {"scripts/zz_probe_main.py#helper"})
+        self.assertEqual(mine, {
+            "scripts/zz_probe_main.py#helper",
+            "scripts/zz_probe_main.py#main",
+            "scripts/zz_probe_main.py#<module>",
+        })
 
 
 class WorkflowSteps(unittest.TestCase):
@@ -376,6 +392,34 @@ class TheThreeMapForms(unittest.TestCase):
                     "other": other,
                 }[cmd](*args)
         ''',
+        "zz_form_inline.py": '''
+            import argparse
+            import sys
+
+
+            def target(card):
+                return card
+
+
+            def main(argv=None):
+                parser = argparse.ArgumentParser()
+                sub = parser.add_subparsers(dest="command")
+                go = sub.add_parser("go")
+                go.add_argument("card")
+                sub.add_parser("other")
+                args = parser.parse_args(argv)
+                command = args.command
+                if command == "go":
+                    target(args.card)
+                    return 0
+                if command == "other":
+                    return 0
+                return 2
+
+
+            if __name__ == "__main__":
+                sys.exit(main())
+        ''',
     }
 
     WORKFLOW = '''
@@ -389,6 +433,12 @@ class TheThreeMapForms(unittest.TestCase):
                 run: python3 .bureau-pipeline/scripts/zz_form_chain.py go "$CARD"
               - name: Chain other step
                 run: python3 .bureau-pipeline/scripts/zz_form_chain.py other
+              - name: Chain quoted step
+                run: python3 "$PIPELINE_DIR/scripts/zz_form_chain.py" go "$CARD"
+              - name: Inline step
+                run: python3 .bureau-pipeline/scripts/zz_form_inline.py go "$CARD"
+              - name: Inline other step
+                run: python3 .bureau-pipeline/scripts/zz_form_inline.py other
               - name: Parser step
                 run: |
                   python3 "$PIPELINE_DIR"/scripts/zz_form_parser.py \\
@@ -412,9 +462,22 @@ class TheThreeMapForms(unittest.TestCase):
         return {c for c in report.callers if c.startswith(".github/workflows/zz-probe.yml#")}
 
     def test_an_if_command_chain_is_read(self):
+        # The quoted step runs `"$PIPELINE_DIR/scripts/…py" go`: the closing
+        # quote belongs to the path, and `go` is still its subcommand.
         report = self._report("zz_form_chain.py")
-        self.assertEqual(self._steps(report), {".github/workflows/zz-probe.yml#Chain step"})
+        self.assertEqual(self._steps(report), {
+            ".github/workflows/zz-probe.yml#Chain step",
+            ".github/workflows/zz-probe.yml#Chain quoted step",
+        })
         self.assertIn("scripts/zz_form_chain.py#_cmd_go", report.callers)
+        self.assertEqual(report.unread, frozenset())
+
+    def test_a_chain_branch_that_calls_the_function_inline_is_read(self):
+        # `go` has no handler: its branch calls `target` itself. The step that
+        # runs `go` is the caller; the step that runs `other` is not.
+        report = self._report("zz_form_inline.py")
+        self.assertEqual(self._steps(report), {".github/workflows/zz-probe.yml#Inline step"})
+        self.assertNotIn("scripts/zz_form_inline.py#main", report.callers)
         self.assertEqual(report.unread, frozenset())
 
     def test_add_parser_with_set_defaults_is_read(self):
@@ -474,6 +537,49 @@ class AnUnknownMapForm(unittest.TestCase):
             report = lane_callers.callers_of("scripts/zz_form_unknown.py", "cmd_go",
                                              root=str(root))
         self.assertEqual(report.unread, frozenset({"scripts/zz_form_unknown.py"}))
+        self.assertFalse([c for c in report.callers if c.startswith(".github/")])
+
+    def test_main_calling_the_function_outside_any_branch_is_unread(self):
+        # The call is in `main`, so a step is its caller, but it sits in no
+        # `if command == …` branch: which subcommand reaches it cannot be read.
+        with _Copy() as root:
+            _write(root / "scripts" / "zz_form_unplaced.py", '''
+                import argparse
+                import sys
+
+
+                def target(card):
+                    return card
+
+
+                def main(argv=None):
+                    parser = argparse.ArgumentParser()
+                    sub = parser.add_subparsers(dest="command")
+                    go = sub.add_parser("go")
+                    go.add_argument("card")
+                    args = parser.parse_args(argv)
+                    if args.command == "go":
+                        print(args.card)
+                    target(args.card)
+                    return 0
+
+
+                if __name__ == "__main__":
+                    sys.exit(main())
+            ''')
+            _write(root / ".github" / "workflows" / "zz-unplaced.yml", '''
+                name: probe
+                on: workflow_dispatch
+                jobs:
+                  probe:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - name: Unplaced step
+                        run: python3 .bureau-pipeline/scripts/zz_form_unplaced.py go "$CARD"
+            ''')
+            report = lane_callers.callers_of("scripts/zz_form_unplaced.py", "target",
+                                             root=str(root))
+        self.assertEqual(report.unread, frozenset({"scripts/zz_form_unplaced.py"}))
         self.assertFalse([c for c in report.callers if c.startswith(".github/")])
 
 
