@@ -701,6 +701,24 @@
       }
     },
     {
+      "name": "roll-up-activated",
+      "tag": "roll-up-split",
+      "adopted": true,
+      "kind": "progress",
+      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, each sent to Planning to be planned on its own, and the parent placed where the sweep closes it.",
+      "state": "unchanged",
+      "next_actor": "plan.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is each child's own planner run, started by the relay when the child enters Planning and timed by that run's own acts, and then the CEO's green light on each child, which no workflow times. The parent is read again only by scripts/reconcile.py's epic close, when its last child is Done — so nothing is expected to speak on this receipt's behalf.",
+      "why": "DRE-4717, the roll-up route's record. A card too big for one epic is split into child epics under itself, each planned and green-lit on its own (standards/card-quality.md), and until this act nothing said on the parent that the split had happened, in which order the children go, or that the parent is never approved for building. A PROGRESS act: nothing is held, nothing is repaired and nothing is escalated — the planning work goes on, now one planner run per child, and the relay dispatches those runs off the lane entry, not this act. Its state is `unchanged` for the same reason: the lane moves that follow the receipt are the placement the split already decided, not a new obligation on anyone. UNLIKE the three lifecycle heartbeats its tag IS a live key, which is why it is adopted: scripts/epic_split.py counts the tag on the parent before posting, so a retried planning run posts nothing twice. It discharges nothing; the parent's own close is the sweep's ordinary epic close, unchanged.",
+      "emits": {
+        "file": "scripts/epic_split.py",
+        "anchor": "pipeline_act.receipt(\"roll-up-activated\""
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,
