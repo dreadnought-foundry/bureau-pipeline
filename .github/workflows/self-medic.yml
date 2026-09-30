@@ -77,6 +77,12 @@ permissions:
 
 jobs:
   call:
+    # DRE-3626: decline at the door. Every completion in the watch list wakes
+    # this stub; a call for one outside the wake set left a run record with
+    # every reusable job nested and skipped under it. This is
+    # scripts/medic_wake.py's expression() byte for byte (DRE-3625) —
+    # tests/test_self_host_stubs.py holds the two together.
+    if: (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out')
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/medic.yml@main
     with:
       pipeline_ref: main
