@@ -4,9 +4,9 @@
 An epic used to produce a plain-text Linear comment: a medium that cannot hold
 a mockup, cannot be navigated, and whose KPI section is prose. Prose is the
 whole problem — "did it move the number" becomes a memory exercise, which is
-the failure KPI objective O10 exists to prevent
-(standards/wave-plan.md §6 — "predicting two and moving two is a result;
-moving two and then naming them is a story"), reintroduced one level down.
+the failure KPI objective O10 exists to prevent ("predicting two and moving
+two is a result; moving two and then naming them is a story" — first written
+into the retired wave standard, DRE-4700), reintroduced one level down.
 
 So the artifact is markdown with a fixed shape, and this module is the
 mechanical form of that shape (the human form is standards/plan-artifact.md):
@@ -1035,10 +1035,11 @@ def render_section(key: str, body: str, title: str | None = None,
 
     `title` overrides the spelling this module derives from the key, and
     `tables` names the fenced blocks rendered AS TABLES rather than as escaped
-    code. Both exist for the wave plan (DRE-2845), whose sections come from
-    standards/wave-plan.md and whose commitment block is `epics` — one
-    renderer, because the sanitiser and the CSP below are the ground DRE-2720
-    covered under adversarial review and a second one would re-open it.
+    code. Both were added for the wave plan (DRE-2845), which the CEO
+    retired in DRE-4700; no caller passes them today. They stay so a second
+    artifact shape reuses this renderer rather than writing its own, because
+    the sanitiser and the CSP below are the ground DRE-2720 covered under
+    adversarial review and a second renderer would re-open it.
     """
     anchor = key.replace(" ", "-")
     title = title if title is not None else section_title(key)

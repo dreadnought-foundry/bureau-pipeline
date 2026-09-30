@@ -57,11 +57,10 @@ whoever calls it.
     prefix is the part the sweep reads, and the rest is what makes a board
     snapshot a megabyte per hundred cards.
   * **Descriptions are kept whole** (redacted, but never truncated). The sweep
-    reads growth records, wave-commitment blocks and `Blocked by:` lines
-    ANYWHERE in a description; a truncated one would change what the replay
-    sees. (Linear's list api already truncates a description at 500 characters
-    — that truncation is part of what the sweep itself sees, and is left
-    exactly as it arrives.)
+    reads growth records and `Blocked by:` lines ANYWHERE in a description; a
+    truncated one would change what the replay sees. (Linear's list api
+    already truncates a description at 500 characters — that truncation is
+    part of what the sweep itself sees, and is left exactly as it arrives.)
   * **A user is its `id` and nothing else.** The id is opaque and it is the
     authorship credential `comment_records` reads; the display name and the
     email are neither, and are not written.
@@ -133,7 +132,7 @@ PAGE = 100
 #:   children  — `mid_epic._EPIC_QUERY`, the epic's green-light read;
 #:   relations — `merge_sweep_gate.RELATION_PAGE`, the dependents read;
 #:   inverse   — `reconcile.backlog_children`, the dependency gate's read;
-#:   history   — `mid_epic._EPIC_QUERY` / `wave_commitment._WAVE_QUERY`.
+#:   history   — `mid_epic._EPIC_QUERY`.
 #: The comment window is not here: it is `linear_ops.COMMENT_WINDOW_GQL`, the
 #: ONE definition of which fifty comments and which way round (DRE-3250).
 CHILD_PAGE = 250
@@ -307,10 +306,10 @@ def scrub_card(card: dict) -> dict:
         "id": card.get("id"),
         "identifier": card.get("identifier"),
         "title": redact_emails(card.get("title")),
-        # whole, never cut: the sweep reads growth records, wave-commitment
-        # blocks and blocker lines anywhere in a description. Redacted all the
-        # same: the addresses the board's prose quotes are real customers', and
-        # a snapshot file travels (it is never committed here — DRE-3918).
+        # whole, never cut: the sweep reads growth records and blocker lines
+        # anywhere in a description. Redacted all the same: the addresses the
+        # board's prose quotes are real customers', and a snapshot file
+        # travels (it is never committed here — DRE-3918).
         "description": redact_emails(card.get("description")),
         "createdAt": card.get("createdAt"),
         "updatedAt": card.get("updatedAt"),

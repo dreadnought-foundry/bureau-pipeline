@@ -55,9 +55,9 @@ a field name), and `direction` (`up`, `down` or `flat`). Optional: `unit`,
 `target`, and any note fields you want. Prose around the block is welcome —
 say how the baseline was measured — but the block is what a close-out reads.
 
-The reason is KPI objective O10, pushed down one level from the wave to the
-epic (`standards/wave-plan.md` §6 — *"predicting two and moving two
-is a result; moving two and then naming them is a story"*). As prose, "did it
+The reason is KPI objective O10, applied to the epic: *"predicting two and
+moving two is a result; moving two and then naming them is a story"*. (It was
+first written into the retired wave standard, DRE-4700.) As prose, "did it
 move the number" becomes a memory exercise. As data,
 `plan_artifact.py closeout` diffs prediction against outcome and reports three
 things the CEO reads differently: KPIs that moved as predicted, KPIs predicted

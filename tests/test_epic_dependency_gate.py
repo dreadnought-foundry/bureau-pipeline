@@ -207,9 +207,8 @@ def _forward_blocks(done_epic, *blocked_epics):
 def test_done_blocker_epic_advances_dependent_backlog_to_triage():
     """A→Done, B blocked-by only A, B in Backlog → B moves Backlog→Triage.
 
-    B carries no wave-commitment record, so it takes this unchanged path —
-    the wave route's own arrival is DRE-2846's, and tests/test_wave_commitment*
-    own it."""
+    This is the only path: since the wave route was retired (DRE-4700) no
+    dependent epic takes any other."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
         patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
         patch.object(reconcile, "card_state", return_value="Backlog"), \

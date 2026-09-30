@@ -18,9 +18,9 @@ dispatched off the lane that owes a plan artifact — it is not in
 lambda_function.py — DRE-1913, label or no label since DRE-3030), so the ask
 was the second of two dispatches for one lane move: on the DRE-3530 approval
 three epics drew six Agent Plan runs, and the duplicates each started a hosted
-runner to learn they had nothing to do. `wave_commitment.advance` stopped
-asking in DRE-3659 and `reconcile.advance_unblocked_epics` in DRE-3664, and
-the ask went with its last caller — from the one place it was written. The
+runner to learn they had nothing to do. The wave route's turn stopped asking
+in DRE-3659 and `reconcile.advance_unblocked_epics` in DRE-3664, and the ask
+went with its last caller — from the one place it was written. The
 lane's stall is still watched by `flag_stalled_planning`, which after
 `PLANNING_MINUTES` asks a HUMAN to look.
 

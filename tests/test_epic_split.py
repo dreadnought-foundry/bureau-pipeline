@@ -264,7 +264,7 @@ class _Board:
     """A parent and its children, with every write recorded rather than sent.
 
     `activate` takes the `linear_ops` MODULE as its first argument (the
-    `wave_commitment` / `mid_epic` convention), so this object stands in for
+    `mid_epic` convention), so this object stands in for
     it: the same five names, the same from-lane guard on `cmd_advance`.
     """
 
