@@ -324,9 +324,15 @@ def test_stranded_watchdog_gates_on_age_before_reading_comments():
     assert fake.per_card_reads == 0
 
 
-def test_planning_watchdog_gates_on_age_before_reading_comments():
-    """Planning's gate needs `updatedAt` and nothing else, so a young card's
-    comments must not be touched AT ALL — not even to look at them."""
+def test_planning_watchdog_reads_a_young_card_off_the_board_read_only():
+    """A young Planning card costs no request of its own.
+
+    It used to cost nothing at all: the age gate ran before the comments were
+    looked at. Since DRE-5177 the planner line is read BEFORE the clock — a
+    card dispatched from the line five minutes ago has a fresh `updatedAt` and
+    may still have waited past the line's bound — so a young card's comments
+    ARE read. They are read off the window the board query already returned,
+    once, and never fetched per card: the request budget is unchanged."""
     young = _card("DRE-1004", state="Planning",
                   minutes_stale=reconcile.PLANNING_MINUTES - 5)
     fake = FakeLinear(active=[young])
@@ -335,9 +341,7 @@ def test_planning_watchdog_gates_on_age_before_reading_comments():
         reconcile, "card_comment_bodies", side_effect=real_bodies
     ) as bodies:
         reconcile.flag_stalled_planning()
-    assert bodies.call_count == 0, (
-        "the age gate must run before ANY read of the card's comments"
-    )
+    assert bodies.call_count == 1, "read once, off the board read"
     assert fake.per_card_reads == 0
 
 
