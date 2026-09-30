@@ -22,6 +22,8 @@ import zipfile
 API_URL = "https://api.github.com"
 _RETRIES = 3
 _BACKOFF_SECONDS = 5
+# GitHub's 422 wording when a PR for the same head and base is already open.
+_PR_ALREADY_EXISTS = "A pull request already exists"
 
 # Bounds on the Actions log archive read (DRE-3076). The driver wants one
 # failing LINE out of a sandbox run; it must never pull a multi-megabyte
@@ -794,11 +796,37 @@ class GitHub:
 
     # ── pull requests ────────────────────────────────────────────────────
     def create_pr(self, repo, head, base, title, body) -> dict:
-        return self.request(
-            "POST",
-            f"/repos/{repo}/pulls",
-            {"title": title, "head": head, "base": base, "body": body},
-        )
+        """Open a PR — safe to have been sent twice (DRE-5294).
+
+        `request` retries a 5xx or a dropped connection by sending the same
+        request again, and a POST that GitHub already carried out answers
+        the second time with 422 "A pull request already exists" for the
+        very PR it just opened (run 36667726633: #2727 opened, the run failed
+        on the retry). Every harness branch is named for its own run and
+        scenario, so an open PR on that head is this client's own: it is
+        read back and returned. Any other refusal still raises, and so does
+        this one when there is no open PR to read back."""
+        try:
+            return self.request(
+                "POST",
+                f"/repos/{repo}/pulls",
+                {"title": title, "head": head, "base": base, "body": body},
+            )
+        except GitHubError as e:
+            if e.status != 422 or _PR_ALREADY_EXISTS not in str(e):
+                raise
+            owner = repo.split("/", 1)[0]
+            query = urllib.parse.urlencode(
+                {"head": f"{owner}:{head}", "base": base, "state": "open"}
+            )
+            existing = self.request("GET", f"/repos/{repo}/pulls?{query}") or []
+            if not existing:
+                raise
+            self._log(
+                f"github: PR #{existing[0]['number']} for {head} was already "
+                "open — a retried create had landed; carrying on with it"
+            )
+            return existing[0]
 
     def get_pr(self, repo, number: int) -> dict:
         return self.request("GET", f"/repos/{repo}/pulls/{number}")
