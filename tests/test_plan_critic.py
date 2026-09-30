@@ -3508,12 +3508,38 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
         self.assertEqual(pc.SIGHT_STATES,
                          ("Green Light", "Todo", "In Progress", "Planning"))
 
+    SIGHT_EPICS = [
+        {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
+        {"identifier": "DRE-5299", "title": "Portal mint", "state": "Planning"},
+    ]
+
+    def test_the_default_sight_names_only_the_lanes_it_was_read_from(self):
+        """The sentence describes the query, never more (PR #602 review). The
+        caller that reads IN_FLIGHT_EPIC_STATES — `epics-in-flight` today —
+        gets a block naming those three lanes and no Planning paragraph."""
+        block = pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1])
+        self.assertIn("That list is every epic in Green Light, Todo, In Progress "
+                      "on the DRE board at the moment this run started.", block)
+        self.assertNotIn("Planning", block)
+        self.assertNotIn("a plan under review", block)
+        self.assertEqual(block, pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1],
+                                               states=pc.IN_FLIGHT_EPIC_STATES))
+
+    def test_the_sight_cli_flag_switches_to_the_wider_sight(self):
+        epics = json.dumps(self.SIGHT_EPICS)
+        narrow = self._run("sight", "--this", self.EPIC, stdin=epics)
+        wide = self._run("sight", "--this", self.EPIC, "--sight", stdin=epics)
+        self.assertEqual((narrow.returncode, wide.returncode), (0, 0),
+                         narrow.stderr + wide.stderr)
+        self.assertEqual(narrow.stdout, pc.sight_block(self.EPIC, self.SIGHT_EPICS))
+        self.assertEqual(wide.stdout, pc.sight_block(self.EPIC, self.SIGHT_EPICS,
+                                                     states=pc.SIGHT_STATES))
+        self.assertNotIn("a plan under review", narrow.stdout)
+        self.assertIn("a plan under review that the CEO has not approved", wide.stdout)
+
     def test_the_sight_block_names_a_plan_under_review_as_one(self):
-        epics = [
-            {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
-            {"identifier": "DRE-5299", "title": "Portal mint", "state": "Planning"},
-        ]
-        block = pc.sight_block(self.EPIC, epics)
+        epics = self.SIGHT_EPICS
+        block = pc.sight_block(self.EPIC, epics, states=pc.SIGHT_STATES)
         self.assertIn("DRE-5299 — Portal mint [Planning]", block)
         self.assertIn("That list is every epic in "
                       + ", ".join(pc.SIGHT_STATES)
