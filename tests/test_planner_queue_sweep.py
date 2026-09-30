@@ -447,6 +447,48 @@ def test_a_card_that_lost_its_slot_keeps_its_place_in_line():
     assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-700"]
 
 
+def _retried_card() -> dict:
+    """DRE-5213's receipts (DRE-5378): claimed and admitted, released by the
+    run that finished, then the automatic retry — a GitHub re-run, under the
+    same run id — claimed again and was told to wait."""
+    run = "36726491495"
+    return _card("DRE-5213", "Planning",
+                 _r("claimed", 150.0, run=run),
+                 _r("released", 121.0, run=run, because="finished"),
+                 _r("claimed", 120.0, run=run),
+                 _r("waiting", 120.0 - 1 / 60, run=run))
+
+
+def test_a_retry_whose_run_finished_is_served_before_cards_that_joined_after_it():
+    """DRE-202 joined the line after DRE-5213's first claim and before its
+    retry; DRE-203 after both. The retry is served first, and GitHub calling
+    its run completed is not read as a dead claim."""
+    cards = ([_claimed(f"DRE-72{n}", f"72{n}") for n in range(3)]
+             + [_retried_card(), _waiting("DRE-202", 140.0), _waiting("DRE-203", 60.0)])
+    runs = {"720": "in_progress", "721": "in_progress", "722": "in_progress",
+            "36726491495": "completed"}
+    world = _serve(cards, runs)
+    assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
+        ("DRE-5213", {"trigger_state": "Planning", "reason": None})]
+    assert [i for i, _ in world.receipts("dispatched")] == ["DRE-5213"]
+    assert world.receipts("released") == []
+    assert "36726491495" not in world.gh_runs_read()
+
+
+def test_the_served_retry_is_dispatched_once_not_every_pass():
+    cards = ([_claimed(f"DRE-72{n}", f"72{n}") for n in range(3)]
+             + [_retried_card(), _waiting("DRE-202", 140.0)])
+    runs = {"720": "in_progress", "721": "in_progress", "722": "in_progress"}
+    first = _serve(cards, runs)
+    assert [c["identifier"] for c, _, _ in first.fires] == ["DRE-5213"]
+    # The next pass reads the `dispatched` receipt the first one posted.
+    ident, body = first.posts[-1]
+    retried = next(c for c in cards if c["identifier"] == ident)
+    retried["comments"]["nodes"].insert(0, {"body": body, "createdAt": _iso(0)})
+    second = _serve(cards, runs)
+    assert second.fires == []
+
+
 # --------------------------------------------------------------------------- #
 # the depth warning                                                            #
 # --------------------------------------------------------------------------- #
