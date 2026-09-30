@@ -211,13 +211,21 @@ jobs:
           import fnmatch
           import json
           import os
+          import sys
 
+          # Both head shapes an adoption opens on — the record card's and the
+          # card-owed fallback's — read from the module that names them.
+          sys.path.insert(0, "scripts")
+          from model_adoption_actions import fallback_branch, record_branch
+
+          heads = (record_branch("*", "*"), fallback_branch("*"))
           title = os.environ["TITLE"]
           with open(os.path.join(os.environ["RUNNER_TEMP"], "open-prs.json")) as fh:
               prs = json.load(fh)
           held = [pr for pr in prs
                   if pr.get("title") == title
-                  or fnmatch.fnmatchcase(pr.get("headRefName") or "", "agent/*-adopt-*")]
+                  or any(fnmatch.fnmatchcase(pr.get("headRefName") or "", head)
+                         for head in heads)]
           line = ("An adoption is already in flight "
                   f"(`{held[0].get('headRefName')}`) — skipped, one at a time."
                   if held else "No adoption in flight.")
@@ -376,12 +384,12 @@ jobs:
           CANDIDATE: ${{ needs.classify.outputs.candidate }}
         run: |
           TITLE="Model trial failed: $CANDIDATE"
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
           if [ -n "$EXISTING" ]; then
             echo "already open as $EXISTING — not duplicating"
           else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/trial-failed.md" \
-              --repo bureau-pipeline --label agent:devops
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/trial-failed.md" --repo "$REPO_SLUG" --label agent:devops
           fi
 
   # A PASSED trial: the record card, the edit, and an ordinary pull request.

@@ -415,10 +415,20 @@ def test_any_open_adoption_head_holds_the_rail(tmp_path):
     assert "skipped" in summary
 
 
+def test_the_card_owed_fallback_head_holds_the_rail(tmp_path):
+    """Linear down when an adoption opened: its PR sits on the fallback head,
+    `agent/model-adoption-<id>`, and still holds the rail."""
+    proc, out, summary = _inflight(tmp_path, [
+        {"title": "Adopt another", "headRefName": "agent/model-adoption-new-opus-9"}])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out["in_flight"] == "true"
+    assert "skipped" in summary
+
+
 def test_the_in_flight_title_is_the_rendered_pr_title():
     run = _step_by_id(_job("classify"), "inflight")["run"]
     assert "model_adoption_actions.py render pr-title" in run
-    assert "agent/*-adopt-*" in run
+    assert "from model_adoption_actions import fallback_branch, record_branch" in run
 
 
 # --------------------------------------------------------------------------- #
@@ -590,7 +600,8 @@ def test_a_failed_trial_files_one_card_and_does_nothing_else():
     runs = _run_steps(job)
     assert 'TITLE="Model trial failed: $CANDIDATE"' in runs
     assert runs.index("linear_ops.py find-open") < runs.index("linear_ops.py create")
-    assert "--repo bureau-pipeline --label agent:devops" in runs
+    assert '--repo "$REPO_SLUG" --label agent:devops' in runs
+    assert "basename \"$GITHUB_REPOSITORY\"" in runs
     for other in ("open-record-card", "open-question-card", "git push",
                   "gh pr create", "model_adoption_actions.py apply"):
         assert other not in runs, other
