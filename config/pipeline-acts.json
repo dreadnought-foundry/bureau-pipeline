@@ -1704,6 +1704,38 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The planner revised this card in place",
+      "step": "One-off revision — what the planner did",
+      "kind": "undeclared-act",
+      "means": "The planner rewrote a one-off card's description in place to answer the pre-approval critic's send-back, and says what it changed per finding (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — giving it one is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. The body is the planner's own per-finding summary, which the critic's next read is told to check first; the machine-readable half of the round is the critic's record, posted alone by the decision step."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The critic reads the revised card again",
+      "step": "One-off revision — read it again",
+      "kind": "undeclared-act",
+      "means": "The pipeline asked for a fresh planning run on a one-off card the planner just revised, so the critic re-reads it — the card stays in Planning and nothing is asked of the CEO (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the post-approval review's re-run note: giving it a row is a REGISTRY change, not an emission change. Written only from the dispatch's exit status (`plan_run.fire`'s rc rule, DRE-2034), never ahead of it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The revised card's re-read could NOT be started",
+      "step": "One-off revision — read it again",
+      "kind": "undeclared-act",
+      "means": "The re-read of a revised one-off card could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review re-run's failure note. Giving it a row is a REGISTRY change, not an emission change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "step": "One-off critic — park in Triage",
+      "kind": "undeclared-act",
+      "means": "The planner's revision of a one-off card did not finish, so the card parks in Triage for the operator with the critic's findings named (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — giving it one is a REGISTRY change, not an emission change. Its body is composed by scripts/plan_critic.py (`unfinished_revision_note`), never in YAML; at the round bound the decision step's own note names the findings and this comment is not posted."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🛑 The post-approval review found a gap",
       "step": "Second critic sent the plan back",
       "kind": "undeclared-act",

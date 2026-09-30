@@ -42,10 +42,13 @@ CLI:
               [--note-file NOTE]
                                       `action=retry|park|leave`, `runs=<ids>`,
                                       and the CEO-facing note for the park.
-  dispatch --epic E --repo OWNER/NAME --reason R
-                                      the ACTIVATE-route repository_dispatch.
-                                      Non-zero on a failed dispatch (DRE-2034:
-                                      no receipt on an unconfirmed dispatch).
+  dispatch --epic E --repo OWNER/NAME --reason R [--route activate|plan]
+                                      the ACTIVATE-route repository_dispatch,
+                                      or with `--route plan` the planning run
+                                      that re-reads a one-off card the planner
+                                      just revised (DRE-5376). Non-zero on a
+                                      failed dispatch (DRE-2034: no receipt on
+                                      an unconfirmed dispatch).
   card-set --before FILE --after FILE --github-output OUT
                                       `changed=`, `added=`, `removed=` over
                                       two `linear_ops.py children-json` files.
@@ -77,6 +80,25 @@ TRIGGER_STATE_ACTIVATE = "in progress"
 REASON_REVIEW_RETRY = "review-retry"   # the review died; try again with headroom
 REASON_RE_REVIEW = "re-review"         # the plan changed; read it again
 REASON_RERUN_ACT = "re-run"            # a person asked, with the act below
+REASON_ONE_OFF_REVISE = "one-off-revise"  # the planner revised a one-off card
+
+#: The lane a one-off card STAYS in while the planner revises it (DRE-5376),
+#: lower-cased the way the relay sends a lane. The re-read is fired for it, so
+#: the planner's duplicate guard skips the run if the card has left Planning by
+#: the time it starts — the lane check `dedupe_dispatch.lane_left_behind` makes.
+TRIGGER_STATE_PLANNING = "planning"
+
+#: The event every planning run listens for. Named rather than left to
+#: `plan_run.fire`'s label rule, which sends `agent-execute` — a build — for a
+#: card that does not carry `agent:planner`, and a one-off card does not.
+PLAN_EVENT = "agent-plan"
+
+#: `--route` → (trigger lane, event). `activate` is what `dispatch` has always
+#: asked for, and stays the default.
+ROUTES = {
+    "activate": (TRIGGER_STATE_ACTIVATE, None),
+    "plan": (TRIGGER_STATE_PLANNING, PLAN_EVENT),
+}
 
 #: The act. A comment whose ENTIRE body, stripped, equals this line asks for
 #: the review to run again; the same words inside a sentence do not (see
@@ -378,7 +400,8 @@ def _cmd_after_death(args) -> int:
 
 
 def _cmd_dispatch(args) -> int:
-    """Ask for the epic's ACTIVATE run.
+    """Ask for the epic's ACTIVATE run — or, with `--route plan`, for the
+    planning run that re-reads a one-off card the planner revised (DRE-5376).
 
     Imported here rather than at module scope so `ceiling` and `card-set` — the
     two seams that must never fail — carry no Linear client at all.
@@ -399,9 +422,11 @@ def _cmd_dispatch(args) -> int:
         print(f"ERROR: review rerun {args.epic}: Linear returned no such card",
               file=sys.stderr)
         return 1
+    trigger_state, event = ROUTES[args.route]
     ok, err = plan_run.fire(card, args.repo,
-                            trigger_state=TRIGGER_STATE_ACTIVATE,
+                            trigger_state=trigger_state,
                             reason=args.reason,
+                            event=event,
                             # The planner run sending this, so the run it
                             # starts does not skip itself as that run's
                             # duplicate (DRE-4573). None from a terminal.
@@ -409,8 +434,9 @@ def _cmd_dispatch(args) -> int:
     if not ok:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1
-    print(f"asked {args.repo} for {args.epic}'s post-approval review "
-          f"({args.reason})")
+    asked = ("post-approval review" if args.route == "activate"
+             else "planning run")
+    print(f"asked {args.repo} for {args.epic}'s {asked} ({args.reason})")
     return 0
 
 
@@ -451,6 +477,7 @@ def main(argv: list[str]) -> int:
     f.add_argument("--epic", required=True)
     f.add_argument("--repo", required=True)
     f.add_argument("--reason", required=True)
+    f.add_argument("--route", choices=sorted(ROUTES), default="activate")
     f.set_defaults(fn=_cmd_dispatch)
 
     s = sub.add_parser("card-set", help="which children a re-plan added or removed")

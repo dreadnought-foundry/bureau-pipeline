@@ -454,7 +454,7 @@ class TheBoundIsWired(unittest.TestCase):
                                 step["with"]["claude_args"])
             if literal:
                 turns.remove(int(literal.group(1)))
-        # FOUR of the agent steps carry an EXPRESSION rather than a literal, so
+        # FIVE of the agent steps carry an EXPRESSION rather than a literal, so
         # the literal scan above cannot see them; each one's worst case is
         # added by name so the arithmetic keeps counting it.
         #
@@ -468,22 +468,39 @@ class TheBoundIsWired(unittest.TestCase):
         #     death.
         #   * the two re-plans — after the first critic and after the second —
         #     sized per plan since DRE-5288, whose worst case is the cap.
+        #   * the planner's revision of a one-off card (DRE-5376), which runs at
+        #     the one-off read's own ceiling and so shares its worst case.
         #
-        # A FIFTH expression would drop out of this arithmetic, which is what
+        # A SIXTH expression would drop out of this arithmetic, which is what
         # the count below refuses.
+        revision = pc.ONE_OFF_TURNS_RETRY_CAP
         expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP,
-                       pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP)
+                       pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP, revision)
         self.assertEqual(
             len(turns), len(agent_steps()) - len(retries) - len(expressions),
-            "every agent step but the four sized ones carries a literal "
-            "ceiling; a fifth expression would drop out of this arithmetic",
+            "every agent step but the five sized ones carries a literal "
+            "ceiling; a sixth expression would drop out of this arithmetic",
         )
-        turns.extend(expressions)
+        # The sum below already adds the one-off READ to every epic-route run,
+        # which no run ever does: the routes are exclusive. The one-off
+        # REVISION is not added on top of that overcount (DRE-5376) — it runs
+        # only on the one-off route, which is checked on its own below, and
+        # its gate reads the one-off decision, so the exclusivity is read off
+        # the step rather than assumed.
+        revisers = [s for s in agent_steps()
+                    if "steps.oneoff.outputs.action" in str(s.get("if") or "")]
+        self.assertEqual(1, len(revisers), revisers)
+        turns.extend(expressions[:-1])
         # 7 s/turn is the upper end measured on completed portico runs, plus
         # ~8 minutes of token minting, checkouts, context assembly and Linear
         # calls that the turn arithmetic does not model.
         self.assertGreaterEqual(timeout, sum(turns) * 7 / 60 + 8,
                                 "the plan job cannot finish the rounds it now runs")
+        # ...and the one-off route alone: the classifier, one read and one
+        # revision, each at its worst case.
+        self.assertGreaterEqual(
+            timeout, (pc.ONE_OFF_TURNS_RETRY_CAP + revision) * 7 / 60 + 8,
+            "the one-off route cannot finish a read and a revision")
 
     def test_the_planning_stall_window_still_exceeds_the_job(self):
         """reconcile flags a Planning card nothing is happening to; it must not

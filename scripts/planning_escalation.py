@@ -391,8 +391,9 @@ def escalation_comment(identifier: str, reason: str | None,
     happened.
 
     `rewrite` is DRE-4058's third arrival, and it is the same lesson a third
-    time. The one-off route spends its bound and then asks for a REWRITTEN card
-    rather than another answer (`plan_critic.one_off_rewrite_request`) — and
+    time. The one-off route spent its bound and then asked for a REWRITTEN card
+    rather than another answer — until DRE-5376 moved that bound to Triage, so
+    no caller in this repository passes the flag today — and
     this wrapper, written for the question case, closed that request with
     "Answer it here and move the card back to be picked up" over the words "it
     is correct and waiting on judgement". Read quickly, that is an instruction

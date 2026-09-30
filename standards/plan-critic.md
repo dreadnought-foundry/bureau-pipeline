@@ -240,8 +240,8 @@ whether the card is really one pull request and whether an agent can tell it is
 done from the card alone.
 
 **It fails CLOSED, and that is the one place this route inverts the epic
-route.** A pass moves the card to the build queue; a send-back, a crash, an
-unusable result and an unavailable model all take the escalation exit to
+route.** A pass moves the card to the build queue, and nothing else does; a
+crash, an unusable result and an unavailable model take the escalation exit to
 `Green Light` with the reason in business terms. That does not contradict "a
 crash is not a rejection" — it is the same rule read in a different place.
 On the epic route, a first critic that decided nothing must not stop the plan,
@@ -250,8 +250,35 @@ one-off route **nothing** reads the card next, so "the critic did not decide"
 cannot be spent as "the critic said yes". The cheap outcome is a person
 answering a question; the expensive one is a build nobody asked for.
 
-**The reason lands on the card either way** — pass or send-back — so the
-planner scorer can grade critic against classifier against outcome.
+**Two ways to say no, and each goes to whoever can act on it** (DRE-5376).
+DRE-5375 was sent back with three findings, every one a defect in the card's
+own text, and it reached the CEO's queue asking whether he wanted to settle
+them himself. He can approve or park a card; he cannot rewrite one. So the
+one-off grammar has a second result:
+
+    PLAN-CRITIC: SEND_BACK — <the worst defect in the card>
+    PLAN-CRITIC: QUESTION — <the one question only the CEO can answer>
+
+* **`SEND_BACK`** is a defect an agent can fix from the repository and the card
+  alone — a test against files the builder cannot read, a criterion that
+  contradicts the code, a missing file list, a shape that is really two pull
+  requests. The decision is `revise`: the planner rewrites the card **in
+  place**, posts one comment saying what it changed per finding, and the run
+  asks for a fresh planning run so the critic reads it again — shown what the
+  last read found, so it checks those fixes rather than finding them again. The
+  card stays in Planning throughout and the CEO is asked nothing. A planner
+  that finds a finding is really a decision asks the question instead; one that
+  does not finish parks the card in `Triage` with the findings.
+* **`QUESTION`** is a decision only the CEO owns — a price, a policy, what to
+  make public, a choice between two defensible options. The decision is
+  `escalate`, and the card parks in `Green Light` with the question.
+
+The rule the critic is given: if the repository and the card could settle it,
+it is a `SEND_BACK`. A card holding both is a `QUESTION` first. `QUESTION` is
+read only on this stage — an epic critic writing it decided nothing.
+
+**The reason lands on the card either way** — pass, send-back or question — so
+the planner scorer can grade critic against classifier against outcome.
 
 **Its ceiling is sized from the CARD, and a read that runs out of turns says
 so** (DRE-4381). This read ran at a hardcoded twenty turns from the day it was
@@ -278,19 +305,22 @@ is deterministic. So:
   same death. A second death does not raise it again: two reads that could not
   finish is a card for a person, not a third ceiling.
 
-**The one-off route is bounded too, and its loop runs through the CEO.** One
-call per classification, and nothing limited the classifications: the card
-parks, the CEO answers it and moves it back to Planning, and that is a fresh
-unbounded call which finds the next problem and parks it again. DRE-3879 made
-that round trip five times — five real, different findings, two signed answers,
-rounds 4 and 5 six minutes apart — and DRE-3880 three times. So the same
-`MAX_ROUNDS` the epic route spends is spent here over the CARD's whole history,
-counted from the markers earlier runs posted, and at the bound the card parks
-with a different ask: **it needs rewriting, not another answer**, with every
-finding raised so far named in one place so one rewrite can answer all of them.
-A crash still parks and still spends nothing — a round the critic never decided
-is not a failed round — and a PASS still moves the card whatever the count is,
-because a rewritten card that now passes has nothing left to answer.
+**The one-off route is bounded too.** One call per classification, and
+nothing limited the classifications: DRE-3879 made the round trip through the
+CEO five times — five real, different findings, two signed answers, rounds 4
+and 5 six minutes apart — and DRE-3880 three times. So the same `MAX_ROUNDS`
+the epic route spends is spent here over the CARD's whole history, counted from
+the markers earlier runs posted. Since DRE-5376 each send-back is answered by
+the planner's revision rather than by the CEO, so reaching the bound means the
+revision loop did not converge — and **the card parks in `Triage`**, the
+operator's defect queue, with every finding raised so far named in one place so
+one rewrite can answer all of them. Never in `Green Light`: a loop that does not
+converge is a defect, not a decision, the same rule the lane contract states
+for a plan at either critic's bound. A `QUESTION` spends nothing — it is a
+decision, not a failed revision. A crash still escalates and still spends
+nothing — a round the critic never decided is not a failed round — and a PASS
+still moves the card whatever the count is, because a rewritten card that now
+passes has nothing left to answer.
 
 ## A critic names everything it sees, in the round it sees it
 

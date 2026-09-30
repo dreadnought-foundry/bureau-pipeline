@@ -91,7 +91,8 @@ def payload(card: dict, *, trigger_state: str | None = None,
 
 def fire(card: dict, repo: str, *, trigger_state: str | None = None,
          reason: str | None = None,
-         sent_by_run: str | int | None = None) -> tuple[bool, str]:
+         sent_by_run: str | int | None = None,
+         event: str | None = None) -> tuple[bool, str]:
     """Fire the card's repository_dispatch at `repo`.
 
     Returns `(True, "")` ONLY on a confirmed rc=0 dispatch, else `(False,
@@ -106,13 +107,21 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
 
     `sent_by_run` (DRE-4573) names the planner run sending this, so the run it
     starts does not skip itself as that run's duplicate. See `payload`.
+
+    `event` (DRE-5376) overrides the event type the labels would pick. A
+    one-off card the planner has just revised carries no `agent:planner`, so
+    the label rule would send `agent-execute` — a BUILD of the card the critic
+    has not re-read. `review_rerun.py dispatch --route plan` asks for
+    `agent-plan` by name. Omit it and nothing about this call changes.
     """
     if not repo:
         return False, (f"plan run {card['identifier']}: no REPO to dispatch at "
                        "— the step that runs this must pass one")
     body = payload(card, trigger_state=trigger_state, reason=reason,
                    sent_by_run=sent_by_run)
-    event = "agent-plan" if "agent:planner" in body["labels"] else "agent-execute"
+    if event is None:
+        event = ("agent-plan" if "agent:planner" in body["labels"]
+                 else "agent-execute")
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"event_type": event, "client_payload": body}, f)
         path = f.name
