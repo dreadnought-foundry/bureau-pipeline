@@ -591,6 +591,16 @@ class SlotsUnknown(DrainRefused):
     and UNKNOWN refuses — it never reads as room."""
 
 
+class NoFreeSlot(DrainRefused):
+    """Every planner slot is taken and the batch cancels nothing, so the drain
+    would write no card at all (DRE-5326). Raised BEFORE any write, and
+    instead of a `groom-drained` record: Intake is unchanged, so the next
+    proposal over it is this same batch with this same id, and a record would
+    spend that id — the re-proposal never posted, a fresh approval refused as
+    already drained, and the cards held back for the slots stuck until Intake
+    moved for some other reason."""
+
+
 class ProposalContradiction(RuntimeError):
     """The proposal both proposes a card and says the read could not place it
     (DRE-3544).
@@ -3423,8 +3433,9 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     Refuses, before any card moves: a closed pen, a closing destination, a
     missing / pipeline-written / declined approval, an approval whose proposal
     is not on the card, a batch already drained, a cycle Linear does not
-    carry, and a planner slot ledger it cannot read. Every refusal but the
-    destination is written onto the card as
+    carry, a planner slot ledger it cannot read, and no free planner slot for
+    a batch that cancels nothing (so it would write no card at all). Every
+    refusal but the destination is written onto the card as
     `🧺 groom-drain-refused: <id> — <reason>`.
     """
     if to in NEVER_WRITES or to == CANCEL_TO:
@@ -3528,6 +3539,14 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
     # the Planning list rationed to the free slots.
     plan = _drain_plan(record, decisions, lane=lane, held=held, gone=gone,
                        slots=slots)
+    if plan["rationed"] and not plan["moving"] and not plan["cancelling"]:
+        # The slots stopped the whole batch. A drained record here would spend
+        # an id the next proposal over this unchanged Intake is bound to reuse.
+        raise NoFreeSlot(
+            f"planner slots: {slots[0]} free of {slots[1]} — every slot is "
+            f"taken by a planner running or waiting, and this batch cancels "
+            f"nothing, so nothing moved and batch {pid} is not used up; approve "
+            f"it again when a planner slot frees", batch=named)
 
     moved = []
     for row in plan["moving"]:
@@ -3588,8 +3607,9 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
 
     `slots` is `(free, cap)` from `free_planner_slots` (DRE-5326): no more
     than `free` cards go to Planning, batch first and additions after, and
-    every card past that is a `held back` row naming the slots. None rations
-    nothing. The Cancel list never takes a slot.
+    every card past that is a `held back` row naming the slots, and listed
+    again under `rationed`. None rations nothing. The Cancel list never takes
+    a slot.
     """
     excluded, added = decisions["excluded"], dict(decisions["added"])
     gone = gone or {}
@@ -3609,7 +3629,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                 f"`{mark['tag']}` names a card on neither approved list, so "
                 f"there was nothing to hold back", identifier))
 
-    moving, cancelling, held_back, rows = [], [], [], []
+    moving, cancelling, held_back, rationed, rows = [], [], [], [], []
 
     def kept(row) -> bool:
         """Held back by an exclusion or a switched-off repo — its row written."""
@@ -3642,6 +3662,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         if slots is None or len(moving) < slots[0]:
             return False
         held_back.append(row)
+        rationed.append(row)
         rows.append({"identifier": row["identifier"], "outcome": "held back",
                      "why": f"planner slots: {slots[0]} free of {slots[1]} — "
                             f"stays in {lane} for the next proposal"})
@@ -3697,7 +3718,8 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         rows.append({"identifier": mark["identifier"] or "—",
                      "outcome": "refused", "why": mark["why"]})
     return {"moving": moving, "cancelling": cancelling, "held_back": held_back,
-            "rows": rows, "ignored": ignored, "lane": lane}
+            "rationed": rationed, "rows": rows, "ignored": ignored,
+            "lane": lane}
 
 
 def _marker_why(mark: dict) -> str:
