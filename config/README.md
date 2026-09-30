@@ -284,9 +284,12 @@ So the rule, now enforced by schema validation in
   which makes it the most attractive place for an unattended promotion to land.
   A newly-discovered model may never reach a build *or* a planning ladder by
   itself; a human editing this file is the only way up.
-  `discovery.alert` must be true: the weekly `model-drift` workflow opens one
-  Linear card for a human whenever the API offers a model this file does not
-  name.
+  `discovery.alert` must be true. A model the API offers that this file does
+  not name is sorted by the CEO's rule of 2026-09-14 in
+  `scripts/model_adoption.py`, run by the `model-adoption` workflow: a new
+  family reaches the advisory ladder only after the CEO answers the one
+  question that workflow files. The weekly `model-drift` workflow refreshes
+  the catalog snapshot and files no card (DRE-3899).
 
 ## The declared overlaps — a Sonnet build is never reviewed by the same Sonnet
 
