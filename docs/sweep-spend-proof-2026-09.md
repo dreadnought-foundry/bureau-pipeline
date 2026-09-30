@@ -210,5 +210,45 @@ at 19:10 PT (`card-done DRE-5057`) spent **5**. That run was still on the older
 1. Someone looks at one bureau-pipeline run summary page (§3) and adds the run id here.
 2. A decision on the busy-hour criterion: re-express it against `sweep-spend: total`,
    or make the budget line per-run. As written it cannot pass while sweeps overlap (§4).
+   **Taken by DRE-5201** — see §6.
 3. A decision on agent-bureau: 30 is not met at its board size (39, 30, 36).
+   **DRE-5201 proposes a target** — see §6. It is the CEO's to set.
 4. The CEO closes the card after reading this record.
+
+## 6. After DRE-5201
+
+**The checker reads a sweep's own count.** `check_linear_budget.py` now charges a
+run that printed a `sweep-spend: total` line that number, and does not add its
+`linear-budget:` lines, which count the shared key. Every other workflow is still
+read off its budget lines. Both markers are read only where they open a line, so
+the Sweep step's echoed source no longer adds three "unknown/rolled" lines per
+run. Read that way, the 19:35 PT pair in §4 is bureau-pipeline 20 and
+agent-bureau 39, a total of 59 — not 59 and 60. `max/run` is also now the most
+one run spent, all of its processes together, rather than the busiest single line.
+
+**What agent-bureau's pass costs, phase by phase** (the three passes in §5,
+read from the code that spends them):
+
+| Phase | Cost | What drives it |
+|---|---|---|
+| `flag_unlanded_work` | 10, 10, 10 | It is the first phase to ask for the board, so it pays for the pass's one board read (DRE-2929): the pages over the swept lanes, plus a whole-thread read for each card whose comments overflow the window. It grows with the board. bureau-pipeline's is 7. |
+| `promote_ready` | 15, 7, 7 | The dependency gate over the Backlog candidates. It grows with Backlog. |
+| `refresh_stale_merge_refs` | 6, 7, 8 | One card read (state and labels) per open, non-draft, non-conflicted card pull request, for the human-park check. It grows with open PRs. bureau-pipeline's is 1. |
+| `report_rereview_missing` | 3, 3, 3 | Fixed. |
+| `close_finished_epics` | 2, 2, 2 | Fixed. |
+| `report_break_glass` | 1, 1, 1 | Fixed. |
+| `flag_stranded` | 0, 0, 5 | Only when a card has stranded. |
+| `recover_limit_deaths` | 2, 0, 0 | Only when a run died on a limit. |
+
+The phases every pass runs came to 37, 30 and 31 on the three passes, before
+any event-driven phase — and 29 with each at its lowest. So at agent-bureau's
+current board, 30 is its floor, not its ceiling. The one cut visible from here
+is `refresh_stale_merge_refs`'s card read, which the pass's board snapshot could
+serve for the cards it already holds. That is worth up to 6–8 a pass. Even with
+it, the 19:34 PT pass would have spent 33.
+
+**Proposed, not applied:** a target of **40** Linear requests per scheduled pass
+for agent-bureau. It covers 30, 36 and 39 on the current code, and it is still
+under half of the 74 the last pass before DRE-3644 spent. bureau-pipeline keeps 30.
+This run could not read agent-bureau's runs (its token is scoped to
+bureau-pipeline), so the figures above are the ones §5 recorded on 2026-09-28.
