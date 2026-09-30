@@ -21,6 +21,12 @@ place, in two halves:
     every `config/repo-map.json` repo that carries a caller stub, naming each
     repo it skipped and why.
 
+DRE-5266 (the CEO, 2026-09-29: "They should all default to the
+round-the-clock") moved the default to `always`. The fleet wake-up keeps its
+05:00 PT sweep on a constant of its own, `release_train.FLEET_WAKE`, because
+`always` has no opening to derive a cron from — and a declared window that
+merely equals the default is never called an override.
+
 Until the per-repo follow-up cards land, the stubs keep their own crons, so a
 repo may be woken twice at the opening. The last test here is the evidence
 that the second wake-up is a harmless no-op: the per-surface concurrency lane
@@ -117,14 +123,22 @@ def green():
 # 1. The fleet opening, declared once — and inherited by omission.
 # --------------------------------------------------------------------------
 
-def test_the_fleet_opening_is_declared_once_in_the_train():
-    """The CEO, 2026-09-20: "The train should start at 5 am." One constant,
-    in the train, is the whole of that decision."""
-    window = release_train.FLEET_WINDOW
-    assert release_train._window_ok(window), window
-    assert release_train.window_bounds(window)[0] == "05:00", (
-        "the fleet opens at 05:00 PT (DRE-4357, the CEO's 2026-09-20 rule)"
-    )
+def test_the_fleet_default_window_is_round_the_clock():
+    """The CEO, 2026-09-29: "They should all default to the round-the-clock.
+    … They can change it if they want but they should default to round the
+    clock." (DRE-5266). One constant, in the train, is the whole of that
+    decision."""
+    assert release_train.FLEET_WINDOW == release_train.WINDOW_ALWAYS == "always"
+    assert release_train._window_ok(release_train.FLEET_WINDOW)
+
+
+def test_the_fleet_wake_up_keeps_its_05_00_sweep_on_a_constant_of_its_own():
+    """`always` has no opening: `window_bounds("always")` starts at 00:00, so a
+    wake-up still derived from the window would silently move to midnight PT.
+    The sweep is its own declaration, and the CEO's 2026-09-20 "the train
+    should start at 5 am" is what it keeps."""
+    assert release_train.FLEET_WAKE == "05:00"
+    assert release_train.wake_crons() == ("0 13 * * *", "0 12 * * *")
 
 
 def test_a_surface_that_omits_window_inherits_the_fleet_default():
@@ -149,31 +163,29 @@ def test_a_declared_window_is_still_refused_when_it_is_malformed():
     assert any("window" in p for p in problems), problems
 
 
-def test_the_inherited_window_actually_gates_the_train():
-    """Inheritance is load-bearing, not cosmetic: the same surface no-ops
-    before the fleet opening and releases after it."""
-    data = _surface_data()
-    data.pop("window")
-    entry = release_train.surface("console", data)
-
-    early = release_train.decide(
-        entry, pt(2026, 7, 15, 4, 30), None, "behind", green(), None)
-    assert early.act == release_train.NO_OP
-    assert early.code == "window"
-
-    opened = release_train.decide(
-        entry, pt(2026, 7, 15, 6, 0), None, "behind", green(), None)
-    assert opened.act == release_train.RELEASE, opened.reason
-
-
-def test_an_inherited_window_line_names_the_fleet_default():
+@pytest.mark.parametrize("hour", [3, 14])
+def test_a_surface_that_omits_window_releases_round_the_clock(hour):
+    """Inheritance is load-bearing, not cosmetic: a surface that declares no
+    window is open in the small hours and in the afternoon alike."""
     data = _surface_data()
     data.pop("window")
     entry = release_train.surface("console", data)
     decision = release_train.decide(
-        entry, pt(2026, 7, 15, 4, 30), None, "behind", green(), None)
+        entry, pt(2026, 7, 15, hour, 0), None, "behind", green(), None)
+    assert decision.act == release_train.RELEASE, decision.reason
+
+
+def test_an_inherited_window_line_names_the_fleet_default():
+    """A surface that inherits `always` never gets a window no-op, so its
+    release line is the one line that can say where its window came from."""
+    data = _surface_data()
+    data.pop("window")
+    entry = release_train.surface("console", data)
+    decision = release_train.decide(
+        entry, pt(2026, 7, 15, 3, 0), None, "behind", green(), None)
+    assert decision.act == release_train.RELEASE
     assert release_train.FLEET_WINDOW in decision.reason
-    assert "fleet default" in decision.reason
+    assert "fleet default" in decision.reason, decision.reason
     assert "overrid" not in decision.reason, (
         "a surface that declares nothing overrides nothing"
     )
@@ -208,41 +220,56 @@ def test_the_release_line_of_an_overriding_surface_says_so_too():
     assert release_train.FLEET_WINDOW in decision.reason, decision.reason
 
 
-def test_a_surface_inheriting_the_default_keeps_its_release_line_plain():
-    data = _surface_data()
-    data.pop("window")
+def test_a_declared_bounded_window_still_no_ops_before_it_opens():
+    """A surface can still narrow its hours: `07:00-21:00 PT` no-ops at 04:30
+    PT, and the line says it overrides the fleet default."""
+    entry = release_train.surface("console", _surface_data(window="07:00-21:00 PT"))
     decision = release_train.decide(
-        release_train.surface("console", data),
-        pt(2026, 7, 15, 10, 0), None, "behind", green(), None)
+        entry, pt(2026, 7, 15, 4, 30), None, "behind", green(), None)
+    assert decision.act == release_train.NO_OP
+    assert decision.code == "window"
+    assert "overriding the fleet default" in decision.reason, decision.reason
+
+
+def test_a_declared_window_equal_to_the_default_is_not_called_an_override():
+    """agent-bureau, Portico and bureau-pipeline all declare `always`
+    explicitly. Once the default is `always` too, "overriding the fleet
+    default always" would be false on every one of their lines."""
+    entry = release_train.surface("console", _surface_data(window="always"))
+    assert entry.declared_window is True
+    note = release_train.window_note(entry)
+    assert "overrid" not in note, note
+    assert "fleet default" in note, note
+
+    decision = release_train.decide(
+        entry, pt(2026, 7, 15, 3, 0), None, "behind", green(), None)
     assert decision.act == release_train.RELEASE
     assert "overrid" not in decision.reason, decision.reason
+    assert "fleet default" in decision.reason, decision.reason
 
 
 # --------------------------------------------------------------------------
 # 3. The wake-up crons, derived from the declared opening with zoneinfo.
 # --------------------------------------------------------------------------
 
-def test_the_wake_up_crons_are_derived_from_the_declared_default():
-    """The whole point of the card: one edit. The crons in the workflow file
-    are exactly the ones the declared opening derives, so moving one of them
-    by hand — or moving the window without the file — turns this red."""
+def test_the_wake_up_crons_are_derived_from_the_declared_sweep():
+    """The whole point of DRE-4450: one edit. The crons in the workflow file
+    are exactly the ones the declared sweep derives, so moving one of them by
+    hand — or moving the sweep without the file — turns this red."""
     assert _file_crons() == list(release_train.wake_crons()), (
         "fleet-wake.yml's schedule must be `release_train.wake_crons()` — "
-        "the fleet opening is declared once, in release_train.FLEET_WINDOW"
+        "the fleet wake-up is declared once, in release_train.FLEET_WAKE"
     )
 
 
 def test_the_derivation_reads_the_zone_and_not_a_restated_offset():
-    """Pinned against the pair the fleet ran on all summer: the 07:00 PT
-    opening derived `0 15 * * *` (PST) and `0 14 * * *` (PDT), which is what
+    """Pinned against the pair the fleet ran on all summer: a 07:00 PT sweep
+    derived `0 15 * * *` (PST) and `0 14 * * *` (PDT), which is what
     `standards/release-train.md` published. A derivation that guessed an
     offset gets this wrong."""
-    assert release_train.wake_crons("07:00-21:00 PT") == (
-        "0 15 * * *", "0 14 * * *")
-    assert release_train.wake_crons("05:00-21:00 PT") == (
-        "0 13 * * *", "0 12 * * *")
-    assert release_train.wake_crons("05:30-21:00 PT") == (
-        "30 13 * * *", "30 12 * * *")
+    assert release_train.wake_crons("07:00") == ("0 15 * * *", "0 14 * * *")
+    assert release_train.wake_crons("05:00") == ("0 13 * * *", "0 12 * * *")
+    assert release_train.wake_crons("05:30") == ("30 13 * * *", "30 12 * * *")
 
 
 def test_one_cron_moving_alone_is_a_failure():
@@ -253,19 +280,19 @@ def test_one_cron_moving_alone_is_a_failure():
     assert moved != list(release_train.wake_crons())
 
 
-def test_the_fleet_wakes_at_the_opening_under_both_pst_and_pdt():
+def test_the_fleet_wakes_at_the_sweep_under_both_pst_and_pdt():
     """GitHub's `schedule:` takes UTC only and has no timezone field, so two
     lines are the only way to hit one local hour all year. Each is checked on
     the America/Los_Angeles clock, on a winter date and a summer one."""
-    opening = release_train.window_bounds(release_train.FLEET_WINDOW)[0]
+    sweep = release_train.FLEET_WAKE
     winter, summer = set(), set()
     for cron in release_train.wake_crons():
         minute, hour = cron.split()[0:2]
         for month, seen in ((1, winter), (7, summer)):
             fires = datetime(2027, month, 15, int(hour), int(minute), tzinfo=UTC)
             seen.add(f"{fires.astimezone(release_train.PT):%H:%M}")
-    assert opening in winter, f"no cron fires at {opening} PST: {winter}"
-    assert opening in summer, f"no cron fires at {opening} PDT: {summer}"
+    assert sweep in winter, f"no cron fires at {sweep} PST: {winter}"
+    assert sweep in summer, f"no cron fires at {sweep} PDT: {summer}"
 
 
 # --------------------------------------------------------------------------
@@ -683,12 +710,34 @@ def test_the_per_surface_lane_is_what_serialises_the_two_wake_ups():
 # 8. The documents that describe all of this.
 # --------------------------------------------------------------------------
 
+#: Every document that states the fleet default (DRE-5266). Each names it
+#: as round the clock and none still publishes the old bounded hours.
+DEFAULT_PROSE = (
+    STANDARD,
+    DOC,
+    ROOT / "README.md",
+    ROOT / "standards" / "engineering.md",
+)
+
+
 def test_the_standard_carries_the_fleet_wake_up_and_the_default_window():
     text = STANDARD.read_text(encoding="utf-8")
     assert "fleet-wake.yml" in text
-    assert release_train.FLEET_WINDOW in text
+    assert "FLEET_WAKE" in text
+    assert f"{release_train.FLEET_WAKE} PT" in text
     assert "07:00 PT" not in text.replace("07:00-21:00 PT", ""), (
         "the standard must not still publish 07:00 PT as the opening"
+    )
+
+
+@pytest.mark.parametrize("path", DEFAULT_PROSE, ids=lambda p: p.name)
+def test_the_prose_names_the_default_as_round_the_clock(path):
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert "round the clock" in text, (
+        f"{path.relative_to(ROOT)} must name the fleet default as round the clock"
+    )
+    assert "05:00-21:00 PT" not in text, (
+        f"{path.relative_to(ROOT)} still states 05:00-21:00 PT as the fleet's hours"
     )
 
 
@@ -697,7 +746,7 @@ def test_the_rendered_document_carries_the_fleet_default():
         "docs/release-train.md is generated — run "
         "`python3 scripts/release_train.py render`"
     )
-    assert release_train.FLEET_WINDOW in DOC.read_text(encoding="utf-8")
+    assert f"`{release_train.FLEET_WINDOW}`" in DOC.read_text(encoding="utf-8")
 
 
 def test_the_schema_table_says_window_may_be_omitted():
