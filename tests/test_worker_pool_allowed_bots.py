@@ -134,7 +134,9 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
         # rounds and the post-approval critic (DRE-2721), the wave planner on
         # the wave route (DRE-2845), and the pre-approval critic on the
         # one-off route (DRE-3041). 8 → 12 with DRE-3970: each of the four
-        # planner steps has its same-step re-run on the next rung.
+        # planner steps has its same-step re-run on the next rung. 12 → 13
+        # with DRE-5376: the one-off revision step, where the planner
+        # rewrites a one-off the pre-approval critic sent back.
         expected = {
             "qa-review.yml": 2,
             "verify.yml": 2,
@@ -144,7 +146,7 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
             # point — a retry admitting a narrower set than the attempt
             # it repeats would crash on the actor the first one allowed.
             "agent-task.yml": 3,
-            "plan.yml": 12,
+            "plan.yml": 13,
         }
         for filename, count in expected.items():
             sites = [
