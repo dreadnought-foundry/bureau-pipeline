@@ -67,8 +67,8 @@ SITES = [
     ("Re-plan after the second critic sent it back", "postreplan",
      "postreplan_cap", "app_post_retry", "postreplan_retry", "postreplan_done",
      "app_post", True),
-    ("Wave route — write the wave plan", "wave", "wave_cap", "app_wave_retry",
-     "wave_retry", "wave_done", "app_wave", False),
+    ("Roll-up route — split into child epics", "rollup", "rollup_cap",
+     "app_rollup_retry", "rollup_retry", "rollup_done", "app_rollup", False),
 ]
 SITE_IDS = [s[1] for s in SITES]
 

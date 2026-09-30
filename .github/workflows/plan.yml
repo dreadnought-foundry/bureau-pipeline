@@ -111,9 +111,11 @@ jobs:
     # must stay longer than the job or the sweep alarms on a run that is
     # simply still going.
     #
-    # 50, raised from 45 with DRE-2845, which adds the wave planner (80 turns)
-    # to this file. A wave run and an epic run are mutually exclusive — the
-    # wave agent runs only for a wave-shaped card, where every epic-route
+    # 50, raised from 45 with DRE-2845, which added an 80-turn planner for
+    # the shape that owes a decomposition into epics — since DRE-4718 the
+    # roll-up planner (80 turns), which splits a card into child epics. A
+    # roll-up run and an epic run are mutually exclusive — the roll-up agent
+    # runs only for a roll-up-shaped card, where every epic-route
     # agent above is skipped — but the pin sums every budget in the file, and
     # raising the ceiling is the cheaper answer than teaching a safety margin
     # to reason about branches. 50 is still well inside the 120-minute
@@ -475,7 +477,7 @@ jobs:
       # The shape is stamped by `planning_shape.py` (DRE-2843) and answers how
       # the work is STRUCTURED and what gate it owes. It is read ONCE, here,
       # before anything else routes: a one-off owes no plan artifact and no
-      # green light, an epic owes both, and a wave owes a decomposition into
+      # green light, an epic owes both, and a roll-up owes a split into child
       # epics before either is meaningful. Every destination comes from
       # `config/planning-shapes.json`, which is bound to the lane contract —
       # routing repeated in this file is routing that drifts from it.
@@ -692,14 +694,17 @@ jobs:
             open_attempt
           fi
 
-      # The WAVE route. A wave cannot be green-lit as one plan — what a CEO
-      # would be approving is not written yet — so it is handed to the route
-      # that owes a decomposition into epics first. This step is the hand-off;
-      # the far side is the "Wave plan" block at the end of this job (DRE-2845),
-      # which runs in the same job because the vocabulary names `plan.yml`
-      # itself as the actor accountable for a wave at its destination.
-      - name: Wave route — hand off
-        if: steps.shape.outputs.route == 'wave'
+      # The ROLL-UP route. A roll-up is too big for one epic, so it cannot be
+      # green-lit as one plan — what a CEO would be approving is not written
+      # yet. It is handed to the route that owes a split into child epics
+      # first, each planned and green-lit on its own. This step is the
+      # hand-off — `planning_route.py exit` posts the roll-up note and applies
+      # the shape's marks, and no lane is written here — and the far side is the
+      # "Roll-up route" block at the end of this job (DRE-4718), which runs in
+      # the same job because the vocabulary names `plan.yml` itself as the
+      # actor accountable for a roll-up at its destination.
+      - name: Roll-up route — hand off
+        if: steps.shape.outputs.route == 'roll-up'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -734,7 +739,7 @@ jobs:
       # is the PRODUCT checkout's, the opposite side to the ledger's own
       # default. The two STATUS lines are grepped back into the step log so a
       # run answers "what was the planner given" without opening a file nothing
-      # commits. The wave route is untouched: it decomposes into epics, not
+      # commits. The roll-up route is untouched: it decomposes into epics, not
       # cards, and sizes nothing.
       #
       # And what PEOPLE said on the epic (DRE-3785), appended the same way:
@@ -940,7 +945,7 @@ jobs:
         id: install_claude
         # ONE install for the whole job, so it is gated on the planning-shape
         # gate rather than on any one route's condition — all four routes
-        # (one-off, plan, activate, wave) run a model below, and the two bail
+        # (one-off, plan, activate, roll-up) run a model below, and the two bail
         # paths above this line run none.
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
@@ -3606,52 +3611,64 @@ jobs:
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
             python3 .bureau-pipeline/scripts/reconcile.py --promote-only
 
-      # --- The WAVE plan (DRE-2845) -----------------------------------------
+      # --- The ROLL-UP split (DRE-4718) ------------------------------------
       #
-      # The far side of the wave hand-off above. A wave-shaped card owes a plan
-      # for a whole layer of work plus the epics it commits to in dependency
-      # order, and `standards/wave-plan.md` is what that document must contain.
+      # The far side of the roll-up hand-off above. A roll-up is a card too big
+      # for one epic: it owes a split into child epics under itself, each
+      # planned and green-lit on its own (standards/card-quality.md, "What the
+      # planner files instead"). The planner creates the children with
+      # `linear_ops.py subissue --epic` (DRE-4698); the run then reads what it
+      # actually created, out of Linear, and `epic_split.py` (DRE-4717) checks
+      # the split and, on a pass, records it and places every card. Same split
+      # as the epic route's proof check: the brief tells the planner, and the
+      # run checks the planner's OUTPUT, never its description of it.
       #
-      # Same split as the plan artifact: the planner writes ONE markdown file
-      # with the `Write` tool it already has, and the run checks it. The agent
-      # gains no capability — the document is an OUTPUT of the run.
+      # Every step is gated on the roll-up shape: a one-off must never be asked
+      # for a split, and an epic plans its own cards above. The lanes are the
+      # scripts' to write — `planning_route.py exit` for the hand-off,
+      # `epic_split.py activate` for the placement — so no step here names one.
+      # The `publish` job below is untouched: it hangs off `mode == 'plan'`,
+      # which this route never sets.
       #
-      # The required sections are NOT written here. `wave_plan.py headings`
-      # prints them from the standard at run time, so this file cannot become a
-      # second, drifting copy of it.
-      #
-      # Every step is gated on the wave shape: a one-off must never be asked
-      # for a wave plan, and an epic already has its artifact above.
-      #
-      # Vendor boundary (standards/vendor-boundaries.md), answered:
+      # Vendor boundary (standards/vendor-boundaries.md), carried over from the
+      # wave block these steps replace and re-read against the roll-up:
       #   Q1 actor — no new trigger. These steps run in the same
       #      repository_dispatch job as the planner above, under the same
       #      `allowed_bots` list (github-actions included — DRE-2053).
       #   Q2 secrets — this run's own store, the same one the planner step
-      #      already draws LINEAR_API_KEY from. No dispatch, no fork context.
-      #   Q3 retry/re-run — the medic re-runs the SAME workflow_run, and every
-      #      step here is idempotent: the plan file is rewritten from scratch,
-      #      the check re-run, and the hand-off's note is posted at most once
-      #      per card (planning_route._say_once).
-      #   Q4 limitations — upload-artifact refuses a duplicate name inside one
-      #      run, so the name carries the card id.
-      #   Q5 our own crash — a crash anywhere here leaves the card in Planning
-      #      owing a decomposition, which is exactly where the next run picks
-      #      it up. Nothing writes a receipt that could block that retry.
-      - name: Wave route — planner context
-        if: steps.shape.outputs.route == 'wave'
+      #      already draws LINEAR_API_KEY from. No dispatch, no fork context:
+      #      the children's own planner runs are dispatched by the relay off
+      #      their lane entry (DRE-1913, DRE-3030), never from here.
+      #   Q3 retry/re-run — the medic re-runs the SAME workflow_run. The
+      #      hand-off's note is posted at most once per card
+      #      (planning_route._say_once), the planner reads the children that
+      #      exist before it creates any, the check is a pure read, and
+      #      `activate` counts its own receipt before posting it and moves a
+      #      card only out of the lane it names.
+      #   Q4 limitations — `subissue` refuses a parent that is not already an
+      #      epic, and a roll-up carries the epic shape's `agent:planner` mark,
+      #      so the create seam admits it; `--epic` refuses a title that does
+      #      not open with `[EPIC]`, which the prompt spells out.
+      #   Q5 our own crash — a crash after some children are created leaves
+      #      them in Backlog under a parent still in Planning, owing a split.
+      #      The next run's `check` reads the children that exist, so nothing
+      #      is created twice as long as the planner reads `children-detail`
+      #      first, which the prompt tells it to. A crash inside `activate`
+      #      leaves a state its retry finishes (epic_split.py's docstring).
+      - name: Roll-up route — planner context
+        if: steps.shape.outputs.route == 'roll-up'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
-      # Fresh App token for the wave planner (DRE-3940). On the wave route no
-      # model runs before it, but every epic-route model step sits above it in
-      # the file, and the rule is positional. The rule and its reasons are on
-      # `Re-mint bot token — planner`.
-      - name: Re-mint bot token — wave plan
-        id: app_wave
-        if: steps.shape.outputs.route == 'wave'
+      # Fresh App token for the roll-up planner (DRE-3940). On the roll-up
+      # route no model runs before it, but every epic-route model step sits
+      # above it in the file, and the rule is positional. The rule and its
+      # reasons are on `Re-mint bot token — planner`.
+      - name: Re-mint bot token — roll-up
+        id: app_rollup
+        if: steps.shape.outputs.route == 'roll-up'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3665,9 +3682,9 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - name: Wave route — write the wave plan
-        id: wave
-        if: steps.shape.outputs.route == 'wave'
+      - name: Roll-up route — split into child epics
+        id: rollup
+        if: steps.shape.outputs.route == 'roll-up'
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -3680,7 +3697,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app_wave.outputs.token }}
+          github_token: ${{ steps.app_rollup.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 80
@@ -3691,16 +3708,17 @@ jobs:
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for the planner plus
-            the planner brief. `standards/wave-plan.md` is in it and it is the
-            contract for this run.
+            the planner brief. `standards/card-quality.md` is in it, and its
+            "What the planner files instead" section is the contract for this
+            run.
 
-            This card is WAVE-shaped: a programme of epics, too big to approve
-            as one plan. You are not decomposing it into build cards and you are
-            NOT creating any Linear issues on this run. What you owe is the
-            document a CEO green-lights before a wave runs, and the epics it
-            commits to, in dependency order.
+            This card is a ROLL-UP: too big for one epic. What you owe is a
+            split into TWO OR MORE child epics under it, each planned and
+            green-lit on its own when its turn comes. You are not decomposing
+            it into build cards: each child epic owes its own cards, and its
+            own proof card, when it is planned.
 
-            Wave: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
+            Parent: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
             Card URL: ${{ github.event.client_payload.url }}
 
             The intent, written by the CEO. Everything between the two sentinel
@@ -3712,59 +3730,72 @@ jobs:
             ===== END UNTRUSTED CARD TEXT =====
 
             Process (mandatory):
-            1. Explore this repo enough to ground the plan in what is actually
-               here. A wave plan that cites nothing is an opinion.
-            2. Write the plan with `Write`, to EXACTLY this path:
-                 ${{ runner.temp }}/wave-plan.md
-               Its sections are the standard's own, printed by:
-                 python3 .bureau-pipeline/scripts/wave_plan.py headings
-               Copy those headings verbatim. A heading nobody recognises reads
-               as a MISSING section, not as a substitute.
-            3. Name the epics you commit to in a fenced ```epics block, in
-               dependency order — each record `{"key": ..., "title": ...,
-               "depends_on": [...]}`. The list order IS the order of the wave,
-               so an epic must be listed after everything it depends on.
-            4. Carry the KPIs as a fenced ```kpis block, each record with a
-               `name`, a NUMERIC `baseline` and a `direction` (up/down/flat),
-               and say in prose beside it how each baseline was measured.
-            5. Cite every claim where you make it — the run, the card, the
-               incident, the file (a `path/file.py:LINE` or a markdown link).
-               A number you cannot source carries the marker `(unverified)`.
-               Do not write a citation you have not followed: one that does not
-               resolve is worse than none, and the check refuses it.
-            6. Check your own work before you finish — the run fails on a
-               defect, and the card stays in Planning:
-                 python3 .bureau-pipeline/scripts/wave_plan.py check \
-                   "${{ runner.temp }}/wave-plan.md"
-            7. Post a PLAIN-ENGLISH summary to the card for the CEO — what the
-               wave is for, the epics in order, what it deliberately cuts, and
-               what is still undecided. No file paths, no code:
+            1. Read the children that already exist FIRST. A run that stopped
+               part-way may have created some of them; keep what still holds
+               and create only the missing ones, never a second copy:
+                 python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}"
+            2. Explore this repo enough to cut on real seams — where the later
+               work depends on observing the earlier work live, or where the
+               file footprints part. A split that cites nothing is an opinion.
+            3. Create each child epic, its description written to a file first:
+                 python3 .bureau-pipeline/scripts/linear_ops.py subissue \
+                   "${{ github.event.client_payload.identifier }}" "[EPIC] <slug>: <title>" <desc-file> --epic
+               The child inherits `repo:${{ steps.repo.outputs.slug }}` from
+               this card; add `--label repo:<slug>` where the child's files live
+               in another repo. Each body OPENS with a paragraph stating the
+               child's slice, carries `## Acceptance criteria` for the set, and
+               — for every child that waits for a sibling — a line in EXACTLY
+               this form, naming the sibling it waits for:
+                 **Blocked by:** DRE-N
+               Never write the parent's id on that line: the parent closes only
+               when every child has closed, so a child waiting on it would wait
+               forever.
+            4. Create NO build cards and NO proof card. Each child epic owes its
+               own when its turn comes.
+               You do NOT stamp the children's routing verdicts either: an epic
+               never gets a buildability verdict, and the cards each child's own
+               planner files get theirs from that run.
+            5. Check your own work before you finish — the run reads the same
+               check and fails on a finding:
+                 python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}" \
+                   | python3 .bureau-pipeline/scripts/epic_split.py check --epic "${{ github.event.client_payload.identifier }}"
+            6. Post a PLAIN-ENGLISH comment on this card for the CEO — what each
+               child covers, in what order, and that each one is green-lit on
+               its own when its turn comes. No file paths, no code:
                  python3 .bureau-pipeline/scripts/linear_ops.py comment \
                    "${{ github.event.client_payload.identifier }}" "<summary>"
-            8. If the intent is too ambiguous to plan, write NO plan file and
-               instead post a comment asking the specific questions you need
-               answered.
+               Move no card yourself. Once the check passes, the run records
+               the split and places every card.
+            7. ESCALATE if the intent is too ambiguous to split safely. Create
+               NO children, and write your reason with the `Write` tool to
+               EXACTLY this path:
+                 ${{ runner.temp }}/planner-escalation.txt
+               Write it in PLAIN ENGLISH for a non-technical reader: what the
+               decision is, why it needs a person, and what getting it wrong
+               costs. No code, no diffs, no file paths, no commands. The run
+               posts it to the card and parks the card for the CEO's decision.
 
-      # DRE-3970 — Wave route — write the wave plan: refused for capacity? The step above is
-      # continue-on-error so a refusal is READ rather than ending the job: its
-      # own execution record goes through the one detector
-      # (model_fallback.capacity_refusal). Only a model out of capacity, on a
-      # run that did no real work, is re-run on the next rung by the SAME step
-      # below; the finish step after it fails the job where this step used to.
-      - name: Wave route — write the wave plan — out of capacity?
-        id: wave_cap
-        if: "!cancelled() && (steps.shape.outputs.route == 'wave') && steps.wave.outcome == 'failure'"
+      # DRE-3970 — Roll-up route — split into child epics: refused for
+      # capacity? The step above is continue-on-error so a refusal is READ
+      # rather than ending the job: its own execution record goes through the
+      # one detector (model_fallback.capacity_refusal). Only a model out of
+      # capacity, on a run that did no real work, is re-run on the next rung by
+      # the SAME step below; the finish step after it fails the job where this
+      # step used to.
+      - name: Roll-up route — split into child epics — out of capacity?
+        id: rollup_cap
+        if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
         env:
-          EXEC_FILE: ${{ steps.wave.outputs.execution_file }}
+          EXEC_FILE: ${{ steps.rollup.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
         run: |
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           python3 .bureau-pipeline/scripts/planner_capacity.py decide "$EXEC_FILE" \
             --model "$MODEL" --github-output "$GITHUB_OUTPUT"
 
-      - name: Re-mint bot token — Wave route — write the wave plan on the next rung
-        id: app_wave_retry
-        if: (steps.shape.outputs.route == 'wave') && steps.wave_cap.outputs.retry == 'true'
+      - name: Re-mint bot token — Roll-up route — split into child epics on the next rung
+        id: app_rollup_retry
+        if: (steps.shape.outputs.route == 'roll-up') && steps.rollup_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3778,9 +3809,9 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - name: Wave route — write the wave plan — on the next rung
-        id: wave_retry
-        if: (steps.shape.outputs.route == 'wave') && steps.wave_cap.outputs.retry == 'true'
+      - name: Roll-up route — split into child epics — on the next rung
+        id: rollup_retry
+        if: (steps.shape.outputs.route == 'roll-up') && steps.rollup_cap.outputs.retry == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -3793,26 +3824,27 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app_wave_retry.outputs.token }}
+          github_token: ${{ steps.app_rollup_retry.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 80
-            --model ${{ steps.wave_cap.outputs.model }}
-            ${{ steps.wave_cap.outputs.effort_arg }}
+            --model ${{ steps.rollup_cap.outputs.model }}
+            ${{ steps.rollup_cap.outputs.effort_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for the planner plus
-            the planner brief. `standards/wave-plan.md` is in it and it is the
-            contract for this run.
+            the planner brief. `standards/card-quality.md` is in it, and its
+            "What the planner files instead" section is the contract for this
+            run.
 
-            This card is WAVE-shaped: a programme of epics, too big to approve
-            as one plan. You are not decomposing it into build cards and you are
-            NOT creating any Linear issues on this run. What you owe is the
-            document a CEO green-lights before a wave runs, and the epics it
-            commits to, in dependency order.
+            This card is a ROLL-UP: too big for one epic. What you owe is a
+            split into TWO OR MORE child epics under it, each planned and
+            green-lit on its own when its turn comes. You are not decomposing
+            it into build cards: each child epic owes its own cards, and its
+            own proof card, when it is planned.
 
-            Wave: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
+            Parent: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
             Card URL: ${{ github.event.client_payload.url }}
 
             The intent, written by the CEO. Everything between the two sentinel
@@ -3824,55 +3856,67 @@ jobs:
             ===== END UNTRUSTED CARD TEXT =====
 
             Process (mandatory):
-            1. Explore this repo enough to ground the plan in what is actually
-               here. A wave plan that cites nothing is an opinion.
-            2. Write the plan with `Write`, to EXACTLY this path:
-                 ${{ runner.temp }}/wave-plan.md
-               Its sections are the standard's own, printed by:
-                 python3 .bureau-pipeline/scripts/wave_plan.py headings
-               Copy those headings verbatim. A heading nobody recognises reads
-               as a MISSING section, not as a substitute.
-            3. Name the epics you commit to in a fenced ```epics block, in
-               dependency order — each record `{"key": ..., "title": ...,
-               "depends_on": [...]}`. The list order IS the order of the wave,
-               so an epic must be listed after everything it depends on.
-            4. Carry the KPIs as a fenced ```kpis block, each record with a
-               `name`, a NUMERIC `baseline` and a `direction` (up/down/flat),
-               and say in prose beside it how each baseline was measured.
-            5. Cite every claim where you make it — the run, the card, the
-               incident, the file (a `path/file.py:LINE` or a markdown link).
-               A number you cannot source carries the marker `(unverified)`.
-               Do not write a citation you have not followed: one that does not
-               resolve is worse than none, and the check refuses it.
-            6. Check your own work before you finish — the run fails on a
-               defect, and the card stays in Planning:
-                 python3 .bureau-pipeline/scripts/wave_plan.py check \
-                   "${{ runner.temp }}/wave-plan.md"
-            7. Post a PLAIN-ENGLISH summary to the card for the CEO — what the
-               wave is for, the epics in order, what it deliberately cuts, and
-               what is still undecided. No file paths, no code:
+            1. Read the children that already exist FIRST. A run that stopped
+               part-way may have created some of them; keep what still holds
+               and create only the missing ones, never a second copy:
+                 python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}"
+            2. Explore this repo enough to cut on real seams — where the later
+               work depends on observing the earlier work live, or where the
+               file footprints part. A split that cites nothing is an opinion.
+            3. Create each child epic, its description written to a file first:
+                 python3 .bureau-pipeline/scripts/linear_ops.py subissue \
+                   "${{ github.event.client_payload.identifier }}" "[EPIC] <slug>: <title>" <desc-file> --epic
+               The child inherits `repo:${{ steps.repo.outputs.slug }}` from
+               this card; add `--label repo:<slug>` where the child's files live
+               in another repo. Each body OPENS with a paragraph stating the
+               child's slice, carries `## Acceptance criteria` for the set, and
+               — for every child that waits for a sibling — a line in EXACTLY
+               this form, naming the sibling it waits for:
+                 **Blocked by:** DRE-N
+               Never write the parent's id on that line: the parent closes only
+               when every child has closed, so a child waiting on it would wait
+               forever.
+            4. Create NO build cards and NO proof card. Each child epic owes its
+               own when its turn comes.
+               You do NOT stamp the children's routing verdicts either: an epic
+               never gets a buildability verdict, and the cards each child's own
+               planner files get theirs from that run.
+            5. Check your own work before you finish — the run reads the same
+               check and fails on a finding:
+                 python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}" \
+                   | python3 .bureau-pipeline/scripts/epic_split.py check --epic "${{ github.event.client_payload.identifier }}"
+            6. Post a PLAIN-ENGLISH comment on this card for the CEO — what each
+               child covers, in what order, and that each one is green-lit on
+               its own when its turn comes. No file paths, no code:
                  python3 .bureau-pipeline/scripts/linear_ops.py comment \
                    "${{ github.event.client_payload.identifier }}" "<summary>"
-            8. If the intent is too ambiguous to plan, write NO plan file and
-               instead post a comment asking the specific questions you need
-               answered.
+               Move no card yourself. Once the check passes, the run records
+               the split and places every card.
+            7. ESCALATE if the intent is too ambiguous to split safely. Create
+               NO children, and write your reason with the `Write` tool to
+               EXACTLY this path:
+                 ${{ runner.temp }}/planner-escalation.txt
+               Write it in PLAIN ENGLISH for a non-technical reader: what the
+               decision is, why it needs a person, and what getting it wrong
+               costs. No code, no diffs, no file paths, no commands. The run
+               posts it to the card and parks the card for the CEO's decision.
 
-      - name: Wave route — write the wave plan — finished?
-        id: wave_done
-        if: "!cancelled() && (steps.shape.outputs.route == 'wave') && (steps.wave.outcome == 'success' || steps.wave.outcome == 'failure')"
+      - name: Roll-up route — split into child epics — finished?
+        id: rollup_done
+        if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && (steps.rollup.outcome == 'success' || steps.rollup.outcome == 'failure')"
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
-          FIRST_OUTCOME: ${{ steps.wave.outcome }}
-          SECOND_OUTCOME: ${{ steps.wave_retry.outcome }}
-          FIRST_EXEC: ${{ steps.wave.outputs.execution_file }}
-          SECOND_EXEC: ${{ steps.wave_retry.outputs.execution_file }}
+          FIRST_OUTCOME: ${{ steps.rollup.outcome }}
+          SECOND_OUTCOME: ${{ steps.rollup_retry.outcome }}
+          FIRST_EXEC: ${{ steps.rollup.outputs.execution_file }}
+          SECOND_EXEC: ${{ steps.rollup_retry.outputs.execution_file }}
           ASKED: ${{ steps.model.outputs.model }}
-          SECOND_MODEL: ${{ steps.wave_cap.outputs.model }}
-          BECAUSE: ${{ steps.wave_cap.outputs.because }}
+          SECOND_MODEL: ${{ steps.rollup_cap.outputs.model }}
+          BECAUSE: ${{ steps.rollup_cap.outputs.because }}
         run: |
           RC=0
-          OUT="$RUNNER_TEMP/wave_done.txt"
+          OUT="$RUNNER_TEMP/rollup_done.txt"
           python3 .bureau-pipeline/scripts/planner_capacity.py finish \
             --first-outcome "$FIRST_OUTCOME" --second-outcome "$SECOND_OUTCOME" \
             --first-execution-file "$FIRST_EXEC" --second-execution-file "$SECOND_EXEC" \
@@ -3887,92 +3931,59 @@ jobs:
           fi
           exit "$RC"
 
-      # The gate. A wave plan missing a required section, committing to epics
-      # out of dependency order, or carrying a citation that does not resolve
-      # fails the run — the card stays in Planning owing a decomposition rather
-      # than reaching anyone with half a document. It refuses; it does not warn.
-      - name: Wave plan — check
-        if: steps.shape.outputs.route == 'wave'
-        run: |
-          python3 .bureau-pipeline/scripts/wave_plan.py check \
-            "${{ runner.temp }}/wave-plan.md"
-
-      # Progressive commitment (DRE-2846). The plan names the epics the wave
-      # commits to; this records that commitment where the CEO reads the plan —
-      # the wave card's own description — with every epic marked
-      # committed-in-sequence. AFTER the check on purpose: a commitment recorded
-      # from an unchecked plan would commit the wave to epics the gate refuses.
+      # The gate. A split that is not one — fewer than two children, a child
+      # not titled or marked as an epic, one wearing a build role, one with no
+      # slice or criteria, a blockedBy cycle, or no child free to start — is
+      # bounced on the parent and fails the run, and the card stays where the
+      # hand-off left it, owing a split: exactly as the proof check bounces an
+      # epic. It refuses; it does not warn.
       #
-      # A sequence that is already committed is never replaced. A wave is
-      # approved on a shape and an order, and a later re-plan silently swapping
-      # them for different ones is exactly the unread approval this card exists
-      # to prevent.
-      - name: Wave route — record the commitment
-        if: steps.shape.outputs.route == 'wave'
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-        run: |
-          python3 .bureau-pipeline/scripts/wave_commitment.py record \
-            "${{ github.event.client_payload.identifier }}" \
-            --plan "${{ runner.temp }}/wave-plan.md"
-
-      # The far side of the same step, and the reason it is `--if-approved`:
-      # this job runs on EVERY dispatch of the wave card, including the one the
-      # CEO's approval fires. On an unapproved wave this is a no-op that says
-      # so — nothing is committed, which is the point. On an approved one it
-      # creates the epics as committed-in-sequence and starts the one whose turn
-      # it is, which goes to the lane that owes a plan artifact and comes back
-      # for its OWN green light. It never green-lights an epic.
+      # The read is done FIRST, into a file: a crashed read decided nothing and
+      # must never bounce a split (standards/console-honesty.md rule 1), so the
+      # bounce is only posted when the checker actually wrote one.
       #
-      # "Starts" IS the lane move: the relay dispatches `agent-plan` for every
-      # card entering the lane the turn sends the epic to (DRE-1913 / DRE-3030).
-      # Neither this step nor the reconcile sweep, which makes the same move
-      # for every LATER epic in the sequence, asks for the run itself any more
-      # (DRE-3659, DRE-3664) — each ask was the second dispatch for one entry.
-      - name: Wave route — commit the approved wave
-        if: steps.shape.outputs.route == 'wave'
-        # Linear only. The commit no longer fires a repository_dispatch for the
-        # epic it starts — the relay does that on the lane entry (DRE-3659) —
-        # so the App token and the repo it needed for that are not handed in.
+      # A planner that escalated created no children and wrote the reason the
+      # epic route's planner writes. That is not a bad split, it is a question:
+      # the card parks for the CEO through `planning_escalation.py`, which
+      # reads the lane off the shape vocabulary, and nothing is activated.
+      - name: Roll-up route — check the split
+        id: rollup_check
+        if: steps.shape.outputs.route == 'roll-up'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
-          python3 .bureau-pipeline/scripts/wave_commitment.py commit \
-            "${{ github.event.client_payload.identifier }}" --if-approved
+          EPIC="${{ github.event.client_payload.identifier }}"
+          CHILDREN="${{ runner.temp }}/roll-up-children.json"
+          BOUNCE_FILE="${{ runner.temp }}/roll-up-bounce.md"
+          REASON="${{ runner.temp }}/planner-escalation.txt"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          if [ -s "$REASON" ] && [ "$KIDS" -eq 0 ]; then
+            python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
+              "$EPIC" --reason-file "$REASON"
+            echo "escalated=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          if ! python3 .bureau-pipeline/scripts/epic_split.py check \
+                 --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+            if [ -s "$BOUNCE_FILE" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "$(cat "$BOUNCE_FILE")"
+            fi
+            exit 1
+          fi
 
-      # Through plan_artifact.py's renderer — same anchors, same sanitiser,
-      # same hardened page shell, so a wave plan can never ship a weaker page
-      # than an epic's artifact.
-      - name: Wave plan — render
-        if: steps.shape.outputs.route == 'wave'
-        run: |
-          python3 .bureau-pipeline/scripts/wave_plan.py render \
-            "${{ runner.temp }}/wave-plan.md" \
-            --wave "${{ github.event.client_payload.identifier }}" \
-            -o "${{ runner.temp }}/wave-plan.html"
-
-      - name: Wave plan — upload build output
-        if: steps.shape.outputs.route == 'wave'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: wave-plan-${{ github.event.client_payload.identifier }}
-          path: |
-            ${{ runner.temp }}/wave-plan.html
-            ${{ runner.temp }}/wave-plan.md
-          if-no-files-found: error
-
-      # Where the document actually is. No portal is configured for wave plans,
-      # so this points at the run rather than inventing a link that resolves to
-      # nothing (standards/console-honesty.md rule 2).
-      - name: Wave plan — announce
-        if: steps.shape.outputs.route == 'wave'
+      # The split passed, so it is recorded once on the parent (`🧩
+      # roll-up-split:`), every child is sent to be planned on its own, and the
+      # parent is placed where the sweep closes it when its last child closes —
+      # all inside the script (DRE-4717), which reads the lanes off the
+      # contract. The card id is the only thing this step hands it.
+      - name: Roll-up route — activate the split
+        if: steps.shape.outputs.route == 'roll-up' && steps.rollup_check.outputs.escalated != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          python3 .bureau-pipeline/scripts/linear_ops.py comment \
-            "${{ github.event.client_payload.identifier }}" \
-            "🌊 The wave plan is written and checked against the standard, and it names the epics it commits to, in order. Nothing is approved yet — each epic comes back with its own plan when its turn comes. Read the wave plan from the run: $RUN_URL"
+          python3 .bureau-pipeline/scripts/epic_split.py activate "${{ github.event.client_payload.identifier }}"
 
       # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
       # failures over 22 days — $97 of model work — could not be attributed to
@@ -3991,7 +4002,7 @@ jobs:
       # conclusion.
       #
       # DID A MODEL RUN AT ALL — asked of the whole set, not of one step. This
-      # job has four mutually exclusive routes (one-off, epic, wave, and the
+      # job has four mutually exclusive routes (one-off, epic, roll-up, and the
       # classifier that chooses between them) and only one route's model steps
       # ever execute; a step that never ran reports `skipped`, so any model
       # step reporting anything else means the model was reached. Without it a
@@ -4005,7 +4016,7 @@ jobs:
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.plan_done.outputs.execution_file || steps.claude.outputs.execution_file }}
-          MODEL_RAN: ${{ steps.classify.outcome != 'skipped' || steps.oocritic.outcome != 'skipped' || steps.claude.outcome != 'skipped' || steps.claude_retry.outcome != 'skipped' || steps.prea.outcome != 'skipped' || steps.replan.outcome != 'skipped' || steps.replan_retry.outcome != 'skipped' || steps.preb.outcome != 'skipped' || steps.posta.outcome != 'skipped' || steps.postreplan.outcome != 'skipped' || steps.postreplan_retry.outcome != 'skipped' || steps.wave.outcome != 'skipped' || steps.wave_retry.outcome != 'skipped' }}
+          MODEL_RAN: ${{ steps.classify.outcome != 'skipped' || steps.oocritic.outcome != 'skipped' || steps.claude.outcome != 'skipped' || steps.claude_retry.outcome != 'skipped' || steps.prea.outcome != 'skipped' || steps.replan.outcome != 'skipped' || steps.replan_retry.outcome != 'skipped' || steps.preb.outcome != 'skipped' || steps.posta.outcome != 'skipped' || steps.postreplan.outcome != 'skipped' || steps.postreplan_retry.outcome != 'skipped' || steps.rollup.outcome != 'skipped' || steps.rollup_retry.outcome != 'skipped' }}
           JOB_STATUS: ${{ job.status }}
           CARD: ${{ github.event.client_payload.identifier }}
           CLAUDE_AUTH_MODE: ${{ vars.CLAUDE_AUTH_MODE }}
