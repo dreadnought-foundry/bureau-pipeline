@@ -602,5 +602,277 @@ class NoOtherShellChanged(unittest.TestCase):
                 self.assertEqual(s["run"], old["run"])
 
 
+# =========================================================================== #
+# DRE-5180 — the run releases its slot at its end and starts the next card     #
+# =========================================================================== #
+#
+# The back half of the cap: when a planner run ends — success, failure, or a
+# death the job survives to report — it releases its slot and dispatches the
+# next card in line itself, without waiting for the fifteen-minute sweep. Four
+# steps, immediately before `Keep the run's death-cause receipt`, which stays
+# the last receipt in the job. Placement is read off NEIGHBORS, never a count:
+# after every step whose `uses:` is the model action, and after every step
+# whose shell runs `review_rerun.py dispatch` (the handover only works because
+# the sender dispatches BEFORE it releases).
+
+DEATH = "Keep the run's death-cause receipt"
+END_IDS = ["release", "next", "next_token", "next_dispatch"]
+END_RUN_IDS = ("release", "next", "next_dispatch")
+RERUN_DISPATCH = "review_rerun.py dispatch"
+MINT = "actions/create-github-app-token"
+ALWAYS_ADMITTED = "always() && steps.slot.outputs.admitted == 'true'"
+NEXT_ENV = {
+    "NEXT_CARD": "${{ steps.next.outputs.card }}",
+    "NEXT_REPO": "${{ steps.next.outputs.repo }}",
+    "NEXT_TRIGGER": "${{ steps.next.outputs.trigger_state }}",
+    "NEXT_REASON": "${{ steps.next.outputs.reason }}",
+}
+
+
+def uses(step: dict) -> str:
+    return str(step.get("uses") or "").split("@")[0]
+
+
+def end_indexes() -> list[int]:
+    return [index_where(lambda s, i=i: s.get("id") == i) for i in END_IDS]
+
+
+class TheEndOfRunSteps(unittest.TestCase):
+    def test_the_four_sit_in_order_immediately_before_the_death_receipt(self):
+        at = end_indexes()
+        death = index_where(lambda s: s.get("name") == DEATH)
+        self.assertEqual(at, list(range(death - 4, death)),
+                         "release, next, next_token, next_dispatch must be the four "
+                         "steps directly above the death-cause receipt, in that order")
+
+    def test_they_come_after_every_model_step(self):
+        first = min(end_indexes())
+        models = [i for i, s in enumerate(steps()) if uses(s) == ACTION]
+        self.assertTrue(models, "no model step found by `uses:`")
+        for i in models:
+            self.assertLess(i, first, steps()[i].get("name"))
+
+    def test_they_come_after_every_review_rerun_dispatch(self):
+        """The handover: the sender asks for its own card's next run BEFORE it
+        releases, so the started run finds the sender's claim still open."""
+        first = min(end_indexes())
+        senders = [i for i, s in enumerate(steps())
+                   if RERUN_DISPATCH in str(s.get("run") or "")]
+        self.assertTrue(senders, f"no step runs `{RERUN_DISPATCH}`")
+        for i in senders:
+            self.assertLess(i, first, steps()[i].get("name"))
+
+    def test_every_step_is_always_and_continue_on_error(self):
+        for ident in END_IDS:
+            s = by_id(ident)
+            self.assertTrue(gate(s).startswith("always() && "), ident)
+            self.assertIs(s.get("continue-on-error"), True, ident)
+        for ident in END_RUN_IDS:
+            self.assertTrue(by_id(ident).get("run"), ident)
+
+    def test_release_and_next_are_gated_on_admission(self):
+        for ident in ("release", "next"):
+            self.assertEqual(gate(by_id(ident)), ALWAYS_ADMITTED, ident)
+
+    def test_release_runs_the_foundation_cards_release(self):
+        s = by_id("release")
+        run = str(s["run"])
+        self.assertIn('python3 .bureau-pipeline/scripts/planner_queue.py release "$CARD"',
+                      run)
+        self.assertIn('--run-id "$GITHUB_RUN_ID"', run)
+        self.assertRegex(run, r"--because finished\b")
+        env = s.get("env") or {}
+        self.assertEqual(env.get("CARD"), "${{ github.event.client_payload.identifier }}")
+        self.assertEqual(env.get("LINEAR_API_KEY"), "${{ secrets.LINEAR_API_KEY }}")
+
+    def test_next_writes_its_answer_to_the_step_outputs(self):
+        s = by_id("next")
+        self.assertIn("python3 .bureau-pipeline/scripts/planner_queue.py next "
+                      '--github-output "$GITHUB_OUTPUT"', str(s["run"]))
+        self.assertEqual((s.get("env") or {}).get("LINEAR_API_KEY"),
+                         "${{ secrets.LINEAR_API_KEY }}")
+
+    def test_the_mint_is_for_the_next_cards_owner(self):
+        s = by_id("next_token")
+        self.assertEqual(uses(s), MINT)
+        self.assertEqual(gate(s), "always() && steps.next.outputs.repo != ''")
+        w = s.get("with") or {}
+        self.assertEqual(w.get("app-id"), "${{ secrets.BUREAU_APP_ID }}")
+        self.assertEqual(w.get("private-key"), "${{ secrets.BUREAU_APP_PRIVATE_KEY }}")
+        self.assertEqual(w.get("owner"), "${{ steps.next.outputs.owner }}")
+        self.assertEqual(w.get("repositories"), "${{ steps.next.outputs.name }}")
+        # Pinned exactly as every other mint in this file is pinned.
+        other = next(x for x in steps() if uses(x) == MINT and x is not s)
+        self.assertEqual(s["uses"], other["uses"])
+
+    def test_the_dispatch_carries_the_minted_token_and_the_four_values(self):
+        s = by_id("next_dispatch")
+        self.assertEqual(gate(s), "always() && steps.next_token.outcome == 'success'")
+        env = s.get("env") or {}
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.next_token.outputs.token }}")
+        for key, value in NEXT_ENV.items():
+            self.assertEqual(env.get(key), value, key)
+        run = str(s["run"])
+        self.assertIn('python3 .bureau-pipeline/scripts/planner_queue.py dispatch '
+                      '"$NEXT_CARD"', run)
+        for flag in ('--run-id "$GITHUB_RUN_ID"', '--repo "$NEXT_REPO"',
+                     '--trigger-state "$NEXT_TRIGGER"', '--reason "$NEXT_REASON"'):
+            self.assertIn(flag, run, flag)
+
+    def test_the_dispatch_never_sends_the_sender(self):
+        """This run is not the next card's planner: the started run's guard and
+        slot step judge it as any dispatch."""
+        s = by_id("next_dispatch")
+        text = str(s.get("run")) + " " + " ".join(f"{k}={v}" for k, v in
+                                                  (s.get("env") or {}).items())
+        for word in ("sent_by_run", "sent-by-run", "SENT_BY_RUN"):
+            self.assertNotIn(word, text)
+
+    def test_no_value_is_interpolated_into_a_shell_line(self):
+        for ident in END_RUN_IDS:
+            self.assertNotIn("${{", str(by_id(ident)["run"]), ident)
+
+    def test_the_cli_accepts_every_flag_the_steps_pass(self):
+        for cmd, flags in (("release", ("--run-id", "--because")),
+                           ("next", ("--github-output",)),
+                           ("dispatch", ("--run-id", "--repo", "--trigger-state",
+                                         "--reason"))):
+            out = subprocess.run([sys.executable, QUEUE, cmd, "--help"],
+                                 capture_output=True, text=True, check=True).stdout
+            for flag in flags:
+                self.assertIn(flag, out, f"{cmd} {flag}")
+
+    def test_the_comment_block_records_the_contract(self):
+        src = wf_src()
+        end = src.index("        id: release\n")
+        start = src.rindex("\n\n", 0, end)
+        block = src[start:end]
+        for q in ("Q1", "Q2", "Q3", "Q4", "Q5"):
+            self.assertIn(q, block, q)
+        for word in ("double-finish", "duplicate", "original line entry",
+                     "closes only this run's claim", "re-review", "review-retry",
+                     "sent_by_run", "recorded reason", "posts nothing here",
+                     "DRE-5177", "github-actions", "contents: write"):
+            self.assertIn(word, block, word)
+
+
+class Walk5180(Walk):
+    """The walk, with the job's status known and a gate without a status
+    function read as GitHub reads it: `success() && (<gate>)`."""
+
+    STATUS = ("always(", "success(", "failure(", "cancelled(")
+
+    def __init__(self, known, skipped, job_failed: bool):
+        super().__init__(known, skipped)
+        self.job_failed = job_failed
+
+    def evaluate(self, expr: str):
+        body = str(expr).strip()
+        if body.startswith("${{") and body.endswith("}}"):
+            body = body[3:-2]
+        if not any(f in body for f in self.STATUS):
+            body = f"success() && ({body})"
+        return super().evaluate(body)
+
+    def _call(self, name, args):
+        if name == "success":
+            return not self.job_failed
+        if name == "failure":
+            return self.job_failed
+        if name == "cancelled":
+            return False
+        return Walk._call(name, args)
+
+    def _name(self, text):
+        if text in self.known:
+            return self.known[text]
+        return super()._name(text)
+
+
+def end_reach(admitted: str, job_failed: bool) -> dict[str, bool | None]:
+    """The four gates, in file order, as a job that got this far reads them:
+    `next` named a card and the mint succeeded wherever they ran."""
+    walk = Walk5180({"steps.slot.outputs.admitted": admitted,
+                     "steps.next.outputs.repo": "dreadnought-foundry/portico",
+                     "steps.next_token.outcome": "success"}, set(), job_failed)
+    out = {}
+    for ident in END_IDS:
+        t = truth(walk.evaluate(gate(by_id(ident))))
+        out[ident] = t
+        if t is False:
+            walk.skipped.add(ident)
+            for key in [k for k in walk.known if k.startswith(f"steps.{ident}.")]:
+                del walk.known[key]
+    return out
+
+
+class TheEndOfRunGates(unittest.TestCase):
+    def test_the_walk_reads_a_bare_gate_as_success_only(self):
+        """The non-vacuous twin: a gate with no `always()` IS unreachable in a
+        failed job, so the reachability below is the `always()` doing it."""
+        w = Walk5180({"steps.slot.outputs.admitted": "true"}, set(), job_failed=True)
+        self.assertIs(truth(w.evaluate("steps.slot.outputs.admitted == 'true'")), False)
+        w = Walk5180({"steps.slot.outputs.admitted": "true"}, set(), job_failed=False)
+        self.assertIs(truth(w.evaluate("steps.slot.outputs.admitted == 'true'")), True)
+
+    def test_reachable_whether_the_planner_failed_or_succeeded(self):
+        for failed in (True, False):
+            with self.subTest(job_failed=failed):
+                self.assertEqual(end_reach("true", failed),
+                                 {ident: True for ident in END_IDS})
+
+    def test_unreachable_when_the_run_was_not_admitted(self):
+        for failed in (True, False):
+            with self.subTest(job_failed=failed):
+                self.assertEqual(end_reach("false", failed),
+                                 {ident: False for ident in END_IDS})
+
+    def test_a_refused_run_reaches_none_of_them_in_the_whole_file(self):
+        verdict = reach(ARefusedRun.REFUSED)
+        for i in end_indexes():
+            self.assertIs(verdict[i], False, steps()[i].get("id"))
+
+
+def _end_before_and_after() -> tuple[str, str] | None:
+    """plan.yml before and after the four steps arrived: the commit that first
+    added `planner_queue.py next` against its parent, or — before that commit
+    exists — the working tree against its merge base with `origin/main`."""
+    log = _git("log", "--format=%H", "--reverse", "-S", "planner_queue.py next",
+               "--", WF_REL)
+    first = (log or "").split()
+    if first:
+        before = _git("show", f"{first[0]}^:{WF_REL}")
+        after = _git("show", f"{first[0]}:{WF_REL}")
+        if before is not None and after is not None:
+            return before, after
+    base = (_git("merge-base", "HEAD", "origin/main") or "").strip()
+    if base:
+        before = _git("show", f"{base}:{WF_REL}")
+        if before is not None:
+            return before, wf_src()
+    return None
+
+
+class TheEndStepsChangedNoOtherStep(unittest.TestCase):
+    def test_no_pre_existing_steps_if_or_run_changed(self):
+        pair = _end_before_and_after()
+        if pair is None:
+            if os.environ.get("BUREAU_REQUIRE_GIT_HISTORY"):
+                self.fail("no git history for plan.yml, and this job requires it")
+            self.skipTest("no git history for plan.yml (a shallow checkout)")
+        before = _keyed(yaml.safe_load(pair[0])["jobs"]["plan"]["steps"])
+        after = _keyed(yaml.safe_load(pair[1])["jobs"]["plan"]["steps"])
+        added = [s.get("id") for k, s in after.items() if k not in before]
+        self.assertEqual(added, END_IDS)
+        self.assertEqual([k for k in before if k not in after], [])
+        for key, old in before.items():
+            new = after[key]
+            for field in ("if", "run", "with", "uses"):
+                self.assertEqual(new.get(field), old.get(field), f"{key}: {field}")
+        route = [k for k in after if k[0] == ROUTE]
+        self.assertTrue(route)
+        self.assertEqual(after[route[0]]["run"], before[route[0]]["run"])
+
+
 if __name__ == "__main__":
     unittest.main()
