@@ -24,10 +24,32 @@
 # availability probe stopped returning 404, and a best-first ladder promoted
 # the ENTIRE FLEET onto it inside one TTL window with no human deciding
 # anything. The rolling session usage drained and agents started dying
-# is_error mid-run. A model becoming AVAILABLE must never promote itself onto
-# the build path: membership on a ladder is a SPEND DECISION and it is made
-# here, by a human, in a reviewed PR. The probe decides how far DOWN a ladder
-# we walk, never how far up.
+# is_error mid-run. So NOTHING MOVES THE FLEET IN A TTL WINDOW: a model
+# becoming AVAILABLE never promotes itself onto a ladder. Adoption is an edit
+# of this file in a merged, reviewed PR, which reaches the fleet riding
+# `stable` like every other commit on `main` — never a probe flip. The probe
+# decides how far DOWN a ladder we walk, never how far up.
+#
+# Membership on a ladder is a SPEND DECISION, and since the CEO's decision of
+# 2026-09-14 some of those decisions are made by rule rather than case by
+# case. `scripts/model_adoption.py` sorts every model the catalog offers that
+# no ladder names into exactly one of three:
+#
+#   `adopt`  — a NEWER VERSION of a family already on a ladder, at the same or
+#              a lower declared price in `config/model-prices.yaml` (input AND
+#              output), replaces that family's rung by itself. The daily
+#              `.github/workflows/model-adoption.yml` gives it one real agent
+#              run on the new model (`.github/workflows/model-trial.yml`), then
+#              opens an ordinary PR to this file that the critic reviews and
+#              the merge gate lands. No human decision: the rule was the
+#              decision.
+#   `ignore` — a model OLDER than, or superseded by, what we run gets nothing
+#              — a line in the run summary, no card, no PR.
+#   `ask`    — a NEW FAMILY, a model whose declared price is above the rung it
+#              would join, or a model with NO declared price (an id absent from
+#              `config/model-prices.yaml`) is still the CEO's spending
+#              decision. The workflow files one plain-English question and
+#              adopts nothing until it is answered.
 #
 # THE THIRD KIND (DRE-3015, CEO decision 2026-09-03)
 # --------------------------------------------------
@@ -38,9 +60,12 @@
 # profile that wore a workhorse label, so the planner moved to its own kind,
 # `judgement`, and runs on the strongest model we have.
 #
-# It is a promotion a HUMAN made, in this file, in a reviewed PR. That is the
-# only way up and it stays the only way up: no probe, no discovery, no
-# availability flip can put a model on the workhorse or judgement ladder.
+# It was a promotion a HUMAN made, in this file, in a reviewed PR — a new rung
+# for the planner, not a newer version of one it had — and a promotion of that
+# kind still is, under the `ask` rule above. No probe, no discovery, no
+# availability flip can put a model on the workhorse or judgement ladder: the
+# only way onto either is a merged PR to this file, written by a person or
+# opened by the adoption workflow for a same-family successor it has trialed.
 #
 # Schema
 # ------
@@ -94,13 +119,20 @@
 #                  likeliest cause of the second being a typo in the id the
 #                  fleet is meant to be running at that level.
 #   discovery      what happens to a model id the system SEES but this file
-#                  does not name. `on_new_model` may be `advisory` (it may join
-#                  the advisory ladder, after a human edits this file) or
-#                  `none`. `workhorse` is REJECTED by schema validation — that
-#                  value is precisely the incident — and so is `judgement`:
-#                  a newly-discovered model may never land on a BUILD or a
-#                  PLANNING ladder by itself. `alert` must be true: a newly
-#                  discovered model always raises a card for a human.
+#                  does not name. `on_new_model` may be `advisory` (a NEW
+#                  FAMILY may be proposed for the advisory ladder at most, and
+#                  only after the CEO answers the `ask` question) or `none`.
+#                  `workhorse` is REJECTED by schema validation — that value is
+#                  precisely the incident — and so is `judgement`: a
+#                  newly-discovered family may never land on a BUILD or a
+#                  PLANNING ladder by itself. A newer version of a family
+#                  already on a ladder is not governed by this key: it is the
+#                  `adopt` rule above, and replaces its own family's rung
+#                  wherever that rung sits. `alert` must be true: discovery is
+#                  never silent. The daily `model-adoption` workflow sorts
+#                  every newly seen id by the CEO's rule of 2026-09-14; the
+#                  weekly `model-drift` workflow refreshes the snapshot and
+#                  files no card (DRE-3899).
 #   retired        ids that have rotated OUT of every ladder. READABLE, never
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
@@ -409,14 +441,20 @@ effort:
   claude-sonnet-5-5: high
 
 discovery:
-  # A model id we SEE but do not name here may, at most, be proposed for the
-  # ADVISORY ladder — and only a human editing this file actually puts it
-  # there. `workhorse` is rejected by schema validation: that value IS the
-  # 2026-08-09 incident, written down as config. `judgement` is rejected the
-  # same way — the planning ladder is now the strongest one we run, which makes
-  # it the most attractive place for an unattended promotion to land.
+  # A NEW FAMILY we SEE but do not name here may, at most, be proposed for the
+  # ADVISORY ladder — and only after the CEO answers the one plain-English
+  # question `.github/workflows/model-adoption.yml` files for it (the `ask`
+  # rule). Until then nothing is adopted. `workhorse` is rejected by schema
+  # validation: that value IS the 2026-08-09 incident, written down as config.
+  # `judgement` is rejected the same way — the planning ladder is the strongest
+  # one we run, which makes it the most attractive place for an unattended
+  # promotion to land. A newer version of a family already on a ladder is the
+  # `adopt` rule, not this key: it replaces its family's rung through a
+  # trialed (`model-trial.yml`), reviewed PR, and never adds a rung.
   on_new_model: advisory
-  # Never silent. A newly discovered model always opens a card for a human.
+  # Never silent. A newly discovered model is sorted by the CEO's rule of
+  # 2026-09-14 in the daily `model-adoption` workflow — `adopt`, `ignore` or
+  # `ask`; the weekly `model-drift` workflow files no card (DRE-3899).
   alert: true
 
 retired:

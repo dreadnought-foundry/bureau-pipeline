@@ -1,7 +1,7 @@
 """RED-first tests for DRE-3897 — one real agent run on a candidate model.
 
-THE PROBLEM. `model-drift.yml` (DRE-2236) discovers a new model and opens a
-card; a human then edits `config/models.yaml`. Nothing in between ever RUNS the
+THE PROBLEM. `model-drift.yml` (DRE-2236) discovered a new model and opened a
+card (it files none since DRE-3899); a human then edits `config/models.yaml`. Nothing in between ever RUNS the
 candidate. The CEO rejected "auto without a test run" for exactly that reason: a
 model that ships a breaking API change would otherwise reach every build agent
 untested. Opus 5 is the worked example — it turned thinking on by default, so a

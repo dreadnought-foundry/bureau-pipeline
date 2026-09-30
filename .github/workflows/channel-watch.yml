@@ -24,9 +24,8 @@
 # (and the threshold, and where the threshold came from) lives in
 # scripts/channel_watch.py, unit-tested in tests/test_channel_watch.py. The
 # alarm reaches a human the way every other unattended alarm in this repo does
-# — ONE deduplicated Linear card (red-main-repair.yml and model-drift.yml both
-# do exactly this), commented on rather than duplicated while the condition
-# lasts.
+# — ONE deduplicated Linear card (red-main-repair.yml does exactly this),
+# commented on rather than duplicated while the condition lasts.
 #
 # WHAT IT DELIBERATELY CANNOT DO: move the channel. `contents: read`, no ref
 # write anywhere in the file, and a test that fails if one appears — the

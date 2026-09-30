@@ -1560,6 +1560,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Roll-up route — check the split",
+      "kind": "not-an-act",
+      "means": "The split check sends a roll-up back: its children are not yet a split into child epics, and the card still owes one (DRE-4718).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/epic_split.py, which owns the bounce and keys it on its own marker, deliberately sharing nothing with the roll-up-split receipt's tag."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"$HELD\")\"",
       "step": "Routing verdicts — the epic's children",
       "kind": "not-an-act",
@@ -1713,18 +1721,10 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
-      "step": "Wave route — write the wave plan",
+      "step": "Roll-up route — split into child epics",
       "kind": "not-an-act",
-      "means": "The line in the wave planner's prompt that tells it where to post its summary.",
+      "means": "The line in the roll-up planner's prompt that tells it where to post its plain-English summary of the split: what each child epic covers, and in what order (DRE-4718).",
       "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
-    },
-    {
-      "file": ".github/workflows/plan.yml",
-      "anchor": "🌊 The wave plan is written and checked against the standard",
-      "step": "Wave plan — announce",
-      "kind": "not-an-act",
-      "means": "The wave plan exists and names the epics it commits to; nothing is approved yet.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist."
     },
     {
       "file": ".github/workflows/plan.yml",
@@ -1898,9 +1898,9 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
-      "step": "Wave route — write the wave plan — on the next rung",
+      "step": "Roll-up route — split into child epics — on the next rung",
       "kind": "not-an-act",
-      "means": "The line in the wave planner's prompt that tells it where to post its summary. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "means": "The line in the roll-up planner's prompt that tells it where to post its plain-English summary of the split (DRE-4718). The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
       "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
     },
     {
@@ -1930,7 +1930,7 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "— the planner ran on the model that answered.",
-      "step": "Wave route — write the wave plan — finished?",
+      "step": "Roll-up route — split into child epics — finished?",
       "kind": "not-an-act",
       "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
       "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
@@ -1955,6 +1955,13 @@
       "kind": "undeclared-act",
       "means": "The pull request merged into another agent's branch rather than the default one, so the card is not Done: the state is left alone and the merge is said once on the card (DRE-4647).",
       "why": "Act-shaped — a refusal: the pipeline declined to close the card and says why, and the work stays exactly where it was — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the gate ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog did. Named here so the debt is countable rather than invisible. Its opener `🪜 Merged into ` is a CONTRACT with the sibling card that closes these cards when the base finally lands — that card finds the receipt by it — so the opener is fixed by something other than this file, and a trailer sits after the body without touching it."
+    },
+    {
+      "file": "scripts/planner_queue.py",
+      "anchor": "linear_ops.cmd_comment(identifier, body)",
+      "kind": "not-an-act",
+      "means": "The planner slot ledger (DRE-5176): a planner run's claimed, waiting, dispatched or released receipt for the fleet-wide planner cap — every Linear write of epic DRE-5167 goes through this one site.",
+      "why": "It is already machine-readable, in its own single-definition grammar — `🎟️ planner-slot:`, owned by scripts/planner_queue.py and read back by that module alone — the same reason the model-attempt heartbeat gives. Two grammars on one line would give its readers two keys to disagree over. A new act ships console-first in agent-bureau, and this epic does not reach into that repo."
     }
   ]
 }
