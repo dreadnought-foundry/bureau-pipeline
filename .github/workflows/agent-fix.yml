@@ -1414,6 +1414,34 @@ jobs:
           # used by the Report step in this same job all along; only the
           # agent's own step lacked it.
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5271). On 2026-09-29 fix runs on four
+          # pull requests edited, started the full suite, and pushed nothing:
+          # the suite outran the 600-second command limit, Claude Code moved
+          # it to the background, and the agent ended its turn to wait for a
+          # notification. In a headless run, ending the turn ends the session,
+          # so the edits died with the runner.
+          #
+          # CHECKED, NOT GUESSED. Claude Code DOES expose a switch for this:
+          # https://code.claude.com/docs/en/env-vars documents
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — "Set to `1` to disable all
+          # background task functionality, including the `run_in_background`
+          # parameter on Bash and subagent tools, auto-backgrounding, and the
+          # Ctrl+B shortcut" — and the 2.1.284 binary the install step above
+          # proves reads it: its Bash tool sets `canAutoBackground` false
+          # whenever the variable is set, so a command that reaches its
+          # timeout is stopped and handed back to the agent in the foreground
+          # instead of being moved out of reach. The agent keeps its turn and
+          # can still commit and push. Pinned by
+          # tests/test_fix_run_no_background_wait.py.
+          #
+          # THE PER-COMMAND LIMIT IS NOT RAISED, on purpose. BASH_MAX_TIMEOUT_MS
+          # (same page) would let one command run past 600 seconds, but a
+          # longer foreground wait only walks the agent closer to the
+          # 60-minute token expiry this job cannot yet survive (DRE-4911) —
+          # run 36640595665 waited forty minutes for two full suites and its
+          # push got HTTP 401. The prompt's step 4 removes the need instead:
+          # no full suite locally, push before any long check.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1577,7 +1605,20 @@ jobs:
             3. Fix the findings AND the failing checks on this branch. Stay in
                scope: address what the critic and CI raised, nothing else.
             4. Run the repo's local checks (see .github/bureau/overrides.md)
-               until green.
+               until green, narrowed to what your change can reach
+               (DRE-5271). Do not run the whole test suite locally, because
+               CI runs it on the push. Run only the test files your change
+               touches, each under a timeout (for example
+               `timeout 300 <test command> <file>`). Commit and push before
+               any check that runs longer than a few minutes: finish 4b and
+               5 first, run that check after the push, and fix a red result
+               with another commit on the same branch. Background tasks are off in this run, so a command
+               that outlasts its timeout is stopped rather than moved to
+               the background. Never end your turn while a background task
+               is still running — in this headless run, ending the turn ends
+               the session, no notification ever arrives, and every
+               uncommitted edit dies with the runner. A finished edit with no
+               push is the one outcome that loses the work.
             4b. PRE-PUSH GATE — do this BEFORE you commit and push, never
                after. Re-read what this PR is accountable for: the critic's
                findings in .bureau-pipeline/critic-verdict.md, and the card's
