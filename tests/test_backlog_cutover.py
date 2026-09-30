@@ -139,14 +139,17 @@ def _one_of_every_historically_exempt_class() -> list[dict]:
     Every one of them must be a candidate now: the CEO withdrew the exemption
     on 2026-08-26 and the guard would have bounced all of them anyway.
 
-    The reach card's epic is `Todo`, not `In Progress`, since DRE-3297: the
-    promoter looks at both, but only `In Progress` means the CEO approved it,
-    and a child of an APPROVED epic is now held on evidence. That is the one
-    thing this fixture is NOT about — it is tested on its own below.
+    The reach card is a parentless one-off carrying FLEET, not a child, since
+    DRE-5347: the promoter now looks only at an `In Progress` epic's children,
+    and a child of an APPROVED epic is held on evidence (DRE-3297). That is the
+    one thing this fixture is NOT about — it is tested on its own below.
     """
     return [
-        # inside promote_ready()'s reach: a child of an active epic
-        _card("DRE-2101", parent="DRE-2100", parent_state="Todo"),
+        # inside promote_ready()'s reach: a one-off whose verdict approves it
+        _card(
+            "DRE-2101",
+            comments=((routing_verdict.verdict_comment("FLEET", "buildable"), 500),),
+        ),
         # held by the phantom-blocker defect / needs-human
         _card("DRE-2102", labels=("repo:portico", "agent:engineer", "needs-human")),
         # an operator card
@@ -193,10 +196,14 @@ def test_the_scan_would_catch_a_planted_allowlist():
 # 2: the promoter-reach cards go FIRST, and reach is read from live state
 # --------------------------------------------------------------------------
 def test_promoter_reach_cards_are_batch_one_and_are_recorded():
-    # `Todo`, so this is about the ORDERING and not about DRE-3297's evidence
-    # clause: a child of an `In Progress` epic never reaches the move list.
-    reach = _card("DRE-2201", parent="DRE-2200", parent_state="Todo",
-                  created_minutes_ago=99_000)  # the OLDEST card in the set
+    # A parentless FLEET card, so this is about the ORDERING and not about
+    # DRE-3297's evidence clause: a child of an `In Progress` epic never
+    # reaches the move list, and since DRE-5347 that is the only child in reach.
+    reach = _card(
+        "DRE-2201",
+        comments=((routing_verdict.verdict_comment("FLEET", "buildable"), 500),),
+        created_minutes_ago=99_000,  # the OLDEST card in the set
+    )
     others = [_card(f"DRE-23{i:02d}", created_minutes_ago=1000 - i) for i in range(4)]
     result = cutover.plan([*others, reach])
     assert result["batch_one"] == ["DRE-2201"]
@@ -227,6 +234,8 @@ def test_reach_is_computed_from_live_state_not_from_ids():
     assert cutover.in_promoter_reach(active) is True
     parked = _card("DRE-2401", parent="DRE-2400", parent_state="Planning")
     assert cutover.in_promoter_reach(parked) is False
+    dragged = _card("DRE-2401", parent="DRE-2400", parent_state="Todo")
+    assert cutover.in_promoter_reach(dragged) is False
 
 
 def test_a_parentless_card_is_in_reach_only_with_a_promotable_verdict():
@@ -362,14 +371,14 @@ def test_a_dormant_epic_is_not_evidence():
     assert [c["identifier"] for c in cutover.plan([card])["move"]] == ["DRE-2903"]
 
 
-def test_an_unstarted_epic_is_not_evidence_even_though_the_promoter_looks():
-    """The two questions are not the same one. The promoter looks at a `Todo`
-    epic's children, but nobody has started it and the CEO has not moved it —
-    so the child is in batch one and it still moves."""
+def test_an_epic_in_todo_is_neither_evidence_nor_in_reach():
+    """An epic in `Todo` was dragged there, and the sweep carries it out
+    (DRE-5347): the CEO has not approved it by being there, and the promoter
+    no longer looks at its children. So the child moves, and not in batch one."""
     card = _card("DRE-2904", parent="DRE-2900", parent_state="Todo")
     result = cutover.plan([card])
     assert [c["identifier"] for c in result["move"]] == ["DRE-2904"]
-    assert result["batch_one"] == ["DRE-2904"]
+    assert result["batch_one"] == []
 
 
 def test_a_parentless_card_is_unaffected():
@@ -382,14 +391,17 @@ def test_a_parentless_card_is_unaffected():
     assert result["in_flight"] == []
 
 
-def test_the_approval_state_is_narrower_than_the_promoters_reach():
-    """One fact, one source, and the two facts are DIFFERENT: `EPIC_ACTIVE_STATES`
-    is what the promoter looks at, `EPIC_APPROVED_STATE` is what the CEO has
-    approved. Collapsing them would exempt every child of an unstarted epic."""
+def test_the_approval_state_and_the_promoters_reach_now_coincide():
+    """Two questions, and since DRE-5347 one answer. `EPIC_ACTIVE_STATES` is
+    what the promoter looks at, `EPIC_APPROVED_STATE` is what the CEO has
+    approved; they used to differ by `Todo`, an epic nobody had started. Todo
+    no longer activates anything — the sweep carries an epic out of it — so
+    the promoter looks at exactly the approved lane, and the mirror still
+    equals the promoter's own set."""
     assert cutover.EPIC_APPROVED_STATE == "In Progress"
-    assert cutover.EPIC_APPROVED_STATE in cutover.EPIC_ACTIVE_STATES
-    assert "Todo" in cutover.EPIC_ACTIVE_STATES
-    assert cutover.EPIC_APPROVED_STATE != "Todo"
+    assert cutover.EPIC_ACTIVE_STATES == (cutover.EPIC_APPROVED_STATE,)
+    assert cutover.EPIC_ACTIVE_STATES == reconcile.EPIC_ACTIVE_STATES
+    assert "Todo" not in cutover.EPIC_ACTIVE_STATES
 
 
 def test_the_other_two_evidences_are_unchanged_by_a_parent():

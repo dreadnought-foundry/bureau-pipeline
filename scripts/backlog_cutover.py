@@ -125,18 +125,23 @@ REHEARSAL_HEADLINE = f"{MARK} {CUTOVER_TAG}: a REHEARSAL ran — NOT the cutover
 #: sweep (which requires the sweep's environment to import at all). If the
 #: promoter's rule changes, that test fails instead of this script quietly
 #: disagreeing with the promoter it is named after.
-EPIC_ACTIVE_STATES = ("Todo", "In Progress")
+EPIC_ACTIVE_STATES = ("In Progress",)
 
 #: The epic lane that IS the CEO's approval, and the only one (DRE-3297). A card
 #: whose parent sits here is in flight by inheritance: the approval already
 #: happened, so the card finishes under the old rules.
 #:
-#: Deliberately NARROWER than EPIC_ACTIVE_STATES, because the two answer
-#: different questions. `EPIC_ACTIVE_STATES` is what the PROMOTER looks at, and
-#: it includes `Todo` — an epic nobody has started. `Green Light` is the lane an
-#: epic waits in to BE approved, which is the opposite of evidence that it was.
-#: Collapsing the two would exempt every child of every unstarted epic on the
-#: board, which is the second population DRE-2728 exists to prevent.
+#: It answers a different question from EPIC_ACTIVE_STATES — what the CEO has
+#: approved, not what the PROMOTER looks at — and the two used to differ by
+#: `Todo`, an epic nobody had started, which the promoter once counted
+#: (DRE-1893). Since DRE-5347 they coincide: Todo activates nothing, and the
+#: sweep carries an epic it finds there back out, so the promoter looks at the
+#: approved lane and no other. They stay two names because they are still two
+#: questions — if the promoter's set ever widens again, this must not widen with
+#: it. `Green Light` is the lane an epic waits in to BE approved, which is the
+#: opposite of evidence that it was; counting it would exempt every child of
+#: every unstarted epic on the board, the second population DRE-2728 exists to
+#: prevent.
 EPIC_APPROVED_STATE = "In Progress"
 
 #: The words the inheritance reason is written in. ONE definition, because the

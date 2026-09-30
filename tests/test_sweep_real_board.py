@@ -110,9 +110,19 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: to `serve_planner_line`, and 37 + 1 = 38. It is the same one read
 #: `test_sweep_request_budget.SWEEP_REQUEST_BUDGET` states the reason for.
 #:
+#: It was 38 until DRE-5347 (measured 2026-09-30: 41) added the carry of an
+#: epic found in Todo. This board keeps three of its epics in Todo, so
+#: `carry_epics_out_of_todo` reads each one's history for the lane before Todo
+#: (3), and the refusal's once-only count pages the one exhausted comment window
+#: among them (2). `promote_ready` spends 2 fewer: Todo no longer activates an
+#: epic, so those epics' children stop at the parent-lane check before the
+#: second critic's markers are read. 38 + 5 − 2 = 41. On a live board the
+#: carry's cost is the number of epics a person has dragged into Todo, which
+#: the write layer keeps at zero for the pipeline's own writers (DRE-5316).
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 38
+REAL_BOARD_SWEEP_BUDGET = 41
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -193,6 +203,15 @@ class ReplayLinear(FakeLinear):
             # the break-glass count: issues filtered by label, not by lane
             self.queries.append((query, v))
             return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+        if "history(first: " in q and "fromState" in q:
+            # The carry's read of the lane an epic was in before Todo
+            # (DRE-5347), off the card's recorded history, newest first. The
+            # snapshot records `toState` alone, so no lane before it is known —
+            # read as not approved, exactly as the carry reads one it cannot get.
+            self.queries.append((query, v))
+            card = self._find(v.get("id", "")) or {}
+            nodes = list(reversed((card.get("history") or {}).get("nodes") or []))
+            return {"issue": {"history": {"nodes": nodes}}}
         return super().gql(query, variables)
 
 
