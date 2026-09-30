@@ -3752,6 +3752,9 @@ jobs:
                forever.
             4. Create NO build cards and NO proof card. Each child epic owes its
                own when its turn comes.
+               You do NOT stamp the children's routing verdicts either: an epic
+               never gets a buildability verdict, and the cards each child's own
+               planner files get theirs from that run.
             5. Check your own work before you finish — the run reads the same
                check and fails on a finding:
                  python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}" \
@@ -3875,6 +3878,9 @@ jobs:
                forever.
             4. Create NO build cards and NO proof card. Each child epic owes its
                own when its turn comes.
+               You do NOT stamp the children's routing verdicts either: an epic
+               never gets a buildability verdict, and the cards each child's own
+               planner files get theirs from that run.
             5. Check your own work before you finish — the run reads the same
                check and fails on a finding:
                  python3 .bureau-pipeline/scripts/linear_ops.py children-detail "${{ github.event.client_payload.identifier }}" \
