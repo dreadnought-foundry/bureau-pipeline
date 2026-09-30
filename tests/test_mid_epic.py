@@ -201,6 +201,7 @@ WALKED = {
     ("linear_ops", "cmd_advance"),
     ("planning_route", "returned_child"),
     ("epic_cap", "_child_is_epic"),
+    ("epic_todo_gate", "is_epic_card"),
 }
 
 
@@ -453,6 +454,17 @@ class TestEveryCallerIsWalked:
             self._epic_with_child(PROBE_TITLE, grandchildren=1),
             count_rollup_parents=False,
         )
+
+    def test_the_todo_gate_does_not_read_a_planner_owned_one_off_as_an_epic(self):
+        """`epic_todo_gate.is_epic_card` (DRE-5316) — the rule that refuses an
+        epic at Todo. Reading the label here would refuse every promoted
+        one-off at the lane it is promoted into."""
+        import epic_todo_gate
+
+        assert epic_todo_gate.is_epic_card(
+            PROBE_TITLE, False, [_stamp("one-off")]) is False
+        assert epic_todo_gate.is_epic_card(
+            PROBE_TITLE, False, [_stamp("epic")]) is True
 
 
 # ===========================================================================

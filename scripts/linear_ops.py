@@ -149,6 +149,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_marker  # noqa: E402 — ONE definition of the "which agent acted" marker
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
+import epic_todo_gate  # noqa: E402 — ONE rule: an epic is never put in Todo (DRE-5316)
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
 import pipeline_act  # noqa: E402 — ONE writer for an act's receipt (DRE-2825)
@@ -1069,6 +1070,12 @@ def guarded_state_write(
     Planning onto an epic that is already in Planning; that write changed
     nothing, so its read-back had no entry of its own to find and "restored"
     Done from a person's reopen instead.
+
+    An EPIC is never written into Todo (DRE-5316): on a write to Todo the card's
+    comments are read (one extra read, only then) and `epic_todo_gate.refusal`
+    decides, with the card's current lane as the lane before Todo. On a refusal
+    nothing is sent, the refusal is posted once, and it returns False. The
+    DRE-3621 write — In Progress to Todo — is the one this refuses.
     """
     terminal_target = target_type in _TERMINAL_TYPES
     # A terminal target skips the pre-write read below, so its no-op check uses
@@ -1093,6 +1100,26 @@ def guarded_state_write(
     if current.get("id") == target_id:
         print(f"{identifier} is already in {state_name!r} — nothing to write.")
         return True
+    if not terminal_target and state_name.strip().lower() == epic_todo_gate.TODO.lower():
+        # An unreadable thread is no shape stamp, exactly as `_stamped_shape`
+        # has it: the title and the children still answer.
+        try:
+            bodies = comment_bodies(identifier)
+        except Exception as e:  # noqa: BLE001 — an unreadable stamp is no stamp
+            print(f"{identifier}: could not read its comments ({e})", file=sys.stderr)
+            bodies = []
+        refused = epic_todo_gate.refusal(
+            identifier,
+            state_name,
+            fresh.get("title") or "",
+            bool(((fresh.get("children") or {}).get("nodes")) or []),
+            bodies,
+            current.get("name"),
+        )
+        if refused is not None:
+            print(refused)
+            epic_todo_gate.post_refusal(sys.modules[__name__], identifier, refused)
+            return False
     # Taken just before the mutation, less the skew margin: the read-back
     # accepts only an entry created at or after it (DRE-5142).
     since = datetime.now(UTC) - _READ_BACK_SKEW
@@ -2026,7 +2053,13 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     seam mints has not been classified, has no shape stamp and carries no
     routing verdict, so landing it in Backlog puts unproven work in the lane the
     rest of the system reads as ready. The ONE caller that passes something else
-    is `cmd_subissue` — see the note there."""
+    is `cmd_subissue` — see the note there.
+
+    Never an epic in Todo (DRE-5316): a new card can be an epic only by an
+    `[EPIC]` title, and one is refused before anything is written."""
+    refused = epic_todo_gate.refusal("new card", lane, title, False, (), None)
+    if refused is not None:
+        raise LinearError(f"create REFUSED ({title!r}): {refused}")
     sid = state_id(team_id, lane)
     label_ids = _team_label_ids(team_id, labels)
     card_input = {
@@ -2341,7 +2374,12 @@ def create_card(title: str, description: str, *, repo_slug: str,
 
     The `repo:<slug>` label is applied first and always; `labels` ride after it
     in the order given, deduplicated by `_team_label_ids`.
+
+    Never an epic in Todo (DRE-5316), refused as `_create_card` refuses it.
     """
+    refused = epic_todo_gate.refusal("new card", lane, title, False, (), None)
+    if refused is not None:
+        raise LinearError(f"create REFUSED ({title!r}): {refused}")
     slug = validated_repo_slug(repo_slug)
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
     team_id = teams["teams"]["nodes"][0]["id"]
