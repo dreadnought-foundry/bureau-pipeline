@@ -3792,10 +3792,10 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
                                              "error_max_turns", 41, 40))
         out = self._run("post-state", "--epic", self.EPIC, stdin=json.dumps(died))
         self.assertEqual((out.returncode, out.stdout.strip()), (0, pc.POST_DIED))
+        # An unreadable thread is read as an empty one: nothing has reviewed
+        # the plan, so it holds. `released` here would release on junk.
         for junk in ("", "not json", "{}"):
             with self.subTest(stdin=junk):
                 out = self._run("post-state", "--epic", self.EPIC, stdin=junk)
-                self.assertEqual(out.returncode, 0, out.stderr)
-                self.assertIn(out.stdout.strip(),
-                              (pc.POST_RELEASED, pc.POST_NOT_RUN,
-                               pc.POST_HELD, pc.POST_DIED))
+                self.assertEqual((out.returncode, out.stdout.strip()),
+                                 (0, pc.POST_NOT_RUN), out.stderr)

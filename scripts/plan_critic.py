@@ -909,10 +909,11 @@ def collisions_declared(text: str) -> int:
 # THE MEASUREMENT: DRE-3164, 2026-09-06 PT. The second critic, whose review
 # ran after approval until DRE-5268, sent the plan back four times in a row,
 # each round carrying ONE finding, each real, each different, and round 4's
-# finding was already present in the plan round 1 read. Four rounds, four re-plans, three parks with `needs-human`, four CEO
-# approvals, ~40 minutes of the CEO's attention — for findings that could all
-# have been made, and fixed, in one pass. The critic READ the whole plan every
-# round; it only REPORTED one of it.
+# finding was already present in the plan round 1 read. Four rounds, four
+# re-plans, three parks with `needs-human`, four CEO approvals, ~40 minutes of
+# the CEO's attention — for findings that could all have been made, and fixed,
+# in one pass. The critic READ the whole plan every round; it only REPORTED one
+# of it.
 #
 # So the result file grows a BODY and nothing else moves. The list rides in the
 # 🛑 note beside the record, never in it: `parse_markers`, `trusted_bodies` and
@@ -3606,11 +3607,12 @@ def _cmd_one_off_turns(args) -> int:
 
 def _cmd_review_turns(args) -> int:
     """The receipt for one review by the second critic — what it SPENT
-    against what it was given (DRE-3498). Reads the run's execution file through the one
-    loader every result gate uses (`execution_result.load_execution` +
-    `spend_scalars`), never a second parser, and prints ONE line for its own
-    comment. Always 0, and never raises: a receipt that cannot be written must
-    not change the review's outcome, so an unreadable file is `spent=?`."""
+    against what it was given (DRE-3498). Reads the run's execution file
+    through the one loader every result gate uses
+    (`execution_result.load_execution` + `spend_scalars`), never a second
+    parser, and prints ONE line for its own comment. Always 0, and never
+    raises: a receipt that cannot be written must not change the review's
+    outcome, so an unreadable file is `spent=?`."""
     execution = execution_result.load_execution(args.execution_file) \
         if args.execution_file else None
     scalars = execution_result.spend_scalars(execution)
