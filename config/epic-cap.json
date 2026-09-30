@@ -1,0 +1,7 @@
+{
+  "cap": 15,
+  "count_rollup_parents": false,
+  "decided": "2026-09-28 15:05 PT",
+  "decided_by": "CEO, in session",
+  "why": "45 epics were In Progress; a sort of them found 14 real builds and 16 close-outs. The cap fits the 14 builds plus one slot. A roll-up parent (every child an epic) holds no cards of its own and takes no slot. scripts/epic_cap.py is the one reader on the pipeline side; the console reads this file over the GitHub contents API."
+}
