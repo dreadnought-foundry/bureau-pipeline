@@ -21,8 +21,11 @@ retirement recorded, in `docs/backlog-cutover.md` — the runbook an operator wh
 set one would be reading.
 
 THE DRAIN IS THE EXIT. The groomer proposes a batch, the CEO approves it in
-Green Light, and `groomer.drain` moves it — the one way out of Intake, and the
-one thing this switch holds.
+Green Light, and `groomer.drain` moves it — the way out of Intake for a card
+with no parent epic, and the one thing this switch holds. The sweep's Urgent
+fast path (DRE-4150) also moves a card out, and does NOT read this switch: the
+CEO's signed answer says an Urgent card waiting behind a pause is the opposite
+of the rule.
 
 The value arrives as a `workflow_call` input, which is why nothing here uses a
 bare `int()` or treats the EMPTY STRING as a setting. On any event where the

@@ -28,10 +28,12 @@ on:
         type: string
         required: false
       # RETIRED BY DRE-4141, AND STILL DECLARED. The sweep no longer moves a
-      # card out of Intake for any reason, so none of these three reaches the
-      # script: THE PEN'S SWITCH LIVES ON `groomer.yml` NOW, where the one
-      # remaining exit is (the approved batch's drain), and the window and the
-      # cap bounded a move that no longer happens.
+      # card out of Intake on age, so none of these three reaches the script:
+      # THE PEN'S SWITCH LIVES ON `groomer.yml` NOW, where the groomer's exit
+      # is (the approved batch's drain), and the window and the cap bounded a
+      # move that no longer happens. The sweep's one move out of Intake, the
+      # Urgent fast path (DRE-4150), ignores the hold by the CEO's own word and
+      # takes its knobs from config/urgent-fast-path.json.
       #
       # They stay declared because a `workflow_call` input a caller passes and
       # the reusable does not declare is a HARD ERROR — "Invalid input, X is
@@ -43,9 +45,11 @@ on:
       intake_hold:
         description: >-
           RETIRED (DRE-4141) — accepted and ignored. The hold is read by
-          `groomer.yml`, which is where the one exit from Intake is; set
-          `vars.INTAKE_HOLD` and pass it THERE. Passing it here holds nothing,
-          because this sweep moves nothing out of Intake.
+          `groomer.yml`, which is where the drain out of Intake is; set
+          `vars.INTAKE_HOLD` and pass it THERE. Passing it here holds nothing:
+          this sweep moves nothing out of Intake on age, and the one card it
+          does move — raised to Urgent after that rule shipped (DRE-4150) —
+          does not wait on the hold, by the CEO's signed answer.
         type: string
         required: false
         default: ""
@@ -295,11 +299,20 @@ jobs:
           REPO: ${{ github.repository }}
           MAX_WIP: ${{ inputs.max_wip }}
           # The operator's controls on Intake are NOT threaded here any more
-          # (DRE-4141). The sweep moves no card out of Intake, so it reads no
-          # hold, no window and no cap; `groomer.yml` threads the hold to the
-          # one thing that still moves a card out of the lane. The three inputs
-          # above stay declared for callers that still pass them, and a value
-          # that reaches no environment is the whole of what "ignored" means.
+          # (DRE-4141). The sweep moves no card out of Intake on age, so it
+          # reads no hold, no window and no cap; `groomer.yml` threads the hold
+          # to the drain. The three inputs above stay declared for callers that
+          # still pass them, and a value that reaches no environment is the
+          # whole of what "ignored" means. The one card the sweep DOES move out
+          # of Intake — one raised to Urgent after that rule shipped (DRE-4150)
+          # — ignores the hold by the CEO's own word, and its knobs are config,
+          # not inputs (config/urgent-fast-path.json).
+          # The groomer's standing card (DRE-4150): the thread the CEO's
+          # per-card exclusions are written on, which the Urgent fast path
+          # must read before it moves anything. The CALLER's variable, the one
+          # the groomer posts to. A repo that names none gets an empty value,
+          # and the fast path then moves nothing and says why in the run log.
+          GROOM_PROPOSAL_CARD: ${{ vars.GROOM_PROPOSAL_CARD }}
           # WHY this pass was asked for and WHICH card it is about (DRE-3640),
           # threaded from the caller's inputs and never a literal here — a
           # scope baked into the shared channel would narrow every repo's

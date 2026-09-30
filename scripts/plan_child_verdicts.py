@@ -92,7 +92,8 @@ into `Intake`, somebody groups them under a new epic, and the epic is sent to
 to create only the MISSING sub-issues and never writes an existing child's
 lane; this module stamped verdicts and moved nothing; and nothing else takes a
 card out of Intake by design (`reconcile.INTAKE_LANE` — no card leaves Intake
-for being old). So the epic was approved and nothing built:
+for being old; since DRE-4150 an Urgent card raised after that rule shipped
+does, and only to Planning). So the epic was approved and nothing built:
 `reconcile.backlog_children` asks Linear for `state: {name: {eq: "Backlog"}}`
 and every hand-filed child was still in Intake. Read on 2026-09-23 before
 approving DRE-4666 (12 such children); DRE-4626 and DRE-4633 have the same

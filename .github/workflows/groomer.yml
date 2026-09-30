@@ -79,9 +79,9 @@ on:
           THE PEN'S SWITCH (DRE-3035), and since DRE-4141 the only reader
           of it. Set, `drain` refuses before any write and says so — `propose`
           is untouched, because a held pen still wants a batch prepared for
-          the day it opens. The drain is the one thing that moves a card out
-          of Intake: the sweep's age-out was the other, and no card leaves
-          that lane for being old any more.
+          the day it opens. The drain is the one thing this holds: the
+          sweep's age-out is gone, and the sweep's Urgent fast path
+          (DRE-4150) does not wait on the hold, by the CEO's signed answer.
         type: string
         required: false
         default: ""
