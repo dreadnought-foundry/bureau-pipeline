@@ -32,11 +32,13 @@ EITHER
     the lane before Planning exit that nothing polices, and straight back.
     Two writes, said out loud on the receipt, because a same-lane write fires
     no webhook and the planner would never start. A card in Intake, Backlog or
-    Triage simply enters Planning. A card in a WORK lane is different: plan.yml's
-    ACTIVATE route runs the second critic against a CEO-approved epic that is
-    already In Progress, and dragging that back to Planning would undo the
-    approval and fire a plan-mode run — so there the ORIGINAL run is re-run,
-    which keeps its own trigger.
+    Triage simply enters Planning. A card in a WORK lane is different: an epic
+    already In Progress is one the CEO has approved, through plan.yml's
+    ACTIVATE route (which runs no review after DRE-5281 — the second critic
+    reads the plan while the epic is still in Planning, DRE-5268), and
+    dragging that back to Planning would undo the approval and fire a
+    plan-mode run — so there the ORIGINAL run is re-run, which keeps its own
+    trigger.
 
 ## Nothing waits without a clock, a switch, or a person being told
 

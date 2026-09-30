@@ -394,9 +394,12 @@ things you must not get from memory:
 
 - **`Green Light`** is the CEO's "needs you" queue — a plan waiting for
   approval, and an agent's escalation waiting for a decision, sit in the same
-  lane. Your plan reaches the CEO there.
+  lane. Your plan reaches the CEO there, and only after both critics have
+  passed it.
 - **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
-  label, an archived repo, a card the readiness guard returned three times. A
+  label, an archived repo, a card the readiness guard returned three times. It
+  also holds a plan that would not converge (parked at either critic's bound)
+  and a Planning card the sweep could not move, and neither is a decision. A
   card waiting on a judgement is not broken. Never send a decision to Triage.
 - **`Intake`** is where new work is created; nothing is decided there.
 - There is ONE review lane, `In Review`. The contract is data
@@ -636,14 +639,16 @@ Plain English: what gets built, in what order, what could go wrong, rough
 size (hours-of-agent-work scale). No jargon, no file paths. End with the
 approval instruction the workflow prompt gives you.
 
-## Your plan is read twice before anyone builds it (DRE-2721)
-A critic reads it **before the CEO does**, asking one question: is this fit to
-take the CEO's time? It can send it back **once** — you get a single revision
-round, in the same run, and then the plan goes to the CEO whatever it says. So
-spend the effort before that, not after: observable acceptance criteria on
-every card, a repo on every card, cards that sum to the epic, and no two cards
-touching the same file. The cheap half is mechanical and you can run it
-yourself before you finish:
+## Your plan is read twice before anyone builds it (DRE-2721, DRE-5268)
+Both readings happen **before the CEO reads it**. The first critic asks one
+question: is this fit to take the CEO's time? When it passes the plan, the
+second critic reads it next. Whatever either critic sends back, you revise in
+the same planning attempt, and that critic reads the revision. A plan sent back
+twice by either critic parks with the operator in Triage — it does not reach
+the CEO. So spend the effort before the first reading, not after: observable
+acceptance criteria on every card, a repo on every card, cards that sum to
+the epic, and no two cards touching the same file. The cheap half is
+mechanical and you can run it yourself before you finish:
 
     python3 .bureau-pipeline/scripts/linear_ops.py children-json <EPIC> \
       | python3 .bureau-pipeline/scripts/plan_critic.py mechanical
@@ -658,12 +663,12 @@ declare a file a delivered sibling also names — the disjoint-files rule is
 about two OPEN pull requests, and a merged one races nobody. Revise the cards
 that are still to build.
 
-A **second** critic reads the plan AFTER the CEO approves it, asking what is
-missing now the text is the specification agents build from — and it can see
-the other epics in flight, so a card of yours that collides with another epic
-is caught there. It sending your plan back should be rare: **how often it does
-is the honest measure of how good the first pass was.** Full rules:
-`standards/plan-critic.md`.
+The **second** critic reads the plan the first one passed, before the CEO
+does, asking what is missing now the text is the specification agents build
+from — and it can see the other epics in flight and under review, so a card of
+yours that collides with another epic is caught there. It sending your plan
+back should be rare: **how often it does is the honest measure of how good the
+first pass was.** Full rules: `standards/plan-critic.md`.
 
 ## When NOT to plan — hand-planning is an escalation (DRE-2848)
 Sometimes the reasoning IS the deliverable: the thinking needs a person and
@@ -678,9 +683,11 @@ gives you the full path). The run posts it to the card and parks the card in
 Never `Triage`: an escalated card is not broken, it is waiting on a judgement.
 
 Write the reason in **plain English, in business terms**: what the decision is,
-why it needs a person, what getting it wrong costs. No code, no diffs, no file
-paths, no commands — a reason written in technical terms is not shown to the
-CEO at all, and the card parks with the reason missing instead.
+why it needs a person, what getting it wrong costs. End it with a one-line
+recommendation — which option you would pick, and why — because a business
+A-vs-B question reaches the CEO with your pick in front of him. No code, no
+diffs, no file paths, no commands — a reason written in technical terms is not
+shown to the CEO at all, and the card parks with the reason missing instead.
 
 **There is no label, flag or lane that skips `Planning`.** This escalation
 leaves FROM Planning rather than around it. If you find yourself wanting a way

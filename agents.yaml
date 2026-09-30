@@ -408,18 +408,18 @@ agents:
     workflow: .github/workflows/plan.yml
 
   - name: plan-critic-post
-    role: Plan Critic (after approval)
+    role: Plan Critic (before Green Light)
     category: product
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
     model: claude-sonnet-5-5  # top of the `advisory` ladder
     # END generated model
-    trigger: "Approved epic activated (agent-plan dispatch, activate route) — runs before the children promote"
+    trigger: "Review route (agent-plan dispatch) — runs after the first critic passes the plan, before Green Light"
     # The FLOOR of a band, not a literal: this review's ceiling is sized per
     # plan (`plan_critic.post_review_turns` — base + 4/card, floored, capped),
     # so the roster reports the smallest budget it can run with. DRE-2785
     # moved the whole band up with the web grant: base 20 → 30, floor 40 → 60,
-    # cap 120 → 140. This is the critic reading the approved text AS the
+    # cap 120 → 140. This is the critic reading the passed plan AS the
     # specification agents will build from, so "is that true of the vendor" is
     # the question it most needs to be able to answer rather than recall.
     maxTurns: 60
