@@ -13,12 +13,20 @@ card claims, and §1 plus the checklist at the end is the whole of its proof.
 owned by
 [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570), not by this
 card.** DRE-3421 was split on 2026-09-21 at 20:25 PT: DRE-3432 keeps the replay,
-DRE-4570 takes the live run and is blocked by DRE-3432. DRE-4570 is scheduled
-for a weekend window, because setting the review credential to a dead value on
-purpose trips the DRE-4219 CRITICAL credential alarm, and that alarm must not
-fire during a working day. §2 is a forward pointer to that work — nothing in it
-is claimed here, and nothing in it blocks this card. DRE-4570 appends its
-observations to this same file when it runs.
+DRE-4570 takes the live run and is blocked by DRE-3432. *The rest of this
+paragraph is the plan as written before the run, left unchanged:* DRE-4570 is
+scheduled for a weekend window, because setting the review credential to a dead
+value on purpose trips the DRE-4219 CRITICAL credential alarm, and that alarm
+must not fire during a working day. §2 is a forward pointer to that work —
+nothing in it is claimed here, and nothing in it blocks this card. DRE-4570
+appends its observations to this same file when it runs.
+
+**Update, 2026-09-29: observation 2 has run.** It was made live on 2026-09-29,
+18:43–20:46 PT, and is recorded in §3. Criteria 1 and 2 and the credential
+restore were observed. The console criterion was not met. It ran on a Tuesday
+evening, not in the planned weekend window, and no approval of that change is
+recorded, so §3 records it as a deviation from the card (see "What else
+happened").
 
 **The replay script is committed beside this record** at
 [`docs/evidence/DRE-3432/replay_2370.py`](evidence/DRE-3432/replay_2370.py).
@@ -212,7 +220,7 @@ So the standing of criterion 1 is: a method anyone can audit, over material only
 an operator can obtain, with a result this repository takes on the operator's
 word. That is weaker than a test and stronger than an assertion, and it is worth
 being exact about which. The live half of the proof — observed by hand rather
-than replayed — is DRE-4570's, in §2.
+than replayed — is DRE-4570's, planned in §2 and recorded in §3.
 
 #### Two latent traps in the script, recorded rather than fixed
 
@@ -234,7 +242,9 @@ point should fix both in their copy:
 
 ---
 
-## 2. Observation 2 — owned by [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570), not by this card: NOT YET OBSERVED
+## 2. Observation 2 — owned by [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570), not by this card: observed 2026-09-29, recorded in §3
+
+*Added 2026-09-29: the live run below was made on 2026-09-29 between 18:43 and 20:46 PT and is recorded in §3. The text of this section is the plan as it was written before the run, left unchanged.*
 
 **Nothing in this section is claimed by DRE-3432.** It is here so that the live
 half of DRE-3421's proof has a visible home and lands beside observation 1 when
@@ -267,6 +277,181 @@ credential and leaves `make cred-doctor` clean at the end of the sitting.
 
 ---
 
+## 3. Observation 2 — the live dead-credential run on `agent-bureau-demo`, 2026-09-29 18:43–20:46 PT
+
+*Observed live on `dreadnought-foundry/agent-bureau-demo`, the sandbox. Owned by
+[DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570). Watched by
+reading Actions runs, pull request comments and the card, never by replaying.
+Every time is Pacific (PDT), converted from GitHub's and Linear's UTC.*
+
+### What this shows, in plain English
+
+We broke the sandbox's review credential on purpose and opened a throwaway pull
+request. The reviewer crashed. The medic named the cause (`credential-refused`)
+and the command that confirms it (`make cred-doctor`). The sweep retried once, the
+retry crashed the same way, and the next sweep posted one hold, on the pull
+request and on the card. The two sweeps after that started nothing. We then
+restored the credential, a second throwaway pull request got a real verdict, and
+the first sweep after that verdict re-ran the held review exactly once. That
+review reached a verdict. **Criteria 1 and 2 hold.** **Criterion 3 holds only in
+part.** The console never showed the held card as a fix agent working, but it
+never named the hold or its reason either. It read "Built by hand — nothing for
+you to do", and the Activity feed listed the crashed review as `Verdict:
+APPROVE`. Both are recorded below as they appeared.
+
+### The controls and the pull requests
+
+| What | When (PT) | Record |
+|---|---|---|
+| Baseline `make cred-doctor` (read-only) | 18:39 | 4 checks PASS, "no broken link found in the 4 check(s) that ran" |
+| Console switched to the Demo tenant through its own tenant switcher (it was on Dreadnought Foundry) | 18:42 | "Now in Demo" |
+| **Break** — `breakSandboxCredential(repo: "agent-bureau-demo")` (DRE-5057), called from the signed-in console tab | 18:43:49 | `ok: true, held: true, heldAccount: "DeltaSolv"` — "The sandbox's Claude credential is broken on purpose and held on DeltaSolv. Nothing will overwrite it until the restore." The secret's `updated_at` moved from 17:00:44 to 18:43:49 |
+| Throwaway PR [#25](https://github.com/dreadnought-foundry/agent-bureau-demo/pull/25) opened, branch `agent/DRE-4570-throwaway-1`, one new docs line | 18:44:36 | head `088fd2d1c8329a25990b2e99a8de40232b2d1145` |
+| **Restore** — `restoreSandboxCredential(repo: "agent-bureau-demo")` | 20:22:55 | `ok: true, held: false` — "The sandbox's Claude credential is restored to DeltaSolv and the hold is cleared." The secret's `updated_at` is 20:22:55 |
+| Throwaway PR [#26](https://github.com/dreadnought-foundry/agent-bureau-demo/pull/26) opened, branch `agent/DRE-4570-throwaway-2`, one new docs line | 20:23:09 | head `493ecc574df6f72cdb88bf2793cac814a8babaf6` |
+| `make cred-doctor` after the restore (read-only) | 20:23:44 | 4 checks PASS, "no broken link found in the 4 check(s) that ran"; `agent-bureau-demo: rotated 2026-09-30T03:22:55+00:00` |
+| Both PRs closed unmerged, both branches deleted | 20:46:30 | `mergedAt: null` on both |
+
+Pipeline driven: the sandbox's stubs at `@stable`, which was bureau-pipeline
+commit `1cc4e3b5b9885081c2daa9da17e157c5e1fa383c` for every run below. It carries
+DRE-5056's detector fix (merge commit `44f2471e`).
+
+### The sequence, observed
+
+| # | Step the card names | When (PT) | Run / comment | What was seen |
+|---|---|---|---|---|
+| 1 | **The critic crashes** | 18:44:38 → 18:50:06 | QA Review run [36656565242](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36656565242), job 109702072107 | Failed at `Fail if critic never really ran`. Both of the job's own attempts (18:47:42, 18:49:46) logged `api_error_status: 401` and `result: Failed to authenticate. API Error: 401 OAuth access token is invalid.` The critic's could-not-run notice was posted at 18:49:51 (comment 5902476607) and mirrored to the card at 18:49:52. |
+| 2 | **The medic leaves one evidence note naming `credential-refused` and `make cred-doctor`** | 18:50:10 → 18:50:33 | Medic run [36656998568](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36656998568) | The classifier printed `class=environment_crash`, `signature=credential-refused`, `check=make cred-doctor in agent-bureau`, `card=DRE-4570`. The diagnosis agent and the medic's own retry were skipped. The note on DRE-4570 at 18:50:33 is quoted below. |
+| 3 | **The sweep re-dispatches once** | 19:04:17 → 19:04:57 | Reconcile [36658105205](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36658105205) | Dispatched QA Review [36658157191](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36658157191) at 19:04:56 and posted `🔁 crashed-review-redispatch @088fd2d1…` on #25 at 19:04:57 (comment 5902629882). |
+| 4 | **The re-dispatch crashes** | 19:04:56 → 19:10:15 | QA Review 36658157191, job 109706847143 | The same failure: `Fail if critic never really ran`, `Failed to authenticate. API Error: 401` at 19:07:55. Its log carries `bureau-card: DRE-4570`. Could-not-run notice at 19:10:05 (comment 5902687181). No medic note followed. The only medic run after it (36658609506) was skipped, so the card holds exactly one evidence note. Observation 1 predicted the same. |
+| 5 | **The next sweep posts one hold, on the PR and on the card** | 19:38:52 → 19:39:27 | Reconcile [36660801310](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36660801310) | `🛑 runner-environment-hold @088fd2d1…` on #25 at 19:39:26 (comment 5902990897) and on DRE-4570 at 19:39:27, quoted below. It dispatched nothing. Its log reads: *"crashed-review: PR #25 head 088fd2d1 — credential-refused: this runner cannot run Claude, so the review is HELD and nothing is being re-dispatched."* |
+| 6 | **Nothing dispatched on the next sweep** | 19:57:12 → 19:57:58 | Reconcile [36662190449](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36662190449) | No QA Review run and no comment. Log: *"crashed-review: PR #25 head 088fd2d1 — HELD: this runner cannot run Claude and nothing has been re-dispatched. Waiting for a critic verdict in this repository or the re-run act on the pull request"* |
+| 7 | **Nothing dispatched on the sweep after that** | 20:19:30 → 20:20:13 | Reconcile [36663876871](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36663876871) | The same HELD line (20:20:09), no QA Review run and no comment. |
+| 8 | Credential restored; **a real verdict posts in the repository** | 20:23:12 → 20:26:50 | QA Review [36664155118](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36664155118) on #26 | `🔎 QA Critic — VERDICT: APPROVE @493ecc574df6f72cdb88bf2793cac814a8babaf6` at 20:26:50 (comment 5903459450). The run succeeded at 20:27:04. |
+| 9 | **The next sweep re-dispatches the held head exactly once, with no hand dispatch** | 20:41:20 → 20:41:58 | Reconcile [36665522245](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36665522245), the first sweep after the verdict | Log: *"crashed-review: PR #25 head 088fd2d1 — the runner-environment hold was RELEASED by a critic verdict on PR #26; the held review re-joins the dispatch queue"*. Dispatched QA Review [36665566096](https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36665566096) at 20:41:57 and posted `🔁 crashed-review-redispatch @088fd2d1…` at 20:41:58 (comment 5903601435). |
+| 10 | **The verdict lands** | 20:41:57 → 20:45:38 | QA Review 36665566096 | `🔎 QA Critic — VERDICT: APPROVE @088fd2d1c8329a25990b2e99a8de40232b2d1145` on #25 at 20:45:38 (comment 5903635329). The run succeeded at 20:45:49. |
+
+**Every QA Review run in the sandbox during the sitting**, from the Actions
+listing: 36656565242 (the pull request opening #25), 36658157191 (the sweep's
+one retry), 36664155118 (the pull request opening #26) and 36665566096 (the
+sweep's release). That is four runs. None was started by hand, and none ran
+between the hold at 19:39 and the release at 20:41.
+
+**The sweep ran every 18 to 35 minutes, not every 15.** The runs were 18:43,
+19:04, 19:38, 19:57, 20:19 and 20:41. No sweep was triggered by hand.
+
+#### The medic's evidence note, verbatim (DRE-4570, 18:50:33 PT)
+
+> 🔌 The code reviewer was temporarily unavailable — reviewer-environment-crash @088fd2d1c8329a25990b2e99a8de40232b2d1145: credential-refused — Claude started and was refused before its first turn: the credential this run holds is not accepted. The sweep retries this review once; a second identical crash holds it. Check: make cred-doctor in agent-bureau.
+>
+> What failed is the runner's environment, not the work: the run never reached a verdict and nothing in this pull request was rejected. The failed run: https://github.com/dreadnought-foundry/agent-bureau-demo/actions/runs/36656565242
+
+#### The hold, verbatim (#25 at 19:39:26 PT; the same body on DRE-4570 at 19:39:27 PT)
+
+> 🛑 runner-environment-hold @088fd2d1c8329a25990b2e99a8de40232b2d1145: reviewer cannot run on this runner — credential-refused: Claude started and was refused before its first turn: the credential this run holds is not accepted — twice on 088fd2d1; holding, nothing re-dispatched. Check: make cred-doctor in agent-bureau.
+>
+> What failed is the runner's environment, not the work: no verdict was written, nothing in this pull request was rejected, and nothing has been re-dispatched.
+>
+> **How this is released:** the first critic verdict posted in this repository after this hold, or a comment on the held pull request whose whole body is `▶️ re-run the review`, re-dispatches the held review once. Until one of those happens, nothing else is coming.
+>
+> 📎 pipeline-act: reviewer-environment-hold · kind: hold · state: unchanged · next: operator · discharges: review-retried-after-crash · subscriber: reconcile.yml · tag: runner-environment-hold
+
+### The console, observed at 19:42–19:44 PT (after the hold)
+
+Read on app.agent-bureau.com, signed in as the operator, on the Demo tenant.
+
+![The DRE-4570 card drawer on the console at 19:42 PT, three minutes after the hold](images/dre-4570-held-card.png)
+
+- **Overview and Pull Requests tabs, the #25 row:** "nothing for you to do ·
+  stopped at merge gate · Operator · **Built by hand — nothing for you to do**".
+- **The card drawer** (screenshot above): "#25 · **CI running**", "**Stuck —
+  needs you**", then *Who acts next*: "Operator · hand-work — nothing is
+  dispatched", then *Critic verdict*: "The critic hasn't ruled yet." That last
+  line was read off the live drawer. The crop ends just below the *Critic
+  verdict* heading, so the image does not show it.
+- **Nowhere** did the console say the review was held, name
+  `credential-refused`, or point to `make cred-doctor`. **Nowhere** did it show
+  a fix agent working.
+- "CI running" was false: CI on #25 (`Typecheck · Test · Build`) had passed at
+  18:45:00.
+- **The Activity tab listed the crashed review as an approval.** Its row for
+  DRE-4570 in agent-bureau-demo read "Run · QA Critic · **Verdict: APPROVE** ·
+  59m", which is the 18:44–18:50 crash. No approval existed anywhere at that
+  point. GitHub's check run `QA critic review` (109703305535) at that head reads
+  `failure`, "Review crashed — no verdict @088fd2d1".
+
+![The DRE-4570 row in the console's Activity tab at 19:44 PT, reading "Verdict: APPROVE" for the crashed review](images/dre-4570-activity-row.png)
+
+Both images are cropped to the DRE-4570 panel and row. The rest of the screen
+showed other projects' private cards, and this repository is public.
+
+### What else happened that the card did not describe
+
+- **DRE-4570 moved from Todo to In Review at 18:49:53 PT**, one second after the
+  crash notice was mirrored to it. This is the pipeline's designed move for a
+  `hand-built` card with an open pull request, and the operator accepted it
+  before the sitting. Nobody moved it by hand, and it is still In Review.
+- **The fleet outage watcher filed card
+  [DRE-5273](https://linear.app/dreadnoughtfoundry/issue/DRE-5273), "Reviewer
+  down since 18:49 PT — 2 runs, 2 repos"**, at 19:04:59 PT, from sweep
+  36658105205. Four things about it are wrong:
+  - **One crash was counted twice.** It lists the critic's notice on
+    agent-bureau-demo #25 as one run, and the medic's note on DRE-4570 as a
+    second run in `bureau-pipeline`, because that card carries
+    `repo:bureau-pipeline`.
+  - **The link is to the wrong repository.** Its "first crashed run" link points
+    at `dreadnought-foundry/agent-bureau`.
+  - **It went through the planner.** It entered Planning, then Triage, and the
+    relay dispatched Agent Plan run 36658173529 to the sandbox at 19:05:07.
+  - **It closed itself before any verdict existed.** It went Done at 19:05:21
+    PT. The card says it closes "on the first successful verdict posted after
+    it was filed", but the first verdict in the repository came at 20:26:50.
+
+  The card is left in place, Done, as evidence of these defects.
+- **Both throwaways were set to draft to keep the merge gate from merging an
+  approved change.** The sweep's crash recovery skips draft pull requests, so
+  each was set to draft only when that no longer mattered:
+  - #26 at 20:23:17, after its own review had started.
+  - #25 at 20:42:24, after the release re-dispatch and before its verdict.
+
+  The merge gate posted "waiting for human merge — the pull request is still a
+  draft" on each (20:27:10 and 20:45:58). #26 was kept open until the release
+  sweep, because the sweep finds the releasing verdict in the open-PR listing
+  (`_newest_repo_verdict`).
+- **The run was on a weekday evening, not in the card's weekend window. This is
+  a deviation from the card.** 2026-09-29 is a Tuesday. DRE-4570's title still
+  reads "(WEEKEND WINDOW)", because a dead credential trips the DRE-4219
+  CRITICAL alarm, and §2 and the top of this record say that alarm must not fire
+  during a working day. The approvals on record are both for a weekend:
+  - DRE-4570's comment of 2026-09-27 15:34 PT says the CEO approved running it
+    that night, Sunday 2026-09-27. That sitting stopped in pre-flight, and the
+    comment names the next weekend window as Saturday 2026-10-03.
+  - The CEO's signed console answer on
+    [DRE-5057](https://linear.app/dreadnoughtfoundry/issue/DRE-5057) at
+    2026-09-28 13:41 PT approves breaking the sandbox's credential for this
+    proof, for the sandbox only and only through the DRE-5057 controls, and
+    says to build them "so the proof can run on Saturday, October 3."
+
+  No approval of a weekday run is recorded on DRE-4570, DRE-5057, DRE-5056,
+  DRE-3421 or DRE-4219, read on 2026-09-30. Who decided to run on 2026-09-29,
+  and when, is therefore not on record. This record does not claim the weekend
+  constraint was lifted.
+- **The DRE-4219 CRITICAL expired-credential alarm was not watched.** Whether it
+  fired is not recorded here. The operator's account is that the CEO accepted
+  this before the sitting. That acceptance is not recorded on any of the cards
+  named above.
+
+### Verdict against DRE-4570's criteria
+
+| Criterion | Result |
+|---|---|
+| A dead credential produced one evidence note, one re-dispatch, one hold with `credential-refused` and its check named, and no third dispatch across at least two further sweeps | **Observed.** One note (18:50:33) and one re-dispatch (19:04:56). One hold (19:39:26 on #25, 19:39:27 on DRE-4570) naming `credential-refused` and `make cred-doctor in agent-bureau`. No dispatch on sweeps 36662190449 (19:57) and 36663876871 (20:19). |
+| After the restore and a real verdict, the held head was re-dispatched exactly once by the sweep with no hand dispatch, and the verdict landed | **Observed.** The verdict on #26 came at 20:26:50. Sweep 36665522245 released the hold and dispatched 36665566096 at 20:41:57, the only dispatch for that head after the hold. The verdict landed on #25 at 20:45:38. |
+| The console showed the held card as held, with the reason named, never as the fix agent working; a screenshot is linked | **Partly observed.** It never showed a fix agent working. It **never named the hold or its reason**: it read "Built by hand — nothing for you to do" and "Stuck — needs you". It also showed "CI running" (false) and, in Activity, "Verdict: APPROVE" for the crashed review (false). Screenshots are above. |
+| The credential restored and `make cred-doctor` clean at the end of the sitting | **Observed.** Restored at 20:22:55. `make cred-doctor` at 20:23:44 had 4 PASS and no broken link. Its `linear-identity` row was UNKNOWN, the same as at the 18:39 baseline, because the relay's Linear key is absent from Secrets Manager; that row is not about the sandbox. Only the sandbox's `CLAUDE_CODE_OAUTH_TOKEN` was written, both times through the console's controls. |
+
+---
+
 ## Acceptance criteria
 
 ### DRE-3432 — this card, both criteria, as they stand after the 2026-09-21 split
@@ -290,19 +475,24 @@ credential and leaves `make cred-doctor` clean at the end of the sitting.
 
 ### Owed by [DRE-4570](https://linear.app/dreadnoughtfoundry/issue/DRE-4570) — not by this card
 
-Listed for the reader's benefit only. These are DRE-4570's acceptance criteria,
-and DRE-4570 ticks them here when the weekend run happens. See §2.
+Listed for the reader's benefit only. These are DRE-4570's acceptance criteria.
+The ones observed were ticked on 2026-09-29 against §3, the live run, which was
+made on a weekday rather than in the planned weekend window. §2 is the plan they
+were written from.
 
-- [ ] The dead credential, observed live on the sandbox repository: one evidence
+- [x] The dead credential, observed live on the sandbox repository: one evidence
   note, one re-dispatch, one hold with `credential-refused` and its check named,
-  and no third dispatch across at least two further sweeps.
-- [ ] Release after the credential is restored, observed live: the held head
+  and no third dispatch across at least two further sweeps. *Observed 2026-09-29 — §3.*
+- [x] Release after the credential is restored, observed live: the held head
   re-dispatched exactly once by the sweep, with no hand dispatch, and the
-  verdict landing.
+  verdict landing. *Observed 2026-09-29 — §3.*
 - [ ] The console rendering of the held card — held, with the reason named,
   never as the fix agent working — with a screenshot linked from this record.
+  *Not met on 2026-09-29: never shown as a fix agent, but the hold and its reason
+  were never named, and the Activity feed showed the crash as an APPROVE — §3.*
 - [ ] This record on `main` carrying the run ids and PT timestamps of those
-  observations, beside observation 1's.
-- [ ] The credential restored and `make cred-doctor` clean at the end of the
-  sitting.
+  observations, beside observation 1's. *Left unticked until it is true: the
+  merge of the pull request that adds §3 is the act that completes it.*
+- [x] The credential restored and `make cred-doctor` clean at the end of the
+  sitting. *Observed 2026-09-29 20:22–20:23 PT — §3.*
 - [ ] The CEO closes DRE-4570 after reading this record.
