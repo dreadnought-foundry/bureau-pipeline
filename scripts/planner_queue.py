@@ -31,6 +31,14 @@ file RAISES; nothing falls back to a number nobody chose. `cap()` is the one
 reader of `max_running` and `waiting_max()` the one reader of
 `waiting_max_minutes`.
 
+THE NUMBER IS TWO (DRE-5326). It shipped as four. On 2026-09-30 a groom drain
+put nineteen cards into Planning at 07:05 PT, four planner and critic steps
+ran at once, and four together spent about 185-260 Linear requests a minute
+against a key that refills about 42 a minute (2,500 an hour). The key was at
+zero by 07:40 PT and every Linear-touching run in the fleet was refused. Two
+running spent about 27 a minute. The groom drain reads this ledger too, and
+releases no more cards than there are free slots (`groomer.free_planner_slots`).
+
 THE RULES, in the order the ledger applies them.
 
   * A `released` receipt closes the claim of the run it names and no other,

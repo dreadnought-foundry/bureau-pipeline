@@ -496,7 +496,8 @@ python3 scripts/groomer.py drain --card DRE-2683
 
 `drain` **reads the approved batch off the proposal comment on that card** and
 executes exactly what the CEO agreed — **minus every exclusion, plus every
-addition** — in that order (DRE-3338, DRE-3370, DRE-4733). The approval names a
+addition** — in that order (DRE-3338, DRE-3370, DRE-4733), with the Planning list
+**capped at the free planner slots** (DRE-5326, below). The approval names a
 proposal id; the proposal comment carrying that id is the record; the rows of
 its batch table are the Planning list, and the rows under `## Cancel, with
 reasons` are the Cancel list (DRE-4727), read back with each row's reason from
@@ -535,7 +536,7 @@ agreed still moves. That used to refuse the whole batch — on 2026-09-16 two
 approved cards had moved on (DRE-3453 Done, DRE-3127 Canceled), nothing moved,
 and the CEO had to exclude both by hand and approve again.
 
-Eight refusals, all of them before any card moves — and every one of them but the
+Ten refusals, all of them before any card moves — and every one of them but the
 last is **written onto the proposal card** as
 `🧺 groom-drain-refused: <id> — <reason>`, then exits 2. A drain that refuses a
 batch and says so only in a workflow log is a stall with an alibi.
@@ -559,6 +560,17 @@ batch and says so only in a workflow log is a stall with an alibi.
   open cycle behind it. Create the cycle; the groomer will not invent one. (A
   cycle that has since STARTED is fine: the drain resolves the number the CEO
   approved, unlike `propose`, which will not schedule into a period half over.)
+- **the planner slot ledger cannot be read** — the drain cannot say how many
+  cards Planning can take, and an unknown count never reads as room (DRE-5326).
+  Approve the batch again once Linear answers;
+- **no free planner slot, and nothing to cancel** — every slot is taken by a
+  planner running or waiting, and the batch has no Cancel row left to write
+  (it had none, or the CEO excluded every one), so the drain would write no
+  card at all (DRE-5326). It refuses rather than record itself as drained:
+  Intake is unchanged, so the next proposal over it is this same batch with
+  this same id, and a `groom-drained` record would spend that id — the
+  re-proposal never posted, a fresh approval refused as already drained. The
+  batch stays approvable; approve it again when a slot frees;
 - **a closing destination** — the drain never writes `Done` or `Duplicate`,
   and it never sends the Planning list to `Canceled`: it writes `Canceled` only
   for an agreed row of the Cancel table.
@@ -573,6 +585,27 @@ the reason from its Cancel row — and then moves to `Canceled`, never `Done`,
 and is given no cycle. Planning cards move first, in the record's order, then
 the Cancel cards. A card excluded on either list stays in Intake with nothing
 written on it.
+
+**No more cards go to Planning than there are free planner slots** (DRE-5326).
+On 2026-09-30 one drain moved nineteen cards at once, and the planners they
+started emptied the fleet's shared Linear key. Before any card moves, the drain
+reads the planner slot ledger once (`planner_queue.py`). The free slots are the
+cap (`config/planner-queue.json`, 2) minus the planners running, the dispatched
+slots, and the cards already waiting in line — a card added to a line starts no
+sooner and only pushes the line toward the wait bound. The batch keeps its order
+and the additions come after it. Every card past the free slots stays in Intake
+with nothing written on it, as a `held back` row whose why is `planner slots:
+<free> free of <cap> — stays in Intake for the next proposal`. An agreed Cancel
+card starts no planner, so the Cancel list is never rationed, and an `already
+gone` card takes no slot. A drain that moves or cancels anything changes Intake,
+so the next proposal is a new batch with a new id, and the held-back cards are
+offered again. A drain that would write nothing refuses instead (above).
+
+The ledger sees a released card only once its planner run posts a `claimed` or
+`waiting` receipt. Two drains approved back to back — several repos' batches
+approved in one sitting — can each see the same free slots before the first
+drain's planners claim them. The queue still runs no more than the cap at once,
+so this only lengthens the line and does not spend the key.
 
 ### What the drain wrote down
 
@@ -604,8 +637,9 @@ optional and reads the other four exactly as they always read, so no clause is
 reordered, respelled or added beside it.
 
 Its five counts answer five different questions: **moved** is the approved
-Planning list that went, **held back** is what the CEO excluded on either list
-and is still in Intake, **added** is what the CEO reached into the lane for,
+Planning list that went, **held back** is what the CEO excluded on either list,
+or what the free planner slots could not take (DRE-5326), and is still in
+Intake, **added** is what the CEO reached into the lane for,
 **cancelled** is the agreed Cancel list that went to `Canceled`, and **refused**
 counts the *decisions* the drain would not honour — a marker the pipeline wrote,
 a decline with no reason, an exclusion naming a card on neither list. `#` is the

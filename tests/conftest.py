@@ -37,8 +37,21 @@ def _reset_linear_budget() -> None:
         reset()
 
 
+def _lift_drain_slots(monkeypatch) -> None:
+    """The groom drain reads the planner slot ledger before it moves a card
+    (DRE-5326), and releases no more cards than there are free slots. Every
+    drain fixture written before that moves fifteen cards through a fake that
+    carries no ledger, and none of them is about slots — so for them the read
+    answers "no limit". `test_groomer_drain_slots.py` is where the slots are
+    tested, and each test there puts back the slots it means."""
+    groomer = sys.modules.get("groomer")
+    if getattr(groomer, "free_planner_slots", None) is not None:
+        monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: None)
+
+
 @pytest.fixture(autouse=True)
-def fresh_sweep_board():
+def fresh_sweep_board(monkeypatch):
+    _lift_drain_slots(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     yield
