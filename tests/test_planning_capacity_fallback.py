@@ -377,7 +377,7 @@ PLANNER_STEPS = (
     "Plan epic",
     "Re-plan after send-back",
     "Re-plan after the second critic sent it back",
-    "Wave route — write the wave plan",
+    "Roll-up route — split into child epics",
 )
 
 
