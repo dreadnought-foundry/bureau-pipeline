@@ -104,9 +104,15 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: serves the whole batch as one page; the live board's 13 epics take two at
 #: `EPIC_RECORD_PAGE` = 8, which this number does not see.
 #:
+#: It was 37 until DRE-5178 (measured 2026-09-30: 38) added the planner line's
+#: backstop, which reads Green Light — outside SWEPT_LANES on purpose — for the
+#: slot a run still holds after its epic moved there: one paged read, charged
+#: to `serve_planner_line`, and 37 + 1 = 38. It is the same one read
+#: `test_sweep_request_budget.SWEEP_REQUEST_BUDGET` states the reason for.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 37
+REAL_BOARD_SWEEP_BUDGET = 38
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
