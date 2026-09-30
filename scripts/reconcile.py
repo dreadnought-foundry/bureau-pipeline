@@ -118,12 +118,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
+import console_receipt  # noqa: E402 — an unchecked receipt is not a refused one (DRE-4153)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
 # escalation carries the reason the critic already stated, and must read the
 # marker from the module that writes it.
@@ -139,6 +140,12 @@ import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping 
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
 import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
+# DRE-4150: the Urgent fast path reads the CEO's per-card exclusions off the
+# groomer's standing card with the groomer's OWN reader (`decision_records`,
+# `standing_decisions`) — a second reading of his markers would be a second
+# answer to "did he exclude this card", waiting to disagree with the first.
+import groom_schedule_gate  # noqa: E402 — the standing card's variable name
+import groomer  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -494,9 +501,12 @@ PLANNING_MINUTES = int(
 # workflow, against an approval thread. A card whose PARENT EPIC is being
 # planned leaves by adoption: the planning exit writes its routing verdict and
 # moves it to Backlog, where this sweep still holds it until the epic reaches
-# In Progress (DRE-4668, the CEO's signed answer of 2026-09-23). Those two are
-# the whole set, both are an approval he gives, and THIS SWEEP PERFORMS
-# NEITHER — it moves nothing out of Intake, on age or on anything else.
+# In Progress (DRE-4668, the CEO's signed answer of 2026-09-23). Both are an
+# approval he gives, and THIS SWEEP PERFORMS NEITHER. It moves nothing out of
+# Intake on age. The one card it does move is point 2 of the same signed
+# answer: a card RAISED to Urgent after that rule shipped goes to Planning on
+# the next pass (DRE-4150, `advance_urgent_intake` below) — urgency skips the
+# groom queue, never Planning's classifier and critic.
 #
 # WHY THE TIMER WENT. DRE-2687 moved an Intake card past the contract's
 # `stale_minutes` into Green Light, three per sweep, on the argument that a
@@ -536,6 +546,45 @@ INTAKE_DEPTH_PREFIX = "intake-depth"
 # reader left: `groomer.INTAKE_HOLD`, over in the workflow that performs the
 # one remaining exit. A constant here that nothing consulted would be a dial
 # wired to nothing, in the module whose dial it used to be.
+#
+# And the Urgent fast path (DRE-4150) does not read it EITHER, by the signed
+# answer's own word: the hold pauses the groomer's drain, and an Urgent card
+# waiting behind a pause is the opposite of the rule.
+
+# The Urgent fast path out of Intake (DRE-4150). Every knob lives in
+# config/urgent-fast-path.json, read once at import like every other knob
+# here — the ship moment above all, which is a DATED constant and never "now":
+# on 2026-09-17 24 of 286 Intake cards already carried Urgent, because on this
+# board Urgent has meant "important", and a rule keyed on the label would have
+# moved all 24 on its first sweep. What the rule reads is the ACT of raising a
+# card to Urgent after that moment, off the card's own Linear history.
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "config", "urgent-fast-path.json"), encoding="utf-8") as _fh:
+    _URGENT_FAST_PATH = json.load(_fh)
+URGENT_SHIPS_AT = datetime.fromisoformat(
+    _URGENT_FAST_PATH["ships_at"].replace("Z", "+00:00"))
+URGENT_SWEEP_CAP = int(_URGENT_FAST_PATH["per_sweep_cap"])
+URGENT_WINDOW_MINUTES = int(_URGENT_FAST_PATH["window_minutes"])
+
+# Urgent is priority 1 in Linear (0 is "no priority", 4 is "low").
+URGENT_PRIORITY = 1
+
+# The receipt the moved card carries, the idempotency key that keeps the move
+# to one per card, AND the marker the cross-repo cap counts. One string, three
+# jobs, so none of them can drift from the others.
+#
+# An OPENER, not yet an act tag, and the name says which: a new act reaches the
+# console's receipts.py:ACTS before the registry declares it (DRE-3091), and
+# that is a change in another repository. Until its row lands with its console
+# half, this receipt is declared in config/pipeline-acts.json's `unconverted`
+# block as an undeclared act — the DRE-4492 / DRE-4647 precedent — and a
+# `*_TAG` constant here would be read as an act the registry never declared.
+URGENT_FAST_PATH_OPENER = "urgent-fast-path"
+
+# The repository variable naming the groomer's standing card — the thread the
+# CEO's per-card exclusions are written on. Read at call time, so a sweep that
+# is not given it says so rather than reading "no exclusions".
+GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
 # cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
@@ -1629,7 +1678,7 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
              team: {key: {eq: "DRE"}},
              state: {name: {in: $states}}
            }) { nodes {
-             id identifier title description updatedAt
+             id identifier title description updatedAt priority
              state { name } labels { nodes { name } }
              children(first: 1) { nodes { id } }
              %s
@@ -2537,6 +2586,277 @@ def report_intake_depth() -> None:
         (age_minutes(card["updatedAt"]) for card in waiting), default=None
     )
     print(intake_depth_line(len(waiting), oldest))
+
+
+# --- the Urgent fast path out of Intake (DRE-4150) --------------------------
+#
+# Point 2 of the CEO's signed console answer of 2026-09-17 09:57 PT, recorded
+# on DRE-4141: an Urgent card should not wait for the next groom batch and its
+# approval. So the sweep moves it to Planning on its next pass — and Planning
+# reads it exactly as it reads any card, classifier and critic both. Urgency
+# skips the QUEUE, not the checks.
+#
+# WHY IT IS NARROW. Measured 2026-09-17 05:55 PT: 24 of 286 Intake cards
+# already carried Urgent — six the CEO had excluded from the 2026-09-15 groom
+# batch with signed receipts, four epics, eleven children of epics still in
+# Intake. A fast path keyed on the label would have moved all 24 at once, so a
+# card moves only when EVERY one of these holds:
+#
+#   * it is not an epic (`card_is_epic`, the sweep's one answer);
+#   * it is at Urgent, and was RAISED to Urgent — or created at it — after
+#     URGENT_SHIPS_AT, read off its own Linear history, never off the label;
+#   * the CEO has not excluded it on the groomer's standing card, read with
+#     the groomer's own reader, signature and all;
+#   * its parent epic, if it has one, is In Progress.
+#
+# THE CAP HOLDS ACROSS REPOS. An Intake card carries no `repo:` label, so
+# every product repo's sweep reads the whole fleet's lane (the incident DRE-4141
+# records). The receipt a moved card carries is therefore also the ledger: a
+# sweep counts the receipts posted ANYWHERE on the board inside
+# URGENT_WINDOW_MINUTES — one fresh comment search, taken just before it acts,
+# never off its own board snapshot — and moves only what is left of the cap.
+# A second repo sweeping in the same minute finds the first one's three and
+# moves none. The candidates are ordered the same way in every repo (oldest
+# raised first, then card number), so two sweeps that read the board at the
+# very same instant pick the SAME three cards rather than three each, and the
+# move itself is guarded on the from-lane. The residue is two sweeps writing in
+# the same second both commenting on one card — never a fourth card moved.
+#
+# COST: nothing on the common pass. `priority` rides the one board read, and a
+# card whose last update predates the ship moment cannot have been raised
+# since, so the history read (one request) happens only when an Urgent card
+# was touched after the rule shipped; the exclusion and receipt reads happen
+# only when one is actually eligible.
+
+_URGENT_HISTORY_QUERY = """query($ids: [ID!], $after: String) {
+  issues(first: 25, after: $after, filter: {id: {in: $ids}}) { nodes {
+    id identifier priority createdAt
+    parent { identifier state { name } }
+    history(first: 50) { nodes { createdAt fromPriority toPriority } }
+  } pageInfo { hasNextPage endCursor } } }"""
+
+_URGENT_RECEIPTS_QUERY = """query($since: DateTimeOrDuration!, $after: String) {
+  comments(first: 100, after: $after, filter: {
+    body: {contains: "%s:"}, createdAt: {gt: $since}
+  }) { nodes { createdAt body issue { identifier } }
+       pageInfo { hasNextPage endCursor } } }""" % URGENT_FAST_PATH_OPENER
+
+
+def _moment(iso: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_urgent_receipt(body: str | None) -> bool:
+    """Anchored at the start, like every marker this pipeline reads: a comment
+    that QUOTES the tag is not the receipt."""
+    return (body or "").lstrip().startswith(f"{URGENT_FAST_PATH_OPENER}:")
+
+
+def urgent_raised_at(issue: dict) -> datetime | None:
+    """When this card was last raised to Urgent — None when it is not at it.
+
+    `history(first: 50)` is the fifty NEWEST entries, newest first, so the
+    first entry that set priority to Urgent is the most recent raise: a card
+    lowered and raised again was raised at the second one. Linear records no
+    priority change on a card created at Urgent, so with no such entry the
+    card's creation IS the raise. That fallback can only ever be too EARLY —
+    creation precedes every raise — so a card whose raise has scrolled out of
+    fifty entries reads as raised before the rule, and waits for the groomer:
+    the safe direction.
+    """
+    if issue.get("priority") != URGENT_PRIORITY:
+        return None
+    for node in ((issue.get("history") or {}).get("nodes") or []):
+        if node.get("toPriority") == URGENT_PRIORITY:
+            return _moment(node.get("createdAt"))
+    return _moment(issue.get("createdAt"))
+
+
+def urgent_fast_path_note(identifier: str, raised: datetime) -> str:
+    """What the moved card carries — the rule, named, once."""
+    return (
+        f"{URGENT_FAST_PATH_OPENER}: {identifier} was raised to Urgent at "
+        f"{dead_run.pacific(raised)}, after the Urgent fast path shipped "
+        f"({dead_run.pacific(URGENT_SHIPS_AT)}), so it skips the groom queue "
+        f"and moves from Intake to Planning now (DRE-4150).\n\n"
+        "Urgency skips the queue, not the checks — Planning's classifier and "
+        "critic read this card exactly as they read any other. The rule is "
+        "point 2 of the CEO's signed console answer of 2026-09-17 09:57 PT, "
+        "recorded on DRE-4141. It moves a card once, and this is that once."
+    )
+
+
+def _urgent_exclusions() -> tuple[set[str] | None, str]:
+    """`(excluded, "")`, or `(None, why)` when the answer cannot be read.
+
+    The CEO's per-card answers live on the groomer's standing card, and the
+    groomer's own reader answers them: `decision_records` verifies every
+    console receipt, `standing_decisions` returns the cards whose newest
+    marker is `groom-excluded` — a signed Don't do, which a later
+    `groom-added` undoes. A marker the fleet wrote for itself decides nothing,
+    exactly as it decides nothing for a batch.
+
+    Absent is not empty (DRE-2034). A sweep with no standing card named, or
+    one whose receipt could not be CHECKED because the console's key was
+    unreadable (DRE-4153), cannot tell an excluded card from an eligible one —
+    so it moves none. A Linear read that fails raises to the caller.
+    """
+    card = (os.environ.get(GROOM_CARD_ENV) or "").strip()
+    if not card:
+        return None, (
+            f"{GROOM_CARD_ENV} is not set for this sweep, so the CEO's "
+            "exclusions on the groomer's standing card cannot be read")
+    records = groomer.decision_records(linear_ops, card, whole_thread=True)
+    for record in records:
+        body = record.get("body") or ""
+        if (console_receipt.is_unchecked(record.get("receipt_refused"))
+                and any(groomer.decision_match(tag, body)
+                        for tag in groomer.PER_CARD_TAGS)):
+            return None, (
+                f"a per-card decision on {card} carries a console receipt "
+                f"that could not be checked — {record['receipt_refused']}")
+    return set(groomer.standing_decisions(records)["excluded"]), ""
+
+
+def _recent_urgent_moves(now: datetime) -> set[str]:
+    """Every card that carries a fast-path receipt posted inside the window —
+    by THIS repo's sweep or any other's. Read fresh, never off the board
+    snapshot: the snapshot is exactly what another repo's writes are not in."""
+    since = now - timedelta(minutes=URGENT_WINDOW_MINUTES)
+    nodes = linear_ops.gql_paged(
+        _URGENT_RECEIPTS_QUERY,
+        {"since": since.isoformat().replace("+00:00", "Z")},
+        connection="comments",
+    )
+    return {
+        ((node.get("issue") or {}).get("identifier"))
+        for node in nodes
+        if _is_urgent_receipt(node.get("body"))
+        and (node.get("issue") or {}).get("identifier")
+    }
+
+
+def _card_number(identifier: str) -> int:
+    tail = identifier.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def advance_urgent_intake() -> set[str]:
+    """Move Intake cards raised to Urgent after the rule shipped to Planning,
+    at most URGENT_SWEEP_CAP per sweep across the fleet (DRE-4150).
+
+    Does NOT read `INTAKE_HOLD` — the signed answer says so: the hold pauses
+    the groomer's drain, and an Urgent card waiting behind a pause is the
+    opposite of the rule.
+
+    One receipt per card, posted BEFORE the move, and a card carrying it is
+    never touched by this rule again: a second sweep adds nothing, and a card
+    a person puts back in Intake stays where they put it. The move is guarded
+    on the from-lane and refuses an epic. A write that fails is recorded on the
+    fail-loudly rail and the sweep carries on with the next card.
+
+    Returns the identifiers moved this sweep. Raises whatever a Linear READ
+    raises — `main` records it as a read failure, never as "nothing eligible".
+    """
+    moved: set[str] = set()
+    tag = URGENT_FAST_PATH_OPENER
+    ship = URGENT_SHIPS_AT
+    candidates = []
+    for card in active_cards(INTAKE_LANE):
+        if card["state"]["name"] != "Intake":
+            continue
+        if card.get("priority") != URGENT_PRIORITY:
+            continue
+        touched = _moment(card.get("updatedAt"))
+        if touched is not None and touched <= ship:
+            continue  # untouched since the rule shipped, so never raised since
+        ident = card["identifier"]
+        bodies = card_comment_bodies(card)
+        if card_is_epic(card, bodies):
+            print(f"{tag}: {ident} is an epic — an epic is never fast-pathed; "
+                  "the CEO moves an epic")
+            continue
+        if any(_is_urgent_receipt(body) for body in bodies):
+            print(f"{tag}: {ident} already carries this rule's receipt — it "
+                  "moves a card once, so it is left where it is")
+            continue
+        candidates.append(card)
+    if not candidates:
+        print(f"{tag}: no card in Intake has been raised to Urgent since "
+              f"{dead_run.pacific(ship)} — nothing to move")
+        return moved
+
+    issues = {
+        issue.get("identifier"): issue
+        for issue in linear_ops.gql_paged(
+            _URGENT_HISTORY_QUERY, {"ids": [c["id"] for c in candidates]})
+    }
+    eligible: list[tuple[datetime, str]] = []
+    for card in candidates:
+        ident = card["identifier"]
+        issue = issues.get(ident)
+        if issue is None:
+            print(f"{tag}: {ident}'s history did not come back — not moved "
+                  "on a raise nobody read")
+            continue
+        raised = urgent_raised_at(issue)
+        if raised is None or raised <= ship:
+            print(f"{tag}: {ident} was already Urgent before "
+                  f"{dead_run.pacific(ship)} — it goes through the groomer")
+            continue
+        parent = issue.get("parent")
+        if parent:
+            lane = ((parent.get("state") or {}).get("name")) or "an unread lane"
+            if lane != "In Progress":
+                print(f"{tag}: {ident}'s epic {parent.get('identifier')} is in "
+                      f"{lane}, not In Progress — it waits for its epic")
+                continue
+        eligible.append((raised, ident))
+    if not eligible:
+        print(f"{tag}: no Urgent card in Intake is eligible this sweep")
+        return moved
+
+    excluded, why = _urgent_exclusions()
+    if excluded is None:
+        print(f"{tag}: {len(eligible)} card(s) eligible and none moved — {why}")
+        return moved
+    for _raised, ident in eligible:
+        if ident in excluded:
+            print(f"{tag}: {ident} was excluded by the CEO on the groomer's "
+                  "standing card — left in Intake")
+    eligible = [e for e in eligible if e[1] not in excluded]
+    eligible.sort(key=lambda e: (e[0], _card_number(e[1])))
+
+    recent = _recent_urgent_moves(datetime.now(UTC))
+    eligible = [e for e in eligible if e[1] not in recent]
+    budget = max(0, URGENT_SWEEP_CAP - len(recent))
+    taking, waiting = eligible[:budget], eligible[budget:]
+    for raised, ident in taking:
+        try:
+            # The receipt first: it is the claim the cross-repo cap counts,
+            # and a move that then fails still leaves the reason on the card.
+            linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised))
+            linear_ops.cmd_advance(ident, "Planning", "Intake", "--not-epic")
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} urgent fast path: {e}")
+            print(f"ERROR: {tag}: failed to move {ident} to Planning: {e}",
+                  file=sys.stderr)
+            continue
+        moved.add(ident)
+        print(f"{tag}: {ident} raised to Urgent {dead_run.pacific(raised)} — "
+              "moved Intake → Planning")
+    if waiting:
+        print(
+            f"{tag}: {len(waiting)} card(s) waited for the next sweep — "
+            f"{', '.join(ident for _raised, ident in waiting)} (at most "
+            f"{URGENT_SWEEP_CAP} per sweep across the fleet; {len(recent)} "
+            f"already moved in the last {URGENT_WINDOW_MINUTES} min, "
+            f"{len(moved)} by this sweep)"
+        )
+    return moved
 
 
 # --- branch ownership: ONE definition, three named questions (DRE-2426) ------
@@ -8841,6 +9161,20 @@ def main(
             # nobody could take must never render as a lane with nothing in it.
             _read_failures.append(f"intake: {e}")
             print(f"ERROR: report_intake_depth: {e}", file=sys.stderr)
+        # The Urgent fast path (DRE-4150), beside the count and on the same
+        # board read. Full sweeps only, like the count. Its own try: a fast
+        # path that cannot read must not cost the sweep the rest of its work,
+        # and an unreadable history, exclusion list or receipt search is a
+        # READ failure — never "nothing was eligible".
+        try:
+            with _phase("advance_urgent_intake"):
+                advance_urgent_intake()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"urgent fast path: {e}")
+            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones

@@ -116,7 +116,11 @@ and the approved batch goes to Planning.
 the CEO's signed console answer of 2026-09-17: *"A card is never moved out of
 Intake because it is old. No 48-hour age-out and no window of any length; it
 stays where it is."* The groomer's approved batch is the only exit **for a card
-with no parent epic**.
+with no parent epic** — save one, on point 2 of the same signed answer: a card
+raised to Urgent after that rule shipped goes straight to Planning on the
+sweep's next pass, three a sweep across the fleet, and not while the CEO has
+excluded it or its epic is not In Progress (DRE-4150, the Urgent fast path —
+`config/lane-contract.json` states it).
 
 A card that was filed into Intake and then grouped under an epic leaves by the
 other exit: when that epic is planned, the planning exit writes the child's
@@ -175,8 +179,10 @@ between them the inflow is exactly the batches the CEO approves, at the capacity
 he sets, and nothing else:
 
 1. **The groomer batch** — the valve for a card with no parent epic, and since
-   DRE-4141 that card's only exit from Intake. Nothing leaves without the CEO
-   approving that exact batch (`docs/groomer.md`). A child of an epic leaves by
+   DRE-4141 that card's only exit from Intake unless it is raised to Urgent
+   after the fast path shipped (DRE-4150, at most three a sweep; `intake_hold`
+   does not stop it). Nothing else leaves without the CEO approving that exact
+   batch (`docs/groomer.md`). A child of an epic leaves by
    adoption instead (DRE-4668, above) and lands in Backlog, where his approval
    of the epic is what releases it.
 2. **PARKED** — the per-card "stay still". A PARKED card is deliberately not

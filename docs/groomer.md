@@ -11,7 +11,9 @@ cards: two cards editing one file, eleven children of one epic that belong in
 one cycle, a repo that waits two months because another repo goes first.
 
 The groomer is the reader that sees the set. It proposes; the CEO approves;
-only then does anything leave Intake.
+only then does anything leave Intake — except a card raised to Urgent after the
+fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
+2 of the CEO's signed answer of 2026-09-17).
 
 ## What one run does
 

@@ -142,9 +142,11 @@ jobs:
       # hold the person dispatching the drain can waive is not a hold.
       #
       # Since DRE-3285 it is a repository VARIABLE rather than a value in this
-      # file, and since DRE-4141 THIS STUB IS ITS ONLY READER: the drain is the
-      # one thing that moves a card out of Intake, because no card leaves that
-      # lane for being old any more. Unset renders empty, which is open.
+      # file, and since DRE-4141 THIS STUB IS ITS ONLY READER: no card leaves
+      # Intake for being old any more, and the sweep's one move out of it —
+      # a card raised to Urgent after that rule shipped (DRE-4150) — does not
+      # wait on the hold, by the CEO's signed answer. Unset renders empty,
+      # which is open.
       #
       #   gh variable set INTAKE_HOLD \
       #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08

@@ -1962,6 +1962,13 @@
       "kind": "not-an-act",
       "means": "The planner slot ledger (DRE-5176): a planner run's claimed, waiting, dispatched or released receipt for the fleet-wide planner cap — every Linear write of epic DRE-5167 goes through this one site.",
       "why": "It is already machine-readable, in its own single-definition grammar — `🎟️ planner-slot:`, owned by scripts/planner_queue.py and read back by that module alone — the same reason the model-attempt heartbeat gives. Two grammars on one line would give its readers two keys to disagree over. A new act ships console-first in agent-bureau, and this epic does not reach into that repo."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised))",
+      "kind": "undeclared-act",
+      "means": "A card raised to Urgent after the rule's ship moment has been moved from Intake straight to Planning — the groom queue skipped, never Planning's classifier or critic (DRE-4150).",
+      "why": "Act-shaped — the pipeline moved the work on by itself and the planner run the relay starts on Planning entry is what follows — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the fast path ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog and DRE-4647's stacked-merge refusal did. Named here so the debt is countable rather than invisible. Its opener `urgent-fast-path:` is a live key three ways, owned by reconcile.URGENT_FAST_PATH_TAG: the card carries exactly one, a card carrying one is never moved by the rule again, and the sweep counts the openers posted anywhere on the board inside the rule's window so the three-per-sweep cap holds across every repo's sweep. A trailer after the body would not touch the opener."
     }
   ]
 }

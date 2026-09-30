@@ -1,0 +1,30 @@
+{
+  "_readme": [
+    "The Urgent fast path out of Intake (DRE-4150), on point 2 of the CEO's",
+    "signed console answer of 2026-09-17 09:57 PT, recorded on DRE-4141.",
+    "",
+    "`ships_at` is the rule's ship moment: a card raised to Urgent (Linear",
+    "priority 1), or created at it, AFTER this moment may leave Intake for",
+    "Planning on the sweep's next pass. It is a DATED CONSTANT on purpose,",
+    "never 'now' — on 2026-09-17, 24 of 286 Intake cards already carried",
+    "Urgent, because on this board Urgent has meant 'important'. The rule",
+    "reads the ACT of raising a card after this moment off the card's own",
+    "Linear history, never the label it carries today.",
+    "",
+    "`per_sweep_cap` is how many cards ONE sweep of the fleet may move, oldest",
+    "raised first; the rest wait for the next sweep and the run log names them.",
+    "",
+    "`window_minutes` is what makes that cap hold ACROSS repos. Every product",
+    "repo's sweep reads the same Intake, so the cap is counted off the",
+    "fast-path receipts already posted anywhere on the board inside this",
+    "window, not off one sweep's own moves. Shorter than the fifteen-minute",
+    "cadence, so a repo's next sweep finds the window open again; long enough",
+    "to cover every repo's sweep that fired on the same schedule tick.",
+    "",
+    "scripts/reconcile.py reads this file; tests/test_intake_urgent_fast_path.py",
+    "reads it as a file too."
+  ],
+  "ships_at": "2026-10-01T07:00:00Z",
+  "per_sweep_cap": 3,
+  "window_minutes": 10
+}
