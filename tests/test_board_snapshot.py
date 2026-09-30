@@ -27,10 +27,10 @@ WHAT IS UNDER TEST:
     and never a mutation.
   * The scrub, as a PURE function: comment bodies cut to their first 200
     characters (every marker this pipeline reads is anchored at the start of a
-    body), descriptions kept whole (growth records and blocker lines live anywhere
-    in them), `user` reduced to its opaque `id`,
-    and a card carrying exactly the contract keys — a key the sweep never reads
-    is not in the file.
+    body), descriptions kept whole (growth records and blocker lines live
+    anywhere in them), `user` reduced to its opaque `id`, and a card
+    carrying exactly the contract keys — a key the sweep never reads is not
+    in the file.
   * The redaction: an email address is taken out of every free-text field
     before it is written, and before the 200-character cut. This repository is
     PUBLIC, a committed snapshot is permanent, and the board's prose quotes

@@ -97,8 +97,9 @@ not Done, none of that epic's children promote this sweep — regardless of the
 epic's own state. And when a blocker epic reaches Done, every epic blocked-by
 it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
 (which re-triggers the planner). Never to In Progress, so the Green Light
-human-approval gate is preserved. Both behaviors fail SAFE on unreadable relation data (don't promote /
-don't advance on uncertainty).
+human-approval gate is preserved. Both the promotion hold and the advance fail
+SAFE on unreadable relation data (don't promote / don't advance on
+uncertainty).
 
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 """
