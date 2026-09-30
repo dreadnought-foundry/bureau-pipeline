@@ -20,7 +20,7 @@ So:
     Intake for the next proposal — the summary line keeps the grammar the
     console parses;
   * an addition takes a slot like any other move; an agreed Cancel row does
-    not, because a cancelled card starts no planner;
+    not, because a canceled card starts no planner;
   * a ledger the drain cannot read refuses the drain before any card moves,
     written on the proposal card like every other refusal.
 
@@ -111,7 +111,7 @@ def test_every_card_past_the_slots_stays_in_intake_as_a_held_back_row(monkeypatc
 
 
 def test_no_free_slot_moves_no_card_to_planning_and_still_cancels(monkeypatch):
-    """A cancelled card starts no planner, so the Cancel list is not rationed."""
+    """A canceled card starts no planner, so the Cancel list is not rationed."""
     proposal, ops = _fifteen_and_five()
     _slots(monkeypatch, 0)
     result = groomer.drain(ops, card=PROPOSAL_CARD)

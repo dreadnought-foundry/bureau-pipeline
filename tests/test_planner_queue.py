@@ -231,7 +231,7 @@ def config_file(doc, raw: str | None = None):
 COMMITTED = {"max_running": 2, "claim_ttl_minutes": 105,
              "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
 
-#: The ledger's behaviour is tested at the four slots it was written against
+#: The ledger's behavior is tested at the four slots it was written against
 #: (DRE-5176). The committed number is `TheCap`'s contract alone: DRE-5326
 #: dropped it to two on 2026-09-30, when four planners out-spent Linear's
 #: refill, and the rules below do not change with the number.

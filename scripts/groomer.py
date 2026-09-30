@@ -3767,7 +3767,8 @@ def drained_record(result: dict) -> str:
 
     The counts answer five different questions and none of them substitutes
     for another: `moved` is the approved Planning list that went, `held back`
-    is what the CEO excluded on either list and is still in the lane, `added`
+    is what the CEO excluded on either list, or what the free planner slots
+    could not take (DRE-5326), and is still in the lane, `added`
     is what the CEO reached in for, `cancelled` is the agreed Cancel list that
     went to Canceled, and `refused` counts the DECISIONS the drain would not
     honour — a marker the pipeline wrote, a decline with no reason, an
