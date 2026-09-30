@@ -152,7 +152,10 @@ CLI:
                                      `max_turns=<int>` for a re-plan, sized
                                      from the plan's child count (DRE-5288).
                                      Never exits non-zero.
-  sight --this <EPIC>                epics in flight (JSON array) on stdin
+  sight --this <EPIC> [--sight]      epics in flight (JSON array) on stdin;
+                                     the block names the lanes they were
+                                     read from — IN_FLIGHT_EPIC_STATES, or
+                                     SIGHT_STATES with `--sight`
   cycle-start --epic <EPIC> [--record]
                                      the note that opens a planning attempt,
                                      and (--record) the boundary line itself —
@@ -273,7 +276,8 @@ BOUND_PARK_LANE = "Triage"
 #: check if the sight stayed at IN_FLIGHT_EPIC_STATES — before DRE-5268 both
 #: sat in Green Light and saw each other. IN_FLIGHT_EPIC_STATES itself is still
 #: the groomer's epic read and the meaning of "in flight", and an unapproved
-#: plan is in flight for neither.
+#: plan is in flight for neither. `sight_block` names these lanes only when
+#: its caller read them (`sight --sight`, beside `epics-in-flight --sight`).
 SIGHT_STATES = IN_FLIGHT_EPIC_STATES + (REVIEW_LANE,)
 
 # --- What a CHILD's lane means to a critic (DRE-3243) -----------------------
@@ -2664,14 +2668,24 @@ def one_off_escalation(result: str, reason: str = "",
 
 # --- Cross-epic sight (D3) --------------------------------------------------
 
-def sight_block(this_epic: str, epics: list[dict]) -> str:
+def sight_block(this_epic: str, epics: list[dict],
+                states=IN_FLIGHT_EPIC_STATES) -> str:
     """What the post critic can see across epics, stated exactly.
 
     `rather than being told to "consider other work"`: the epics are named,
     and so is the boundary. The cost of this decision is a vaguer critic, and a
     vague scope is how that cost compounds — a critic that does not know what
     it was shown cannot tell you what it missed.
+
+    `states` is the lanes the CALLER read `epics` from, and the block names
+    exactly those — never a lane nobody queried (PR #602 review). The default
+    is IN_FLIGHT_EPIC_STATES because that is what `linear_ops.py
+    epics-in-flight` queries today. SIGHT_STATES (`sight --sight`) is for the
+    caller that also read Planning — `epics-in-flight --sight` (DRE-5278) —
+    and only then does the block explain a `[Planning]` epic; DRE-5280 runs
+    the two flags together.
     """
+    states = tuple(states)
     others = [e for e in (epics or [])
               if (e.get("identifier") or "") != this_epic]
     lines = [
@@ -2697,16 +2711,21 @@ def sight_block(this_epic: str, epics: list[dict]) -> str:
     lines += [
         "",
         "That list is every epic in "
-        + ", ".join(SIGHT_STATES)
+        + ", ".join(states)
         + " on the DRE board at the moment this run started.",
         "",
+    ]
+    if REVIEW_LANE in states:
         # DRE-5268: plans are reviewed while their epics sit in Planning, so a
         # plan under review is in the list — and named as what it is.
-        f"An epic listed [{REVIEW_LANE}] is a plan under review that the CEO "
-        "has not approved: name a collision with it as one with a plan that "
-        "may still change, and name it all the same, because that epic's "
-        "critic sees this one the same way.",
-        "",
+        lines += [
+            f"An epic listed [{REVIEW_LANE}] is a plan under review that the "
+            "CEO has not approved: name a collision with it as one with a plan "
+            "that may still change, and name it all the same, because that "
+            "epic's critic sees this one the same way.",
+            "",
+        ]
+    lines += [
         "YOU CANNOT SEE, and must not claim anything about: epics in Backlog, "
         "Intake or Done; work in any other Linear team; unmerged branches and "
         "open pull requests; or anything an epic's own cards do not say. If a "
@@ -3546,7 +3565,8 @@ def _cmd_post_state(args) -> int:
 
 def _cmd_sight(args) -> int:
     epics = _stdin_json([])
-    print(sight_block(args.this, epics), end="")
+    states = SIGHT_STATES if args.sight else IN_FLIGHT_EPIC_STATES
+    print(sight_block(args.this, epics, states=states), end="")
     return 0
 
 
@@ -3728,6 +3748,11 @@ def main(argv: list[str]) -> int:
 
     s = sub.add_parser("sight", help="cross-epic scope; epics on stdin")
     s.add_argument("--this", required=True)
+    # The epics on stdin were read from SIGHT_STATES (`epics-in-flight
+    # --sight`, DRE-5278), so the block names Planning too. Without it the
+    # block names IN_FLIGHT_EPIC_STATES, what `epics-in-flight` queries.
+    s.add_argument("--sight", action="store_true",
+                   help="the epics were read from SIGHT_STATES, Planning included")
     s.set_defaults(fn=_cmd_sight)
 
     r = sub.add_parser("rate", help="send-back rate; comment thread on stdin")
