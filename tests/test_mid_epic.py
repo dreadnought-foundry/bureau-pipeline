@@ -200,6 +200,7 @@ WALKED = {
     ("linear_ops", "epic_branch_refusal"),
     ("linear_ops", "cmd_advance"),
     ("planning_route", "returned_child"),
+    ("epic_cap", "_child_is_epic"),
 }
 
 
@@ -423,6 +424,35 @@ class TestEveryCallerIsWalked:
         )
         assert answer.returned is True
         assert answer.parent == "DRE-3013"
+
+    def _epic_with_child(self, title: str, grandchildren: int = 0) -> dict:
+        return {
+            "identifier": "DRE-5134",
+            "state": {"name": "In Progress"},
+            "children": {"nodes": [{
+                "identifier": "DRE-3018", "title": title,
+                "labels": {"nodes": [{"name": n} for n in PROBE_LABELS]},
+                "children": {"nodes": [{"id": f"g{n}"} for n in range(grandchildren)]},
+            }]},
+        }
+
+    def test_epic_cap_counts_an_epic_whose_child_is_a_planner_owned_one_off(self):
+        """`epic_cap._child_is_epic` (DRE-5134) — a one-off child is a card,
+        so its parent holds work of its own and takes a slot, whatever the
+        child's `agent:planner` label says."""
+        import epic_cap
+
+        assert epic_cap.counts_against_cap(
+            self._epic_with_child(PROBE_TITLE), count_rollup_parents=False
+        )
+
+    def test_epic_cap_does_not_count_a_parent_whose_only_child_is_an_epic(self):
+        import epic_cap
+
+        assert not epic_cap.counts_against_cap(
+            self._epic_with_child(PROBE_TITLE, grandchildren=1),
+            count_rollup_parents=False,
+        )
 
 
 # ===========================================================================
