@@ -275,7 +275,8 @@ _CLAUDE_LIMIT_SIGNATURES = tuple(
 # --log-failed`, prose and all. On 2026-09-07 at 16:50Z the medic posted
 # `🪦 limit-death: kind=claude stage=plan reset=unknown` on epic DRE-3257 for
 # agent-bureau run 34144302622: nothing in that run met an account wall — the
-# post-approval review ran 51 turns against a 48-turn ceiling and the action
+# post-approval review (the second critic, which ran after approval until
+# DRE-5268) ran 51 turns against a 48-turn ceiling and the action
 # ended `"subtype": "success"`, `"num_turns": 51`. The words were in the log
 # because the reviewer had READ the standard that quotes `429
 # rate_limit_error` as an example. The consequence is not a wrong word:
