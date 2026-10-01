@@ -286,6 +286,164 @@ class StandingVerdictSweepTest(unittest.TestCase):
         self.assertEqual(self.sweep([pr_payload(STANDING)], thread=[])[0], [])
 
 
+# ==========================================================================
+# DRE-5230 — a standing Verifier FAIL is a blocking verdict too.
+# ==========================================================================
+#
+# DRE-5229 made the Verifier's FAIL a fix-loop trigger, and the same DRE-2810
+# eviction that stranded portico #407's REQUEST_CHANGES can strand a FAIL. The
+# route reads the Verifier exactly as it reads the critic: qa-bot only, the
+# newest one, bound to the current head, no content carry — and every other
+# gate is the one the REQUEST_CHANGES cases above already pin.
+
+def verifier_body(sha: str = HEAD, token: str = "FAIL") -> str:
+    """The comment verify.yml really posts — marker, em-dash, token, sha —
+    built through merge_gate's own grammar like `verdict_body`."""
+    return (
+        f"🧪 {merge_gate.VERIFIER_MARKER} — VERDICT: {token} @{sha}\n\n"
+        "## For the fixing agent\nThe saved filter is dropped on reload."
+    )
+
+
+#: The critic APPROVEd the head, the Verifier FAILed it 25 minutes ago, and
+#: nothing from the worker bot after it: the run the FAIL should have started
+#: never arrived.
+FAIL_STANDING = [
+    comment(WORKER_BOT, "🔧 Fix attempt 1 pushed — CI and critic review re-running.", 90),
+    comment(QA_BOT, verdict_body(token="APPROVE"), 40),
+    comment(QA_BOT, verifier_body(), 25),
+]
+
+
+class StandingVerifierFailSweepTest(unittest.TestCase):
+    """The FAIL half of the route, driven by the same sweep harness."""
+
+    sweep = StandingVerdictSweepTest.sweep
+
+    def fail_thread(self, body: str, minutes_ago: float = 25,
+                    login: str = QA_BOT) -> list:
+        return FAIL_STANDING[:2] + [comment(login, body, minutes_ago)]
+
+    # ---------------------------------------------------------------- the act
+
+    def test_a_standing_verifier_fail_dispatches_the_fix_agent_once(self):
+        calls, notes, _ = self.sweep([pr_payload(FAIL_STANDING)])
+        self.assertEqual(len(calls), 1, f"expected one dispatch, got {calls}")
+        self.assertIn(reconcile.fix_workflow(), calls[0])
+        self.assertIn(f"pr_number={PR}", " ".join(calls[0]))
+        self.assertEqual(len(notes), 1, f"expected one receipt, got {notes}")
+        self.assertEqual(notes[0][0], PR)
+        fields = pipeline_act.read_trailer(notes[0][1])
+        self.assertIsNotNone(fields, f"the receipt carries no trailer: {notes[0][1]}")
+        self.assertEqual(fields["act"], "fix-loop-restarted")
+
+    def test_the_log_line_names_the_fail_and_the_sha(self):
+        _, _, log = self.sweep([pr_payload(FAIL_STANDING)])
+        self.assertIn("evicted-verdict:", log)
+        self.assertIn(f"PR #{PR}", log)
+        self.assertIn("FAIL", log)
+        self.assertIn(HEAD, log)
+
+    def test_the_receipt_names_both_blocking_verdicts(self):
+        for thread in (STANDING, FAIL_STANDING):
+            with self.subTest(verdict=thread[-1]["body"].split("\n")[0]):
+                _, notes, _ = self.sweep([pr_payload(thread)])
+                body = notes[0][1]
+                self.assertIn("a blocking verdict (the critic's REQUEST_CHANGES "
+                              "or the Verifier's FAIL)", body)
+                self.assertIn("until the critic or the Verifier speaks next", body)
+                self.assertNotIn("VERDICT:", body)
+
+    def test_the_fail_dispatch_is_self_disarming(self):
+        _, notes, _ = self.sweep([pr_payload(FAIL_STANDING)])
+        after = FAIL_STANDING + [comment(WORKER_BOT, notes[0][1], 0)]
+        self.assertEqual(self.sweep([pr_payload(after)])[0], [],
+                         "the same FAIL was dispatched twice")
+
+    def test_a_standing_request_changes_and_a_standing_fail_dispatch_once(self):
+        both = [
+            STANDING[0],
+            comment(QA_BOT, verdict_body(), 42),
+            comment(QA_BOT, verifier_body(), 25),
+        ]
+        calls, notes, _ = self.sweep([pr_payload(both)])
+        self.assertEqual(len(calls), 1, f"expected one dispatch, got {calls}")
+        self.assertEqual(len(notes), 1, f"expected one receipt, got {notes}")
+
+    def test_a_later_qa_bot_comment_quoting_the_marker_does_not_mask_the_fail(self):
+        # Only a comment whose FIRST line opens with the marker is the
+        # Verifier's (merge_gate.opens_with_marker) — the same comment the fix
+        # job's fetch picks — so a status note mentioning it is not its word.
+        quoted = FAIL_STANDING + [comment(
+            QA_BOT, f"Merge gate: waiting on the {merge_gate.VERIFIER_MARKER}.", 22)]
+        self.assertEqual(len(self.sweep([pr_payload(quoted)])[0]), 1)
+
+    # ------------------------------------------------------- the nine negatives
+
+    def test_a_fail_bound_to_an_older_head_does_not_dispatch(self):
+        thread = self.fail_thread(verifier_body(OLD_HEAD))
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_pass_does_not_dispatch(self):
+        thread = self.fail_thread(verifier_body(token="PASS"))
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_skip_does_not_dispatch(self):
+        thread = self.fail_thread(verifier_body(token="SKIP"))
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_fail_younger_than_twenty_minutes_does_not_dispatch(self):
+        thread = self.fail_thread(verifier_body(), minutes_ago=5)
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_fail_followed_by_a_worker_bot_comment_does_not_dispatch(self):
+        thread = FAIL_STANDING + [
+            comment(WORKER_BOT, "🔧 Fix attempt 2 pushed — CI re-running.", 5)
+        ]
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_fail_by_a_non_qa_bot_login_does_not_dispatch(self):
+        # DRE-1998: a forged FAIL is invisible, not merely non-blocking.
+        thread = self.fail_thread(verifier_body(), login="some-human")
+        self.assertEqual(self.sweep([pr_payload(thread)])[0], [])
+
+    def test_a_dirty_pr_with_a_fail_does_not_dispatch(self):
+        self.assertEqual(
+            self.sweep([pr_payload(FAIL_STANDING, merge_state="DIRTY")])[0], [])
+
+    def test_a_human_parked_card_with_a_fail_does_not_dispatch(self):
+        self.assertEqual(
+            self.sweep([pr_payload(FAIL_STANDING)], parked=True)[0], [])
+
+    def test_a_spent_budget_with_a_fail_does_not_dispatch(self):
+        marker, cap = fix_budget.BUDGETS["fix"]
+        spent = [rest(WORKER_BOT, f"{marker} {n}") for n in range(cap)]
+        self.assertEqual(
+            self.sweep([pr_payload(FAIL_STANDING)], thread=spent)[0], [])
+
+
+class VerifierCommentsTest(unittest.TestCase):
+    """The helper beside critic_comments: qa-bot only, marker `QA Verifier`."""
+
+    def test_only_qa_bot_verifier_comments_oldest_to_newest(self):
+        pr = pr_payload([
+            comment(QA_BOT, verifier_body(OLD_HEAD), 60),
+            comment(QA_BOT, verdict_body(), 50),
+            comment("some-human", verifier_body(), 40),
+            comment(QA_BOT, f"Waiting on the {merge_gate.VERIFIER_MARKER}.", 30),
+            comment(QA_BOT, verifier_body(), 20),
+        ])
+        self.assertEqual(
+            [c["body"] for c in reconcile.verifier_comments(pr)],
+            [verifier_body(OLD_HEAD), verifier_body()],
+        )
+
+    def test_the_route_reads_the_verifier_through_merge_gate(self):
+        src = inspect.getsource(reconcile.redispatch_standing_verdicts)
+        for name in ("verifier_comments(", "merge_gate.VERIFIER_MARKER"):
+            self.assertTrue(name in src, f"the route never reads {name}")
+
+
 class WiringTest(unittest.TestCase):
     """Called, not merely defined — the DRE-2682 lesson about a watchdog
     nobody invokes, which is the very failure this card repairs."""
@@ -334,6 +492,14 @@ class WiringTest(unittest.TestCase):
                       "standing-verdict", "evicted-verdict:"):
             self.assertTrue(route in page,
                             f"docs/held-pr-recovery.md never names {route}")
+
+    def test_the_operator_page_says_a_verifier_fail_stands_too(self):
+        # DRE-5230: the standing-verdict row fires on either blocking verdict.
+        page = (ROOT / "docs" / "held-pr-recovery.md").read_text()
+        row = next((ln for ln in page.splitlines()
+                    if ln.startswith("| standing-verdict |")), "")
+        self.assertTrue("Verifier" in row and "FAIL" in row,
+                        "the standing-verdict row never names the Verifier's FAIL")
 
     def test_the_age_threshold_is_the_approved_but_red_literal(self):
         # The contract with DRE-3129: no new window constant, a literal 20
