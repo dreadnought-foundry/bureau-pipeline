@@ -209,3 +209,35 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":                      # pragma: no cover
     unittest.main()
+
+
+class NotPostedTest(unittest.TestCase):
+    """DRE-5317: on a morning the pipeline chose to post no proposal, the
+    receipt still lands — a model was asked — and says why nothing followed."""
+
+    WHY = ("no reader could see merged pull requests this morning: the check "
+           "searched no owner — the installation could not be read")
+
+    def test_the_clause_and_the_reason_end_the_line_exactly_once(self):
+        today = groomer_receipt.receipt_line(_proposal())
+        stopped = _proposal()
+        stopped["verify"] = {"not_posted_why": self.WHY}
+        line = groomer_receipt.receipt_line(stopped)
+        self.assertEqual(groomer_receipt.NOT_POSTED_CLAUSE,
+                         " — proposal not posted: ")
+        self.assertEqual(
+            line, today + groomer_receipt.NOT_POSTED_CLAUSE + self.WHY)
+        self.assertEqual(line.count(groomer_receipt.NOT_POSTED_CLAUSE), 1)
+
+    def test_a_null_reason_or_no_verify_block_is_the_line_of_today(self):
+        today = groomer_receipt.receipt_line(_proposal())
+        null = _proposal()
+        null["verify"] = {"not_posted_why": None}
+        self.assertEqual(groomer_receipt.receipt_line(null), today)
+        self.assertNotIn("verify", _proposal())
+        self.assertNotIn("not posted", today)
+
+    def test_no_model_asked_is_still_no_receipt(self):
+        stopped = _proposal(enabled=False)
+        stopped["verify"] = {"not_posted_why": self.WHY}
+        self.assertIsNone(groomer_receipt.receipt_line(stopped))
