@@ -896,6 +896,7 @@ def test_prepare_over_the_fixture_fences_the_card_and_the_evidence(tmp_path):
 # --------------------------------------------------------------------------
 # DRE-5306 — the card's board context, and four cards excluded unjudged
 # --------------------------------------------------------------------------
+import console_receipt  # noqa: E402
 import console_receipt_vectors as V  # noqa: E402
 
 UNREAD = "board context unread: the pipeline's own Linear identity could not be read"
@@ -1246,6 +1247,19 @@ def test_a_refused_console_answer_reads_withheld_and_shows_none_of_its_text(monk
                      FakeVerifier("its signature does not verify"))
     assert said["by"] == "withheld"
     assert "console answer receipt" in said["body"]
+    for line in V.ANSWER_COMMENT.splitlines():
+        if line.strip():
+            assert line.strip() not in said["body"]
+
+
+def test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text(monkeypatch):
+    """A key that could not be read is UNCHECKED, not REFUSED — and not the
+    CEO either: the agent sees the label, never the words (DRE-4153)."""
+    said = _voice_of(monkeypatch, comment_node(V.ANSWER_COMMENT, by=VIEWER),
+                     FakeVerifier(console_receipt.CouldNotCheck(
+                         "the console's public key could not be read")))
+    assert said["by"] == "withheld"
+    assert "the check could not run" in said["body"]
     for line in V.ANSWER_COMMENT.splitlines():
         if line.strip():
             assert line.strip() not in said["body"]
