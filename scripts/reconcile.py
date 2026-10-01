@@ -412,6 +412,25 @@ DEAD_TAG = dead_run.DEAD_TAG
 RESET_TAG = dead_run.RESET_TAG
 REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
 
+# Review-lane nudges, per head sha (DRE-5231). The nudge loop's open-PR branch
+# re-triggers the merge gate (a critic verdict is bound) or the review (none
+# is), and before this nothing counted: the receipt touched the card, the
+# STALE_MINUTES["In Review"] window ran out again, and an APPROVE sitting on a
+# Verifier FAIL was nudged every two hours forever. Three on purpose: one fix
+# round (a fix run of up to 120 minutes plus a review of up to 65) fits inside
+# two windows, so three windows with the same head unmoved is a stall, not a
+# slow round. Counted off the card's own receipts carrying the tag AND the
+# head, so a new commit re-arms the budget — the CRASHED_REVIEW_RETRY_CAP
+# shape. At the cap nothing is dispatched: HOLD_LABEL goes on and a person is
+# told once per head. `0` dispatches nothing and hands off on the first stale
+# sweep. The words are `_KEY`, not `_TAG`: pipeline_act reads every `*_TAG`
+# literal as a declared act, and these three ship as `unconverted` sites in
+# config/pipeline-acts.json until the console gives them a row.
+REVIEW_NUDGE_CAP = int(os.environ.get("REVIEW_NUDGE_CAP", "3"))
+GATE_NUDGE_KEY = "gate-nudge"
+REVIEW_NUDGE_KEY = "review-nudge"
+REVIEW_NUDGE_CAP_KEY = "review-nudge-cap"
+
 # Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
 # reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
 # linear_ops raise SystemExit, which sails past every `except Exception`
@@ -3604,6 +3623,109 @@ def verdict_bound(pr: dict) -> bool:
     if not head_content_id:
         return False
     return has_verdict(pr, head_content_id, pr_commit_shas_for(pr))
+
+
+def standing_verdict(comments: list[dict], marker: str, head: str) -> str:
+    """The token the newest of `comments` (critic_comments / verifier_comments)
+    carries when it binds `head` by sha — APPROVE, REQUEST_CHANGES, PASS, FAIL,
+    SKIP — else "none" (DRE-5231).
+
+    For the review-nudge receipts, which name what stands on the head in plain
+    words. The sha binding only: a verdict carried across a head change by
+    content (verdict_bound) was written about another commit, and the receipt
+    says "bound to this head". Read through merge_gate's grammar, so a quoted
+    verdict is inert and a forged one is already gone from `comments`."""
+    if not comments or not head:
+        return "none"
+    line = merge_gate.first_line(comments[-1].get("body") or "")
+    if merge_gate.verdict_sha(line) != head:
+        return "none"
+    return merge_gate.verdict_token(line, marker) or "none"
+
+
+def _review_nudge_key(tag: str, head: str) -> str:
+    """What a review-lane nudge receipt carries for `tag` on `head` — the one
+    spelling the receipt writes and the count reads (DRE-5231). The opening
+    parenthesis keeps `review-nudge` from matching `review-nudge-cap`."""
+    return f"{tag} @{head} ("
+
+
+def review_nudges_spent(card: dict, tag: str, head: str) -> int:
+    """How many `tag` nudges this head has had: the card's own receipts carrying
+    the tag AND the head sha, off the comments the sweep already holds — no
+    request (DRE-5231). A new commit is a new key, so it re-arms the budget,
+    the CRASHED_REVIEW_RETRY_CAP shape. The window is the card's fifty newest
+    comments, so the count can only read low, never high."""
+    key = _review_nudge_key(tag, head)
+    return sum(1 for body in card_comment_bodies(card) if key in body)
+
+
+def hand_review_nudge_to_person(
+    card: dict, pr: dict, tag: str, critic: str, verifier: str
+) -> None:
+    """REVIEW_NUDGE_CAP is spent on this head: dispatch nothing, label the card
+    HOLD_LABEL and say so once per head (DRE-5231).
+
+    The label is what stands the loops down — held() skips the card on every
+    later sweep and fix_dispatch_blocked() keeps the fix agent off its pull
+    request. The card stays in the review lane: its pull request is open, and
+    parking it in Backlog the way the no-PR dead-run cap does would put a card
+    with live work in a lane that says there is none. Re-applied if a person
+    lifts the label with the head unmoved; the notice is not repeated.
+    """
+    ident = card["identifier"]
+    number = pr["number"]
+    head = pr.get("headRefOid") or ""
+    if REVIEW_NUDGE_CAP <= 0:
+        print(
+            "review-nudge: REVIEW_NUDGE_CAP is 0 — the cap is off; "
+            f"{ident} PR #{number} gets no re-trigger and goes to a person"
+        )
+    else:
+        print(
+            f"review-nudge: {ident} PR #{number} spent {REVIEW_NUDGE_CAP} "
+            f"{tag} re-triggers on {head} — handing to a person"
+        )
+    linear_ops.add_label(ident, HOLD_LABEL)
+    notice = f"🚨 {REVIEW_NUDGE_CAP_KEY} PR #{number} @{head}:"
+    if any(notice in body for body in card_comment_bodies(card)):
+        print(f"review-nudge: {ident} already told for {head} — not repeating")
+        return
+    key = _review_nudge_key(tag, head)
+    receipts = [
+        node for node in linear_ops.window_nodes(card.get("comments"))
+        if key in (node.get("body") or "")
+    ]
+    first = receipts[0].get("createdAt") if receipts else None
+    hours = age_minutes(first) / 60 if first else 0.0
+    plural = "" if len(receipts) == 1 else "s"
+    spent = f"{len(receipts)} re-trigger{plural} over {hours:.1f}h"
+    if not receipts:
+        what = (
+            "REVIEW_NUDGE_CAP is 0, so the sweep re-triggers nothing, and "
+            + ("the gate has not merged it." if tag == GATE_NUDGE_KEY
+               else "no critic verdict is bound to this head.")
+        )
+    elif tag == GATE_NUDGE_KEY:
+        what = (
+            f"the sweep spent {spent} on the merge gate, and the gate declined "
+            "to merge on those re-triggers."
+        )
+    else:
+        what = (
+            f"the sweep spent {spent} on the review, and no critic verdict "
+            "bound to this head came back."
+        )
+    linear_ops.cmd_comment(
+        ident,
+        f"{notice} critic {critic}, verifier {verifier} bound to this head — "
+        f"{what} Re-triggering again would not change that, so the sweep has "
+        f"stopped and labeled this card '{HOLD_LABEL}'. It stays in "
+        f"{REVIEW_LANE} because its pull request is open. The way back: a "
+        "person acts on the pull request — pushes a fix, or settles what "
+        f"stands on it — and removes the '{HOLD_LABEL}' label. A new commit "
+        f"gives the sweep a fresh {REVIEW_NUDGE_CAP} re-triggers.",
+    )
 
 
 def redispatch(card: dict) -> bool:
@@ -9793,11 +9915,32 @@ def main(
                 # The two lanes both meant "a pull request is open and being
                 # checked"; what actually differs is whether a verdict is bound to
                 # the head yet.
-                if verdict_bound(pr):
+                #
+                # Both nudges are capped per head (REVIEW_NUDGE_CAP, DRE-5231):
+                # the receipt says what stands on the head and how much of the
+                # budget is spent, and at the cap the card goes to a person
+                # instead of round again. Why the gate declined is NOT this
+                # receipt's job — the gate's own note on the pull request says
+                # what it holds on (DRE-5228); the sweep reports only what it
+                # can read off the thread and that no merge followed.
+                bound = verdict_bound(pr)
+                head = pr.get("headRefOid") or ""
+                tag = GATE_NUDGE_KEY if bound else REVIEW_NUDGE_KEY
+                spent = review_nudges_spent(card, tag, head)
+                critic = standing_verdict(
+                    critic_comments(pr), merge_gate.CRITIC_MARKER, head)
+                verifier = standing_verdict(
+                    verifier_comments(pr), merge_gate.VERIFIER_MARKER, head)
+                if spent >= REVIEW_NUDGE_CAP:
+                    hand_review_nudge_to_person(card, pr, tag, critic, verifier)
+                elif bound:
                     if _nudge(gate_workflow(), pr["number"]):
                         linear_ops.cmd_comment(
                             ident,
-                            "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
+                            f"🧹 Reconcile: {GATE_NUDGE_KEY} @{head} "
+                            f"({spent + 1}/{REVIEW_NUDGE_CAP}) — critic {critic}, "
+                            f"verifier {verifier} bound to this head, and the gate "
+                            "has not merged it; merge gate re-triggered.",
                         )
                 else:
                     # review_workflow(), not a hardcoded qa-review.yml: in the
@@ -9806,8 +9949,10 @@ def main(
                     if _nudge(review_workflow(), pr["number"]):
                         linear_ops.cmd_comment(
                             ident,
-                            "🧹 Reconcile: no critic verdict after "
-                            f"{STALE_MINUTES[REVIEW_LANE] // 60}h — review re-triggered.",
+                            f"🧹 Reconcile: {REVIEW_NUDGE_KEY} @{head} "
+                            f"({spent + 1}/{REVIEW_NUDGE_CAP}) — "
+                            "no critic verdict bound to this head after "
+                            f"{STALE_MINUTES[REVIEW_LANE] // 60}h; review re-triggered.",
                         )
             elif state == REVIEW_LANE and not is_open:
                 # Capped like the In Progress dead-run path (DRE-1403 mechanics,

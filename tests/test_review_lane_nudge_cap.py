@@ -308,13 +308,13 @@ class TestTheCapIsOffAtZero:
 
 class TestTheReceiptsCarryNoVerdictMarker:
     def test_no_body_the_sweep_wrote_reads_as_a_verdict(self):
-        board = _Board()
+        gate, review = _Board(), _Board()
         for _ in range(4):
-            board.sweep(_pr(critic="APPROVE", verifier="FAIL"))
-        for _ in range(4):
-            board.sweep(_pr(head=NEW_HEAD))
-        assert len(board.comments) == 8
-        for body in board.comments:
+            gate.sweep(_pr(critic="APPROVE", verifier="FAIL"))
+            review.sweep(_pr())
+        bodies = gate.comments + review.comments
+        assert len(bodies) == 8  # three receipts and one notice, each
+        for body in bodies:
             for marker in VERDICT_MARKERS:
                 assert marker not in body, body
 
@@ -331,7 +331,7 @@ class TestTheActRegistry:
         ]
         gate = anchors.index("has not merged it; merge gate re-triggered")
         assert anchors[gate + 1] == "no critic verdict bound to this head after"
-        assert anchors[gate + 2] == "review-nudge-cap PR #"
+        assert anchors[gate + 2] == "Re-triggering again would not change that"
         # The old wording is gone, not left beside the new.
         assert "verdict present but merge never happened" not in anchors
         assert "no critic verdict after" not in anchors

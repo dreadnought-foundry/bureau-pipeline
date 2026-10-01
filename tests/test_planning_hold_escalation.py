@@ -490,9 +490,11 @@ class TestTheRepairPass:
 #: that identifies the site. Six of them pair the label with a move into a lane
 #: a person watches and are UNCHANGED by this card; `flag_stranded` is the
 #: seventh and is a separate card. `flag_stalled_planning` is the only writer
-#: this card removes.
+#: this card removes. DRE-5231 added the review-nudge cap's hand-off
+#: (`hand_review_nudge_to_person`), which labels a card whose pull request is
+#: open and leaves it in `In Review` — the fourth reconcile.py site.
 _LABEL_WRITERS = (
-    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 3),
+    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 4),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
     (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 2),

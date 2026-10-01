@@ -771,6 +771,19 @@ refuse a child that lacks it either, so exactly one thing breaks without it:
 `validate_card.infer_repo` loses its only route to a repo for a card carrying
 no `repo:` label.
 
+The sweep's review-lane nudges are capped per head (DRE-5231). A card in
+`In Review` whose open pull request has sat past the two-hour window gets the
+merge gate re-triggered when a critic verdict is bound to its head, and the
+review re-triggered when none is — at most `REVIEW_NUDGE_CAP` times each (3 by
+default) for the same head sha, each receipt naming the head, the count and
+what stands on it. At the cap the sweep dispatches nothing more: it labels the
+card `needs-human`, leaves it in `In Review` because its pull request is open,
+and posts one `🚨 review-nudge-cap` notice naming the standing verdicts and how
+many re-triggers were spent over how long. The way back is a person: someone
+acts on the pull request and removes the `needs-human` label, and a new commit
+re-arms the budget. `REVIEW_NUDGE_CAP=0` hands the card off on the first stale
+sweep.
+
 ## The plan artifact (DRE-2720)
 
 An epic's CEO-facing output is a published document, not a Linear comment.
