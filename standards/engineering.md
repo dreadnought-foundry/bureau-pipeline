@@ -38,7 +38,9 @@ is the floor. Every rule here exists because its violation shipped a bug.
   code. A static design record — a
   `.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/`.json` file under
   `console/design/` or a root `design/` — counts as docs; `.css` and source
-  there stay code (DRE-3763). A root `models.json` counts as DATA, beside
+  there stay code (DRE-3763). The same formats under a root `architecture/`
+  — decisions, forensics, proof records and their screenshots — count as
+  docs by the same rule, and source there stays code (DRE-5311). A root `models.json` counts as DATA, beside
   `config/` and `agents.yaml`: it is the Anthropic catalog snapshot a
   scheduled job refreshes from the vendor's model list, and there is no RED
   test to write for a list somebody else publishes (DRE-3879, CEO's signed
@@ -138,9 +140,11 @@ the shape that buys it, and they apply to every repo in the fleet.
    `main` that runs every suite.** Narrowing is only safe where something still
    runs the whole thing: agent-bureau (DRE-3656), Portico (DRE-4804), and
    bureau-pipeline in `.github/workflows/tests.yml` under its own card. Crons
-   stay off the hour and apart from each other, and outside the release window
-   (`FLEET_WINDOW` in `scripts/release_train.py`, `standards/release-train.md`)
-   — a nightly competing with a train for runners delays both.
+   stay off the hour and apart from each other, and at least an hour clear of
+   the fleet wake-up's sweep (`FLEET_WAKE` in `scripts/release_train.py`,
+   `standards/release-train.md`) — the fleet default window is round the clock
+   (DRE-5266), so the sweep that wakes every train at once is the minute to
+   stay clear of, and a nightly competing with a train for runners delays both.
 
 3. **A red nightly is repaired.** The repo's Red-Main Repair stub
    (`.github/workflows/red-main-repair.yml`) is the rail, and it **must not

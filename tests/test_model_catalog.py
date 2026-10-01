@@ -1,5 +1,5 @@
 """RED-first tests for DRE-2236 — the model catalog: discover models from the
-API, alert on drift, NEVER auto-adopt.
+API and snapshot them as data (DRE-3899: and decide nothing).
 
 THE PROBLEM. Model ids and display labels are hardcoded in several places and
 drift silently. On 2026-07-28 the console showed "Opus 4.8" on every board card
@@ -13,14 +13,19 @@ WHAT THIS MODULE IS, AND WHAT IT DELIBERATELY IS NOT.
 
   * IS: a read-only catalog of what /v1/models actually offers, a committed
     snapshot (models.json) the console can read with no Anthropic credential,
-    and a weekly check that says "the ladder is behind".
-  * IS NOT: an upgrade path. Nothing here may change LADDER, agents.yaml, or
-    any model id. Adoption stays a deliberate human edit, because a new model
-    can ship breaking API changes (Opus 5 turned thinking ON by default, so
-    max_tokens caps thinking + response together, and disabling thinking 400s
-    above `high` effort) and can double the bill (Fable 5 is ~2x Opus per
-    token). An unattended overnight fleet-wide adoption is exactly the failure
-    the ladder's Fable exclusion already exists to prevent.
+    and the ranking library (`created_at`, `family`, `stale_ladder`,
+    `new_models`) the adoption rule in scripts/model_adoption.py reads.
+  * IS NOT: a decision. Nothing here may change LADDER, agents.yaml, or any
+    model id, and since DRE-3899 nothing here files a Linear card either. The
+    CEO's rule of 2026-09-14 — newer and no dearer is adopted, older is
+    ignored, a new family or a higher price is a question for him — is applied
+    by `model-adoption.yml`, which trials a candidate before it proposes one.
+    A new model can ship breaking API changes (Opus 5 turned thinking ON by
+    default, so max_tokens caps thinking + response together, and disabling
+    thinking 400s above `high` effort) and can double the bill (Fable 5 is ~2x
+    Opus per token); that is why the rule reads a declared price and runs a
+    trial, and why a scheduled snapshot job must stay incapable of touching a
+    ladder.
 
 THE TRAPS THESE TESTS PIN.
 
@@ -516,78 +521,128 @@ def test_cli_snapshot_on_an_outage_leaves_a_good_file_alone(monkeypatch, tmp_pat
     assert out.read_bytes() == good, "an empty catalog must never blank the file"
 
 
-def test_cli_check_drift_exits_3_and_writes_one_card(monkeypatch, tmp_path):
-    snap = tmp_path / "models.json"
-    mc.write_snapshot(
-        snap,
-        mc.build_snapshot(
-            [
-                model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
-                model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
-                model(SONNET, "Claude Sonnet 4.6", "2026-06-01T00:00:00Z"),
-            ],
-            known_ids=(),
+def test_the_card_commands_are_gone():
+    """DRE-3899. `check-drift` filed DRE-3880 and `check-new` filed DRE-3881 —
+    the cards the CEO said should not exist once the adoption rule of
+    2026-09-14 decides instead. They are unknown commands now, not no-ops a
+    stale workflow could keep calling."""
+    assert mc.main(["check-drift", str(SNAPSHOT_PATH)]) == 2
+    assert mc.main(["check-new", str(SNAPSHOT_PATH)]) == 2
+
+
+def test_the_card_commands_are_unknown_from_the_command_line(tmp_path):
+    import subprocess
+
+    for cmd in ("check-drift", "check-new"):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "model_catalog.py"), cmd],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 2, f"{cmd}: {proc.stdout}{proc.stderr}"
+
+
+def test_the_snapshot_command_still_works_from_the_command_line(tmp_path):
+    import os
+    import subprocess
+
+    out = tmp_path / "models.json"
+    env = dict(
+        os.environ,
+        BUREAU_FAKE_CATALOG=json.dumps(
+            payload(model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"))
         ),
     )
-    title_file = tmp_path / "title.txt"
-    body_file = tmp_path / "body.md"
-    rc = mc.main(
-        [
-            "check-drift",
-            str(snap),
-            "--title-file",
-            str(title_file),
-            "--body-file",
-            str(body_file),
-        ]
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "model_catalog.py"),
+         "snapshot", str(out)],
+        capture_output=True, text=True, env=env,
     )
-    assert rc == 3
-    title = title_file.read_text().strip()
-    # The title encodes the FINDING, so `linear_ops.py find-open "<title>"`
-    # matches next week's identical run and no duplicate card is minted.
-    assert title == f"Model drift: {OPUS} → claude-opus-10"
-    body = body_file.read_text()
-    assert OPUS in body and "claude-opus-10" in body
-    assert "2027-02-01" in body, "the body shows created_at, the ranking basis"
-    assert "do not" in body.lower(), "the body must say adoption is a human edit"
-    # find-open ignores terminal cards, so a CANCELLED finding comes back as a
-    # fresh card next Monday — the body has to tell the reader to park it.
-    assert "backlog" in body.lower()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert OPUS in [m["id"] for m in json.loads(out.read_text())["models"]]
 
 
-def test_cli_drift_title_is_stable_for_the_same_finding():
-    finding = mc.stale_ladder(
-        [OPUS],
-        [
-            model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
-            model("claude-opus-10", "Claude Opus 10", "2027-02-01T00:00:00Z"),
-        ],
+# The card writers that contradicted the 2026-09-14 rule. None of them may come
+# back under the same name, and nothing else in the module may render a card.
+CARD_WRITERS = (
+    "drift_title",
+    "drift_body",
+    "new_model_title",
+    "new_model_body",
+    "_cmd_check_drift",
+    "_cmd_check_new",
+    "_parse_card_args",
+)
+
+
+@pytest.mark.parametrize("name", CARD_WRITERS)
+def test_no_card_writer_survives(name):
+    assert not hasattr(mc, name), f"model_catalog.{name} still renders a card"
+
+
+def test_nothing_in_the_module_renders_a_linear_card():
+    source = (ROOT / "scripts" / "model_catalog.py").read_text()
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
     )
-    assert mc.drift_title(finding) == mc.drift_title(finding)
-    assert mc.drift_title(finding) == f"Model drift: {OPUS} → claude-opus-10"
+    for marker in ("**Repo:**", "## Before adopting anything",
+                   "nothing has been changed automatically",
+                   "title-file", "body-file"):
+        assert marker not in code, f"model_catalog.py still writes card text: {marker!r}"
 
 
-def test_cli_check_drift_is_quiet_when_the_ladder_is_current(monkeypatch, tmp_path):
-    snap = tmp_path / "models.json"
-    mc.write_snapshot(
-        snap,
-        mc.build_snapshot(
-            [
-                model(OPUS, "Claude Opus 5", "2026-08-01T00:00:00Z"),
-                model(SONNET, "Claude Sonnet 4.6", "2026-06-01T00:00:00Z"),
-            ],
-            known_ids=(),
-        ),
-    )
-    title_file = tmp_path / "title.txt"
-    assert mc.main(["check-drift", str(snap), "--title-file", str(title_file)]) == 0
-    assert not title_file.exists(), "no finding, no card file"
+# The library model_adoption.py reads. Deleting the card writers must not take
+# any of these with it (DRE-3899's contract with DRE-3895/DRE-3898).
+LIBRARY = (
+    "parse_catalog", "fetch_catalog", "created_at", "family",
+    "_is_dated_snapshot_of", "_resolve_pin", "stale_ladder", "new_models",
+    "build_snapshot", "load_snapshot", "snapshot_catalog", "write_snapshot",
+    "discovery_policy",
+)
 
 
-def test_cli_check_drift_on_the_committed_snapshot_never_crashes(tmp_path):
-    # The bootstrap file has nothing observed yet; the check must be a quiet
-    # no-op rather than an exception on the very first scheduled run.
-    assert mc.main(["check-drift", str(SNAPSHOT_PATH)]) in (0, 3)
+@pytest.mark.parametrize("name", LIBRARY)
+def test_the_library_the_adoption_rule_reads_is_kept(name):
+    assert callable(getattr(mc, name, None)), f"model_catalog.{name} is gone"
+
+
+# The policy the module and the workflow state in prose. "Never auto-adopt"
+# was true until the CEO's rule of 2026-09-14; a sentence a reader trusts and
+# acts on has to say what is true now, and where the decision is made.
+RETIRED_POLICY = (
+    "never auto-adopt",
+    "do not automate it",
+    "adoption is a deliberate human edit",
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [ROOT / "scripts" / "model_catalog.py", WORKFLOW_PATH],
+    ids=["model_catalog.py", "model-drift.yml"],
+)
+def test_no_retired_policy_sentence_survives(path):
+    text = path.read_text().lower()
+    for phrase in RETIRED_POLICY:
+        assert phrase not in text, f"{path.name} still says {phrase!r}"
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [mc.__doc__, mc.discovery_policy.__doc__],
+    ids=["module", "discovery_policy"],
+)
+def test_the_docstrings_state_the_2026_09_14_rule(doc):
+    assert doc
+    assert "2026-09-14" in doc
+    assert "scripts/model_adoption.py" in doc
+    assert "config/model-prices.yaml" in doc
+
+
+def test_discovery_policy_says_a_new_family_waits_for_the_ceo():
+    doc = mc.discovery_policy.__doc__.lower()
+    assert "new family" in doc
+    assert "advisory" in doc
+    assert "ceo" in doc
 
 
 def test_cli_rejects_an_unknown_command():
@@ -595,7 +650,7 @@ def test_cli_rejects_an_unknown_command():
 
 
 # --------------------------------------------------------------------------- #
-# 7. The scheduled workflow — one card, no duplicates, data-only commit        #
+# 7. The scheduled workflow — the snapshot only, no card, data-only commit   #
 # --------------------------------------------------------------------------- #
 
 def _workflow_doc() -> dict:
@@ -628,20 +683,51 @@ def test_the_drift_workflow_is_scheduled():
     assert "workflow_dispatch" in _on(_workflow_doc()), "manual re-run must exist"
 
 
-def test_the_drift_workflow_refreshes_the_snapshot_and_checks_drift():
+def test_the_drift_workflow_refreshes_the_snapshot():
     runs = _run_steps(_workflow_doc())
     assert "model_catalog.py snapshot models.json" in runs
-    assert "model_catalog.py check-drift models.json" in runs
 
 
-def test_the_drift_workflow_opens_one_card_and_never_duplicates_it():
-    runs = _run_steps(_workflow_doc())
-    assert "linear_ops.py find-open" in runs, "dedupe before creating"
-    assert "linear_ops.py create" in runs
-    assert runs.index("linear_ops.py find-open") < runs.index("linear_ops.py create"), (
-        "the existing-card lookup must precede the create, or every weekly run "
-        "mints a duplicate for the same finding"
-    )
+def test_the_drift_workflow_decides_nothing():
+    """DRE-3899. The two decision steps are gone — every decision about a
+    model lives in `model-adoption.yml` — and so is the baseline copy only
+    `check-new` read."""
+    text = _workflow_text()
+    for gone in ("check-drift", "check-new", "--baseline", "previous-models.json"):
+        assert gone not in text, f"model-drift.yml still carries {gone!r}"
+
+
+def test_the_drift_workflow_files_no_card():
+    """DRE-3880 (Sonnet 4.6 -> Sonnet 5) and DRE-3881 (five models older than
+    what we run) were filed from here; the CEO said neither should exist."""
+    text = _workflow_text()
+    assert "linear_ops.py create" not in text
+    assert "linear_ops.py find-open" not in text
+    assert "linear_ops.py" not in text
+    assert "LINEAR_API_KEY" not in text, "a job that files nothing needs no Linear key"
+
+
+def test_the_drift_workflow_has_one_job_left():
+    names = [
+        step.get("name", "")
+        for job in (_workflow_doc().get("jobs") or {}).values()
+        for step in (job or {}).get("steps") or []
+        if isinstance(step, dict)
+    ]
+    for gone in (
+        "Keep the previous snapshot as the discovery baseline",
+        "Check the pinned ladder against the catalog",
+        "Open ONE drift card (idempotent)",
+        "Check the catalog for models we have never configured",
+        "Open ONE new-model alert card (idempotent)",
+    ):
+        assert gone not in names, f"model-drift.yml still has the step {gone!r}"
+
+
+def test_the_drift_workflow_points_at_the_adoption_workflow():
+    text = _workflow_text()
+    assert "model-adoption.yml" in text
+    assert "does exactly three things" not in text
 
 
 def test_the_drift_workflow_commits_models_json_and_nothing_else():

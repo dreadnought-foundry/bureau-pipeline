@@ -15,9 +15,11 @@ on:
   # run is made of, so it carries the same net.
   #
   # 10:41 UTC = 03:41 PT — off the hour, clear of agent-bureau's `23 10 * * *`
-  # (DRE-3656) and Portico's 02:30 PT (DRE-4804), and outside the release
-  # window (`release_train.FLEET_WINDOW`, 05:00-21:00 PT), because a nightly
-  # competing with a train for runners delays both.
+  # (DRE-3656) and Portico's 02:30 PT (DRE-4804), and at least an hour clear
+  # of the fleet wake-up's sweep (`release_train.FLEET_WAKE`, 05:00 PT — `0 13`
+  # and `0 12` UTC), because a nightly competing with every train woken at
+  # once for runners delays both. The fleet default window is round the clock
+  # (DRE-5266), so the sweep, not a window, is the minute to stay clear of.
   #
   # A schedule run executes every job below with ONE named exemption: `tdd`,
   # which reads a pull request's commit list for test-before-fix order and has
@@ -54,9 +56,22 @@ jobs:
     # `tests/test_unit_suite_time_budget.py` holds it there and carries the
     # measurements. The clock is the remedy because the clock is what is
     # wrong: no branch has doubled this suite's runtime, it simply grew.
-    timeout-minutes: 20
+    #
+    # AND AGAIN AT 20 (DRE-5179 review round 2, measured 2026-09-30), on main
+    # first: runs 36675466692 and 36678331201 printed 13,077 and 13,136 passed
+    # in 19m38s and 19m41s and were cancelled at the cap. The fifteen green main
+    # runs before them ranged 13m15s to 19m32s: 28 seconds of headroom against
+    # 377 seconds of spread. 40 is ~2x the longest real run, same rule.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history (DRE-5179): tests/test_planner_queue_wiring.py diffs
+          # plan.yml against the commit that added the planner slot step, and
+          # a depth-1 clone has no such commit — the check would skip, green
+          # and vacuous. BUREAU_REQUIRE_GIT_HISTORY below turns that skip into
+          # a failure here.
+          fetch-depth: 0
       # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE
       # pip installs — one from the pinned manifest and two of bare `pyyaml`
       # while requirements-dev.txt pins PyYAML — so two of the three took
@@ -83,6 +98,7 @@ jobs:
           LINEAR_API_KEY: test-key
           REPO: test/test
           GH_TOKEN: test
+          BUREAU_REQUIRE_GIT_HISTORY: "1"
         run: python3 -m pytest tests -v
       - name: Workflow YAML parses
         run: python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"

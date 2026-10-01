@@ -12,10 +12,12 @@ One section per acceptance criterion:
   1. A send-back carries a STATED REASON, and the reason survives the trip
      from the critic's result file to the step output the workflow reads.
   2. A pass proceeds — and nothing about the pre-stage claims post-stage sight.
-  3. The post stage reviews the APPROVED text and says so in its own charter.
-  4. THE BOUND. Two failed rounds at either critic and the plan proceeds to the
-     CEO regardless, with the critic's stated reason attached. Unbounded is how
-     17 cards sat in a lane for 27 days.
+  3. The post stage reviews the text the first critic passed, before the CEO
+     has seen it, and says so in its own charter (DRE-5276).
+  4. THE BOUND. Two failed rounds at either critic and the plan parks in
+     Triage with `needs-human` for the operator, with the critic's stated
+     reason attached (DRE-5276). Unbounded is how 17 cards sat in a lane for
+     27 days.
   5. The send-back RATE is computed from durable markers, so "how often does the
      second critic send a plan back" is readable over time instead of recalled.
   6. The two charters are different text, each carrying its own question, and
@@ -155,9 +157,11 @@ class StagesAreTwoDifferentQuestions(unittest.TestCase):
         self.assertIn("not settled", pre)
 
     def test_the_post_charter_says_the_plan_is_now_the_specification(self):
-        post = pc.charter(pc.STAGE_POST).lower()
+        """...and, since DRE-5276, that the CEO has not seen it yet: the
+        second critic reads before Green Light, not after an approval."""
+        post = " ".join(pc.charter(pc.STAGE_POST).lower().split())
         self.assertIn("specification", post)
-        self.assertIn("approved", post)
+        self.assertIn("has not seen", post)
 
     def test_an_unknown_stage_fails_loudly(self):
         with self.assertRaises(KeyError):
@@ -218,7 +222,12 @@ class ACrashIsNotARejection(unittest.TestCase):
 
 
 class TheBound(unittest.TestCase):
-    """AC4 — two failed rounds and the plan reaches the CEO regardless."""
+    """AC4 — two failed rounds and the plan parks for the operator (DRE-5276).
+
+    Until DRE-5276 the first critic's bound PROCEEDED — "the plan reaches the
+    CEO regardless" — because the CEO was the next reader. Under DRE-5268 the
+    next reader is the second critic and then the CEO, and a plan the first
+    critic held twice is fit for neither, so both bounds park the same way."""
 
     def test_the_bound_is_two_rounds(self):
         self.assertEqual(pc.MAX_ROUNDS, 2)
@@ -228,13 +237,15 @@ class TheBound(unittest.TestCase):
         self.assertEqual(action, "hold")
         self.assertIn("round 1", note.lower())
 
-    def test_the_second_send_back_proceeds_with_the_reason_attached(self):
+    def test_the_second_send_back_parks_with_the_reason_attached(self):
         action, note = pc.decide(
             pc.SEND_BACK, prior_send_backs=1, reason="the migration card has no operator step"
         )
-        self.assertEqual(action, "proceed")
+        self.assertEqual(action, "hold")
+        self.assertTrue(pc.at_bound(action, 1, pc.SEND_BACK))
         self.assertIn("the migration card has no operator step", note)
         self.assertIn("two failed rounds", note.lower())
+        self.assertIn(pc.BOUND_PARK_LANE, note)
 
     def test_the_post_stage_parks_at_the_bound_instead_of_building(self):
         """DRE-3088: after approval, "proceed" means agents build it. A plan the
@@ -263,9 +274,13 @@ class TheBound(unittest.TestCase):
         self.assertFalse(pc.at_bound("proceed", 5, pc.NO_RESULT), "a crash never reaches the bound")
 
     def test_a_plan_can_never_circle_a_third_time(self):
+        """Past the bound every send-back is the bound again: it parks, and
+        the workflow's park signal (`bound`) says so on every one."""
         for prior in (2, 3, 17):
             action, _ = pc.decide(pc.SEND_BACK, prior_send_backs=prior)
-            self.assertEqual(action, "proceed", f"still holding after {prior} rounds")
+            self.assertEqual(action, "hold", f"not parked after {prior} rounds")
+            self.assertTrue(pc.at_bound(action, prior, pc.SEND_BACK),
+                            f"no park signal after {prior} rounds")
 
     def test_a_pass_proceeds(self):
         action, _ = pc.decide(pc.PASS, prior_send_backs=1)
@@ -495,12 +510,14 @@ class AnAnsweredRoundStopsCountingAgainstTheNext(unittest.TestCase):
         self.assertIn("two failed rounds", note.lower())
         self.assertIn("needs-human", note)
 
-    def test_the_pre_stage_is_untouched(self):
-        """Its two rounds run inside one job and the plan reaches the CEO
-        regardless; there is no re-plan between them to answer anything."""
-        action, _ = pc.decide(pc.SEND_BACK, prior_send_backs=1, reason="x",
-                              stage=pc.STAGE_PRE, still_open=[])
-        self.assertEqual(action, "proceed")
+    def test_the_pre_stage_reads_no_still_open_line(self):
+        """Its two rounds run inside one job, with no answered-round reading:
+        a second send-back is the bound whatever `still_open` says, and it
+        parks (DRE-5276)."""
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=1, reason="x",
+                                 stage=pc.STAGE_PRE, still_open=[])
+        self.assertEqual(action, "hold")
+        self.assertIn("two failed rounds", note.lower())
 
     # --- the record ---------------------------------------------------------
 
@@ -618,7 +635,7 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
 
     def test_the_new_attempt_is_still_bounded_at_two_rounds(self):
         """A fresh budget, not an unbounded one — the second send-back of the
-        new cycle still reaches the CEO."""
+        new cycle is still the bound, and parks (DRE-5276)."""
         thread = self.SPENT + [
             pc.cycle_marker("DRE-2721"),
             pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a card names no repo"),
@@ -626,7 +643,8 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         prior = pc.send_backs(pc.current_cycle(thread), pc.STAGE_PRE)
         self.assertEqual(prior, 1)
         action, note = pc.decide(pc.SEND_BACK, prior, reason="a card still names no repo")
-        self.assertEqual(action, "proceed")
+        self.assertEqual(action, "hold")
+        self.assertTrue(pc.at_bound(action, prior, pc.SEND_BACK))
         self.assertIn("two failed rounds", note.lower())
 
     def test_the_post_stage_budget_is_scoped_to_the_same_cycle(self):
@@ -760,7 +778,10 @@ class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
         prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
         self.assertEqual(prior, 2, "a stray boundary erased the rounds already spent")
         action, _ = pc.decide(pc.SEND_BACK, prior)
-        self.assertEqual(action, "proceed", "a stray boundary reopened the loop")
+        # The bound PARKS since DRE-5276: still the bound, never a fresh round.
+        self.assertEqual(action, "hold")
+        self.assertTrue(pc.at_bound(action, prior, pc.SEND_BACK),
+                        "a stray boundary reopened the loop")
 
     def test_the_pipelines_own_boundary_still_opens_a_cycle(self):
         """The fix must not cost a re-planned epic its revision round."""
@@ -886,7 +907,9 @@ class ARecordIsAComment_ThatSaysNothingElse(unittest.TestCase):
         prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
         self.assertEqual(prior, 2, "a quoted boundary erased the rounds already spent")
         action, _ = pc.decide(pc.SEND_BACK, prior)
-        self.assertEqual(action, "proceed", "a quoted boundary reopened the loop")
+        self.assertEqual(action, "hold")
+        self.assertTrue(pc.at_bound(action, prior, pc.SEND_BACK),
+                        "a quoted boundary reopened the loop")
 
     def test_a_quoted_late_collision_line_moves_no_counter(self):
         thread = [
@@ -1015,7 +1038,7 @@ class CrossEpicSight(unittest.TestCase):
     def test_the_states_it_looks_in_are_lanes_the_contract_carries(self):
         contract = json.load(open(os.path.join(ROOT, "config", "lane-contract.json")))
         lanes = {lane["name"] for lane in contract["lanes"]}
-        for state in pc.IN_FLIGHT_EPIC_STATES:
+        for state in pc.SIGHT_STATES:
             self.assertIn(state, lanes, f"{state} is not a lane the board carries")
 
     def test_only_the_post_charter_carries_the_sight_block(self):
@@ -1067,6 +1090,7 @@ class MechanicalChecksReuseDesignParity(unittest.TestCase):
             _cards(("DRE-1", GOOD_CARD)),
             plan_comment="We will build the board.",
             surfaces=["console/design/images/screens/desktop/board.png"],
+            ledger=NO_DEATHS,
         )
         self.assertTrue(any("board" in f for f in findings), findings)
 
@@ -1075,11 +1099,13 @@ class MechanicalChecksReuseDesignParity(unittest.TestCase):
             _cards(("DRE-1", GOOD_CARD)),
             plan_comment="deferred: board — waiting on the lane contract",
             surfaces=["console/design/images/screens/desktop/board.png"],
+            ledger=NO_DEATHS,
         )
         self.assertEqual(findings, [])
 
     def test_no_surfaces_in_scope_is_not_a_finding(self):
-        self.assertEqual(pc.mechanical_findings(_cards(("DRE-1", GOOD_CARD))), [])
+        self.assertEqual(pc.mechanical_findings(_cards(("DRE-1", GOOD_CARD)),
+                                                 ledger=NO_DEATHS), [])
 
 
 class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
@@ -1089,7 +1115,8 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
     def test_a_card_with_no_acceptance_criteria_is_a_finding(self):
         cards = _cards(("DRE-9001", "Do the thing.\n**Files:** `a/b.py`\n"))
         self.assertEqual(pc.cards_without_acceptance(cards), ["DRE-9001"])
-        self.assertTrue(any("DRE-9001" in f for f in pc.mechanical_findings(cards)))
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
+        self.assertTrue(any("DRE-9001" in f for f in findings))
 
     def test_an_empty_acceptance_section_does_not_count(self):
         cards = _cards(("DRE-9001", "**Files:** `a/b.py`\n## Acceptance criteria\n\nsoon\n"))
@@ -1115,7 +1142,8 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
                          "## Acceptance criteria\n- [ ] done\n"),
         )
         self.assertEqual(pc.shared_files(cards), {"scripts/reconcile.py": ["DRE-9004", "DRE-9005"]})
-        self.assertTrue(any("reconcile.py" in f for f in pc.mechanical_findings(cards)))
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
+        self.assertTrue(any("reconcile.py" in f for f in findings))
 
     def test_one_card_naming_a_file_twice_is_not_a_collision(self):
         cards = _cards(("DRE-9006", "**Files:** `scripts/reconcile.py`, `scripts/reconcile.py`\n"
@@ -1128,7 +1156,7 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
             ("DRE-9008", "Write the standard.\n**Files:** `standards/plan-critic.md`\n"
                          "## Acceptance criteria\n- [ ] the standard exists\n"),
         )
-        self.assertEqual(pc.mechanical_findings(cards), [])
+        self.assertEqual(pc.mechanical_findings(cards, ledger=NO_DEATHS), [])
 
 
 class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
@@ -1157,7 +1185,7 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         """The third acceptance criterion: a missing section is a refusal, not
         a silent empty set that reads like a checked, clean footprint."""
         cards = _cards(("DRE-9010", "Do it.\n## Acceptance criteria\n- [ ] done\n"))
-        findings = pc.mechanical_findings(cards)
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
         self.assertTrue(
             any("DRE-9010" in f and "footprint" in f for f in findings), findings
         )
@@ -1169,13 +1197,15 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         as a LABEL, which is what the standard requires — and the standard
         FORBIDS the body stamp the old regex looked for."""
         self.assertEqual(pc.cards_without_repo(self.children), [])
-        findings = pc.mechanical_findings(self.children)
+        findings = pc.mechanical_findings(self.children, ledger=NO_DEATHS)
         self.assertEqual([f for f in findings if "names no repo" in f], [])
 
     def test_the_posted_note_lists_the_footprint_it_checked(self):
         """First acceptance criterion, second half: the root-level files the
         old regex could not see are named in the list the epic gets."""
-        note = pc.findings_note(self.children, pc.mechanical_findings(self.children))
+        note = pc.findings_note(
+            self.children, pc.mechanical_findings(self.children, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         self.assertIn("README.md", note)
         self.assertIn("CHANGELOG.md", note)
         self.assertIn("DRE-3026", note)
@@ -1183,7 +1213,7 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
     def test_two_children_declaring_one_root_file_are_reported_as_a_collision(self):
         """Second acceptance criterion. DRE-3026 and DRE-3031 both declare
         `README.md`; before this card neither was visible to the check."""
-        findings = pc.mechanical_findings(self.children)
+        findings = pc.mechanical_findings(self.children, ledger=NO_DEATHS)
         self.assertTrue(
             any(f.startswith("README.md:") and "DRE-3026" in f and "DRE-3031" in f
                 for f in findings),
@@ -1208,7 +1238,8 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         posted note distinguishes "no findings" from "never ran"
         (standards/console-honesty.md rule 2)."""
         clean = _cards(("DRE-9011", GOOD_CARD))
-        note = pc.findings_note(clean, pc.mechanical_findings(clean))
+        note = pc.findings_note(clean, pc.mechanical_findings(clean, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertIn("DRE-9011", note)
         self.assertIn("no structural findings", note.lower())
 
@@ -1230,6 +1261,15 @@ def _ledger(*rows, by_tell=()):
     }
 
 
+#: The ledger every test passes when the ledger is not what it is testing
+#: (DRE-5314). `config/split-ledger.json` is regenerated every night, so a test
+#: that read it for its expected findings went red the night a row landed on
+#: its fixture's files — bureau-pipeline #584, a DRE-5280 row over
+#: SHIPPED_CARD's two files. `TheLiveLedgerCannotChangeTheseTests` holds every
+#: test here to it.
+NO_DEATHS = _ledger()
+
+
 #: A card body that trips exactly one of the four tells — one backend file and
 #: one console file, which is `two-languages-or-tiers`.
 TIERS_CARD = """One backend defect and one console surface.
@@ -1246,6 +1286,11 @@ DEAD_ROW = ("DRE-2937", ["turn-cap-death", "split"], 4,
             ["scripts/alerts.py", "console/src/Board.tsx"], "UNKNOWN", 63.9)
 LIVE_ROW = ("DRE-3029", ["named-as-a-seed"], 0,
             ["scripts/planning_shape.py", "briefs/planner.md"], "UNKNOWN", 0.0)
+#: DRE-3016's row as `config/split-ledger.json` carried it on 2026-09-28.
+DRE_3016_ROW = ("DRE-3016", ["turn-cap-death"], 1,
+                ["scripts/planner_score.py", "config/planner-audit.json",
+                 "tests/test_planner_score.py", "docs/planner-audit.md",
+                 "plan.yml", "planner-replay.yml"], "UNKNOWN", 22.57)
 
 
 class AFootprintThatHasDiedBefore(unittest.TestCase):
@@ -1423,9 +1468,13 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
                                 ledger=pc.LEDGER_UNREADABLE)
         self.assertIn("could not be read", note)
 
-    # -- against the shipped ledger, not a fixture ---------------------------
+    # -- against a real row, copied rather than read -------------------------
+    #
+    # These two read the shipped ledger until DRE-5314. The file is
+    # regenerated every night, so a test that reads it asserts whatever last
+    # night's run wrote; the row is copied here from it instead.
 
-    def test_the_shipped_ledger_flags_this_very_cards_footprint(self):
+    def test_dre_3016s_row_flags_this_very_cards_footprint(self):
         """DRE-3079 declares `scripts/planner_score.py`,
         `config/planner-audit.json` and `tests/test_planner_score.py` — three
         of the six files DRE-3016 declared before it died at the turn cap. The
@@ -1434,12 +1483,17 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
             "scripts/plan_critic.py", "scripts/planner_score.py",
             "config/planner-audit.json", "tests/test_plan_critic.py",
             "tests/test_planner_score.py", identifier="DRE-3079")
-        matches = pc.ledger_footprint_matches(cards)
+        matches = pc.ledger_footprint_matches(cards, ledger=_ledger(DRE_3016_ROW))
         self.assertIn("DRE-3016", [m["row"] for m in matches], matches)
 
-    def test_a_one_file_card_is_still_clean_against_the_shipped_ledger(self):
-        """The noise floor, against the real file rather than a fixture."""
-        self.assertEqual(pc.mechanical_findings(_cards(("DRE-9105", GOOD_CARD))), [])
+    def test_a_one_file_card_is_clean_against_a_row_holding_that_file(self):
+        """The noise floor: one shared file is below `LEDGER_MIN_OVERLAP`,
+        however many deaths the row records."""
+        row = ("DRE-9106", ["turn-cap-death"], 3,
+               ["scripts/plan_critic.py", "scripts/reconcile.py"], "UNKNOWN", 30.0)
+        self.assertEqual(
+            pc.mechanical_findings(_cards(("DRE-9105", GOOD_CARD)),
+                                   ledger=_ledger(DRE_3016_ROW, row)), [])
 
 
 def _plan_yml_steps():
@@ -1637,7 +1691,9 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
     # -- The mechanical pass says so, in its output ---------------------------
 
     def test_the_note_names_the_delivered_child_as_a_non_finding(self):
-        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        note = pc.findings_note(
+            self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         self.assertIn("delivered child", note.lower())
         self.assertIn("DRE-3210", note)
         self.assertIn("Done", note)
@@ -1651,7 +1707,9 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         note has always said "which is what the collision check reads" a few
         lines up, and a search of the whole text would pass against a note
         that never mentioned a delivered card at all."""
-        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        note = pc.findings_note(
+            self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+            ledger=NO_DEATHS)
         sentence = [line for line in note.splitlines()
                     if "delivered child" in line.lower()]
         self.assertEqual(len(sentence), 1, note)
@@ -1669,11 +1727,11 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         collision check."""
         cards = _cards(("DRE-3210", SHIPPED_CARD), state="Done") + _cards(
             ("DRE-9999", SHIPPED_CARD), state="Backlog")
-        findings = pc.mechanical_findings(cards)
+        findings = pc.mechanical_findings(cards, ledger=NO_DEATHS)
         self.assertEqual(
             [f for f in findings if "disjoint files" in f], [], findings)
         self.assertEqual(pc.shared_files(cards), {})
-        note = pc.findings_note(cards, findings)
+        note = pc.findings_note(cards, findings, ledger=NO_DEATHS)
         self.assertNotIn("disjoint files", note)
 
     def test_two_active_children_over_one_file_are_still_a_collision(self):
@@ -1685,7 +1743,8 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
             sorted(pc.shared_files(cards)),
             ["scripts/plan_critic.py", "tests/test_plan_critic.py"])
         self.assertTrue(
-            [f for f in pc.mechanical_findings(cards) if "disjoint files" in f])
+            [f for f in pc.mechanical_findings(cards, ledger=NO_DEATHS)
+             if "disjoint files" in f])
 
     def test_the_state_block_is_input_and_never_a_finding_of_its_own(self):
         """It is INPUT to the critic's judgement. A Done child must be named in
@@ -1694,14 +1753,17 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         self.assertTrue(
             any("DRE-3210" in line and "delivered child" in line.lower()
                 for line in pc.findings_note(
-                    self.done, pc.mechanical_findings(self.done)).splitlines()))
+                    self.done, pc.mechanical_findings(self.done, ledger=NO_DEATHS),
+                    ledger=NO_DEATHS).splitlines()))
         self.assertEqual(
-            [f for f in pc.mechanical_findings(self.done) if "DRE-3210" in f],
+            [f for f in pc.mechanical_findings(self.done, ledger=NO_DEATHS) if "DRE-3210" in f],
             [],
         )
 
     def test_the_backlog_child_gets_no_such_line(self):
-        note = pc.findings_note(self.backlog, pc.mechanical_findings(self.backlog))
+        note = pc.findings_note(self.backlog,
+                                pc.mechanical_findings(self.backlog, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertNotIn("delivered child", note.lower())
         self.assertIn("Backlog", note)
 
@@ -1710,7 +1772,8 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         (standards/console-honesty.md rule 2), and only the first clears a
         card the critic is about to call already-shipped."""
         stateless = _cards(("DRE-9003", SHIPPED_CARD))
-        note = pc.findings_note(stateless, pc.mechanical_findings(stateless))
+        note = pc.findings_note(stateless, pc.mechanical_findings(stateless, ledger=NO_DEATHS),
+                                ledger=NO_DEATHS)
         self.assertIn("no child carried a state", note.lower())
 
     # -- Both charters say what a state means ---------------------------------
@@ -1748,6 +1811,110 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
                           f"{name} never tells the critic the records carry a state")
             self.assertIn("Done", prompt,
                           f"{name} never says what a Done child means")
+
+
+#: What the nightly regeneration did to this module on 2026-09-30 (DRE-5314):
+#: bureau-pipeline #584 added a DRE-5280 death row whose declared files are
+#: SHIPPED_CARD's own, and `test_the_state_block_is_input_and_never_a_finding_
+#: of_its_own` — which read the live file — gained a finding it never expected.
+#: The rows here carry every file a fixture card in this module declares, in
+#: pairs, and every tell carries a rate, so a test still reading the live
+#: ledger has something to trip over.
+REGENERATED_ROWS = (
+    ("DRE-5280", ["turn-cap-death"], 1,
+     ["scripts/plan_critic.py", "tests/test_plan_critic.py"], "UNKNOWN", 9.0),
+    ("DRE-5281", ["turn-cap-death"], 1,
+     ["scripts/reconcile.py", "standards/plan-critic.md", "a/b.py"],
+     "UNKNOWN", 9.0),
+    ("DRE-5282", ["turn-cap-death"], 1,
+     ["README.md", "CHANGELOG.md"], "UNKNOWN", 9.0),
+)
+REGENERATED_TELLS = [
+    {"tell": tell, "of": 2, "died": 2,
+     "sentence": f"cards carrying the {tell} tell died 2 of 2 times"}
+    for tell in split_ledger.TELLS
+]
+
+#: The calls that read the split ledger. A test whose source makes one of them
+#: is a test whose expectations the ledger can change.
+LEDGER_READERS = ("mechanical_findings(", "findings_note(", "ledger_findings(",
+                  "ledger_footprint_matches(", "ledger_tell_matches(",
+                  "ledger_death_rows(")
+
+
+class TheLiveLedgerCannotChangeTheseTests(unittest.TestCase):
+    """DRE-5314. `config/split-ledger.json` is regenerated every night, so a
+    test that reads it for its expected findings goes red the night a row
+    lands on its fixture's files — and the ledger PR that added the row cannot
+    merge. Every test here passes its ledger explicitly; this class writes an
+    overlapping row into a temporary ledger, points the default read at it,
+    and runs those tests again."""
+
+    def setUp(self):
+        from unittest import mock
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "split-ledger.json")
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(_ledger(*REGENERATED_ROWS, by_tell=REGENERATED_TELLS), f)
+        self.default_reads = []
+        real_load = split_ledger.load
+
+        def load(path=None):
+            if path is None:
+                self.default_reads.append(path)
+            return real_load(path)
+
+        for patch in (mock.patch.object(split_ledger, "LEDGER_PATH", self.path),
+                      mock.patch.object(split_ledger, "load", load)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _run(self, tests):
+        result = unittest.TestResult()
+        unittest.TestSuite(tests).run(result)
+        return [f"{test.id()}: " + next(
+                    (line for line in trace.splitlines() if "Error:" in line),
+                    trace.splitlines()[-1])
+                for test, trace in result.failures + result.errors]
+
+    def test_the_regenerated_row_reaches_a_caller_that_passes_no_ledger(self):
+        """The premise, so the rest cannot pass vacuously: the temporary file
+        is the one the production default reads, and its row does produce the
+        finding #584's run reported."""
+        done = _cards(("DRE-3210", SHIPPED_CARD), state="Done")
+        self.assertTrue(
+            [f for f in pc.mechanical_findings(done) if "DRE-5280" in f])
+        self.assertTrue(self.default_reads)
+
+    def test_the_state_block_test_is_unchanged_by_the_row(self):
+        test = ACriticReadsTheChildsStateAndNotOnlyItsText(
+            "test_the_state_block_is_input_and_never_a_finding_of_its_own")
+        self.assertEqual(self._run([test]), [])
+        self.assertEqual(self.default_reads, [],
+                         "the state-block test still reads the live ledger")
+
+    def test_no_test_in_this_module_reads_the_live_ledger(self):
+        """Discovered off each test's source, never listed, so a test added
+        tomorrow that forgets its ledger is caught here rather than by the
+        next night's regeneration."""
+        import inspect
+
+        loader = unittest.TestLoader()
+        tests = [
+            case(name)
+            for case in vars(sys.modules[__name__]).values()
+            if isinstance(case, type) and issubclass(case, unittest.TestCase)
+            and case is not type(self)
+            for name in loader.getTestCaseNames(case)
+            if any(call in inspect.getsource(getattr(case, name))
+                   for call in LEDGER_READERS)
+        ]
+        self.assertGreater(len(tests), 20, "the discovery found nothing to run")
+        self.assertEqual(self._run(tests), [])
+        self.assertEqual(self.default_reads, [],
+                         "a test in this module still reads the live ledger")
 
 
 class ThePostMarkerReleasesTheChildren(unittest.TestCase):
@@ -1911,7 +2078,8 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         self.assertIn(self.EPIC, first)
         self.assertIn("approved at", first)
         self.assertIn("2026-09-10 12:04 UTC", first)
-        self.assertIn("second critic has not passed it", first)
+        self.assertIn("second critic has not passed it on this plan's current "
+                      "attempt", first)
         self.assertIn("holding", first)
 
     def test_a_pass_refuses_nothing(self):
@@ -2157,12 +2325,14 @@ class TheOneOffCharterAsksOneQuestion(unittest.TestCase):
         self.assertNotIn(pc.question(pc.STAGE_PRE), charter)
         self.assertNotIn(pc.question(pc.STAGE_POST), charter)
 
-    def test_the_charter_tells_the_critic_a_decision_is_a_send_back(self):
+    def test_the_charter_tells_the_critic_a_decision_is_a_question(self):
         """FD-6 is the case this exists for: a card whose content is a business
         decision reads as one card and one pull request, and the critic has to
-        be told that is exactly what it sends back."""
+        be told that is exactly what it asks the CEO (DRE-5376 — a QUESTION,
+        where a defect in the card is a SEND_BACK the planner answers)."""
         charter = pc.charter(pc.STAGE_ONE_OFF).lower()
         self.assertIn("decision", charter)
+        self.assertIn(pc.QUESTION.lower(), charter)
         self.assertIn(pc.SEND_BACK.lower(), charter)
 
     def test_the_charter_says_it_is_the_last_reader_before_the_build(self):
@@ -2181,11 +2351,18 @@ class TheOneOffDecisionFailsClosed(unittest.TestCase):
         self.assertEqual("proceed", action)
         self.assertTrue(note)
 
-    def test_a_send_back_takes_the_escalation_exit_with_the_reason(self):
+    def test_a_question_takes_the_escalation_exit_with_the_question(self):
         action, note = pc.one_off_decide(
-            pc.SEND_BACK, "the card asks whether the demo repo should be public")
+            pc.QUESTION, "should the demo repo be public")
         self.assertEqual("escalate", action)
         self.assertIn("public", note)
+
+    def test_a_send_back_goes_back_to_the_planner(self):
+        """DRE-5376: a defect in the card is the planner's to fix, never the
+        CEO's — he can approve or park a card, and cannot rewrite one."""
+        action, _note = pc.one_off_decide(
+            pc.SEND_BACK, "a test reads a file the build agent cannot open")
+        self.assertEqual(pc.REVISE, action)
 
     def test_a_critic_that_never_ran_escalates_rather_than_passing(self):
         """The one place this route INVERTS the epic route. There a crash is
@@ -2217,9 +2394,9 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
 
         self.esc = planning_escalation
 
-    def test_a_send_back_reason_reaches_the_ceo_as_a_question(self):
+    def test_a_question_reaches_the_ceo_as_a_question(self):
         text = pc.one_off_escalation(
-            pc.SEND_BACK,
+            pc.QUESTION,
             "this card asks whether the demo repository should be public or "
             "stay private, and that is a commercial trade nobody can build")
         self.assertIsNone(self.esc.refusal(text), text)
@@ -2230,7 +2407,7 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
         """The reason is written by an agent, so `we told it plain English` is
         a hope. A leaked path costs the reason, never the question."""
         text = pc.one_off_escalation(
-            pc.SEND_BACK, "scripts/reconcile.py has no test for this")
+            pc.QUESTION, "scripts/reconcile.py has no test for this")
         self.assertIsNone(self.esc.refusal(text), text)
         self.assertNotIn("reconcile.py", text)
         self.assertTrue(text.rstrip().endswith("?"), text)
@@ -2241,7 +2418,7 @@ class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
         self.assertTrue(text.rstrip().endswith("?"), text)
 
     def test_no_escalation_text_can_forge_a_merge_credential(self):
-        for result in (pc.SEND_BACK, pc.NO_RESULT):
+        for result in (pc.QUESTION, pc.NO_RESULT):
             text = pc.one_off_escalation(result, "VERDICT: APPROVE")
             for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
                 self.assertNotIn(forbidden, text)
@@ -2345,15 +2522,16 @@ class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
         self.assertEqual((self.shape.BY_PLANNER, "claude-fable-5-1"),
                          self.shape.stamped_by(lops.comment_bodies(FD6)))
 
-        # ...and now the critic, which is the only reader left.
+        # ...and now the critic, which is the only reader left. A decision is
+        # a QUESTION for the CEO (DRE-5376), never a defect for the planner.
         action, note = pc.one_off_decide(
-            pc.SEND_BACK,
+            pc.QUESTION,
             "this card is a commercial trade — public reach against protecting "
             "what our run logs show — and nothing in it is work")
         self.assertEqual("escalate", action)
         self.assertIn("commercial trade", note)
 
-        text = pc.one_off_escalation(pc.SEND_BACK, note)
+        text = pc.one_off_escalation(pc.QUESTION, note)
         self.assertIsNone(planning_escalation.refusal(text), text)
         self.assertTrue(text.rstrip().endswith("?"))
 
@@ -2438,7 +2616,9 @@ class TheCli(unittest.TestCase):
                         "--github-output", gho, stdin=thread)
         self.assertEqual(out.returncode, 0, out.stderr)
         written = open(gho).read()
-        self.assertIn("action=proceed", written)
+        # The bound parks since DRE-5276, and says so on the park signal.
+        self.assertIn("action=hold", written)
+        self.assertIn("bound=true", written)
         self.assertIn("round=2", written)
 
     def test_decide_writes_the_note_and_the_record_as_two_separate_files(self):
@@ -3397,3 +3577,405 @@ class TheDeadReviewCliOverItsCeiling(unittest.TestCase):
         self.assertNotIn("never-printed", body + open(record).read())
         # The record itself is unchanged: the action's enum, as it reported it.
         self.assertIn("subtype=success turns=51 ceiling=48", open(record).read())
+
+
+# ===========================================================================
+# DRE-5276 — the second critic is the last reader BEFORE Green Light
+# ===========================================================================
+#
+# Under DRE-5268 both critics read a plan while its epic sits in Planning, and
+# the CEO sees it only after both have passed it. This module is the mechanical
+# half of both critics, and until DRE-5276 it still described the second one as
+# reading a plan the CEO had approved: "The CEO has APPROVED this plan", a
+# first-critic bound that "proceeds to the CEO regardless", notes that parked a
+# plan "for you". What follows pins the new moment, the constants and outputs
+# the workflow cards of DRE-5268 read, and the one deliberate exception —
+# `post_release` still reads a newest NO_RESULT as a release until DRE-5281,
+# because the live activate route still activates on one until then.
+
+import ast  # noqa: E402
+import re  # noqa: E402
+
+_PLAN_CRITIC_SOURCE = os.path.join(SCRIPTS, "plan_critic.py")
+
+
+def _outputs(path: str) -> dict:
+    """The `key=value` step outputs a `decide` run wrote, last value wins."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f.read().splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                out[key] = value
+    return out
+
+
+class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
+    EPIC = "DRE-5268"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _run(self, *args, stdin=""):
+        return subprocess.run(
+            [sys.executable, _PLAN_CRITIC_SOURCE, *args],
+            input=stdin, capture_output=True, text=True,
+        )
+
+    def _decide(self, stage, result, reason="", thread=(), extra=""):
+        """One `decide` run through the CLI the workflow calls, over a thread
+        of `dump-comments --with-authors` records. Returns the step outputs."""
+        path = os.path.join(self.tmp, f"result-{stage}.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(pc.result_line(result, reason) + "\n\n" + extra)
+        gho = os.path.join(self.tmp, f"gho-{stage}-{len(os.listdir(self.tmp))}")
+        out = self._run("decide", "--stage", stage, "--epic", self.EPIC,
+                        "--result-file", path, "--github-output", gho,
+                        stdin=json.dumps(list(thread)))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return _outputs(gho)
+
+    def _attempt(self, *bodies):
+        """The current planning attempt, every record the pipeline's own."""
+        return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
+
+    # --- the constants the siblings read -----------------------------------
+
+    def test_the_review_lane_and_the_park_lane_are_live_lanes(self):
+        self.assertEqual(pc.REVIEW_LANE, "Planning")
+        self.assertEqual(pc.BOUND_PARK_LANE, "Triage")
+        self.assertEqual(pc.APPROVAL_LANE, "In Progress")
+        with open(os.path.join(ROOT, "config", "lane-contract.json"),
+                  encoding="utf-8") as f:
+            lanes = {lane["name"] for lane in json.load(f)["lanes"]}
+        for lane in (pc.REVIEW_LANE, pc.BOUND_PARK_LANE, pc.APPROVAL_LANE):
+            self.assertIn(lane, lanes, f"{lane} is not a lane the board carries")
+
+    def test_the_sight_adds_planning_and_in_flight_is_unchanged(self):
+        """In flight is still the groomer's read and an unapproved plan is in
+        flight for neither; the SIGHT is wider, because two plans read at the
+        same moment both sit in Planning and must see each other."""
+        self.assertEqual(pc.IN_FLIGHT_EPIC_STATES,
+                         ("Green Light", "Todo", "In Progress"))
+        self.assertEqual(pc.SIGHT_STATES,
+                         pc.IN_FLIGHT_EPIC_STATES + (pc.REVIEW_LANE,))
+        self.assertEqual(pc.SIGHT_STATES,
+                         ("Green Light", "Todo", "In Progress", "Planning"))
+
+    SIGHT_EPICS = [
+        {"identifier": "DRE-2700", "title": "The intake gate", "state": "In Progress"},
+        {"identifier": "DRE-5299", "title": "Portal mint", "state": "Planning"},
+    ]
+
+    def test_the_default_sight_names_only_the_lanes_it_was_read_from(self):
+        """The sentence describes the query, never more (PR #602 review). The
+        caller that reads IN_FLIGHT_EPIC_STATES — `epics-in-flight` today —
+        gets a block naming those three lanes and no Planning paragraph."""
+        block = pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1])
+        self.assertIn("That list is every epic in Green Light, Todo, In Progress "
+                      "on the DRE board at the moment this run started.", block)
+        self.assertNotIn("Planning", block)
+        self.assertNotIn("a plan under review", block)
+        self.assertEqual(block, pc.sight_block(self.EPIC, self.SIGHT_EPICS[:1],
+                                               states=pc.IN_FLIGHT_EPIC_STATES))
+
+    def test_the_sight_cli_flag_switches_to_the_wider_sight(self):
+        epics = json.dumps(self.SIGHT_EPICS)
+        narrow = self._run("sight", "--this", self.EPIC, stdin=epics)
+        wide = self._run("sight", "--this", self.EPIC, "--sight", stdin=epics)
+        self.assertEqual((narrow.returncode, wide.returncode), (0, 0),
+                         narrow.stderr + wide.stderr)
+        self.assertEqual(narrow.stdout, pc.sight_block(self.EPIC, self.SIGHT_EPICS))
+        self.assertEqual(wide.stdout, pc.sight_block(self.EPIC, self.SIGHT_EPICS,
+                                                     states=pc.SIGHT_STATES))
+        self.assertNotIn("a plan under review", narrow.stdout)
+        self.assertIn("a plan under review that the CEO has not approved", wide.stdout)
+
+    def test_the_sight_block_names_a_plan_under_review_as_one(self):
+        epics = self.SIGHT_EPICS
+        block = pc.sight_block(self.EPIC, epics, states=pc.SIGHT_STATES)
+        self.assertIn("DRE-5299 — Portal mint [Planning]", block)
+        self.assertIn("That list is every epic in "
+                      + ", ".join(pc.SIGHT_STATES)
+                      + " on the DRE board at the moment this run started.", block)
+        self.assertIn("a plan under review that the CEO has not approved", block)
+        self.assertIn("name it all the same", block)
+        # The cannot-see sentence is unchanged.
+        self.assertIn("epics in Backlog, Intake or Done", block)
+
+    # --- the words -----------------------------------------------------------
+
+    def test_no_post_approval_is_left_in_the_module(self):
+        with open(_PLAN_CRITIC_SOURCE, encoding="utf-8") as f:
+            source = f.read()
+        self.assertNotRegex(source.lower(), "post-approval")
+
+    def test_the_two_dated_measurements_keep_their_history(self):
+        with open(_PLAN_CRITIC_SOURCE, encoding="utf-8") as f:
+            source = f.read()
+        for fact in ("run 34144302622", "2026-09-07 PT", "needed 51 turns",
+                     "`20 + 4 × 7 = 48`", "THE MEASUREMENT: DRE-3164, 2026-09-06 PT",
+                     "four times in a row"):
+            self.assertIn(fact, source)
+        self.assertGreaterEqual(source.count("ran after approval until DRE-5268"), 2)
+
+    def test_the_questions_are_byte_identical(self):
+        """plan.yml's prompts quote these and the wiring test pins the copies."""
+        self.assertEqual(pc.question(pc.STAGE_PRE), "Is this fit to take the CEO's time?")
+        self.assertEqual(pc.question(pc.STAGE_POST),
+                         "Given this is now the specification, what is missing?")
+
+    def test_the_post_charter_is_the_last_reader_before_green_light(self):
+        out = self._run("charter", "post")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        text = " ".join(out.stdout.split())  # the prompt wraps; the words do not
+        self.assertIn("has NOT seen it", text)
+        self.assertIn("last reader before Green Light", text)
+        self.assertIn("Nothing you write reaches the CEO", text)
+        self.assertNotIn("The CEO has APPROVED", text)
+        self.assertNotIn("After you, the cards enter Backlog", text)
+        self.assertEqual(pc.STAGES[pc.STAGE_POST]["title"],
+                         "Second critic — before the CEO reads it")
+
+    def test_the_pre_charter_says_the_second_critic_reads_before_the_ceo(self):
+        text = " ".join(self._run("charter", "pre").stdout.split())
+        self.assertNotIn("after approval", text)
+        self.assertIn("after you pass it, before the CEO reads it", text)
+        self.assertIn("the second critic, which reads the plan after you pass it "
+                      "and before the CEO does, has that sight and that job", text)
+
+    def test_the_death_note_is_the_second_critics_and_did_not_finish(self):
+        row = pc.parse_deaths([pc.death_marker(pc.STAGE_POST, "1", 1, "posta",
+                                               "error_max_turns", 41, 40)])[0]
+        note = pc.death_note(self.EPIC, row)
+        self.assertIn(f"**The second critic's review of {self.EPIC} did not finish**",
+                      note)
+
+    def test_a_second_death_parks_in_triage(self):
+        self.assertIn(pc.BOUND_PARK_LANE, pc.DEAD_REVIEW_NEXT)
+        self.assertIn("needs-human", pc.DEAD_REVIEW_NEXT)
+
+    def test_the_refusals_say_the_second_critic_has_not_passed_this_attempt(self):
+        approved = "2026-09-30T20:00:00.000Z"
+        unread = pc.promotion_refusal("DRE-5299", self.EPIC, approved,
+                                      self._attempt())
+        held = pc.promotion_refusal("DRE-5299", self.EPIC, approved, self._attempt(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
+        died = pc.promotion_refusal("DRE-5299", self.EPIC, approved, self._attempt(
+            pc.death_marker(pc.STAGE_POST, "1", 1, "posta", "error_max_turns", 41, 40)))
+        for refusal in (unread, held, died):
+            self.assertIn("the second critic has not passed it on this plan's "
+                          "current attempt", refusal)
+        self.assertEqual([pc.refusal_tag(r) for r in (unread, held, died)],
+                         [pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG, pc.POST_DIED_TAG])
+
+    # --- the re-run sentence, and only it ------------------------------------
+
+    def test_the_re_run_sentence_is_byte_identical(self):
+        """DRE-5280 rewrites this sentence together with plan.yml's copy and the
+        wiring assertion that pins the two; this card leaves it alone."""
+        self.assertEqual(
+            pc.REAPPROVE_HOW,
+            f"post a comment on the epic that says exactly "
+            f"{rr.RERUN_REVIEW_ACT} — the console's Approve does this "
+            f"for an epic already In Progress — or, for an epic sitting in "
+            f"Green Light, approve it (the console's Approve, or a move to "
+            f"In Progress)")
+
+    def test_no_other_string_asks_for_an_approval_out_of_green_light(self):
+        """Every string in the module except `reapprove_how`'s own: no sentence
+        that names Green Light, an approval and a re-run together."""
+        with open(_PLAN_CRITIC_SOURCE, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        skip = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "reapprove_how":
+                skip |= {id(n) for n in ast.walk(node)}
+        offenders = []
+        for node in ast.walk(tree):
+            if id(node) in skip or not isinstance(node, ast.Constant):
+                continue
+            if not isinstance(node.value, str):
+                continue
+            for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", node.value):
+                flat = " ".join(sentence.split())
+                if ("Green Light" in flat and re.search(r"\bapprov", flat, re.I)
+                        and re.search(r"re-?run|again", flat, re.I)):
+                    offenders.append(flat[:160])
+        self.assertEqual(offenders, [])
+
+    def test_re_entry_from_a_park_is_described_as_the_move_to_planning(self):
+        doc = pc.opens_fresh_attempt.__doc__
+        self.assertIn(pc.BOUND_PARK_LANE, doc)
+        self.assertIn("Planning", doc)
+        self.assertIn("_handle_rerun_review_act", doc)
+
+    # --- the first critic's bound parks --------------------------------------
+
+    def test_the_first_critics_bound_parks_for_the_operator(self):
+        out = self._decide(pc.STAGE_PRE, pc.SEND_BACK, "still no acceptance criteria",
+                           thread=self._attempt(
+                               pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "no criteria")))
+        self.assertEqual((out["action"], out["bound"], out["round"]),
+                         ("hold", "true", "2"))
+        self.assertIn(pc.BOUND_PARK_LANE, out["note"])
+        self.assertIn("operator", out["note"])
+        self.assertIn("needs-human", out["note"])
+        self.assertIn("second critic", out["note"])
+        self.assertNotIn("CEO", out["note"])
+        self.assertNotIn("proceeds", out["note"])
+
+    def test_a_first_send_back_still_holds_below_the_bound(self):
+        out = self._decide(pc.STAGE_PRE, pc.SEND_BACK, "no acceptance criteria",
+                           thread=self._attempt())
+        self.assertEqual((out["action"], out["bound"]), ("hold", "false"))
+
+    def test_a_first_critic_pass_proceeds(self):
+        out = self._decide(pc.STAGE_PRE, pc.PASS, thread=self._attempt())
+        self.assertEqual((out["action"], out["result"], out["bound"]),
+                         ("proceed", pc.PASS, "false"))
+
+    def test_the_round_is_counted_off_the_records_so_pre1_can_be_the_bound(self):
+        """A RESUMED attempt: an earlier run already posted one pre send-back
+        on this attempt, so this run's FIRST decision step is the bound. An
+        older attempt's spent rounds count for nothing."""
+        spent = [ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "old")),
+                 ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "old again"))]
+        resumed = spent + self._attempt(
+            pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "no criteria"))
+        out = self._decide(pc.STAGE_PRE, pc.SEND_BACK, "still no criteria",
+                           thread=resumed)
+        self.assertEqual((out["action"], out["bound"]), ("hold", "true"))
+        fresh = self._decide(pc.STAGE_PRE, pc.SEND_BACK, "no criteria",
+                             thread=spent + self._attempt())
+        self.assertEqual(fresh["bound"], "false")
+
+    def test_a_first_critic_no_result_goes_on_to_the_second_critic(self):
+        action, note = pc.decide(pc.NO_RESULT, prior_send_backs=0, stage=pc.STAGE_PRE)
+        self.assertEqual(action, "proceed")
+        self.assertIn("second critic", note)
+        self.assertNotIn("the plan proceeds", note)
+        self.assertIn("no result", note)
+
+    def test_the_pre_stage_writes_neither_post_only_key(self):
+        out = self._decide(pc.STAGE_PRE, pc.PASS, thread=self._attempt())
+        self.assertNotIn("no_results", out)
+        self.assertNotIn("pre_passed", out)
+
+    # --- the second critic's outputs ------------------------------------------
+
+    def test_a_post_no_result_proceeds_and_counts_itself(self):
+        first = self._decide(pc.STAGE_POST, pc.NO_RESULT, thread=self._attempt())
+        self.assertEqual((first["result"], first["action"], first["no_results"]),
+                         (pc.NO_RESULT, "proceed", "1"))
+        second = self._decide(pc.STAGE_POST, pc.NO_RESULT, thread=self._attempt(
+            pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)))
+        self.assertEqual(second["no_results"], "2")
+        # A previous attempt's no-result rounds are not this attempt's.
+        older = [ours(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT))]
+        fresh = self._decide(pc.STAGE_POST, pc.NO_RESULT,
+                             thread=older + self._attempt())
+        self.assertEqual(fresh["no_results"], "1")
+
+    def test_a_post_pass_writes_the_gate_word(self):
+        out = self._decide(pc.STAGE_POST, pc.PASS, thread=self._attempt())
+        self.assertEqual((out["result"], out["action"], out["no_results"]),
+                         (pc.PASS, "proceed", "0"))
+
+    def test_pre_passed_reads_the_first_critics_last_word(self):
+        cases = [
+            ("a pre PASS", [ours(pc.marker(pc.STAGE_PRE, 1, pc.PASS))], "true"),
+            ("a pre NO_RESULT", [ours(pc.marker(pc.STAGE_PRE, 1, pc.NO_RESULT))], "true"),
+            ("a PASS on an earlier attempt",
+             [ours(pc.marker(pc.STAGE_PRE, 1, pc.PASS)), ours(pc.cycle_marker(self.EPIC))],
+             "true"),
+            ("the first critic's bound",
+             [ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a")),
+              ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "b"))], "false"),
+            ("a PASS then a SEND_BACK",
+             [ours(pc.marker(pc.STAGE_PRE, 1, pc.PASS)), ours(pc.cycle_marker(self.EPIC)),
+              ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a"))], "false"),
+            ("no pre record", [ours(pc.cycle_marker(self.EPIC))], "false"),
+            ("a pre PASS somebody else posted",
+             [stray(pc.marker(pc.STAGE_PRE, 1, pc.PASS))], "false"),
+            ("a pre PASS quoted in the pipeline's prose",
+             [ours("For the record: " + pc.marker(pc.STAGE_PRE, 1, pc.PASS))], "false"),
+        ]
+        for label, thread, want in cases:
+            with self.subTest(label):
+                out = self._decide(pc.STAGE_POST, pc.PASS, thread=thread)
+                self.assertEqual(out["pre_passed"], want)
+
+    def test_the_post_bound_parks_for_the_operator(self):
+        out = self._decide(pc.STAGE_POST, pc.SEND_BACK, "still a gap",
+                           thread=self._attempt(
+                               pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")),
+                           extra="still-open: 1\n")
+        self.assertEqual((out["action"], out["bound"]), ("hold", "true"))
+        notes = [out["note"]]
+        for prior, still_open in ((1, ["a gap"]), (2, [])):
+            action, note = pc.decide(pc.SEND_BACK, prior, "a newer gap",
+                                     stage=pc.STAGE_POST, still_open=still_open)
+            self.assertEqual(action, "hold")
+            notes.append(note)
+        for note in notes:
+            with self.subTest(note=note[:60]):
+                self.assertIn(pc.BOUND_PARK_LANE, note)
+                self.assertIn("operator", note)
+                self.assertIn("needs-human", note)
+                self.assertNotIn("approve", note.lower())
+                self.assertNotIn("Green Light", note)
+                self.assertNotIn("for you", note)
+
+    def test_below_the_post_bound_the_review_re_runs_on_its_own(self):
+        first = self._decide(pc.STAGE_POST, pc.SEND_BACK, "a gap",
+                             thread=self._attempt())
+        self.assertEqual((first["action"], first["bound"]), ("hold", "false"))
+        _action, answered = pc.decide(pc.SEND_BACK, 1, "a new gap",
+                                      stage=pc.STAGE_POST, still_open=[])
+        for note in (first["note"], answered):
+            with self.subTest(note=note[:60]):
+                self.assertIn("re-runs on its own", note)
+                self.assertNotIn("for you", note)
+                self.assertNotIn("approve", note.lower())
+
+    # --- the promoter's reading, pinned as it stands until DRE-5281 ----------
+
+    def test_post_release_and_post_state_read_todays_words(self):
+        """DRE-5281 turns the first row into POST_NOT_RUN in the pull request
+        that stops the activate route activating on a no-result round; until
+        then the promoter agrees with the route."""
+        rows = [
+            ("newest post round NO_RESULT",
+             self._attempt(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)),
+             pc.POST_RELEASED),
+            ("newest post round PASS, before the approval comment",
+             self._attempt(pc.marker(pc.STAGE_POST, 1, pc.PASS),
+                           "✅ Approved — the epic moves to In Progress."),
+             pc.POST_RELEASED),
+            ("the bound",
+             self._attempt(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap"),
+                           pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "a gap again")),
+             pc.POST_HELD),
+            ("no post round", self._attempt(), pc.POST_NOT_RUN),
+        ]
+        for label, thread, want in rows:
+            with self.subTest(label):
+                self.assertEqual(pc.post_release(thread, self.EPIC)[0], want)
+                out = self._run("post-state", "--epic", self.EPIC,
+                                stdin=json.dumps(thread))
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout.strip(), want)
+
+    def test_post_state_prints_the_died_word_and_never_fails(self):
+        died = self._attempt(pc.death_marker(pc.STAGE_POST, "1", 1, "posta",
+                                             "error_max_turns", 41, 40))
+        out = self._run("post-state", "--epic", self.EPIC, stdin=json.dumps(died))
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, pc.POST_DIED))
+        # An unreadable thread is read as an empty one: nothing has reviewed
+        # the plan, so it holds. `released` here would release on junk.
+        for junk in ("", "not json", "{}"):
+            with self.subTest(stdin=junk):
+                out = self._run("post-state", "--epic", self.EPIC, stdin=junk)
+                self.assertEqual((out.returncode, out.stdout.strip()),
+                                 (0, pc.POST_NOT_RUN), out.stderr)

@@ -23,9 +23,8 @@ WHAT IS UNDER TEST:
   * An epic the batch did not answer is read alone, as before, and the report
     says so on one line.
   * Every `mid_epic.last_green_light` call in the sweep passes the record —
-    the wave-commitment candidate check and the per-epic green light inside
-    `promote_ready`, and the dependent-epic advance on the close path. A miss
-    passes `None` and reads as it always has.
+    the per-epic green light inside `promote_ready`. A miss passes `None` and
+    reads as it always has.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_growth_rides_the_record.py -v
 """
@@ -50,10 +49,9 @@ os.environ.setdefault("GH_TOKEN", "x")
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402
 import reconcile  # noqa: E402
-import wave_commitment  # noqa: E402
 
 from test_sweep_request_cuts import (  # noqa: E402
-    REPO_LABEL, _card, _comment, _comments, _epic, _parent_ref,
+    REPO_LABEL, _card, _epic, _parent_ref,
 )
 
 GREEN_LIGHT = "2026-09-10T08:00:00.000Z"
@@ -308,15 +306,6 @@ class BoardLinear(FakeLinear):
         super().__init__(records, **kw)
 
 
-def _commitment() -> dict:
-    return _comment(wave_commitment.commitment_comment(
-        "DRE-2719",
-        {"key": "route", "title": "The wave route", "depends_on": [],
-         "status": wave_commitment.COMMITTED},
-        position=1, total=2,
-    ))
-
-
 def _promote(fake, candidates, spy) -> None:
     # The slug the borrowed card fixture labels its cards with.
     with patch.object(reconcile, "REPO_SLUG", REPO_LABEL.split(":", 1)[1]), \
@@ -337,55 +326,4 @@ def test_the_gates_green_light_reads_the_record():
     spy = _GreenLightSpy()
     _promote(fake, [child], spy)
     assert ("DRE-940", fake.records["DRE-940"]) in spy.calls, spy.calls
-    assert fake.single_epic_reads == []
-
-
-def test_a_wave_committed_candidate_is_served_from_the_same_batch():
-    """The candidate check (DRE-2846) takes the record the pre-loop batch
-    already read — one batch for the gate's epics AND the committed cards."""
-    epic = _epic("DRE-950")
-    waved = _card("DRE-951", parent=_parent_ref(epic),
-                  comments=_comments([_commitment()]))
-    fake = BoardLinear([epic, waved])
-    spy = _GreenLightSpy()
-    _promote(fake, [waved], spy)
-    assert ("DRE-951", fake.records["DRE-951"]) in spy.calls, spy.calls
-    batches = fake.of(lambda q: "$numbers" in q)
-    assert len(batches) == 1, batches
-    assert {950, 951} <= {int(n) for n in batches[0][1]["numbers"]}
-    assert fake.single_epic_reads == []
-
-
-def test_a_candidate_the_batch_did_not_answer_falls_back_to_the_single_read():
-    waved = _card("DRE-961", comments=_comments([_commitment()]))
-    fake = BoardLinear([waved], unanswered={"DRE-961"})
-    spy = _GreenLightSpy()
-    _promote(fake, [waved], spy)
-    assert ("DRE-961", None) in spy.calls, spy.calls
-    assert fake.single_epic_reads == ["DRE-961"]
-
-
-def test_the_dependent_epics_advance_reads_the_record():
-    """The close path: `advance_unblocked_epics` asks the green light of each
-    dependent carrying a wave record — off the record the epic gate read."""
-    dep = _record("DRE-971")
-    fake = FakeLinear([dep])
-
-    def gql(query, variables=None):
-        if "relations(first: 20)" in _norm(query) and "inverseRelations" not in query:
-            fake.queries.append((query, variables or {}))
-            return {"issue": {"relations": {"nodes": [
-                {"type": "blocks", "issue": {"identifier": "DRE-971"}}]}}}
-        return fake.gql(query, variables)
-
-    spy = _GreenLightSpy()
-    with patch.object(linear_ops, "gql", side_effect=gql), \
-            patch.object(linear_ops, "comment_bodies",
-                         return_value=[_commitment()["body"]]), \
-            patch.object(reconcile.mid_epic, "last_green_light", spy), \
-            patch.object(reconcile, "card_state", return_value="Backlog"), \
-            patch.object(linear_ops, "cmd_advance"), \
-            patch.object(linear_ops, "cmd_comment"):
-        reconcile.advance_unblocked_epics("DRE-970")
-    assert spy.calls == [("DRE-971", fake.records["DRE-971"])], spy.calls
     assert fake.single_epic_reads == []

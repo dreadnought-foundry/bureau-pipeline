@@ -405,9 +405,15 @@ STDOUT_WRITERS = {
     # `one_line` for exactly this reason (DRE-3262), and every human line
     # goes through `_log`, which writes to stderr.
     "push_rescue.py": "safe",
+    # `open-record-card` renders its block inside `only_outputs()`, since it
+    # talks to Linear through `linear_ops` (DRE-3898).
+    "model_adoption_actions.py": "guarded",
+    # `supports` writes one `github_output.render` block of three values, and
+    # its one human line goes to stderr; it calls no module that talks.
+    "claude_code_pin.py": "safe",
 }
 
-#: The two above that render through the safe writer. Named, because "it
+#: The ones above that render through the safe writer. Named, because "it
 #: imports the module" is the only mechanical proof available here.
 GUARDED = {name for name, why in STDOUT_WRITERS.items() if why == "guarded"}
 

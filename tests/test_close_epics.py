@@ -217,3 +217,90 @@ def test_close_only_sweep_survives_a_linear_timeout():
         patch.object(reconcile.linear_ops, "cmd_state") as state:
         reconcile.main(close_only=True)  # must not raise
     state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DRE-4700: a parent whose children are themselves epics. Waves are retired;
+# what is left of a split plan is a roll-up — child epics under a parent that
+# never builds anything and closes when its children are Done. The sweep
+# already carries both halves of that rule generically, one level at a time
+# (`_close_epic_if_finished` and the epic skip in `promote_ready`); nothing
+# tested them on a parent whose children are epics, so these do.
+# ---------------------------------------------------------------------------
+ROLL_UP = "DRE-4800"
+
+
+def _child_epics(*states):
+    """The roll-up's record as the epic read returns it: each child is an
+    `[EPIC]`-titled card of its own, in the lane given."""
+    return {"issue": {"children": {"nodes": [
+        {
+            "identifier": f"DRE-{4801 + n}",
+            "title": f"[EPIC] bureau-pipeline: slice {n + 1}",
+            "state": {"name": s},
+        }
+        for n, s in enumerate(states)
+    ]}}}
+
+
+def test_roll_up_whose_child_epics_are_all_done_closes():
+    """(a) Three child epics all Done → the parent goes to Done with the
+    `🏁 Epic complete` receipt, and the chain behind it is advanced."""
+    with patch.object(reconcile.linear_ops, "gql",
+                      return_value=_child_epics("Done", "Done", "Done")), \
+        patch.object(reconcile.linear_ops, "cmd_state") as state, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment, \
+        patch.object(reconcile, "advance_unblocked_epics") as advance_chain:
+        reconcile.close_finished_epics({ROLL_UP})
+    state.assert_called_once_with(ROLL_UP, "Done")
+    comment.assert_called_once()
+    epic, body = comment.call_args.args
+    assert epic == ROLL_UP
+    assert body.startswith("🏁 Epic complete: all 3 children are closed (3 done).")
+    advance_chain.assert_called_once_with(ROLL_UP)
+
+
+def test_roll_up_with_an_open_child_epic_stays_where_it_is():
+    """(b) One child epic still In Progress → the parent is not moved and
+    nothing is posted on it."""
+    with patch.object(reconcile.linear_ops, "gql",
+                      return_value=_child_epics("Done", "In Progress", "Done")), \
+        patch.object(reconcile.linear_ops, "cmd_state") as state, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment, \
+        patch.object(reconcile, "advance_unblocked_epics") as advance_chain:
+        reconcile.close_finished_epics({ROLL_UP})
+    state.assert_not_called()
+    comment.assert_not_called()
+    advance_chain.assert_not_called()
+
+
+def test_roll_up_in_backlog_is_never_promoted(monkeypatch, capsys):
+    """(c) The same parent as a Backlog promotion candidate, one child epic
+    still open → skipped with the epics-are-promoted-by-humans line, and
+    nothing is written for it: no move (the move to Todo IS the dispatch),
+    no receipt, no refusal notice."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    parent = {
+        "identifier": ROLL_UP,
+        "title": "[EPIC] bureau-pipeline: the roll-up",
+        "description": "**Repo:** agent-bureau\nchild epics under this one",
+        "labels": {"nodes": [{"name": "agent:planner"}]},
+        "children": {"nodes": [{"id": "DRE-4801"}]},
+        "comments": {"nodes": []},
+        "inverseRelations": {"nodes": []},
+    }
+    with patch.object(reconcile.linear_ops, "gql",
+                      return_value=_child_epics("Done", "In Progress", "Done")), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+        patch.object(reconcile.linear_ops, "cmd_state") as state, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        promoted = reconcile.promote_ready(0, candidates=[parent])
+    assert promoted == 0
+    advance.assert_not_called()
+    state.assert_not_called()
+    comment.assert_not_called()
+    out = capsys.readouterr().out
+    assert (
+        f"promotion: {ROLL_UP} is an epic — epics are promoted by humans, "
+        "never by the sweep; skipping"
+    ) in out

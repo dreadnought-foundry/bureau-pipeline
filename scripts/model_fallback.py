@@ -436,7 +436,10 @@ def policy_errors(config, prices=None) -> list[str]:
       6. `discovery.on_new_model` is `advisory` or `none`. `workhorse` — a
          newly seen model auto-joining the build path — is rejected outright,
          `judgement` with it (the planning ladder is the strongest one we run),
-         and `discovery.alert` must be true: discovery is never silent.
+         and `discovery.alert` must be true: discovery is never silent. The
+         `model-adoption` workflow sorts every newly seen id by the CEO's rule
+         of 2026-09-14 and asks about a new family; `model-drift` files no
+         card (DRE-3899).
       7. No `excluded` model appears on ANY ladder. Rule 4 only bars the top of
          a non-build ladder from the build path; when the advisory ladder moved
          off Fable (2026-08-12) that stopped covering Fable, and a config
@@ -664,7 +667,10 @@ def policy_errors(config, prices=None) -> list[str]:
             "strongest one we run — is refused for the same reason."
         )
     if not cfg["discovery"]["alert"]:
-        errors.append("discovery.alert: must be true — discovery is never silent")
+        errors.append(
+            "discovery.alert: must be true — discovery is never silent (the "
+            "model-adoption workflow asks the CEO about every new family)"
+        )
 
     # Rule 9 (DRE-4836): a declared effort level is real and reaches something.
     # Both halves fail the same way in production — an unknown level is an

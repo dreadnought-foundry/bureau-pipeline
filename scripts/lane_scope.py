@@ -113,8 +113,9 @@ def is_policed(lane: str, *, parent_epic_lane: str | None = None) -> bool:
 
       1. **The card's own lane.** Before Planning exit → not policed.
       2. **Its epic's lane**, when it has a parent epic. The planner creates
-         children into the first work lane before the epic is green-lit, and the
-         second critic writes their verdicts only after approval — so a child
+         children into the first work lane before the epic is green-lit, and
+         their verdicts are settled only once both critics have passed the
+         plan and the epic leaves Planning (DRE-5268) — so a child
          whose epic has not passed Planning exit has no verdict to be judged
          against either. It becomes policed the moment its epic does.
 

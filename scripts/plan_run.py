@@ -2,13 +2,17 @@
 """The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
 callers that genuinely make one.
 
-Two of them remain:
+Four of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
     the failure kept in its write ledger so the run goes red;
   * `review_rerun.py dispatch` — the retry of a dead post-approval review,
     which asks for the ACTIVATE route with `trigger_state` / `reason`
-    (DRE-3286).
+    (DRE-3286);
+  * `planner_queue.py dispatch` and `reconcile.serve_planner_line` — the
+    planner line serving the card whose turn has come (DRE-5180, DRE-5178).
+    Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is
+    waiting to be planned, whatever its labels (DRE-5366).
 
 This module began as the ONE place that asked for an epic's planner run when
 its turn came in a wave (DRE-2846, `note`), on the belief that nothing
@@ -18,9 +22,9 @@ dispatched off the lane that owes a plan artifact — it is not in
 lambda_function.py — DRE-1913, label or no label since DRE-3030), so the ask
 was the second of two dispatches for one lane move: on the DRE-3530 approval
 three epics drew six Agent Plan runs, and the duplicates each started a hosted
-runner to learn they had nothing to do. `wave_commitment.advance` stopped
-asking in DRE-3659 and `reconcile.advance_unblocked_epics` in DRE-3664, and
-the ask went with its last caller — from the one place it was written. The
+runner to learn they had nothing to do. The wave route's turn stopped asking
+in DRE-3659 and `reconcile.advance_unblocked_epics` in DRE-3664, and the ask
+went with its last caller — from the one place it was written. The
 lane's stall is still watched by `flag_stalled_planning`, which after
 `PLANNING_MINUTES` asks a HUMAN to look.
 
@@ -36,6 +40,12 @@ import json
 import os
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import tempfile
+
+# The two events a dispatch can carry. Without an `event` from its caller,
+# `fire` picks off the labels: `agent:planner` plans, anything else builds.
+PLAN_EVENT = "agent-plan"
+EXECUTE_EVENT = "agent-execute"
+EVENTS = (PLAN_EVENT, EXECUTE_EVENT)
 
 # The epic a dispatch is about, read fresh: the payload is built from it.
 # `review_rerun.py dispatch` reads the card with this query before it fires.
@@ -91,7 +101,8 @@ def payload(card: dict, *, trigger_state: str | None = None,
 
 def fire(card: dict, repo: str, *, trigger_state: str | None = None,
          reason: str | None = None,
-         sent_by_run: str | int | None = None) -> tuple[bool, str]:
+         sent_by_run: str | int | None = None,
+         event: str | None = None) -> tuple[bool, str]:
     """Fire the card's repository_dispatch at `repo`.
 
     Returns `(True, "")` ONLY on a confirmed rc=0 dispatch, else `(False,
@@ -106,13 +117,26 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
 
     `sent_by_run` (DRE-4573) names the planner run sending this, so the run it
     starts does not skip itself as that run's duplicate. See `payload`.
+
+    `event` (DRE-5366) is the caller naming the event outright. The planner
+    line passes `PLAN_EVENT`: the label rule below asks whether the card is an
+    epic, and a one-off sent back to Planning is not one — on 2026-09-30 the
+    line fired `agent-execute` for DRE-5198 and a build ran on a card waiting
+    to be planned. Omit it and the labels decide, as they always have. An
+    event outside `EVENTS` raises before anything is sent. (DRE-5376) A one-off
+    card the planner has just revised carries no `agent:planner`, so
+    `review_rerun.py dispatch --route plan` names `agent-plan` the same way.
     """
+    if event is not None and event not in EVENTS:
+        raise ValueError(f"plan run {card['identifier']}: unknown event {event!r} "
+                         f"— one of {', '.join(EVENTS)}")
     if not repo:
         return False, (f"plan run {card['identifier']}: no REPO to dispatch at "
                        "— the step that runs this must pass one")
     body = payload(card, trigger_state=trigger_state, reason=reason,
                    sent_by_run=sent_by_run)
-    event = "agent-plan" if "agent:planner" in body["labels"] else "agent-execute"
+    if event is None:
+        event = PLAN_EVENT if "agent:planner" in body["labels"] else EXECUTE_EVENT
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"event_type": event, "client_payload": body}, f)
         path = f.name

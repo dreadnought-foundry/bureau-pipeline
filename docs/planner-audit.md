@@ -47,6 +47,10 @@ can never disagree about what "did not fit one run" means. It is WIDER than the
 handed back to Planning as an epic never hit the cap and agrees on `size`,
 while being the clearest split there is.
 
+`split-rate` and `score` both take `--ledger <path>` to read another ledger
+instead; without it they read the shipped file. The tests pass their own,
+because the shipped file is regenerated every night (DRE-5314).
+
 Four answers per card, and the last two are the load-bearing ones: `split`,
 `one-card`, `pending` (the card has not finished, so the question was never put
 to it) and `unknown` (its record could not be read). Only the first two are in

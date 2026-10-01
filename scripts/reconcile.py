@@ -83,12 +83,15 @@ full sweep also refreshes each active epic's growth record on the epic itself:
 green-lit at N cards, running M, plus any card that joined without the plan
 moving with it (scripts/mid_epic.py owns the whole mechanism).
 
-An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
-activation action is moving an approved epic to **In Progress** — that is what
+An epic counts as ACTIVATED in In Progress and nowhere else (DRE-5347). The
+CEO's approval is the move of an epic to **In Progress**, and only that — what
 standards/card-quality.md and the planner brief tell them, and what the plan
-comment asks for (DRE-2727). Todo remains accepted and activates identically, so
-an epic started the old way still flows; the set of parent states that count as
-"active" is unchanged, and so are MAX_WIP and the blocker checks.
+comment asks for (DRE-2727). DRE-1893 once let Todo activate an epic too; that
+convention is retired. An epic found in Todo is carried out of it on every full
+sweep (`carry_epics_out_of_todo`) — back to In Progress when it was approved, to
+Planning when it was not — and while it sits there it activates nothing: an
+approved epic's children wait at most one sweep, and an unapproved epic's
+children are never released. MAX_WIP and the blocker checks are unchanged.
 
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
@@ -96,12 +99,10 @@ EPICS. Before promoting an epic's children, it checks that EPIC's own
 not Done, none of that epic's children promote this sweep — regardless of the
 epic's own state. And when a blocker epic reaches Done, every epic blocked-by
 it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
-(which re-triggers the planner), or, for an epic recorded committed-in-sequence
-inside an approved wave, to the lane no epic leaves without a plan artifact, so
-it writes its own plan now and comes back for its own green light (DRE-2846).
-Never to In Progress either way, so the Green Light human-approval gate is
-preserved. Both behaviors fail SAFE on unreadable relation data (don't promote /
-don't advance on uncertainty).
+(which re-triggers the planner). Never to In Progress, so the Green Light
+human-approval gate is preserved. Both the promotion hold and the advance fail
+SAFE on unreadable relation data (don't promote / don't advance on
+uncertainty).
 
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 """
@@ -109,6 +110,7 @@ Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import json
 import math
@@ -119,12 +121,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
+import console_receipt  # noqa: E402 — an unchecked receipt is not a refused one (DRE-4153)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
 # escalation carries the reason the critic already stated, and must read the
 # marker from the module that writes it.
@@ -135,11 +138,18 @@ import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and it
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
+import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
 import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
+# DRE-4150: the Urgent fast path reads the CEO's per-card exclusions off the
+# groomer's standing card with the groomer's OWN reader (`decision_records`,
+# `standing_decisions`) — a second reading of his markers would be a second
+# answer to "did he exclude this card", waiting to disagree with the first.
+import groom_schedule_gate  # noqa: E402 — the standing card's variable name
+import groomer  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -176,6 +186,9 @@ import pipeline_act  # noqa: E402
 # seam the planner's own hand-planning escalation takes, so a card the sweep
 # escalates and a card the planner escalates read the same in the CEO's queue.
 import planning_escalation  # noqa: E402
+# DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
+# turn for a planner is not a dead planner, and its wait has its own bound.
+import planner_queue  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -224,9 +237,6 @@ import stranded_fix  # noqa: E402
 import structural_repair  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
-# DRE-2846: ONE source for "is this epic committed in sequence inside an
-# approved wave, and has it had a green light of its own?"
-import wave_commitment  # noqa: E402
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -376,14 +386,16 @@ MAX_WIP, MAX_WIP_SOURCE = cap_and_source(
     os.environ.get("MAX_WIP"), os.environ.get("GITHUB_WORKSPACE")
 )
 
-# Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
-# The CEO activates an approved epic by moving it to **In Progress** (DRE-2727 —
-# the verb the standard, the planner brief and the plan comment all name). Todo
-# was added by DRE-1893 and is still accepted: an epic in either state promotes
-# its unblocked Backlog children, so an epic started the old way still flows.
-# Anything else (Backlog, Planning, Green Light, Done, …) is not active and its
-# children stay parked.
-EPIC_ACTIVE_STATES = ("Todo", "In Progress")
+# Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893,
+# narrowed by DRE-5347). The CEO approves an epic by moving it to **In Progress**
+# (DRE-2727 — the verb the standard, the planner brief and the plan comment all
+# name), and that move is the only approval. An epic in Todo is carried out of
+# it every full sweep (`carry_epics_out_of_todo`) and activates nothing: one
+# dragged there from Green Light is unapproved, and counting Todo here would
+# release its verdict-carrying children in the window before the carry.
+# Anything else (Backlog, Planning, Green Light, Todo, Done, …) is not active
+# and its children stay parked.
+EPIC_ACTIVE_STATES = ("In Progress",)
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
 # crashes (counted by agent-task) or HANGS/times out (seen only here) — is
@@ -495,9 +507,12 @@ PLANNING_MINUTES = int(
 # workflow, against an approval thread. A card whose PARENT EPIC is being
 # planned leaves by adoption: the planning exit writes its routing verdict and
 # moves it to Backlog, where this sweep still holds it until the epic reaches
-# In Progress (DRE-4668, the CEO's signed answer of 2026-09-23). Those two are
-# the whole set, both are an approval he gives, and THIS SWEEP PERFORMS
-# NEITHER — it moves nothing out of Intake, on age or on anything else.
+# In Progress (DRE-4668, the CEO's signed answer of 2026-09-23). Both are an
+# approval he gives, and THIS SWEEP PERFORMS NEITHER. It moves nothing out of
+# Intake on age. The one card it does move is point 2 of the same signed
+# answer: a card RAISED to Urgent after that rule shipped goes to Planning on
+# the next pass (DRE-4150, `advance_urgent_intake` below) — urgency skips the
+# groom queue, never Planning's classifier and critic.
 #
 # WHY THE TIMER WENT. DRE-2687 moved an Intake card past the contract's
 # `stale_minutes` into Green Light, three per sweep, on the argument that a
@@ -537,6 +552,46 @@ INTAKE_DEPTH_PREFIX = "intake-depth"
 # reader left: `groomer.INTAKE_HOLD`, over in the workflow that performs the
 # one remaining exit. A constant here that nothing consulted would be a dial
 # wired to nothing, in the module whose dial it used to be.
+#
+# And the Urgent fast path (DRE-4150) does not read it EITHER, by the signed
+# answer's own word: the hold pauses the groomer's drain, and an Urgent card
+# waiting behind a pause is the opposite of the rule.
+
+# The Urgent fast path out of Intake (DRE-4150). Every knob lives in
+# config/urgent-fast-path.json, read once at import like every other knob
+# here — the ship moment above all, which is a DATED constant and never "now":
+# on 2026-09-17 24 of 286 Intake cards already carried Urgent, because on this
+# board Urgent has meant "important", and a rule keyed on the label would have
+# moved all 24 on its first sweep. What the rule reads is the ACT of raising a
+# card to Urgent after that moment, off the card's own Linear history.
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "config", "urgent-fast-path.json"), encoding="utf-8") as _fh:
+    _URGENT_FAST_PATH = json.load(_fh)
+URGENT_SHIPS_AT = datetime.fromisoformat(
+    _URGENT_FAST_PATH["ships_at"].replace("Z", "+00:00"))
+URGENT_SWEEP_CAP = int(_URGENT_FAST_PATH["per_sweep_cap"])
+URGENT_WINDOW_MINUTES = int(_URGENT_FAST_PATH["window_minutes"])
+URGENT_MAX_ATTEMPTS = int(_URGENT_FAST_PATH["max_attempts"])
+
+# Urgent is priority 1 in Linear (0 is "no priority", 4 is "low").
+URGENT_PRIORITY = 1
+
+# The receipt the moved card carries, the attempt count that bounds a move that
+# did not land, AND the marker the cross-repo cap counts. One string, three
+# jobs, so none of them can drift from the others.
+#
+# An OPENER, not yet an act tag, and the name says which: a new act reaches the
+# console's receipts.py:ACTS before the registry declares it (DRE-3091), and
+# that is a change in another repository. Until its row lands with its console
+# half, this receipt is declared in config/pipeline-acts.json's `unconverted`
+# block as an undeclared act — the DRE-4492 / DRE-4647 precedent — and a
+# `*_TAG` constant here would be read as an act the registry never declared.
+URGENT_FAST_PATH_OPENER = "urgent-fast-path"
+
+# The repository variable naming the groomer's standing card — the thread the
+# CEO's per-card exclusions are written on. Read at call time, so a sweep that
+# is not given it says so rather than reading "no exclusions".
+GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
 # cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
@@ -1550,6 +1605,7 @@ def reset_sweep_cards() -> None:
     _build_job_names.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
+    _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
 
@@ -1606,6 +1662,61 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
     )
 
 
+def carry_epics_out_of_todo() -> None:
+    """Carry every epic found in Todo to its right lane (DRE-5347).
+
+    The write layer refuses to put an epic in Todo (DRE-5316), but a person can
+    still drag one there — in Linear, or from the console's epic move menu — and
+    nothing comes for it: the relay dispatches nothing for an epic in Todo, and
+    the promoter and the nudge loop skip epics. DRE-3621 sat there seventeen
+    days. So every full sweep reads the Todo cards it has already fetched and,
+    for each one `epic_todo_gate` calls an epic (never the planner-ownership
+    label), writes In Progress when the lane before Todo says it was approved
+    and Planning when it does not. A move to In Progress re-fires `plan.yml`'s
+    activate route, the intended re-activation; a move to Planning starts the
+    planner, the cost DRE-5316 accepts. Each lane is a literal, so the
+    lane-writer check reads it.
+
+    The refusal is posted through `epic_todo_gate.post_refusal`, once per card
+    and move, and only after the write landed: it names the lane the card is
+    now in. A write that fails is recorded and the next epic is still carried.
+
+    Another repo's epic is left to that repo's sweep, which reads the same
+    board; an epic with no `repo:` label is everybody's (`_another_repos_card`).
+    """
+    for card in active_cards((epic_todo_gate.TODO,)):
+        # The lane this read says the card is in, asked again: every write
+        # below is made on the strength of it, so it is never taken on trust.
+        if (card.get("state") or {}).get("name") != epic_todo_gate.TODO:
+            continue
+        if _another_repos_card(card):
+            continue
+        ident = card["identifier"]
+        title = card.get("title") or ""
+        kids = bool(((card.get("children") or {}).get("nodes")) or [])
+        bodies = card_comment_bodies(card)
+        if not epic_todo_gate.is_epic_card(title, kids, bodies):
+            continue
+        before = epic_todo_gate.lane_before_todo(linear_ops, ident)
+        try:
+            if epic_todo_gate.approved(before):
+                linear_ops.cmd_state(ident, "In Progress")
+                carried = "In Progress"
+            else:
+                linear_ops.cmd_state(ident, "Planning")
+                carried = "Planning"
+        except Exception as e:  # noqa: BLE001 — one epic must not stop the rest
+            _write_failures.append(f"epic-not-todo: carrying {ident} out of Todo: {e}")
+            print(f"ERROR: carry_epics_out_of_todo: {ident}: {e}", file=sys.stderr)
+            continue
+        print(f"epic-not-todo: {ident} found in Todo (before: {before}) — carried to {carried}")
+        body = epic_todo_gate.refusal(
+            ident, epic_todo_gate.TODO, title, kids, bodies, before, carried_to=carried
+        )
+        if body is not None:
+            epic_todo_gate.post_refusal(linear_ops, ident, body)
+
+
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     """The paged board read itself. `linear_ops.COMMENT_WINDOW_GQL` is inline —
     the shape backlog_children already uses — so every reader downstream gets
@@ -1630,7 +1741,7 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
              team: {key: {eq: "DRE"}},
              state: {name: {in: $states}}
            }) { nodes {
-             id identifier title description updatedAt
+             id identifier title description updatedAt priority
              state { name } labels { nodes { name } }
              children(first: 1) { nodes { id } }
              %s
@@ -1939,6 +2050,19 @@ def flag_stalled_planning() -> set[str]:
     escalated card is no longer in Planning, so nothing needs to remember it.
     Returns the identifiers escalated this sweep.
 
+    A CARD WAITING IN THE PLANNER LINE IS NOT A STRAND (DRE-5177). Under the
+    fleet-wide planner cap (DRE-5176) a card can sit here for hours with only
+    its `waiting` receipt on it, so the line is read before the clock: a card
+    in line inside the line's own bound (`planner_queue.overdue`) is skipped
+    and logged, and one past it is escalated through the same seam with the
+    line's own reason — once,
+    under the same WATCHDOG_TAG rule. The escalation takes it out of the line:
+    the ledger reads a Green Light card for its open claim only, and the
+    `because parked` release posted with it (DRE-5378) ends its place, so a
+    re-send starts a fresh wait rather than an overdue one. A card whose
+    newest receipt is a claim, or that carries none, is measured by the stall
+    clock exactly as before.
+
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
     has no `repo:` label — assigning one is what Planning does — so filtering
@@ -1969,15 +2093,41 @@ def flag_stalled_planning() -> set[str]:
             continue
         if _another_repos_card(card):
             continue  # that repo's own sweep applies this same rule to its cards
-        # The age gate runs BEFORE anything reads what the card says (DRE-2929).
-        # It needs `updatedAt` and nothing else, and a young card is the common
-        # case — so every check below it is work the lane's own question has
-        # already made unnecessary.
-        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
-            continue  # planning is young — let it produce its classification
         # Off the card the board read already returned (DRE-2929): no per-card
         # request, however many cards Planning holds.
         bodies = card_comment_bodies(card)
+        # The line BEFORE the clock (DRE-5177). Under the fleet-wide planner
+        # cap a card can sit here for hours with only its `waiting` receipt on
+        # it, and `updatedAt` cannot tell that from a planner that died — so
+        # a card in line is judged by the line's own, longer bound instead,
+        # and never by the stall clock below. A card holding a claim, or
+        # carrying no receipt at all, falls through and is measured as before.
+        line = _planner_line(bodies)
+        if line is not None:
+            waited, overdue = line
+            if not overdue:
+                print(
+                    f"watchdog: {ident} is waiting for a planner slot "
+                    f"({_line_place(bodies)}, waited {waited:.0f} minutes) — "
+                    "not a strand"
+                )
+                continue
+            if any(WATCHDOG_TAG in b for b in bodies):
+                continue  # flagged once already — idempotent forever
+            if escalate_out_of_planning(card, waiting_too_long_reason(waited)):
+                flagged.add(ident)
+                _end_line_place(ident, bodies)
+                print(
+                    f"watchdog: {ident} has waited {waited:.0f} minutes for a "
+                    "planner slot, past the line's bound — escalated to "
+                    f"{ESCALATED_STATE}"
+                )
+            continue
+        # The stall clock needs `updatedAt` and nothing else, and a young card
+        # is the common case — so every check below it is work the lane's own
+        # question has already made unnecessary.
+        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
+            continue  # planning is young — let it produce its classification
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -2012,6 +2162,102 @@ def stalled_planning_reason() -> str:
         "card in Planning owes a decision about what it is and where it goes, "
         "and none has been recorded. Why is not known from here, which is why "
         "it is in front of you rather than being guessed at."
+    )
+
+
+def _slot_receipts(bodies) -> list:
+    """The planner-slot receipts among `bodies`, oldest first — parsed by the
+    module that owns the grammar (DRE-5176), never re-read here."""
+    parsed = [planner_queue.parse_receipt(b) for b in bodies or []]
+    return sorted(
+        (r for r in parsed if r is not None),
+        key=lambda r: datetime.fromisoformat(r.created_at.replace("Z", "+00:00")),
+    )
+
+
+def _planner_line(bodies) -> tuple[float, bool] | None:
+    """`(minutes waited, past the bound)` for a card in the planner line, or
+    None for a card that is not in it (DRE-5177).
+
+    In line means the foundation card's rule and nothing else:
+    `planner_queue.in_line` — `waiting`, or `dispatched` inside the grace —
+    with the wait measured from the line entry, never from the dispatch.
+
+    An unreadable queue config answers None: the card is then measured by the
+    stall clock exactly as it was before the line existed, which can raise a
+    false alarm but can never hide a card.
+    """
+    now = datetime.now(UTC)
+    try:
+        if not planner_queue.in_line(bodies, now):
+            return None
+        waited = planner_queue.waited_minutes(bodies, now) or 0.0
+        return waited, planner_queue.overdue(bodies, now)
+    except planner_queue.PlannerQueueError as e:
+        print(f"::warning::the planner line could not be read ({e}) — "
+              "measuring by the stall clock as before")
+        return None
+
+
+def _line_place(bodies) -> str:
+    """Where the card stands, as its own newest receipt says."""
+    receipts = _slot_receipts(bodies)
+    if receipts and receipts[-1].state == "dispatched":
+        return "dispatched from the line, its run not yet started"
+    waits = [r for r in receipts if r.state == "waiting"]
+    if waits and waits[-1].place:
+        return f"place {waits[-1].place} of {waits[-1].of}"
+    return "place not stated"
+
+
+def _end_line_place(ident: str, bodies) -> None:
+    """A park out of Planning ends the card's place in line (DRE-5378).
+
+    The watchdog's park is the one park no planner run follows with a release
+    of its own: the card was waiting, so no run held its claim. The
+    `because parked` release is what makes the reason's last sentence true —
+    a re-send starts a fresh wait instead of coming back already overdue, the
+    way DRE-5213 did at 14:26 PT on 2026-09-30. It carries the card's own
+    repo and trigger and this sweep's run id. A release that does not land
+    goes on the write ledger: the card is parked all the same.
+    """
+    receipts = _slot_receipts(bodies)
+    stand = receipts[-1] if receipts else None
+    try:
+        planner_queue.post_released(
+            linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
+            repo=stand.repo if stand else REPO,
+            trigger_state=stand.trigger if stand else "-", because="parked",
+        )
+    except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+        _write_failures.append(f"{ident} planner-slot park release: {e}")
+        print(f"ERROR: planner line: {ident} was parked but its place in line was "
+              f"not released: {e}", file=sys.stderr)
+
+
+_COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten")
+
+
+def waiting_too_long_reason(waited_minutes: float) -> str:
+    """What the CEO reads on a card the planner line never served (DRE-5177).
+
+    Written for him and nothing else: `planning_escalation.refusal` reads this
+    text before it is posted and will not put a diff, a path or a command in
+    front of him. The cap is read off the queue's config rather than written
+    here, so the sentence stays true if the number moves.
+    """
+    hours = max(1, round(waited_minutes / 60))
+    running = planner_queue.cap()
+    count = _COUNT_WORDS[running] if running < len(_COUNT_WORDS) else str(running)
+    return (
+        "this card has been waiting in line for a planner for about "
+        f"{hours} hour{'s' if hours != 1 else ''} and nothing has started it. "
+        f"{count[0].upper() + count[1:]} planners run at a time across the "
+        "company and the rest wait their turn, and a wait this long means the "
+        "line has stopped moving for this card. Why is not known from here, "
+        "which is why it is in front of you rather than being guessed at. "
+        "Sending it back through Planning gives it a fresh place in line."
     )
 
 
@@ -2174,6 +2420,158 @@ def repair_frozen_planning_holds() -> set[str]:
     return repaired
 
 
+def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
+    """The planner line's backstop (DRE-5178, epic DRE-5167). Full sweeps only.
+
+    The end-of-run dispatch in `plan.yml` is the line's fast path, and it does
+    not run when a runner is killed, when a job hits its timeout (its
+    `always()` steps are skipped), or when the finishing run cannot mint a
+    token for the waiting card's owner. This is the promise behind it: no
+    waiting card outlives two sweeps of its own repo while a slot is free.
+
+    WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`): the ones
+    inside SWEPT_LANES come off the board read this sweep already paid for,
+    and Green Light — outside it — is one real paged query, the one extra
+    request this phase costs, paid because a run whose epic has just moved
+    there still holds its slot until its release step. The ledger itself, the
+    order of the line and every receipt's text are `planner_queue`'s; nothing
+    here decides who is next.
+
+    1. DEAD CLAIMS. Only open claims are read — a claim closed by its own
+       release or by a handover is never released twice. One past the TTL is
+       released fleet-wide `because expired`, with no GitHub read: no plan job
+       outlives its timeout. One of THIS repo whose run GitHub reports
+       `completed` is released `because run-gone` — the fast path for a killed
+       runner, own-repo only because the sweep's token reaches only its own
+       owner. An unreadable status keeps the claim: the slot is held for at
+       most the TTL, and a second dispatch is never the fallback.
+    2. FREE SLOTS. While one is free, the earliest waiting card recorded
+       against THIS repo is fired through `plan_run.fire` with the card
+       record the board read returned, its recorded trigger and its recorded
+       reason, on the plan event whatever its labels (DRE-5366) — never
+       `sent_by_run`: the sweep is not the card's planner run,
+       and the run it starts must be judged as any dispatch. The `dispatched`
+       receipt follows only a confirmed dispatch (`redispatch`'s rule); a
+       failure goes on the write ledger, the card stays waiting, and nothing
+       else is dispatched this pass. A card escalated out of Planning earlier
+       in this pass (`skip`) is still waiting on this pass's board read, and
+       is not served.
+    3. DEPTH. One line per pass, as a `::warning::` once the oldest card has
+       waited over half the line's bound. Passing the whole bound is the
+       Planning watchdog's to escalate (DRE-5177); this phase never does.
+
+    A config that cannot be read is the fleet cap switched off everywhere —
+    every planner run's claim step admits uncapped with only a warning — so
+    here it is a `::error::` and a read failure: the sweep exits red for the
+    medic.
+    """
+    try:
+        limit = planner_queue.cap()
+        bound = planner_queue.waiting_max()
+    except planner_queue.PlannerQueueError as e:
+        print(
+            f"::error::planner line: the planner queue config could not be read "
+            f"— {e}. Every planner run is admitting without a cap until it is fixed."
+        )
+        _read_failures.append(f"planner-line: {e}")
+        return
+    swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
+    extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
+    cards = active_cards(swept) + (active_cards(extra) if extra else [])
+    records = {card["identifier"]: card for card in cards}
+    now = datetime.now(UTC)
+    line = planner_queue.ledger(cards, now)
+
+    def release(claim, because: str) -> bool:
+        try:
+            planner_queue.post_released(
+                linear_ops, claim.card, run_id=claim.run, repo=claim.repo,
+                trigger_state=claim.trigger, because=because,
+            )
+        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+            _write_failures.append(f"{claim.card} planner-slot release: {e}")
+            print(f"ERROR: planner line: {claim.card} run {claim.run} was not "
+                  f"released: {e}", file=sys.stderr)
+            return False
+        print(f"planner line: released {claim.card} run {claim.run} — because {because}")
+        return True
+
+    for claim in planner_queue.expired_claims(line, now):
+        release(claim, "expired")
+    running = []
+    for claim in line.running:
+        # A run id is digits; anything else on the ledger is not a run GitHub
+        # can answer for, and the TTL ends it instead.
+        if claim.repo.lower() != REPO.lower() or not claim.run.isdigit():
+            running.append(claim)
+            continue
+        status = gh_actions_read(
+            "api", f"repos/{REPO}/actions/runs/{claim.run}", "--jq", ".status"
+        )
+        if status != "completed" or not release(claim, "run-gone"):
+            running.append(claim)
+    line = dataclasses.replace(line, running=running)
+
+    free = line.free_slots(limit)
+    served: list[str] = []
+    halted = False
+    for stand in line.waiting:
+        ident = stand.card
+        if ident in skip:
+            why = "escalated out of Planning this pass"
+        elif stand.repo.lower() != REPO.lower():
+            why = f"recorded against {stand.repo} — that repo's sweep serves it"
+        elif halted:
+            why = "a dispatch failed this pass — it stays waiting for the next sweep"
+        elif free <= 0:
+            why = "no free slot — it keeps its place in line"
+        elif ident not in records:
+            why = "not on this pass's board read"
+        else:
+            why = None
+        if why:
+            print(f"planner line: {ident} skipped — {why}")
+            continue
+        try:
+            ok, err = plan_run.fire(records[ident], REPO, trigger_state=stand.trigger,
+                                    reason=stand.reason, event=plan_run.PLAN_EVENT)
+        except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
+            ok, err = False, f"redispatch {ident}: {e}"
+        if not ok:
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+            print(f"planner line: {ident} skipped — its dispatch failed; it stays waiting")
+            halted = True
+            continue
+        free -= 1
+        served.append(ident)
+        try:
+            planner_queue.post_dispatched(
+                linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
+                repo=stand.repo, trigger_state=stand.trigger, reason=stand.reason,
+            )
+        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
+            _write_failures.append(f"{ident} planner-slot dispatched receipt: {e}")
+            print(f"ERROR: planner line: {ident} was dispatched but its receipt did "
+                  f"not post: {e}", file=sys.stderr)
+        print(f"planner line: {ident} served — dispatched at {REPO} "
+              f"(trigger {stand.trigger}, reason {stand.reason or 'none'})")
+
+    waiting = [stand for stand in line.waiting if stand.card not in served]
+    oldest = max(
+        (planner_queue.waited_minutes(
+            (records[stand.card].get("comments") or {}).get("nodes"), now) or 0.0
+         for stand in waiting if stand.card in records),
+        default=0.0,
+    )
+    depth = (
+        f"planner line: {len(waiting)} waiting, oldest {oldest:.0f} minutes, "
+        f"{len(line.running)} running and {len(line.reserved) + len(served)} "
+        f"dispatched of {limit}"
+    )
+    print(f"::warning::{depth}" if oldest > bound / 2 else depth)
+
+
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
 # agent-fix from PR state alone (DIRTY / approved-but-red / dead-fix-run),
 # blind to the card — so a card the fix loop had already escalated to
@@ -2238,12 +2636,14 @@ def intake_depth_line(waiting: int, oldest_minutes: float | None) -> str:
         return (
             f"{INTAKE_DEPTH_PREFIX}: 0 cards waiting in Intake, so there is no "
             "oldest — nothing leaves this lane on age; the groomer's approved "
-            "batch is the way out"
+            "batch is the way out, and the Urgent fast path for a card raised "
+            "to Urgent since it shipped"
         )
     return (
         f"{INTAKE_DEPTH_PREFIX}: {waiting} card{'' if waiting == 1 else 's'} "
         f"waiting in Intake, oldest {oldest_minutes / 1440:.1f} days — nothing "
-        "leaves this lane on age; the groomer's approved batch is the way out"
+        "leaves this lane on age; the groomer's approved batch is the way out, "
+        "and the Urgent fast path for a card raised to Urgent since it shipped"
     )
 
 
@@ -2253,7 +2653,10 @@ def report_intake_depth() -> None:
     THE RULE IS THE CEO'S SIGNED CONSOLE ANSWER of 2026-09-17 09:57 PT, point
     1: no card leaves Intake because it is old. No 48 hours, no timer. Cards
     leave Intake when the groomer proposes them and he approves the batch in
-    Green Light, and `groomer.py drain` is the one writer that performs it.
+    Green Light, and `groomer.py drain` performs that. The one move this sweep
+    makes out of Intake is point 2 of the same answer, and it is not this
+    phase: `advance_urgent_intake` below, for a card raised to Urgent after
+    that rule shipped (DRE-4150).
 
     This phase is what DRE-2687's age-out became. That gate moved any Intake
     card past the lane contract's `stale_minutes` into Green Light, oldest
@@ -2280,6 +2683,346 @@ def report_intake_depth() -> None:
         (age_minutes(card["updatedAt"]) for card in waiting), default=None
     )
     print(intake_depth_line(len(waiting), oldest))
+
+
+# --- the Urgent fast path out of Intake (DRE-4150) --------------------------
+#
+# Point 2 of the CEO's signed console answer of 2026-09-17 09:57 PT, recorded
+# on DRE-4141: an Urgent card should not wait for the next groom batch and its
+# approval. So the sweep moves it to Planning on its next pass — and Planning
+# reads it exactly as it reads any card, classifier and critic both. Urgency
+# skips the QUEUE, not the checks.
+#
+# WHY IT IS NARROW. Measured 2026-09-17 05:55 PT: 24 of 286 Intake cards
+# already carried Urgent — six the CEO had excluded from the 2026-09-15 groom
+# batch with signed receipts, four epics, eleven children of epics still in
+# Intake. A fast path keyed on the label would have moved all 24 at once, so a
+# card moves only when EVERY one of these holds:
+#
+#   * it is not an epic (`card_is_epic`, the sweep's one answer);
+#   * it is at Urgent, and was RAISED to Urgent — or created at it — after
+#     URGENT_SHIPS_AT, read off its own Linear history, never off the label;
+#   * the CEO has not excluded it on the groomer's standing card, read with
+#     the groomer's own reader, signature and all;
+#   * its parent epic, if it has one, is In Progress.
+#
+# THE CAP HOLDS ACROSS REPOS. An Intake card carries no `repo:` label, so
+# every product repo's sweep reads the whole fleet's lane (the incident DRE-4141
+# records). The receipt a moved card carries is therefore also the ledger: a
+# sweep counts the receipts posted ANYWHERE on the board inside
+# URGENT_WINDOW_MINUTES — one fresh comment search, taken just before it acts,
+# never off its own board snapshot — and moves only what is left of the cap.
+# A second repo sweeping in the same minute finds the first one's three and
+# moves none. The candidates are ordered the same way in every repo (oldest
+# raised first, then card number), so two sweeps that read the board at the
+# very same instant pick the SAME three cards rather than three each, and the
+# move itself is guarded on the from-lane. The residue is two sweeps writing in
+# the same second both commenting on one card — never a fourth card moved.
+#
+# COST: nothing on the common pass. `priority` rides the one board read, and a
+# card whose last update predates the ship moment cannot have been raised
+# since, so the history read (one request) happens only when an Urgent card
+# was touched after the rule shipped; the exclusion and receipt reads happen
+# only when one is actually eligible.
+
+_URGENT_HISTORY_QUERY = """query($ids: [ID!], $after: String) {
+  issues(first: 25, after: $after, filter: {id: {in: $ids}}) { nodes {
+    id identifier priority createdAt
+    parent { identifier state { name } }
+    history(first: 50) { nodes {
+      createdAt fromPriority toPriority toState { name } } }
+  } pageInfo { hasNextPage endCursor } } }"""
+
+_URGENT_RECEIPTS_QUERY = """query($since: DateTimeOrDuration!, $after: String) {
+  comments(first: 100, after: $after, filter: {
+    body: {contains: "%s:"}, createdAt: {gt: $since}
+  }) { nodes { createdAt body issue { identifier } }
+       pageInfo { hasNextPage endCursor } } }""" % URGENT_FAST_PATH_OPENER
+
+
+def _moment(iso: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_urgent_receipt(body: str | None) -> bool:
+    """Anchored at the start, like every marker this pipeline reads: a comment
+    that QUOTES the tag is not the receipt."""
+    return (body or "").lstrip().startswith(f"{URGENT_FAST_PATH_OPENER}:")
+
+
+def urgent_raised_at(issue: dict) -> datetime | None:
+    """When this card was last raised to Urgent — None when it is not at it.
+
+    `history(first: 50)` is the fifty NEWEST entries, newest first, so the
+    first entry that set priority to Urgent is the most recent raise: a card
+    lowered and raised again was raised at the second one. Linear records no
+    priority change on a card created at Urgent, so with no such entry the
+    card's creation IS the raise. That fallback can only ever be too EARLY —
+    creation precedes every raise — so a card whose raise has scrolled out of
+    fifty entries reads as raised before the rule, and waits for the groomer:
+    the safe direction.
+    """
+    if issue.get("priority") != URGENT_PRIORITY:
+        return None
+    for node in ((issue.get("history") or {}).get("nodes") or []):
+        if node.get("toPriority") == URGENT_PRIORITY:
+            return _moment(node.get("createdAt"))
+    return _moment(issue.get("createdAt"))
+
+
+def urgent_reached_planning(issue: dict, since: datetime | None) -> bool:
+    """Did this card enter Planning at or after `since` — its first receipt —
+    off its own history, the one record of a move that the receipt, posted
+    BEFORE the move, cannot be. A card that did and is back in Intake was put
+    there by a person; one that never did carries a receipt for a move that
+    did not land. A receipt with no readable moment reads as the ship moment:
+    any Planning entry since the rule shipped counts, the side that leaves the
+    card where it is.
+    """
+    since = since or URGENT_SHIPS_AT
+    for node in ((issue.get("history") or {}).get("nodes") or []):
+        if ((node.get("toState") or {}).get("name")) != "Planning":
+            continue
+        at = _moment(node.get("createdAt"))
+        if at is not None and at >= since:
+            return True
+    return False
+
+
+def urgent_fast_path_note(identifier: str, raised: datetime,
+                          attempt: int = 1) -> str:
+    """What the card carries, posted just BEFORE the move — so a claim, never
+    a report that the move happened. A retry says which attempt it is."""
+    retry = (
+        f" This is attempt {attempt} of {URGENT_MAX_ATTEMPTS} — the earlier "
+        "move did not land, and the card was still in Intake."
+        if attempt > 1 else ""
+    )
+    return (
+        f"{URGENT_FAST_PATH_OPENER}: {identifier} was raised to Urgent at "
+        f"{dead_run.pacific(raised)}, after the Urgent fast path shipped "
+        f"({dead_run.pacific(URGENT_SHIPS_AT)}), so it skips the groom queue "
+        f"and the sweep is moving it from Intake to Planning (DRE-4150).{retry}"
+        "\n\n"
+        "Urgency skips the queue, not the checks — Planning's classifier and "
+        "critic read this card exactly as they read any other. The rule is "
+        "point 2 of the CEO's signed console answer of 2026-09-17 09:57 PT, "
+        "recorded on DRE-4141. It takes a card out of Intake once: a card that "
+        "reached Planning and is put back is left where it is put."
+    )
+
+
+def _urgent_exclusions() -> tuple[set[str] | None, str]:
+    """`(excluded, "")`, or `(None, why)` when the answer cannot be read.
+
+    The CEO's per-card answers live on the groomer's standing card, and the
+    groomer's own reader answers them: `decision_records` verifies every
+    console receipt, `standing_decisions` returns the cards whose newest
+    marker is `groom-excluded` — a signed Don't do, which a later
+    `groom-added` undoes. A marker the fleet wrote for itself decides nothing,
+    exactly as it decides nothing for a batch.
+
+    Absent is not empty (DRE-2034). A sweep with no standing card named, or
+    one whose receipt could not be CHECKED because the console's key was
+    unreadable (DRE-4153), cannot tell an excluded card from an eligible one —
+    so it moves none. A Linear read that fails raises to the caller.
+    """
+    card = (os.environ.get(GROOM_CARD_ENV) or "").strip()
+    if not card:
+        return None, (
+            f"{GROOM_CARD_ENV} is not set for this sweep, so the CEO's "
+            "exclusions on the groomer's standing card cannot be read")
+    records = groomer.decision_records(linear_ops, card, whole_thread=True)
+    for record in records:
+        body = record.get("body") or ""
+        if (console_receipt.is_unchecked(record.get("receipt_refused"))
+                and any(groomer.decision_match(tag, body)
+                        for tag in groomer.PER_CARD_TAGS)):
+            return None, (
+                f"a per-card decision on {card} carries a console receipt "
+                f"that could not be checked — {record['receipt_refused']}")
+    return set(groomer.standing_decisions(records)["excluded"]), ""
+
+
+def _recent_urgent_moves(now: datetime) -> set[str]:
+    """Every card that carries a fast-path receipt posted inside the window —
+    by THIS repo's sweep or any other's. Read fresh, never off the board
+    snapshot: the snapshot is exactly what another repo's writes are not in."""
+    since = now - timedelta(minutes=URGENT_WINDOW_MINUTES)
+    nodes = linear_ops.gql_paged(
+        _URGENT_RECEIPTS_QUERY,
+        {"since": since.isoformat().replace("+00:00", "Z")},
+        connection="comments",
+    )
+    return {
+        ((node.get("issue") or {}).get("identifier"))
+        for node in nodes
+        if _is_urgent_receipt(node.get("body"))
+        and (node.get("issue") or {}).get("identifier")
+    }
+
+
+def _card_number(identifier: str) -> int:
+    tail = identifier.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def advance_urgent_intake() -> set[str]:
+    """Move Intake cards raised to Urgent after the rule shipped to Planning,
+    at most URGENT_SWEEP_CAP per sweep across the fleet (DRE-4150).
+
+    Does NOT read `INTAKE_HOLD` — the signed answer says so: the hold pauses
+    the groomer's drain, and an Urgent card waiting behind a pause is the
+    opposite of the rule.
+
+    The receipt is posted BEFORE the move — it is the claim the cross-repo
+    cap counts — and the move is then read BACK off the card's lane, because
+    `cmd_advance` returns normally when it stands down (an epic, a card no
+    longer in Intake, a guarded write that refused). Only a card read back in
+    Planning is reported as moved. One still in Intake is a write failure on
+    the fail-loudly rail; one that left Intake some other way is said so.
+    Either way the sweep carries on with the next card.
+
+    A card that reached Planning is never touched by this rule again: a second
+    sweep adds nothing, and a card a person puts back in Intake stays where
+    they put it — its history shows the move. A card whose receipt claims a
+    move its history never shows is tried again once that receipt's window has
+    passed, with a fresh receipt, until it carries URGENT_MAX_ATTEMPTS of them;
+    then it is left to the groomer.
+
+    Returns the identifiers moved this sweep. Raises whatever a Linear READ
+    raises — `main` records it as a read failure, never as "nothing eligible".
+    """
+    moved: set[str] = set()
+    tag = URGENT_FAST_PATH_OPENER
+    ship = URGENT_SHIPS_AT
+    candidates = []
+    attempts: dict[str, int] = {}
+    first_receipt: dict[str, datetime | None] = {}
+    for card in active_cards(INTAKE_LANE):
+        if card["state"]["name"] != "Intake":
+            continue
+        if card.get("priority") != URGENT_PRIORITY:
+            continue
+        touched = _moment(card.get("updatedAt"))
+        if touched is not None and touched <= ship:
+            continue  # untouched since the rule shipped, so never raised since
+        ident = card["identifier"]
+        bodies = card_comment_bodies(card)
+        if card_is_epic(card, bodies):
+            print(f"{tag}: {ident} is an epic — an epic is never fast-pathed; "
+                  "the CEO moves an epic")
+            continue
+        receipts = [
+            _moment(node.get("createdAt"))
+            for node in linear_ops.window_nodes(card.get("comments"))
+            if _is_urgent_receipt(node.get("body"))
+        ]
+        if receipts:
+            first_receipt[ident] = receipts[0]
+        if len(receipts) >= URGENT_MAX_ATTEMPTS:
+            print(f"{tag}: {ident} carries {len(receipts)} of this rule's receipts "
+                  "and is still in Intake — no more attempts; it goes through "
+                  "the groomer")
+            continue
+        attempts[ident] = len(receipts) + 1
+        candidates.append(card)
+    if not candidates:
+        print(f"{tag}: no card in Intake has been raised to Urgent since "
+              f"{dead_run.pacific(ship)} — nothing to move")
+        return moved
+
+    issues = {
+        issue.get("identifier"): issue
+        for issue in linear_ops.gql_paged(
+            _URGENT_HISTORY_QUERY, {"ids": [c["id"] for c in candidates]})
+    }
+    eligible: list[tuple[datetime, str]] = []
+    for card in candidates:
+        ident = card["identifier"]
+        issue = issues.get(ident)
+        if issue is None:
+            print(f"{tag}: {ident}'s history did not come back — not moved "
+                  "on a raise nobody read")
+            continue
+        raised = urgent_raised_at(issue)
+        if raised is None or raised <= ship:
+            print(f"{tag}: {ident} was already Urgent before "
+                  f"{dead_run.pacific(ship)} — it goes through the groomer")
+            continue
+        if attempts[ident] > 1 and urgent_reached_planning(
+                issue, first_receipt.get(ident)):
+            print(f"{tag}: {ident} already carries this rule's receipt and "
+                  "reached Planning — it moves a card once, so it is left "
+                  "where it is")
+            continue
+        parent = issue.get("parent")
+        if parent:
+            lane = ((parent.get("state") or {}).get("name")) or "an unread lane"
+            if lane != "In Progress":
+                print(f"{tag}: {ident}'s epic {parent.get('identifier')} is in "
+                      f"{lane}, not In Progress — it waits for its epic")
+                continue
+        eligible.append((raised, ident))
+    if not eligible:
+        print(f"{tag}: no Urgent card in Intake is eligible this sweep")
+        return moved
+
+    excluded, why = _urgent_exclusions()
+    if excluded is None:
+        print(f"{tag}: {len(eligible)} card(s) eligible and none moved — {why}")
+        return moved
+    for _raised, ident in eligible:
+        if ident in excluded:
+            print(f"{tag}: {ident} was excluded by the CEO on the groomer's "
+                  "standing card — left in Intake")
+    eligible = [e for e in eligible if e[1] not in excluded]
+    eligible.sort(key=lambda e: (e[0], _card_number(e[1])))
+
+    recent = _recent_urgent_moves(datetime.now(UTC))
+    eligible = [e for e in eligible if e[1] not in recent]
+    budget = max(0, URGENT_SWEEP_CAP - len(recent))
+    taking, waiting = eligible[:budget], eligible[budget:]
+    for raised, ident in taking:
+        try:
+            # The receipt first: it is the claim the cross-repo cap counts,
+            # and a move that then fails still leaves the reason on the card.
+            linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised, attempts[ident]))
+            linear_ops.cmd_advance(ident, "Planning", "Intake", "--not-epic")
+            # Read back: `cmd_advance` returns normally when it stands down.
+            lane = linear_ops.get_issue(ident)["state"]["name"]
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} urgent fast path: {e}")
+            print(f"ERROR: {tag}: failed to move {ident} to Planning: {e}",
+                  file=sys.stderr)
+            continue
+        if lane == "Intake":
+            _write_failures.append(
+                f"{ident} urgent fast path: the move stood down and the card "
+                "is still in Intake")
+            print(f"ERROR: {tag}: {ident} is still in Intake after the move "
+                  "to Planning — a later sweep tries it again",
+                  file=sys.stderr)
+            continue
+        if lane != "Planning":
+            print(f"{tag}: {ident} left Intake for {lane} before this sweep "
+                  "moved it — not moved by this rule")
+            continue
+        moved.add(ident)
+        print(f"{tag}: {ident} raised to Urgent {dead_run.pacific(raised)} — "
+              "moved Intake → Planning")
+    if waiting:
+        print(
+            f"{tag}: {len(waiting)} card(s) waited for the next sweep — "
+            f"{', '.join(ident for _raised, ident in waiting)} (at most "
+            f"{URGENT_SWEEP_CAP} per sweep across the fleet; {len(recent)} "
+            f"already moved in the last {URGENT_WINDOW_MINUTES} min, "
+            f"{len(moved)} by this sweep)"
+        )
+    return moved
 
 
 # --- branch ownership: ONE definition, three named questions (DRE-2426) ------
@@ -2945,6 +3688,108 @@ def redeliver_rescued_work(identifier: str, bodies: list[str]) -> bool:
     return True
 
 
+#: A card's inverse relations, as the sweep's batched reads ask for them
+#: (DRE-5379). The page counts EVERY relation type — `related`, `duplicate`,
+#: `blocks` — so a card with many `related` links loses blockers off its end:
+#: live on 2026-09-30, DRE-4580's page carried 11 of its 13 `blocks` relations
+#: and DRE-5136's 11 of 16. So the page says whether it is full, and a full one
+#: is read to the end by `complete_inverse_relations`. Twenty, not more: every
+#: card on the board pays for this page in the batched reads' node weight, and
+#: almost none of them fill it. `board_snapshot` reads this one number.
+INVERSE_PAGE = 20
+
+#: How many further pages one card's relations are read for, and how deep
+#: each is — Linear's own maximum. Twenty plus three hundred relations; a card
+#: past that is a card whose blockers the sweep says it does not know.
+INVERSE_TOPUP_PAGES = 3
+INVERSE_TOPUP_PAGE = 100
+
+INVERSE_RELATIONS_GQL = """inverseRelations(first: %d) {
+               pageInfo { hasNextPage endCursor }
+               nodes { type issue { identifier state { name } } }
+             }""" % INVERSE_PAGE
+
+_INVERSE_TOPUP_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
+             inverseRelations(first: %d, after: $after) {
+               pageInfo { hasNextPage endCursor }
+               nodes { type issue { identifier state { name } } }
+             } } }""" % INVERSE_TOPUP_PAGE
+
+#: Set once a top-up read is refused by the quota, for the rest of the pass:
+#: more requests against a spent bucket cannot answer and deepen it (DRE-1921).
+#: Dropped by `reset_sweep_cards()`.
+_inverse_topup_refused: list[str] = []
+
+
+def complete_inverse_relations(cards: list[dict]) -> None:
+    """Read every card whose relation page came back FULL to the end, in place
+    (DRE-5379).
+
+    A card whose page is not full costs nothing. One that is costs one request
+    per hundred further relations, up to `INVERSE_TOPUP_PAGES`. A card still
+    full after that, or whose read failed, keeps `hasNextPage: True` — which
+    `prose_blockers.relations_unknown` reads as UNKNOWN, and the gates neither
+    refuse nor promote it. Never raises: this runs inside the reads every gate
+    takes its candidates from, and one card's relations must not cost the rest
+    of the board its sweep.
+    """
+    for card in cards:
+        page = card.get("inverseRelations")
+        if not isinstance(page, dict) or not prose_blockers.relations_unknown(card):
+            continue
+        identifier = card.get("identifier")
+        if _inverse_topup_refused:
+            print(
+                f"inverse-relations: {identifier}'s relation page is full and not "
+                f"read to the end — the quota is spent ({_inverse_topup_refused[0]}); "
+                "its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+            continue
+        nodes = list(page.get("nodes") or [])
+        after = (page.get("pageInfo") or {}).get("endCursor")
+        if not after:
+            nodes = []  # no cursor to resume from: read the set from its start
+        more_pages, failed = True, False
+        try:
+            for _ in range(INVERSE_TOPUP_PAGES):
+                data = linear_ops.gql(_INVERSE_TOPUP_QUERY, {"id": identifier, "after": after})
+                rest = ((data or {}).get("issue") or {}).get("inverseRelations") or {}
+                nodes.extend(rest.get("nodes") or [])
+                info = rest.get("pageInfo") or {}
+                more_pages = info.get("hasNextPage") is True
+                after = info.get("endCursor")
+                if not more_pages or not after:
+                    break
+        except linear_ops.LinearRateLimited as e:
+            _inverse_topup_refused.append(str(e) or type(e).__name__)
+            more_pages, failed = True, True
+            print(
+                f"inverse-relations: could not read the rest of {identifier}'s "
+                f"relations — the quota refused it ({e}); no further card's is "
+                "read this sweep, and their blockers are UNKNOWN",
+                file=sys.stderr,
+            )
+        except Exception as e:  # noqa: BLE001 — unknown, said, and the sweep goes on
+            more_pages, failed = True, True
+            print(
+                f"inverse-relations: could not read the rest of {identifier}'s "
+                f"relations ({e}) — its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+        card["inverseRelations"] = {
+            "pageInfo": {"hasNextPage": more_pages, "endCursor": after},
+            "nodes": nodes,
+        }
+        if more_pages and not failed:
+            print(
+                f"inverse-relations: {identifier} holds more than "
+                f"{len(nodes)} inverse relation(s) and was not read to the end — "
+                "its blockers are UNKNOWN this sweep",
+                file=sys.stderr,
+            )
+
+
 def backlog_children(only: list[str] | None = None) -> list[dict]:
     """EVERY Backlog card, not the first page of them (DRE-2681).
 
@@ -2983,16 +3828,15 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
              %s
-             inverseRelations(first: 20) { nodes {
-               type issue { identifier state { name } }
-             } }
+             %s
            } pageInfo { hasNextPage endCursor } } }""" % (
-            declared, scope, linear_ops.COMMENT_WINDOW_GQL,
+            declared, scope, linear_ops.COMMENT_WINDOW_GQL, INVERSE_RELATIONS_GQL,
         ),
         {"numbers": numbers} if only is not None else None,
     )
     for card in cards:
         linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    complete_inverse_relations(cards)
     return cards
 
 
@@ -3021,10 +3865,10 @@ EPIC_RECORD_GQL = """
              id identifier description state { name }
              children(first: 250) { nodes { identifier createdAt state { name } } }
              history(last: 50) { nodes { createdAt toState { name } } }
-             inverseRelations(first: 20) { nodes {
-               type issue { identifier state { name } }
-             } }
-             comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }"""
+             %s
+             comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }""" % (
+    INVERSE_RELATIONS_GQL,
+)
 
 #: How many epics one PAGE of the record asks for. Eight, not the 100 every
 #: other paged read here uses, because this selection is far heavier per node:
@@ -3153,6 +3997,7 @@ def _read_epic_records(identifiers: list[str]) -> None:
             )
         else:
             _epic_records[ident] = record
+    complete_inverse_relations([_epic_records[i] for i in askable if i in _epic_records])
 
 
 def _read_one_epic_record(identifier: str) -> None:
@@ -3167,6 +4012,7 @@ def _read_one_epic_record(identifier: str) -> None:
     if not issue:
         _epic_record_gaps[identifier] = "Linear returned no issue for it"
         return
+    complete_inverse_relations([issue])
     _epic_records[identifier] = issue
 
 
@@ -3230,6 +4076,17 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         return True  # ambiguous/unreadable -> fail safe (blocked)
     epic.setdefault("parent", None)
     epic.setdefault("identifier", epic_identifier)
+    # Half a page decides nothing (DRE-5379): the unread rest may hold the
+    # blocker the prose names, or a live one the page does not show. Held, and
+    # never called a defect — no notice, no stale clock.
+    if prose_blockers.relations_unknown(epic):
+        print(
+            f"epic-gate: {epic_identifier}'s blockers are UNKNOWN "
+            f"({prose_blockers.UNKNOWN_TAG}) — its inverse relations were not "
+            "read to the end; holding its children, and no prose defect is "
+            "recorded on half a page"
+        )
+        return True
     # The defect first: an epic can be BOTH legitimately blocked and wrong about
     # itself, and the wrong sentence is the one nobody is coming to fix unless
     # something says so.
@@ -3304,12 +4161,10 @@ def advance_unblocked_epics(done_epic: str) -> None:
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
     that epic's own blocker epics are now Done AND it is still in Backlog, move
-    it to **Triage** (which triggers the planner) — or, when the epic carries a
-    committed-in-sequence record, to the lane that owes a plan artifact, which
-    is what an epic inside an approved wave is waiting its turn for (DRE-2846).
-    NEVER to In Progress — the Green Light approval gate stays human-owned, and
-    a wave's approval was never an approval of the epics under it. Idempotent
-    and safe:
+    it to **Triage** (which triggers the planner). Every dependent takes that
+    one path — the wave route that sent some elsewhere is retired (DRE-4700).
+    NEVER to In Progress — the Green Light approval gate stays human-owned.
+    Idempotent and safe:
       * only acts on epics still in Backlog (never re-advances one already past
         it, never thrashes an operator-parked or already-running epic);
       * never revives a Canceled/Duplicate/Done dependent;
@@ -3339,45 +4194,6 @@ def advance_unblocked_epics(done_epic: str) -> None:
             continue  # idempotent: only ever advance a still-Backlog epic
         if epic_blockers_unmet(dep):
             continue  # another blocker epic isn't Done yet — hold
-        # Progressive commitment (DRE-2846). An epic committed in sequence
-        # inside an approved wave has NOT been approved to build — the wave's
-        # approval covered the shape and the order. Its turn sends it to the
-        # lane no epic leaves without a plan artifact, so the document the CEO
-        # green-lights is written NOW, not when the wave was approved. Only a
-        # card carrying the record pays for the green-light read.
-        # Fails SAFE like the rest of this function: a record we cannot read is
-        # not a record we may act on, so the epic takes the unchanged Triage
-        # path rather than the sweep guessing or freezing.
-        # The green light is read off the pass's epic record (DRE-3644): the
-        # epic gate just above read `dep` into it, so this costs nothing; a
-        # miss passes None and reads the epic alone, as before.
-        try:
-            bodies = linear_ops.comment_bodies(dep)
-            arrival = wave_commitment.turn_arrival(
-                dep, bodies,
-                mid_epic.last_green_light(
-                    linear_ops, dep, issue=epic_records([dep]).get(dep),
-                )
-                if wave_commitment.state(bodies) is not None else None,
-            )
-        except Exception as e:  # noqa: BLE001 — an unreadable record is unknown
-            print(f"epic-advance: could not read {dep}'s wave commitment: {e}")
-            arrival = None
-        if arrival is not None:
-            # The move IS the trigger. The relay dispatches `agent-plan` for
-            # every card entering the lane (agent-bureau's lambda_function.py
-            # — DRE-1913, label or no label since DRE-3030), so the sweep asks
-            # for nothing itself. It used to (DRE-2846), on the belief that
-            # nothing dispatched off the lane, and every
-            # epic after a wave's first then cost two Agent Plan runs — the
-            # second starting a hosted runner to learn it was the duplicate.
-            # One dispatcher per transition (DRE-3659 for the wave's own turn,
-            # DRE-3664 here); `dedupe_dispatch.py plan-gate` stays as the
-            # backstop, not the common path.
-            linear_ops.cmd_advance(dep, arrival.lane, "Backlog")
-            linear_ops.cmd_comment(
-                dep, arrival.note + wave_commitment.lane_starts_the_run())
-            continue
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
             dep,
@@ -3519,19 +4335,52 @@ def _route_to_defect_lane(identifier: str) -> None:
 POST_CRITIC_GRACE_MINUTES = int(os.environ.get("POST_CRITIC_GRACE_MINUTES", "30"))
 
 
-def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None) -> bool:
+def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
+                                bodies: list | None = None) -> bool:
     """Should this second-critic refusal be posted to the card, or only logged?
 
     Only the "no round at all" refusal waits (DRE-3059). A SEND_BACK is a
     decision the critic already made, so it speaks at once; and an unreadable
     green light speaks too — unknown must not silence a refusal.
+
+    `bodies` is the epic's own thread, and it changes WHEN the notice speaks,
+    never whether the hold holds (DRE-5177). An approved epic whose activate
+    run was not admitted waits in the planner line, and its review has not
+    started — so while its newest planner-slot receipt is in line the notice
+    is logged and not posted, since telling the CEO to re-run a review that is
+    merely queued is the wrong instruction. Once it is claimed, the grace runs
+    from the claim when that is newer than the green light, because the review
+    starts when the run is admitted. No receipt at all answers as before.
     """
     if tag != plan_critic.POST_UNREAD_TAG:
         return True
-    if not green_lit_at:
+    started_at = green_lit_at
+    if bodies:
+        try:
+            in_line = planner_queue.in_line(bodies)
+        except planner_queue.PlannerQueueError as e:
+            print(f"::warning::the planner line could not be read ({e}) — "
+                  "the hold notice is timed from the green light as before")
+            in_line = False
+        receipts = _slot_receipts(bodies)
+        if in_line:
+            epic = receipts[-1].card if receipts else "the epic"
+            print(
+                f"promotion: epic {epic} is waiting for a planner slot — its "
+                "post-approval review has not started, so the hold on its "
+                "children is logged and not posted"
+            )
+            return False
+        if green_lit_at and receipts and receipts[-1].state == "claimed":
+            try:
+                if age_minutes(receipts[-1].at) < age_minutes(green_lit_at):
+                    started_at = receipts[-1].at
+            except ValueError:
+                pass  # an unreadable claim time leaves the green light's clock
+    if not started_at:
         return True
     try:
-        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+        return age_minutes(started_at) >= POST_CRITIC_GRACE_MINUTES
     except ValueError:
         return True
 
@@ -3656,22 +4505,13 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     # On a full sweep the close ran first and every one of them is already in
     # the record, so this line spends nothing at all.
     #
-    # The same read serves both green lights below (DRE-3644): the epic's, and
-    # the one a candidate carrying a wave-commitment record is checked against
-    # — named here off comment bodies the Backlog read already carried, so a
-    # committed card costs the batch one identifier rather than a read of its
-    # own.
+    # The same read serves the epic's green light below (DRE-3644).
     epic_records({
         (card.get("parent") or {}).get("identifier")
         for card in candidates
         if card_repo(card) == REPO_SLUG
         and ((card.get("parent") or {}).get("state") or {}).get("name")
         in EPIC_ACTIVE_STATES
-    } | {
-        card["identifier"]
-        for card in candidates
-        if card_repo(card) == REPO_SLUG
-        and wave_commitment.state(card_comment_bodies(card)) is not None
     })
     for index, card in enumerate(candidates):
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
@@ -3681,9 +4521,9 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         if card_repo(card) != REPO_SLUG:
             continue  # deliberately silent: another repo's card, see above
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-        # The comments come free with the candidates query (DRE-2929), and three
-        # gates below read them — the epic test, the wave record and the
-        # verdict. One comprehension, hoisted to the first of them.
+        # The comments come free with the candidates query (DRE-2929), and two
+        # gates below read them — the epic test and the verdict. One
+        # comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
         # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
         # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
@@ -3730,31 +4570,6 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 f"('{HOLD_LABEL}' label) — never auto-promoted; skipping"
             )
             continue
-        # Progressive commitment (DRE-2846). An epic inside an approved wave is
-        # recorded `committed-in-sequence`: the wave's approval covered the
-        # SHAPE and the ORDER and nothing else, so it is not an approval to
-        # build. Read off the card's own RECORD, deliberately not off the epic
-        # skip above — a wave's epic is skipped there for BEING an epic, and
-        # that is a different fact from "the wave approved its order". The
-        # green-light history is bought only for a card that carries the record.
-        if wave_commitment.state(bodies) is not None:
-            committed = wave_commitment.promotion_refusal(
-                card["identifier"], bodies,
-                mid_epic.last_green_light(
-                    linear_ops, card["identifier"],
-                    issue=epic_records([card["identifier"]]).get(card["identifier"]),
-                ),
-            )
-            if committed is not None:
-                print(
-                    f"promotion: {card['identifier']} is not being promoted — "
-                    f"{committed.splitlines()[0]}"
-                )
-                _surface_once(
-                    card["identifier"], wave_commitment.refusal_tag(committed),
-                    committed,
-                )
-                continue
         parent = card.get("parent")
         if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
             # DRE-1893 unchanged: a child must not build while its epic is
@@ -3775,6 +4590,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # computation over the card this sweep already fetched: no Linear read,
         # and the sentence is wrong whatever the card's epic, verdict or
         # blockers say.
+        #
+        # Unless the card's relations were not read to the end (DRE-5379). Then
+        # neither answer is safe — the prose may name a blocker the unread rest
+        # holds, and the page may show no live blocker while the card has one —
+        # so the card is neither refused nor promoted, and the log says why.
+        if prose_blockers.relations_unknown(card):
+            print(
+                f"promotion: {card['identifier']}'s blockers are UNKNOWN "
+                f"({prose_blockers.UNKNOWN_TAG}) — its inverse relations were "
+                "not read to the end; neither refused nor promoted — skipping"
+            )
+            continue
         undeclared = prose_blockers.undeclared_claims(card)
         if undeclared:
             notice = prose_blockers.card_refusal(card["identifier"], undeclared)
@@ -3871,9 +4698,9 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             # light is. An epic whose green light Linear cannot report abstains
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
             # There is no green light to read for a card with no epic.
-            # `bodies` is read once above, before the wave-commitment gate — a
-            # pure comprehension over the query's own inline comments, so
-            # hoisting it buys the second reader nothing and costs nothing.
+            # `bodies` is read once above, at the epic test — a pure
+            # comprehension over the query's own inline comments, so hoisting
+            # it buys the second reader nothing and costs nothing.
             if epic_id is not None:
                 if epic_id not in green_light:
                     # Off the record the epic gate above just read (DRE-3644).
@@ -3900,8 +4727,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 )
                 if refusal is not None:
                     refusal_tag = plan_critic.refusal_tag(refusal)
+                    # The epic's own thread, already in hand — whether its
+                    # review is still queued for a planner (DRE-5177).
                     surface_refusal = post_critic_hold_is_overdue(
-                        refusal_tag, green_light[epic_id])
+                        refusal_tag, green_light[epic_id],
+                        [r.get("body") or "" for r in post_critic[epic_id] or []])
                 else:
                     refusal = mid_epic.promotion_refusal(
                         card["identifier"],
@@ -7195,17 +8025,66 @@ def recover_crashed_reviews() -> None:
 #: mechanism exists to remove.
 FLEET_OUTAGE_SWEEP_CAP = int(os.environ.get("FLEET_OUTAGE_SWEEP_CAP", "1"))
 
+#: The lane an outage card is CREATED in (DRE-5292). Created there, never moved
+#: there: Planning entry is what the relay dispatches the planner on, and
+#: DRE-5273 — created in Planning, moved to Triage one second later — got an
+#: Agent Plan run (36658173529) off that one second. The relay dispatches from
+#: Triage only for an `agent:planner` card (the DRE-3013 probe's reading of
+#: it), and this card wears no `agent:*` role at all.
+FLEET_OUTAGE_LANE = "Triage"
+
+
+def _fleet_outage_crashed_run(sha: str) -> tuple[str, str]:
+    """(run id, run url) of the head's first crashed review run, or ("", "").
+
+    Read off the Actions run listing for the review workflow at the crashed
+    head's commit — the run itself, in the repository it crashed in. NEVER off
+    the review check run's `details_url`: when the posting App sets none,
+    GitHub fills in the App's homepage, which is not a run (DRE-5292 — DRE-5273
+    sent its reader to https://github.com/dreadnought-foundry/agent-bureau).
+
+    The earliest FAILED run is the crash: a head also collects the green
+    re-review that ends an outage and runs still in flight, and neither of
+    those has a log that ended on the error. An unreadable listing is `None`
+    from `gh_actions_read` (already recorded there) and answers the same as an
+    empty one — no run found — because naming a run nobody read would be the
+    guess this card is filed to remove.
+    """
+    if not sha:
+        return "", ""
+    out = gh_actions_read(
+        "run", "list", "--repo", REPO, "--workflow", review_workflow(),
+        "--commit", sha, "--limit", "20",
+        "--json", "databaseId,url,conclusion,createdAt",
+    )
+    try:
+        runs = json.loads(out or "[]")
+    except ValueError:
+        return "", ""
+    crashed = sorted(
+        (r for r in runs if isinstance(r, dict)
+         and r.get("conclusion") == "failure" and r.get("databaseId")),
+        key=lambda r: r.get("createdAt") or "",
+    )
+    for run in crashed:
+        url = str(run.get("url") or "")
+        match = _RUN_ID.search(url)
+        if match and match.group(1) == str(run["databaseId"]):
+            return match.group(1), url
+    return "", ""
+
 
 def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
     """The evidence the FIRST crashed run leaves, for the card's body.
 
-    Read only when the decision is `file` — this is three reads (a check-run
+    Read only when the decision is `file` — this is three reads (a run
     listing, an Actions log, a file) and an outage card is filed once. Every
     one of them degrades to a stated absence rather than to a guess:
 
-      * the run url comes off the head's own review check run, the record
-        qa-review publishes against the reviewed sha (HEAD_REVIEW_CHECK_NAME,
-        DRE-2291) — not off the run that happens to be newest;
+      * the run url is the head's own crashed review workflow run
+        (`_fleet_outage_crashed_run`, DRE-5292) — not the run that happens to
+        be newest, and never a check run's `details_url`. No run found is
+        said as exactly that, with no url printed in its place;
       * the log tail goes through `gh_actions_read`, i.e. the GH_DISPATCH_TOKEN
         swap, because the App token 403s the Actions API (DRE-2525). `None`
         there means UNREADABLE, and an unreadable log says so and points at the
@@ -7218,19 +8097,18 @@ def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
     """
     pr = next((p for p in prs if p.get("number") == outcome.pr), None)
     sha = (pr or {}).get("headRefOid") or ""
-    run_url = ""
-    if sha:
-        run_url = gh(
-            "api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
-            "[.check_runs[] | select(.name == %s) | .details_url][0] // \"\""
-            % json.dumps(HEAD_REVIEW_CHECK_NAME),
-        ).strip()
-    log_line = f"log tail unreadable — see {run_url}" if run_url else "log tail unreadable"
-    run_id = _RUN_ID.search(run_url)
+    run_id, run_url = _fleet_outage_crashed_run(sha)
     if run_id:
-        tail = gh_actions_read("run", "view", run_id.group(1), "--log-failed")
+        log_line = f"log tail unreadable — see {run_url}"
+        tail = gh_actions_read("run", "view", run_id, "--repo", REPO,
+                               "--log-failed")
         if tail is not None:
             log_line = reviewer_down.error_line(tail)
+    else:
+        log_line = (
+            f"no run found — no failed {review_workflow()} run on this head's "
+            "commit could be read, so there is no log to quote"
+        )
     workflow = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         ".github", "workflows", "qa-review.yml",
@@ -7253,7 +8131,8 @@ def _fleet_outage_failed(what: str, exc: BaseException) -> None:
     DRE-1254 discipline), and its caller stops rather than carrying on: a sweep
     that kept going after a failed create would comment onto an identifier it
     does not have. Nothing is lost by stopping — a card created but not yet
-    moved to Triage is found by prefix on the next sweep and moved then.
+    receipted is found by prefix on the next sweep, which appends to it
+    rather than filing a second.
 
     Only the FAILURE is a helper. Every `linear_ops.cmd_comment` on this path
     is written out as its own call with `pipeline_act.receipt()` around its
@@ -7327,7 +8206,8 @@ def report_fleet_reviewer_outage() -> None:
          neutral receipt and verdicts, so every hold the sweep above now posts
          is invisible here by that module's own rule.
       2. THE FLEET WITNESS — a second repository's crashes reach this sweep
-         only through the medic's note on the Linear card, and `active_cards()`
+         only through the medic's note on the Linear card, attributed to the
+         repository its run link names (DRE-5291), and `active_cards()`
          has already been read once for this sweep and is served from the pass
          cache. So this step costs ZERO Linear requests, which is the whole
          reason the fleet half is affordable at all.
@@ -7353,11 +8233,12 @@ def report_fleet_reviewer_outage() -> None:
         local.extend(reviewer_down.outcomes_from_pr(pr, REPO_SLUG))
     witness = []
     for card in active_cards():
-        repo = card_repo(card)
-        if not repo:
-            continue
+        # THIS sweep's repository, never the card's `repo:` label (DRE-5291):
+        # a note is attributed to the run it links, and one naming this repo
+        # is skipped — its crashes are already counted off the listing above.
         witness.extend(reviewer_down.witness_from_comments(
-            repo, card["identifier"], linear_ops.window_nodes(card.get("comments")),
+            REPO_SLUG, card["identifier"],
+            linear_ops.window_nodes(card.get("comments")),
         ))
     threshold = reviewer_down.threshold_from_registry()
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -7472,8 +8353,19 @@ def report_fleet_reviewer_outage() -> None:
         first_run=_fleet_outage_first_run(first, prs) if first else None,
     )
     try:
+        # Triage, the red-main-repair precedent: the CARD is not broken, the
+        # pipeline is, and this is the lane a person scans for a pipeline that
+        # cannot run. reconcile.py is a permitted Triage writer in
+        # config/lane-contract.json. CREATED there in the one write that mints
+        # it (DRE-5292): creating in the default lane and moving it afterwards
+        # passed the card through Planning, and the relay dispatched the
+        # planner at an alarm. `no-code` and no `agent:*` role — this is not
+        # work to build or plan, and every gate reads `no-code` as "no run is
+        # coming for this card".
         issue = linear_ops.create_card(decision.title, decision.body,
-                                       repo_slug=REPO_SLUG)
+                                       repo_slug=REPO_SLUG,
+                                       labels=(linear_ops.NO_CODE_LABEL,),
+                                       lane=FLEET_OUTAGE_LANE)
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _fleet_outage_failed("create", e)
         return
@@ -7483,13 +8375,6 @@ def report_fleet_reviewer_outage() -> None:
             "reviewer-outage-fleet-wide", reviewer_down.outage_receipt(decision)))
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _fleet_outage_failed(f"outage receipt on {identifier}", e)
-    else:
-        # Triage, the red-main-repair precedent: the CARD is not broken, the
-        # pipeline is, and this is the lane a person scans for a pipeline that
-        # cannot run. reconcile.py is a permitted Triage writer in
-        # config/lane-contract.json. A crash between the create and this move
-        # is recovered by the next sweep, which finds the card by prefix.
-        _fleet_outage_state(f"triage {identifier}", identifier, "Triage")
     print(f"fleet-reviewer-outage: filed {identifier} — {decision.title}")
 
 
@@ -8414,8 +9299,8 @@ def main(
     promote_only exists because GitHub's cron is best-effort — the "*/15"
     schedule delivers sweeps 78-100 minutes apart in practice. Eligibility
     changes at two precise events, so those workflows invoke this directly:
-      - plan.yml, the moment an epic activates (Todo or In Progress; the gate
-        counts an epic as active in EITHER state — DRE-1893)
+      - plan.yml, the moment an epic activates (In Progress, the one lane the
+        gate counts an epic as active in — DRE-5347)
       - linear-sync.yml, the moment a merge flips a card to Done
     Promotion is pure Linear (the Backlog→Todo transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
@@ -8568,19 +9453,51 @@ def main(
             # nobody could take must never render as a lane with nothing in it.
             _read_failures.append(f"intake: {e}")
             print(f"ERROR: report_intake_depth: {e}", file=sys.stderr)
+        # The Urgent fast path (DRE-4150), beside the count and on the same
+        # board read. Full sweeps only, like the count. Its own try: a fast
+        # path that cannot read must not cost the sweep the rest of its work,
+        # and an unreadable history, exclusion list or receipt search is a
+        # READ failure — never "nothing was eligible".
+        try:
+            with _phase("advance_urgent_intake"):
+                advance_urgent_intake()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"urgent fast path: {e}")
+            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
+        repaired: set[str] = set()
         try:
             with _phase("repair_frozen_planning_holds"):
-                repair_frozen_planning_holds()
+                repaired = repair_frozen_planning_holds()
         except ReconcileWriteError as e:
             _write_failures.append(str(e))
             print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
         except linear_ops.LinearError as e:
             _read_failures.append(f"planning-repair: {e}")
             print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
+        # The planner line's backstop (DRE-5178): dead claims released, free
+        # slots filled, the line's depth said. After the watchdog and the
+        # repair, so a card either of them escalated this pass — still waiting
+        # on this pass's board read — is not dispatched on its way out. Full
+        # sweeps only: the event paths have returned or skip this block.
+        try:
+            with _phase("serve_planner_line"):
+                serve_planner_line(flagged | (repaired or set()))
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"planner-line: {e}")
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"planner-line: {e}")
+            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`
@@ -8604,6 +9521,12 @@ def main(
     if not promote_only:
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
+        # BEFORE promote_ready reads its candidates, and that order is
+        # load-bearing (DRE-5347): a child's parent lane is read after the
+        # carry, never before it, so an approved epic dragged into Todo is back
+        # in In Progress by the time its children are asked about.
+        with _phase("carry_epics_out_of_todo"):
+            carry_epics_out_of_todo()
     # The WIP base and the nudge list, from the helper limit-recovery counts
     # its room from too (DRE-4934) — so the two cannot disagree. It drops the
     # epics `repo_epics(mine)` found above, the same set on the same cards.

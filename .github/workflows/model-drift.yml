@@ -1,28 +1,31 @@
-# Model drift watch (DRE-2236) — discover models from the API, alert on drift,
-# NEVER auto-adopt.
+# Model drift watch (DRE-2236) — the committed catalog snapshot, and nothing
+# else. It decides nothing about a model (DRE-3899).
 #
 # We used to learn about model changes by eye: on 2026-07-28 the console showed
 # "Opus 4.8" on every board card while the pipeline was already dispatching
 # Opus 5, and the same rotation missed one agent's pin with CI green throughout.
 # This job replaces the eyeball with a weekly read of the live model list.
 #
-# It does exactly three things, all of them safe:
-#   1. refreshes models.json — DATA ONLY, the seam the console reads so
-#      agent-bureau needs no Anthropic credential and no second transport;
-#   2. opens ONE Linear card when the pinned ladder has something newer
-#      available, for a HUMAN to decide;
-#   3. opens ONE Linear card when the catalog offers a model config/models.yaml
-#      has never named (DRE-2317). That discovery may join the ADVISORY ladder
-#      at most — never the build path, and never the planning one (DRE-3015) —
-#      and only when a human edits the config.
+# It does one thing: it refreshes models.json — DATA ONLY, the seam the console
+# reads so agent-bureau needs no Anthropic credential and no second transport —
+# and gets it onto `main` through one pull request (below).
 #
-# It does NOT change the ladder. Adoption stays a deliberate one-line human
-# edit, because a new model can ship breaking API changes (Opus 5 turned
-# thinking on by default and 400s when thinking is disabled above `high`
-# effort) and can double the bill (Fable 5 is ~2x Opus per token — the reason
-# Fable is off the workhorse ladder). The commit step below stages one path and
-# then PROVES the staged set, so this workflow is structurally incapable of
-# adopting anything.
+# THE SNAPSHOT LIVES HERE; EVERY DECISION ABOUT A MODEL LIVES IN
+# `model-adoption.yml`. This job used to file two sorts of Linear card — "the
+# pinned ladder has something newer" (DRE-3880, Sonnet 4.6 -> Sonnet 5) and
+# "the catalog offers a model we have never configured" (DRE-3881, five models
+# older than what we run) — and both were the cards the CEO said should not
+# exist once his rule of 2026-09-14 decides instead: a newer version of a
+# family we run, at no higher declared price, is trialled and proposed as an
+# ordinary pull request; an older one is ignored; a new family or a higher
+# price is ONE question for him. `scripts/model_adoption.py` classifies,
+# `config/model-prices.yaml` is the only source of price, and
+# `model-adoption.yml` runs it daily against the live catalog.
+#
+# It does NOT change the ladder. The commit step below stages one path and then
+# PROVES the staged set, so this workflow is structurally incapable of adopting
+# anything — the one automated path to a ladder change is the adoption
+# workflow's reviewed pull request, never a scheduled snapshot job.
 #
 # IT DOES NOT PUSH TO `main` (DRE-3879). The commit step used to end in
 # `git push origin HEAD:main`, and branch protection refused it — `GH006:
@@ -46,23 +49,17 @@
 #      distinct from the qa-bot App that merges, so author != merger holds.
 #   Q2 secrets — a schedule-triggered run in this repo reads the repo's normal
 #      secrets store (never the separate Dependabot store), so the Anthropic
-#      and Linear credentials resolve.
+#      credentials resolve. No Linear credential is read: the job files no card.
 #   Q3 re-run — the snapshot write is idempotent (an unchanged catalog is a
-#      byte-identical file, no commit and no pull request), a changed one
-#      force-pushes the same branch and finds its own open pull request, and
-#      the card lookup is by exact title, so a re-run mints nothing new. A
-#      DECLINED finding should be parked in Backlog rather than Canceled:
-#      `find-open` ignores terminal cards, so cancelling one invites a fresh
-#      card next week.
+#      byte-identical file, no commit and no pull request), and a changed one
+#      force-pushes the same branch and finds its own open pull request, so a
+#      re-run mints nothing new.
 #   Q4 command limits — the push is to `bot/model-drift`, which no protection
 #      rule covers, so the GH006 refusal cannot recur; the pull request is what
 #      reaches `main`, through the gate. `gh pr list --state open` is
 #      deliberately not `--state all` — a merged pull request is finished and
 #      the next refresh needs a new one — and a listing GitHub will not answer
-#      fails the run rather than opening a duplicate. `linear_ops.py find-open`
-#      matches an EXACT title among non-terminal cards; drift_title() is
-#      generated deterministically from the finding so the match holds week to
-#      week.
+#      fails the run rather than opening a duplicate.
 #   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
 #      anywhere simply repeats next week (or on workflow_dispatch).
 name: Model drift
@@ -103,14 +100,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The snapshot as it stands BEFORE the refresh — the record of every model
-      # we had already seen. Discovery compares the fresh catalog against THIS;
-      # comparing it against the file the next step overwrites would find
-      # nothing, ever. Copied, not stashed in git, so the commit step below
-      # still stages exactly one path.
-      - name: Keep the previous snapshot as the discovery baseline
-        run: cp models.json "$RUNNER_TEMP/previous-models.json" || echo '{}' > "$RUNNER_TEMP/previous-models.json"
-
       # ONE live API call per run. Both credential shapes are passed; the shared
       # auth seam (model_fallback.auth_headers) picks x-api-key or the OAuth
       # bearer. No credential, or any network/parse failure, degrades to an
@@ -121,89 +110,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: python3 scripts/model_catalog.py snapshot models.json
-
-      # Drift is checked against the file just written — no second API call,
-      # and on an outage it degrades to the last good snapshot rather than to
-      # a false "no drift". Exit 3 = something newer than what we pin.
-      - name: Check the pinned ladder against the catalog
-        id: drift
-        run: |
-          set +e
-          python3 scripts/model_catalog.py check-drift models.json \
-            --title-file "$RUNNER_TEMP/drift-title.txt" \
-            --body-file "$RUNNER_TEMP/drift-body.md"
-          rc=$?
-          set -e
-          case "$rc" in
-            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
-            3) echo "drift=true"  >> "$GITHUB_OUTPUT" ;;
-            *) exit "$rc" ;;
-          esac
-
-      # ONE card per finding. The title encodes pinned → newest, so the
-      # exact-title lookup matches the card an earlier run already opened and
-      # the weekly schedule never duplicates it.
-      - name: Open ONE drift card (idempotent)
-        if: steps.drift.outputs.drift == 'true'
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-        run: |
-          # The repo whose pins drifted — this one. Derived, not hardcoded
-          # (DRE-2680): a card with no repo:<slug> label carries no product key
-          # and the readiness gate cannot route it out of Planning.
-          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          TITLE=$(cat "$RUNNER_TEMP/drift-title.txt")
-          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
-          if [ -n "$EXISTING" ]; then
-            echo "already open as $EXISTING — not duplicating"
-          else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/drift-body.md" --repo "$REPO_SLUG"
-          fi
-
-      # Discovery (DRE-2317): a model id the catalog offers that
-      # config/models.yaml has never named. The policy for one of those is
-      # `discovery.on_new_model: advisory` — it may be proposed for the
-      # ADVISORY ladder and nothing else. `on_new_model: workhorse` is rejected
-      # by schema validation because a new model joining the BUILD path
-      # unattended is the 2026-08-09 outage, and `judgement` is rejected with
-      # it: the planning ladder is the strongest one we run (DRE-3015), so it
-      # is the most attractive place for an unattended promotion to land. This
-      # step reports; a human decides. Exit 3 = something we have never
-      # configured.
-      - name: Check the catalog for models we have never configured
-        id: discovery
-        run: |
-          set +e
-          python3 scripts/model_catalog.py check-new models.json \
-            --baseline "$RUNNER_TEMP/previous-models.json" \
-            --title-file "$RUNNER_TEMP/new-model-title.txt" \
-            --body-file "$RUNNER_TEMP/new-model-body.md"
-          rc=$?
-          set -e
-          case "$rc" in
-            0) echo "new=false" >> "$GITHUB_OUTPUT" ;;
-            3) echo "new=true"  >> "$GITHUB_OUTPUT" ;;
-            *) exit "$rc" ;;
-          esac
-
-      # The ALERT half of the discovery policy — never silent. Same exact-title
-      # idempotency as the drift card: next week's identical finding matches the
-      # open card instead of minting a duplicate.
-      - name: Open ONE new-model alert card (idempotent)
-        if: steps.discovery.outputs.new == 'true'
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-        run: |
-          # Same derivation as the drift card above (DRE-2680) — the repo whose
-          # configuration has never named this model is the repo we are in.
-          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          TITLE=$(cat "$RUNNER_TEMP/new-model-title.txt")
-          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
-          if [ -n "$EXISTING" ]; then
-            echo "already open as $EXISTING — not duplicating"
-          else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/new-model-body.md" --repo "$REPO_SLUG"
-          fi
 
       # DATA ONLY, and proven so: exactly one path is named here, and
       # `bot_branch_pr.py` stages it, reads the index back and refuses to
@@ -221,11 +127,11 @@ jobs:
           The Anthropic catalog snapshot, refreshed by
           `.github/workflows/model-drift.yml` (DRE-2236).
 
-          **Data only — the ladder is unchanged; adoption is a human edit.** The
-          run stages one path and refuses to commit anything else, so this job
-          is structurally incapable of moving a model pin. A model the catalog
-          offers that we have never configured is reported on its own Linear
-          card, for a person to decide.
+          **Data only — the ladder is unchanged.** The run stages one path and
+          refuses to commit anything else, so this job is structurally
+          incapable of moving a model pin. Every decision about a model is
+          made by `.github/workflows/model-adoption.yml` under the CEO's rule
+          of 2026-09-14, never here.
           BODY
           python3 scripts/bot_branch_pr.py publish \
             --repo "$GITHUB_REPOSITORY" \

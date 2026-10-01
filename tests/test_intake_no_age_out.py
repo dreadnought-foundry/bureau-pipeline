@@ -25,10 +25,13 @@ WHAT THESE TESTS PIN:
     criterion, and it fails against the code this card replaces.
   * **No code path in `reconcile.py` moves a card out of Intake on the grounds
     of its age.** Asserted behaviourally over a FULL sweep and structurally
-    over the module's source: the sweep's only Intake write is a log line.
-  * **Priority buys nothing.** A card at Urgent, of any age, is untouched —
-    pinned on purpose, so the later Urgent fast-path card (the signed answer's
-    point 2) has a baseline it changes deliberately rather than inherits.
+    over the module's source: the sweep's one Intake exit is DRE-4150's Urgent
+    fast path, and nothing else.
+  * **Priority alone buys nothing.** CHANGED ON PURPOSE BY DRE-4150, the
+    Urgent fast path this baseline was pinned for (the signed answer's point
+    2): a card at any priority, of any age, is untouched UNLESS it was raised
+    to Urgent after the rule shipped — which the card's history says, never
+    its label. The fast path itself is tests/test_intake_urgent_fast_path.py.
   * **The report survives the move.** Every full pass prints one line saying
     how many cards are in Intake and how old the oldest is — a record, never a
     gate. Absent data renders as absent (console-honesty rule 2): an empty lane
@@ -43,6 +46,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_intake_no_age_out.py -v
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import json
 import os
@@ -77,6 +81,11 @@ THIRTY_DAYS = 30 * 24 * 60
 #: this card deletes.
 AGED_TAG = "intake-aged"
 
+#: When every card below was created — the start of the window the 24 Urgent
+#: cards measured on 2026-09-17 were created in, and well before DRE-4150's
+#: ship moment, so no fixture here was raised to Urgent after the rule.
+CREATED = "2026-08-10T16:00:00.000Z"
+
 
 def _iso(minutes_ago: float) -> str:
     return (
@@ -95,9 +104,27 @@ def _card(identifier="DRE-2687", state="Intake", labels=(),
         "description": "work",
         "updatedAt": _iso(minutes_stale),
         "priority": priority,
+        "createdAt": CREATED,
         "state": {"name": state},
         "labels": {"nodes": [{"name": n} for n in labels]},
     }
+
+
+def _history_reads(cards):
+    """`gql_paged` as the Urgent fast path's history read sees it: each card
+    as created, with no priority change since — so a card at Urgent was
+    created at it, on CREATED."""
+    def paged(query, variables=None, *, connection="issues"):
+        if connection != "issues" or "history" not in query:
+            return []
+        wanted = set((variables or {}).get("ids") or ())
+        return [
+            {"id": c["id"], "identifier": c["identifier"],
+             "priority": c["priority"], "createdAt": c["createdAt"],
+             "parent": None, "history": {"nodes": []}}
+            for c in cards if c["id"] in wanted
+        ]
+    return paged
 
 
 def _old_batch(n: int) -> list[dict]:
@@ -110,8 +137,9 @@ def _old_batch(n: int) -> list[dict]:
 
 
 def _run(cards):
-    """Run the sweep's Intake phase over `cards`, with the `active_cards` stub
-    honouring the lane filter the way Linear does. Returns
+    """Run the sweep's WHOLE Intake phase over `cards` — the depth report and,
+    since DRE-4150, the Urgent fast path beside it — with the `active_cards`
+    stub honouring the lane filter the way Linear does. Returns
     (cmd_comment mock, cmd_advance mock)."""
     def by_lane(states=reconcile.SWEEP_STATES):
         return [c for c in cards if c["state"]["name"] in states]
@@ -120,6 +148,8 @@ def _run(cards):
     with mock.patch.object(
         reconcile, "active_cards", side_effect=by_lane
     ), mock.patch.object(
+        reconcile.linear_ops, "gql_paged", side_effect=_history_reads(cards)
+    ), mock.patch.object(
         reconcile.linear_ops, "comment_bodies", return_value=[]
     ), mock.patch.object(
         reconcile.linear_ops, "cmd_comment"
@@ -127,6 +157,7 @@ def _run(cards):
         reconcile.linear_ops, "cmd_advance"
     ) as advanced:
         reconcile.report_intake_depth()
+        reconcile.advance_urgent_intake()
     return comment, advanced
 
 
@@ -235,27 +266,47 @@ def test_a_full_sweep_moves_nothing_out_of_intake():
 
 def test_reconcile_never_advances_a_card_off_the_intake_lane():
     """Structural companion, read off the module's own source: `cmd_advance`
-    with `Intake` as the from-lane is the exact call this card deletes, and a
-    later edit that reintroduces it fails here even if it is unreachable."""
+    with `Intake` as the from-lane is the exact call this card deleted, and a
+    later edit that reintroduces it fails here even if it is unreachable.
+
+    CHANGED ON PURPOSE BY DRE-4150: exactly ONE such call exists, the Urgent
+    fast path's move into Planning, refusing an epic. The age-out's move into
+    Green Light — or any second exit — is still an offence."""
     source = (ROOT / "scripts" / "reconcile.py").read_text()
     offences = re.findall(r"cmd_advance\([^)]*\"Intake\"[^)]*\)", source)
-    assert offences == [], offences
+    assert offences == [
+        'cmd_advance(ident, "Planning", "Intake", "--not-epic")'
+    ], offences
+    tree = ast.parse(source)
+    owner = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "advance_urgent_intake"
+    )
+    assert offences[0] in ast.get_source_segment(source, owner), (
+        "the one Intake exit lives in the Urgent fast path and nowhere else"
+    )
 
 
 # --------------------------------------------------------------------------
-# 2: priority buys nothing — the baseline the Urgent card will change
+# 2: priority alone buys nothing — the baseline DRE-4150 changed on purpose
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("priority", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("minutes", [5, THIRTY_DAYS, 365 * 24 * 60])
 def test_a_card_at_any_priority_and_any_age_is_untouched(priority, minutes):
-    """Urgent is priority 1 in Linear. The signed answer's point 2 gives Urgent
-    a fast path in a LATER card, and only for cards raised to Urgent after that
-    rule ships — so today's answer must be 'nothing', pinned, or that card
-    inherits a behaviour instead of choosing one."""
-    _comment, advanced = _run(
+    """Urgent is priority 1 in Linear. DRE-4141 pinned "nothing" here so the
+    Urgent fast path would CHOOSE its behaviour rather than inherit one, and
+    DRE-4150 has chosen: a card at any priority and any age is untouched
+    unless it was raised to Urgent AFTER the rule shipped. Every card here was
+    created on CREATED, before that moment, and never re-prioritised — so a
+    card at Urgent, touched five minutes ago, is still untouched: the label is
+    not the act. The card that DOES move is pinned in
+    tests/test_intake_urgent_fast_path.py."""
+    comment, advanced = _run(
         [_card(minutes_stale=minutes, priority=priority)]
     )
     assert not advanced.called
+    assert not comment.called
 
 
 def test_the_twenty_four_urgent_cards_already_in_intake_stay_there():

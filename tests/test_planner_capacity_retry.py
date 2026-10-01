@@ -67,8 +67,8 @@ SITES = [
     ("Re-plan after the second critic sent it back", "postreplan",
      "postreplan_cap", "app_post_retry", "postreplan_retry", "postreplan_done",
      "app_post", True),
-    ("Wave route — write the wave plan", "wave", "wave_cap", "app_wave_retry",
-     "wave_retry", "wave_done", "app_wave", False),
+    ("Roll-up route — split into child epics", "rollup", "rollup_cap",
+     "app_rollup_retry", "rollup_retry", "rollup_done", "app_rollup", False),
 ]
 SITE_IDS = [s[1] for s in SITES]
 
@@ -441,11 +441,12 @@ def test_the_plan_epic_finish_fails_the_job_on_a_genuine_failure(tmp_path):
 def test_every_capacity_retry_step_carries_its_planner_steps_route(site):
     """The re-run steps belong to their planner step's route and no other.
 
-    tests/test_wave_plan_wiring.py caught `wave_cap` and `wave_done` gated only
-    on the wave step's outcome; nothing pinned the same for the plan epic and
-    the two re-plans, so dropping the route from any of their four steps would
-    have passed. A step off its route runs for a card on another one — a
-    finished? step that fails the job, or a re-run nobody's route asked for."""
+    The retired wave route's own wiring test caught `wave_cap` and `wave_done`
+    gated only on the wave step's outcome; nothing pinned the same for the
+    plan epic and the two re-plans, so dropping the route from any of their
+    four steps would have passed. A step off its route runs for a card on
+    another one — a finished? step that fails the job, or a re-run nobody's
+    route asked for."""
     name, orig, cap, mint, retry, done, _mint0, _coe = site
     route = _by_id(orig)["if"]
     assert route, f"{orig} is gated on a route"

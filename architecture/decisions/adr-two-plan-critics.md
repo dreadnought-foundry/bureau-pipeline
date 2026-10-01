@@ -3,7 +3,10 @@
 - **Status:** Accepted — 2026-08-29. Built by
   [DRE-2721](https://linear.app/dreadnoughtfoundry/issue/DRE-2721):
   `scripts/plan_critic.py`, `standards/plan-critic.md`, wired into
-  `.github/workflows/plan.yml` on both routes.
+  `.github/workflows/plan.yml` on both routes. Placement of the second critic
+  superseded by
+  [DRE-5268](https://linear.app/dreadnoughtfoundry/issue/DRE-5268/epic-bureau-pipeline-a-plan-reaches-green-light-only-after-the-planner),
+  2026-09-29.
 - **Date:** 2026-08-29
 - **Cards:** DRE-2721 (this design and its build), DRE-2712 (web search for the
   planner and both critics — a hard prerequisite; closed with no pull request
@@ -37,7 +40,7 @@ because it has already been spent.
 
 | | First critic | Second critic |
 | -- | -- | -- |
-| When | After the planner, before Green Light | After the CEO approves, before the children promote |
+| When | After the planner, before Green Light | After the first critic passes the plan, before Green Light |
 | Reviews | A moving document | A frozen specification |
 | Question | Is this fit to take the CEO's time? | Given this is now the specification, what is missing? |
 | Cross-epic scope | This epic only | This epic plus every epic in Green Light / Todo / In Progress, named one by one |
@@ -160,6 +163,50 @@ review are counted separately from collisions found later
 (`plan_critic.py collisions`). **A collision reaching Backlog is the tripwire:
 the signal that this check has to split back out into its own pass, rather than
 the critic being asked to do more.**
+
+## Amended by [DRE-5268](https://linear.app/dreadnoughtfoundry/issue/DRE-5268/epic-bureau-pipeline-a-plan-reaches-green-light-only-after-the-planner) — both critics read a plan before Green Light (2026-09-29)
+
+**The decision.** The CEO, on 2026-09-29: *"Nothing should get to me that
+hasn't been approved by the planner and run through all the critics. It should
+never come to me. That's how it gets the green light, when it's not me deciding
+that you need to go look at it again, but to go."* So the second critic now
+reads the plan after the first critic passes it and before the CEO does, and
+the CEO's Approve means go. This supersedes the placement above, and with it
+the second critic's rows of the table on what a send-back and the bound do.
+It also supersedes the second critic's cross-epic scope row: that critic sees
+every other epic under review in Planning as well, so two plans read at the
+same moment see each other. That part lands with
+[DRE-5276](https://linear.app/dreadnoughtfoundry/issue/DRE-5276), and until
+then the row above is still what the critic sees.
+
+**Why the premise did not hold.** This record put the second critic after the
+approval because an adversarial pass needs a fixed target, and it read the
+approval as what fixes the text. It does not. The text is fixed once the first
+critic passes it, and the CEO's click changes none of it. The send-back rate,
+which this record named as the tripwire, had fired: DRE-5129 was approved three
+times, DRE-5034 twice, and DRE-3778 and DRE-4198 five times each, and every
+approval was sent back. Each Approve was really a "review it again" button.
+
+**Both bounds park in Triage.** At either critic a send-back is re-planned and
+re-read by that critic without leaving Planning. At either bound the plan parks
+in Triage with `needs-human` and the findings still open, where the operator
+works it; the CEO sees it only if the operator turns it into a business
+question. DRE-3088's "the plan reaches the CEO regardless" at the first
+critic's bound is superseded, because a plan the first critic held twice has
+not been through all the critics. DRE-3291's card-set branch is gone, because
+the CEO has not seen the plan and a changed card set is nothing he has to
+re-approve. And the Consequences line below that a crashed critic never holds
+a plan now covers the first critic only: the second critic's `NO_RESULT` is
+not a pass, it is asked for once more, and a second one on the attempt parks
+in Triage.
+
+**Green Light holds four kinds of row** (`config/lane-contract.json`, rendered
+to `docs/lane-contract.md`). The epic asked for two: a plan both critics
+passed, and a business question the planner escalated with a recommendation.
+Kind (c), an approved epic queued under the cap on epics in motion (DRE-5129),
+was proposed by the operator and accepted with the plan. Kind (d), a build that
+stopped on something only a person can settle, predates this amendment. The
+rule in full is `standards/plan-critic.md`.
 
 ## Consequences
 

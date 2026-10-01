@@ -53,7 +53,6 @@ os.environ.setdefault("GH_TOKEN", "x")
 import linear_ops  # noqa: E402
 import medic_classify  # noqa: E402
 import pipeline_act  # noqa: E402
-import publish_review_check  # noqa: E402
 import reconcile  # noqa: E402
 import reviewer_down  # noqa: E402
 import reviewer_environment  # noqa: E402
@@ -63,6 +62,16 @@ RUN_URL = (
     "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/"
     "34512000001/job/96000000001"
 )
+#: The crashed QA Review run itself, as `gh run list --json url` names it —
+#: the link the card owes its reader (DRE-5292).
+CRASHED_RUN_ID = "34512000001"
+CRASHED_RUN_URL = (
+    "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/"
+    + CRASHED_RUN_ID
+)
+#: What GitHub fills a check run's `details_url` with when the posting App set
+#: none: the App's homepage. DRE-5273 linked exactly this as its "first run".
+APP_HOMEPAGE = "https://github.com/dreadnought-foundry/agent-bureau"
 NATIVE_BINARY_LOG = (
     "agent\tqa\t2026-09-08T22:19:03.1234567Z ReferenceError: Claude Code "
     "native binary not found at /home/runner/.local/bin/claude"
@@ -151,10 +160,14 @@ def _medic_note():
     )
 
 
-def _environment_note():
+def _environment_note(run_url=RUN_URL):
     """DRE-3430's evidence note, built by its own WRITER — never restated."""
     signature = reviewer_environment.SIGNATURES[0]
-    return reviewer_environment.evidence_note(signature, SHA, RUN_URL)
+    return reviewer_environment.evidence_note(signature, SHA, run_url)
+
+
+#: A run in ANOTHER repository than this sweep's own (`agent-bureau`).
+ATLAS_RUN_URL = "https://github.com/EveryBite/atlas/actions/runs/34512000777"
 
 
 def _hold_receipt():
@@ -173,6 +186,7 @@ class Written:
 
     def __init__(self):
         self.created: list = []
+        self.created_kw: list = []
         self.comments: list = []
         self.states: list = []
         self.titles: list = []
@@ -198,12 +212,39 @@ def _gh_factory(state):
     return fake_gh
 
 
+def _crashed_run(run_id=CRASHED_RUN_ID, conclusion="failure", minutes_ago=12):
+    """One row of `gh run list --json databaseId,url,conclusion,createdAt`."""
+    return {
+        "databaseId": int(run_id),
+        "url": ("https://github.com/dreadnought-foundry/agent-bureau/actions/"
+                f"runs/{run_id}"),
+        "conclusion": conclusion,
+        "createdAt": _iso(minutes_ago),
+    }
+
+
+def _actions_factory(state, log):
+    """`reconcile.gh_actions_read` for the two Actions reads the evidence
+    makes: the head's review workflow runs, and the crashed run's log."""
+
+    def fake_actions(*args):
+        state["actions_calls"].append(tuple(args))
+        if args[:2] == ("run", "list"):
+            runs = state.get("runs", [_crashed_run()])
+            return runs if runs is None else json.dumps(runs)
+        if args[:2] == ("run", "view"):
+            return log
+        raise AssertionError(f"unexpected Actions read: {args}")
+
+    return fake_actions
+
+
 @contextlib.contextmanager
 def _outage(prs=(), cards=(), open_card=None, duplicates=(),
             log=NATIVE_BINARY_LOG, create_fails=False, **gh_state):
     """Drive `report_fleet_reviewer_outage` over a fixed world."""
     written = Written()
-    state = {"prs": list(prs), "gh_calls": [], **gh_state}
+    state = {"prs": list(prs), "gh_calls": [], "actions_calls": [], **gh_state}
 
     def find_open_prefix(prefix):
         written.prefix_reads += 1
@@ -216,10 +257,12 @@ def _outage(prs=(), cards=(), open_card=None, duplicates=(),
         if create_fails:
             raise linear_ops.LinearError("Linear API error 500: issueCreate failed")
         written.created.append((title, description, repo_slug))
+        written.created_kw.append(kw)
         return {"identifier": "DRE-9999", "url": "https://linear.app/x/DRE-9999"}
 
     with patch.object(reconcile, "gh", side_effect=_gh_factory(state)), \
-        patch.object(reconcile, "gh_actions_read", side_effect=lambda *a: log), \
+        patch.object(reconcile, "gh_actions_read",
+                     side_effect=_actions_factory(state, log)), \
         patch.object(reconcile, "active_cards", side_effect=lambda *a, **k: list(cards)), \
         patch.object(reconcile.linear_ops, "find_open_prefix",
                      side_effect=find_open_prefix), \
@@ -415,20 +458,24 @@ def _file_world(witness_body):
 
 
 @pytest.mark.parametrize(
-    "witness", ["generic", "environment"],
+    "witness, repos", [("generic", 1), ("environment", 2)],
     ids=["generic-medic-note", "environment-evidence-note"],
 )
-def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness):
-    """ACCEPTANCE: two local receipts plus one witness on a card labelled
-    another repo → ONE card, titled from the decision, described by
-    `card_body`, receipted once, and moved to Triage."""
-    body = _medic_note() if witness == "generic" else _environment_note()
+def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness, repos):
+    """ACCEPTANCE: two local receipts plus one witness → ONE card, titled from
+    the decision, described by `card_body`, receipted once, and CREATED in
+    Triage — never moved there (DRE-5292). The environment note names a run
+    in atlas, so it is a second repository; the generic note names no run, so
+    it is a third run and no repository at all (DRE-5291) — the run rule
+    files it either way."""
+    body = (_medic_note() if witness == "generic"
+            else _environment_note(ATLAS_RUN_URL))
     written, _ = _run_outage(**_file_world(body))
 
     assert len(written.created) == 1, "ONE card for one outage — never two"
     title, description, slug = written.created[0]
     assert title.startswith(reviewer_down.TITLE_PREFIX)
-    assert title.endswith("— 3 runs, 2 repos"), title
+    assert title.endswith(f"— 3 runs, {repos} repos"), title
     assert slug == reconcile.REPO_SLUG
     assert "The three usual suspects" in description, "the body is card_body's"
     assert reviewer_down.LEDGER_PREFIX in description
@@ -440,27 +487,178 @@ def test_three_could_not_run_across_two_repos_file_exactly_one_card(witness):
     assert pipeline_act.trailer(reviewer_down.ACT) in receipt, (
         "every comment composes through the ONE act DRE-3433 declared"
     )
-    assert written.states == [("DRE-9999", "Triage")]
+    assert written.created_kw[0].get("lane") == "Triage"
+    assert written.states == [], "created in its lane, so nothing moves it"
+
+
+def test_a_note_naming_this_sweeps_own_repository_is_not_counted_again():
+    """DRE-5291: the note is attributed to the repository in its run link —
+    here this sweep's own — never to the card's `repo:` label. This sweep
+    already counts its own crashes off its pull requests, so the note adds
+    nothing: two crashes in one repository, below both rules."""
+    world = _file_world(_environment_note(RUN_URL))
+    world["cards"] = [_card(repo="bureau-pipeline",
+                            bodies=[(_environment_note(RUN_URL), _iso(6))])]
+    written, _ = _run_outage(**world)
+    assert written.created == [], "one repository's two crashes file nothing"
 
 
 def test_the_filed_card_carries_the_first_runs_evidence():
-    """ACCEPTANCE (step 5): the run url off the head's review check run, the
-    log tail through `reviewer_down.error_line`, the action ref off this
-    checkout's own qa-review.yml."""
+    """ACCEPTANCE (step 5): the run url off the head's own QA Review workflow
+    run (DRE-5292 — never a check run's `details_url`), the log tail through
+    `reviewer_down.error_line`, the action ref off this checkout's own
+    qa-review.yml."""
     written, state = _run_outage(**_file_world(_medic_note()))
     _, description, _ = written.created[0]
-    assert RUN_URL in description
+    assert CRASHED_RUN_URL in description
     assert "native binary not found" in description
     assert "anthropics/claude-code-action@" in description
-    assert any(
+    assert not any(
         c[0] == "api" and "/check-runs" in c[1] for c in state["gh_calls"]
-    ), "the run url is read off the head's review check run"
+    ), "a check run's details_url is not a run — it is never read (DRE-5292)"
 
 
-def test_the_check_run_read_asks_for_the_published_review_check():
+def test_the_run_read_asks_for_the_review_workflow_on_the_crashed_head():
+    """The listing names the crashed repository, the review workflow this
+    sweep dispatches, and the crashed head's commit — so the run it answers
+    is the one that crashed there, not the newest run anywhere."""
     written, state = _run_outage(**_file_world(_medic_note()))
-    api = next(c for c in state["gh_calls"] if c[0] == "api")
-    assert publish_review_check.CHECK_NAME in " ".join(api)
+    listing = next(c for c in state["actions_calls"] if c[:2] == ("run", "list"))
+    assert listing[listing.index("--repo") + 1] == reconcile.REPO
+    assert listing[listing.index("--workflow") + 1] == reconcile.review_workflow()
+    assert listing[listing.index("--commit") + 1] == SHA
+
+
+# --------------------------------------------------------------------------
+# 3a. DRE-5292 — the first-run link is the crashed run, never the App homepage
+# --------------------------------------------------------------------------
+def _first_run_statement(description):
+    """The sentence naming the first run, and the log line under it."""
+    lines = description.splitlines()
+    at = next(i for i, l in enumerate(lines) if l.startswith("The first crashed run"))
+    return lines[at], lines[at + 3]
+
+
+def test_an_app_homepage_details_url_never_becomes_the_first_run_link():
+    """ACCEPTANCE: the DRE-5273 shape — the head's review check run carries
+    the posting App's homepage as its `details_url`. The card links
+    `…/actions/runs/<id>` for the crashed QA Review run in the crashed
+    repository, and the log tail is read from THAT run."""
+    written, state = _run_outage(details_url=APP_HOMEPAGE,
+                                 **_file_world(_medic_note()))
+    _, description, _ = written.created[0]
+    sentence, log_line = _first_run_statement(description)
+    assert f"({CRASHED_RUN_URL})" in sentence, sentence
+    assert f"({APP_HOMEPAGE})" not in description
+    assert "native binary not found" in log_line
+    views = [c for c in state["actions_calls"] if c[:2] == ("run", "view")]
+    assert len(views) == 1 and views[0][2] == CRASHED_RUN_ID, views
+    assert views[0][views[0].index("--repo") + 1] == reconcile.REPO
+    assert "--log-failed" in views[0]
+
+
+def test_the_first_crashed_run_is_the_earliest_failed_one_on_the_head():
+    """A head collects runs: the crash, a later green re-review, one still
+    going. The card names the run that CRASHED — the earliest failure."""
+    runs = [
+        _crashed_run("34512000009", conclusion="success", minutes_ago=2),
+        _crashed_run("34512000005", conclusion="failure", minutes_ago=6),
+        _crashed_run(CRASHED_RUN_ID, conclusion="failure", minutes_ago=12),
+        _crashed_run("34512000010", conclusion="", minutes_ago=1),
+    ]
+    written, state = _run_outage(runs=runs, **_file_world(_medic_note()))
+    sentence, _ = _first_run_statement(written.created[0][1])
+    assert f"({CRASHED_RUN_URL})" in sentence, sentence
+    views = [c for c in state["actions_calls"] if c[:2] == ("run", "view")]
+    assert [v[2] for v in views] == [CRASHED_RUN_ID]
+
+
+@pytest.mark.parametrize(
+    "runs", [[], [_crashed_run(conclusion="success")], None],
+    ids=["no-run-on-the-head", "no-failed-run", "listing-unreadable"],
+)
+def test_no_resolvable_run_says_so_and_prints_no_url(runs):
+    """ACCEPTANCE: no crashed run can be resolved → the body says no run was
+    found, prints no URL in its place, and reads no log."""
+    written, state = _run_outage(runs=runs, details_url=APP_HOMEPAGE,
+                                 **_file_world(_medic_note()))
+    sentence, log_line = _first_run_statement(written.created[0][1])
+    assert "no run found" in log_line, log_line
+    assert "http" not in sentence and "http" not in log_line, (sentence, log_line)
+    assert not [c for c in state["actions_calls"] if c[:2] == ("run", "view")]
+
+
+# --------------------------------------------------------------------------
+# 3b. DRE-5292 — filed straight into Triage, wearing nothing a dispatch reads
+# --------------------------------------------------------------------------
+def test_the_outage_card_is_created_in_triage_and_never_passes_planning():
+    """ACCEPTANCE: the card's first recorded state is Triage. The create names
+    it, and no state write on this path puts the card anywhere — Planning
+    entry is what the relay dispatches the planner on (DRE-5273's Agent Plan
+    run 36658173529)."""
+    written, _ = _run_outage(**_file_world(_medic_note()))
+    assert [kw.get("lane") for kw in written.created_kw] == ["Triage"]
+    assert written.states == []
+
+
+def test_triage_is_a_lane_this_sweep_may_create_in():
+    """The lane contract names reconcile.py a permitted Triage writer."""
+    contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
+    triage = next(l for l in contract["lanes"] if l["name"] == "Triage")
+    assert "reconcile.py" in triage["clauses"]["writers"]["who"]
+
+
+def test_the_outage_card_wears_no_agent_role_and_is_marked_no_code():
+    """ACCEPTANCE: no `agent:*` role — 25 of 30 earlier outage cards wore
+    `agent:engineer` — and `no-code`, the mark every gate reads as "no run is
+    coming for this": the alarm is not work to build or plan."""
+    written, _ = _run_outage(**_file_world(_medic_note()))
+    labels = [l.lower() for l in written.created_kw[0].get("labels", ())]
+    assert not [l for l in labels if l.startswith("agent:")], labels
+    assert linear_ops.NO_CODE_LABEL in labels
+    assert reconcile.HAND_BUILT_LABEL not in labels
+    assert not reconcile.counts_against_wip(
+        {"labels": {"nodes": [{"name": l} for l in labels]}}
+    )
+
+
+def test_the_real_create_writes_triage_and_the_labels_in_one_mutation():
+    """The same claim one seam down: through the REAL `create_card`, the ONE
+    Linear write that mints the card carries Triage's state id and no
+    `agent:*` label — there is no second write to have got it wrong."""
+    mutations: list = []
+
+    def fake_gql(query, variables=None):
+        if "teams(" in query:
+            return {"teams": {"nodes": [{"id": "team-1"}]}}
+        if "issueCreate" in query:
+            mutations.append(variables["input"])
+            return {"issueCreate": {"success": True, "issue": {
+                "id": "u", "identifier": "DRE-9999",
+                "url": "https://linear.app/x/DRE-9999"}}}
+        raise AssertionError(f"unexpected Linear call: {query[:80]}")
+
+    with patch.object(linear_ops, "gql", side_effect=fake_gql), \
+        patch.object(linear_ops, "state_id",
+                     side_effect=lambda team, lane: f"state:{lane}"), \
+        patch.object(linear_ops, "_team_label_ids",
+                     side_effect=lambda team, names: [f"label:{n}" for n in names]), \
+        patch.object(reconcile, "gh", side_effect=_gh_factory(
+            {"prs": _file_world(_medic_note())["prs"], "gh_calls": []})), \
+        patch.object(reconcile, "gh_actions_read", side_effect=_actions_factory(
+            {"actions_calls": []}, NATIVE_BINARY_LOG)), \
+        patch.object(reconcile, "active_cards",
+                     side_effect=lambda *a, **k: _file_world(_medic_note())["cards"]), \
+        patch.object(reconcile.linear_ops, "find_open_prefix", return_value=None), \
+        patch.object(reconcile.linear_ops, "cmd_comment"), \
+        patch.object(reconcile.linear_ops, "cmd_state",
+                     side_effect=AssertionError("no state write on this path")):
+        reconcile.reset_sweep_cards()
+        reconcile.report_fleet_reviewer_outage()
+    assert len(mutations) == 1
+    assert mutations[0]["stateId"] == "state:Triage"
+    assert not [l for l in mutations[0]["labelIds"] if l.startswith("label:agent:")]
+    assert f"label:{linear_ops.NO_CODE_LABEL}" in mutations[0]["labelIds"]
 
 
 def test_the_evidence_is_the_earliest_LOCAL_crash():
@@ -476,7 +674,7 @@ def test_the_evidence_is_the_earliest_LOCAL_crash():
         cards=[_card(bodies=[(_medic_note(), _iso(20))])],
     )
     _, description, _ = written.created[0]
-    assert RUN_URL in description
+    assert CRASHED_RUN_URL in description
     assert "native binary not found" in description
     assert "agent-bureau#141" in description, (
         "the first run named is the earliest LOCAL crash, not the witness"
@@ -488,7 +686,7 @@ def test_an_unreadable_actions_log_never_fabricates_a_line():
     run url, never an invented error."""
     written, _ = _run_outage(log=None, **_file_world(_medic_note()))
     _, description, _ = written.created[0]
-    assert f"log tail unreadable — see {RUN_URL}" in description
+    assert f"log tail unreadable — see {CRASHED_RUN_URL}" in description
 
 
 def test_a_failed_create_lands_in_write_failures():

@@ -19,14 +19,15 @@
 # model (`modelUsage.<model>`) and compares them with the Models API's
 # `max_input_tokens` and `max_tokens`, read after the trial by
 # `claude_code_pin.py limits`. A run below either is `degraded` — never
-# `passed` — and the adoption workflow (DRE-3898, not built yet) is to raise
+# `passed` — and the adoption workflow (`model-adoption.yml`, DRE-3898) raises
 # the Claude Code pin first (`claude_code_pin.py latest-supporting`) instead of
-# adopting the model.
+# adopting the model, trialling the candidate again on the raised pin by
+# pointing `pipeline_ref` at the pin-raise branch.
 #
 # WHAT IT REPORTS, AND WHAT IT DOES NOT DO. Three outputs — `outcome`,
 # `run_url`, `summary` — and nothing else. It never fails the calling workflow
 # on a failed trial: a model that dies is the ANSWER this run exists to
-# produce, so the caller (`model-adoption.yml`, DRE-3903) decides what to do
+# produce, so the caller (`model-adoption.yml`, DRE-3898) decides what to do
 # with it. A trial that went red would take the adoption rail down with the
 # candidate.
 #
@@ -39,10 +40,11 @@
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — nothing here is initiated by this workflow: it inherits the
-#      caller's event. `allowed_bots` is copied verbatim from agent-task.yml's
-#      `Implement card` step, so every identity that already dispatches work in
-#      this fleet (the four pool bots and `github-actions`, DRE-2053) is
-#      admitted here too.
+#      caller's event. `allowed_bots` is agent-task.yml's `Implement card`
+#      step verbatim, so every identity that already dispatches work in this
+#      fleet (the four pool bots and `github-actions`, DRE-2053) is admitted
+#      here too — plus `agent-bureau-qa-bot`, the actor of a scheduled run
+#      (DRE-5123).
 #   Q2 secrets — BOTH credential shapes are declared optional and selected by
 #      `vars.CLAUDE_AUTH_MODE`, exactly as agent-task.yml selects them. And the
 #      endpoint matters as much as the store: the model call goes through
@@ -188,9 +190,13 @@ jobs:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ github.token }}
-          # Copied verbatim from agent-task.yml's `Implement card` step — a
-          # second, drifting list is how DRE-2020/DRE-2053 happened.
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # agent-task.yml's `Implement card` step verbatim — a second,
+          # drifting list is how DRE-2020/DRE-2053 happened — PLUS
+          # `agent-bureau-qa-bot`, as groomer.yml admits it (DRE-5123): the
+          # daily adoption run reaches this step from a `schedule`, and a
+          # scheduled run initiates as the qa-bot that merges every PR here.
+          # Pinned in tests/test_scheduled_claude_allowed_bots.py.
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,github-actions
           # The bounds. Ten turns is plenty for one read and one write, and it
           # is the ceiling whose breach IS the report. The tool set carries no
           # Bash and no network: the trial must not be able to do anything but

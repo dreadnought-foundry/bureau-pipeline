@@ -42,6 +42,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402
+import planning_route  # noqa: E402
 import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -198,6 +199,9 @@ WALKED = {
     ("reconcile", "card_is_epic"),
     ("linear_ops", "epic_branch_refusal"),
     ("linear_ops", "cmd_advance"),
+    ("planning_route", "returned_child"),
+    ("epic_cap", "_child_is_epic"),
+    ("epic_todo_gate", "is_epic_card"),
 }
 
 
@@ -386,6 +390,81 @@ class TestEveryCallerIsWalked:
         with card.patched():
             created = linear_ops.cmd_subissue("DRE-3013", "a child", "## What\n- work")
         assert created["identifier"] == "DRE-3040"
+
+    def _returned_thread(self) -> list:
+        """A card handed back and read afresh as an epic (DRE-5242)."""
+        import planner_score
+
+        return [
+            planning_shape.shape_comment(
+                "one-off", "first read", by=planning_shape.BY_PLANNER,
+                model="claude-fable-5-1"),
+            f"{planner_score.HANDBACK_RECEIPT_PREFIX} an epic's worth of work.",
+            planning_shape.shape_comment(
+                "epic", "read after the hand-back", by=planning_shape.BY_PLANNER,
+                model="claude-fable-5-1"),
+        ]
+
+    def test_returned_child_does_not_read_a_planner_owned_one_off_parent_as_an_epic(self):
+        """`planning_route.returned_child` (DRE-5242) — the newest caller. A
+        returned card under a one-off wearing `agent:planner` is not a child
+        of an epic, so it is not split into siblings under that one-off."""
+        answer = planning_route.returned_child(
+            self._returned_thread(),
+            {"identifier": "DRE-3018", "title": PROBE_TITLE,
+             "has_children": False, "shape": "one-off"},
+        )
+        assert answer.returned is False
+        assert "not an epic" in answer.reason
+
+    def test_returned_child_still_reads_a_stamped_epic_parent_as_one(self):
+        answer = planning_route.returned_child(
+            self._returned_thread(),
+            {"identifier": "DRE-3013", "title": "the intake front door",
+             "has_children": False, "shape": "epic"},
+        )
+        assert answer.returned is True
+        assert answer.parent == "DRE-3013"
+
+    def _epic_with_child(self, title: str, grandchildren: int = 0) -> dict:
+        return {
+            "identifier": "DRE-5134",
+            "state": {"name": "In Progress"},
+            "children": {"nodes": [{
+                "identifier": "DRE-3018", "title": title,
+                "labels": {"nodes": [{"name": n} for n in PROBE_LABELS]},
+                "children": {"nodes": [{"id": f"g{n}"} for n in range(grandchildren)]},
+            }]},
+        }
+
+    def test_epic_cap_counts_an_epic_whose_child_is_a_planner_owned_one_off(self):
+        """`epic_cap._child_is_epic` (DRE-5134) — a one-off child is a card,
+        so its parent holds work of its own and takes a slot, whatever the
+        child's `agent:planner` label says."""
+        import epic_cap
+
+        assert epic_cap.counts_against_cap(
+            self._epic_with_child(PROBE_TITLE), count_rollup_parents=False
+        )
+
+    def test_epic_cap_does_not_count_a_parent_whose_only_child_is_an_epic(self):
+        import epic_cap
+
+        assert not epic_cap.counts_against_cap(
+            self._epic_with_child(PROBE_TITLE, grandchildren=1),
+            count_rollup_parents=False,
+        )
+
+    def test_the_todo_gate_does_not_read_a_planner_owned_one_off_as_an_epic(self):
+        """`epic_todo_gate.is_epic_card` (DRE-5316) — the rule that refuses an
+        epic at Todo. Reading the label here would refuse every promoted
+        one-off at the lane it is promoted into."""
+        import epic_todo_gate
+
+        assert epic_todo_gate.is_epic_card(
+            PROBE_TITLE, False, [_stamp("one-off")]) is False
+        assert epic_todo_gate.is_epic_card(
+            PROBE_TITLE, False, [_stamp("epic")]) is True
 
 
 # ===========================================================================

@@ -622,6 +622,11 @@ class TestPlanYmlBranchesThreeWays:
     def test_each_of_the_three_shapes_has_its_own_gated_step(self):
         assert "steps.shape.outputs.route == 'epic'" in _step("Route — plan or activate")["if"]
         assert "steps.shape.outputs.route == 'one-off'" in _step("One-off route")["if"]
+        # DRE-4718: the roll-up's hand-off, gated on the shape name DRE-4699
+        # stamps, still exits through planning_route.py.
+        hand_off = _step("Roll-up route — hand off")
+        assert hand_off["if"] == "steps.shape.outputs.route == 'roll-up'"
+        assert "planning_route.py exit" in hand_off["run"]
 
     def test_the_one_off_step_names_no_lane_of_its_own(self):
         """The destination is the file's. A lane written into the YAML is the
@@ -634,6 +639,21 @@ class TestPlanYmlBranchesThreeWays:
                     "destination comes from config/planning-shapes.json"
                 )
 
+    def test_no_roll_up_step_names_a_lane_of_its_own(self):
+        """DRE-4718: the roll-up's lanes are written by planning_route.py (the
+        hand-off) and epic_split.py (the activation), each reading them off
+        the vocabulary and the contract — never by the YAML around them."""
+        rollup = [s for s in _steps()
+                  if (s.get("name") or "").startswith("Roll-up route")]
+        assert rollup, "plan.yml carries no Roll-up route step"
+        for step in rollup:
+            body = step.get("run") or ""
+            for lane in lane_contract.lane_names(status="live"):
+                assert lane not in body, (
+                    f"the {step['name']!r} step names the lane {lane!r} — the "
+                    "destination comes from the script it calls"
+                )
+
     def test_a_one_off_run_writes_no_artifact_and_asks_one_model(self):
         """Everything the epic route owes — the planner, both critics, the
         artifact check, the publish job — hangs off the plan/activate mode that
@@ -643,7 +663,7 @@ class TestPlanYmlBranchesThreeWays:
         Two steps run on a critic's DECISION rather than on the mode directly,
         so the chain is walked: the decision steps themselves are mode-gated.
 
-        The wave route's own agent (DRE-2845) hangs off the SHAPE instead —
+        The roll-up route's own agent (DRE-4718) hangs off the SHAPE instead —
         there is no mode on that branch — so an agent step qualifies either
         way, as long as the shape it waits for is not the one-off.
 
@@ -651,14 +671,26 @@ class TestPlanYmlBranchesThreeWays:
         that no model reads is a one-off nothing judges: the shape stamp was
         the only reader on the fast path, and a business decision stamped
         `one-off` was routed FLEET and would have been built. The pre-approval
-        critic is the ONE agent step a one-off run may reach, and this asserts
-        it stays one — the cheap route stays cheap.
+        critic is the one agent step every one-off run reaches.
+
+        DRE-5376 added the one other: when that critic sends the card back, the
+        planner revises it. That step runs ONLY behind the one-off decision's
+        `revise` action, never on the shape alone, so a one-off the critic
+        passes, escalates or parks still asks exactly one model. Any other
+        agent step reachable from the one-off route fails here.
         """
         for producer in ("First critic — round 1 decision", "Second critic — decision"):
             assert "steps.route.outputs.mode" in _step(producer)["if"], (
                 f"{producer!r} must itself be mode-gated, or the steps that "
                 "hang off it escape the branch"
             )
+        # The revision hangs off the one-off decision, so the chain is walked
+        # here too: the decision itself runs on the one-off shape alone.
+        decision = _step("One-off critic — decision")
+        assert decision["id"] == "oneoff"
+        assert re.findall(r"steps\.shape\.outputs\.route == '([a-z-]+)'",
+                          decision["if"]) == ["one-off"]
+        revise_gate = "steps.oneoff.outputs.action == 'revise'"
         gated = ("steps.route.outputs.mode", "steps.pre1.outputs", "steps.post1.outputs")
         on_the_one_off_route = []
         for step in _steps():
@@ -666,7 +698,7 @@ class TestPlanYmlBranchesThreeWays:
                 condition = step.get("if", "")
                 shapes = re.findall(
                     r"steps\.shape\.outputs\.route == '([a-z-]+)'", condition)
-                if shapes == ["one-off"]:
+                if shapes == ["one-off"] or "steps.oneoff.outputs" in condition:
                     on_the_one_off_route.append(step.get("name"))
                     continue
                 assert any(g in condition for g in gated) or (
@@ -674,10 +706,20 @@ class TestPlanYmlBranchesThreeWays:
                     f"agent step {step.get('name')!r} is gated on neither the "
                     f"mode nor a shape a one-off cannot be"
                 )
-        assert on_the_one_off_route == ["Pre-approval critic — the one-off exit"], (
-            "exactly one agent step may run on the one-off route — the "
-            f"pre-approval critic (DRE-3041); found {on_the_one_off_route}"
+        assert on_the_one_off_route == [
+            "Pre-approval critic — the one-off exit",
+            "One-off revision — the planner answers the critic",
+        ], (
+            "exactly two agent steps may run on the one-off route — the "
+            "pre-approval critic (DRE-3041) and the planner's revision behind "
+            f"its send-back (DRE-5376); found {on_the_one_off_route}"
         )
+        assert _step("One-off revision — the planner answers the critic")["if"] \
+            == revise_gate, (
+                "the one-off revision must run on the critic's revise decision "
+                "and nothing else, or a one-off the critic passed asks a second "
+                "model"
+            )
         for fragment in ("Plan artifact — check", "Plan artifact — upload source"):
             assert "steps.route.outputs.mode == 'plan'" in _step(fragment)["if"]
         publish = _jobs()["publish"]["if"]

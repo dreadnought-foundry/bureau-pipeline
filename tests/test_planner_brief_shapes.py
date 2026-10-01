@@ -5,8 +5,8 @@ DRE-2727 updated every brief to the model that had already shipped and
 deliberately left this half out: the three shapes, the artifact gate and the
 execution plan describe a mechanism that did not exist when it was written.
 The mechanism exists now — `config/planning-shapes.json` (DRE-2843),
-`scripts/planning_route.py` (DRE-2844), `scripts/wave_plan.py` (DRE-2845) and
-`scripts/plan_artifact.py` (DRE-2720) — so the brief owes the description.
+`scripts/planning_route.py` (DRE-2844) and `scripts/plan_artifact.py`
+(DRE-2720) — so the brief owes the description.
 
 Every assertion here binds the brief to something that is not the brief: the
 shape vocabulary, the lane contract, the standard that owns a rule, or the

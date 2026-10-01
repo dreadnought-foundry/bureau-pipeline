@@ -13,6 +13,20 @@ lists the runs of the last hour (`--hours N` widens the window), fetches each
 run's log, and prints one row per (repo, workflow): runs seen, total spent,
 the most one run spent — sorted by total, with a grand total at the bottom.
 
+A sweep is read off its own count instead (DRE-5201). The budget line is the
+SHARED key's remaining quota read as the process starts and exits, so two
+sweeps that overlap each count the other's requests: on 2026-09-28
+bureau-pipeline's pass read 59, its own 20 plus agent-bureau's 39. The sweep
+also prints `sweep-spend: total <N> request(s) …`, counted by the process
+itself, and a run that printed one is charged that and its budget lines are
+not added. Every other workflow is still read off its budget lines.
+
+Both markers are read only where they OPEN a line — after the job/step/
+timestamp prefix `gh run view --log` adds. GitHub echoes a step's script into
+the log before running it, and the Sweep step's script names `linear-budget:`
+three times; matched anywhere, that added three "unknown/rolled" lines to
+every reconcile run.
+
 A repo the token cannot read prints UNKNOWN, never 0: a zero that means
 "could not look" would hide exactly the repo that is spending. A run whose
 log cannot be fetched (still in progress, or expired) is skipped and counted
@@ -37,11 +51,23 @@ from pathlib import Path
 
 REPO_MAP_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
 
-# The line linear_ops.budget_line() composes. `gh run view --log` prefixes each
-# line with `job\tstep\ttimestamp `, so the match is anchored on the marker,
-# not the line start. The arrow is the literal U+2192 the seam prints.
-_SPENT_RE = re.compile(r"linear-budget:\s*(\d+)\s*→\s*(\d+)\s*\(spent\s+(\d+)\s+this run")
-_SEEN_RE = re.compile(r"linear-budget:")
+# Where a printed line starts. `gh run view --log` prefixes each line with
+# `job\tstep\ttimestamp ` (the timestamp sometimes behind a byte-order mark on
+# a job's first line); a log saved without it starts at the line itself. What
+# follows the prefix must be the marker — the echoed script that merely names
+# it starts with a colour code, a `#` or a command (DRE-5201).
+_LINE_START = (
+    r"^(?:[^\t\n]*\t[^\t\n]*\t)?\ufeff?"
+    r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?"
+)
+# The line linear_ops.budget_line() composes. The arrow is the literal U+2192
+# the seam prints.
+_SPENT_RE = re.compile(
+    _LINE_START + r"linear-budget:\s*(\d+)\s*→\s*(\d+)\s*\(spent\s+(\d+)\s+this run"
+)
+_SEEN_RE = re.compile(_LINE_START + r"linear-budget:")
+# The last line of every sweep pass, reconcile.SweepSpend.report_total().
+_SWEEP_TOTAL_RE = re.compile(_LINE_START + r"sweep-spend: total (\d+) request")
 
 UNKNOWN = "UNKNOWN"
 
@@ -56,11 +82,24 @@ def spent_from_log(log_text: str) -> list[int | None]:
     for a line whose spend cannot be known (`window rolled`, `unknown`)."""
     out: list[int | None] = []
     for line in (log_text or "").splitlines():
-        if not _SEEN_RE.search(line):
+        if not _SEEN_RE.match(line):
             continue
-        m = _SPENT_RE.search(line)
+        m = _SPENT_RE.match(line)
         out.append(int(m.group(3)) if m else None)
     return out
+
+
+def run_spend_from_log(log_text: str) -> list[int | None]:
+    """What ONE run spent, entry by entry: its `sweep-spend: total` lines when
+    it printed any — the pass's own count — and otherwise its budget lines
+    (`spent_from_log`). Never both: a sweep's budget line counts the same
+    requests again, plus whatever else drew on the shared key meanwhile."""
+    totals = [
+        int(m.group(1))
+        for m in map(_SWEEP_TOTAL_RE.match, (log_text or "").splitlines())
+        if m
+    ]
+    return totals or spent_from_log(log_text)
 
 
 def aggregate(observations) -> list[dict]:
@@ -75,12 +114,14 @@ def aggregate(observations) -> list[dict]:
              "max": 0, "unknown_lines": 0},
         )
         row["runs"] += 1
-        for spent in spent_from_log(log_text):
+        run_total = 0
+        for spent in run_spend_from_log(log_text):
             if spent is None:
                 row["unknown_lines"] += 1
                 continue
-            row["total"] += spent
-            row["max"] = max(row["max"], spent)
+            run_total += spent
+        row["total"] += run_total
+        row["max"] = max(row["max"], run_total)
     return sorted(rows.values(), key=lambda r: (-r["total"], r["repo"], r["workflow"]))
 
 

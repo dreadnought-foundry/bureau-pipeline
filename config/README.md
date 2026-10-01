@@ -7,6 +7,9 @@ token for a private repo**, so anything they need must be a file in the public
 of it is ever a runtime lookup.
 
 - **`models.yaml`** — which model each agent runs on (see below).
+- **`model-prices.yaml`** — the declared price of each model id, in USD per
+  million tokens (DRE-3895). An id absent from it has no price and cannot
+  adopt itself.
 - **`turn-budgets.json`** — how many turns a build run gets (DRE-3097). A
   `turns:<n>` label picks a rung from a closed, reviewed set; absent that the
   `size:` label maps to one; absent both it is the default, **400 since
@@ -31,6 +34,15 @@ of it is ever a runtime lookup.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
+  "file the planner cap at 4"): how many planner runs may hold a slot at once,
+  how long a claim lives, how long a dispatch reserves a slot, and how long a
+  card may wait before the watchdog treats it as stuck. Read only through
+  `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
+  file rather than defaulting; `python3 scripts/planner_queue.py check`
+  validates it. `plan.yml` claims against it in its `Planner slot — claim or
+  wait` step, after the duplicate-dispatch guard and before any model step
+  (DRE-5179); a run it does not admit waits in line and ends green.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
 - **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):
@@ -255,8 +267,13 @@ returning 404, and a best-first ladder promoted the **entire fleet** onto it
 inside one TTL window with no human deciding anything. Usage drained and agents
 started dying mid-run.
 
-So the rule, now enforced by schema validation in
-`model_fallback.policy_errors()` rather than by convention:
+So **nothing moves the fleet in a TTL window.** Adoption is a merged pull
+request to this file, reaching the fleet riding `stable` like every other commit
+on `main` — never a probe flip. The probe decides how far *down* a ladder we
+walk, never how far up.
+
+What stands between an available model and the fleet, enforced by schema
+validation in `model_fallback.policy_errors()` rather than by convention:
 
 - the model at the **top of a non-build ladder** — the advisory one, the
   judgement one — must not appear on any build ladder. A config that puts it
@@ -278,15 +295,37 @@ So the rule, now enforced by schema validation in
 - the critic and verifier must stay `advisory`;
 - `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
   the cheap side of the fence;
-- `discovery.on_new_model` may be `advisory` or `none`. **`workhorse` is
-  rejected** — a newly seen model auto-joining the build path *is* the incident —
-  **and so is `judgement`**: the planning ladder is the strongest one we run,
-  which makes it the most attractive place for an unattended promotion to land.
-  A newly-discovered model may never reach a build *or* a planning ladder by
-  itself; a human editing this file is the only way up.
-  `discovery.alert` must be true: the weekly `model-drift` workflow opens one
-  Linear card for a human whenever the API offers a model this file does not
-  name.
+- `discovery.on_new_model` may be `advisory` or `none`, and `advisory` now
+  means a **new family** may be proposed for the advisory ladder at most, after
+  the CEO answers its `ask` question. `on_new_model: workhorse` and
+  `on_new_model: judgement` remain rejected — a newly seen family auto-joining
+  the build path *is* the incident, and the planning ladder is the strongest
+  one we run, which makes it the most attractive place for an unattended
+  promotion to land. A newer version of a family already on a ladder is the
+  `adopt` rule, not this key: it replaces its own family's rung through a
+  trialed, reviewed pull request, and never adds one. `discovery.alert` must
+  be true. The weekly `model-drift` workflow refreshes the catalog snapshot and
+  files no card (DRE-3899).
+
+## The three rules — `adopt`, `ignore`, `ask` (CEO decision, 2026-09-14)
+
+Ladder membership is a spend decision, and since 2026-09-14 some of those
+decisions are made by rule. `scripts/model_adoption.py` sorts every model the
+catalog offers that no ladder names into exactly one of three:
+
+- **`adopt`** — a newer version of a family already on a ladder, at the same or
+  a lower declared price in `config/model-prices.yaml` (input *and* output),
+  replaces that family's rung automatically. The daily
+  `.github/workflows/model-adoption.yml` gives it one real agent run on the new
+  model (`.github/workflows/model-trial.yml`), then opens an ordinary pull
+  request to this file that the critic reviews and the merge gate lands. No
+  human decision — the rule was the decision.
+- **`ignore`** — a model older than, or superseded by, what we run gets nothing:
+  a line in the run summary, no card, no pull request.
+- **`ask`** — a new family, a model whose declared price is above the rung it
+  would join, or a model with no declared price is still **the CEO's spending
+  decision**. The workflow files one plain-English question and adopts nothing
+  until it is answered.
 
 ## The declared overlaps — a Sonnet build is never reviewed by the same Sonnet
 
@@ -482,10 +521,11 @@ same PR as the ladder move, and the table's row for it names 2.1.284.
 `model-trial.yml` now reads that for itself (DRE-5121): it compares the context
 window and output cap the run recorded in `modelUsage.<model>` with the Models
 API's `max_input_tokens` and `max_tokens`, and a run below either is
-`degraded`, never `passed`. The model adoption workflow (DRE-3898, not built
-yet) is to treat `degraded` like `failed` for the ladders and raise the Claude
-Code pin first, through its own trial-gated PR (`scripts/claude_code_pin.py`).
-Until it lands, a `degraded` trial is read and the pin raised by hand.
+`degraded`, never `passed`. The model adoption workflow
+(`.github/workflows/model-adoption.yml`, DRE-3898) treats `degraded` like
+`failed` for the ladders and raises the Claude Code pin first, through its own
+trial-gated PR (`scripts/claude_code_pin.py`); the adoption follows on the
+first daily run after that PR merges.
 
 ## Changing a model
 
@@ -493,7 +533,16 @@ Edit `models.yaml`, run the sync script, commit both. Merging to `main` is
 **instantly live fleet-wide** — treat it as a production change. Remember that
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
-membership is the spend decision, and it is made here.
+membership is the spend decision, and it is made here — in this file, in a
+reviewed pull request.
+
+One kind of edit is made for you: the `adopt` rule above. The daily model
+adoption workflow (`.github/workflows/model-adoption.yml`, DRE-3898) trials a
+same-family successor at the same or a lower declared price and proposes it as
+an ordinary pull request editing this file, which the critic and the merge gate
+review like any other. Every other ladder change — a new family, a pricier tier,
+an unpriced model — waits on the CEO's answer to the one question that workflow
+files.
 
 ---
 

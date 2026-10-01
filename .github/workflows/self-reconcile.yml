@@ -28,9 +28,11 @@ jobs:
     with:
       pipeline_ref: main
       # THE PEN'S SWITCH IS NOT PASSED HERE ANY MORE (DRE-4141). This sweep
-      # moves no card out of Intake — no card leaves that lane because it is
-      # old — so there is nothing here for a hold to hold. The switch lives on
-      # `self-groomer.yml`, which calls the drain, which is the one exit:
+      # moves no card out of Intake because it is old, so there is nothing
+      # here for a hold to hold. The one card it does move out of Intake — one
+      # raised to Urgent after that rule shipped (DRE-4150) — does not wait on
+      # the hold, by the CEO's signed answer. The switch lives on
+      # `self-groomer.yml`, which calls the drain, the groomer's exit:
       #
       #   gh variable set INTAKE_HOLD \
       #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08

@@ -379,11 +379,14 @@ class TestThePlannerBrief:
             "the artifact section must name the checker and activator the "
             "split is run through (DRE-4717)"
         )
-        for retired in ("depends_on", "wave_commitment"):
-            assert retired not in section, (
-                f"the artifact section still names {retired!r} — the wave "
-                "filer is retired with the wave"
-            )
+        assert "depends_on" not in section, (
+            "the artifact section still names 'depends_on' — the wave filer "
+            "is retired with the wave"
+        )
+        assert not re.search(r"\bwave", section, re.I), (
+            "the artifact section still names the wave or its filer — both "
+            "are retired"
+        )
 
 
 class TestTheVocabulary:

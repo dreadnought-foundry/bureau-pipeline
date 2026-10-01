@@ -356,6 +356,160 @@ class TestAnExplicit401NamesTheCredentialAsRefused:
 
 
 # --------------------------------------------------------------------------- #
+# 2c. a test suite that names a signature is not a crash (DRE-5272)            #
+# --------------------------------------------------------------------------- #
+
+#: A line of Pipeline Tests' `scripts unit tests` job, prefix and all.
+UNIT_PREFIX = "scripts unit tests\tUnit tests\t2026-09-29T18:40:12.1234567Z "
+
+
+def _unit_log(*content: str) -> str:
+    return "".join(f"{UNIT_PREFIX}{line}\n" for line in content)
+
+
+#: Pipeline Tests run 36653738122 (2026-09-29, 18:40 PT), as `pytest tests -v`
+#: printed it: two real failures, and one PASSING test whose name carries
+#: `executable_not_found`. That test id was the only line in the log that did,
+#: and the medic held the run as a runner that cannot start Claude.
+PIPELINE_TESTS_LOG = _unit_log(
+    "tests/test_lane_contract.py::TestTheContract::test_lane_contract FAILED [ 41%]",
+    "tests/test_mid_epic.py::TestMidEpic::test_mid_epic FAILED [ 52%]",
+    "tests/test_reviewer_environment.py::TestDetect::test_executable_not_found "
+    "PASSED [ 79%]",
+    "=================================== FAILURES ===================================",
+    "E       AssertionError: assert 'Todo' == 'Backlog'",
+    "=========================== short test summary info ============================",
+    "FAILED tests/test_lane_contract.py::TestTheContract::test_lane_contract - "
+    "AssertionError: assert 'Todo' == 'Backlog'",
+    "FAILED tests/test_mid_epic.py::TestMidEpic::test_mid_epic - KeyError: 'epic'",
+    "================= 2 failed, 12935 passed in 812.34s (0:13:32) =================",
+    "##[error]Process completed with exit code 1.",
+)
+
+#: The line each signature's crash really prints, as a Claude-running job's
+#: log carries it. Every row of `SIGNATURES` has one, so a signature added
+#: later is checked against its own test names the moment it lands.
+ACTION_LINES = {
+    "native-binary-missing": "Error: Claude Code native binary not found",
+    "executable-not-found":
+        'Error: {"type":"executable_not_found","message":"no Claude executable"}',
+    "credential-refused":
+        "  result: Failed to authenticate. API Error: 401 OAuth access token "
+        "is invalid.",
+    "authentication-error":
+        'API Error: {"type":"authentication_error","message":"invalid x-api-key"}',
+}
+
+
+def _test_name(slug: str) -> str:
+    return "test_" + slug.replace("-", "_")
+
+
+def _test_name_lines(slug: str) -> list:
+    """Every shape a test runner reports a test named for this signature in:
+    `pytest -v` passing and failing, its short summary, an xdist worker's
+    line, a parametrized id carrying the action's own line, and `unittest -v`.
+    """
+    name = _test_name(slug)
+    node = f"tests/test_reviewer_environment.py::TestDetect::{name}"
+    param = f"{node}[{ACTION_LINES[slug]}]"
+    return [
+        f"{node} PASSED [ 79%]",
+        f"{node} FAILED [ 79%]",
+        f"FAILED {node} - AssertionError: assert None is not None",
+        f"[gw3] [ 79%] PASSED {node}",
+        f"{param} PASSED [ 79%]",
+        f"FAILED {param} - AssertionError",
+        f"{name} (test_reviewer_environment.TestDetect.{name}) ... ok",
+        f"{name} (test_reviewer_environment.TestDetect.{name}) ... FAIL",
+    ]
+
+
+class TestATestSuiteNamingASignatureIsNotACrash:
+    """DRE-5272. Pipeline Tests runs `pytest tests -v`, so every run's log
+    carries `TestDetect::test_executable_not_found PASSED`, and the
+    `executable-not-found` pattern matched that test id. Every Pipeline Tests
+    run that went red on a real failure was held as a runner that cannot start
+    Claude: no rerun, no diagnosis, and a receipt that blamed the runner."""
+
+    def test_the_2026_09_29_pipeline_tests_log_is_not_an_environment_crash(self):
+        assert renv.detect(PIPELINE_TESTS_LOG) is None
+
+    def test_the_medic_classifies_it_as_a_real_failure(self, tmp_path):
+        assert medic_classify.classify("Pipeline Tests", PIPELINE_TESTS_LOG) != (
+            "environment_crash"
+        )
+        out = _lines(_classify_cli("Pipeline Tests", PIPELINE_TESTS_LOG, tmp_path))
+        assert out["class"] == "normal"
+        assert out["signature"] == ""
+        assert out["infra_crash"] == "false"
+
+    def test_the_action_s_own_executable_not_found_still_names_the_cause(
+            self, tmp_path):
+        found = renv.detect(EXECUTABLE_LOG)
+        assert found is not None and found.slug == "executable-not-found"
+        out = _lines(_classify_cli("Agent Task", EXECUTABLE_LOG, tmp_path))
+        assert out["class"] == "environment_crash"
+        assert out["signature"] == "executable-not-found"
+
+    @pytest.mark.parametrize("line", [
+        'Error: {"type":"executable_not_found"}',
+        "Error: executable_not_found",
+        "error_type: executable_not_found.",
+    ])
+    def test_the_token_standing_on_its_own_still_names_the_cause(self, line):
+        found = renv.detect(_log(line))
+        assert found is not None and found.slug == "executable-not-found"
+
+    def test_every_signature_has_its_action_line(self):
+        assert set(ACTION_LINES) == {s.slug for s in renv.SIGNATURES}
+
+    @pytest.mark.parametrize("slug", [s.slug for s in renv.SIGNATURES])
+    def test_the_action_line_alone_names_its_signature(self, slug):
+        """What keeps the test below honest: each line DOES classify, so the
+        only thing that stops it classifying there is the test-runner shape."""
+        found = renv.detect(_log(ACTION_LINES[slug]))
+        assert found is not None and found.slug == slug
+
+    @pytest.mark.parametrize("slug", [s.slug for s in renv.SIGNATURES])
+    def test_a_test_named_for_the_signature_is_not_the_signature(self, slug):
+        for line in _test_name_lines(slug):
+            assert renv.detect(_unit_log(line)) is None, line
+            assert medic_classify.classify(
+                "Pipeline Tests", _unit_log(line)
+            ) != "environment_crash", line
+
+    def test_pytest_s_explanation_of_a_failure_is_not_the_runner(self):
+        """A failing test prints the value it was handed on an `E` line, and
+        the value is often this file's own fixture log, prefix and all."""
+        explained = _unit_log(
+            "E       AssertionError: assert None is not None",
+            "E        +  where None = detect('qa-review\\tReview the pull "
+            "request\\t2026-09-08T18:03:12.1234567Z Error: Claude Code native "
+            "binary not found\\n')",
+            "E        +  where None = detect('API Error: {\"type\":"
+            "\"authentication_error\",\"message\":\"invalid x-api-key\"}')",
+        )
+        assert renv.detect(explained) is None
+
+    def test_every_test_this_session_collected_detects_nothing(self, request):
+        """The whole suite as `pytest -v` reports it, passing and failing: a
+        test added tomorrow whose id names a signature fails here, before a
+        red Pipeline Tests run is held for it."""
+        lines = []
+        for item in request.session.items:
+            lines += [
+                f"{item.nodeid} PASSED [ 50%]",
+                f"FAILED {item.nodeid} - AssertionError",
+            ]
+        if renv.detect(_unit_log(*lines)) is None:
+            return
+        named = [l for l in lines if renv.detect(_unit_log(l)) is not None]
+        pytest.fail("a test id reads as an environment crash:\n"
+                    + "\n".join(named[:20]))
+
+
+# --------------------------------------------------------------------------- #
 # 3. the evidence note — the phrase the fleet alarm counts                     #
 # --------------------------------------------------------------------------- #
 

@@ -27,10 +27,10 @@ WHAT IS UNDER TEST:
     and never a mutation.
   * The scrub, as a PURE function: comment bodies cut to their first 200
     characters (every marker this pipeline reads is anchored at the start of a
-    body), descriptions kept whole (growth records, wave-commitment blocks and
-    blocker lines live anywhere in them), `user` reduced to its opaque `id`,
-    and a card carrying exactly the contract keys — a key the sweep never reads
-    is not in the file.
+    body), descriptions kept whole (growth records and blocker lines live
+    anywhere in them), `user` reduced to its opaque `id`, and a card
+    carrying exactly the contract keys — a key the sweep never reads is not
+    in the file.
   * The redaction: an email address is taken out of every free-text field
     before it is written, and before the 200-character cut. This repository is
     PUBLIC, a committed snapshot is permanent, and the board's prose quotes
@@ -246,8 +246,8 @@ def test_a_missing_body_reads_as_empty_not_as_a_crash():
 
 
 def test_a_description_is_kept_whole():
-    """The sweep reads growth records, wave-commitment blocks and blocker lines
-    ANYWHERE in a description — truncating one would change what the replay
+    """The sweep reads growth records and blocker lines ANYWHERE in a
+    description — truncating one would change what the replay
     sees."""
     description = "**Blocked by:** DRE-1\n" + ("z" * 5000)
     card = board_snapshot.scrub_card(_raw_card("DRE-1", description=description))
@@ -416,7 +416,8 @@ def test_the_nested_shapes_are_the_ones_the_sweep_reads():
     assert card["relations"] == {"pageInfo": {"hasNextPage": True}, "nodes": [
         {"type": "blocks", "issue": {"identifier": "DRE-1"},
          "relatedIssue": {"identifier": "DRE-3"}}]}
-    assert card["inverseRelations"] == {"nodes": [
+    # and the promotion gate reads it to know the page was full (DRE-5379)
+    assert card["inverseRelations"] == {"pageInfo": {"hasNextPage": False}, "nodes": [
         {"type": "blocks", "issue": {"identifier": "DRE-4",
                                      "state": {"name": "Done"}}}]}
     assert card["history"] == {"nodes": [
@@ -644,7 +645,9 @@ def test_every_card_in_the_fixture_validates_against_the_contract(snapshot):
             assert rel["relatedIssue"] is None or _valid_ref(
                 rel["relatedIssue"], {"identifier"})
 
-        assert set(card["inverseRelations"]) == {"nodes"}, where
+        assert set(card["inverseRelations"]) == {"pageInfo", "nodes"}, where
+        assert _valid_ref(card["inverseRelations"]["pageInfo"], {"hasNextPage"}), where
+        assert isinstance(card["inverseRelations"]["pageInfo"]["hasNextPage"], bool)
         for rel in card["inverseRelations"]["nodes"]:
             assert _valid_ref(rel, {"type", "issue"}), where
             assert rel["issue"] is None or (

@@ -16,8 +16,9 @@ The three things asserted, each read off the workflow files rather than
 remembered:
 
   * ONE nightly cron, off the hour, apart from every other cron this repo
-    schedules, and outside the release window (`release_train.FLEET_WINDOW`) —
-    a nightly competing with a train for runners delays both.
+    schedules, and clear of the fleet wake-up's sweep by
+    `WAKE_MARGIN_MINUTES` (`release_train.FLEET_WAKE`, DRE-5266) — a nightly
+    competing with a train for runners delays both.
   * A SCHEDULE RUN SKIPS NOTHING BUT `tdd`. Every job's `if:` is evaluated
     against a schedule event, and `tdd` — which reads a pull request's commit
     list, and a schedule run has no pull request — is asserted to be the ONLY
@@ -51,6 +52,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import release_train  # noqa: E402
 
 UTC = timezone.utc
+
+#: How far the nightly must fire from either of the fleet wake-up's two cron
+#: lines (DRE-5266). Once the fleet default window became `always` there is no
+#: "outside the release window" left to fire in, but the 05:00 PT sweep still
+#: wakes every train at once — that is the minute a nightly would compete
+#: with for runners, so the rule is stated against it.
+WAKE_MARGIN_MINUTES = 60
 
 #: The card's rule: `tdd` is the one named exemption, because it checks a pull
 #: request's commits for test-before-fix order and a schedule run has neither.
@@ -249,16 +257,58 @@ def test_the_nightly_avoids_the_other_repos_nightlies(elsewhere):
     )
 
 
-@pytest.mark.parametrize("month", [1, 7])  # PST and PDT
-def test_the_nightly_runs_outside_the_release_window(month):
-    # A nightly competing with the release train for runners delays both
-    # (standards/engineering.md rule 2). The window is read from its one
-    # declaration, never a restated offset.
-    minute, hour = (int(f) for f in _tests_crons()[0].split()[:2])
-    fires = datetime(2026, month, 15, hour, minute, tzinfo=UTC)
-    assert not release_train.in_window(release_train.FLEET_WINDOW, fires), (
-        f"{fires.astimezone(release_train.PT):%H:%M} PT is inside the fleet's "
-        f"release window ({release_train.FLEET_WINDOW})"
+def _utc_minute(cron: str) -> int:
+    minute, hour = (int(f) for f in cron.split()[:2])
+    return hour * 60 + minute
+
+
+def _gap_minutes(cron_a: str, cron_b: str) -> int:
+    """How many minutes apart two daily crons fire. The distance wraps
+    midnight: 23:50 and 00:10 are twenty minutes apart, not a day."""
+    gap = abs(_utc_minute(cron_a) - _utc_minute(cron_b))
+    return min(gap, 24 * 60 - gap)
+
+
+@pytest.mark.parametrize("wake", release_train.wake_crons())
+def test_the_nightly_stays_clear_of_the_fleet_wake_up(wake):
+    # A nightly competing with the release trains for runners delays both
+    # (standards/engineering.md rule 2). The fleet default window is `always`
+    # (DRE-5266), so the minute every train is woken at once is the fleet
+    # wake-up's sweep — read from its one declaration, both cron lines, never
+    # a restated offset.
+    gap = _gap_minutes(_tests_crons()[0], wake)
+    assert gap >= WAKE_MARGIN_MINUTES, (
+        f"the nightly {_tests_crons()[0]!r} fires {gap} minutes from the fleet "
+        f"wake-up's {wake!r} ({release_train.FLEET_WAKE} PT) — keep it at "
+        f"least {WAKE_MARGIN_MINUTES} minutes clear"
+    )
+
+
+@pytest.mark.parametrize("wake", release_train.wake_crons())
+def test_the_wake_margin_rejects_a_nightly_at_the_sweep(wake):
+    # The non-vacuous half: a nightly sitting on either wake-up line is
+    # inside the margin, and one an hour or more away is outside it.
+    assert _gap_minutes(wake, wake) == 0 < WAKE_MARGIN_MINUTES
+    minute, hour = (int(f) for f in wake.split()[:2])
+    later = f"{minute} {(hour + 1) % 24} * * *"
+    assert _gap_minutes(later, wake) == WAKE_MARGIN_MINUTES
+
+
+def test_the_gap_wraps_midnight():
+    # Without the wraparound, 23:50 and 00:10 UTC read as 1420 minutes apart
+    # and a nightly twenty minutes from a wake-up would pass the margin.
+    assert _gap_minutes("50 23 * * *", "10 0 * * *") == 20
+    assert _gap_minutes("10 0 * * *", "50 23 * * *") == 20
+    assert _gap_minutes("50 23 * * *", "10 0 * * *") < WAKE_MARGIN_MINUTES
+
+
+def test_the_schedule_comment_states_the_rule_against_the_wake_up():
+    head = TESTS.read_text(encoding="utf-8").split("jobs:", 1)[0]
+    assert "FLEET_WAKE" in head, (
+        "the schedule comment must state the rule against the fleet wake-up"
+    )
+    assert "05:00-21:00 PT" not in head, (
+        "the schedule comment still states the retired bounded window"
     )
 
 

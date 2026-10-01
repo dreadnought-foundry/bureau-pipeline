@@ -472,6 +472,37 @@ def _drive_proof_waiting(mp):
     )
 
 
+@site("roll-up-activated", "roll-up-activated")
+def _drive_roll_up_split(mp):
+    """The roll-up's split record (DRE-4717). Drives `epic_split.activate`
+    over a two-child split — the second child blocked on the first — with the
+    `linear_ops` module it is handed standing in for Linear. Frozen from the
+    first render of the receipt, like the proof hold above: there was no
+    earlier wording to read it off."""
+    import epic_split  # noqa: PLC0415 — only this driver needs it
+
+    body = ("The engine ships first and ends at a watched release. More "
+            "follows.\n\n## Acceptance criteria\n\n- [ ] planned on its own\n")
+    children = [
+        {"identifier": "DRE-2", "title": "[EPIC] bureau-pipeline: the engine",
+         "body": body, "labels": ["agent:planner"], "blocked_by": []},
+        {"identifier": "DRE-3", "title": "[EPIC] bureau-pipeline: the fleet",
+         "body": body.replace("The engine ships first", "The fleet follows"),
+         "labels": ["agent:planner"], "blocked_by": ["DRE-2"]},
+    ]
+
+    def posted(_identifier, text, *_flags):
+        raise _Posted(text)
+
+    epic_split.activate(SimpleNamespace(
+        get_issue=lambda _i, **_k: {"state": {"name": "Planning"}},
+        cmd_children_detail=lambda _i: print(json.dumps(children)),
+        count_comments=lambda *_a, **_k: 0,
+        cmd_comment=posted,
+        cmd_advance=lambda *_a, **_k: None,
+    ), "DRE-1")
+
+
 # --------------------------------------------------------------------------- #
 # 1. the body survives byte-identical, and the trailer is appended             #
 # --------------------------------------------------------------------------- #

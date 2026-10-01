@@ -50,11 +50,14 @@ class TestTheGroomerMayWriteCanceled:
     def test_that_is_the_whole_permitted_set(self):
         # Pinned as a tuple as well as by membership: a terminal lane gaining a
         # writer nobody named is the failure this clause exists to prevent, and
-        # a membership test alone cannot see an addition.
+        # a membership test alone cannot see an addition. `plan.yml` is the
+        # one DRE-5242 named: a returned child of an epic, split into siblings
+        # under its parent, is canceled by the planner that split it.
         assert lane_contract.lane_writers("Canceled") == (
             "operator",
             "reconcile.py",
             GROOMER,
+            "plan.yml",
         )
 
     def test_the_writer_key_resolves_in_the_contracts_own_glossary(self):

@@ -77,7 +77,8 @@ import validate_card  # noqa: E402
 
 #: What one busy-repo sweep may spend on Linear READS, over the fixture board
 #: below. The card's target. Two paged reads of the active lanes and the
-#: Backlog (three pages at 260 cards), one read per active epic for its
+#: Backlog (three pages at 260 cards), one paged read of Green Light for the
+#: planner line's claims (DRE-5178), one read per active epic for its
 #: green-light history, one `viewer` read for authorship, and ONE paged read of
 #: the epics for the close's children states and the gate's relations together
 #: (DRE-3642 — it was a read per epic for each of them) — nothing per card.

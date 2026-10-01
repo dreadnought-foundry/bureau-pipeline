@@ -620,5 +620,120 @@ class ConfigIsBundledNotLookedUpTest(unittest.TestCase):
         self.assertIn("models.yaml", readme)
 
 
+def _comment_text(lines):
+    """The prose of the `#` comment lines among ``lines``, whitespace-joined,
+    so a phrase is found however the comment happens to wrap."""
+    words = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            words.extend(stripped.lstrip("#").split())
+    return " ".join(words)
+
+
+def _between(lines, start, end):
+    """The lines from the first one containing ``start`` up to (not
+    including) the next one containing ``end``."""
+    first = next(i for i, line in enumerate(lines) if start in line)
+    last = next(i for i in range(first + 1, len(lines)) if end in lines[i])
+    return lines[first:last]
+
+
+def _squash(text):
+    return " ".join(text.split())
+
+
+class AdoptionRuleIsWrittenDownTest(unittest.TestCase):
+    """The written rule catches up with the mechanism (DRE-3900).
+
+    The CEO's decision of 2026-09-14: a newer version of a family already on a
+    ladder adopts itself through a tested pull request; a new family, a pricier
+    tier or an unpriced model is his spending decision; an older model gets
+    nothing. The comments in ``config/models.yaml`` and the ``models.yaml``
+    section of ``config/README.md`` used to say every ladder change is made
+    "by a human", which stopped being true when ``model-adoption.yml`` landed.
+    """
+
+    NAMES = (
+        "scripts/model_adoption.py",
+        "config/model-prices.yaml",
+        "model-adoption.yml",
+        "model-trial.yml",
+    )
+    RULE_WORDS = ("`adopt`", "`ignore`", "`ask`")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.yaml_lines = CONFIG.read_text().splitlines()
+        cls.readme = (ROOT / "config" / "README.md").read_text()
+
+    def _policy_block(self):
+        return _comment_text(_between(
+            self.yaml_lines, "THE RULE: AVAILABILITY IS NOT PERMISSION",
+            "THE THIRD KIND",
+        ))
+
+    def _readme_models_section(self):
+        start = self.readme.index("# `models.yaml` — the ONE model config")
+        end = self.readme.index("\n---\n", start)
+        return self.readme[start:end]
+
+    def test_models_yaml_no_longer_says_every_ladder_change_is_a_human_act(self):
+        comments = _comment_text(self.yaml_lines)
+        for stale in (
+            "it is made here, by a human, in a reviewed PR",
+            "That is the only way up and it stays the only way up",
+            "only a human editing this file actually puts it there",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, comments)
+
+    def test_policy_block_states_the_three_rules_and_names_the_mechanism(self):
+        block = self._policy_block()
+        for name in self.NAMES + self.RULE_WORDS:
+            with self.subTest(name=name):
+                self.assertIn(name, block)
+        # Rule 1: the 2026-08-09 story stays as the reason nothing moves in a
+        # TTL window.
+        self.assertIn("2026-08-09", block)
+        self.assertIn("TTL window", block)
+        self.assertIn("stable", block)
+        # Rule 4: the CEO's spending decision is still his.
+        self.assertIn("spending decision", block)
+
+    def test_discovery_block_limits_a_new_family_to_the_advisory_ladder(self):
+        block = _comment_text(_between(self.yaml_lines, "discovery:", "retired:"))
+        self.assertIn("NEW FAMILY", block)
+        self.assertIn("model-adoption.yml", block)
+        self.assertIn("`workhorse`", block)
+        self.assertIn("`judgement`", block)
+        self.assertIn("rejected", block)
+
+    def test_readme_lists_model_prices_yaml_with_its_purpose(self):
+        file_list = self.readme[: self.readme.index("\n---\n")]
+        entry = next(
+            (para for para in file_list.split("\n- ")
+             if para.startswith("**`model-prices.yaml`**")),
+            None,
+        )
+        self.assertIsNotNone(entry, "config/README.md must list model-prices.yaml")
+        entry = _squash(entry)
+        self.assertIn("per million tokens", entry)
+        self.assertIn("no price", entry)
+
+    def test_readme_models_section_states_the_three_rules(self):
+        section = _squash(self._readme_models_section())
+        for name in self.NAMES + self.RULE_WORDS:
+            with self.subTest(name=name):
+                self.assertIn(name, section)
+        self.assertIn("spending decision", section)
+        self.assertIn("TTL window", section)
+        self.assertNotIn("a human editing this file is the only way up", section)
+        self.assertIn(
+            "`on_new_model: workhorse` and `on_new_model: judgement` remain "
+            "rejected", section,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

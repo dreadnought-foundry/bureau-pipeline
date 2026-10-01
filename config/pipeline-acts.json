@@ -701,6 +701,24 @@
       }
     },
     {
+      "name": "roll-up-activated",
+      "tag": "roll-up-split",
+      "adopted": true,
+      "kind": "progress",
+      "means": "A roll-up's child epics passed the split check, so its split is recorded once on the parent: every child in order, each sent to Planning to be planned on its own, and the parent placed where the sweep closes it.",
+      "state": "unchanged",
+      "next_actor": "plan.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is each child's own planner run, started by the relay when the child enters Planning and timed by that run's own acts, and then the CEO's green light on each child, which no workflow times. The parent is read again only by scripts/reconcile.py's epic close, when its last child is Done — so nothing is expected to speak on this receipt's behalf.",
+      "why": "DRE-4717, the roll-up route's record. A card too big for one epic is split into child epics under itself, each planned and green-lit on its own (standards/card-quality.md), and until this act nothing said on the parent that the split had happened, in which order the children go, or that the parent is never approved for building. A PROGRESS act: nothing is held, nothing is repaired and nothing is escalated — the planning work goes on, now one planner run per child, and the relay dispatches those runs off the lane entry, not this act. Its state is `unchanged` for the same reason: the lane moves that follow the receipt are the placement the split already decided, not a new obligation on anyone. UNLIKE the three lifecycle heartbeats its tag IS a live key, which is why it is adopted: scripts/epic_split.py counts the tag on the parent before posting, so a retried planning run posts nothing twice. It discharges nothing; the parent's own close is the sweep's ordinary epic close, unchanged.",
+      "emits": {
+        "file": "scripts/epic_split.py",
+        "anchor": "pipeline_act.receipt(\"roll-up-activated\""
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,
@@ -1070,13 +1088,6 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "arrival.note + wave_commitment.lane_starts_the_run()",
-      "kind": "undeclared-act",
-      "means": "An epic whose blocker epics all finished arrives in the planning lane. The lane entry is what starts its planner run (the relay's dispatch, DRE-3664), so the note names that and the stalled-planning alarm rather than claiming a run the sweep did not start.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Since DRE-3664 the sweep no longer dispatches the run itself — the relay does, on the lane entry, as it already did for the wave's first epic since DRE-3659 — so the receipt carries no started/not-started half: a receipt that vouched for the relay's dispatch would be the DRE-1254 false-receipt class."
-    },
-    {
-      "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-advanced Backlog → Triage",
       "kind": "undeclared-act",
       "means": "The last blocker epic reached Done, so the dependent epic advances on its own.",
@@ -1228,41 +1239,6 @@
       "kind": "undeclared-act",
       "means": "The Todo gate refuses a card it cannot repair and returns it to Planning.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its wording is asserted byte for byte by `tests/test_writers_point_at_planning.py`, so a trailer here has to be additive in the way this epic means it — which is an argument for a row, not against one."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "adopted, commitment_comment(",
-      "kind": "not-an-act",
-      "means": "An epic adopted into an approved wave carries its position in the approved sequence.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The sequence was approved by a human; this records where each epic sits in it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "child[\"identifier\"],",
-      "kind": "not-an-act",
-      "means": "Each child epic of a committed wave carries its position in the approved sequence.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The sequence was approved by a human; this records where each epic sits in it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "arrival_note(card, wave) + lane_starts_the_run()",
-      "kind": "undeclared-act",
-      "means": "An epic whose turn has come arrives in the lane that owes it a plan. The lane entry is what starts its planner run (the relay's dispatch, DRE-3659), so the note names that and the stalled-planning alarm rather than claiming a run it did not start.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Since DRE-3659 the commit no longer dispatches the run itself — the relay does, on the lane entry — so the receipt carries no started/not-started half: a receipt that vouched for the relay's dispatch would be the DRE-1254 false-receipt class."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "The wave's sequence changed:",
-      "kind": "not-an-act",
-      "means": "The record that an approved wave's order or membership changed, and why.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Approving a wave approves the shape and the order, and both were always going to move — what a change owes is a record for the approver, and this is it."
-    },
-    {
-      "file": "scripts/wave_commitment.py",
-      "anchor": "drop_comment(wave, entry(updated, key), because)",
-      "kind": "not-an-act",
-      "means": "An epic dropped from an approved wave is told so on its own card, with the reason.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The other half of the change record above, said where the dropped epic's own readers will see it."
     },
     {
       "file": ".github/workflows/agent-fix.yml",
@@ -1584,6 +1560,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Roll-up route — check the split",
+      "kind": "not-an-act",
+      "means": "The split check sends a roll-up back: its children are not yet a split into child epics, and the card still owes one (DRE-4718).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/epic_split.py, which owns the bounce and keys it on its own marker, deliberately sharing nothing with the roll-up-split receipt's tag."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"$HELD\")\"",
       "step": "Routing verdicts — the epic's children",
       "kind": "not-an-act",
@@ -1720,6 +1704,38 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The planner revised this card in place",
+      "step": "One-off revision — what the planner did",
+      "kind": "undeclared-act",
+      "means": "The planner rewrote a one-off card's description in place to answer the pre-approval critic's send-back, and says what it changed per finding (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — giving it one is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. The body is the planner's own per-finding summary, which the critic's next read is told to check first; the machine-readable half of the round is the critic's record, posted alone by the decision step."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The critic reads the revised card again",
+      "step": "One-off revision — read it again",
+      "kind": "undeclared-act",
+      "means": "The pipeline asked for a fresh planning run on a one-off card the planner just revised, so the critic re-reads it — the card stays in Planning and nothing is asked of the CEO (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the post-approval review's re-run note: giving it a row is a REGISTRY change, not an emission change. Written only from the dispatch's exit status (`plan_run.fire`'s rc rule, DRE-2034), never ahead of it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The revised card's re-read could NOT be started",
+      "step": "One-off revision — read it again",
+      "kind": "undeclared-act",
+      "means": "The re-read of a revised one-off card could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step goes red for the medic.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review re-run's failure note. Giving it a row is a REGISTRY change, not an emission change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "step": "One-off critic — park in Triage",
+      "kind": "undeclared-act",
+      "means": "The planner's revision of a one-off card did not finish, so the card parks in Triage for the operator with the critic's findings named (DRE-5376).",
+      "why": "Act-shaped, and the registry has no row for it — giving it one is a REGISTRY change, not an emission change. Its body is composed by scripts/plan_critic.py (`unfinished_revision_note`), never in YAML; at the round bound the decision step's own note names the findings and this comment is not posted."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🛑 The post-approval review found a gap",
       "step": "Second critic sent the plan back",
       "kind": "undeclared-act",
@@ -1737,18 +1753,10 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
-      "step": "Wave route — write the wave plan",
+      "step": "Roll-up route — split into child epics",
       "kind": "not-an-act",
-      "means": "The line in the wave planner's prompt that tells it where to post its summary.",
+      "means": "The line in the roll-up planner's prompt that tells it where to post its plain-English summary of the split: what each child epic covers, and in what order (DRE-4718).",
       "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
-    },
-    {
-      "file": ".github/workflows/plan.yml",
-      "anchor": "🌊 The wave plan is written and checked against the standard",
-      "step": "Wave plan — announce",
-      "kind": "not-an-act",
-      "means": "The wave plan exists and names the epics it commits to; nothing is approved yet.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist."
     },
     {
       "file": ".github/workflows/plan.yml",
@@ -1905,10 +1913,26 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
-      "step": "Wave route — write the wave plan — on the next rung",
+      "anchor": "linear_ops.py comment {1} \"<comment>\"",
+      "step": "Plan epic",
       "kind": "not-an-act",
-      "means": "The line in the wave planner's prompt that tells it where to post its summary. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "means": "The line in the planner's prompt that tells it, for a returned child of an epic split into siblings under its parent (DRE-5242), where to post the note naming those siblings before it cancels the original.",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own note naming the siblings it filed. The act the pipeline takes on that card is the cancel beside it, and the card-quality standard's split rule is its reason; a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "linear_ops.py comment {1} \"<comment>\"",
+      "step": "Plan epic — on the next rung",
+      "kind": "not-an-act",
+      "means": "The line in the planner's prompt that tells it, for a returned child of an epic split into siblings under its parent (DRE-5242), where to post the note naming those siblings before it cancels the original. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own note naming the siblings it filed. The act the pipeline takes on that card is the cancel beside it, and the card-quality standard's split rule is its reason; a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
+      "step": "Roll-up route — split into child epics — on the next rung",
+      "kind": "not-an-act",
+      "means": "The line in the roll-up planner's prompt that tells it where to post its plain-English summary of the split (DRE-4718). The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
       "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
     },
     {
@@ -1938,7 +1962,7 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "— the planner ran on the model that answered.",
-      "step": "Wave route — write the wave plan — finished?",
+      "step": "Roll-up route — split into child epics — finished?",
       "kind": "not-an-act",
       "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
       "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
@@ -1963,6 +1987,27 @@
       "kind": "undeclared-act",
       "means": "The pull request merged into another agent's branch rather than the default one, so the card is not Done: the state is left alone and the merge is said once on the card (DRE-4647).",
       "why": "Act-shaped — a refusal: the pipeline declined to close the card and says why, and the work stays exactly where it was — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the gate ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog did. Named here so the debt is countable rather than invisible. Its opener `🪜 Merged into ` is a CONTRACT with the sibling card that closes these cards when the base finally lands — that card finds the receipt by it — so the opener is fixed by something other than this file, and a trailer sits after the body without touching it."
+    },
+    {
+      "file": "scripts/planner_queue.py",
+      "anchor": "linear_ops.cmd_comment(identifier, body)",
+      "kind": "not-an-act",
+      "means": "The planner slot ledger (DRE-5176): a planner run's claimed, waiting, dispatched or released receipt for the fleet-wide planner cap — every Linear write of epic DRE-5167 goes through this one site.",
+      "why": "It is already machine-readable, in its own single-definition grammar — `🎟️ planner-slot:`, owned by scripts/planner_queue.py and read back by that module alone — the same reason the model-attempt heartbeat gives. Two grammars on one line would give its readers two keys to disagree over. A new act ships console-first in agent-bureau, and this epic does not reach into that repo."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised, attempts[ident]))",
+      "kind": "undeclared-act",
+      "means": "A card raised to Urgent after the rule's ship moment has been moved from Intake straight to Planning — the groom queue skipped, never Planning's classifier or critic (DRE-4150).",
+      "why": "Act-shaped — the pipeline moved the work on by itself and the planner run the relay starts on Planning entry is what follows — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the fast path ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog and DRE-4647's stacked-merge refusal did. Named here so the debt is countable rather than invisible. Its opener `urgent-fast-path:` is a live key three ways, owned by reconcile.URGENT_FAST_PATH_OPENER: the card carries one per attempt, posted before the move, and a card whose move did not land is tried again until it carries max_attempts of them (config/urgent-fast-path.json), and the sweep counts the openers posted anywhere on the board inside the rule's window so the three-per-sweep cap holds across every repo's sweep. A trailer after the body would not touch the opener."
+    },
+    {
+      "file": "scripts/epic_todo_gate.py",
+      "anchor": "ops.cmd_comment(identifier, body)",
+      "kind": "undeclared-act",
+      "means": "A write that would have put an epic in Todo was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
+      "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of Todo (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
     }
   ]
 }

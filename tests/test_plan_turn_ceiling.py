@@ -72,9 +72,11 @@ EPIC_STEP = "claude"
 EPIC_CEILING = 140
 
 # Every agent step plan.yml can run, and the ceiling each one carries.
-# `posta` and `oocritic` are deliberately absent: both ceilings are
-# EXPRESSIONS — `posta` sized per plan since DRE-3241, `oocritic` sized per
-# card since DRE-4381 — and both are asserted separately below.
+# `posta`, `oocritic`, `oorevise` and the four re-plan steps are deliberately
+# absent: their ceilings are EXPRESSIONS — `posta` sized per plan since
+# DRE-3241, `oocritic` and `oorevise` sized per card since DRE-4381 and
+# DRE-5376, the re-plans sized per plan since DRE-5288 — and all of them are
+# asserted separately below.
 #
 # This table is the "everything else is unchanged" assertion for DRE-3450.
 # Adding a step, or moving one of these numbers, is meant to fail here — which
@@ -83,26 +85,34 @@ EPIC_CEILING = 140
 CEILINGS = {
     EPIC_STEP: EPIC_CEILING,  # Plan epic
     "prea": 60,          # First critic — round 1        (40 → 60, DRE-2785)
-    "replan": 60,        # Re-plan after send-back
     "preb": 60,          # First critic — round 2        (40 → 60, DRE-2785)
-    "postreplan": 60,    # Re-plan after the second critic sent it back
-    "wave": 80,          # Wave route — write the wave plan
+    "rollup": 80,        # Roll-up route — split into child epics (DRE-4718)
     # DRE-3970: each planner step's re-run on the next rung carries the SAME
     # ceiling as the step it re-runs — it is that step, on another model.
     "claude_retry": EPIC_CEILING,
-    "replan_retry": 60,
-    "postreplan_retry": 60,
-    "wave_retry": 80,
+    "rollup_retry": 80,
 }
 
 # The steps whose ceiling is chosen at RUN TIME rather than written here, and
 # the step output each one reads it from. `posta` is sized from the plan it has
 # to read (DRE-3241); `oocritic` is sized from the card it has to read
 # (DRE-4381 — a fixed 20 killed two reads of DRE-4378 and told the CEO nothing
-# had checked the card).
+# had checked the card). `oorevise` reads the same output (DRE-5376): the
+# planner's revision of a sent-back one-off re-reads the files the critic read.
+#
+# The four re-plan steps left the table with DRE-5288: a ten-card revision of
+# epic DRE-5268 FINISHED at 86 turns and was failed at the literal 60 every one
+# of them carried. Each is sized from the plan's child count now, by a step on
+# its own route, and each `_retry` reads the same output as the step it re-runs
+# (tests/test_replan_turns.py pins the arithmetic).
 SIZED = {
     "posta": "steps.postturns.outputs.max_turns",
     "oocritic": "steps.ooturns.outputs.max_turns",
+    "oorevise": "steps.ooturns.outputs.max_turns",
+    "replan": "steps.replanturns.outputs.max_turns",
+    "replan_retry": "steps.replanturns.outputs.max_turns",
+    "postreplan": "steps.postreplanturns.outputs.max_turns",
+    "postreplan_retry": "steps.postreplanturns.outputs.max_turns",
 }
 
 _TURNS_RE = re.compile(r"--max-turns\s+(\S+)")
@@ -198,8 +208,8 @@ class TestEveryOtherPlannerCeilingIsUnchanged:
 
     @pytest.mark.parametrize("step_id", sorted(SIZED))
     def test_the_sized_reads_are_still_sized_at_run_time(self, step_id):
-        """Both of these are expressions on purpose — each is sized from the
-        thing it has to read. Neither may become a literal here."""
+        """Every one of these is an expression on purpose — each is sized from
+        the thing it has to read or rewrite. None may become a literal here."""
         raw = _turns_arg(step_id)
         args = str(
             (_agent_steps()[step_id].get("with") or {}).get("claude_args")

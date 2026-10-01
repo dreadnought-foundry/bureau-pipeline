@@ -193,7 +193,9 @@ class TestWitnessGenericShape(unittest.TestCase):
         out = rd.witness_from_comments("agent-bureau", "DRE-3409", comments)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].kind, rd.COULD_NOT_RUN)
-        self.assertEqual(out[0].repo, "agent-bureau")
+        # The generic note carries no run link, so it names no repository
+        # (DRE-5291) — never the card's `repo:` label.
+        self.assertEqual(out[0].repo, rd.UNKNOWN_REPO)
         self.assertEqual(out[0].src, "linear:DRE-3409:2026-09-08T22:19:00Z")
         self.assertIn(rd.MEDIC_BACKOFF_MARKER, out[0].detail)
 
@@ -215,9 +217,10 @@ class TestWitnessEnvironmentShape(unittest.TestCase):
     def test_a_real_evidence_note_is_exactly_one_could_not_run_outcome(self):
         note = reviewer_environment.evidence_note(self.signature, SHA, RUN_URL)
         comments = [{"body": note, "createdAt": "2026-09-08T22:19:00Z"}]
-        out = rd.witness_from_comments("agent-bureau", "DRE-3409", comments)
+        out = rd.witness_from_comments("bureau-pipeline", "DRE-3409", comments)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].kind, rd.COULD_NOT_RUN)
+        self.assertEqual(out[0].repo, "agent-bureau")
         self.assertEqual(out[0].src, "linear:DRE-3409:2026-09-08T22:19:00Z")
 
     def test_the_hold_receipt_is_not_a_witness(self):
@@ -397,9 +400,12 @@ class TestDecideAppends(unittest.TestCase):
 
 class TestDecideCloses(unittest.TestCase):
     def setUp(self):
+        crashed = _cnr("bureau-pipeline", "2026-09-08T22:20:00Z",
+                       "https://example.invalid/pull/351#issuecomment-1", pr=351)
         self.card = rd.OpenCard(identifier="DRE-3500",
                                 filed_at="2026-09-08T22:27:00Z",
-                                text="Reviewer down since 15:19 PT")
+                                text="Reviewer down since 15:19 PT\n\n- "
+                                     + rd.ledger_line(crashed))
 
     def test_a_verdict_after_the_card_was_filed_closes_it(self):
         later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z",
@@ -408,14 +414,289 @@ class TestDecideCloses(unittest.TestCase):
         self.assertEqual(d.action, rd.CLOSE)
         self.assertEqual(
             d.resolve_note,
-            "reviewer back at 15:32 PT — first successful verdict after this "
-            "card was filed (https://example.invalid/v)",
+            "reviewer back at 15:32 PT — first successful verdict in "
+            "bureau-pipeline after its last counted crash and after this card "
+            "was filed (https://example.invalid/v)",
         )
 
     def test_a_verdict_before_the_card_was_filed_is_not_a_close(self):
         earlier = _verdict("bureau-pipeline", "2026-09-08T22:25:00Z", "v")
         d = rd.decide([earlier], [], self.card, NOW, _threshold())
         self.assertNotEqual(d.action, rd.CLOSE)
+
+    def test_a_card_whose_ledger_names_no_repository_closes_on_any_verdict(self):
+        """No line names a repository, so there is no repository to be wrong
+        about: the first local verdict after filing says it is back — or the
+        card could never close itself (DRE-5291)."""
+        bare = rd.OpenCard(identifier="DRE-3500",
+                           filed_at="2026-09-08T22:27:00Z",
+                           text="Reviewer down since 15:19 PT")
+        later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z", "v")
+        d = rd.decide([later], [], bare, NOW, _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(
+            d.resolve_note,
+            "reviewer back at 15:32 PT — first successful verdict in "
+            "bureau-pipeline after the last counted crash and after this card "
+            "was filed (v)",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 4b. DRE-5291 — one crash counted once, and closed only where it crashed      #
+# --------------------------------------------------------------------------- #
+
+# DRE-5273's inputs, live on 2026-09-29 (bureau-pipeline PR #577,
+# `docs/reviewer-environment-hold-proof.md` §3): ONE crash, QA Review run
+# 36656565242 on agent-bureau-demo #25, seen twice — once as the review
+# workflow's could-not-run notice on the pull request, once as the medic's
+# evidence note on DRE-4570, a card labelled `repo:bureau-pipeline`.
+DEMO_RUN_URL = ("https://github.com/dreadnought-foundry/agent-bureau-demo/"
+                "actions/runs/36656565242")
+DEMO_NOTICE_SRC = ("https://github.com/dreadnought-foundry/agent-bureau-demo/"
+                   "pull/25#issuecomment-5902476607")
+DEMO_NOTICE_AT = "2026-09-30T01:49:51Z"      # 18:49:51 PT
+MEDIC_NOTE_AT = "2026-09-30T01:50:33.766Z"   # 18:50:33 PT
+DRE_5273_FILED = "2026-09-30T02:04:59Z"      # 19:04:59 PT
+DRE_5273_WRONG_CLOSE = "2026-09-30T02:05:21Z"  # 19:05:21 PT
+DEMO_RETRY_CRASH_AT = "2026-09-30T02:07:55Z"   # 19:07:55 PT
+DEMO_FIRST_VERDICT_AT = "2026-09-30T03:26:50Z"  # 20:26:50 PT
+
+#: DRE-5273's ledger, verbatim — the OLD shape, which nothing rewrites.
+DRE_5273_LEDGER = (
+    "run repo=agent-bureau-demo pr=#25 at=2026-09-30T01:49:51Z "
+    "src=https://github.com/dreadnought-foundry/agent-bureau-demo/pull/25"
+    "#issuecomment-5902476607\n"
+    "run repo=bureau-pipeline pr=- at=2026-09-30T01:50:33.766Z "
+    "src=linear:DRE-4570:2026-09-30T01:50:33.766Z"
+)
+
+
+def _medic_note(run_url=DEMO_RUN_URL):
+    """The note the medic left on DRE-4570, built by its own WRITER."""
+    signature = reviewer_environment.by_slug("native-binary-missing")
+    return reviewer_environment.evidence_note(signature, SHA, run_url)
+
+
+def _demo_notice():
+    return _cnr("agent-bureau-demo", DEMO_NOTICE_AT, DEMO_NOTICE_SRC, pr=25)
+
+
+class TestWitnessAttribution(unittest.TestCase):
+    """A witness note belongs to the repository its run link names, never to
+    the `repo:` label of the card it happens to be posted on."""
+
+    def test_the_note_is_attributed_to_the_repository_in_its_run_url(self):
+        comments = [{"body": _medic_note(), "createdAt": MEDIC_NOTE_AT}]
+        # Read by bureau-pipeline's sweep, off a `repo:bureau-pipeline` card.
+        (one,) = rd.witness_from_comments("bureau-pipeline", "DRE-4570", comments)
+        self.assertEqual(one.repo, "agent-bureau-demo")
+        self.assertEqual(one.kind, rd.COULD_NOT_RUN)
+        self.assertEqual(one.src, f"linear:DRE-4570:{MEDIC_NOTE_AT}")
+
+    def test_a_sweep_skips_a_note_naming_its_own_repository(self):
+        """It already counts its own crashes off its pull requests' notices,
+        and the notice carries no run link to pair the two by."""
+        comments = [{"body": _medic_note(), "createdAt": MEDIC_NOTE_AT}]
+        self.assertEqual(
+            rd.witness_from_comments("agent-bureau-demo", "DRE-4570", comments),
+            [],
+        )
+
+    def test_the_repository_is_read_case_insensitively_as_the_sweep_slugs_it(self):
+        """reconcile.yml slugs its own repository as the lowercased basename."""
+        url = ("https://github.com/Dreadnought-Foundry/Agent-Bureau-Demo/"
+               "actions/runs/36656565242")
+        comments = [{"body": _medic_note(url), "createdAt": MEDIC_NOTE_AT}]
+        self.assertEqual(
+            rd.witness_from_comments("agent-bureau-demo", "DRE-4570", comments),
+            [],
+        )
+
+    def test_a_link_in_linear_markdown_still_names_the_repository(self):
+        """Linear stores a pasted url as `[url](<url>)`."""
+        body = (rd.MEDIC_BACKOFF_MARKER + " — crashed.\n\nThe failed run: "
+                f"[{DEMO_RUN_URL}](<{DEMO_RUN_URL}>)")
+        (one,) = rd.witness_from_comments(
+            "bureau-pipeline", "DRE-4570",
+            [{"body": body, "createdAt": MEDIC_NOTE_AT}])
+        self.assertEqual(one.repo, "agent-bureau-demo")
+
+    def test_a_note_with_no_readable_run_url_names_no_repository(self):
+        body = rd.MEDIC_BACKOFF_MARKER + " (an infrastructure rate-limit)."
+        (one,) = rd.witness_from_comments(
+            "agent-bureau-demo", "DRE-4570",
+            [{"body": body, "createdAt": MEDIC_NOTE_AT}])
+        self.assertEqual(one.repo, rd.UNKNOWN_REPO)
+
+
+class TestTheDRE5273Replay(unittest.TestCase):
+    """One crash, counted once — the filing the sandbox's sweep got wrong."""
+
+    def _witness(self, sweep_repo):
+        return rd.witness_from_comments(
+            sweep_repo, "DRE-4570",
+            [{"body": _medic_note(), "createdAt": MEDIC_NOTE_AT}])
+
+    def test_the_sandboxs_sweep_counts_one_run_in_one_repo(self):
+        local = [_demo_notice()]
+        witness = self._witness("agent-bureau-demo")
+        window = rd._window(local + witness, DRE_5273_FILED, _threshold().window_s)
+        runs, repos, _ = rd._counts([o for o in window
+                                     if o.kind == rd.COULD_NOT_RUN])
+        self.assertEqual((runs, repos), (1, 1))
+        self.assertFalse(rd._threshold_met(window, _threshold()))
+        self.assertEqual(
+            rd.decide(local, witness, None, DRE_5273_FILED, _threshold()).action,
+            rd.NOTHING,
+            "one crash is not a fleet outage — DRE-5273 is never filed",
+        )
+
+    def test_another_repos_sweep_counts_the_same_crash_in_the_sandbox(self):
+        """bureau-pipeline's sweep has no notice of its own: the note is one
+        run in agent-bureau-demo there, and still one repository."""
+        witness = self._witness("bureau-pipeline")
+        runs, repos, _ = rd._counts(witness)
+        self.assertEqual((runs, repos), (1, 1))
+        self.assertEqual(
+            rd.decide([], witness, None, DRE_5273_FILED, _threshold()).action,
+            rd.NOTHING,
+        )
+
+
+class TestUnknownRepository(unittest.TestCase):
+    """A note naming no repository is a run, never a second repository."""
+
+    def test_one_unknown_plus_one_real_crash_is_two_runs_one_repo(self):
+        generic = rd.witness_from_comments(
+            "bureau-pipeline", "DRE-4570",
+            [{"body": rd.MEDIC_BACKOFF_MARKER + " (a rate limit).",
+              "createdAt": MEDIC_NOTE_AT}])
+        local = [_demo_notice()]
+        window = rd._window(local + generic, DRE_5273_FILED, _threshold().window_s)
+        runs, repos, _ = rd._counts(window)
+        self.assertEqual((runs, repos), (2, 1))
+        self.assertFalse(rd._threshold_met(window, _threshold()),
+                         "the spread rule does not fire on one real repository")
+        self.assertEqual(
+            rd.decide(local, generic, None, DRE_5273_FILED, _threshold()).action,
+            rd.NOTHING,
+        )
+
+    def test_the_unknown_repository_round_trips_through_the_ledger(self):
+        one = _cnr(rd.UNKNOWN_REPO, MEDIC_NOTE_AT, f"linear:DRE-4570:{MEDIC_NOTE_AT}")
+        (back,) = rd.ledger_from_text(rd.ledger_line(one))
+        self.assertEqual(back.repo, rd.UNKNOWN_REPO)
+        self.assertEqual(rd._counts([back, _demo_notice()])[:2], (2, 1))
+
+    def test_two_unknowns_alone_are_zero_repositories(self):
+        a = _cnr(rd.UNKNOWN_REPO, "2026-09-30T01:50:00Z", "linear:DRE-1:a")
+        b = _cnr(rd.UNKNOWN_REPO, "2026-09-30T01:51:00Z", "linear:DRE-2:b")
+        self.assertEqual(rd._counts([a, b])[:2], (2, 0))
+        self.assertFalse(rd._threshold_met([a, b], _threshold()))
+
+    def _unknown_card(self):
+        """Three generic medic notes — no run link, so no repository — meet
+        the run rule on their own, and the card they file names none."""
+        notes = [_cnr(rd.UNKNOWN_REPO, f"2026-09-08T22:2{i}:00Z",
+                      f"linear:DRE-{4600 + i}:2026-09-08T22:2{i}:00Z")
+                 for i in range(3)]
+        filed = rd.decide([], notes, None, NOW, _threshold())
+        self.assertEqual(filed.action, rd.FILE)
+        self.assertEqual((filed.runs, filed.repos), (3, 0))
+        return rd.OpenCard(identifier="DRE-3500",
+                           filed_at="2026-09-08T22:27:00Z",
+                           text=filed.title + "\n\n" + filed.body)
+
+    def test_a_card_filed_from_unknown_notes_alone_closes_itself(self):
+        """The critic's repro on PR #583: this card used to stay open for
+        good, and every later sweep could only append to it."""
+        later = _verdict("bureau-pipeline", "2026-09-08T22:32:00Z",
+                         "https://example.invalid/v")
+        d = rd.decide([later], [], self._unknown_card(), NOW, _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, "2026-09-08T22:32:00Z")
+
+    def test_a_verdict_before_the_last_unknown_crash_is_not_a_close(self):
+        card = self._unknown_card()
+        late_crash = _cnr(rd.UNKNOWN_REPO, "2026-09-08T22:33:00Z",
+                          "linear:DRE-4700:2026-09-08T22:33:00Z")
+        between = _verdict("bureau-pipeline", "2026-09-08T22:30:00Z", "v")
+        d = rd.decide([between], [late_crash], card, NOW, _threshold())
+        self.assertEqual(d.action, rd.APPEND)
+
+
+class TestOldLedgerLines(unittest.TestCase):
+    """Lines already written on open or closed cards are left as they are."""
+
+    def test_the_old_shape_still_reads(self):
+        old = rd.ledger_from_text("Reviewer down\n\n- " +
+                                  DRE_5273_LEDGER.replace("\n", "\n- "))
+        self.assertEqual([(o.repo, o.pr, o.at, o.src) for o in old], [
+            ("agent-bureau-demo", 25, DEMO_NOTICE_AT, DEMO_NOTICE_SRC),
+            ("bureau-pipeline", None, MEDIC_NOTE_AT,
+             f"linear:DRE-4570:{MEDIC_NOTE_AT}"),
+        ])
+
+    def test_an_append_writes_only_new_lines_and_never_restates_old_ones(self):
+        card = rd.OpenCard("DRE-5273", DRE_5273_FILED, DRE_5273_LEDGER)
+        retry = _cnr("agent-bureau-demo", DEMO_RETRY_CRASH_AT,
+                     "https://example.invalid/pull/25#issuecomment-2", pr=25)
+        d = rd.decide([_demo_notice(), retry], [], card,
+                      "2026-09-30T02:10:00Z", _threshold())
+        self.assertEqual(d.action, rd.APPEND)
+        self.assertEqual(d.lines, [rd.ledger_line(retry)])
+        # The old mis-attributed line still counts as it was written.
+        self.assertEqual((d.runs, d.repos), (3, 2))
+
+
+class TestTheDRE5273Close(unittest.TestCase):
+    """Closed only by a verdict in a repository that crashed."""
+
+    def setUp(self):
+        ledger = "Reviewer down\n\n- " + rd.ledger_line(_demo_notice())
+        self.card = rd.OpenCard("DRE-5273", DRE_5273_FILED, ledger)
+
+    def test_a_verdict_in_a_repository_that_never_crashed_does_not_close(self):
+        healthy = _verdict(
+            "bureau-pipeline", DRE_5273_WRONG_CLOSE,
+            "https://github.com/dreadnought-foundry/bureau-pipeline/pull/564"
+            "#issuecomment-5902630938", pr=564)
+        d = rd.decide([healthy], [], self.card, DRE_5273_WRONG_CLOSE, _threshold())
+        self.assertNotEqual(d.action, rd.CLOSE)
+
+    def test_the_first_sandbox_verdict_after_its_last_crash_closes_it(self):
+        back = _verdict("agent-bureau-demo", DEMO_FIRST_VERDICT_AT,
+                        "https://example.invalid/pull/25#issuecomment-9", pr=25)
+        later = _verdict("agent-bureau-demo", "2026-09-30T03:40:00Z",
+                         "https://example.invalid/pull/26#issuecomment-9", pr=26)
+        d = rd.decide([later, back], [], self.card, "2026-09-30T03:45:00Z",
+                      _threshold())
+        self.assertEqual(d.action, rd.CLOSE)
+        self.assertEqual(d.first_at, DEMO_FIRST_VERDICT_AT)
+        self.assertIn("agent-bureau-demo", d.resolve_note)
+        self.assertIn(back.src, d.resolve_note)
+
+    def test_a_verdict_before_that_repositorys_last_crash_does_not_close(self):
+        """Filed at 19:04:59, a verdict at 19:06, and the retry crashed again
+        at 19:07:55 — the reviewer was not back."""
+        retry = _cnr("agent-bureau-demo", DEMO_RETRY_CRASH_AT,
+                     "https://example.invalid/pull/25#issuecomment-2", pr=25)
+        card = rd.OpenCard("DRE-5273", DRE_5273_FILED,
+                           self.card.text + "\n- " + rd.ledger_line(retry))
+        early = _verdict("agent-bureau-demo", "2026-09-30T02:06:00Z",
+                         "https://example.invalid/pull/26#issuecomment-1", pr=26)
+        d = rd.decide([early], [], card, "2026-09-30T02:30:00Z", _threshold())
+        self.assertNotEqual(d.action, rd.CLOSE)
+
+    def test_a_crash_this_sweep_has_not_yet_appended_still_counts_as_last(self):
+        retry = _cnr("agent-bureau-demo", DEMO_RETRY_CRASH_AT,
+                     "https://example.invalid/pull/25#issuecomment-2", pr=25)
+        early = _verdict("agent-bureau-demo", "2026-09-30T02:06:00Z",
+                         "https://example.invalid/pull/26#issuecomment-1", pr=26)
+        d = rd.decide([early, retry], [], self.card, "2026-09-30T02:10:00Z",
+                      _threshold())
+        self.assertEqual(d.action, rd.APPEND)
 
 
 # --------------------------------------------------------------------------- #

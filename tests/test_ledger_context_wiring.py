@@ -32,8 +32,9 @@ What is pinned, and why each half could break silently:
      that an UNKNOWN status is written into every record rather than omitted —
      an omitted check reads as a check that passed.
 
-The wave route is deliberately untouched: it decomposes into epics, not cards,
-and sizes nothing. Test 6 holds that by counting the renderer's call sites.
+The roll-up route is deliberately untouched: it decomposes into epics, not
+cards, and sizes nothing. Test 6 holds that by counting the renderer's call
+sites and reading the roll-up route's own context step (DRE-4718).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_ledger_context_wiring.py -v
 """
@@ -179,11 +180,21 @@ class LedgerReachesThePlannerTest(unittest.TestCase):
         self.assertIn("||", echo,
                       "a grep that matched nothing must not fail the step")
 
-    def test_the_wave_route_is_untouched(self):
-        # A wave decomposes into epics, not cards, and sizes nothing.
+    def test_the_roll_up_route_is_untouched(self):
+        # A roll-up decomposes into epics, not cards, and sizes nothing
+        # (DRE-4718): its own context step assembles the planner's standards
+        # and appends no ledger.
         self.assertEqual(
             wf_src().count(RENDER), 1,
             "the renderer belongs to the plan route's context step alone")
+        doc = yaml.safe_load(wf_src())
+        rollup = [step for job in (doc.get("jobs") or {}).values()
+                  for step in job.get("steps") or []
+                  if step.get("name") == "Roll-up route — planner context"]
+        self.assertEqual(len(rollup), 1,
+                         "plan.yml carries one roll-up planner context step")
+        self.assertIn(ASSEMBLE, rollup[0]["run"])
+        self.assertNotIn(RENDER, rollup[0]["run"])
 
     def test_the_step_is_on_the_plan_route(self):
         self.assertIn("steps.route.outputs.mode == 'plan'",

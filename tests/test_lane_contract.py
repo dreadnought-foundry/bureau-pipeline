@@ -119,9 +119,12 @@ class TestTheFileExists:
         # unmerged. `groomer.py` joined it on DRE-4689, for the second class of
         # the same shape: the CEO agrees to a proposed cancellation card by
         # card and the drain records his decision
-        # (tests/test_lane_contract_groomer_cancels.py).
+        # (tests/test_lane_contract_groomer_cancels.py). `plan.yml` joined it
+        # on DRE-5242: a returned child of an epic is split into siblings
+        # under its parent, and the planner cancels the original once they
+        # are filed (tests/test_returned_child_split.py).
         assert lane_contract.lane_writers("Canceled") == (
-            "operator", "reconcile.py", "groomer.py",
+            "operator", "reconcile.py", "groomer.py", "plan.yml",
         )
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):

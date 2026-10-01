@@ -186,7 +186,7 @@ the stub — and on 2026-09-21 Portico's train slept until 07:03 PT because
 DRE-4357 had moved one copy and not the other. Now `FLEET_WINDOW` is the
 declaration: a surface that omits `window` inherits it, one that declares its
 own keeps it and every line about that window says it is overriding the
-default, and the same constant derives the two cron lines of the FLEET
+default, and `FLEET_WAKE` derives the two cron lines of the FLEET
 WAKE-UP (`.github/workflows/fleet-wake.yml` in this repo — GitHub fires a
 `schedule:` only from the repo holding the file, and this workflow is
 `workflow_call`, so the cron cannot be in the train itself). At the opening
@@ -196,6 +196,13 @@ wake turns the run red. The stubs keep their own crons until the per-repo
 follow-up cards remove them, so a train may be woken twice at the opening —
 the collapse rule two paragraphs up is why that is a no-op and not a second
 release.
+
+THE FLEET DEFAULT IS ROUND THE CLOCK (DRE-5266, the CEO, 2026-09-29: "They
+should all default to the round-the-clock"). `FLEET_WINDOW` is `always`, and
+the wake-up's 05:00 PT sweep moved to a constant of its own, `FLEET_WAKE`,
+because `always` has no opening to derive a cron from. A surface that declares
+a window equal to the default is not overriding anything, and its lines say
+it is the fleet default.
 """
 
 from __future__ import annotations
@@ -226,17 +233,16 @@ import release_linear  # noqa: E402 — the Linear release every declared surfac
 #: `check_deploy_activity.py` already do.
 PT = ZoneInfo("America/Los_Angeles")
 
-#: THE FLEET'S HOURS, DECLARED ONCE (DRE-4450). The CEO, 2026-09-20: "The
-#: train should start at 5 am." Before this constant that sentence had to be
-#: written twice in every repo with a train — the `window` in its
+#: THE FLEET WAKE-UP'S SWEEP, DECLARED ONCE (DRE-4450, DRE-5266). The CEO,
+#: 2026-09-20: "The train should start at 5 am." Before DRE-4450 that sentence
+#: had to be written twice in every repo with a train — the `window` in its
 #: `release.json` and the two `schedule:` crons in its stub — and DRE-4357
 #: moved agent-bureau while Portico slept until 07:03 PT the next morning.
-#: Now the opening is HERE: a surface that declares no `window` inherits it,
-#: `wake_crons()` derives the fleet wake-up's two cron lines from it, and a
-#: time change is one edit in one repo. A surface may still declare its own
-#: window, and every line the train prints about that window says it is
-#: overriding this default.
-FLEET_WINDOW = "05:00-21:00 PT"
+#: `wake_crons()` derives the fleet wake-up's two cron lines from this, so a
+#: time change is one edit in one repo. It was the opening of `FLEET_WINDOW`
+#: until DRE-5266 made that window `always`, which has no opening to derive a
+#: cron from.
+FLEET_WAKE = "05:00"
 
 #: Opens every line the train prints, so one run's receipts are greppable.
 TAG = "release-train"
@@ -307,6 +313,15 @@ HELD = "held"
 RECORDS = ("tag", "channel")
 
 WINDOW_ALWAYS = "always"
+
+#: THE FLEET'S HOURS, DECLARED ONCE (DRE-4450) — round the clock (DRE-5266).
+#: The CEO, 2026-09-29: "They should all default to the round-the-clock. …
+#: They can change it if they want but they should default to round the
+#: clock." A surface that declares no `window` inherits this. A surface may
+#: still declare its own window, and every line the train prints about a
+#: window that differs from this one says it is overriding this default.
+FLEET_WINDOW = WINDOW_ALWAYS
+
 _WINDOW_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d) PT$")
 
 #: The line a surface script prints to say the deployment is owed to a person.
@@ -385,10 +400,10 @@ SCHEMA: tuple[Field, ...] = (
           "The hours a release may be cut, read on the America/Los_Angeles "
           "clock. A trigger outside the window is a no-op that names it; a "
           "hand dispatch runs anyway. **Optional** — omit it and the surface "
-          f"inherits the fleet default `{FLEET_WINDOW}`, which is also what "
-          "the fleet wake-up's crons are derived from, so the fleet's hours "
-          "are one edit in one place. Declare one and it overrides the "
-          "default, which the train says on the surface's own line.",
+          f"inherits the fleet default `{FLEET_WINDOW}` — round the clock "
+          "(DRE-5266) — so the fleet's hours are one edit in one place. "
+          "Declare a different one and it overrides the default, which the "
+          "train says on the surface's own line.",
           optional=True),
     Field("auto", "true or false",
           "Whether the train releases this surface unattended. False means it "
@@ -1062,11 +1077,11 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
     # would be the one sentence in this file that is not true.
     said = checks.detail if checks is ASSUMED_GREEN else (
         f"{checks.detail}; {checks.describe()}")
-    # The override rides on the RELEASE line too (DRE-4450): a surface whose
-    # own window is open never no-ops on it, so this is the only line that
-    # can say the fleet default was overridden for it.
-    override = (f" — its window {surface.window} is {window_note(surface)}"
-                if surface.declared_window else "")
+    # The window's origin rides on the RELEASE line too (DRE-4450): a surface
+    # whose window is open never no-ops on it — and one on the `always`
+    # default never no-ops at all (DRE-5266) — so this is the only line that
+    # can say where its window came from.
+    override = f" — its window {surface.window} is {window_note(surface)}"
     return Decision(
         RELEASE, "release",
         f"{surface.name} is behind and the spacing has elapsed — releasing "
@@ -1153,10 +1168,14 @@ def _ci_refusal(checks: Checks) -> str:
 
 def window_note(surface) -> str:
     """Where this surface's window came from, as the clause its lines carry
-    (DRE-4450). One sentence with two readings, and the train says which:
-    the fleet default, or the surface's own overriding it."""
-    if surface.declared_window:
+    (DRE-4450). One sentence with three readings, and the train says which:
+    the fleet default inherited, the fleet default declared anyway, or the
+    surface's own overriding it. A declared window equal to the default
+    overrides nothing (DRE-5266), so it is never called an override."""
+    if surface.declared_window and surface.window != FLEET_WINDOW:
         return f"its own, overriding the fleet default {FLEET_WINDOW}"
+    if surface.declared_window:
+        return "the fleet default, declared by the surface as well"
     return "the fleet default, declared once in the train"
 
 
@@ -1304,7 +1323,7 @@ def re_arm_plan(planned, *, now: datetime, bound_minutes: int) -> ReArm:
             f"not re-armed: {when} is more than the {bound_minutes}-minute "
             f"wait a re-armed run may hold a runner for — the next CI "
             f"completion on the default branch or the fleet wake-up at "
-            f"{window_bounds(FLEET_WINDOW)[0]} PT wakes the train")
+            f"{FLEET_WAKE} PT wakes the train")
     return ReArm(at, True, f"re-armed for {when}")
 
 
@@ -1485,10 +1504,9 @@ def wake_head(repo_root, branch: str, dispatched_at: str, not_before) -> Woken:
 # `workflow_call` — so a cron inside the train never fires for a caller. The
 # schedule therefore cannot be IN the train; it is one workflow in this repo
 # (`.github/workflows/fleet-wake.yml`) whose crons are derived from
-# `FLEET_WINDOW` and which dispatches every roster repo's own stub at the
-# opening. That is the second half of "the opening lives in one place": the
-# first half is the window every surface inherits, and both read the same
-# constant.
+# `FLEET_WAKE` and which dispatches every roster repo's own stub at that
+# sweep. It was derived from `FLEET_WINDOW`'s opening until DRE-5266 made the
+# default window `always`, which opens at no particular minute.
 
 #: The year the wake-up crons are derived on. Any year does — the offsets
 #: come from the zoneinfo database, not from this number — and it is fixed so
@@ -1511,18 +1529,18 @@ SKIPPED = "skipped"
 FAILED = "could-not-wake"
 
 
-def wake_crons(window: str = FLEET_WINDOW) -> tuple:
-    """The UTC cron lines that wake the fleet at `window`'s opening — one for
-    standard time and one for daylight time, in that order.
+def wake_crons(sweep: str = FLEET_WAKE) -> tuple:
+    """The UTC cron lines that wake the fleet at `sweep` (`HH:MM` PT) — one
+    for standard time and one for daylight time, in that order.
 
     Derived on the `America/Los_Angeles` clock with `zoneinfo`, never from a
     restated offset: `schedule:` takes UTC only and has no timezone field, so
     two lines are the only way to hit one local hour all year, and every day
-    one of them fires at the opening while the other fires an hour either
-    side of it (a window no-op in winter, an ordinary run in summer — exactly
-    what the two stub crons have always done).
+    one of them fires at the sweep while the other fires an hour either side
+    of it (an ordinary run that finds nothing new, exactly what the two stub
+    crons have always done).
     """
-    hour, minute = (int(part) for part in window_bounds(window)[0].split(":"))
+    hour, minute = (int(part) for part in sweep.split(":"))
     lines: list[str] = []
     for month in (1, 7):   # a standard-time date and a daylight-time one
         local = datetime(CRON_ANCHOR_YEAR, month, 15, hour, minute, tzinfo=PT)
@@ -2093,10 +2111,11 @@ def render_markdown() -> str:
     w("")
     w(
         f"No `window` there on purpose: a surface that omits it releases on "
-        f"the fleet's hours (`{FLEET_WINDOW}`, the section below), which is "
-        "what a surface should normally do. Add `\"window\": \"HH:MM-HH:MM "
-        "PT\"` only to be deliberately different, and the train says on that "
-        "surface's line that it is overriding the fleet default."
+        f"the fleet's hours (`{FLEET_WINDOW}` — round the clock, the section "
+        "below), which is what a surface should normally do. Add "
+        "`\"window\": \"HH:MM-HH:MM PT\"` only to be deliberately different, "
+        "and the train says on that surface's line that it is overriding the "
+        "fleet default."
     )
     w("")
     w("| Field | Shape | What it means |")
@@ -2108,28 +2127,29 @@ def render_markdown() -> str:
     w("## The fleet's hours, in one place")
     w("")
     w(
-        f"**DRE-4450.** The fleet opens at "
-        f"`{window_bounds(FLEET_WINDOW)[0]} PT` and that is written ONCE, as "
-        f"`release_train.FLEET_WINDOW` (`{FLEET_WINDOW}`). A surface that "
-        "omits `window` inherits it — the schema check accepts the omission "
-        "— and a surface that declares its own keeps it, with every line the "
-        "train prints about that window saying it overrides the fleet "
-        "default. Before this the opening was written twice in every repo "
-        "with a train, and on 2026-09-21 Portico's train slept until 07:03 "
-        "PT because one of the two copies had been moved and the other had "
-        "not."
+        f"**DRE-4450, DRE-5266.** The fleet releases round the clock, and "
+        f"that is written ONCE, as `release_train.FLEET_WINDOW` "
+        f"(`{FLEET_WINDOW}`). A surface that omits `window` inherits it — the "
+        "schema check accepts the omission — and a surface that declares a "
+        "different one keeps it, with every line the train prints about that "
+        "window saying it overrides the fleet default. A surface that "
+        "declares `always` anyway is on the fleet default, and its lines say "
+        "so. Before DRE-4450 the hours were written twice in every repo with "
+        "a train, and on 2026-09-21 Portico's train slept until 07:03 PT "
+        "because one of the two copies had been moved and the other had not."
     )
     w("")
     w(
-        "**The same constant wakes the fleet.** GitHub runs a `schedule:` "
+        "**One more constant wakes the fleet.** GitHub runs a `schedule:` "
         "only from a workflow on the default branch of the repo that holds "
         "it, and this train is `workflow_call` — so a cron inside it never "
         "fires for a caller. `.github/workflows/fleet-wake.yml` in "
         "bureau-pipeline carries the schedule for the whole fleet: its two "
-        "cron lines are derived from the window above with `zoneinfo` "
+        "cron lines are derived from `release_train.FLEET_WAKE` "
+        f"(`{FLEET_WAKE} PT`) with `zoneinfo` "
         f"(`{'` and `'.join(wake_crons())}` — UTC has no timezone field, so "
-        "one line is standard time and the other daylight time), and at the "
-        "opening it reads `config/repo-map.json` and dispatches "
+        "one line is standard time and the other daylight time), and at "
+        "that sweep it reads `config/repo-map.json` and dispatches "
         f"`{TRAIN_WORKFLOW}` in every roster repo that carries a caller "
         "stub. A repo with no stub is skipped and NAMED; a repo it could not "
         "wake — an unreadable stub, a refused dispatch — turns the run red, "
@@ -2314,7 +2334,7 @@ def render_markdown() -> str:
         "window and the brake, nothing bypassed. A minute further away than "
         "that bound is not re-armed: a sleeping run holds a runner the whole "
         "time, and the line says the next CI completion or the fleet "
-        f"wake-up at {window_bounds(FLEET_WINDOW)[0]} PT wakes the train "
+        f"wake-up at {FLEET_WAKE} PT wakes the train "
         "instead."
     )
     w("")
@@ -2722,7 +2742,7 @@ def _cmd_wake(args) -> int:
                for act in (WOKEN, SKIPPED, FAILED)}
     print(f"{FLEET_TAG}: {counted[WOKEN]} woken, {counted[SKIPPED]} skipped, "
           f"{counted[FAILED]} could not be woken "
-          f"(the fleet opens at {window_bounds(FLEET_WINDOW)[0]} PT)")
+          f"(the fleet wake-up sweeps at {FLEET_WAKE} PT)")
     return wake_exit(results)
 
 
