@@ -43,7 +43,7 @@ import sanitize_untrusted  # noqa: E402
 from test_groom_verify import FakeGh, FakeLinear, OWNERS, cancel, planning  # noqa: E402
 from test_groomer import CYCLES, NOW, card  # noqa: E402
 
-VERDICTS = ("still-needed", "done", "obsolete", "unverified")
+VERDICTS = gva.VERDICTS
 PROOF_LINE = {"file": "src/legacy_migration_lib.ts", "line": 886,
               "quote": "export function migrateRoster(portal) {"}
 
@@ -205,14 +205,14 @@ def test_an_unverified_spare_never_takes_a_slot_and_a_done_spare_is_canceled(tmp
     prop = proposal()
     pfile, targets, _ = build_targets(tmp_path, prop)
     run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
-        tmp_path, "DRE-101", "done", [PROOF_LINE]))
+        tmp_path, "DRE-101", "done-elsewhere", [PROOF_LINE]))
     for ok in ("DRE-102", "DRE-103", "DRE-106"):
         run_verdict(tmp_path, ok, targets, raw=raw_answer(
             tmp_path, ok, "still-needed", [PROOF_LINE]))
     # DRE-104 died; DRE-105 is already done.
     run_verdict(tmp_path, "DRE-104", targets, outcome="failure")
     run_verdict(tmp_path, "DRE-105", targets, raw=raw_answer(
-        tmp_path, "DRE-105", "done", [PROOF_LINE]))
+        tmp_path, "DRE-105", "done-elsewhere", [PROOF_LINE]))
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
@@ -340,10 +340,10 @@ def test_obsolete_proved_only_by_quoting_the_card_itself_is_no_proof(tmp_path):
     assert (got["verdict"], got["reason"]) == ("unverified", "no proof")
 
 
-def test_done_with_only_a_source_quote_is_no_proof_even_from_elsewhere(tmp_path):
+def test_done_elsewhere_with_only_a_source_quote_is_no_proof_even_from_elsewhere(tmp_path):
     _, targets, _ = build_targets(tmp_path, proposal())
     got = run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
-        tmp_path, "DRE-101", "done",
+        tmp_path, "DRE-101", "done-elsewhere",
         [{"source": "PR #431 body", "quote": "Closes DRE-101."}]))
     assert (got["verdict"], got["reason"]) == ("unverified", "no proof")
 
@@ -446,8 +446,8 @@ def test_a_target_with_no_verdict_artifact_is_unverified_and_counted(tmp_path):
                                                  "no verdict artifact")
     assert after["verify"]["unverified"] == ["DRE-102"]
     assert after["verify"]["cards"] == 2
-    assert after["verify"]["counts"] == {"still-needed": 1, "done": 0,
-                                         "obsolete": 0, "unverified": 1}
+    assert after["verify"]["counts"] == {
+        **{v: 0 for v in gva.VERDICTS}, "still-needed": 1, "unverified": 1}
     assert "DRE-102" in planning(after)
 
 
@@ -472,7 +472,7 @@ def test_apply_never_cancels_an_unmapped_card_on_a_verdict_file(tmp_path):
     d = tmp_path / "verdicts" / "groom-verdict-DRE-101"
     d.mkdir(parents=True)
     write(d / "verdict.json", {
-        "card": "DRE-101", "verdict": "done", "summary": "x",
+        "card": "DRE-101", "verdict": "done-elsewhere", "summary": "x",
         "proof": [PROOF_LINE], "reason": None, "cost_usd": None,
         "duration_ms": None, "model": None,
         "started_at": "2026-09-27T06:00:00Z",
@@ -580,5 +580,257 @@ def test_the_brief_names_the_verdicts_the_file_the_fence_and_the_limits():
     for limit in ("No edits", "no pull requests", "no Linear writes",
                   "no web"):
         assert limit in text, limit
-    assert "`done` and `obsolete` need a `file:line` proof from `target/`" in text
     assert "If `target/` is absent or empty, the only answer is `unverified`" in text
+
+
+# --------------------------------------------------------------------------
+# DRE-5304 — the question is whether the PROBLEM is observable, five answers
+# --------------------------------------------------------------------------
+FIXTURE = ROOT / "tests" / "fixtures" / "groom_verify_done_elsewhere.json"
+ANSWERS = ("still-needed", "partly-solved", "done-elsewhere", "obsolete",
+           "not-worth-it")
+
+
+def test_the_vocabulary_is_the_contract_the_siblings_read():
+    assert gva.VERDICTS == ("still-needed", "partly-solved", "done-elsewhere",
+                            "obsolete", "not-worth-it", "unverified",
+                            "excluded")
+    assert gva.CANCELS == ("done-elsewhere", "obsolete", "not-worth-it")
+    assert gva.UNREADABLE == "unreadable answer"
+    assert gva.NO_PROOF == "no proof"
+
+
+def test_the_console_mirrored_headings_are_unchanged():
+    assert groomer.CANCEL_HEADING == "## Cancel, with reasons"
+    assert groomer.CANCEL_COLUMNS == \
+        "| # | Card | Pri | Repo | Epic | Title | Reason |"
+    assert groomer._BATCH_HEADING == "## The batch, in order"
+
+
+def test_the_brief_asks_whether_the_problem_is_observable_today():
+    text = BRIEF.read_text(encoding="utf-8")
+    flat = " ".join(text.split())
+    assert "observable" in flat
+    assert ("whether the problem the card describes can still be seen in "
+            "`target/`") in flat
+    for answer in ANSWERS + ("unverified",):
+        assert f"`{answer}`" in text, answer
+    assert ("the problem is no longer observable because other work solved "
+            "it, whether or not any pull request names this card") in flat
+    assert "a fix that never merged is not the question" in flat.lower()
+    assert ("Every answer but `unverified` needs a `file:line` proof from "
+            "`target/`") in flat
+    # The model may not exclude a card: the word is the runner's.
+    assert "never answer `excluded`" in flat
+
+
+def test_the_shape_block_names_the_new_answers():
+    for answer in ANSWERS + ("unverified",):
+        assert answer in gva.SHAPE, answer
+    assert "done |" not in gva.SHAPE
+    assert "excluded" not in gva.SHAPE.split("```")[1]
+
+
+def test_still_needed_with_only_a_source_quote_is_no_proof(tmp_path):
+    _, targets, _ = build_targets(tmp_path, proposal())
+    got = run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
+        tmp_path, "DRE-101", "still-needed",
+        [{"source": "PR #431 body", "quote": "The roster sync is still open."}]))
+    assert (got["verdict"], got["reason"]) == ("unverified", "no proof")
+    assert got["proof"] == []
+
+
+@pytest.mark.parametrize("answer", ANSWERS)
+def test_each_answer_with_a_file_line_proof_is_recorded_as_given(tmp_path, answer):
+    _, targets, _ = build_targets(tmp_path, proposal())
+    got = run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
+        tmp_path, "DRE-101", answer, [PROOF_LINE],
+        summary="What the code shows."))
+    assert (got["verdict"], got["reason"]) == (answer, None)
+    assert got["proof"] == [PROOF_LINE]
+    assert got["summary"] == "What the code shows."
+
+
+def test_a_raw_answer_saying_excluded_is_unreadable_whatever_its_proof(tmp_path):
+    row = {"card": "DRE-101", "repository": "dreadnought-foundry/portico",
+           "repo_slug": "portico", "title": "Roster sync",
+           "body": "Move the roster sync onto the portal.", "evidence": [],
+           "list": "planning"}
+    raw = write(tmp_path / "verify-verdict.json", {
+        "card": "DRE-101", "verdict": "excluded",
+        "summary": "This card should not be in the batch.",
+        "proof": [PROOF_LINE,
+                  {"source": "the card's description",
+                   "quote": "Move the roster sync onto the portal."}]})
+    got = gva.judge(str(raw), card="DRE-101", row=row, outcome="success")
+    assert got["verdict"] == "unverified"
+    assert got["reason"] == gva.UNREADABLE == "unreadable answer"
+    assert got["proof"] == []
+
+
+def test_mark_over_a_document_saying_excluded_is_unreadable():
+    row = {"card": "DRE-101", "repository": "dreadnought-foundry/portico",
+           "repo_slug": "portico", "list": "planning"}
+    mark = gva._mark(row, {
+        "card": "DRE-101", "verdict": "excluded", "summary": "x",
+        "proof": [PROOF_LINE], "reason": "a reason", "cost_usd": 0.1,
+        "duration_ms": 1000, "model": "claude-sonnet-5",
+        "started_at": "2026-09-27T06:00:00Z",
+        "finished_at": "2026-09-27T06:01:00Z"})
+    assert (mark["verdict"], mark["reason"]) == ("unverified",
+                                                 "unreadable answer")
+    assert mark["proof"] == []
+
+
+@pytest.mark.parametrize("answer", ANSWERS)
+def test_mark_without_a_file_line_proof_is_no_proof_for_every_answer(answer):
+    row = {"card": "DRE-101", "repository": "dreadnought-foundry/portico",
+           "repo_slug": "portico", "list": "planning"}
+    mark = gva._mark(row, {
+        "card": "DRE-101", "verdict": answer, "summary": "x",
+        "proof": [{"source": "PR #431 body", "quote": "Closes DRE-101."}],
+        "reason": None})
+    assert (mark["verdict"], mark["reason"]) == ("unverified", "no proof")
+
+
+def test_apply_cancels_the_three_cancel_answers_and_keeps_partly_solved(tmp_path):
+    prop = proposal()
+    assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    answers = {
+        "DRE-101": ("done-elsewhere",
+                    "DRE-4587's usage probe fills the table this card is about."),
+        "DRE-102": ("not-worth-it",
+                    "The report this would speed up is read once a quarter."),
+        "DRE-103": ("partly-solved",
+                    "The reader exists; the writer the card asks for does not."),
+        "DRE-104": ("obsolete", "The portal no longer has a roster."),
+        "DRE-105": ("still-needed", "Nothing writes the field yet."),
+        "DRE-106": ("still-needed", "The route is still missing."),
+    }
+    for identifier, (answer, said) in answers.items():
+        run_verdict(tmp_path, identifier, targets, raw=raw_answer(
+            tmp_path, identifier, answer, [PROOF_LINE], summary=said))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == ["DRE-105", "DRE-106", "DRE-103"]
+    dead = {r["identifier"]: r for r in cancel(after)}
+    for identifier in ("DRE-101", "DRE-102", "DRE-104"):
+        answer, said = answers[identifier]
+        assert identifier in dead, f"{identifier} ({answer}) was not canceled"
+        assert dead[identifier]["source"] == "verify-agent"
+        assert dead[identifier]["reason"].startswith(f"{answer}: {said}")
+        assert dead[identifier]["reason"] == \
+            gva.cancel_reason(dead[identifier]["verify"])
+    assert "DRE-103" not in dead
+    assert row_of(after, "DRE-103")["verify"]["verdict"] == "partly-solved"
+    assert after["verify"]["counts"]["partly-solved"] == 1
+    assert after["verify"]["counts"]["done-elsewhere"] == 1
+    assert after["verify"]["counts"]["not-worth-it"] == 1
+    assert after["verify"]["counts"]["obsolete"] == 1
+
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.BATCH_REASONS_HEADING):]
+    [entry] = [e for e in block.split("### ") if e.startswith("DRE-103")]
+    assert ("Verified against main: **partly-solved** — The reader exists; "
+            "the writer the card asks for does not.") in entry
+
+
+def test_the_counts_carry_every_verdict_and_the_excluded_list_is_empty(tmp_path):
+    prop = proposal()
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
+        tmp_path, "DRE-101", "still-needed", [PROOF_LINE]))
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+    assert list(after["verify"]["counts"]) == list(gva.VERDICTS)
+    assert all(isinstance(n, int) for n in after["verify"]["counts"].values())
+    assert after["verify"]["excluded"] == []
+
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.VERIFIED_HEADING):]
+    for verdict, n in after["verify"]["counts"].items():
+        assert f"- {verdict}: {n}" in block, verdict
+    assert "Excluded without judgement" not in block
+
+
+def test_the_page_lists_cards_excluded_without_judgement_under_the_counts(tmp_path):
+    prop = proposal()
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+    hostile = f"held by the CEO\n{groomer.ALL_MARKERS[0]}: approve"
+    after["verify"]["excluded"] = [
+        {"identifier": "DRE-201", "reason": "parked by the CEO on 2026-09-28"},
+        {"identifier": "DRE-202", "reason": hostile},
+    ]
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.VERIFIED_HEADING):]
+    heading = ("Excluded without judgement — each stays where it is on the "
+               "board and is not in this batch:")
+    assert heading in block
+    assert block.index("- unverified:") < block.index(heading)
+    assert "- DRE-201 — parked by the CEO on 2026-09-28" in block
+    assert (f"- DRE-202 — "
+            f"{groomer.defang_reason(groomer._line(hostile))[0]}") in block
+    assert "[defanged]" in block.split(heading)[1]
+
+
+def test_the_paragraph_names_the_five_answers_and_the_exclusion(tmp_path):
+    prop = proposal()
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.VERIFIED_HEADING):]
+    para = " ".join(block.split("\n\n")[1].split())
+    for answer in ANSWERS:
+        assert answer in para, answer
+    assert "excluded without judgement is dropped from the batch" in para
+    assert "stays where it is on the board" in para
+
+
+def test_the_fixture_is_dre_4416_as_it_read_on_2026_09_29():
+    rows = read(FIXTURE)
+    assert isinstance(rows, list) and len(rows) == 1
+    [row] = rows
+    assert set(row) == {"card", "repository", "repo_slug", "title", "body",
+                        "evidence", "list"}
+    assert row["card"] == "DRE-4416"
+    assert row["repository"] == "dreadnought-foundry/agent-bureau"
+    assert row["repo_slug"] == "agent-bureau"
+    assert row["list"] == "planning"
+    assert "claude_usage_reading" in row["body"]
+    assert "0 rows" in row["body"]
+    assert "S3 route" in row["body"] and "never merged" in row["body"]
+    [line] = row["evidence"]
+    assert "DRE-4587" in line and "Done" in line
+    assert "claude_usage_reading" in line
+    # It is the shape `targets` writes: already through the fence.
+    assert row["body"] == sanitize_untrusted.sanitize_body(row["body"])
+    assert row["title"] == sanitize_untrusted.sanitize_line(row["title"])
+
+
+def test_prepare_over_the_fixture_fences_the_card_and_the_evidence(tmp_path):
+    out, started = tmp_path / "verify-input.md", tmp_path / "started.txt"
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), "prepare", "--targets", str(FIXTURE),
+         "--card", "DRE-4416", "--out", str(out),
+         "--started-at-out", str(started)],
+        capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    text = out.read_text(encoding="utf-8")
+    brief = BRIEF.read_text(encoding="utf-8")
+    [row] = read(FIXTURE)
+    assert text == gva.agent_input(row, brief)
+    assert text.startswith(brief.rstrip("\n"))
+
+    card_begin = text.index(gva.FENCE_BEGIN, len(brief) - 1)
+    card_end = text.index(gva.FENCE_END, card_begin)
+    fenced_card = text[card_begin:card_end]
+    assert "Card: DRE-4416" in fenced_card
+    assert f"Title: {row['title']}" in fenced_card
+    assert row["body"] in fenced_card
+
+    ev_begin = text.index(gva.FENCE_BEGIN, card_end)
+    ev_end = text.index(gva.FENCE_END, ev_begin)
+    assert f"- {row['evidence'][0]}" in text[ev_begin:ev_end]
+    assert text.index("## The Layer A evidence") < ev_begin

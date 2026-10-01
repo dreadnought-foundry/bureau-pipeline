@@ -253,8 +253,10 @@ def _verified():
 def test_the_verified_record_is_the_shape_this_card_renders():
     record = _verified()
     assert record["verify"]["cards"] == 4
-    assert record["verify"]["counts"] == {"still-needed": 2, "done": 0,
-                                          "obsolete": 1, "unverified": 1}
+    assert record["verify"]["counts"] == {
+        **{v: 0 for v in gva.VERDICTS}, "still-needed": 2, "obsolete": 1,
+        "unverified": 1}
+    assert list(record["verify"]["counts"]) == list(gva.VERDICTS)
     assert record["verify"]["unverified"] == ["DRE-103"]
     assert record["verify"]["wall_clock_seconds"] == 307
     dead = record["outcomes"]["dead"]
@@ -273,8 +275,9 @@ def test_the_page_carries_the_verified_section_after_the_cancel_table():
     )
     block = section(text, groomer.VERIFIED_HEADING)
     assert "Verify step: 4 cards, $1.75, 5 min 7 s wall clock" in block
-    for verdict, count in (("still-needed", 2), ("done", 0),
-                           ("obsolete", 1), ("unverified", 1)):
+    for verdict, count in {**{v: 0 for v in gva.VERDICTS},
+                           "still-needed": 2, "obsolete": 1,
+                           "unverified": 1}.items():
         assert f"- {verdict}: {count}" in block, (
             f"no count line for {verdict}")
     assert "DRE-103 — no verdict artifact" in block, (
