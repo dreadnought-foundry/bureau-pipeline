@@ -182,9 +182,8 @@ drift from other traffic stated honestly."
 **Who made this observation.** The session that wrote the rest of this record
 was not permitted to dispatch a workflow run. The coordinating session ran the
 dispatch and took the header readings after the CEO's go, which reached this
-record as relayed: "yes to … 3636", 2026-10-01, about 12:50 PT. That time is
-about four minutes after the dispatch (12:46:08 PT); both times are written
-here as given. The header readings below are the coordinator's, made with the
+record as relayed: "yes to 5072, 5232 and 3636", 2026-10-01, shortly before
+12:45 PT, before the first reading. The header readings below are the coordinator's, made with the
 fleet key read out of Secrets Manager `bureau/relay/linear-api-key` (viewer
 `Agent-Bureau`), from `x-ratelimit-requests-remaining` on a `{ viewer { name } }`
 query, with the key never printed. They are past readings and could not be
