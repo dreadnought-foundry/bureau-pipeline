@@ -63,6 +63,8 @@ card comment goes straight to the Linear GraphQL API and never touches `gh`
 (eight of the ten `reconcile.py` sites this card converts), and the workflow
 side posts through the shell spelling of it forty-odd times. A guard reading
 only the `gh` forms sees none of that, and reports zero problems while it does.
+A row naming a workflow is counted through `step_shell.workflow_source`, so a
+step moved to `scripts/<name>.sh` keeps its row unedited (DRE-5220).
 That block is the countable record of the receipts this repo posts with no
 trailer, and a row in it must match exactly one real site — by file, anchor,
 and the workflow step when a file posts the same command from several — or the
@@ -150,6 +152,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fnmatch
 import glob
 import json
 import os
@@ -158,6 +161,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lane_contract  # noqa: E402
+import step_shell  # noqa: E402 — reads a moved step's shell where it now lives (DRE-5220)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
@@ -185,7 +189,8 @@ _TAG_CONSTANT = re.compile(r'(?m)^([A-Z][A-Z0-9_]*_TAG)\s*=\s*"([^"]+)"')
 # pipeline writes a receipt from; this module is excluded because the tags live
 # in the JSON, not here, and tests/ is excluded because a test naming a tag is
 # not an emission.
-_SCAN_GLOBS = ("scripts/*.py", ".github/workflows/*.yml")
+_WORKFLOW_GLOB = ".github/workflows/*.yml"
+_SCAN_GLOBS = ("scripts/*.py", _WORKFLOW_GLOB)
 
 # A slug, like every other machine-readable key in this pipeline.
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -413,6 +418,23 @@ def _read(path: str) -> str | None:
         return None
 
 
+def _source(relative: str) -> str | None:
+    """The text of a file an act row names, or None when it cannot be read.
+
+    A workflow is read through `step_shell.workflow_source`: a step moved to
+    `scripts/<name>.sh` (DRE-3488) keeps its row's `file` = the workflow, so
+    the row's anchor and adopted tag are counted where the step's shell now
+    lives, and a move needs no edit to `config/pipeline-acts.json`.
+    """
+    path = os.path.join(ROOT, relative)
+    if not fnmatch.fnmatch(relative, _WORKFLOW_GLOB):
+        return _read(path)
+    try:
+        return step_shell.workflow_source(path, ROOT)
+    except OSError:
+        return None
+
+
 def _corpus() -> dict:
     """Every file the pipeline writes a receipt from, by repo-relative path."""
     out: dict[str, str] = {}
@@ -421,7 +443,7 @@ def _corpus() -> dict:
             relative = os.path.relpath(path, ROOT)
             if relative == os.path.join("scripts", "pipeline_act.py"):
                 continue  # the tags live in the JSON, not in the reader
-            text = _read(path)
+            text = _source(relative)
             if text is not None:
                 out[relative] = text
     return out
@@ -588,7 +610,7 @@ def _emitter_problems(entry) -> list:
             f"act {name!r} does not say where it is emitted — a registry that "
             "cannot be checked against the code is a description, not a registry"
         ]
-    text = _read(os.path.join(ROOT, relative))
+    text = _source(relative)
     if text is None:
         return [f"act {name!r} names the emitter {relative!r}, which does not exist"]
     found = text.count(anchor)

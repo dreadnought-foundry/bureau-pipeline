@@ -27,8 +27,10 @@ a writer this sweep would never see, and it is reported as such.
 
 `writes()` finds every call of the seam in `scripts/**.py`, and every
 `linear_ops.py` invocation in `.github/workflows/*.yml` that hands the write
-layer a lane. The destination of each is resolved statically — a literal, a
-module constant, a parameter default, a pure vocabulary reader called with
+layer a lane — a step moved to `scripts/<name>.sh` (DRE-3488) read through
+to its script by `step_shell.workflow_source`, so it still writes as its
+workflow (DRE-5220). The destination of each is resolved statically — a
+literal, a module constant, a parameter default, a pure vocabulary reader called with
 literal arguments, or, when the call site computes it, the module's own
 published `destinations()`. A destination no rule can read is reported as
 UNREAD rather than assumed innocent: unknown is never a pass.
@@ -105,6 +107,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import epic_todo_gate  # noqa: E402 — the rule the Todo seams must call (DRE-5316)
 import lane_contract  # noqa: E402
 import planning_escalation  # noqa: E402
+import step_shell  # noqa: E402 — reads a moved step's shell where it now lives (DRE-5220)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
@@ -505,6 +508,15 @@ def _workflow_files(root: str) -> list:
     return sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")))
 
 
+def _workflow_text(path: str, root: str) -> str:
+    """A workflow's text with each delegating step read through to its script.
+
+    A step moved to `scripts/<name>.sh` (DRE-3488) is one delegation line in
+    the workflow; its lane writes and the modules it runs are in the script,
+    and they still belong to the workflow that runs it."""
+    return step_shell.workflow_source(os.path.abspath(path), root)
+
+
 def _attribution(root: str, contract: dict | None) -> dict:
     """module filename → the writer key(s) the contract would name for it.
 
@@ -518,8 +530,7 @@ def _attribution(root: str, contract: dict | None) -> dict:
     workflows = []
     for wf in _workflow_files(root):
         try:
-            with open(wf, encoding="utf-8") as fh:
-                workflows.append((os.path.basename(wf), fh.read()))
+            workflows.append((os.path.basename(wf), _workflow_text(wf, root)))
         except OSError:
             continue
     out: dict = {}
@@ -706,8 +717,7 @@ def _workflow_writes(root: str, live: set, lane_args: dict) -> list:
     found: list[LaneWrite] = []
     for path in _workflow_files(root):
         try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
+            text = _workflow_text(path, root)
         except OSError:
             continue
         writer = os.path.basename(path)

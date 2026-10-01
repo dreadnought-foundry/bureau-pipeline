@@ -35,6 +35,9 @@ A caller is a UNIT, written `<file>#<unit>` with the file repo-relative:
   subcommand to the function or to an in-module caller of it. Resolved to
   `<file>#<step name>`. Shell comment lines and YAML comments are not calls.
   A fully quoted path (`"$PIPELINE_DIR/scripts/…py" go`) reads the same.
+  A step whose `run:` delegates to `scripts/<name>.sh` (DRE-3488) is read
+  through to its script (`step_shell.workflow_source`) and keeps its step
+  name (DRE-5220).
   Composite actions (`.github/actions/*/action.yml`) are not read: none of
   their `run:` steps writes a lane today.
 
@@ -95,6 +98,9 @@ import sys
 from dataclasses import dataclass
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import step_shell  # noqa: E402 — reads a moved step's shell where it now lives (DRE-5220)
 
 #: The unit a call at module level, outside any def, is reported as.
 MODULE_UNIT = "<module>"
@@ -408,8 +414,9 @@ def _workflow_invocations(root: str, module: str, unread: set) -> list:
     for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
         rel = os.path.relpath(path, root).replace(os.sep, "/")
         try:
-            with open(path, encoding="utf-8") as fh:
-                doc = yaml.safe_load(fh)
+            # A step moved to `scripts/<name>.sh` (DRE-3488) is read through
+            # to its script, so it keeps its step name as the caller.
+            doc = yaml.safe_load(step_shell.workflow_source(os.path.abspath(path), root))
         except (OSError, yaml.YAMLError):
             unread.add(rel)
             continue

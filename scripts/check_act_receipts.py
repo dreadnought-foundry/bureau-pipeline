@@ -35,6 +35,10 @@ converts, so the question to ask of this file is never "does it pass?" but
 test (`tests/test_check_act_receipts.py`), because that is the only place it
 cannot quietly regress.
 
+A workflow step moved to `scripts/<name>.sh` (DRE-3488) is read through to
+its script by `step_shell.workflow_source`, so its sites keep the workflow as
+their file and the step as their step (DRE-5220).
+
 Each site is in exactly one of three states:
 
   * **composed** — its body comes from `pipeline_act.receipt()` (Python) or from
@@ -69,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import glob
 import json
 import os
@@ -77,6 +82,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pipeline_act  # noqa: E402
+import step_shell  # noqa: E402 — reads a moved step's shell where it now lives (DRE-5220)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
@@ -200,6 +206,20 @@ def _paths(pattern: str, root: str | None = None) -> list:
     return sorted(glob.glob(os.path.join(root or ROOT, pattern)))
 
 
+def _workflow(path: str, root: str | None = None) -> str:
+    """A workflow's text with each delegating step read through to its script.
+
+    A step moved to `scripts/<name>.sh` (DRE-3488) is one delegation line in
+    the workflow, and the sites it posts from now sit in the script. Read
+    through `step_shell.workflow_source`, they keep this file's `path` and the
+    step's name, which is what `_matches()` compares with the registry's
+    `file` and `step` — so a move needs no edit to `config/pipeline-acts.json`.
+    A site's line is its line in this read: for a moved step, a line of the
+    expanded view rather than of the file.
+    """
+    return step_shell.workflow_source(os.path.abspath(path), root or ROOT)
+
+
 # --------------------------------------------------------------------------- #
 # shell                                                                        #
 # --------------------------------------------------------------------------- #
@@ -290,7 +310,7 @@ def shell_sites(root: str | None = None) -> list:
     out: list = []
     for path in _paths(WORKFLOW_GLOB, root):
         relative = os.path.relpath(path, root)
-        text = _read(path)
+        text = _workflow(path, root)
         lines = text.splitlines()
         # act name -> the file it writes its composed receipt to, and where.
         composed: dict = {}
@@ -355,7 +375,7 @@ def shell_act_flags(root: str | None = None) -> list:
     out: list = []
     for path in _paths(WORKFLOW_GLOB, root):
         relative = os.path.relpath(path, root)
-        for number, line in enumerate(_read(path).splitlines(), start=1):
+        for number, line in enumerate(_workflow(path, root).splitlines(), start=1):
             if ("linear_ops.py" not in line
                     and "pipeline_act.py" not in line
                     and not _SHELL_ACT_ASSIGNMENT.match(line)):
@@ -541,7 +561,9 @@ def pending_acts(doc: dict | None = None, root: str | None = None) -> frozenset:
     texts = {}
     for site in sites(root):
         if site.path not in texts:
-            texts[site.path] = _read(os.path.join(root or ROOT, site.path))
+            path = os.path.join(root or ROOT, site.path)
+            workflow = fnmatch.fnmatch(site.path, WORKFLOW_GLOB)
+            texts[site.path] = _workflow(path, root) if workflow else _read(path)
     return frozenset(
         name for name in pipeline_act.acts(doc)
         if not any(name in text or pipeline_act.tag(name, doc) in text
