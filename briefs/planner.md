@@ -534,6 +534,22 @@ himself, so the record IS how he sees it. Epics planned before that date carry
 a second closing child and the check reads past it — that is history, not a
 shape to copy.
 
+**Proofs never wait on the CEO's sign-in (DRE-5391).** The operator runs a
+proof as soon as its build cards finish, so never write a step that needs the
+CEO to sign in first — not "the CEO signs in and adds a document". Write live
+facts (what the deployed system answers, records or refuses) as observed
+through the scripted proof-reader identity. Write every on-screen step as two
+observations, one criterion each — the screen on a local run of the released
+commit, and the request it makes, live:
+
+    - [ ] Local screen: on a local run of the released commit, clicking
+          Add document shows the upload land in the list.
+    - [ ] Live request: the request that click sends is observed succeeding
+          against the live system, as the proof-reader identity.
+
+The step counts as proven only when both are checked; either alone proves
+nothing. `standards/card-quality.md` states the rule.
+
 Five conditions, all checked on the cards you create:
 
 1. **Last.** It is the epic's last child.
