@@ -429,7 +429,7 @@ batch that was right apart from two rows.
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
 | `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
-| `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain | one per drain that queued a card, after the drained record — the cards past the free planner slots, in place order (DRE-5435) |
+| `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain | one per drain that queued a card, written just before the drained record — the cards past the free planner slots, in place order (DRE-5435) |
 | `🧺 groom-released: <id> — released: DRE-A, DRE-B · left the lane: DRE-C[ · taken out by hand: DRE-D]` | the reconcile sweep | one comment per pass that changed the queue, a line per batch it touched; pipeline-authored only, like `groom-queued` |
 | `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
 | `🧺 groom-release-repo: <slug>` | the CEO (console or by hand) | same |
@@ -600,8 +600,9 @@ to approve again until a slot happened to be free. Now one approval moves the
 whole batch into the line. A card past the slots stays in Intake and gains the
 `groom-queued` label — its one write: no lane, no cycle — and is a `held back`
 row whose why is `groom-queued: place <n> of <m>`. ONE `🧺 groom-queued: <id>`
-record follows the drained record, listing the queue in place order. The
-drained record is written whatever the slots took, so the batch is used up by
+record lists the queue in place order, written just before the drained record
+so a run that dies between the two leaves the batch approvable, never a
+labelled card no record lists. The drained record is written whatever the slots took, so the batch is used up by
 it and a second approval is `already drained`.
 
 The reconcile sweep releases the queue (`release_groom_queue`, right after the

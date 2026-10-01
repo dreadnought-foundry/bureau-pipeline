@@ -450,8 +450,8 @@ CANCELLED_TAG = "groom-cancelled"
 # The groom queue (DRE-5435). A drain moves no more cards to Planning than
 # there are free planner slots (DRE-5326), and every card past them is QUEUED:
 # it stays in Intake, gains QUEUED_LABEL, and ONE `🧺 groom-queued: <id>`
-# record follows the drained record, listing the queue in place order. The
-# reconcile sweep releases it one card per free slot and writes ONE
+# record, written just before the drained record, lists the queue in place
+# order. The reconcile sweep releases it one card per free slot and writes ONE
 # `🧺 groom-released: <id> — released: … · left the lane: …` row per pass
 # that changed it, so the queue's standing is readable off the thread alone:
 # queued, less released, less left. The label is the `epic_cap.QUEUED_LABEL`
@@ -3439,7 +3439,8 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     batch keeps its order and the additions follow it; every card past the
     free slots is QUEUED (DRE-5435): it stays in Intake, gains QUEUED_LABEL,
     and is a `held back` row whose why is `groom-queued: place N of M`, and
-    ONE `🧺 groom-queued: <id>` record follows the drained record. The
+    ONE `🧺 groom-queued: <id>` record is written just before the drained
+    record, so a run that dies between them leaves the batch approvable. The
     reconcile sweep releases the queue into Planning as slots free. One
     approval moves the whole batch into the line — the drained record is
     written whatever the slots took, so the batch is used up by it. An agreed
@@ -3534,8 +3535,11 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
             f"approve the batch again once Linear answers", batch=named) from exc
     # A groom queue already standing on this thread is owed the slots before
     # this batch is (DRE-5435): a later batch queues behind an earlier one.
+    # This batch's own queue is not ahead of it — it stands only when a drain
+    # of it died before its drained record, and its cards are this batch's.
     if slots is not None:
-        slots = (max(0, slots[0] - len(queue_standing(records))), slots[1])
+        ahead = [s for s in queue_standing(records) if s["id"] != pid]
+        slots = (max(0, slots[0] - len(ahead)), slots[1])
     # Unrationed here: every card the CEO agreed is read for its lane, so one
     # that has left it frees its slot for the next in order.
     plan = _drain_plan(record, decisions, lane=lane, held=held)
@@ -3588,6 +3592,13 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
         lops.add_label(row["identifier"], QUEUED_LABEL)
         queued.append(row["identifier"])
 
+    if plan["queued"]:
+        # ONE record of the queue, never one per card: the sweep's release
+        # reads it (`parse_queued_record`). BEFORE the drained record, because
+        # that record spends the batch: a run that dies between the two leaves
+        # a queue the sweep can release and a batch still approvable, never a
+        # labelled card no record lists and no approval can reach.
+        lops.cmd_comment(card, queued_record(record["id"], plan["queued"]))
     result = {"moved": moved,
               "held_back": [r["identifier"] for r in plan["held_back"]],
               "added": [r["identifier"] for r in plan["moving"]
@@ -3600,10 +3611,6 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
               "rows": plan["rows"], "to": to, "from": lane,
               "cycle": cycle[0], "proposal": record["id"]}
     lops.cmd_comment(card, drained_record(result))
-    if plan["queued"]:
-        # ONE record of the queue, after the drained record and never one per
-        # card: the sweep's release reads it (`parse_queued_record`).
-        lops.cmd_comment(card, queued_record(record["id"], plan["queued"]))
     return result
 
 
@@ -3847,8 +3854,7 @@ def drained_record(result: dict) -> str:
               f"{result['from']} for a planner slot — planner slots: "
               f"{slots[0]} free of {slots[1]}. The sweep releases them into "
               f"{result['to']} as slots free, earlier batches before it; the "
-              f"`{MARK} {QUEUED_TAG}: {pid}` record below lists them in "
-              f"order.", ""]
+              f"`{MARK} {QUEUED_TAG}: {pid}` record lists them in order.", ""]
     w += ["| # | Card | Outcome | Why |", "| -- | -- | -- | -- |"]
     order = {identifier: n for n, identifier in enumerate(result["moved"], 1)}
     for row in rows:
@@ -3884,8 +3890,8 @@ _RELEASED_LINE = re.compile(
 
 def queued_record(pid: str, queued: list[dict]) -> str:
     """`🧺 groom-queued: <id>` and the queue, in place order — ONE record per
-    drain that queued anything, on the proposal card after the drained record
-    (DRE-5435). `queued` is the drain plan's own list: rows carrying
+    drain that queued anything, on the proposal card just before the drained
+    record (DRE-5435). `queued` is the drain plan's own list: rows carrying
     `identifier` and, off the approved record, `repo`.
 
     `parse_queued_record` is its one reader; the sweep imports it rather
@@ -3983,22 +3989,28 @@ def queue_standing(records: list[dict]) -> list[dict]:
     left, less taken out by hand, read off the thread alone (DRE-5435).
 
     Each entry is `{"id", "place", "identifier", "repo", "at"}`, `at` being
-    the queued record's own Linear time."""
-    batches, gone = [], set()
+    the queued record's own Linear time.
+
+    Read in thread order, one place per `(batch, card)`: a batch whose drain
+    died before its drained record is queued again when it is approved again,
+    and the second record names cards the first already did. A row takes a
+    card out of only the queue written before it."""
+    standing: dict[tuple[str, str], dict] = {}
     for record, at in queue_records(records):
         body = record.get("body") or ""
         queued = parse_queued_record(body)
         if queued:
-            batches.append((queued, at))
+            for c in queued["cards"]:
+                standing.setdefault((queued["id"], c["identifier"]), {
+                    "id": queued["id"], "place": c["place"],
+                    "identifier": c["identifier"], "repo": c["repo"],
+                    "at": at})
             continue
         for change in parse_released_record(body):
             for ident in (*change["released"], *change["left"],
                           *change["unqueued"]):
-                gone.add((change["id"], ident))
-    return [{"id": queued["id"], "place": c["place"],
-             "identifier": c["identifier"], "repo": c["repo"], "at": at}
-            for queued, at in batches for c in queued["cards"]
-            if (queued["id"], c["identifier"]) not in gone]
+                standing.pop((change["id"], ident), None)
+    return list(standing.values())
 
 
 def drain_refused_record(pid: str, reason: str) -> str:

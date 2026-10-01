@@ -936,7 +936,7 @@
       "file": "scripts/groomer.py",
       "anchor": "queued_record(record[\"id\"], plan[\"queued\"])",
       "kind": "not-an-act",
-      "means": "The cards of an approved batch the free planner slots could not take, on the proposal card in one record after the drained record: the queue, in place order, that the reconcile sweep releases into Planning as slots free (DRE-5435).",
+      "means": "The cards of an approved batch the free planner slots could not take, on the proposal card in one record written just before the drained record: the queue, in place order, that the reconcile sweep releases into Planning as slots free (DRE-5435).",
       "why": "The CEO decided this, not the pipeline. The cards are queued only because the CEO approved the batch they are in, so the record is bookkeeping of that approval rather than something the pipeline chose — the same reason the drained record beside it is not an act. A trailer would name a next actor nobody chose: the next actor is the sweep, and it reads this record by its own grammar (`parse_queued_record`). One record per drain, never one per card."
     },
     {
