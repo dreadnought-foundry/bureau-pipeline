@@ -330,7 +330,9 @@ So no `off-rail:` line was printed, which is observation 7, MET. Observation 8
 is **NOT MET as the card words it**: the card expected each phase's own quiet
 line where it did not spend, naming the repair's among them, and four of the
 eight phases — the drain, the limit-death recovery, the frozen-hold repair and
-the epic carry — print nothing at all when they have nothing to do. They are
+the epic carry — print nothing at all when they have nothing to do. The card
+itself already calls the drain silent by design, so the gap between the card
+and the code is three phases: the recovery, the repair and the carry. They are
 accounted for here by reading their print sites in `scripts/reconcile.py` on
 `main`, not by a line in the log. That is a fact about the card's expectation,
 not a failure of the fence: in the sandbox those same four phases print their
@@ -402,9 +404,10 @@ count does not name. They are listed because they are writes:
 
 Beyond the window, the seat's whole record of created cards was read: **107
 cards** since 2026-09-23 10:20:45 PT (the first, DRE-4703) — 84 `repo:portico`,
-12 `repo:agent-bureau`, 7 `repo:bureau-pipeline`, 4 `repo:vericorr` — and two
-more, DRE-5464 and DRE-5465, created at 12:32:03 and 12:32:32 PT today, four
-minutes after the window closed. It is still happening.
+12 `repo:agent-bureau`, 7 `repo:bureau-pipeline`, 4 `repo:vericorr`. The
+latest two of them, DRE-5464 and DRE-5465, were created at 12:32:03 and
+12:32:32 PT today, four minutes after the window closed. It is still
+happening.
 
 **Observation 10 is MET, and the list is empty.** The seat's legitimate writes
 on the harness's own cards — a critic verdict, a merge note — would appear on a
@@ -445,7 +448,12 @@ is, at about 12:30 PT:
 So any assistant session on this machine opened outside agent-bureau — a
 portico session, for example — writes Linear as `bureau-sandbox` when it uses
 the Linear MCP. That matches the `repo:portico` concentration and the
-routing-verdict texts. It is an inference from those two facts; nothing here
+routing-verdict texts. The DRE-5392 comment (01:14:42 PT) was read in full: it
+is free prose ("The CEO chose on 2026-09-30 to fix this as its own card after
+DRE-5388 … Built on `agent/DRE-5392-image-shown-inline`."), with none of the
+`**Why:** … **Where it goes:** … **Marked:**` template the pipeline's own
+routing-verdict writer uses and no `📎 pipeline-act:` receipt, which points
+away from a pipeline script holding the sandbox API key. It is an inference from those two facts; nothing here
 saw a session make one of those writes. The record that would settle it is
 Linear's own audit log for those API calls, which this session did not read.
 
