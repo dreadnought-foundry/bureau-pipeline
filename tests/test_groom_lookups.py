@@ -207,7 +207,7 @@ def test_next_link_records_the_cut_and_never_pages():
     assert card["read"] is True
     assert card["cut"] == [{"repo": repo, "path": ALERTS}]
     assert len(gh.commit_requests()) == 1
-    assert not any("page=" in c[0] for c in gh.calls)
+    assert not any("page" in params for _, params in gh.queries())
     assert len(gh.calls) == 1 + gl.MAX_COMMITS
 
 
