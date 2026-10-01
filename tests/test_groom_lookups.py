@@ -20,6 +20,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_lookups.py -v
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -77,10 +78,12 @@ class FakeGh:
     `(repo, path)` pairs whose commits response says more pages exist;
     `remaining` stamps `x-ratelimit-remaining`, falling by one per request as
     GitHub's does; `fail(n, endpoint)` returns an exception to raise on the
-    n-th request; `clock` is advanced by `tick` seconds per request."""
+    n-th request; `clock` is advanced by `tick` seconds per request;
+    `raw(endpoint)` returns a body string to answer in place of the list, or
+    None for the ordinary answer."""
 
     def __init__(self, commits=None, pulls=None, *, nexts=(), remaining=None,
-                 fail=None, clock=None, tick=0, every_path=None):
+                 fail=None, clock=None, tick=0, every_path=None, raw=None):
         self.commits = commits or {}
         self.pulls = pulls or {}
         self.nexts = set(nexts)
@@ -89,6 +92,7 @@ class FakeGh:
         self.clock = clock
         self.tick = tick
         self.every_path = every_path
+        self.raw = raw
         self.calls: list[list[str]] = []
 
     def __call__(self, args):
@@ -117,7 +121,9 @@ class FakeGh:
             shas = (self.every_path(repo, path) if self.every_path
                     else self.commits.get((repo, path), []))
             body = [{"sha": s} for s in shas]
-        return "\r\n".join(lines) + "\r\n", json.dumps(body)
+        answer = self.raw(endpoint) if self.raw else None
+        return ("\r\n".join(lines) + "\r\n",
+                answer if answer is not None else json.dumps(body))
 
     def commit_requests(self):
         return [c for c in self.calls if not c[0].endswith("/pulls")]
@@ -182,6 +188,7 @@ def test_asks_each_repo_since_creation_and_keeps_merged_prs():
         assert params["path"] == ALERTS
         assert params["since"] == CREATED
         assert params["per_page"] == str(gl.MAX_COMMITS)
+        assert params["until"] == "2026-10-01T13:00:00Z"
     pulls = [c[0] for c in gh.calls if c[0].endswith("/pulls")]
     assert pulls == ["repos/dreadnought-foundry/agent-bureau/commits/aaa/pulls",
                      "repos/dreadnought-foundry/agent-bureau/commits/bbb/pulls"]
@@ -518,3 +525,106 @@ def test_the_document_is_the_contract_shape():
     assert late == {"read": False, "why": "request budget of 5 spent",
                     "merged_prs": [], "cut": [], "unread_repos": {}}
     json.dumps(doc)
+
+
+# --------------------------------------------------------------------------
+# a 200 that is not a list is a repo refusing, never "nothing merged"
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("answer, on, said", [
+    ('{"message": "Not Found"}', "commits", "commits for {path} answered Not Found, not a list"),
+    ("not json", "commits", "commits for {path} answered unreadable JSON: "),
+    ('{"message": "Moved"}', "pulls", "pulls for aaa answered Moved, not a list"),
+])
+def test_an_answer_that_is_not_a_list_names_the_repo(answer, on, said):
+    repo = "dreadnought-foundry/agent-bureau"
+
+    def raw(endpoint):
+        if "agent-bureau" not in endpoint:
+            return None
+        return answer if endpoint.endswith("/pulls") == (on == "pulls") else None
+
+    gh = FakeGh(commits={(repo, ALERTS): ["aaa"],
+                         ("dreadnought-foundry/portico", ALERTS): ["p1"]},
+                pulls={(repo, "aaa"): [pr(41)],
+                       ("dreadnought-foundry/portico", "p1"): [pr(9)]},
+                raw=raw)
+    card = run([row("DRE-1")], gh, repo_map=REPO_MAP)["cards"]["DRE-1"]
+    assert set(card["unread_repos"]) == {repo}
+    assert card["unread_repos"][repo].startswith(
+        f"{repo} " + said.format(path=ALERTS))
+    assert card["read"] is True
+    assert [p["repo"] for p in card["merged_prs"]] == ["dreadnought-foundry/portico"]
+
+
+# --------------------------------------------------------------------------
+# a row with no creation date is not asked; an owner with no repo is not read
+# --------------------------------------------------------------------------
+def test_a_row_with_no_creation_date_is_not_asked_and_the_next_is():
+    gh = FakeGh(every_path=lambda repo, path: [])
+    bare = row("BARE-1", paths=("bare.py",))
+    del bare["context"]
+    rows = [row("NULL-1", paths=("null.py",), created=None), bare,
+            row("DRE-1", paths=("a.py",))]
+    doc = run(rows, gh)
+    assert [q[1]["path"] for q in gh.queries()] == ["a.py"]
+    assert len(gh.calls) == 1
+    for card in ("NULL-1", "BARE-1"):
+        assert doc["cards"][card]["read"] is False
+        assert doc["cards"][card]["why"] == gl.NO_CREATED_AT
+    assert doc["cards"]["DRE-1"]["read"] is True
+    assert doc["read"] is True and doc["why"] is None
+
+
+def test_an_owner_with_no_repo_in_the_map_is_not_read():
+    gh = FakeGh(every_path=busy)
+    doc = run([row("DRE-1"), row("DRE-2", which="spare")], gh,
+              repo_map=REPO_MAP, owner="nobody-owns-this")
+    assert gh.calls == []
+    why = "no repo of nobody-owns-this in the repo map"
+    assert doc["read"] is False and doc["why"] == why
+    assert doc["requests"] == 0
+    for card in doc["cards"].values():
+        assert card["read"] is False and card["why"] == why
+
+
+# --------------------------------------------------------------------------
+# main: `until` is the moment the leg ran; unreadable inputs still write
+# --------------------------------------------------------------------------
+def test_main_bounds_every_commits_query_by_now(tmp_path, monkeypatch):
+    monkeypatch.setattr(gl, "_now", lambda: "2026-10-01T13:14:15Z")
+    gh = FakeGh(every_path=lambda repo, path: [])
+    code, _ = _main(tmp_path, gh, [row("DRE-1", paths=("a.py", "b.py"))])
+    assert code == 0
+    assert [params["until"] for _, params in gh.queries()] == [
+        "2026-10-01T13:14:15Z"] * 2
+
+
+def test_now_is_utc_to_the_second():
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", gl._now())
+
+
+@pytest.mark.parametrize("broken", ["missing", "invalid", "targets-type",
+                                    "map-type"])
+def test_main_unreadable_inputs_still_write_a_not_read_document(
+        tmp_path, capsys, broken):
+    targets, repo_map_file = _files(tmp_path, [row("DRE-1")])
+    if broken == "missing":
+        targets.unlink()
+    elif broken == "invalid":
+        repo_map_file.write_text("{not json", encoding="utf-8")
+    elif broken == "targets-type":
+        targets.write_text(json.dumps({"rows": []}), encoding="utf-8")
+    else:
+        repo_map_file.write_text(json.dumps([]), encoding="utf-8")
+    out = tmp_path / "lookups.json"
+    gh = FakeGh(every_path=busy)
+    code = gl.main(["owner", "--owner", OWNER, "--targets", str(targets),
+                    "--out", str(out), "--repo-map", str(repo_map_file)],
+                   gh_run=gh)
+    assert code == 0
+    assert gh.calls == []
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["read"] is False and doc["cards"] == {}
+    assert doc["why"].startswith("the leg's inputs could not be read: ")
+    assert capsys.readouterr().out.strip().splitlines()[-1] == (
+        f"groom-lookups: {OWNER} — not read: {doc['why']}")
