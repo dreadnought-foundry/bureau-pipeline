@@ -32,6 +32,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import fix_budget  # noqa: E402
+import fix_concurrency  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -98,32 +99,13 @@ def top_level_clauses(expr: str) -> list:
 
 
 def evaluate(expr: str, event: dict) -> bool:
-    """Evaluate a GitHub `if` expression of the shape this gate uses
-    (dotted `github.*` paths, `==`, `contains()`, `&&`, `||`, parentheses)
-    against an event context — the LIVE expression, executed, not grepped."""
-    def lookup(path):
-        node = {"github": event}
-        for part in path.split("."):
-            node = node.get(part) if isinstance(node, dict) else None
-        return node
-
-    py = re.sub(r"\bcontains\(", "_contains(", " ".join(expr.split()))
-    py = re.sub(r"\bgithub(?:\.\w+)+", lambda m: f"_get({m.group(0)!r})", py)
-    py = py.replace("&&", " and ").replace("||", " or ")
-    return bool(eval(py, {
-        "_get": lookup,
-        "_contains": lambda hay, needle: needle in (hay or ""),
-    }))
+    """The LIVE expression, executed — through the evaluator the concurrency
+    audit already runs the shipped gate with, not a copy of it."""
+    return fix_concurrency._truthy(fix_concurrency.evaluate(expr, event))
 
 
 def comment_event(login: str, user_type: str, body: str) -> dict:
-    return {
-        "event_name": "issue_comment",
-        "event": {
-            "issue": {"pull_request": {"url": "x"}, "number": 7},
-            "comment": {"user": {"login": login, "type": user_type}, "body": body},
-        },
-    }
+    return fix_concurrency.comment_event(7, login, body, user_type=user_type)
 
 
 FAIL_BODY = "🧪 QA Verifier — VERDICT: FAIL @" + "a" * 40
