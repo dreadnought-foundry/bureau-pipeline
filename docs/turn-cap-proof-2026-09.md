@@ -9,13 +9,12 @@ GitHub Actions on `dreadnought-foundry/bureau-pipeline` (plus one run in
 Where a UTC string is itself the evidence, it is quoted as written with the
 Pacific reading beside it.
 
-**Two of the four observations hold, and two have not been run yet.**
+**Two of the four observations hold. The other two were never run, and the
+CEO closed the proof without them on 2026-09-30 (see "Closing decision").**
 Observation 1 (every run at 400) and observation 4 (the decide-by checkpoint)
 were read from traffic the pipeline produced on its own. Observations 2 and 3
-need planted `turns:150` cards. None has been planted yet, because what the
-observation 2 card would change is still being decided (see §2). They are
-recorded as **NOT OBSERVED**, and nothing below describes an outcome that was
-not seen.
+needed planted `turns:150` cards, and none was planted. They are recorded as
+**NOT OBSERVED**, and nothing below describes an outcome that was not seen.
 
 **Read-only so far.** Nothing here moved a card, dispatched a run, re-ran a
 workflow or commented on a pull request. This record is the only write.
@@ -171,6 +170,33 @@ merged prompt and not from habit. DRE-4699's run shipped
 
 ---
 
+## Closing decision — 2026-09-30, about 17:05 PT
+
+The CEO closed DRE-4371 on this record as it stands: **"Yes let's close this."**
+He was accepting the operator's recommendation to close on observations 1 and 4,
+with observations 2 and 3 recorded as not observed.
+
+**Observations 2 and 3 were not observed and were deliberately not run.** The
+reasons:
+
+- **No run has died at the new ceiling.** No build or fix run has run out of
+  turns since the 400-turn change went live on 2026-09-24. The last turn-cap
+  deaths on the board were 2026-09-04 to 2026-09-08, all under the old 150-turn
+  ceiling. So the requeue paths these observations exercise have had nothing
+  real to act on.
+- **Planting was not worth the cost.** Planting the two `turns:150` cards would
+  have cost two agent runs at roughly $13–23 each, in `plan.yml`, a file three
+  other open cards were editing at the time. A plant there would collide with
+  real work at merge.
+
+**Follow-up owed:** the first real build or fix run that dies at the 400-turn
+ceiling past implementation-green (`⏳ 3/5`) is the observation for §2. The
+same goes for one that dies at or before `⏳ 2/5` for §3. When one happens,
+it is quoted into this record (card id, run URL, receipts verbatim, PT
+timestamps) under that section.
+
+---
+
 ## Something seen on the way, not part of this proof
 
 At 2026-09-29 18:43 PT, DRE-5242's PR #571 got a `🛑 runner-environment-hold`
@@ -185,8 +211,8 @@ work, not this epic.
 ## Acceptance criteria, as observed
 
 - [x] The first build and fix runs after deploy are quoted, showing 400 turns and a non-blank label clause (§1a, §1b).
-- [ ] A planted `turns:150` card died past `⏳ 3/5`, was requeued once from its own branch, and merged — **NOT OBSERVED, not planted** (§2).
-- [ ] A second planted card died at or before `⏳ 2/5` and landed in Planning — **NOT OBSERVED, not planted** (§3).
+- [ ] A planted `turns:150` card died past `⏳ 3/5`, was requeued once from its own branch, and merged — **NOT OBSERVED, not planted; closed without it by the CEO's decision** (§2).
+- [ ] A second planted card died at or before `⏳ 2/5` and landed in Planning — **NOT OBSERVED, not planted; closed without it by the CEO's decision** (§3).
 - [x] A real run's `⏳ 1/5` marker is quoted with its decide-by wording (§4).
 - [ ] This record merged on `main` — pending; this record is the pull request.
-- [ ] The CEO closes this card after reading the record.
+- [x] The CEO closes this card after reading the record — closed 2026-09-30 about 17:05 PT, on observations 1 and 4 with 2 and 3 not observed (see "Closing decision").
