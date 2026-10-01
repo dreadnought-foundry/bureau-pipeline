@@ -542,3 +542,23 @@ def test_the_cli_carries_the_no_judgement_switch():
     with contextlib.redirect_stdout(buf), contextlib.suppress(SystemExit):
         groomer.main(["propose", "--help"])
     assert "--no-judgement" in buf.getvalue()
+
+
+# --------------------------------------------------------------------------
+# DRE-5306 — one count of open children, read by verify and by DRE-5309
+# --------------------------------------------------------------------------
+def test_closed_states_are_done_canceled_and_duplicate():
+    assert groomer.CLOSED_STATES == ("Done", "Canceled", "Duplicate")
+
+
+def test_open_children_counts_the_children_not_in_a_closed_state():
+    node = {"children": {"nodes": [
+        {"identifier": "DRE-1", "state": {"name": "In Progress"}},
+        {"identifier": "DRE-2", "state": {"name": "Done"}},
+        {"identifier": "DRE-3", "state": {"name": "Todo"}}]}}
+    assert groomer.open_children(node) == 2
+
+
+def test_open_children_of_a_card_with_no_children_key_is_zero():
+    assert groomer.open_children(card("DRE-1")) == 0
+    assert groomer.open_children({"children": None}) == 0

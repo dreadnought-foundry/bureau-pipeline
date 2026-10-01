@@ -8,6 +8,24 @@
     "evidence": [
       "DRE-4587 is Done: the console's usage probe now inserts one row per window into claude_usage_reading each time it reads an account."
     ],
-    "list": "planning"
+    "list": "planning",
+    "context": {
+      "created_at": "2026-09-08T17:20:41.000Z",
+      "age_days": 21,
+      "labels": [
+        "repo:agent-bureau"
+      ],
+      "parent": null,
+      "children": [],
+      "last_moved": null,
+      "comments": [
+        {
+          "at": "2026-09-24T16:05:12.000Z",
+          "by": "person",
+          "body": "The S3 route PR was closed unmerged. Is the Accounts panel still empty?"
+        }
+      ]
+    },
+    "excluded": null
   }
 ]

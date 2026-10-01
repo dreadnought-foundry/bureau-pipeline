@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -70,20 +71,76 @@ def proposal(unmapped=()):
         lops=FakeLinear(), run=FakeGh(), owners=OWNERS)
 
 
-class CardText:
-    """`linear_ops`, as `targets` reads a card's title and description."""
+#: Who the pipeline's own Linear key is, and somebody else's.
+VIEWER = "user-agent-bureau"
+SOMEONE = "user-frederick"
 
-    def __init__(self, texts=None):
+
+def iso_ago(days: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def issue_node(ident, *, title=None, body=None, created_days=30,
+               labels=("repo:portico", "agent:engineer"), parent=None,
+               children=(), comments=(), history=()):
+    """A `CARD_QUERY` node, Linear's shape: `children` and `parent` as
+    `(identifier, state)`, `comments` and `history` as Linear nodes."""
+    return {
+        "identifier": ident,
+        "title": title if title is not None else f"{ident} does a thing",
+        "description": body if body is not None else f"The body of {ident}.",
+        "createdAt": iso_ago(created_days),
+        "labels": {"nodes": [{"name": n} for n in labels]},
+        "parent": ({"identifier": parent[0], "state": {"name": parent[1]}}
+                   if parent else None),
+        "children": {"nodes": [{"identifier": i, "state": {"name": s}}
+                               for i, s in children]},
+        "comments": {"nodes": list(comments)},
+        "history": {"nodes": list(history)},
+    }
+
+
+def comment_node(body, *, by=SOMEONE, days=2):
+    return {"body": body, "createdAt": iso_ago(days),
+            "user": {"id": by} if by else None,
+            "botActor": None if by else {"id": "bot-github"}}
+
+
+def move_node(*, frm, to, days, by=SOMEONE):
+    return {"createdAt": iso_ago(days),
+            "fromState": {"name": frm} if frm else None,
+            "toState": {"name": to} if to else None,
+            "actor": {"id": by} if by else None, "botActor": None}
+
+
+class CardText:
+    """`linear_ops`, as `targets` reads a card and its board context — and
+    who the pipeline's key is. `calls` keeps every request in order."""
+
+    def __init__(self, texts=None, issues=None, *, viewer=VIEWER, fail=None):
         self.texts = dict(texts or {})
+        self.issues = dict(issues or {})
+        self.viewer = viewer
+        self.fail = dict(fail or {})
         self.asked: list[str] = []
+        self.calls: list[str] = []
+
+    def viewer_id(self):
+        self.calls.append("viewer")
+        return self.viewer
 
     def gql(self, query, variables=None):
         ident = (variables or {}).get("id")
         self.asked.append(ident)
+        self.calls.append(ident)
+        if ident in self.fail:
+            raise RuntimeError(self.fail[ident])
+        if ident in self.issues:
+            return {"issue": self.issues[ident]}
         title, body = self.texts.get(ident, (f"{ident} does a thing",
                                              f"The body of {ident}."))
-        return {"issue": {"identifier": ident, "title": title,
-                          "description": body}}
+        return {"issue": issue_node(ident, title=title, body=body)}
 
 
 def write(path: Path, doc) -> Path:
@@ -95,13 +152,13 @@ def read(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_targets(tmp_path, prop, texts=None):
+def build_targets(tmp_path, prop, texts=None, *, lops=None):
     """Run `targets` against the proposal with a faked Linear read."""
     pfile = write(tmp_path / "proposal.json", prop)
     out, matrix = tmp_path / "verify-targets.json", tmp_path / "matrix.json"
     assert gva.main(["targets", "--proposal", str(pfile), "--out", str(out),
                      "--matrix-out", str(matrix)],
-                    lops=CardText(texts)) == 0
+                    lops=lops or CardText(texts)) == 0
     return pfile, out, matrix
 
 
@@ -793,7 +850,7 @@ def test_the_fixture_is_dre_4416_as_it_read_on_2026_09_29():
     assert isinstance(rows, list) and len(rows) == 1
     [row] = rows
     assert set(row) == {"card", "repository", "repo_slug", "title", "body",
-                        "evidence", "list"}
+                        "evidence", "list", "context", "excluded"}
     assert row["card"] == "DRE-4416"
     assert row["repository"] == "dreadnought-foundry/agent-bureau"
     assert row["repo_slug"] == "agent-bureau"
@@ -834,3 +891,467 @@ def test_prepare_over_the_fixture_fences_the_card_and_the_evidence(tmp_path):
     ev_end = text.index(gva.FENCE_END, ev_begin)
     assert f"- {row['evidence'][0]}" in text[ev_begin:ev_end]
     assert text.index("## The Layer A evidence") < ev_begin
+
+
+# --------------------------------------------------------------------------
+# DRE-5306 — the card's board context, and four cards excluded unjudged
+# --------------------------------------------------------------------------
+import console_receipt_vectors as V  # noqa: E402
+
+UNREAD = "board context unread: the pipeline's own Linear identity could not be read"
+HEADING = "## The card's board context"
+
+
+def small_proposal(n=5):
+    """`n` cards at a capacity of three: DRE-101..103 are the Planning list
+    and the rest the spares behind it."""
+    return groomer.verify_proposal(
+        [card(f"DRE-{100 + i}", days=i) for i in range(1, n + 1)],
+        dict(cycles=CYCLES, capacity=3, now=NOW),
+        lops=FakeLinear(), run=FakeGh(), owners=OWNERS)
+
+
+def targets_of(prop, lops, verifier=None):
+    return {r["card"]: r for r in gva.targets(
+        prop, lops=lops, repo_map=json.loads(gva.REPO_MAP.read_text()),
+        verifier=verifier)}
+
+
+class FakeVerifier:
+    """`console_receipt.Verifier`, answering every receipt one way."""
+
+    def __init__(self, why=None):
+        self.why = why
+        self.checked = 0
+
+    def check_answer(self, body, *, card, created_at):
+        self.checked += 1
+        return self.why
+
+
+def test_the_contract_constants():
+    assert gva.EXCLUDED == "excluded" and gva.VERDICTS[6] == "excluded"
+    assert gva.EXCLUDE_DAYS == 7
+    assert gva.VIEWER_UNREAD == \
+        "the pipeline's own Linear identity could not be read"
+    for field in ("createdAt", "labels { nodes { name } }",
+                  "parent { identifier state { name } }",
+                  "children(first: 50) { nodes { identifier state { name } } }",
+                  "comments(first: 50) { nodes { body createdAt user { id } "
+                  "botActor { id } } }",
+                  "history(first: 50) { nodes { createdAt fromState { name } "
+                  "toState { name } actor { id } botActor { id } } }"):
+        assert field in " ".join(gva.CARD_QUERY.split()), field
+
+
+def test_agent_input_writes_the_board_context_inside_the_fence(tmp_path):
+    issue = issue_node(
+        "DRE-101", created_days=12,
+        labels=("repo:portico", "agent:engineer"),
+        parent=("DRE-900", "In Progress"), children=[("DRE-902", "Done")],
+        history=[move_node(frm="Intake", to="Planning", days=20, by=VIEWER),
+                 move_node(frm="Planning", to="Backlog", days=10, by=SOMEONE)],
+        comments=[comment_node("The roster still double-counts.", days=3),
+                  comment_node("🤖 agent-actor: engineer", by=VIEWER, days=1)])
+    _, targets, _ = build_targets(tmp_path, proposal(),
+                                  lops=CardText(issues={"DRE-101": issue}))
+    row = {r["card"]: r for r in read(targets)}["DRE-101"]
+    assert row["excluded"] is None
+    ctx = row["context"]
+    assert ctx["age_days"] == 12
+    assert ctx["labels"] == ["repo:portico", "agent:engineer"]
+    assert ctx["parent"] == {"identifier": "DRE-900", "state": "In Progress"}
+    assert ctx["children"] == [{"identifier": "DRE-902", "state": "Done"}]
+    assert ctx["last_moved"]["to"] == "Backlog"
+    assert ctx["last_moved"]["by"] == "person"
+    assert [c["by"] for c in ctx["comments"]] == ["person", "pipeline"]
+
+    text = gva.prepare(read(targets), "DRE-101",
+                       brief=BRIEF.read_text(encoding="utf-8"))
+    card_end = text.index(gva.FENCE_END, text.index("Card: DRE-101"))
+    start = text.index(HEADING)
+    assert card_end < start < text.index("## The Layer A evidence")
+    begin = text.index(gva.FENCE_BEGIN, start)
+    end = text.index(gva.FENCE_END, begin)
+    assert text[start:begin].strip() == HEADING
+    fenced = text[begin:end]
+    assert "Age: 12 days" in fenced
+    assert "Labels: repo:portico, agent:engineer" in fenced
+    assert "Parent: DRE-900 (In Progress)" in fenced
+    assert "- DRE-902 (Done)" in fenced
+    moved = ctx["last_moved"]["at"]
+    assert f"Last state move: to Backlog on {moved}, by: person" in fenced
+    for comment in ctx["comments"]:
+        assert f"- {comment['at']}, by: {comment['by']}" in fenced
+    assert "The roster still double-counts." in fenced
+    assert "🤖 agent-actor: engineer" in fenced
+
+
+EXCLUSIONS = {
+    "an open child": (
+        dict(children=[("DRE-150", "In Progress")]),
+        "parent epic with 1 open child"),
+    "a child that is itself an epic in progress (DRE-4633)": (
+        dict(children=[("DRE-4634", "In Progress"), ("DRE-4635", "Done")]),
+        "parent epic with 1 open child"),
+    "two open children": (
+        dict(children=[("DRE-150", "Todo"), ("DRE-151", "Backlog")]),
+        "parent epic with 2 open children"),
+    "hand-built": (
+        dict(labels=("repo:portico", "hand-built")), "hand-built"),
+    "moved into Intake by a person": (
+        dict(history=[move_node(frm="Planning", to="Intake", days=1,
+                                by=SOMEONE)]),
+        "moved into Intake on {day}"),
+    "moved into Intake by the pipeline's key": (
+        dict(history=[move_node(frm="Planning", to="Intake", days=1,
+                                by=VIEWER)]),
+        "moved into Intake on {day}"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(EXCLUSIONS))
+def test_each_exclusion_drops_the_card_from_judgement(tmp_path, case):
+    fields, reason = EXCLUSIONS[case]
+    reason = reason.format(day=iso_ago(1)[:10])
+    lops = CardText(issues={"DRE-101": issue_node("DRE-101", **fields)})
+    _, targets, matrix = build_targets(tmp_path, proposal(), lops=lops)
+    rows = {r["card"]: r for r in read(targets)}
+    assert rows["DRE-101"]["excluded"] == reason
+    assert rows["DRE-101"]["context"] is not None
+    assert rows["DRE-102"]["excluded"] is None
+    m = {r["card"]: r["repository"] for r in read(matrix)}
+    assert m["DRE-101"] == ""
+    assert m["DRE-102"] == "dreadnought-foundry/portico"
+    _assert_excluded_through_the_job(tmp_path, targets, "DRE-101", reason)
+
+
+def _assert_excluded_through_the_job(tmp_path, targets, card_id, reason):
+    """`prepare` writes the one line, and `verdict` says `excluded` with the
+    reason whatever the raw file says and whatever the step did."""
+    out, started = tmp_path / "verify-input.md", tmp_path / "started.txt"
+    assert gva.main(["prepare", "--targets", str(targets), "--card", card_id,
+                     "--out", str(out), "--started-at-out", str(started)]) == 0
+    assert out.read_text(encoding="utf-8") == \
+        f"excluded without judgement: {reason}\n"
+    for outcome, raw in (
+            ("success", raw_answer(tmp_path, card_id, "obsolete", [PROOF_LINE])),
+            ("success", raw_answer(tmp_path, card_id, "still-needed",
+                                   [PROOF_LINE])),
+            ("skipped", None)):
+        got = run_verdict(tmp_path, card_id, targets, raw=raw,
+                          outcome=outcome)
+        assert (got["verdict"], got["reason"]) == ("excluded", reason)
+        assert got["proof"] == []
+
+
+def test_a_card_whose_read_raises_is_excluded_with_no_title(tmp_path):
+    texts = {"DRE-101": ("A title nobody read", "A body nobody read.")}
+    lops = CardText(texts, fail={"DRE-101": "Linear said 429: rate limited"})
+    _, targets, matrix = build_targets(tmp_path, proposal(), lops=lops)
+    row = {r["card"]: r for r in read(targets)}["DRE-101"]
+    reason = "board context unread: Linear said 429: rate limited"
+    assert row["excluded"] == reason
+    assert row["context"] is None
+    assert row["title"] == "" and row["body"] == ""
+    assert not any("could not be read" in str(e) for e in row["evidence"])
+    assert {"card": "DRE-101", "repository": ""} in read(matrix)
+    _assert_excluded_through_the_job(tmp_path, targets, "DRE-101", reason)
+
+
+def test_an_excluded_answer_over_a_row_that_is_not_excluded_is_unreadable(tmp_path):
+    _, targets, _ = build_targets(tmp_path, proposal())
+    assert {r["card"]: r for r in read(targets)}["DRE-101"]["excluded"] is None
+    got = run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
+        tmp_path, "DRE-101", "excluded", [PROOF_LINE]))
+    assert (got["verdict"], got["reason"]) == ("unverified",
+                                               "unreadable answer")
+
+
+def test_an_epic_whose_children_are_all_closed_is_judged_like_any_card(tmp_path):
+    issue = issue_node("DRE-101", children=[("DRE-150", "Done"),
+                                            ("DRE-151", "Canceled")])
+    assert groomer.open_children(issue) == 0
+    _, targets, matrix = build_targets(
+        tmp_path, proposal(), lops=CardText(issues={"DRE-101": issue}))
+    row = {r["card"]: r for r in read(targets)}["DRE-101"]
+    assert row["excluded"] is None
+    assert row["context"]["children"] == [
+        {"identifier": "DRE-150", "state": "Done"},
+        {"identifier": "DRE-151", "state": "Canceled"}]
+    assert {"card": "DRE-101",
+            "repository": "dreadnought-foundry/portico"} in read(matrix)
+    text = gva.prepare(read(targets), "DRE-101",
+                       brief=BRIEF.read_text(encoding="utf-8"))
+    assert HEADING in text and "verify-verdict.json" in text
+    got = run_verdict(tmp_path, "DRE-101", targets, raw=raw_answer(
+        tmp_path, "DRE-101", "still-needed", [PROOF_LINE]))
+    assert got["verdict"] == "still-needed"
+
+
+def test_a_card_moved_into_intake_eight_days_ago_is_judged(tmp_path):
+    issue = issue_node("DRE-101", history=[
+        move_node(frm="Planning", to="Intake", days=8)])
+    rows = targets_of(proposal(), CardText(issues={"DRE-101": issue}))
+    assert rows["DRE-101"]["excluded"] is None
+    assert rows["DRE-101"]["context"]["last_moved"]["to"] == "Intake"
+
+
+def test_a_card_created_in_intake_and_never_moved_into_it_is_judged(tmp_path):
+    issue = issue_node("DRE-101", created_days=1, history=[
+        move_node(frm=None, to="Intake", days=1)])
+    rows = targets_of(proposal(), CardText(issues={"DRE-101": issue}))
+    assert rows["DRE-101"]["excluded"] is None
+    assert rows["DRE-101"]["context"]["last_moved"] is None
+
+
+def _excluded_doc(card_id, reason):
+    return {"card": card_id, "verdict": "excluded",
+            "summary": "Not judged: excluded before any agent ran.",
+            "proof": [], "reason": reason, "cost_usd": None,
+            "duration_ms": None, "model": None,
+            "started_at": "2026-09-29T06:00:00Z",
+            "finished_at": "2026-09-29T06:00:01Z"}
+
+
+def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_holds_the_slot(tmp_path):
+    prop = proposal()
+    assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    reason = "moved into Intake on 2026-09-28"
+    d = tmp_path / "verdicts" / "groom-verdict-DRE-101"
+    d.mkdir(parents=True)
+    write(d / "verdict.json", _excluded_doc("DRE-101", reason))
+    for other in ("DRE-102", "DRE-103", "DRE-104"):
+        run_verdict(tmp_path, other, targets, raw=raw_answer(
+            tmp_path, other, "still-needed", [PROOF_LINE]))
+
+    # The workflow's apply step passes no `--targets`.
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == ["DRE-104", "DRE-102", "DRE-103"]
+    assert row_of(after, "DRE-104")["position"] == 1
+    assert "DRE-101" not in [r["identifier"] for r in cancel(after)]
+    waiting = {r["identifier"]: r for r in after["outcomes"]["not-now"]}
+    want = f"excluded without judgement: {reason}"
+    assert waiting["DRE-101"]["reason"] == want
+    assert waiting["DRE-101"]["cycle"] is None
+    assert waiting["DRE-101"]["cycle_id"] is None
+    assert waiting["DRE-101"]["trigger"] is None
+    seq = {r["identifier"]: r for r in after["sequence"]}
+    assert seq["DRE-101"]["outcome"] == "not-now"
+    assert seq["DRE-101"]["reason"] == want
+    assert seq["DRE-101"]["cycle"] is None and seq["DRE-101"]["trigger"] is None
+    assert after["verify"]["excluded"] == [
+        {"identifier": "DRE-101", "reason": reason}]
+    assert after["verify"]["counts"]["excluded"] == 1
+    assert after["verify"]["slots_unfilled"] == 0
+    assert waiting["DRE-101"]["verify"]["verdict"] == "excluded"
+    assert after["id"] == groomer.proposal_id(after) != prop["id"]
+
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.VERIFIED_HEADING):]
+    assert "- excluded: 1" in block
+    assert f"- DRE-101 — {reason}" in block
+    table = text[text.index(groomer._BATCH_HEADING):text.index(
+        groomer.VERIFIED_HEADING)]
+    assert "| DRE-101 |" not in table
+    assert "DRE-101" not in "\n".join(groomer._render_not_now(after))
+
+
+def test_an_excluded_spare_takes_no_slot_and_is_listed_the_same_way(tmp_path):
+    prop = proposal()
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    reason = "hand-built"
+    run_verdict(tmp_path, "DRE-102", targets, raw=raw_answer(
+        tmp_path, "DRE-102", "obsolete", [PROOF_LINE]))
+    d = tmp_path / "verdicts" / "groom-verdict-DRE-104"
+    d.mkdir(parents=True)
+    write(d / "verdict.json", _excluded_doc("DRE-104", reason))
+    for other in ("DRE-101", "DRE-103", "DRE-105"):
+        run_verdict(tmp_path, other, targets, raw=raw_answer(
+            tmp_path, other, "still-needed", [PROOF_LINE]))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == ["DRE-101", "DRE-105", "DRE-103"]
+    assert "DRE-104" not in [r["identifier"] for r in cancel(after)]
+    waiting = {r["identifier"]: r for r in after["outcomes"]["not-now"]}
+    assert waiting["DRE-104"]["reason"] == f"excluded without judgement: {reason}"
+    assert waiting["DRE-104"]["trigger"] is None
+    seq = {r["identifier"]: r for r in after["sequence"]}
+    assert seq["DRE-104"]["outcome"] == "not-now"
+    assert seq["DRE-104"]["reason"] == f"excluded without judgement: {reason}"
+    assert after["verify"]["excluded"] == [
+        {"identifier": "DRE-104", "reason": reason}]
+    assert f"- DRE-104 — {reason}" in groomer.render_proposal(after)
+
+
+def test_a_document_saying_excluded_with_no_exclusion_reason_is_unreadable():
+    row = {"card": "DRE-101", "repository": "dreadnought-foundry/portico",
+           "repo_slug": "portico", "list": "planning"}
+    mark = gva._mark(row, _excluded_doc("DRE-101", "because I said so"))
+    assert (mark["verdict"], mark["reason"]) == ("unverified",
+                                                 "unreadable answer")
+    mark = gva._mark(row, _excluded_doc("DRE-101", "hand-built"))
+    assert (mark["verdict"], mark["reason"]) == ("excluded", "hand-built")
+    # A targets row that says the card was NOT excluded wins over the file.
+    mark = gva._mark({**row, "excluded": None},
+                     _excluded_doc("DRE-101", "hand-built"))
+    assert (mark["verdict"], mark["reason"]) == ("unverified",
+                                                 "unreadable answer")
+    # A targets row that says it WAS wins whatever the file says.
+    mark = gva._mark({**row, "excluded": "parent epic with 2 open children"},
+                     None)
+    assert (mark["verdict"], mark["reason"]) == (
+        "excluded", "parent epic with 2 open children")
+
+
+def _voice_of(monkeypatch, comment, verifier):
+    lops = CardText(issues={"DRE-101": issue_node("DRE-101",
+                                                  comments=[comment])})
+    monkeypatch.setattr(lops, "viewer_id", lambda: VIEWER)
+    [said] = targets_of(proposal(), lops, verifier)["DRE-101"]["context"][
+        "comments"]
+    return said
+
+
+def test_a_signed_console_answer_posted_with_the_pipeline_key_reads_ceo(monkeypatch):
+    verifier = FakeVerifier(None)
+    said = _voice_of(monkeypatch, comment_node(V.ANSWER_COMMENT, by=VIEWER),
+                     verifier)
+    assert said["by"] == "ceo"
+    assert "Go with option B" in said["body"]
+    assert verifier.checked == 1
+
+
+def test_a_refused_console_answer_reads_withheld_and_shows_none_of_its_text(monkeypatch):
+    said = _voice_of(monkeypatch, comment_node(V.ANSWER_COMMENT, by=VIEWER),
+                     FakeVerifier("its signature does not verify"))
+    assert said["by"] == "withheld"
+    assert "console answer receipt" in said["body"]
+    for line in V.ANSWER_COMMENT.splitlines():
+        if line.strip():
+            assert line.strip() not in said["body"]
+
+
+def test_a_comment_by_another_user_reads_person(monkeypatch):
+    said = _voice_of(monkeypatch, comment_node("Still broken.", by=SOMEONE),
+                     FakeVerifier(None))
+    assert (said["by"], said["body"]) == ("person", "Still broken.")
+
+
+def test_a_comment_by_the_pipeline_key_without_a_receipt_reads_pipeline(monkeypatch):
+    said = _voice_of(monkeypatch,
+                     comment_node("Answer from Sid: cancel it.", by=VIEWER),
+                     FakeVerifier(None))
+    assert said["by"] == "pipeline"
+
+
+def test_a_comment_with_no_user_reads_integration(monkeypatch):
+    said = _voice_of(monkeypatch, comment_node("Linked a PR.", by=None),
+                     FakeVerifier(None))
+    assert said["by"] == "integration"
+
+
+def test_an_unread_viewer_excludes_every_card_and_reads_no_card(tmp_path, monkeypatch):
+    issues = {
+        "DRE-101": issue_node("DRE-101", history=[
+            move_node(frm="Planning", to="Intake", days=1)]),
+        "DRE-102": issue_node("DRE-102", children=[("DRE-150", "Todo")]),
+    }
+    lops = CardText(issues=issues)
+    monkeypatch.setattr(lops, "viewer_id", lambda: None)
+    prop = small_proposal(5)
+    pfile, targets, matrix = build_targets(tmp_path, prop, lops=lops)
+
+    assert lops.asked == []
+    rows = read(targets)
+    assert [r["card"] for r in rows] == [f"DRE-{n}" for n in range(101, 106)]
+    for row in rows:
+        assert row["excluded"] == UNREAD
+        assert row["context"] is None
+    assert {r["repository"] for r in read(matrix)} == {""}
+    for row in rows:
+        run_verdict(tmp_path, row["card"], targets, outcome="skipped")
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == []
+    assert after["verify"]["counts"]["excluded"] == 5
+    text = groomer.render_proposal(after)
+    block = text[text.index(groomer.VERIFIED_HEADING):]
+    for row in rows:
+        assert f"- {row['card']} — {UNREAD}" in block
+    table = text[text.index(groomer._BATCH_HEADING):text.index(
+        groomer.VERIFIED_HEADING)]
+    for row in rows:
+        assert f"| {row['card']} |" not in table
+
+
+def test_targets_reads_the_viewer_once_then_one_request_per_card(tmp_path):
+    lops = CardText()
+    _, targets, _ = build_targets(tmp_path, small_proposal(5), lops=lops)
+    rows = read(targets)
+    assert len(rows) == 5
+    # The bodies name no file on purpose: DRE-5458 adds one request per
+    # file-naming card, and this count must stay true after it lands.
+    assert not any("." in r["body"].rstrip(".") for r in rows)
+    assert lops.calls == ["viewer"] + [r["card"] for r in rows]
+    assert all(r["excluded"] is None for r in rows)
+
+
+def test_the_fixture_row_carries_a_filled_context_and_no_exclusion():
+    [row] = read(FIXTURE)
+    assert row["excluded"] is None
+    ctx = row["context"]
+    assert set(ctx) == {"created_at", "age_days", "labels", "parent",
+                        "children", "last_moved", "comments"}
+    assert isinstance(ctx["age_days"], int)
+    assert ctx["labels"] == ["repo:agent-bureau"]
+    assert ctx["parent"] is None and ctx["children"] == []
+    assert ctx["last_moved"] is None
+    [comment] = ctx["comments"]
+    assert comment["by"] == "person" and comment["body"] and comment["at"]
+
+
+def test_prepare_over_the_fixture_shows_the_board_context_inside_the_fence():
+    [row] = read(FIXTURE)
+    text = gva.prepare([row], "DRE-4416",
+                       brief=BRIEF.read_text(encoding="utf-8"))
+    start = text.index(HEADING)
+    begin = text.index(gva.FENCE_BEGIN, start)
+    end = text.index(gva.FENCE_END, begin)
+    fenced = text[begin:end]
+    assert f"Age: {row['context']['age_days']} days" in fenced
+    assert "Labels: repo:agent-bureau" in fenced
+    assert "Parent: none" in fenced
+    assert "Last state move: none" in fenced
+    assert row["context"]["comments"][0]["body"] in fenced
+    assert ", by: person" in fenced
+
+
+def test_the_brief_describes_the_board_context_and_the_exclusions():
+    flat = " ".join(BRIEF.read_text(encoding="utf-8").split())
+    assert "The card's board context" in flat
+    for word in ("ceo", "person", "pipeline", "integration", "unknown",
+                 "withheld"):
+        assert f"`{word}`" in flat, word
+    assert "a move carries no signature" in flat
+    assert "a console move for the CEO reads `pipeline`" in flat
+    assert "decided before you run" in flat
+
+
+def test_the_doc_names_the_four_exclusions():
+    text = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+    section = text[text.index("### Compute, verify, then post"):
+                   text.index("## The decision vocabulary")]
+    flat = " ".join(section.split())
+    assert "What verify excludes without judging" in flat
+    for reason in ("parent epic with <n> open child(ren)", "hand-built",
+                   "moved into Intake on YYYY-MM-DD",
+                   "board context unread: <why>"):
+        assert f"`{reason}`" in flat, reason
+    assert "reads the move, not its author" in flat
+    assert "an epic with no open child is judged like any card" in flat
+    assert "dropped from the batch and stays where it is on the board" in flat
