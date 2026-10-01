@@ -49,10 +49,20 @@
 # script's machine-readable verdict.
 #
 # Triggered (via the product-repo stub) from both directions of the race: CI
-# finishing (workflow_run) and the critic verdict landing (issue_comment).
-# Whichever happens last merges. A person's approving review wakes it too
-# (pull_request_review, DRE-4341) — the one wake left for a card the gate
-# parked in Green Light while it waited on a required code-owner review.
+# finishing (workflow_run) and a verdict landing (issue_comment) — the
+# critic's, or since DRE-5228 the verifier's: a qa-bot comment carrying
+# "QA Critic" or "QA Verifier" wakes it, whichever workflows the stub's
+# workflow_run list happens to name. Whichever happens last merges. A
+# person's approving review wakes it too (pull_request_review, DRE-4341) —
+# the one wake left for a card the gate parked in Green Light while it
+# waited on a required code-owner review.
+#
+# A HOLD says so on the PR (DRE-5228). The stack, code-owner and
+# waiting-for-human arms always spoke; every other hold — a verifier FAIL, a
+# critic REQUEST_CHANGES, a stale or unbound verdict, a stack it cannot
+# read — used to end in a green run and nothing on the thread. It now posts
+# one note, `⏸️ Merge gate: declined @<head sha> — <reason>`, once per head
+# and reason, the reason being the decision script's own `reason=` line.
 #
 # Reusable workflow: permissions live in the calling stub (contents: read,
 # actions: write). Job-level concurrency stays here — it keys off
@@ -211,6 +221,18 @@ jobs:
     # other wake (its run's completion is not a `pull_request` event). The
     # one provable no-op, a comment on an already-closed PR, was 3 of 279.
     #
+    # DRE-5228 widened it by exactly one marker: a qa-bot "QA Verifier"
+    # comment wakes the gate too, inside the same author clause. Before, a
+    # Verifier FAIL woke the gate only where the calling stub's workflow_run
+    # list named `Verify` — agent-bureau's does, the scaffold's and this
+    # repo's own do not — so elsewhere the next look after a late FAIL was
+    # the sweep's nudge. The comment leg makes the wake independent of every
+    # stub's list, and the stubs already fire on every created comment. A
+    # SKIP and the neutral "could not run" notice wake it as well; the
+    # decision script treats the first as advisory and holds on the second.
+    # Where both wakes fire, the per-PR concurrency group serializes them
+    # and the hold note's marker makes the second a no-op.
+    #
     # pull_request_review leg (DRE-4341): a person's submitted APPROVING
     # review. A pull request held for a required code-owner review has its
     # card parked in Green Light, where the sweep dispatches nothing, so the
@@ -224,7 +246,7 @@ jobs:
         github.event.inputs.pr_number != '') ||
        (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'QA Critic') &&
+        (contains(github.event.comment.body, 'QA Critic') || contains(github.event.comment.body, 'QA Verifier')) &&
         github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') ||
        (github.event_name == 'pull_request_review' &&
         github.event.action == 'submitted' &&
@@ -654,6 +676,54 @@ jobs:
               --repo "$REPO_FULL" --pr "$PR" --author "$QA_LOGIN" \
               --head-sha "$SHA" --card "$CARD" --groups "$OWNER_HOLD"
             exit 0
+          fi
+          # DRE-5228: every OTHER hold says so on the PR — a verifier FAIL, a
+          # critic REQUEST_CHANGES, a stale or unbound verdict, a stack the
+          # gate cannot read. It used to fall through to the merge guard
+          # below: a green run and nothing on the thread. The stack and
+          # code-owner holds spoke above, so this arm takes a hold carrying
+          # neither line. ONE note through gate_note.py as the qa-bot, the
+          # only identity here that can comment. The reason is the decision
+          # script's own `reason=` line, verbatim, so the why is never
+          # restated in shell; no hold reason carries verdict-shaped text
+          # (tests/test_merge_gate_hold_note.py pins it), so the note never
+          # re-wakes the comment leg above.
+          #
+          # The marker carries the head AND the reason: gate_note.py reads a
+          # note as posted when its first line OPENS with the marker, so a
+          # head-only marker would match an earlier note with another reason
+          # and post nothing. A new head or reason posts; a repeat does not.
+          # That match also wants a word boundary right after the marker
+          # (merge_gate.opens_with_marker), which a reason ending on
+          # punctuation — the stack-UNKNOWN holds end `(DRE-4103)` — never
+          # leaves at the end of the line, so the marker drops trailing
+          # non-word characters while the first line keeps them whole.
+          #
+          # The bound (vendor premortem Q1): on a stub that keys Agent Fix's
+          # concurrency group on the commenter's login, this note queues a
+          # fix run that skips at its job gate, and GitHub keeps one PENDING
+          # run per group, so it can evict a verdict-triggered fix run still
+          # pending (DRE-2810). gate_note.py posts once per marker: at most
+          # one eviction per (head, reason) — once per critic rejection or
+          # verifier FAIL, never per wake — and the sweep's standing-verdict
+          # route re-dispatches an evicted run twenty minutes after the
+          # verdict (DRE-3130, DRE-5230). A stub keying the group on the
+          # comment body queues the note's run alone and evicts nothing.
+          # A failed post leaves the hold standing; the next wake retries.
+          if [ "$DECISION" = "hold" ] && [ -z "$STACKED" ] && [ -z "$OWNER_HOLD" ]; then
+            REASON=$(grep -m1 '^reason=' /tmp/gate-decision | cut -d= -f2-)
+            HOLD_LINE="Merge gate: declined @$SHA — $REASON"
+            HOLD_MARK=$(python3 -c 'import re, sys; print(re.sub(r"\W+$", "", sys.argv[1]))' "$HOLD_LINE")
+            printf '⏸️ %s\n\n%s\n' "$HOLD_LINE" \
+              "Not merged. The gate looks again on the next CI completion, review or sweep, and merges once nothing holds it." \
+              > /tmp/hold-note.md
+            python3 .bureau-pipeline/scripts/gate_note.py \
+              --repo "$REPO_FULL" \
+              --pr "$PR" \
+              --author "$QA_LOGIN" \
+              --marker "$HOLD_MARK" \
+              --body-file /tmp/hold-note.md \
+              || echo "the hold note did not post — the hold stands; the next evaluation tries again"
           fi
           [ "$DECISION" = "merge" ] || exit 0
 
