@@ -53,11 +53,19 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    replacement is not real goes back to the Planning list. No model call. The
    id is computed after, so the approval covers the checked lists. Below.
 9. **Posts, in its own job** (DRE-4971, wired by DRE-4972). The run is
-   compute, verify, then post — three jobs in `groomer.yml`:
+   compute, verify, then post — three jobs in `groomer.yml`, with the
+   lookups between the first two since DRE-5429:
    - **`groom`** runs `propose --card DRE-N --out proposal.json`, which
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
+   - **`lookup`** (DRE-5429) runs between them, one leg per owner in the
+     roster, each on that owner's own App token: an installation token sees
+     one installation, and the fleet spans three owners. Each leg runs
+     `groom_lookups.py owner` and uploads `groom-lookups-<owner>`; it holds
+     no Linear key and no model credential, and a leg whose token could not
+     be minted still uploads a document naming its owner unread. A dead leg
+     does not stop `verify`.
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
      only read that one repo, and holding no Linear key at all. Each agent
