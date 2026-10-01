@@ -1186,17 +1186,24 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "verdict present but merge never happened",
+      "anchor": "has not merged it; merge gate re-triggered",
       "kind": "undeclared-act",
-      "means": "A verdict bound to the head with no merge behind it re-triggers the merge gate.",
+      "means": "A verdict bound to the head with no merge behind it re-triggers the merge gate, counted per head against REVIEW_NUDGE_CAP and naming what stands on the head.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "no critic verdict after",
+      "anchor": "no critic verdict bound to this head after",
       "kind": "undeclared-act",
-      "means": "An open PR with no verdict past the review window re-triggers the critic.",
+      "means": "An open PR with no verdict bound to its head past the review window re-triggers the critic, counted per head against REVIEW_NUDGE_CAP.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "Re-triggering again would not change that",
+      "kind": "undeclared-act",
+      "means": "A review-lane nudge that has spent REVIEW_NUDGE_CAP on one head stops, labels the card needs-human and tells a person once per head what stands and the way back.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. DRE-5231 shipped it unconverted on purpose: an act ships console-first, and an Urgent stop on an uncapped loop must not wait on the console. Its key, `review-nudge-cap`, with the PR number and the head sha, is already the once-per-head key the sweep reads before posting it again."
     },
     {
       "file": "scripts/reconcile.py",
