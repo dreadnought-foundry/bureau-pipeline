@@ -1462,7 +1462,7 @@
       "step": "Evaluate and merge",
       "kind": "undeclared-act",
       "means": "The gate looked at this PR and declined to merge it — a verifier FAIL, a critic rejection, a stale verdict or a stack it could not read — and says so once per head and reason, quoting the decision script's own reason (DRE-5228).",
-      "why": "A status note, not an act: it records a decline the gate already made, and the same standing as the gate's waiting-for-human, stack and refresh notes beside it, none of which shipped as a registry row. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; here the marker is the head and the reason, so a trailer is a change to that idempotence key, and the card that converts the human note owns this one with it."
+      "why": "A status note, not an act: it records a decline the gate already made, and has the same standing as the gate's waiting-for-human, stack and refresh notes beside it, none of which shipped as a registry row. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; here the marker is the head and the reason, so a trailer is a change to that idempotence key, and the card that converts the human note owns this one with it."
     },
     {
       "file": "scripts/code_owner_hold.py",
