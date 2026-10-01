@@ -61,6 +61,7 @@ UPLOADER = SCRIPTS / "upload_agent_log.py"
 
 sys.path.insert(0, str(SCRIPTS))
 import check_death_receipts as receipts  # noqa: E402
+from model_fallback import EFFORT_LEVELS  # noqa: E402
 
 #: The six reusable workflow jobs that run an agent for a card and so keep a
 #: working log. The same six as `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
@@ -344,10 +345,10 @@ class UploaderBehaviourTest(unittest.TestCase):
         Path(env["RUNNER_TEMP"]).mkdir(parents=True, exist_ok=True)
         return env
 
-    def _run(self, log=None, secrets=None, env=None):
+    def _run(self, log=None, secrets=None, env=None, extra=()):
         return subprocess.run(
             [sys.executable, str(UPLOADER), "--log-file",
-             str(self.log if log is None else log)],
+             str(self.log if log is None else log), *extra],
             input=json.dumps({"BUREAU_TOKEN": self.SECRET})
             if secrets is None else secrets,
             capture_output=True, text=True, env=env or self._env(),
@@ -411,6 +412,63 @@ class UploaderBehaviourTest(unittest.TestCase):
         self._run()
         self.assertTrue(_TokenHandler.seen, "no OIDC token was requested")
         self.assertEqual(_TokenHandler.seen[0]["audience"], "sts.amazonaws.com")
+
+    # ---- the run's effort level, as S3 user metadata (DRE-4906) ---------
+    # The level is decided per model in config/models.yaml, and that config
+    # changes, so the value read later is not the value the run had. The run
+    # hands it over and the put writes it down: key `effort`
+    # (`x-amz-meta-effort`), exactly one of EFFORT_LEVELS, or absent.
+
+    def test_an_upload_given_an_effort_records_it_as_metadata(self):
+        result = self._run(extra=["--effort", "high"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self._calls()
+        self.assertEqual(len(calls), 1,
+                         f"the metadata must ride the one put, got {calls}")
+        self.assertIn("--metadata effort=high", calls[0])
+        self.assertIn("--if-none-match", calls[0])
+
+    def test_every_level_the_cli_accepts_is_recorded_as_given(self):
+        for level in EFFORT_LEVELS:
+            with self.subTest(effort=level):
+                self.aws_calls.unlink(missing_ok=True)
+                result = self._run(extra=["--effort", level])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = self._calls()
+                self.assertEqual(len(calls), 1, calls)
+                self.assertIn(f"--metadata effort={level}", calls[0])
+
+    def test_an_upload_given_no_effort_writes_no_effort_key(self):
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self._calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertNotIn("--metadata", calls[0])
+        self.assertNotIn("effort=", calls[0])
+
+    def test_a_value_outside_the_levels_is_refused_and_the_log_still_kept(self):
+        for value in ("High", "extreme", "", "high "):
+            with self.subTest(effort=value):
+                self.assertNotIn(value, EFFORT_LEVELS)
+                self.aws_calls.unlink(missing_ok=True)
+                result = self._run(extra=["--effort", value])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = self._calls()
+                self.assertEqual(len(calls), 1,
+                                 f"a refused effort must not stop the upload: "
+                                 f"{calls}")
+                self.assertNotIn("--metadata", calls[0])
+                self.assertNotIn("effort=", calls[0])
+                self.assertIn("effort not recorded", result.stdout)
+
+    def test_a_failed_upload_with_an_effort_still_exits_zero(self):
+        self._write_aws(exit_code=1, stderr="An error occurred (AccessDenied)")
+        result = self._run(extra=["--effort", "high"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self._calls()), 1)
+        result = self._run(env=self._env(ACTIONS_ID_TOKEN_REQUEST_URL=None),
+                           extra=["--effort", "extreme"])
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     # ---- the credential claims, pinned against the real process ---------
     # Every one of these was true when the module docstring first said so and
