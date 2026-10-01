@@ -360,6 +360,16 @@ _HARNESS_SUMMARY_HEADER = "== harness summary =="
 _HARNESS_FAILURE_RE = re.compile(r"(?:^|\s)(\w+): ((?:FAIL|BLOCKED) at \w+)\s*$")
 
 
+#: What never makes a surface owe a release (DRE-5375, the CEO's rule of
+#: 2026-09-30): `*.md` anywhere and anything under a `docs/` directory. Handed
+#: to git as `:(exclude,glob)` pathspecs after the surface's paths, so git does
+#: the matching and the rule lives here once. A surface's `ignore` replaces it.
+DOCUMENTATION_IGNORE = ("**/*.md", "**/docs/**")
+
+#: How many documentation files a `current` line names before it says `…`.
+DOCUMENTATION_NAMED = 5
+
+
 class Field(NamedTuple):
     """One key of a surface, once — the schema check and `docs/` both read
     this table, so the document cannot drift from what is enforced."""
@@ -383,7 +393,8 @@ SCHEMA: tuple[Field, ...] = (
     Field("paths", "list of paths",
           "What counts as changed. `[]` means every commit counts. A surface "
           "whose paths are untouched since its newest tag reads current, and "
-          "the train exits a no-op saying so."),
+          "the train exits a no-op saying so. Documentation is ignored by "
+          "default — see `ignore`."),
     Field("script", "path in the caller, or null",
           "The surface's own release script, called as `bash <script> "
           "--surface <name>` with `RELEASE_SHA` in the environment and the "
@@ -418,6 +429,15 @@ SCHEMA: tuple[Field, ...] = (
           "the script cuts. `channel` is a moving tag another train advances: "
           "the release train never runs it, and deploy-lag measures it by "
           "compare."),
+    Field("ignore", "list of path globs",
+          "What never counts as changed, even under `paths` (DRE-5375). "
+          "**Optional** — omit it and the surface ignores documentation: "
+          "`*.md` anywhere and anything under a `docs/` directory "
+          f"(`{'`, `'.join(DOCUMENTATION_IGNORE)}`), so a note can never "
+          "start, or block, a release. Declare a list and it replaces that "
+          "set; `[]` turns the exclusion off. The globs are git's: `**/` "
+          "matches any depth, including none.",
+          optional=True),
 )
 
 REQUIRED_FIELDS = tuple(f.name for f in SCHEMA
@@ -442,6 +462,9 @@ class Surface(NamedTuple):
     #: value either way — this only says where it came from, so the line can
     #: say "overriding the fleet default" and mean it.
     declared_window: bool = False
+    #: The globs that never count as changed (DRE-5375): the surface's own
+    #: `ignore`, or `DOCUMENTATION_IGNORE` when it declares none.
+    ignore: tuple = DOCUMENTATION_IGNORE
 
 
 class Channel(NamedTuple):
@@ -573,6 +596,7 @@ def surface(name: str, data: dict) -> Surface:
     hour" and is the one reading of a missing field that must not be silent.
     """
     declared = isinstance(data.get("window"), str) and bool(data.get("window"))
+    ignore = data.get("ignore")
     return Surface(
         name=name,
         tag_series=list(data.get("tag_series") or []),
@@ -585,6 +609,8 @@ def surface(name: str, data: dict) -> Surface:
         identity=str(data.get("identity") or ""),
         record=str(data.get("record") or "tag"),
         declared_window=declared,
+        ignore=(tuple(ignore) if isinstance(ignore, list)
+                else DOCUMENTATION_IGNORE),
     )
 
 
@@ -643,6 +669,13 @@ def _check_surface(name: str, entry: dict, repo_root=None) -> list:
         or not all(isinstance(p, str) and p for p in paths)
     ):
         bad("paths", "must be a list of paths (`[]` means every commit)")
+
+    ignore = entry.get("ignore")
+    if "ignore" in entry and (
+        not isinstance(ignore, list)
+        or not all(isinstance(g, str) and g for g in ignore)
+    ):
+        bad("ignore", "must be a list of path globs (`[]` ignores nothing)")
 
     spacing = entry.get("spacing_minutes")
     if "spacing_minutes" in entry and (
@@ -978,7 +1011,8 @@ def brake(raw=None) -> str | None:
 
 
 def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
-           dispatched: bool = False, channel: Channel | None = None) -> Decision:
+           dispatched: bool = False, channel: Channel | None = None,
+           documentation: tuple = ()) -> Decision:
     """The whole rule, as one answer with a plain sentence.
 
     `lag_state` is `"current"` or `"behind"` (this module's `lag_state()`
@@ -1020,11 +1054,7 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
             f"dispatch naming it")
 
     if lag_state == "current":
-        where = ", ".join(surface.paths) or "the whole repository"
-        return Decision(
-            NO_OP, "current",
-            f"{surface.name} reads current: nothing under {where} has changed "
-            f"since its newest tag")
+        return Decision(NO_OP, "current", current_reason(surface, documentation))
 
     if newest_tag_at is not None and surface.spacing_minutes > 0:
         elapsed = now - newest_tag_at
@@ -1737,7 +1767,13 @@ def newest_tag(repo_root, series):
     return None, None
 
 
-def lag_state(repo_root, tag, sha, paths) -> str:
+def _pathspec(paths, ignore) -> list:
+    """The surface's paths, then each ignored glob as a git exclusion — with
+    no paths the exclusions apply against the whole tree."""
+    return [*paths, *(f":(exclude,glob){glob}" for glob in ignore)]
+
+
+def lag_state(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> str:
     """`"behind"` when the surface owes a release, `"current"` when it does not.
 
     No tag at all is BEHIND — the first release of a surface is exactly the
@@ -1748,6 +1784,10 @@ def lag_state(repo_root, tag, sha, paths) -> str:
     older than the newest tag whenever a slow CI on X finishes after Y was
     released. `diff Y..X` is non-empty in the reverse direction and would
     read X as behind — and tag backwards.
+
+    A change matching `ignore` never counts (DRE-5375): by default that is
+    documentation, so a surface whose only changes since its tag are notes
+    reads current. git does the matching, through `_pathspec`.
     """
     if not tag:
         return "behind"
@@ -1758,9 +1798,39 @@ def lag_state(repo_root, tag, sha, paths) -> str:
     if contained.returncode == 0:
         return "current"
     args = ["diff", "--name-only", f"{tag}..{sha}"]
-    if paths:
-        args += ["--", *paths]
+    spec = _pathspec(paths, ignore)
+    if spec:
+        args += ["--", *spec]
     return "behind" if _git(repo_root, *args) else "current"
+
+
+def ignored_changes(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> tuple:
+    """The files under `paths` changed from `tag` to `sha` that `ignore`
+    kept from counting — what a `current` line names, so "only
+    documentation changed" is said with the files, never assumed."""
+    if not tag or not ignore:
+        return ()
+    args = ["diff", "--name-only", f"{tag}..{sha}"]
+    every = _git(repo_root, *args, *(["--", *paths] if paths else []))
+    counted = _git(repo_root, *args, "--", *_pathspec(paths, ignore))
+    kept = set(counted.splitlines())
+    return tuple(f for f in every.splitlines() if f and f not in kept)
+
+
+def current_reason(surface, documentation=()) -> str:
+    """The `current` no-op's sentence. With `documentation` — the files
+    `ignored_changes` found — it says only documentation changed and names
+    up to `DOCUMENTATION_NAMED` of them."""
+    where = ", ".join(surface.paths) or "the whole repository"
+    if not documentation:
+        return (f"{surface.name} reads current: nothing under {where} has "
+                f"changed since its newest tag")
+    named = ", ".join(documentation[:DOCUMENTATION_NAMED])
+    if len(documentation) > DOCUMENTATION_NAMED:
+        named += ", …"
+    return (f"{surface.name} reads current: only documentation changed under "
+            f"{where} since its newest tag ({len(documentation)} file(s): "
+            f"{named})")
 
 
 def tag_is_annotated(repo_root, tag) -> bool:
@@ -1839,7 +1909,8 @@ def walk(surface, *, repo_root, head, tag, checks_for, bound=WALK_BOUND) -> Walk
     skipped: list[Skipped] = []
     read = 0
     for sha in shas:
-        if lag_state(repo_root, tag, sha, surface.paths) == "current":
+        if lag_state(repo_root, tag, sha, surface.paths,
+                     ignore=surface.ignore) == "current":
             return Walk(None, None, tuple(skipped), read, True)
         checks = checks_for(sha)
         read += 1
@@ -1849,7 +1920,8 @@ def walk(surface, *, repo_root, head, tag, checks_for, bound=WALK_BOUND) -> Walk
     return Walk(None, None, tuple(skipped), read, not more)
 
 
-def walk_decision(surface, found: Walk, *, head: str, tag, bound=WALK_BOUND) -> Decision:
+def walk_decision(surface, found: Walk, *, head: str, tag, bound=WALK_BOUND,
+                  documentation: tuple = ()) -> Decision:
     """The walk's answer as one decision whose sentence names the chosen
     commit and every skipped one with its reason."""
     stepped = ("; stepped past " + ", ".join(s.describe() for s in found.skipped)
@@ -1892,11 +1964,7 @@ def walk_decision(surface, found: Walk, *, head: str, tag, bound=WALK_BOUND) -> 
             + " — a red commit is never released")
 
     # Every candidate read current before any check was read.
-    where = ", ".join(surface.paths) or "the whole repository"
-    return Decision(
-        NO_OP, "current",
-        f"{surface.name} reads current: nothing under {where} has changed "
-        f"since its newest tag")
+    return Decision(NO_OP, "current", current_reason(surface, documentation))
 
 
 # ---------------------------------------------------------------------------
@@ -1991,9 +2059,12 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     run.
     """
     tag, tag_at = newest_tag(repo_root, surface.tag_series)
-    lag = lag_state(repo_root, tag, sha, surface.paths)
+    lag = lag_state(repo_root, tag, sha, surface.paths, ignore=surface.ignore)
+    documentation = (ignored_changes(repo_root, tag, sha, surface.paths,
+                                     surface.ignore)
+                     if lag == "current" else ())
     decision = decide(surface, now, tag_at, lag, ASSUMED_GREEN, brake,
-                      dispatched=dispatched)
+                      dispatched=dispatched, documentation=documentation)
     if decision.releases:
         settled = checks() if callable(checks) else checks
         decision = decide(surface, now, tag_at, lag, settled, brake,
@@ -2050,9 +2121,14 @@ def plan(data, *, repo_root, head, now, brake=None, dispatched_surface=None,
                 channel = Channel(CHANNEL_UNKNOWN, None, None, None, head,
                                   None, (), str(err))
         tag, tag_at = newest_tag(repo_root, entry.tag_series)
-        lag = lag_state(repo_root, tag, head, entry.paths)
+        lag = lag_state(repo_root, tag, head, entry.paths, ignore=entry.ignore)
+        documentation = (ignored_changes(repo_root, tag, head, entry.paths,
+                                         entry.ignore)
+                         if lag == "current" and entry.record != "channel"
+                         else ())
         decision = decide(entry, now, tag_at, lag, ASSUMED_GREEN, brake,
-                          dispatched=bool(dispatched_surface), channel=channel)
+                          dispatched=bool(dispatched_surface), channel=channel,
+                          documentation=documentation)
         if decision.releases:
             try:
                 found = walk(entry, repo_root=repo_root, head=head, tag=tag,
@@ -2156,6 +2232,29 @@ def render_markdown() -> str:
         "because a wake-up that silently did not happen is the whole fault "
         "being fixed. Each woken train then applies its own rules, nothing "
         "bypassed."
+    )
+    w("")
+    w("## Documentation never owes a release")
+    w("")
+    w(
+        "**DRE-5375, the CEO's rule of 2026-09-30.** A documentation-only "
+        "change never, by itself, makes a surface owe a release, starts a "
+        "production lap, or blocks one. The lag check hands git the surface's "
+        "`paths` followed by each glob of its `ignore` as a "
+        "`:(exclude,glob)` pathspec — by default "
+        f"`{'` and `'.join(DOCUMENTATION_IGNORE)}`, which is `*.md` anywhere "
+        "and anything under a `docs/` directory — so a surface whose `paths` "
+        "include a whole directory such as `infra/` does not run a lap for a "
+        "README. A surface whose only changes since its newest tag are "
+        "ignored reads `current`, and its line names them: `<surface> reads "
+        "current: only documentation changed under <paths> since its newest "
+        f"tag (N file(s): a, b, …)`, at most {DOCUMENTATION_NAMED} names. The "
+        "walk needs no rule of its own: each candidate is judged by "
+        "everything from the tag to it, so a documentation commit directly "
+        "on the tag ends the walk with nothing released, and one on top of "
+        "unreleased code still reads behind and may be chosen, because it "
+        "contains the code that is owed. Declare `ignore` to replace the "
+        "set, or `\"ignore\": []` to count every file again."
     )
     w("")
     w("## A Linear release, by declaring one key")
@@ -2402,7 +2501,9 @@ _ORDER = (
     ("auto-false", NO_OP, "unattended runs skip an `auto: false` surface; a "
                           "hand dispatch runs it"),
     ("current", NO_OP, "nothing under the surface's `paths` has changed since "
-                       "its newest tag"),
+                       "its newest tag, or only what its `ignore` names — "
+                       "documentation by default, and the line names up to "
+                       f"{DOCUMENTATION_NAMED} of those files (DRE-5375)"),
     ("spacing", NO_OP, "the newest tag in the series is younger than "
                        "`spacing_minutes`; the line names the first whole "
                        "minute a release may be cut, and the run re-arms "

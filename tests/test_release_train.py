@@ -1364,7 +1364,7 @@ def test_the_13_44_pt_fixture_releases_the_green_parent_behind_a_still_checking_
     monkeypatch.setattr(release_train, "candidates",
                         lambda repo_root, head_, tag, bound: ([head, parent], False))
     monkeypatch.setattr(release_train, "lag_state",
-                        lambda repo_root, tag, sha, paths: "behind")
+                        lambda repo_root, tag, sha, paths, **_: "behind")
     repo = _fake_repo(tmp_path)
     data = {"surfaces": {"console": _good_surface_data(auto=False)}}
     plan = release_train.plan(
@@ -1693,3 +1693,220 @@ def test_the_standard_says_ready_is_a_commit():
     assert "ready is a commit" in body.lower()
     assert "DRE-3266" in body
     assert "dispatch again once CI has answered" not in body
+
+
+# --------------------------------------------------------------------------
+# DRE-5375, the CEO's rule of 2026-09-30: documentation never makes a surface
+# owe a release. agent-bureau's console declares `infra/` among its paths, and
+# a documentation note under `infra/deploy/stacks/` would otherwise run a
+# full production lap. `*.md` anywhere and anything under a `docs/` directory
+# are excluded by default; a surface's optional `ignore` replaces that set.
+# --------------------------------------------------------------------------
+
+#: The two fleet `release.json` surfaces as of 2026-09-30, `$`-notes and
+#: `linear_pipelines` omitted — copied from the card, never read across repos.
+AGENT_BUREAU_CONSOLE = {
+    "tag_series": ["agent-bureau-console-v*", "console-v*"],
+    "paths": ["console/", "infra/"],
+    "script": "infra/release-console.sh",
+    "rollback": "make rollback-console VERSION=<tag>",
+    "spacing_minutes": 30,
+    "window": "always",
+    "auto": True,
+    "identity": "bureau-console-release-role",
+    "record": "tag",
+}
+
+PORTICO_PORTALS = {
+    "tag_series": ["portico-portals-v*"],
+    "paths": ["infra/", "client/", "forms/"],
+    "script": "infra/release-portals.sh",
+    "rollback": "make rollback-portals VERSION=<tag>",
+    "spacing_minutes": 30,
+    "window": "always",
+    "auto": True,
+    "identity": "portico-release-role",
+    "record": "tag",
+}
+
+CONSOLE_PATHS = ("console/", "infra/")
+
+
+def _docs_repo(tmp_path, **over):
+    """The demo caller with the console's paths, tagged at its first commit
+    so the spacing has elapsed and only the lag decides."""
+    repo = _fake_repo(tmp_path, paths=CONSOLE_PATHS)
+    if over:
+        path = repo / ".github" / "bureau" / "release.json"
+        data = json.loads(path.read_text())
+        data["surfaces"]["demo"].update(over)
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "the surface, overridden")
+    _tag_head(repo)
+    return repo
+
+
+def _demo_surface(repo):
+    data = release_train.load(repo / ".github" / "bureau" / "release.json")
+    return release_train.surfaces(data)["demo"]
+
+
+def test_a_documentation_note_under_infra_reads_current_and_is_named(tmp_path):
+    repo = _docs_repo(tmp_path)
+    sha = _commit(repo, "infra/deploy/stacks/X.md", message="a stack note")
+    entry = _demo_surface(repo)
+
+    assert release_train.lag_state(
+        repo, "demo/v0", sha, entry.paths, ignore=entry.ignore) == "current"
+
+    reader = _Reader({})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.NO_OP, decision.reason
+    assert decision.code == "current"
+    assert reader.reads == [], "a documentation-only surface reads no check"
+    assert decision.reason == (
+        "demo reads current: only documentation changed under console/, "
+        "infra/ since its newest tag (1 file(s): infra/deploy/stacks/X.md)")
+    assert release_train.matrix(_plan(repo, reader)) == []
+
+    # The surface job's own decision says the same, and cuts nothing.
+    released = _release(repo, sha=sha)
+    assert released.code == "current"
+    assert "infra/deploy/stacks/X.md" in released.reason
+    assert _git(repo, "tag", "-l").splitlines() == ["demo/v0"]
+
+
+def test_a_documentation_change_beside_a_code_change_reads_behind(tmp_path):
+    repo = _docs_repo(tmp_path)
+    _commit(repo, "infra/deploy/stacks/X.md", message="a stack note")
+    sha = _commit(repo, "infra/lib/stack.py", message="a real CDK change")
+    entry = _demo_surface(repo)
+    assert release_train.lag_state(
+        repo, "demo/v0", sha, entry.paths, ignore=entry.ignore) == "behind"
+    decision = _only(_plan(repo, _Reader({sha: green()})))
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == sha
+
+
+def test_a_change_under_a_docs_directory_alone_reads_current(tmp_path):
+    repo = _docs_repo(tmp_path)
+    sha = _commit(repo, "console/docs/guide.txt", message="a guide")
+    entry = _demo_surface(repo)
+    assert release_train.lag_state(
+        repo, "demo/v0", sha, entry.paths, ignore=entry.ignore) == "current"
+    decision = _only(_plan(repo, _Reader({})))
+    assert decision.code == "current"
+    assert "console/docs/guide.txt" in decision.reason
+
+
+def test_a_root_readme_on_a_whole_repository_surface_reads_current(tmp_path):
+    """`paths: []` means every commit — the exclusion still applies across
+    the whole tree."""
+    repo = _fake_repo(tmp_path, paths=())
+    _tag_head(repo)
+    sha = _commit(repo, "README.md", message="a readme")
+    assert release_train.lag_state(repo, "demo/v0", sha, []) == "current"
+    decision = _only(_plan(repo, _Reader({})))
+    assert decision.code == "current"
+    assert "the whole repository" in decision.reason
+    assert "README.md" in decision.reason
+
+
+def test_ignore_empty_turns_the_exclusion_off(tmp_path):
+    repo = _docs_repo(tmp_path, ignore=[])
+    sha = _commit(repo, "infra/deploy/stacks/X.md", message="a stack note")
+    entry = _demo_surface(repo)
+    assert entry.ignore == ()
+    assert release_train.lag_state(
+        repo, "demo/v0", sha, entry.paths, ignore=entry.ignore) == "behind"
+    decision = _only(_plan(repo, _Reader({sha: green()})))
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == sha
+
+
+def test_a_declared_ignore_replaces_the_default_set(tmp_path):
+    repo = _docs_repo(tmp_path, ignore=["**/*.txt"])
+    entry = _demo_surface(repo)
+    assert entry.ignore == ("**/*.txt",)
+    note = _commit(repo, "console/docs/guide.md", message="a guide")
+    assert release_train.lag_state(
+        repo, "demo/v0", note, entry.paths, ignore=entry.ignore) == "behind"
+
+
+def test_an_omitted_ignore_is_the_documentation_default():
+    entry = release_train.surface("console", dict(AGENT_BUREAU_CONSOLE))
+    assert entry.ignore == release_train.DOCUMENTATION_IGNORE
+    assert set(release_train.DOCUMENTATION_IGNORE) == {"**/*.md", "**/docs/**"}
+
+
+def test_the_current_line_names_at_most_five_documentation_files(tmp_path):
+    repo = _docs_repo(tmp_path)
+    for i in range(7):
+        _commit(repo, f"infra/notes/n{i}.md", message=f"note {i}")
+    decision = _only(_plan(repo, _Reader({})))
+    assert decision.code == "current"
+    assert decision.reason.endswith(
+        "(7 file(s): infra/notes/n0.md, infra/notes/n1.md, infra/notes/n2.md, "
+        "infra/notes/n3.md, infra/notes/n4.md, …)"), decision.reason
+
+
+def test_the_walk_chooses_nothing_when_the_only_commit_is_documentation(tmp_path):
+    repo = _docs_repo(tmp_path)
+    head = _commit(repo, "infra/deploy/stacks/X.md", message="a stack note")
+    reader = _Reader({head: green()})
+    found = release_train.walk(_demo_surface(repo), repo_root=repo, head=head,
+                               tag="demo/v0", checks_for=reader)
+    assert found.chosen is None
+    assert found.exhausted
+    assert reader.reads == [], "a documentation commit is never read for checks"
+
+
+def test_the_walk_chooses_a_documentation_commit_that_carries_owed_code(tmp_path):
+    """The candidate is judged by everything from the tag to it, so a note on
+    top of an unreleased code change still contains the code that is owed."""
+    repo = _docs_repo(tmp_path)
+    code = _commit(repo, "console/backend/app.py", message="owed code")
+    head = _commit(repo, "infra/deploy/stacks/X.md", message="a stack note")
+    reader = _Reader({head: green(), code: green()})
+    found = release_train.walk(_demo_surface(repo), repo_root=repo, head=head,
+                               tag="demo/v0", checks_for=reader)
+    assert found.chosen == head
+    assert reader.reads == [head]
+    decision = _only(_plan(repo, _Reader({head: green(), code: green()})))
+    assert decision.act == release_train.RELEASE and decision.sha == head
+
+
+@pytest.mark.parametrize("fixture", [AGENT_BUREAU_CONSOLE, PORTICO_PORTALS],
+                         ids=["agent-bureau-console", "portico-portals"])
+def test_the_fleet_surfaces_validate_with_and_without_ignore(fixture):
+    assert "ignore" not in fixture
+    assert release_train.check_schema({"surfaces": {"s": dict(fixture)}}) == []
+    declared = {**fixture, "ignore": ["**/*.md"]}
+    assert release_train.check_schema({"surfaces": {"s": declared}}) == []
+    assert release_train.check_schema(
+        {"surfaces": {"s": {**fixture, "ignore": []}}}) == []
+
+
+@pytest.mark.parametrize("bad", ["**/*.md", [""], [3], None])
+def test_a_malformed_ignore_is_refused_by_name(bad):
+    problems = release_train.check_schema(
+        {"surfaces": {"console": {**AGENT_BUREAU_CONSOLE, "ignore": bad}}})
+    assert any(p.startswith("console.ignore:") for p in problems), problems
+
+
+def test_ignore_is_optional_and_documented():
+    field = next(f for f in release_train.SCHEMA if f.name == "ignore")
+    assert field.optional
+    assert "ignore" not in release_train.REQUIRED_FIELDS
+    paths = next(f for f in release_train.SCHEMA if f.name == "paths")
+    assert "documentation" in paths.means.lower()
+    rendered = release_train.render_markdown()
+    assert "`ignore` *(optional)*" in rendered
+    assert "DRE-5375" in rendered
+
+
+def test_the_standard_says_documentation_never_owes_a_release():
+    body = STANDARD.read_text()
+    assert "DRE-5375" in body
+    assert "documentation" in body.lower() and "`ignore`" in body
