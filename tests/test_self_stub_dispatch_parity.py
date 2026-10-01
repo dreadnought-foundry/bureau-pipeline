@@ -47,6 +47,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -70,7 +71,7 @@ def _on(doc: dict) -> dict:
 def _load(name: str) -> dict:
     path = WORKFLOWS / name
     assert path.is_file(), f"missing workflow {name}"
-    return yaml.safe_load(path.read_text())
+    return yaml.safe_load(step_shell.workflow_source(path))
 
 
 class TestResolvers:
@@ -222,7 +223,7 @@ class TestNoLiteralDispatchOfReusables:
 
     def test_workflows_never_hardcode_a_workflow_call_only_target(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):
-            for name in re.findall(self.WF_PATTERN, path.read_text()):
+            for name in re.findall(self.WF_PATTERN, step_shell.workflow_source(path)):
                 self._assert_dispatchable(name, f".github/workflows/{path.name}")
 
 
@@ -234,7 +235,7 @@ class TestMergeGateDirtyArmResolves:
     def test_dirty_arm_resolves_self_stub(self):
         doc = _load("merge-gate.yml")
         runs = [
-            s["run"]
+            step_shell.step_shell(s)
             for s in doc["jobs"]["evaluate"]["steps"]
             if s.get("name") == "Evaluate and merge"
         ]

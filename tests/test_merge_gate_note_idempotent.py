@@ -50,6 +50,7 @@ import sys  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import gate_note  # noqa: E402
+import step_shell  # noqa: E402
 
 # The live literals: the marker merge-gate.yml posts and the harness asserts
 # (scripts/harness/scenarios/gate_paths.py HUMAN_WAIT_MARKER).
@@ -572,12 +573,12 @@ class CliSmokeTest(unittest.TestCase):
 
 # ── workflow wiring ─────────────────────────────────────────────────────────
 def _doc():
-    return yaml.safe_load(WORKFLOW.read_text())
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOW))
 
 
 def _evaluate_block():
     steps = _doc()["jobs"]["evaluate"]["steps"]
-    runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+    runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
     assert len(runs) == 1, "expected exactly one 'Evaluate and merge' step"
     return runs[0]
 

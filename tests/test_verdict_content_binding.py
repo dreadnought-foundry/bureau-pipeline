@@ -74,6 +74,7 @@ os.environ.setdefault("REPO_SLUG", "test")
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
+import step_shell  # noqa: E402
 import verdict_content  # noqa: E402
 
 HEAD = "aa11" * 10  # the PR's current head
@@ -828,9 +829,9 @@ class MergeGateWiringTest(unittest.TestCase):
     verdict leaves a record on the PR."""
 
     def setUp(self):
-        doc = yaml.safe_load(MERGE_GATE_YML.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(MERGE_GATE_YML))
         steps = doc["jobs"]["evaluate"]["steps"]
-        runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+        runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
         assert len(runs) == 1
         self.run_block = runs[0]
 
@@ -896,7 +897,7 @@ class ProducerLineTest(unittest.TestCase):
 
     @staticmethod
     def extract(path, prefix):
-        lines = [ln.strip() for ln in path.read_text().splitlines()
+        lines = [ln.strip() for ln in step_shell.workflow_source(path).splitlines()
                  if ln.strip().startswith(prefix)]
         assert len(lines) == 1, f"expected one {prefix!r} line in {path.name}"
         return lines[0]
@@ -949,10 +950,10 @@ class ProducerWiringTest(unittest.TestCase):
     GitHub's own compare record, through the one module."""
 
     def block(self, workflow, step_name):
-        doc = yaml.safe_load(workflow.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(workflow))
         job = next(iter(doc["jobs"].values()))
         step = next(s for s in job["steps"] if s.get("name") == step_name)
-        return step["run"]
+        return step_shell.step_shell(step)
 
     def test_qa_review_computes_the_id_for_the_reviewed_sha(self):
         block = self.block(QA_REVIEW_YML, "Resolve PR")
@@ -968,7 +969,7 @@ class ProducerWiringTest(unittest.TestCase):
     def test_both_producers_thread_the_id_into_the_verdict_step(self):
         for workflow, step in ((QA_REVIEW_YML, "Post verdict or neutral status"),
                                (VERIFY_YML, "Post verdict or neutral status")):
-            doc = yaml.safe_load(workflow.read_text())
+            doc = yaml.safe_load(step_shell.workflow_source(workflow))
             job = next(iter(doc["jobs"].values()))
             s = next(x for x in job["steps"] if x.get("name") == step)
             self.assertIn("CONTENT_ID", s.get("env", {}),
@@ -1060,28 +1061,28 @@ class SkipReadsTheGatesRecordsTest(unittest.TestCase):
 
     def setUp(self):
         self.step = next(
-            s for s in yaml.safe_load(QA_REVIEW_YML.read_text())
+            s for s in yaml.safe_load(step_shell.workflow_source(QA_REVIEW_YML))
             ["jobs"]["review"]["steps"]
             if "should_review_pr.py" in (s.get("run") or "")
         )
 
     def test_the_commit_record_is_fetched_and_passed(self):
-        self.assertIn("/commits?per_page=100", self.step["run"])
-        self.assertIn("--pr-commits-file", self.step["run"])
+        self.assertIn("/commits?per_page=100", step_shell.step_shell(self.step))
+        self.assertIn("--pr-commits-file", step_shell.step_shell(self.step))
 
     def test_the_commit_fetch_fails_soft_to_no_carry(self):
         """A blip must mean "review" (cheap), never a red run or a carry on
         unverifiable data — the `[]` substitute merge-gate.yml also writes."""
-        fetch = next(ln for ln in self.step["run"].splitlines()
+        fetch = next(ln for ln in step_shell.step_shell(self.step).splitlines()
                      if "/commits?per_page=100" in ln)
-        idx = self.step["run"].splitlines().index(fetch)
+        idx = step_shell.step_shell(self.step).splitlines().index(fetch)
         self.assertIn("|| echo '[]'",
-                      self.step["run"].splitlines()[idx + 1])
+                      step_shell.step_shell(self.step).splitlines()[idx + 1])
 
     def test_it_fetches_what_the_gate_fetches(self):
         """Same call shape as merge-gate.yml, so neither can read a record
         the other cannot."""
-        gate = MERGE_GATE_YML.read_text()
+        gate = step_shell.workflow_source(MERGE_GATE_YML)
         self.assertIn("/commits?per_page=100", gate)
 
 
@@ -1386,7 +1387,7 @@ class SkipRepublishesTheHeadBoundCheckTest(unittest.TestCase):
     DISPATCH App token (qa-bot holds checks:read only)."""
 
     def setUp(self):
-        self.doc = yaml.safe_load(QA_REVIEW_YML.read_text())
+        self.doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW_YML))
         self.steps = self.doc["jobs"]["review"]["steps"]
 
     def step(self, predicate):
@@ -1421,7 +1422,7 @@ class SkipRepublishesTheHeadBoundCheckTest(unittest.TestCase):
         publishers = self.step(
             lambda s: "publish_review_check.py" in (s.get("run") or "")
         )
-        self.assertTrue(any("carried-from" in s["run"] for s in publishers))
+        self.assertTrue(any("carried-from" in step_shell.step_shell(s) for s in publishers))
 
 
 class PublishReviewCheckCarryTest(unittest.TestCase):

@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "merge-gate.yml"
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import step_shell  # noqa: E402
 from verdict_content import content_id  # noqa: E402
 
 PR = 2588
@@ -182,9 +183,9 @@ def thread() -> list:
 
 
 def evaluate_body() -> str:
-    doc = yaml.safe_load(WORKFLOW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
     steps = doc["jobs"]["evaluate"]["steps"]
-    runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+    runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
     assert len(runs) == 1, "expected exactly one 'Evaluate and merge' step"
     return runs[0]
 

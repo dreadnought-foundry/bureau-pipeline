@@ -51,6 +51,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import stacked_prs  # noqa: E402
+import step_shell  # noqa: E402
 
 QA = "agent-bureau-qa-bot[bot]"
 REPO = "dreadnought-foundry/agent-bureau"
@@ -488,7 +489,7 @@ class GathererTest(unittest.TestCase):
 
 
 def evaluate_step() -> dict:
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["evaluate"]["steps"]
+    steps = yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["evaluate"]["steps"]
     return next(s for s in steps if s.get("name") == "Evaluate and merge")
 
 
@@ -498,7 +499,7 @@ class WiringTest(unittest.TestCase):
 
     def setUp(self):
         self.step = evaluate_step()
-        self.run_block = self.step["run"]
+        self.run_block = step_shell.step_shell(self.step)
 
     def test_the_record_is_gathered_from_the_compare_the_gate_already_read(self):
         gather = self.run_block.index("stacked_prs.py gather")
@@ -611,7 +612,7 @@ def run_shipped_step(threads) -> tuple:
         "compare": COMPARE,
         "open_prs": OPEN_ALL,
     }
-    body = re.sub(r"\$\{\{[^}]*\}\}", "", evaluate_step()["run"])
+    body = re.sub(r"\$\{\{[^}]*\}\}", "", step_shell.step_shell(evaluate_step()))
     with tempfile.TemporaryDirectory() as raw:
         td = Path(raw)
         (td / "bin").mkdir()

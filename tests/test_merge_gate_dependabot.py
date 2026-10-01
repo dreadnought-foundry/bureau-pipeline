@@ -45,6 +45,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
 import should_review_pr  # noqa: E402
+import step_shell  # noqa: E402
 
 HEAD = "aa11" * 10
 STALE = "bb22" * 10
@@ -276,9 +277,9 @@ class WorkflowWiringTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.doc = yaml.safe_load(WORKFLOW.read_text())
+        cls.doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = cls.doc["jobs"]["evaluate"]["steps"]
-        runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+        runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
         assert len(runs) == 1
         cls.run_block = runs[0]
 
@@ -362,7 +363,7 @@ class CriticReachabilityTest(unittest.TestCase):
         its branch, so a dependabot head reaches the critic and the merge gate
         gets the verdict it waits on.
         """
-        doc = yaml.safe_load(QA_REVIEW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
         cond = " ".join((doc["jobs"]["review"]["if"] or "").split())
         self.assertNotIn(
             "head.ref", cond,
