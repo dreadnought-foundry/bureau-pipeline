@@ -197,6 +197,18 @@ fires on every CI completion on the default branch and the TRAIN does the path
 filtering: a surface whose declared `paths` are untouched since its newest tag
 reads current and is a no-op that says so.
 
+**Documentation never owes a release (DRE-5375).** A change to documentation
+alone — `*.md` anywhere, or anything under a `docs/` directory — never makes a
+surface owe a release, so a note can neither start a production rollout nor
+hold one up. The train excludes those files when it reads what changed under
+`paths`, and a surface whose only changes since its newest tag are
+documentation reads current, with a line that names the files. A commit that
+carries owed code is still released, whatever documentation rides with it. A
+surface that needs a different set declares the optional `ignore` list, which
+replaces the default; `"ignore": []` counts every file again. Your script's own
+change check (rule 2 above) is yours to keep in step: the train's exclusion
+decides whether a lap runs, never what the script ships.
+
 **The stub's own cron lines are legacy (DRE-4450).** They are still in the
 block above, and they still work, but the schedule that matters is now the
 fleet wake-up below — one workflow, in bureau-pipeline, for every train.
