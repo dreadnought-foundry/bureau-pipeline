@@ -110,6 +110,12 @@ on:
           demonstrate a proposal and write NOTHING to the card (DRE-3712)
         type: boolean
         default: false
+      lookup_budget:
+        description: >-
+          empty = sized from the token's own bucket; 0 = spend nothing; a whole
+          number = the cap on requests per owner
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -138,6 +144,10 @@ jobs:
       # drain writes the record of a decision that was already made, and there
       # is nothing to demonstrate about it.
       dry_run: ${{ inputs.dry_run }}
+      # The lookup legs' request budget (DRE-5429), offered here only, like
+      # the switch above: the `drain` and `schedule` jobs omit it, so the
+      # reusable's empty default — the leg sizes itself off its token — applies.
+      lookup_budget: ${{ inputs.lookup_budget }}
       # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
       # hold the person dispatching the drain can waive is not a hold.
       #

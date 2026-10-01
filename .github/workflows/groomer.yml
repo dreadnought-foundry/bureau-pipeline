@@ -26,6 +26,11 @@
 # finishes. On a drain `verify` and `post` are skipped and `groom` runs the
 # drain exactly as before.
 #
+# A FOURTH, BETWEEN THEM (DRE-5429): `lookup` runs the GitHub half of the
+# card lookups once per owner in the roster, each leg on that owner's own App
+# token, and the verify legs fold the documents into their targets. It is
+# skipped on a drain with the other two.
+#
 # Reusable workflow: permissions live in the calling stub (contents: read).
 name: Groomer (reusable)
 
@@ -105,6 +110,19 @@ on:
         type: string
         required: false
         default: ""
+      lookup_budget:
+        # The request budget each lookup leg may spend (DRE-5429), passed as
+        # `--budget "$LOOKUP_BUDGET"` on EVERY run. The three readings are
+        # DRE-5308's `groom_lookups.parse_budget`, not restated here: empty is
+        # the ordinary morning, and `0` is how a proof produces a morning on
+        # which every file-naming card's lookup failed without touching a
+        # secret. Anything else is refused before any request, a red leg.
+        description: >-
+          empty = sized from the token's own bucket; 0 = spend nothing; a whole
+          number = the cap on requests per owner
+        type: string
+        required: false
+        default: ""
     secrets:
       LINEAR_API_KEY:
         required: true
@@ -147,8 +165,11 @@ jobs:
       cancel-in-progress: false
     # The verify matrix's rows (DRE-4972): `[{"card": "DRE-N", "repository":
     # "<owner/repo>" | ""}, …]`, compacted onto one line. Empty on a drain.
+    # `lookup_owners` (DRE-5429): the lookup job's matrix, every owner in the
+    # roster as a JSON list.
     outputs:
       verify_matrix: ${{ steps.groom.outputs.verify_matrix }}
+      lookup_owners: ${{ steps.owners.outputs.owners }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -157,6 +178,15 @@ jobs:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
+
+      # THE LOOKUP LEGS' OWNERS (DRE-5429). The reader `fleet-wake.yml` builds
+      # its matrix with, over the pipeline's own `config/repo-map.json`, so a
+      # repo onboarded into the map is looked up with no second edit. Skipped
+      # on `drain`, which runs no lookup.
+      - name: Owners in the roster
+        id: owners
+        if: ${{ inputs.mode != 'drain' }}
+        run: python3 .bureau-pipeline/scripts/release_train.py wake-owners
 
       # THE MERGED-PR READ'S TOKEN (DRE-4964). The Groom step had no
       # `GH_TOKEN`, so its `gh` read exited rc=4 on every run and the proposal
@@ -325,6 +355,91 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+  # THE LOOKUPS, ONE LEG PER OWNER (DRE-5429). The GitHub half of DRE-5308's
+  # lookups reaches every repo in config/repo-map.json, and those repos sit
+  # under three owners. An App installation token is scoped to ONE
+  # installation, so the groom job's token — minted with no `owner:` — is
+  # refused for every repo outside its own owner. Each leg here mints for its
+  # own owner, the shape `fleet-wake.yml` uses for the same reason, runs
+  # `groom_lookups.py owner` and uploads one document; the verify legs fold
+  # them into the targets.
+  #
+  # WHAT THIS JOB HOLDS: a token that reads contents and pull requests on one
+  # owner's installation, and nothing else — no Linear key, no model
+  # credential. A leg whose mint failed still runs the script, which records
+  # the owner unread with the reason (`no token for <owner>`).
+  #
+  # THE CLOCK, sized from the script's own: the leg stops asking at
+  # `groom_lookups.MAX_SECONDS` (300 s), one call holds it past that by at most
+  # `REQUEST_TIMEOUT` (20 s), and it then writes its document. Nine minutes
+  # leave the mint, the download and the upload three minutes around that
+  # 320 s, so the job's kill never arrives before the script's own stop.
+  # tests/test_groomer_wiring.py asserts the number against both constants,
+  # and asserts their sum fits the morning's headroom before 06:30 PT. A leg
+  # the job does kill uploads nothing, and `fold` names that owner
+  # `no lookup record for <owner>`; the run concludes `failure` and the medic
+  # sees it, which is right for a leg that did not stop itself.
+  lookup:
+    needs: groom
+    if: ${{ inputs.mode != 'drain' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 9
+    strategy:
+      # One owner's missing installation never cancels the other owners'.
+      fail-fast: false
+      matrix:
+        owner: ${{ fromJSON(needs.groom.outputs.lookup_owners) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Download the proposal and its targets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: groom-proposal
+
+      # Per owner, read-only, at the pin every mint in this file uses.
+      # `continue-on-error`: a failed mint renders an empty token, and the
+      # step below names the owner unread rather than the leg dying unsaid.
+      - name: Mint a read-only token for this owner
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      # No `if`: a leg with no token still writes its document. Every input
+      # through env, never interpolated into the shell line, and `--budget`
+      # on every run — empty is "no budget given" to `parse_budget`.
+      - name: Look up this owner's repos
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ matrix.owner }}
+          LOOKUP_BUDGET: ${{ inputs.lookup_budget }}
+        run: |
+          python3 .bureau-pipeline/scripts/groom_lookups.py owner \
+            --owner "$OWNER" --targets verify-targets.json \
+            --out "lookups-$OWNER.json" --budget "$LOOKUP_BUDGET"
+
+      # `overwrite`: re-running one leg re-uploads its artifact, and `fold`
+      # reads whatever is in the directory.
+      - name: Keep this owner's lookups
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: groom-lookups-${{ matrix.owner }}
+          path: lookups-${{ matrix.owner }}.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
+
   # THE VERIFY MATRIX (DRE-4972, epic of DRE-4966..4971). One read-only agent
   # per card the proposal would put in front of the CEO — the Planning list and
   # the spares behind it — reading that card's repo on its default branch and
@@ -349,9 +464,14 @@ jobs:
   # — and `prepare` and `verdict` still run, so the leg uploads a verdict that
   # says `unverified` and names the slug. No verdict is ever formed from card
   # text alone.
+  #
+  # `always()` over `needs: [groom, lookup]` (DRE-5429): a lookup leg that
+  # died never stops the matrix. Its owner has no document, `fold` names it
+  # `no lookup record for <owner>`, and the cards it held are judged with that
+  # said. Only a groom that did not succeed stops it.
   verify:
-    needs: groom
-    if: ${{ inputs.mode != 'drain' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
+    needs: [groom, lookup]
+    if: ${{ always() && inputs.mode != 'drain' && needs.groom.result == 'success' && needs.groom.outputs.verify_matrix != '' && needs.groom.outputs.verify_matrix != '[]' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     strategy:
@@ -369,6 +489,33 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: groom-proposal
+
+      # NOT merged, the post job's verdict download copied: every leg's
+      # artifact lands in its own subdirectory, so the dreadnought-foundry
+      # document is at
+      # `lookups/groom-lookups-dreadnought-foundry/lookups-dreadnought-foundry.json`
+      # — never at `lookups/lookups-<owner>.json`. `fold` walks the directory
+      # at every depth and reads each document's owner off its `owner` key.
+      # `continue-on-error`: no artifact at all is every owner unread, not a
+      # leg that never reaches its verdict.
+      - name: Download every owner's lookups
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: groom-lookups-*
+          path: lookups
+          merge-multiple: false
+
+      # Before `prepare`, so it fences the lookup evidence and `verdict` reads
+      # the row's `lookups` field. `mkdir -p`: on a morning no leg uploaded,
+      # the download above created nothing.
+      - name: Fold the lookups into the targets
+        run: |
+          set -euo pipefail
+          mkdir -p lookups
+          python3 .bureau-pipeline/scripts/groom_lookups.py fold \
+            --targets verify-targets.json --lookups-dir lookups \
+            --out verify-targets.json
 
       # The agent's whole input, and the moment it started. No `if`: on an
       # unmapped repo `prepare` writes the one line that says the card is not
