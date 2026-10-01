@@ -1600,3 +1600,289 @@ def test_the_doc_says_what_the_lookups_do():
     for name in ("MAX_PATHS", "MAX_COMMITS", "MAX_REQUESTS", "BUDGET_SHARE",
                  "MAX_SECONDS", "REQUEST_TIMEOUT"):
         assert f"`{name}` = {getattr(groom_lookups, name)}" in flat, name
+
+
+# --------------------------------------------------------------------------
+# DRE-5317 — a morning on which no reader could see a merged pull request
+# posts no proposal: `apply` writes the four keys the post step reads
+# --------------------------------------------------------------------------
+import groom_context  # noqa: E402
+
+LOOKUP_OPENER = "the lookup failed for every card: "
+UNREAD_OPENER = ("no reader could see merged pull requests this morning: the "
+                 "check searched no owner — ")
+COUNT_SUFFIX = "; the merged-PR count was unread too"
+MAP3 = {"portico": "dreadnought-foundry/portico",
+        "atlas": "EveryBite/atlas", "deltasolv": "DeltaSolv/deltasolv"}
+OWNERS3 = ["DeltaSolv", "EveryBite", "dreadnought-foundry"]
+INSTALL_WHY = ("the installation could not be read: gh api "
+               "installation/repositories failed rc=1: HTTP 401")
+
+
+def trow(card_id, *, unmapped=False, which="planning"):
+    return {"card": card_id,
+            "repository": None if unmapped else PORTICO,
+            "repo_slug": "widgets" if unmapped else "portico",
+            "list": which}
+
+
+def vdoc(card_id, verdict, lookup, *, reason=None, proof=None):
+    doc = {"card": card_id, "verdict": verdict, "summary": "One sentence.",
+           "proof": proof if proof is not None else (
+               [PROOF_LINE] if verdict not in ("unverified", "excluded") else []),
+           "reason": reason, "cost_usd": None, "duration_ms": None,
+           "model": None, "started_at": "2026-09-29T06:00:00Z",
+           "finished_at": "2026-09-29T06:01:00Z"}
+    if lookup is not ...:
+        doc["lookup"] = lookup
+    return doc
+
+
+def failed(card_id, why=HOME_WHY):
+    return vdoc(card_id, "unverified", "failed",
+                reason=groom_lookups.LOOKUP_FAILED + why)
+
+
+def ok(card_id):
+    return vdoc(card_id, "still-needed", "ok")
+
+
+def stop_of(docs, *, rows=None, prop=None, repo_map=None):
+    """`apply` over DRE-101..103 (or `rows`) with `docs`, as the workflow
+    runs it: the marks are the verdict documents, nothing else."""
+    prop = prop if prop is not None else proposal()
+    rows = rows or [trow(d["card"]) for d in docs]
+    found = {d["card"]: d for d in docs}
+    after = gva.apply(prop, found, rows,
+                      repo_map=repo_map if repo_map is not None else MAP3)
+    return after["verify"]
+
+
+def test_every_card_lookup_failed_is_the_stop():
+    block = stop_of([failed("DRE-101"), failed("DRE-102"), failed("DRE-103")])
+    assert block["lookups_failed"] == ["DRE-101", "DRE-102", "DRE-103"]
+    assert block["all_lookups_failed"] is True
+    assert block["not_posted_why"].startswith(LOOKUP_OPENER)
+    assert block["not_posted_why"] == LOOKUP_OPENER + HOME_WHY
+    assert block["merged_prs_unread"] is False
+
+
+def test_one_card_whose_lookup_answered_holds_the_stop_off():
+    block = stop_of([failed("DRE-101"), ok("DRE-102"), failed("DRE-103")])
+    assert block["all_lookups_failed"] is False
+    assert block["lookups_failed"] == ["DRE-101", "DRE-103"]
+    assert block["not_posted_why"] is None
+
+
+def test_a_card_whose_lookup_answered_but_whose_agent_failed_holds_it_off():
+    block = stop_of([failed("DRE-101"),
+                     vdoc("DRE-102", "unverified", "ok",
+                          reason=gva.STEP_FAILED),
+                     failed("DRE-103")])
+    assert block["all_lookups_failed"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_a_card_that_names_no_file_counts_on_neither_side():
+    block = stop_of([failed("DRE-101"), failed("DRE-102"),
+                     vdoc("DRE-103", "still-needed", "none")])
+    assert block["all_lookups_failed"] is True
+    assert block["lookups_failed"] == ["DRE-101", "DRE-102"]
+    block = stop_of([vdoc(c, "still-needed", "none")
+                     for c in ("DRE-101", "DRE-102", "DRE-103")])
+    assert block["all_lookups_failed"] is False
+    assert block["lookups_failed"] == []
+    assert block["not_posted_why"] is None
+
+
+def test_a_lookup_that_never_ran_holds_the_stop_off():
+    block = stop_of([failed("DRE-101"), failed("DRE-102"),
+                     vdoc("DRE-103", "still-needed", "not-run")])
+    assert block["all_lookups_failed"] is False
+    block = stop_of([failed("DRE-101"), failed("DRE-102"),
+                     vdoc("DRE-103", "still-needed", ...)])
+    assert block["all_lookups_failed"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_an_unmapped_card_counts_by_its_own_lookup_state():
+    rows = [trow("DRE-101", unmapped=True), trow("DRE-102")]
+    unmapped_failed = vdoc("DRE-101", "unverified", "failed",
+                           reason="repo not in config/repo-map.json: widgets")
+    block = stop_of([unmapped_failed, failed("DRE-102")], rows=rows)
+    assert block["all_lookups_failed"] is True
+    assert block["lookups_failed"] == ["DRE-101", "DRE-102"]
+    assert block["not_posted_why"].startswith(LOOKUP_OPENER)
+    unmapped_ok = vdoc("DRE-101", "unverified", "ok",
+                       reason="repo not in config/repo-map.json: widgets")
+    block = stop_of([unmapped_ok, failed("DRE-102")], rows=rows)
+    assert block["all_lookups_failed"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_an_excluded_card_counts_on_neither_side():
+    reason = "moved into Intake on 2026-09-28"
+    block = stop_of([_excluded_doc("DRE-101", reason),
+                     _excluded_doc("DRE-102", reason), failed("DRE-103")])
+    assert block["all_lookups_failed"] is True
+    assert block["lookups_failed"] == ["DRE-103"]
+    block = stop_of([_excluded_doc(c, reason)
+                     for c in ("DRE-101", "DRE-102", "DRE-103")])
+    assert block["all_lookups_failed"] is False
+    assert block["lookups_failed"] == []
+    assert block["not_posted_why"] is None
+
+
+class BlindGh(FakeGh):
+    """2026-09-29: the groom job's token could not read its installation."""
+
+    def __call__(self, args):
+        if "installation/repositories" in " ".join(args):
+            raise groom_context.ContextError(
+                "gh api installation/repositories failed rc=1: HTTP 401")
+        return super().__call__(args)
+
+
+def blind_proposal(*, judged=False, unread=None):
+    """A proposal whose pre-post check searched no owner, with two Planning
+    rows; `judged` gives it a judgement block whose pack's `unread` is
+    `unread`."""
+    prop = groomer.verify_proposal(
+        lane(), dict(cycles=CYCLES, capacity=2, now=NOW),
+        lops=FakeLinear(), run=BlindGh(), owners=OWNERS)
+    assert prop["verification"]["merged_prs_searched"] == []
+    assert [r["list"] for r in prop["verification"]["cards"]].count(
+        "planning") == 2
+    if judged:
+        pack = {name: 3 for name in groom_context.SECTIONS}
+        for name in unread or []:
+            if name in pack:
+                pack[name] = None
+        pack.update(truncated=[], unread=sorted(unread or []))
+        prop["judgement"] = {**prop["judgement"], "enabled": True,
+                             "calls": 1, "pack": pack}
+    return prop
+
+
+def oks(n=2):
+    return [ok(f"DRE-{101 + i}") for i in range(n)]
+
+
+def test_a_check_that_searched_no_owner_is_the_stop():
+    block = stop_of(oks(), prop=blind_proposal())
+    assert block["merged_prs_unread"] is True
+    assert block["all_lookups_failed"] is False
+    assert block["not_posted_why"] == UNREAD_OPENER + INSTALL_WHY
+
+
+def test_the_count_unread_too_gains_the_suffix():
+    prop = blind_proposal(judged=True, unread=["merged_prs"])
+    block = stop_of(oks(), prop=prop)
+    assert block["not_posted_why"] == UNREAD_OPENER + INSTALL_WHY + COUNT_SUFFIX
+
+
+def test_the_count_unread_for_every_owner_in_the_map_gains_the_suffix():
+    prop = blind_proposal(judged=True,
+                          unread=[f"merged_prs:{o}" for o in OWNERS3])
+    block = stop_of(oks(), prop=prop)
+    assert block["not_posted_why"].endswith(COUNT_SUFFIX)
+    assert block["not_posted_why"].count(COUNT_SUFFIX) == 1
+
+
+def test_a_no_judgement_run_never_gains_the_suffix():
+    prop = blind_proposal()
+    assert prop["judgement"]["enabled"] is False
+    assert prop["judgement"]["pack"] == groomer._EMPTY_PACK()
+    block = stop_of(oks(), prop=prop)
+    assert block["not_posted_why"] == UNREAD_OPENER + INSTALL_WHY
+
+
+def test_a_judgement_that_never_started_never_gains_the_suffix():
+    prop = blind_proposal()
+    prop["judgement"] = {**prop["judgement"], "enabled": True, "calls": 0,
+                         "pack": groomer._EMPTY_PACK()}
+    block = stop_of(oks(), prop=prop)
+    assert block["not_posted_why"] == UNREAD_OPENER + INSTALL_WHY
+
+
+def test_one_owner_of_three_unread_never_gains_the_suffix():
+    prop = blind_proposal(judged=True, unread=["merged_prs:EveryBite"])
+    block = stop_of(oks(), prop=prop)
+    assert block["not_posted_why"] == UNREAD_OPENER + INSTALL_WHY
+
+
+def test_a_check_that_searched_one_owner_is_not_the_stop():
+    prop = blind_proposal()
+    prop["verification"]["merged_prs_searched"] = ["dreadnought-foundry"]
+    block = stop_of(oks(), prop=prop)
+    assert block["merged_prs_unread"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_a_check_that_did_not_run_is_not_the_stop():
+    prop = blind_proposal()
+    prop["verification"]["merged_prs_searched"] = None
+    block = stop_of(oks(), prop=prop)
+    assert block["merged_prs_unread"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_a_record_with_no_searched_key_is_not_the_stop():
+    prop = blind_proposal()
+    del prop["verification"]["merged_prs_searched"]
+    block = stop_of(oks(), prop=prop)
+    assert block["merged_prs_unread"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_a_check_with_no_planning_or_spare_row_is_not_the_stop():
+    prop = blind_proposal()
+    prop["verification"]["cards"] = [
+        r for r in prop["verification"]["cards"]
+        if r["list"] not in ("planning", "spare")]
+    block = stop_of(oks(), prop=prop)
+    assert block["merged_prs_unread"] is False
+    assert block["not_posted_why"] is None
+
+
+def test_both_shapes_at_once_write_the_lookup_reason():
+    block = stop_of([failed("DRE-101"), failed("DRE-102")],
+                    prop=blind_proposal())
+    assert block["all_lookups_failed"] is True
+    assert block["merged_prs_unread"] is True
+    assert block["not_posted_why"] == LOOKUP_OPENER + HOME_WHY
+
+
+def _apply_cli(tmp_path, docs, capsys):
+    prop = proposal()
+    prop["verify_targets"] = [trow(d["card"]) for d in docs]
+    pfile = write(tmp_path / "proposal.json", prop)
+    for d in docs:
+        folder = tmp_path / "verdicts" / f"groom-verdict-{d['card']}"
+        folder.mkdir(parents=True)
+        write(folder / "verdict.json", d)
+    capsys.readouterr()
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+    return after, capsys.readouterr().out.strip().splitlines()[-1]
+
+
+def test_apply_cli_over_the_all_failed_morning_exits_0_saying_why(tmp_path, capsys):
+    after, line = _apply_cli(
+        tmp_path, [failed("DRE-101"), failed("DRE-102"), failed("DRE-103")],
+        capsys)
+    for key in ("lookups_failed", "all_lookups_failed", "merged_prs_unread",
+                "not_posted_why"):
+        assert key in after["verify"], key
+    why = after["verify"]["not_posted_why"]
+    assert why.startswith(LOOKUP_OPENER)
+    assert line.endswith("; not posted — " + why)
+
+
+def test_apply_cli_over_an_answered_morning_prints_the_summary_as_today(tmp_path, capsys):
+    after, line = _apply_cli(
+        tmp_path, [failed("DRE-101"), ok("DRE-102"), failed("DRE-103")],
+        capsys)
+    assert after["verify"]["not_posted_why"] is None
+    assert "not posted" not in line
+    assert line.startswith("groom-verify: 3 card(s) — ")
+    assert line.endswith(f"id {proposal()['id']} → {after['id']}")

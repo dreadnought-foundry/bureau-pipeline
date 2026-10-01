@@ -358,3 +358,88 @@ def test_the_doc_says_compute_verify_then_post():
         "the `What the run cost` sentence does not say where the verify "
         "step's cost is recorded"
     )
+
+
+# --------------------------------------------------------------------------
+# DRE-5317 — a morning the pipeline chose not to post: no Linear call, the
+# reason as the last line, and a green exit
+# --------------------------------------------------------------------------
+WHY = ("the lookup failed for every card: dreadnought-foundry/portico did "
+       "not answer — time budget of 300 s spent")
+
+
+class RecordingOps:
+    """A `lops` that records every attribute the code under test reaches for
+    — a read or a write — and answers nothing."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def __getattr__(self, name):
+        self.calls.append(name)
+
+        def call(*args, **kwargs):
+            raise AssertionError(f"post_record called lops.{name} on a "
+                                 f"stopped morning")
+        return call
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_post_on_a_stopped_morning_calls_nothing_and_says_why_last(
+        tmp_path, capsys, dry_run):
+    record = _lane_proposal()
+    record["verify"] = {"not_posted_why": WHY}
+    path = _record_file(tmp_path, record)
+    lops = RecordingOps()
+
+    assert groomer.post_record(lops, PROPOSAL_CARD, str(path),
+                               dry_run=dry_run) == 0
+
+    assert lops.calls == [], "a stopped morning reached Linear"
+    out = capsys.readouterr().out
+    lines = out.rstrip("\n").splitlines()
+    assert groomer.NOT_POSTED == "groomer: not posted — "
+    assert lines[-1] == groomer.NOT_POSTED + WHY
+    assert lines[-2] == "::warning::" + groomer.NOT_POSTED + WHY
+    page = groomer.render_proposal(record)
+    assert page in out
+    assert out.index(page) < out.index("::warning::")
+    assert "dry run — nothing posted" not in out
+
+
+def test_post_with_a_null_reason_posts_as_today(ops, tmp_path, capsys):
+    record = _lane_proposal()
+    record["verify"] = {"not_posted_why": None}
+    path = _record_file(tmp_path, record)
+    assert groomer.post_record(ops, PROPOSAL_CARD, str(path)) == 0
+    assert ops.whole_thread_asked, "the thread was not read"
+    assert len(ops.posted) == 1
+    assert groomer.NOT_POSTED not in capsys.readouterr().out
+
+
+def test_post_with_no_verify_block_posts_as_today(ops, tmp_path, capsys):
+    record = _lane_proposal()
+    assert "verify" not in record
+    path = _record_file(tmp_path, record)
+    assert groomer.post_record(ops, PROPOSAL_CARD, str(path)) == 0
+    assert ops.whole_thread_asked, "the thread was not read"
+    assert len(ops.posted) == 1
+    assert groomer.NOT_POSTED not in capsys.readouterr().out
+
+
+def test_the_doc_says_which_two_shapes_post_no_proposal():
+    text = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+    start = text.index("**The lookups before the agent runs")
+    paragraph = " ".join(text[start:text.index("\n\n", start)].split())
+    for phrase in (
+            "posts no proposal in exactly two shapes",
+            "the lookup failed for every card that names a file",
+            "the pre-post check could search no owner for merged pull requests",
+            "a standing blind owner is neither",
+            "the judgement receipt still lands on the standing card carrying "
+            "the not-posted clause",
+            "a dry run posts nothing at all",
+            "run stays green and the medic is not woken",
+            "the last line of the run's \"Post the verified proposal\" step",
+            "a warning on the run's summary page"):
+        assert phrase in paragraph, phrase

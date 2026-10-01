@@ -239,22 +239,29 @@ def _search(run, query: str) -> list[dict]:
 
 
 def merged_mentions(identifiers: list[str], *, run=None,
-                    owners=None) -> tuple[dict, dict]:
-    """`({card: [merged PR for it]}, {card: why the search was not read})`.
+                    owners=None) -> tuple[dict, dict, list[str]]:
+    """`({card: [merged PR for it]}, {card: why the search was not read},
+    [owner whose search answered])`.
 
     One search per owner per `SEARCH_CHUNK` cards, each card quoted. An owner
     the token's installation cannot see leaves every card unread — a search
     that could not look everywhere cannot say "nothing merged" — and the
     owners it could see are still searched, so evidence found there counts.
+
+    The third value is the owners for which at least one search chunk
+    answered (DRE-5317): `[]` when nothing was searched — no token, an
+    installation that could not be read, or every search raising — which is
+    the morning of 2026-09-29, and the one `apply` stops the post on.
     """
     found: dict[str, list[dict]] = {i: [] for i in identifiers}
     gaps: dict[str, str] = {}
+    searched: list[str] = []
     if not identifiers:
-        return found, gaps
+        return found, gaps, searched
     if not (os.environ.get(groom_context.TOKEN_ENV) or "").strip():
         why = (f"no {groom_context.TOKEN_ENV} in the environment — the Groom "
                f"step hands the check the Bureau App token under that name")
-        return found, {i: why for i in identifiers}
+        return found, {i: why for i in identifiers}, searched
     run = run or groom_context._gh_json
     try:
         owners = (list(owners) if owners is not None
@@ -262,7 +269,7 @@ def merged_mentions(identifiers: list[str], *, run=None,
         visible = groom_context.installed_owners(run)
     except Exception as e:  # noqa: BLE001 — an unread source is named, not fatal
         return found, {i: f"the installation could not be read: {e}"
-                       for i in identifiers}
+                       for i in identifiers}, searched
     blind = [o for o in owners if o.lower() not in visible]
     if blind:
         why = ("the Bureau App token's installation cannot see "
@@ -281,13 +288,15 @@ def merged_mentions(identifiers: list[str], *, run=None,
                 for i in chunk:
                     gaps.setdefault(i, f"the search of {owner} failed: {e}")
                 continue
+            if owner not in searched:
+                searched.append(owner)
             for item in items:
                 if not (item.get("pull_request") or {}).get("merged_at"):
                     continue
                 for i in chunk:
                     if _pr_is_for(i, item) and item not in found[i]:
                         found[i].append(item)
-    return found, gaps
+    return found, gaps, searched
 
 
 def lane_says(target: str, lane: str | None) -> tuple[bool, str]:
@@ -438,7 +447,8 @@ def check(proposal: dict, *, lops, run=None, owners=None,
     planning, spares = window(proposal, spare)
     candidates = planning + spares
     real = _Replacements(lops, run)
-    prs, pr_gaps = merged_mentions(candidates, run=run, owners=owners)
+    prs, pr_gaps, searched = merged_mentions(candidates, run=run,
+                                             owners=owners)
 
     rows: list[dict] = []
     unread: dict[str, dict] = {}
@@ -509,7 +519,8 @@ def check(proposal: dict, *, lops, run=None, owners=None,
                      "unread": [], "acted": verdict == "cancel-rejected"})
 
     return {"cards": rows, "cancel": cancel, "keep": keep, "unread": unread,
-            "checked": [r["identifier"] for r in rows], "spare": spare}
+            "checked": [r["identifier"] for r in rows], "spare": spare,
+            "merged_prs_searched": searched}
 
 
 def unread_result(proposal: dict, why: str, *, spare: int = SPARE) -> dict:
@@ -519,7 +530,9 @@ def unread_result(proposal: dict, why: str, *, spare: int = SPARE) -> dict:
     The answer for a check that FAILED rather than one that found a source
     unreadable — a morning with no proposal costs the CEO a day, and a
     proposal that says plainly it was not checked costs nothing that is not
-    written on it.
+    written on it. `merged_prs_searched` is `None`, never `[]`: a check that
+    did not run searched nowhere for a different reason, and must not read
+    as a token that could see nothing (DRE-5317).
     """
     planning, spares = window(proposal, spare)
     rows = [{"identifier": i,
@@ -531,7 +544,7 @@ def unread_result(proposal: dict, why: str, *, spare: int = SPARE) -> dict:
     return {"cards": rows, "cancel": {}, "keep": {},
             "unread": {source: {"cards": list(ids), "why": why}
                        for source in SOURCES} if ids else {},
-            "checked": ids, "spare": spare}
+            "checked": ids, "spare": spare, "merged_prs_searched": None}
 
 
 def settle(proposal: dict, result: dict) -> dict:
@@ -553,5 +566,6 @@ def settle(proposal: dict, result: dict) -> dict:
         "moved_to_cancel": [i for i in result["cancel"]],
         "cancels_rejected": [i for i in result["keep"]],
         "not_checked": [i for i in planning if i not in checked],
+        "merged_prs_searched": result.get("merged_prs_searched"),
     }
     return proposal

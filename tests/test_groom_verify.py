@@ -717,3 +717,106 @@ def test_a_hold_naming_another_batch_holds_nothing_back_at_drain():
                    _marker(groomer.HOLD_TAG, {"id": "fedcba987654"}, "DRE-101")])
     result = groomer.drain(ops, card=PROPOSAL_CARD)
     assert "DRE-101" in result["moved"]
+
+
+# --------------------------------------------------------------------------
+# DRE-5317 — which owners the merged-PR search actually ran against
+# --------------------------------------------------------------------------
+THREE_OWNERS = ["DeltaSolv", "EveryBite", "dreadnought-foundry"]
+
+
+class OwnersGh(FakeGh):
+    """`gh api` whose installation sees only `visible`, and whose search of
+    each owner in `failing` raises."""
+
+    def __init__(self, visible, *, failing=(), installation_fails=False):
+        super().__init__()
+        self.visible = list(visible)
+        self.failing = set(failing)
+        self.installation_fails = installation_fails
+
+    def __call__(self, args):
+        joined = " ".join(args)
+        if "installation/repositories" in joined:
+            if self.installation_fails:
+                raise groom_context.ContextError(
+                    "gh api installation/repositories failed rc=1: HTTP 401")
+            return json.dumps({"total_count": len(self.visible), "repositories": [
+                {"full_name": f"{o}/repo"} for o in self.visible]})
+        if "search/issues" in joined:
+            self.queries.append(joined)
+            if any(f"user:{o}" in joined for o in self.failing):
+                raise groom_context.ContextError(
+                    "gh api search/issues failed rc=1: HTTP 403 rate limited")
+            return json.dumps({"total_count": 0, "items": []})
+        raise AssertionError(f"unexpected gh call: {joined}")
+
+
+IDS = [f"DRE-{100 + n}" for n in range(1, 8)]
+
+
+def test_merged_mentions_names_the_owners_whose_search_answered():
+    gh = OwnersGh(["dreadnought-foundry", "EveryBite"])
+    found, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert searched == ["EveryBite", "dreadnought-foundry"]
+    assert "DeltaSolv" not in searched
+    # the blind owner is still the per-card gap it always was
+    assert all("DeltaSolv" in gaps[i] for i in IDS)
+
+
+def test_merged_mentions_with_no_token_searched_no_owner(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "")
+    _, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=OwnersGh(THREE_OWNERS), owners=THREE_OWNERS)
+    assert searched == []
+    assert set(gaps) == set(IDS)
+
+
+def test_merged_mentions_whose_installation_read_raises_searched_no_owner():
+    """2026-09-29: the installation read failed and the morning posted."""
+    gh = OwnersGh(THREE_OWNERS, installation_fails=True)
+    _, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert searched == []
+    assert gh.queries == []
+    assert all("installation could not be read" in gaps[i] for i in IDS)
+
+
+def test_merged_mentions_whose_every_search_raises_searched_no_owner():
+    gh = OwnersGh(THREE_OWNERS, failing=THREE_OWNERS)
+    _, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert gh.queries, "the searches were never attempted"
+    assert searched == []
+    assert set(gaps) == set(IDS)
+
+
+def test_check_carries_the_searched_owners_and_settle_writes_them():
+    got = checked()
+    assert got["verification"]["merged_prs_searched"] == OWNERS
+    first = groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW)
+    result = groom_verify.check(first, lops=FakeLinear(), run=FakeGh(),
+                                owners=OWNERS)
+    assert result["merged_prs_searched"] == OWNERS
+    blind = groom_verify.check(
+        first, lops=FakeLinear(),
+        run=OwnersGh(OWNERS, installation_fails=True), owners=OWNERS)
+    assert blind["merged_prs_searched"] == []
+    assert groom_verify.settle(first, blind)["verification"][
+        "merged_prs_searched"] == []
+
+
+def test_a_check_that_failed_outright_searched_nowhere_and_says_none(monkeypatch):
+    """A check that did not run is not a token that could see nothing."""
+    first = groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW)
+    result = groom_verify.unread_result(first, "the check failed this run")
+    assert result["merged_prs_searched"] is None
+
+    def boom(*a, **k):
+        raise KeyError("identifier")
+
+    monkeypatch.setattr(groom_verify, "check", boom)
+    got = checked()
+    assert "merged_prs_searched" in got["verification"]
+    assert got["verification"]["merged_prs_searched"] is None

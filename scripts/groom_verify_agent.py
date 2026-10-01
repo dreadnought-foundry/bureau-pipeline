@@ -36,7 +36,11 @@ and the four subcommands here are everything around it.
     answer, checked, in the fixed shape the proposal reads.
   * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
     `obsolete` or `not-worth-it` goes on the Cancel list with the proof as its reason, the next spare
-    still needed takes its slot, and the proposal id is recomputed.
+    still needed takes its slot, and the proposal id is recomputed. And it
+    decides whether the morning is posted at all (DRE-5317): the lookup
+    failed for every card that names a file, or the pre-post check searched
+    no owner for merged pull requests, and `not_posted_why` says so —
+    `groomer.py post` reads it and posts no proposal.
 
 **A run that dies lands as `unverified`, never as `still-needed`.** Anything
 but a well-formed answer with the proof the brief requires, from a step that
@@ -74,6 +78,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import execution_result  # noqa: E402 — the one loader of the execution file
+import groom_context  # noqa: E402 — the pack's sections, for the stop's suffix
 import groom_lookups  # noqa: E402 — the lookups before the agent (DRE-5458)
 import groom_verify  # noqa: E402 — the spare count and source names
 import groomer  # noqa: E402 — proposal_id, assert_disjoint
@@ -962,10 +967,70 @@ def apply(proposal: dict, found: dict[str, dict],
 
     proposal["batch"]["cards"] = len(kept)
     proposal["deprioritised"] = groomer._deprioritised(proposal)
-    proposal["verify"] = summary(marks, [r["card"] for r in rows], unfilled)
+    order = [r["card"] for r in rows]
+    proposal["verify"] = {**summary(marks, order, unfilled),
+                          **stop(proposal, marks, order, repo_map)}
     groomer.assert_disjoint(proposal)
     proposal["id"] = groomer.proposal_id(proposal)
     return proposal
+
+
+#: The two reasons a morning posts no proposal (DRE-5317), and the clause
+#: added when the header's merged-PR count failed too.
+ALL_LOOKUPS_FAILED = "the lookup failed for every card: "
+MERGED_PRS_UNREAD = ("no reader could see merged pull requests this morning: "
+                     "the check searched no owner — ")
+COUNT_UNREAD_TOO = "; the merged-PR count was unread too"
+
+
+def _count_unread(proposal: dict, repo_map: dict) -> bool:
+    """Was the header's merged-PR count — the other 2026-09-29 reader —
+    asked for, and did it fail? A `--no-judgement` run never asked, and a
+    pack with every section unread is the shape of one that read no pack
+    (`groomer._EMPTY_PACK`), so neither says the count failed."""
+    block = proposal.get("judgement") or {}
+    if block.get("enabled") is not True:
+        return False
+    unread = set((block.get("pack") or {}).get("unread") or ())
+    if set(groom_context.SECTIONS) <= unread:
+        return False
+    if "merged_prs" in unread:
+        return True
+    owners = {str(full).split("/")[0] for full in (repo_map or {}).values()}
+    return bool(owners) and all(f"merged_prs:{o}" in unread for o in owners)
+
+
+def stop(proposal: dict, marks: dict[str, dict], order: list[str],
+         repo_map: dict) -> dict:
+    """The four keys `groomer.py post` and the receipt read (DRE-5317).
+
+    Read off the marks and the verification record, never the target rows:
+    the workflow's apply step has none. A mark with lookup `none` and an
+    excluded mark count on neither side, so one no-file card can neither
+    fire the stop nor hold it off.
+    """
+    judged = [i for i in order if marks[i]["verdict"] != EXCLUDED]
+    failed_ = [i for i in judged if marks[i].get("lookup") == _LOOKUP_FAILED]
+    all_failed = bool(failed_) and not any(
+        marks[i].get("lookup") in (_LOOKUP_OK, _LOOKUP_NOT_RUN) for i in judged)
+    verification = proposal.get("verification") or {}
+    unread = (verification.get("merged_prs_searched") == []
+              and any(r.get("list") in ("planning", "spare")
+                      for r in verification.get("cards") or ()))
+    why = None
+    if all_failed:
+        reason = _one_line(marks[failed_[0]].get("reason"))
+        if reason.startswith(groom_lookups.LOOKUP_FAILED):
+            reason = reason[len(groom_lookups.LOOKUP_FAILED):]
+        why = ALL_LOOKUPS_FAILED + reason
+    elif unread:
+        gap = ((verification.get("unread") or {}).get("merged_prs") or {})
+        why = MERGED_PRS_UNREAD + _one_line(
+            gap.get("why") or "no reason was recorded")
+    if why and _count_unread(proposal, repo_map):
+        why += COUNT_UNREAD_TOO
+    return {"lookups_failed": failed_, "all_lookups_failed": all_failed,
+            "merged_prs_unread": unread, "not_posted_why": why}
 
 
 def summary(marks: dict[str, dict], order: list[str], unfilled: int) -> dict:
@@ -1092,7 +1157,9 @@ def _run(args, *, lops) -> int:
     print(f"groom-verify: {block['cards']} card(s) — "
           + ", ".join(f"{n} {v}" for v, n in block["counts"].items())
           + f"; {block['slots_unfilled']} slot(s) unfilled; "
-            f"id {before} → {after['id']}")
+            f"id {before} → {after['id']}"
+          + (f"; not posted — {block['not_posted_why']}"
+             if block["not_posted_why"] else ""))
     return 0
 
 

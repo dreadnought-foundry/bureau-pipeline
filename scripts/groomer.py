@@ -344,6 +344,9 @@ CANCEL_COLUMNS = "| # | Card | Pri | Repo | Epic | Title | Reason |"
 # workflow, so they are written once. ABSENT when the record carries no
 # `verify` block, so a run without the matrix renders as it always did.
 VERIFIED_HEADING = "## Verified against main"
+#: What `post` prints, last, on a morning the verify step withheld (DRE-5317):
+#: this, then `proposal["verify"]["not_posted_why"]`.
+NOT_POSTED = "groomer: not posted — "
 VERIFY_COST_LINE = "Verify step: {cards} cards, {cost}, {clock} wall clock"
 
 # The lane the drain writes the Planning list into: Intake's exit is a
@@ -4438,6 +4441,12 @@ def post_record(lops, card: str, path: str, *, dry_run: bool = False) -> int:
     same read decides "already proposed here". Everything else is
     `post_proposal`, so a re-run posts nothing and an empty record is refused.
     The page is printed either way, for the step summary.
+
+    A record whose `verify.not_posted_why` is set is not posted, dry run or
+    not (DRE-5317): no reader could see a merged pull request this morning.
+    Nothing is read from Linear and nothing written; the page prints, then a
+    warning annotation and the not-posted line, last. Exit 0 — a planned stop
+    is not a failure, and a red run would wake the medic for a decision.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -4446,6 +4455,12 @@ def post_record(lops, card: str, path: str, *, dry_run: bool = False) -> int:
         print(f"groomer: refused — cannot read the proposal at {path}: {e}",
               file=sys.stderr)
         return 2
+    why = (proposal.get("verify") or {}).get("not_posted_why")
+    if isinstance(why, str) and why.strip():
+        print(render_proposal(proposal))
+        print(f"::warning::{NOT_POSTED}{why}")
+        print(f"{NOT_POSTED}{why}")
+        return 0
     records = decision_records(lops, card)
     answer_decline(proposal, records)
     if dry_run:

@@ -34,6 +34,14 @@ asked — an unpicked model, a prompt that would not compose). No model attempt
 happened, so a model-attempt receipt would name one that did not. The reader
 writes an empty file and the workflow step posts nothing.
 
+## On a morning no proposal was posted
+
+The receipt step runs after the post step, and on a morning `groomer.py post`
+withheld the proposal (DRE-5317) the model was still asked, so the receipt
+still lands — `check_death_receipts.py` expects it. It ends with
+`NOT_POSTED_CLAUSE` and the reason, so the thread never carries a receipt that
+implies a proposal above it. A dry run skips the step, as always.
+
 Nothing here raises: a missing or unreadable `proposal.json` is a run that died
 before it proposed, which the step summary already shows. A receipt step that
 fails the job would turn a missing footnote into a red run over a proposal that
@@ -52,6 +60,11 @@ import sys
 
 #: The marker every model attempt in this pipeline opens with.
 MARKER = "🧠 model-attempt:"
+
+#: Appended, with `verify.not_posted_why`, on a morning the post step
+#: withheld the proposal (DRE-5317): the model was asked, and this says why
+#: no proposal followed rather than implying one above the receipt.
+NOT_POSTED_CLAUSE = " — proposal not posted: "
 
 
 def _plural(count: int, noun: str) -> str:
@@ -84,6 +97,9 @@ def receipt_line(proposal: dict) -> str | None:
         unranked = len(block.get("unranked") or [])
         line += (f" — answer cut short; {_plural(unranked, 'card')} unranked "
                  "for it")
+    why = ((proposal or {}).get("verify") or {}).get("not_posted_why")
+    if isinstance(why, str) and why.strip():
+        line += NOT_POSTED_CLAUSE + why
     return line
 
 
