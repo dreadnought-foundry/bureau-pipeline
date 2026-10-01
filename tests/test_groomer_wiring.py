@@ -66,6 +66,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import groom_judgement  # noqa: E402
+import groom_lookups  # noqa: E402
 import groomer  # noqa: E402
 
 PIPELINE = "dreadnought-foundry/bureau-pipeline"
@@ -927,8 +928,10 @@ class ComputeVerifyPostTest(unittest.TestCase):
         self.groom = _step(self.doc, GROOM_STEP)
         self.run = self.groom.get("run") or ""
 
-    def test_the_jobs_are_exactly_groom_verify_and_post(self):
-        self.assertEqual(list(self.jobs), ["groom", "verify", "post"])
+    def test_the_jobs_are_groom_lookup_verify_and_post(self):
+        """DRE-5429 put the per-owner lookups between the groom and the
+        verify matrix."""
+        self.assertEqual(list(self.jobs), ["groom", "lookup", "verify", "post"])
 
     def test_post_needs_both_and_runs_whatever_verify_did(self):
         post = self.jobs["post"]
@@ -978,7 +981,7 @@ class ComputeVerifyPostTest(unittest.TestCase):
 
     def test_the_verify_job_fans_out_over_the_groom_output(self):
         verify = self.jobs["verify"]
-        self.assertEqual(_needs(verify), ["groom"])
+        self.assertEqual(set(_needs(verify)), {"groom", "lookup"})
         condition = _expression(verify.get("if"))
         for clause in ("inputs.mode != 'drain'",
                        "needs.groom.outputs.verify_matrix != ''",
@@ -993,8 +996,8 @@ class ComputeVerifyPostTest(unittest.TestCase):
         self.assertEqual(_expression(verify.get("runs-on")), RUNS_ON)
         self.assertEqual(verify.get("timeout-minutes"), 15)
 
-    def test_both_new_jobs_are_skipped_on_a_drain(self):
-        for name in ("verify", "post"):
+    def test_the_new_jobs_are_skipped_on_a_drain(self):
+        for name in ("lookup", "verify", "post"):
             self.assertIn("inputs.mode != 'drain'",
                           _expression(self.jobs[name].get("if")),
                           f"the {name} job runs on a drain")
@@ -1284,6 +1287,411 @@ class TheLegsAndThePostRunAsWrittenTest(unittest.TestCase):
                          "repo not in config/repo-map.json: widgets")
         self.assertEqual(marks["DRE-103"]["reason"], "agent step failed")
         self.assertEqual(marks["DRE-104"]["reason"], "no verdict artifact")
+
+
+#: DRE-5429: the per-owner lookup job, and the steps that bind it to the
+#: groom job before it and the verify legs after it.
+LOOKUP_JOB = "lookup"
+OWNERS_STEP = "Owners in the roster"
+LOOKUP_STEP = "Look up this owner's repos"
+LOOKUP_DOWNLOAD_STEP = "Download every owner's lookups"
+FOLD_STEP = "Fold the lookups into the targets"
+VERIFY_PROPOSAL_STEP = "Download the proposal and its targets"
+
+#: The `lookup_budget` input's description, verbatim, on both files.
+LOOKUP_BUDGET_DESCRIPTION = (
+    "empty = sized from the token's own bucket; 0 = spend nothing; a whole "
+    "number = the cap on requests per owner")
+
+#: The only permissions a lookup leg's token is minted with: it reads commits
+#: and the pull requests they belong to, and nothing else.
+LOOKUP_PERMISSIONS = {"permission-contents": "read",
+                      "permission-pull-requests": "read"}
+
+#: The credentials no lookup leg may hold: it writes no card and calls no model.
+LOOKUP_FORBIDDEN = ("LINEAR_API_KEY", *MODEL_SECRETS)
+
+
+def _one_line(run) -> str:
+    return " ".join(str(run or "").replace("\\\n", " ").split())
+
+
+def _uses(job: dict, action: str) -> list:
+    return [s for s in job.get("steps") or []
+            if str(s.get("uses") or "").startswith(action)]
+
+
+def _named(job: dict, name: str) -> dict:
+    for step in job.get("steps") or []:
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"no step named {name!r} in the job")
+
+
+def _flag(run: str, flag: str) -> str:
+    """The value a shell line passes `flag`, read the way bash reads it."""
+    import shlex
+    words = shlex.split(_one_line(run))
+    return words[words.index(flag) + 1]
+
+
+class LookupJobTest(unittest.TestCase):
+    """DRE-5429: the GitHub half of the lookups runs once per owner, each leg
+    on that owner's own App token. An installation token is scoped to one
+    installation and the roster spans three owners, so the groom job's one
+    token — minted with no `owner:` — was refused for every repo outside
+    dreadnought-foundry every morning. `fleet-wake.yml` mints per owner for
+    the same reason, and the matrix reads the same roster reader."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.jobs = self.doc["jobs"]
+        self.job = self.jobs[LOOKUP_JOB]
+        self.steps = self.job.get("steps") or []
+        self.script = _named(self.job, LOOKUP_STEP)
+
+    def _mint(self) -> dict:
+        found = _uses(self.job, "actions/create-github-app-token@")
+        self.assertEqual(len(found), 1, "each leg mints exactly one token")
+        return found[0]
+
+    def test_it_needs_groom_and_keys_on_the_verify_matrix(self):
+        self.assertEqual(_needs(self.job), ["groom"])
+        condition = _expression(self.job.get("if"))
+        for clause in ("inputs.mode != 'drain'",
+                       "needs.groom.outputs.verify_matrix != ''",
+                       "needs.groom.outputs.verify_matrix != '[]'"):
+            self.assertIn(clause, condition,
+                          f"the lookup job's `if` lacks {clause!r}")
+        self.assertEqual(_expression(self.job.get("runs-on")), RUNS_ON)
+
+    def test_one_leg_per_owner_and_one_dead_leg_cancels_none(self):
+        strategy = self.job.get("strategy") or {}
+        self.assertIs(strategy.get("fail-fast"), False)
+        self.assertEqual(
+            _expression((strategy.get("matrix") or {}).get("owner")),
+            "fromJSON(needs.groom.outputs.lookup_owners)")
+
+    def test_the_token_is_minted_for_the_legs_owner_read_only(self):
+        mint = self._mint()
+        verify_mint = _verify_step(self.jobs["verify"], "target_token")
+        self.assertEqual(mint.get("uses"), verify_mint.get("uses"),
+                         "the lookup mint is not at the verify mint's pin")
+        with_ = mint.get("with") or {}
+        self.assertEqual(_expression(with_.get("owner")), "matrix.owner")
+        self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
+        self.assertEqual(_expression(with_.get("private-key")),
+                         "secrets.BUREAU_APP_PRIVATE_KEY")
+        self.assertEqual(
+            {k: v for k, v in with_.items() if k.startswith("permission-")},
+            LOOKUP_PERMISSIONS,
+            "the lookup token reads contents and pull requests and nothing else")
+        self.assertIs(mint.get("continue-on-error"), True,
+                      "a failed mint must leave the leg alive to say so")
+
+    def test_the_jobs_clock_never_kills_the_leg_before_its_own_stop(self):
+        """Both sides READ: the YAML's minutes and the script's constants. The
+        leg stops asking at `MAX_SECONDS`, one call can hold it past that by
+        `REQUEST_TIMEOUT`, and three minutes cover the mint, the download and
+        the upload. A change to any of the three that lets the job kill the
+        leg first — so it uploads nothing — fails here."""
+        self.assertEqual(self.job.get("timeout-minutes"), 9)
+        self.assertGreaterEqual(
+            int(self.job["timeout-minutes"]) * 60,
+            groom_lookups.MAX_SECONDS + groom_lookups.REQUEST_TIMEOUT + 180)
+
+    def test_the_legs_clock_fits_the_mornings_headroom(self):
+        """The morning's latency budget. The scheduled run is the 06:00 PT
+        cron, and DRE-4968 needs the proposal on the standing card by 06:30
+        PT. The two most recent scheduled mornings, runs 36719580735
+        (2026-09-30) and 36866353792 (2026-10-01), posted at 06:16 and 06:18
+        PT — twelve to fourteen minutes before the deadline. The lookup stage
+        runs between groom and verify, its legs side by side, so it adds the
+        slowest leg: at most `MAX_SECONDS + REQUEST_TIMEOUT`. Six minutes is
+        that measured headroom with half kept for the groom job's own
+        variance; a leg clock past it has to argue for the deadline first."""
+        self.assertLessEqual(
+            groom_lookups.MAX_SECONDS + groom_lookups.REQUEST_TIMEOUT, 360)
+
+    def test_the_steps_run_in_the_contract_order(self):
+        checkout = self.steps[0]
+        self.assertTrue(str(checkout.get("uses")).startswith("actions/checkout@"))
+        self.assertEqual((checkout.get("with") or {}).get("path"), ".bureau-pipeline")
+        self.assertEqual((checkout.get("with") or {}).get("repository"), PIPELINE)
+        downloads = _uses(self.job, "actions/download-artifact@")
+        self.assertEqual([(d.get("with") or {}).get("name") for d in downloads],
+                         ["groom-proposal"])
+        upload = _uses(self.job, "actions/upload-artifact@")
+        self.assertEqual(len(upload), 1)
+        order = [checkout, downloads[0], self._mint(), self.script, upload[0]]
+        self.assertEqual([self.steps.index(s) for s in order],
+                         sorted(self.steps.index(s) for s in order))
+
+    def test_the_leg_runs_the_owner_command_with_every_input_through_env(self):
+        run = _one_line(self.script.get("run"))
+        self.assertIn(
+            'python3 .bureau-pipeline/scripts/groom_lookups.py owner '
+            '--owner "$OWNER" --targets verify-targets.json '
+            '--out "lookups-$OWNER.json" --budget "$LOOKUP_BUDGET"', run)
+        self.assertNotIn("${{", run, "every input goes through env:")
+        env = self.script.get("env") or {}
+        self.assertEqual(_expression(env.get("OWNER")), "matrix.owner")
+        self.assertEqual(_expression(env.get("LOOKUP_BUDGET")),
+                         "inputs.lookup_budget")
+        self.assertEqual(_expression(env.get("GH_TOKEN")),
+                         f"steps.{self._mint()['id']}.outputs.token")
+
+    def test_a_leg_whose_mint_failed_still_runs_and_says_so(self):
+        """DRE-5308's `no token for <owner>` contract: the script records the
+        owner unread with the reason, so the verify legs learn what was not
+        consulted. Gated on the mint, the leg would upload nothing instead."""
+        self.assertNotIn("if", self.script)
+
+    def test_the_leg_holds_no_linear_key_and_no_model_credential(self):
+        for name in LOOKUP_FORBIDDEN:
+            self.assertNotIn(name, str(self.job),
+                             f"the lookup job carries {name}")
+
+    def test_each_leg_uploads_its_document_under_its_owner(self):
+        upload = _uses(self.job, "actions/upload-artifact@")[0]
+        with_ = upload.get("with") or {}
+        self.assertEqual(with_.get("name"), "groom-lookups-${{ matrix.owner }}")
+        self.assertEqual(with_.get("path"), "lookups-${{ matrix.owner }}.json")
+        self.assertIs(with_.get("overwrite"), True,
+                      "a re-run leg must re-upload its artifact")
+
+
+class LookupOwnersAndBudgetTest(unittest.TestCase):
+    """The matrix's owners, read off the roster, and the per-owner request
+    budget: an input on both files whose ordinary value is the empty string."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.stub = _load("self-groomer.yml")
+
+    def _reusable_input(self) -> dict:
+        spec = (_on(self.doc)["workflow_call"].get("inputs") or {}).get(
+            "lookup_budget")
+        self.assertIsNotNone(spec, "the reusable takes no lookup_budget input")
+        return spec
+
+    def _stub_input(self) -> dict:
+        spec = (_on(self.stub)["workflow_dispatch"].get("inputs") or {}).get(
+            "lookup_budget")
+        self.assertIsNotNone(spec, "the stub offers no lookup_budget input")
+        return spec
+
+    def test_the_owners_are_the_roster_readers_output(self):
+        groom = self.doc["jobs"]["groom"]
+        step = _named(groom, OWNERS_STEP)
+        self.assertEqual(_one_line(step.get("run")),
+                         "python3 .bureau-pipeline/scripts/release_train.py "
+                         "wake-owners")
+        self.assertEqual(
+            _expression((groom.get("outputs") or {}).get("lookup_owners")),
+            f"steps.{step['id']}.outputs.owners")
+
+    def test_the_input_exists_on_both_files_and_is_empty_by_default(self):
+        for spec in (self._reusable_input(), self._stub_input()):
+            self.assertEqual(spec.get("type"), "string")
+            self.assertEqual(spec.get("default"), "")
+            self.assertEqual(" ".join(str(spec.get("description")).split()),
+                             LOOKUP_BUDGET_DESCRIPTION)
+        self.assertFalse(self._reusable_input().get("required"))
+
+    def test_both_defaults_read_as_no_budget_given(self):
+        """The flag rides every run, so the ordinary morning hands the script
+        whatever the defaults are. Read through DRE-5308's own reader: a
+        default it refused would turn every scheduled leg red."""
+        for spec in (self._reusable_input(), self._stub_input()):
+            self.assertIsNone(groom_lookups.parse_budget(spec.get("default")))
+
+    def test_only_the_hand_dispatch_passes_it(self):
+        jobs = self.stub["jobs"]
+        self.assertEqual(
+            _expression((jobs["call"].get("with") or {}).get("lookup_budget")),
+            "inputs.lookup_budget")
+        for name in ("drain", "schedule"):
+            self.assertNotIn("lookup_budget", jobs[name].get("with") or {},
+                             f"the {name} job passes lookup_budget — omitted, "
+                             "the reusable's default applies")
+
+
+class VerifyReadsTheLookupsTest(unittest.TestCase):
+    """The verify legs read every owner's document. Downloaded unmerged, each
+    artifact lands in its own subdirectory, and `fold` walks the directory at
+    every depth — so the download's `path` and the fold's `--lookups-dir` are
+    one value, asserted as one."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.job = self.doc["jobs"]["verify"]
+        self.steps = self.job.get("steps") or []
+        self.download = _named(self.job, LOOKUP_DOWNLOAD_STEP)
+        self.fold = _named(self.job, FOLD_STEP)
+
+    def test_a_dead_lookup_leg_never_stops_the_verify_matrix(self):
+        self.assertEqual(set(_needs(self.job)), {"groom", "lookup"})
+        condition = _expression(self.job.get("if"))
+        self.assertTrue(condition.startswith("always()"),
+                        "verify's `if` must open with always()")
+        for clause in ("needs.groom.result == 'success'",
+                       "inputs.mode != 'drain'",
+                       "needs.groom.outputs.verify_matrix != ''",
+                       "needs.groom.outputs.verify_matrix != '[]'"):
+            self.assertIn(clause, condition)
+
+    def test_the_download_is_unmerged_and_lands_where_fold_reads(self):
+        with_ = self.download.get("with") or {}
+        self.assertEqual(with_.get("pattern"), "groom-lookups-*")
+        self.assertIs(with_.get("merge-multiple"), False)
+        self.assertIs(self.download.get("continue-on-error"), True)
+        self.assertEqual(with_.get("path"),
+                         _flag(self.fold.get("run"), "--lookups-dir"))
+
+    def test_the_fold_makes_its_directory_then_folds_the_targets(self):
+        run = _one_line(self.fold.get("run"))
+        directory = (self.download.get("with") or {}).get("path")
+        mkdir = f"mkdir -p {directory}"
+        self.assertIn(mkdir, run)
+        command = ("python3 .bureau-pipeline/scripts/groom_lookups.py fold "
+                   f"--targets verify-targets.json --lookups-dir {directory} "
+                   "--out verify-targets.json")
+        self.assertIn(command, run)
+        self.assertLess(run.index(mkdir), run.index(command))
+
+    def test_the_fold_runs_between_the_downloads_and_prepare(self):
+        order = [_named(self.job, VERIFY_PROPOSAL_STEP), self.download,
+                 self.fold, _verify_step(self.job, "prepare")]
+        at = [self.steps.index(s) for s in order]
+        self.assertEqual(at, sorted(at),
+                         "the fold must run after both downloads and before "
+                         "`prepare` fences the evidence")
+
+
+class TheLookupLegAndTheFoldRunAsWrittenTest(unittest.TestCase):
+    """The workflow's OWN `run:` blocks, executed against one layout: a lookup
+    leg run as written over a `gh` that answers, its document placed where the
+    unmerged download puts it — the path built from the upload's and the
+    download's own `with:` values — then the verify leg's fold step. So the
+    wiring and both commands are proven against one answered card."""
+
+    CARD = "DRE-901"
+    HOME = "dreadnought-foundry/bureau-pipeline"
+    OWNER = "dreadnought-foundry"
+
+    #: `gh api -i`, answering: a status line, the rate-limit header the leg
+    #: sizes itself from, and an empty commits list.
+    GH = ("#!/bin/sh\n"
+          "printf 'HTTP/2.0 200 OK\\nx-ratelimit-remaining: 4000\\n\\n[]'\n")
+
+    def _run(self, step: dict, cwd: Path, env: dict) -> str:
+        import subprocess
+        proc = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=cwd,
+                              env={**os.environ, **env}, capture_output=True,
+                              text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    def _targets(self) -> list:
+        return [{"card": self.CARD, "repository": self.HOME, "list": "planning",
+                 "context": {"created_at": "2026-09-01T00:00:00Z"},
+                 "lookups": {"looked_up": True, "ok": None, "why": None,
+                             "paths": ["scripts/groomer.py"],
+                             "paths_left_out": 0, "newer_cards": [],
+                             "newer_cards_why": None, "merged_prs": [],
+                             "cut": [], "owners": {}}}]
+
+    def _workspace(self, tmp: Path, name: str) -> Path:
+        ws = tmp / name
+        ws.mkdir()
+        (ws / ".bureau-pipeline").symlink_to(ROOT)
+        (ws / "verify-targets.json").write_text(json.dumps(self._targets()))
+        return ws
+
+    def test_an_answered_leg_folds_to_an_ok_card(self):
+        import shutil
+        import tempfile
+
+        doc = self._doc()
+        lookup, verify = doc["jobs"][LOOKUP_JOB], doc["jobs"]["verify"]
+        leg = _named(lookup, LOOKUP_STEP)
+        upload = (_uses(lookup, "actions/upload-artifact@")[0].get("with") or {})
+        download = _named(verify, LOOKUP_DOWNLOAD_STEP).get("with") or {}
+        fold = _named(verify, FOLD_STEP)
+
+        def owned(text: str) -> str:
+            return text.replace("${{ matrix.owner }}", self.OWNER)
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "gh").write_text(self.GH)
+            (bin_dir / "gh").chmod(0o755)
+
+            leg_ws = self._workspace(tmp, "leg")
+            self._run(leg, leg_ws, {
+                "OWNER": self.OWNER, "GH_TOKEN": "a-token",
+                "LOOKUP_BUDGET": "",
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+            written = leg_ws / owned(upload["path"])
+            self.assertTrue(written.is_file(), "the leg wrote no document")
+            self.assertTrue(json.loads(written.read_text())["cards"][self.CARD]
+                            ["read"])
+
+            verify_ws = self._workspace(tmp, "verify")
+            placed = (Path(download["path"]) / owned(upload["name"])
+                      / owned(upload["path"]))
+            self.assertEqual(
+                placed.as_posix(),
+                "lookups/groom-lookups-dreadnought-foundry/"
+                "lookups-dreadnought-foundry.json")
+            (verify_ws / placed).parent.mkdir(parents=True)
+            shutil.copy(written, verify_ws / placed)
+            self._run(fold, verify_ws, {})
+            rows = json.loads((verify_ws / "verify-targets.json").read_text())
+
+        look = rows[0]["lookups"]
+        self.assertIs(look["ok"], True, look)
+        self.assertIsNone(look["why"])
+        self.assertEqual(look["owners"][self.OWNER], {"read": True, "why": None})
+
+    def test_a_morning_no_leg_uploaded_still_folds(self):
+        """The download is `continue-on-error`, so on a morning no leg
+        uploaded there is no directory at all — the fold's own `mkdir -p` is
+        what keeps the step green, and the card comes out failed, named."""
+        import tempfile
+
+        fold = _named(self._doc()["jobs"]["verify"], FOLD_STEP)
+        with tempfile.TemporaryDirectory() as raw:
+            ws = self._workspace(Path(raw), "verify")
+            self._run(fold, ws, {})
+            look = json.loads((ws / "verify-targets.json").read_text())[0][
+                "lookups"]
+        self.assertIs(look["ok"], False)
+        self.assertIn(groom_lookups.NO_RECORD.format(owner=self.OWNER),
+                      look["why"])
+
+    def test_a_leg_with_no_token_writes_its_document_unread(self):
+        """A failed mint renders an empty token; the leg still runs, on an
+        empty budget, and says the owner was not read."""
+        import tempfile
+
+        leg = _named(self._doc()["jobs"][LOOKUP_JOB], LOOKUP_STEP)
+        with tempfile.TemporaryDirectory() as raw:
+            ws = self._workspace(Path(raw), "leg")
+            self._run(leg, ws, {"OWNER": self.OWNER, "GH_TOKEN": "",
+                                "LOOKUP_BUDGET": ""})
+            written = json.loads(
+                (ws / f"lookups-{self.OWNER}.json").read_text())
+        self.assertIs(written["read"], False)
+        self.assertEqual(written["why"],
+                         groom_lookups.NO_TOKEN.format(owner=self.OWNER))
+
+    @staticmethod
+    def _doc() -> dict:
+        return _load("groomer.yml")
 
 
 class LaneContractTest(unittest.TestCase):
