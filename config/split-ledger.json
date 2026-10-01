@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-09-28T04:55:20Z",
+  "generated_at": "2026-10-01T04:53:34Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
-  "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
+  "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards \u2014 with 2 read(s) that could not be made and are therefore in no count below: the search for comments carrying 'turn-exhaustion-requeue' could not be read, so any card it alone would have found is missing: The read operation timed out; the search for comments carrying 'held-for-human (turn-exhaustion-requeue cap reached)' could not be read, so any card it alone would have found is missing: The read operation timed out",
   "seed_cards": [
     "DRE-3029",
     "DRE-3016",
@@ -137,62 +137,6 @@
       ]
     },
     {
-      "card": "DRE-2727",
-      "title": "Update every agent brief and standard to the new model \u2014 or they will confidently do the old thing",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2727/update-every-agent-brief-and-standard-to-the-new-model-or-they-will",
-      "state": "Done",
-      "created_at": "2026-08-25T14:26:04Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "L",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 18.36,
-      "tells": [
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unbounded-quantifier": "'every agent' with no count of agents anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2731",
-      "title": "The Alerts list renders UTC as if it were local \u2014 an alert reads 7 hours newer than it is",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2731/the-alerts-list-renders-utc-as-if-it-were-local-an-alert-reads-7-hours",
-      "state": "Done",
-      "created_at": "2026-08-25T21:54:34Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "XS",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 15.73,
-      "tells": [
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unbounded-quantifier": "'every rendered' with no count of rendereds anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
       "card": "DRE-2744",
       "title": "Delete the two redundant product keys \u2014 and the third call site that raises rather than falls back",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2744/delete-the-two-redundant-product-keys-and-the-third-call-site-that",
@@ -239,196 +183,6 @@
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
         "DRE-2876: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
         "DRE-2875: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
-      ]
-    },
-    {
-      "card": "DRE-2753",
-      "title": "The console needs a batch-approval surface \u2014 the groomer proposes, and there is nowhere for you to approve it",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2753/the-console-needs-a-batch-approval-surface-the-groomer-proposes-and",
-      "state": "Done",
-      "created_at": "2026-08-26T17:46:07Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "UNKNOWN",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 17.97,
-      "tells": [
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unbounded-quantifier": "'each batch' with no count of batchs anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2771",
-      "title": "Phase 1's two lane changes were never declared \u2014 the board still has no Intake and still says Plan Review",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2771/phase-1s-two-lane-changes-were-never-declared-the-board-still-has-no",
-      "state": "Done",
-      "created_at": "2026-08-27T00:42:33Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 36.89,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2780",
-      "title": "The console reports the version you rolled AWAY from \u2014 a rollback moves the image, not the version stamp",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2780/the-console-reports-the-version-you-rolled-away-from-a-rollback-moves",
-      "state": "Done",
-      "created_at": "2026-08-27T20:44:51Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 18.75,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2811",
-      "title": "The console cannot tell a working fix loop from a stalled one \u2014 both read as failure",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2811/the-console-cannot-tell-a-working-fix-loop-from-a-stalled-one-both",
-      "state": "Done",
-      "created_at": "2026-08-29T03:58:21Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 3,
-      "dollars": 52.84,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2814",
-      "title": "Console noise: the dashboard keeps asking for a human who already answered",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2814/console-noise-the-dashboard-keeps-asking-for-a-human-who-already",
-      "state": "Done",
-      "created_at": "2026-08-29T15:42:18Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 4,
-      "dollars": 72.01,
-      "tells": [
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unbounded-quantifier": "'Each sighting' with no count of sightings anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2821",
-      "title": "Every automatic recovery is invisible to the console \u2014 it shows the last bad state, never the repair already running",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2821/every-automatic-recovery-is-invisible-to-the-console-it-shows-the-last",
-      "state": "Done",
-      "created_at": "2026-08-29T17:20:58Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 36.54,
-      "tells": [
-        "two-languages-or-tiers",
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "two-languages-or-tiers": "the footprint spans workflow, python",
-        "unbounded-quantifier": "'All current' with no count of currents anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2826",
-      "title": "Every act emits its trailer, and every receipt body is byte-identical",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2826/every-act-emits-its-trailer-and-every-receipt-body-is-byte-identical",
-      "state": "Done",
-      "created_at": "2026-08-29T19:49:58Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 18.42,
-      "tells": [
-        "two-languages-or-tiers",
-        "unenumerated-count",
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "two-languages-or-tiers": "the footprint spans python, workflow",
-        "unenumerated-count": "'567 findings' \u2014 the body names 7",
-        "unbounded-quantifier": "'every relay' with no count of relays anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -540,66 +294,6 @@
       ]
     },
     {
-      "card": "DRE-2845",
-      "title": "The wave route \u2014 a wave plan written to the standard, and the epics it commits to",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2845/the-wave-route-a-wave-plan-written-to-the-standard-and-the-epics-it",
-      "state": "Done",
-      "created_at": "2026-08-30T20:50:47Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "L",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 17.01,
-      "tells": [
-        "unenumerated-count",
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unenumerated-count": "'six cards' \u2014 the body names 5",
-        "unbounded-quantifier": "'every phase' with no count of phases anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2846",
-      "title": "Progressive commitment \u2014 an epic inside an approved wave gets its own green light when its turn comes",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2846/progressive-commitment-an-epic-inside-an-approved-wave-gets-its-own",
-      "state": "Done",
-      "created_at": "2026-08-30T20:51:12Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "devops",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 21.12,
-      "tells": [
-        "unenumerated-count",
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unenumerated-count": "'six cards' \u2014 the body names 5",
-        "unbounded-quantifier": "'each arrives' with no count of arrives anywhere"
-      },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
       "card": "DRE-2847",
       "title": "Close the back doors into Backlog and Todo \u2014 and prove the absence by test",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2847/close-the-back-doors-into-backlog-and-todo-and-prove-the-absence-by",
@@ -654,30 +348,6 @@
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
         "DRE-2860: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
-      ]
-    },
-    {
-      "card": "DRE-2852",
-      "title": "Moving work looks like it is moving \u2014 a pulse earned from a timestamp, never from the state name",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2852/moving-work-looks-like-it-is-moving-a-pulse-earned-from-a-timestamp",
-      "state": "Done",
-      "created_at": "2026-08-30T22:00:55Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 32.89,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -742,30 +412,6 @@
       "tell_evidence": {
         "two-languages-or-tiers": "the footprint spans web, python"
       },
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-2898",
-      "title": "COMPLIANCE \u00b7 An answer to a question the form never asked exports as an ordinary answer, and reads 12/11",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2898/compliance-an-answer-to-a-question-the-form-never-asked-exports-as-an",
-      "state": "Canceled",
-      "created_at": "2026-09-01T01:02:38Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 39.47,
-      "tells": [],
-      "tell_evidence": {},
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
@@ -845,30 +491,6 @@
       ]
     },
     {
-      "card": "DRE-2917",
-      "title": "SECURITY \u00b7 The library WRITE responses still return the template id",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2917/security-the-library-write-responses-still-return-the-template-id",
-      "state": "Done",
-      "created_at": "2026-09-01T04:23:04Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 16.07,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
       "card": "DRE-2937",
       "title": "A cold cache renders \"nothing needs you\" into the bell \u2014 and fixing it crosses the whole stack, not just the backend",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2937/a-cold-cache-renders-nothing-needs-you-into-the-bell-and-fixing-it",
@@ -901,30 +523,6 @@
       "unreadable": [
         "DRE-2953: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
         "DRE-2952: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
-      ]
-    },
-    {
-      "card": "DRE-2968",
-      "title": "The dev mock has no artifact with painted anchors, so no passage-anchored flow can be driven locally",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2968/the-dev-mock-has-no-artifact-with-painted-anchors-so-no-passage",
-      "state": "Done",
-      "created_at": "2026-09-02T12:09:28Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "frontend",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 37.5,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -1084,172 +682,6 @@
       "unreadable": []
     },
     {
-      "card": "DRE-3037",
-      "title": "A placed form freezes a full copy of its definition into the library partition, which is read as ONE page \u2014 five copies of the readiness questionnaire truncate the library silently",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3037/a-placed-form-freezes-a-full-copy-of-its-definition-into-the-library",
-      "state": "Done",
-      "created_at": "2026-09-04T00:50:48Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "M",
-      "role": "engineer",
-      "declared_files": "UNKNOWN",
-      "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 39.34,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
-      ]
-    },
-    {
-      "card": "DRE-3074",
-      "title": "The classifier calls the Messages API raw with the subscription token and gets 429 every time \u2014 every card entering Planning escalates to the CEO; the classification must run through the Claude Code path",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3074/the-classifier-calls-the-messages-api-raw-with-the-subscription-token",
-      "state": "Done",
-      "created_at": "2026-09-04T04:18:27Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "engineer",
-      "declared_files": [
-        "scripts/planning_classify.py",
-        ".github/workflows/plan.yml",
-        "scripts/planning_escalation.py",
-        "tests/test_planning_classify.py"
-      ],
-      "declared_file_count": 4,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 21.19,
-      "tells": [
-        "two-languages-or-tiers"
-      ],
-      "tell_evidence": {
-        "two-languages-or-tiers": "the footprint spans python, workflow"
-      },
-      "unreadable": []
-    },
-    {
-      "card": "DRE-3076",
-      "title": "The harness fails fast on a dead sandbox \u2014 each scenario wait has its own deadline, and a failed sandbox sweep or gate is quoted, not waited on for three hours",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3076/the-harness-fails-fast-on-a-dead-sandbox-each-scenario-wait-has-its",
-      "state": "Done",
-      "created_at": "2026-09-04T04:53:43Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "devops",
-      "declared_files": [
-        ".github/workflows/harness.yml",
-        ".github/workflows/promote-channel.yml"
-      ],
-      "declared_file_count": 2,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 16.14,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": []
-    },
-    {
-      "card": "DRE-3078",
-      "title": "The planner reads the split ledger and the mulch planning records before it sizes a card (piece 2 of 3 of DRE-3022)",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3078/the-planner-reads-the-split-ledger-and-the-mulch-planning-records",
-      "state": "Backlog",
-      "created_at": "2026-09-04T04:55:00Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "devops",
-      "declared_files": [
-        ".github/workflows/plan.yml",
-        "briefs/planner.md",
-        "scripts/plan_artifact.py"
-      ],
-      "declared_file_count": 3,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 2,
-      "dollars": 40.07,
-      "tells": [
-        "contracts-between-pieces",
-        "two-languages-or-tiers"
-      ],
-      "tell_evidence": {
-        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")",
-        "two-languages-or-tiers": "the footprint spans workflow, python"
-      },
-      "unreadable": []
-    },
-    {
-      "card": "DRE-3088",
-      "title": "The post-approval send-back revises the plan and never builds a plan held twice \u2014 one re-plan per hold with the critic's finding, a park with needs-human at the bound, and receipts that name In Progress, not Todo",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3088/the-post-approval-send-back-revises-the-plan-and-never-builds-a-plan",
-      "state": "Done",
-      "created_at": "2026-09-04T15:44:48Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "XS",
-      "role": "devops",
-      "declared_files": [
-        ".github/workflows/plan.yml",
-        "tests/test_plan_workflow.py"
-      ],
-      "declared_file_count": 2,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 3,
-      "dollars": 54.67,
-      "tells": [
-        "two-languages-or-tiers"
-      ],
-      "tell_evidence": {
-        "two-languages-or-tiers": "the footprint spans python, workflow"
-      },
-      "unreadable": []
-    },
-    {
-      "card": "DRE-3101",
-      "title": "A pull request's harness run takes its sandbox cleanup and probe rules from main, not from the PR's branch \u2014 an old branch cannot wipe main's proving run out of the shared sandbox",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3101/a-pull-requests-harness-run-takes-its-sandbox-cleanup-and-probe-rules",
-      "state": "Done",
-      "created_at": "2026-09-04T19:39:47Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "devops",
-      "declared_files": [
-        ".github/workflows/harness.yml",
-        ".github/workflows/promote-channel.yml"
-      ],
-      "declared_file_count": 2,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 16.21,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": []
-    },
-    {
       "card": "DRE-3213",
       "title": "agent-bureau: release.json gains the website and relay entries with auto off, and a loader plus a parity test pin the data to deploy-lag's surface table \u2014 the readers do not change yet",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3213/agent-bureau-releasejson-gains-the-website-and-relay-entries-with-auto",
@@ -1284,72 +716,6 @@
       "unreadable": [
         "DRE-3238: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
-    },
-    {
-      "card": "DRE-3232",
-      "title": "COMPLIANCE \u00b7 Answers outside the frozen definition are kept, flagged, and never counted as asked",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3232/compliance-answers-outside-the-frozen-definition-are-kept-flagged-and",
-      "state": "Done",
-      "created_at": "2026-09-05T23:47:56Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "UNKNOWN",
-      "role": "engineer",
-      "declared_files": [
-        "infra/lambda/answered_lib.ts",
-        "infra/lambda/response_export_lib.ts",
-        "infra/lambda/routes/responses.ts",
-        "infra/lambda/routes/library.ts",
-        "infra/lambda/items_lib.ts",
-        "infra/test/answered_lib.test.ts",
-        "infra/test/response_export_lib.test.ts",
-        "infra/test/responses_route.test.ts",
-        "infra/test/api_shapes.test.ts",
-        "infra/test/fixtures/api-shapes/folder-form-progress.json",
-        "infra/test/fixtures/api-shapes/responses-submit.json"
-      ],
-      "declared_file_count": 11,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 17.76,
-      "tells": [],
-      "tell_evidence": {},
-      "unreadable": []
-    },
-    {
-      "card": "DRE-3275",
-      "title": "bureau-pipeline: declare the \ud83d\udd2c proof-waiting act in the registry and add linear_ops.py proof-waiting / proof-observed helpers",
-      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3275/bureau-pipeline-declare-the-proof-waiting-act-in-the-registry-and-add",
-      "state": "Done",
-      "created_at": "2026-09-07T00:14:30Z",
-      "reasons": [
-        "turn-cap-death"
-      ],
-      "size": "S",
-      "role": "devops",
-      "declared_files": [
-        "dreadnought-foundry/",
-        "bureau-pipeline/config/pipeline-acts.json",
-        "bureau-pipeline/scripts/linear_ops.py",
-        "bureau-pipeline/scripts/test_linear_ops.py",
-        "bureau-pipeline/docs/pipeline-acts.md"
-      ],
-      "declared_file_count": 5,
-      "piece_files": "UNKNOWN",
-      "pieces": 0,
-      "pieces_named": [],
-      "deaths": 1,
-      "dollars": 13.6,
-      "tells": [
-        "unbounded-quantifier"
-      ],
-      "tell_evidence": {
-        "unbounded-quantifier": "'all built' with no count of builts anywhere"
-      },
-      "unreadable": []
     },
     {
       "card": "DRE-3306",
@@ -1508,154 +874,369 @@
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
+    },
+    {
+      "card": "DRE-4906",
+      "title": "bureau-pipeline: every uploaded agent log records the effort level the run was given, so the Record can compare runs by effort as well as by model",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-4906/bureau-pipeline-every-uploaded-agent-log-records-the-effort-level-the",
+      "state": "Backlog",
+      "created_at": "2026-09-25T20:55:43Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": [
+        "scripts/upload_agent_log.py",
+        "tests/test_agent_log_upload.py"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-5356"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans workflow, python",
+        "unbounded-quantifier": "'each model' with no count of models anywhere"
+      },
+      "unreadable": [
+        "DRE-5356: no merged pull request this run could read"
+      ]
+    },
+    {
+      "card": "DRE-5009",
+      "title": "portico: reingest.ts rebuilds a stale interactive document from its recorded source, as its last publisher, and reads back that it is still interactive at the same address",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5009/portico-reingestts-rebuilds-a-stale-interactive-document-from-its",
+      "state": "Backlog",
+      "created_at": "2026-09-27T14:45:09Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": [
+        "infra/scripts/reingest.ts",
+        "infra/test/reingest_run_log.test.ts",
+        "infra/test/fixtures/release/bin/"
+      ],
+      "declared_file_count": 3,
+      "piece_files": "UNKNOWN",
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-5377",
+        "DRE-5300",
+        "DRE-5297"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'every rebuild' with no count of rebuilds anywhere"
+      },
+      "unreadable": [
+        "DRE-5377: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-5300: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-5297: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-5022",
+      "title": "agent-bureau: the Sunday job \u2014 one console copy claims the week, gathers the stops and the fingerprints, hands the patterns and the table to the two model-note cards, composes, keeps, files the one card before the briefing builds, and records what it cost",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5022/agent-bureau-the-sunday-job-one-console-copy-claims-the-week-gathers",
+      "state": "Backlog",
+      "created_at": "2026-09-27T15:20:50Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": [
+        "console/backend/weekly_agent_report.py",
+        "console/backend/starters/weekly_agent_report.py",
+        "console/backend/tests/test_weekly_agent_report.py"
+      ],
+      "declared_file_count": 3,
+      "piece_files": "UNKNOWN",
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-5406",
+        "DRE-5405",
+        "DRE-5404"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'every few' with no count of fews anywhere"
+      },
+      "unreadable": [
+        "DRE-5406: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-5405: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-5404: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-5131",
+      "title": "agent-bureau: the 06:30 PT briefing lists the epics in motion in priority order \u2014 each with done/total, what it waits on, and a flag when it has not moved in two days",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5131/agent-bureau-the-0630-pt-briefing-lists-the-epics-in-motion-in",
+      "state": "Canceled",
+      "created_at": "2026-09-28T22:16:16Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-5140"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'each epic' with no count of epics anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-5140: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-5240",
+      "title": "bureau-pipeline: Todo holds only cards about to be built \u2014 work a person does (WORKBENCH and OPERATOR verdicts, proofs) rests in its own lane, and no epic is ever put in Todo",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5240/bureau-pipeline-todo-holds-only-cards-about-to-be-built-work-a-person",
+      "state": "In Progress",
+      "created_at": "2026-09-29T21:06:10Z",
+      "reasons": [
+        "handed-back"
+      ],
+      "size": "UNKNOWN",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'every classified' with no count of classifieds anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-5280",
+      "title": "bureau-pipeline: plan.yml runs the second critic before Green Light \u2014 a 'review' route the plan route hands off to, a PASS that reaches Green Light, a send-back that revises and re-reviews on its own, and a bound that parks in Triage",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5280/bureau-pipeline-planyml-runs-the-second-critic-before-green-light-a",
+      "state": "Backlog",
+      "created_at": "2026-09-30T02:10:53Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "devops",
+      "declared_files": [
+        ".github/workflows/plan.yml",
+        "config/pipeline-acts.json",
+        "scripts/plan_critic.py",
+        "tests/test_plan_critic.py",
+        "tests/test_plan_critic_wiring.py",
+        "tests/test_plan_token_remint.py",
+        "tests/test_plan_critic_scenario.py"
+      ],
+      "declared_file_count": 7,
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-5284"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans workflow, python",
+        "unbounded-quantifier": "'every row' with no count of rows anywhere"
+      },
+      "unreadable": [
+        "DRE-5284: no merged pull request this run could read"
+      ]
+    },
+    {
+      "card": "DRE-5289",
+      "title": "agent-bureau: the card drawer's header tells the same story as the row \u2014 a held review on a hand-built card never reads \"Stuck \u2014 needs you\", and a PR whose CI passed never reads \"CI running\"",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-5289/agent-bureau-the-card-drawers-header-tells-the-same-story-as-the-row-a",
+      "state": "Green Light",
+      "created_at": "2026-09-30T04:02:50Z",
+      "reasons": [
+        "handed-back"
+      ],
+      "size": "UNKNOWN",
+      "role": "frontend",
+      "declared_files": [
+        "console/web/src/components/flyout/CardFlyout.tsx",
+        "MobileCardSheet.tsx"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans web, python",
+        "unbounded-quantifier": "'all concluded' with no count of concludeds anywhere"
+      },
+      "unreadable": []
     }
   ],
   "monthly": [
     {
-      "month": "2026-06",
-      "planner_children": 0,
+      "month": "2026-07",
+      "planner_children": 191,
       "split": 0,
       "died": 0,
       "complete": false
     },
     {
-      "month": "2026-07",
-      "planner_children": 228,
-      "split": 0,
-      "died": 0,
-      "complete": true
-    },
-    {
       "month": "2026-08",
-      "planner_children": 281,
+      "planner_children": 280,
       "split": 7,
-      "died": 17,
+      "died": 5,
       "complete": true
     },
     {
       "month": "2026-09",
-      "planner_children": 1143,
-      "split": 7,
-      "died": 16,
+      "planner_children": 1322,
+      "split": 12,
+      "died": 5,
+      "complete": true
+    },
+    {
+      "month": "2026-10",
+      "planner_children": 35,
+      "split": 0,
+      "died": 0,
       "complete": false
     }
   ],
   "rates": {
-    "cards": 45,
-    "died": 33,
+    "cards": 29,
+    "died": 10,
     "by_declared_files": [
       {
         "more_than": 1,
-        "of": 13,
-        "died": 9,
+        "of": 11,
+        "died": 2,
         "cards": [
           "DRE-3016",
-          "DRE-3022",
-          "DRE-3074",
-          "DRE-3076",
-          "DRE-3078",
-          "DRE-3088",
-          "DRE-3101",
-          "DRE-3232",
-          "DRE-3275"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 1 file died 9 of 13 times"
+        "sentence": "cards declaring more than 1 file died 2 of 11 times"
       },
       {
         "more_than": 2,
-        "of": 10,
-        "died": 6,
+        "of": 9,
+        "died": 2,
         "cards": [
           "DRE-3016",
-          "DRE-3022",
-          "DRE-3074",
-          "DRE-3078",
-          "DRE-3232",
-          "DRE-3275"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 2 files died 6 of 10 times"
+        "sentence": "cards declaring more than 2 files died 2 of 9 times"
       },
       {
         "more_than": 3,
-        "of": 8,
-        "died": 5,
+        "of": 6,
+        "died": 2,
         "cards": [
           "DRE-3016",
-          "DRE-3022",
-          "DRE-3074",
-          "DRE-3232",
-          "DRE-3275"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 3 files died 5 of 8 times"
+        "sentence": "cards declaring more than 3 files died 2 of 6 times"
       },
       {
         "more_than": 4,
-        "of": 7,
-        "died": 4,
+        "of": 6,
+        "died": 2,
         "cards": [
           "DRE-3016",
-          "DRE-3022",
-          "DRE-3232",
-          "DRE-3275"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 4 files died 4 of 7 times"
+        "sentence": "cards declaring more than 4 files died 2 of 6 times"
       },
       {
         "more_than": 5,
         "of": 6,
-        "died": 3,
+        "died": 2,
         "cards": [
           "DRE-3016",
-          "DRE-3022",
-          "DRE-3232"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 5 files died 3 of 6 times"
+        "sentence": "cards declaring more than 5 files died 2 of 6 times"
       },
       {
         "more_than": 6,
         "of": 5,
-        "died": 2,
+        "died": 1,
         "cards": [
-          "DRE-3022",
-          "DRE-3232"
+          "DRE-3022"
         ],
-        "sentence": "cards declaring more than 6 files died 2 of 5 times"
+        "sentence": "cards declaring more than 6 files died 1 of 5 times"
       },
       {
         "more_than": 7,
-        "of": 2,
-        "died": 1,
-        "cards": [
-          "DRE-3232"
-        ],
-        "sentence": "cards declaring more than 7 files died 1 of 2 times"
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 7 files died 0 of 1 times"
       },
       {
         "more_than": 8,
-        "of": 2,
-        "died": 1,
-        "cards": [
-          "DRE-3232"
-        ],
-        "sentence": "cards declaring more than 8 files died 1 of 2 times"
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 8 files died 0 of 1 times"
       },
       {
         "more_than": 9,
-        "of": 2,
-        "died": 1,
-        "cards": [
-          "DRE-3232"
-        ],
-        "sentence": "cards declaring more than 9 files died 1 of 2 times"
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 9 files died 0 of 1 times"
       },
       {
         "more_than": 10,
-        "of": 2,
-        "died": 1,
-        "cards": [
-          "DRE-3232"
-        ],
-        "sentence": "cards declaring more than 10 files died 1 of 2 times"
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 10 files died 0 of 1 times"
       },
       {
         "more_than": 11,
@@ -1675,31 +1256,31 @@
     "by_tell": [
       {
         "tell": "contracts-between-pieces",
-        "of": 6,
-        "died": 3,
-        "sentence": "cards carrying the contracts-between-pieces tell died 3 of 6 times"
+        "of": 5,
+        "died": 2,
+        "sentence": "cards carrying the contracts-between-pieces tell died 2 of 5 times"
       },
       {
         "tell": "two-languages-or-tiers",
-        "of": 17,
-        "died": 11,
-        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 17 times"
+        "of": 15,
+        "died": 6,
+        "sentence": "cards carrying the two-languages-or-tiers tell died 6 of 15 times"
       },
       {
         "tell": "unenumerated-count",
-        "of": 7,
-        "died": 4,
-        "sentence": "cards carrying the unenumerated-count tell died 4 of 7 times"
+        "of": 4,
+        "died": 1,
+        "sentence": "cards carrying the unenumerated-count tell died 1 of 4 times"
       },
       {
         "tell": "unbounded-quantifier",
-        "of": 17,
-        "died": 11,
-        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 17 times"
+        "of": 15,
+        "died": 2,
+        "sentence": "cards carrying the unbounded-quantifier tell died 2 of 15 times"
       }
     ],
-    "unreadable_footprint": 31,
-    "dead_dollars": 1223.23,
+    "unreadable_footprint": 17,
+    "dead_dollars": 552.68,
     "dead_dollars_unreadable": 0
   }
 }
