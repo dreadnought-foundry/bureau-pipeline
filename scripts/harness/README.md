@@ -262,6 +262,7 @@ then no-ops deterministically:
 
 No permanent harness card, no sandbox Linear stubs, zero Linear writes —
 the harness cannot spam real cards because it never addresses one.
+Since DRE-3632 the sandbox's own sweep holds that promise mechanically: a sweep whose slug is off the routing rail skips its eight fleet-wide board writers (`reconcile.OFF_RAIL_SKIPPED`) and prints one `off-rail:` line for each.
 
 DRE-2726 added the first Linear READ (the `lane_contract` scenario's one
 `query` for the board's workflow states and their occupancy). The promise above
