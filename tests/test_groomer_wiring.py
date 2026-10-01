@@ -1402,10 +1402,10 @@ class LookupJobTest(unittest.TestCase):
 
     def test_the_legs_clock_fits_the_mornings_headroom(self):
         """The morning's latency budget. The scheduled run is the 06:00 PT
-        cron, and DRE-4968 needs the proposal on the standing card by 06:30
-        PT. The two most recent scheduled mornings, runs 36719580735
-        (2026-09-30) and 36866353792 (2026-10-01), posted at 06:16 and 06:18
-        PT — twelve to fourteen minutes before the deadline. The lookup stage
+        cron, and DRE-4968 needs the proposal on the standing card by the
+        06:30 PT deadline. The two most recent scheduled mornings, runs
+        36719580735 (2026-09-30) and 36866353792 (2026-10-01), posted at 06:16
+        and 06:18 PT — twelve to fourteen minutes before the deadline. The lookup stage
         runs between groom and verify, its legs side by side, so it adds the
         slowest leg: at most `MAX_SECONDS + REQUEST_TIMEOUT`. Six minutes is
         that measured headroom with half kept for the groom job's own
