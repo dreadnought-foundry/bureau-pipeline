@@ -376,7 +376,7 @@ def _older_queue(n=3):
     """A queue standing on the thread from an earlier batch: its record, as
     the drain that wrote it wrote it."""
     rows = [{"identifier": f"DRE-80{k}", "repo": "portico"} for k in range(n)]
-    return {"body": groomer.queued_record("0ld0ba7c4e11", rows),
+    return {"body": groomer.queued_record("01d0ba7c4e11", rows),
             "authored_by_pipeline": True}
 
 
@@ -404,7 +404,7 @@ def test_a_released_card_no_longer_stands_in_front(monkeypatch):
     proposal = _twenty()
     older = _older_queue(3)
     released = {"body": groomer.released_record([
-        {"id": "0ld0ba7c4e11", "released": ["DRE-800"],
+        {"id": "01d0ba7c4e11", "released": ["DRE-800"],
          "left": ["DRE-801", "DRE-802"], "unqueued": []}]),
         "authored_by_pipeline": True}
     ops = FakeOps(comments=[older, released, *_thread(proposal)])

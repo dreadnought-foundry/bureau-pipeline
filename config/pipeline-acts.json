@@ -934,6 +934,20 @@
     },
     {
       "file": "scripts/groomer.py",
+      "anchor": "queued_record(record[\"id\"], plan[\"queued\"])",
+      "kind": "not-an-act",
+      "means": "The cards of an approved batch the free planner slots could not take, on the proposal card in one record after the drained record: the queue, in place order, that the reconcile sweep releases into Planning as slots free (DRE-5435).",
+      "why": "The CEO decided this, not the pipeline. The cards are queued only because the CEO approved the batch they are in, so the record is bookkeeping of that approval rather than something the pipeline chose — the same reason the drained record beside it is not an act. A trailer would name a next actor nobody chose: the next actor is the sweep, and it reads this record by its own grammar (`parse_queued_record`). One record per drain, never one per card."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "groomer.released_record(list(changes.values()))",
+      "kind": "not-an-act",
+      "means": "What one sweep pass did to the groom queue, on the groomer's standing card in one comment: per batch it touched, the queued cards it released into Planning and the ones that had left the lane (DRE-5435).",
+      "why": "Bookkeeping of a queue the CEO's approval filled, not a decision the pipeline made: each release only carries out that approval at the rate the planner line can take. The queue's standing is read off the thread from these rows (`groomer.queue_standing`), so its grammar is the groomer's, and a trailer would announce a recovery that has not happened. One comment per pass that changed the queue, never one per card."
+    },
+    {
+      "file": "scripts/groomer.py",
       "anchor": "drain_refused_record(refusal.batch, str(refusal))",
       "kind": "not-an-act",
       "means": "Why a drain refused the batch, on the proposal card the CEO approved on, in one line: the same fact the moved record carries from the other side (DRE-3370).",

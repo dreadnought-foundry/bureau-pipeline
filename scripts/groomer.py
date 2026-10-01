@@ -447,12 +447,26 @@ DRAIN_REFUSED_TAG = "groom-drain-refused"
 # agreed to, so the card carries why it was closed and which batch closed it.
 CANCELLED_TAG = "groom-cancelled"
 
+# The groom queue (DRE-5435). A drain moves no more cards to Planning than
+# there are free planner slots (DRE-5326), and every card past them is QUEUED:
+# it stays in Intake, gains QUEUED_LABEL, and ONE `🧺 groom-queued: <id>`
+# record follows the drained record, listing the queue in place order. The
+# reconcile sweep releases it one card per free slot and writes ONE
+# `🧺 groom-released: <id> — released: … · left the lane: …` row per pass
+# that changed it, so the queue's standing is readable off the thread alone:
+# queued, less released, less left. The label is the `epic_cap.QUEUED_LABEL`
+# shape, and it is what keeps a queued card off the next proposal.
+QUEUED_TAG = "groom-queued"
+RELEASED_TAG = "groom-released"
+QUEUED_LABEL = "groom-queued"
+
 # Every marker this module writes or reads, in one tuple — the set a decline's
 # reason is defanged against (DRE-3373). A reason is CEO-written free text that
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
 ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
-               DRAIN_REFUSED_TAG, CANCELLED_TAG, console_receipt.TAG)
+               DRAIN_REFUSED_TAG, CANCELLED_TAG, QUEUED_TAG, RELEASED_TAG,
+               console_receipt.TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
@@ -589,16 +603,6 @@ class SlotsUnknown(DrainRefused):
     many cards Planning can take (DRE-5326). Raised BEFORE any write: a drain
     that guessed would be guessing about the Linear budget the cap protects,
     and UNKNOWN refuses — it never reads as room."""
-
-
-class NoFreeSlot(DrainRefused):
-    """Every planner slot is taken and the batch cancels nothing, so the drain
-    would write no card at all (DRE-5326). Raised BEFORE any write, and
-    instead of a `groom-drained` record: Intake is unchanged, so the next
-    proposal over it is this same batch with this same id, and a record would
-    spend that id — the re-proposal never posted, a fresh approval refused as
-    already drained, and the cards held back for the slots stuck until Intake
-    moved for some other reason."""
 
 
 class ProposalContradiction(RuntimeError):
@@ -3394,6 +3398,11 @@ def free_planner_slots(lops) -> tuple[int, int]:
     the queue's own `free_slots` less the line, because a card released into
     a line only lengthens it: it starts no sooner, and a line that outgrows
     the wait bound is escalated to the CEO. Raises whatever the read raises.
+
+    The groom queue standing on the proposal card takes these slots too
+    (DRE-5435): `_drain` subtracts `queue_standing` off the thread it has
+    already read whole, so this stays one ledger read and a later batch
+    queues behind an earlier one.
     """
     cap = planner_queue.cap()
     led = planner_queue.ledger(planner_queue.read_board(lops))
@@ -3425,17 +3434,22 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
 
     No more cards go to Planning than there are free planner slots
     (DRE-5326): on 2026-09-30 one drain moved nineteen at once and the
-    planners they started emptied the fleet's Linear key. The batch keeps its
-    order and the additions follow it; every card past the free slots is a
-    `held back` row naming them and stays in Intake for the next proposal. An
-    agreed Cancel row starts no planner and is not rationed.
+    planners they started emptied the fleet's Linear key. The free slots are
+    the ledger's less every card a standing groom queue still holds. The
+    batch keeps its order and the additions follow it; every card past the
+    free slots is QUEUED (DRE-5435): it stays in Intake, gains QUEUED_LABEL,
+    and is a `held back` row whose why is `groom-queued: place N of M`, and
+    ONE `🧺 groom-queued: <id>` record follows the drained record. The
+    reconcile sweep releases the queue into Planning as slots free. One
+    approval moves the whole batch into the line — the drained record is
+    written whatever the slots took, so the batch is used up by it. An agreed
+    Cancel row starts no planner and is not rationed.
 
     Refuses, before any card moves: a closed pen, a closing destination, a
     missing / pipeline-written / declined approval, an approval whose proposal
     is not on the card, a batch already drained, a cycle Linear does not
-    carry, a planner slot ledger it cannot read, and no free planner slot for
-    a batch that cancels nothing (so it would write no card at all). Every
-    refusal but the destination is written onto the card as
+    carry, and a planner slot ledger it cannot read. Every refusal but the
+    destination is written onto the card as
     `🧺 groom-drain-refused: <id> — <reason>`.
     """
     if to in NEVER_WRITES or to == CANCEL_TO:
@@ -3518,6 +3532,10 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
             f"the drain could not read the planner slot ledger, so it cannot "
             f"say how many cards Planning can take ({exc}) — nothing moved; "
             f"approve the batch again once Linear answers", batch=named) from exc
+    # A groom queue already standing on this thread is owed the slots before
+    # this batch is (DRE-5435): a later batch queues behind an earlier one.
+    if slots is not None:
+        slots = (max(0, slots[0] - len(queue_standing(records))), slots[1])
     # Unrationed here: every card the CEO agreed is read for its lane, so one
     # that has left it frees its slot for the next in order.
     plan = _drain_plan(record, decisions, lane=lane, held=held)
@@ -3536,17 +3554,9 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
             gone[row["identifier"]] = now or "a lane this run could not read"
     # The same pure plan with any gone card taken out of the writes, so each
     # one's row says what happened to it and nothing is written to it — and
-    # the Planning list rationed to the free slots.
+    # the Planning list rationed to the free slots, the rest of it queued.
     plan = _drain_plan(record, decisions, lane=lane, held=held, gone=gone,
                        slots=slots)
-    if plan["rationed"] and not plan["moving"] and not plan["cancelling"]:
-        # The slots stopped the whole batch. A drained record here would spend
-        # an id the next proposal over this unchanged Intake is bound to reuse.
-        raise NoFreeSlot(
-            f"planner slots: {slots[0]} free of {slots[1]} — every slot is "
-            f"taken by a planner running or waiting, and this batch cancels "
-            f"nothing, so nothing moved and batch {pid} is not used up; approve "
-            f"it again when a planner slot frees", batch=named)
 
     moved = []
     for row in plan["moving"]:
@@ -3571,16 +3581,29 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
         lops.cmd_state(row["identifier"], CANCEL_TO)
         cancelled.append(row["identifier"])
 
+    queued = []
+    for row in plan["queued"]:
+        # The ONE write a queued card gets: no lane, no cycle. The label keeps
+        # it off the next proposal, and the sweep releases it (DRE-5435).
+        lops.add_label(row["identifier"], QUEUED_LABEL)
+        queued.append(row["identifier"])
+
     result = {"moved": moved,
               "held_back": [r["identifier"] for r in plan["held_back"]],
               "added": [r["identifier"] for r in plan["moving"]
                         if r["outcome"] == "added"],
               "cancelled": cancelled,
+              "queued": queued,
+              "slots": slots,
               "already_gone": list(gone),
               "refused": plan["ignored"],
               "rows": plan["rows"], "to": to, "from": lane,
               "cycle": cycle[0], "proposal": record["id"]}
     lops.cmd_comment(card, drained_record(result))
+    if plan["queued"]:
+        # ONE record of the queue, after the drained record and never one per
+        # card: the sweep's release reads it (`parse_queued_record`).
+        lops.cmd_comment(card, queued_record(record["id"], plan["queued"]))
     return result
 
 
@@ -3607,9 +3630,9 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
 
     `slots` is `(free, cap)` from `free_planner_slots` (DRE-5326): no more
     than `free` cards go to Planning, batch first and additions after, and
-    every card past that is a `held back` row naming the slots, and listed
-    again under `rationed`. None rations nothing. The Cancel list never takes
-    a slot.
+    every card past that is queued (DRE-5435) — a `held back` row whose why
+    is `groom-queued: place N of M`, and listed again under `queued` in place
+    order. None rations nothing. The Cancel list never takes a slot.
     """
     excluded, added = decisions["excluded"], dict(decisions["added"])
     gone = gone or {}
@@ -3629,7 +3652,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
                 f"`{mark['tag']}` names a card on neither approved list, so "
                 f"there was nothing to hold back", identifier))
 
-    moving, cancelling, held_back, rationed, rows = [], [], [], [], []
+    moving, cancelling, held_back, queued, rows = [], [], [], [], []
 
     def kept(row) -> bool:
         """Held back by an exclusion or a switched-off repo — its row written."""
@@ -3658,14 +3681,14 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         return True
 
     def full(row) -> bool:
-        """Past the free planner slots — held back in the lane, row written."""
+        """Past the free planner slots — queued in the lane, row written. Its
+        place is known once the whole queue is, so the why is filled below."""
         if slots is None or len(moving) < slots[0]:
             return False
         held_back.append(row)
-        rationed.append(row)
+        queued.append(row)
         rows.append({"identifier": row["identifier"], "outcome": "held back",
-                     "why": f"planner slots: {slots[0]} free of {slots[1]} — "
-                            f"stays in {lane} for the next proposal"})
+                     "why": QUEUED_TAG})
         return True
 
     for row in record["batch"]:
@@ -3695,6 +3718,12 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         rows.append({"identifier": identifier, "outcome": "added",
                      "why": _marker_why(mark)})
 
+    places = {row["identifier"]: n for n, row in enumerate(queued, 1)}
+    for row in rows:
+        if row["identifier"] in places and row["outcome"] == "held back":
+            row["why"] = (f"{QUEUED_TAG}: place {places[row['identifier']]} "
+                          f"of {len(queued)}")
+
     for row in to_cancel:
         identifier = row["identifier"]
         if identifier in added:
@@ -3718,7 +3747,7 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str, held=(),
         rows.append({"identifier": mark["identifier"] or "—",
                      "outcome": "refused", "why": mark["why"]})
     return {"moving": moving, "cancelling": cancelling, "held_back": held_back,
-            "rationed": rationed, "rows": rows, "ignored": ignored,
+            "queued": queued, "rows": rows, "ignored": ignored,
             "lane": lane}
 
 
@@ -3790,7 +3819,8 @@ def drained_record(result: dict) -> str:
     The counts answer five different questions and none of them substitutes
     for another: `moved` is the approved Planning list that went, `held back`
     is what the CEO excluded on either list, or what the free planner slots
-    could not take (DRE-5326), and is still in the lane, `added`
+    could not take (DRE-5326) and is queued for them (DRE-5435), and is still
+    in the lane, `added`
     is what the CEO reached in for, `cancelled` is the agreed Cancel list that
     went to Canceled, and `refused` counts the DECISIONS the drain would not
     honour — a marker the pipeline wrote, a decline with no reason, an
@@ -3811,6 +3841,14 @@ def drained_record(result: dict) -> str:
     if result["cycle"]:
         w += [f"Out of {result['from']}, into cycle {result['cycle']}, in the "
               f"order proposal `{pid}` was approved in.", ""]
+    if result.get("queued"):
+        slots = result.get("slots") or (0, 0)
+        w += [f"{_plural(len(result['queued']), 'card')} queued in "
+              f"{result['from']} for a planner slot — planner slots: "
+              f"{slots[0]} free of {slots[1]}. The sweep releases them into "
+              f"{result['to']} as slots free, earlier batches before it; the "
+              f"`{MARK} {QUEUED_TAG}: {pid}` record below lists them in "
+              f"order.", ""]
     w += ["| # | Card | Outcome | Why |", "| -- | -- | -- | -- |"]
     order = {identifier: n for n, identifier in enumerate(result["moved"], 1)}
     for row in rows:
@@ -3830,6 +3868,137 @@ def cancelled_note(pid: str, reason: str) -> str:
     """
     return (f"{MARK} {CANCELLED_TAG}: {pid} — "
             f"{' '.join((reason or 'no reason given').split())}\n")
+
+
+# --------------------------------------------------------------------------- #
+# the groom queue (DRE-5435)                                                   #
+# --------------------------------------------------------------------------- #
+
+QUEUE_COLUMNS = "| place | card | repo |"
+_QUEUED_LINE = re.compile(rf"^{MARK} {QUEUED_TAG}: ([0-9a-f]{{6,}})\s*$")
+_QUEUE_ROW = re.compile(r"^\|\s*(\d+)\s*\|\s*(DRE-\d+)\s*\|\s*([^|]*?)\s*\|\s*$")
+_RELEASED_LINE = re.compile(
+    rf"^{MARK} {RELEASED_TAG}: ([0-9a-f]{{6,}}) — released: (.*?) · "
+    rf"left the lane: (.*?)(?: · taken out by hand: (.*?))?\s*$")
+
+
+def queued_record(pid: str, queued: list[dict]) -> str:
+    """`🧺 groom-queued: <id>` and the queue, in place order — ONE record per
+    drain that queued anything, on the proposal card after the drained record
+    (DRE-5435). `queued` is the drain plan's own list: rows carrying
+    `identifier` and, off the approved record, `repo`.
+
+    `parse_queued_record` is its one reader; the sweep imports it rather
+    than reading this grammar a second way.
+    """
+    w = [f"{MARK} {QUEUED_TAG}: {pid}", "",
+         f"{_plural(len(queued), 'card')} from batch `{pid}` wait in Intake "
+         f"for a planner slot, carrying the `{QUEUED_LABEL}` label. The "
+         f"reconcile sweep moves them to Planning one per free slot, in this "
+         f"order and behind every earlier queue, and writes a "
+         f"`{MARK} {RELEASED_TAG}` row when it does. Taking the label off a "
+         f"card takes it out of the queue.", "",
+         QUEUE_COLUMNS, "| -- | -- | -- |"]
+    for place, row in enumerate(queued, 1):
+        w.append(f"| {place} | {row['identifier']} | "
+                 f"{_cell(row.get('repo') or NO_REPO)} |")
+    return "\n".join(w) + "\n"
+
+
+def parse_queued_record(body: str | None) -> dict | None:
+    """`{"id", "cards": [{"place", "identifier", "repo"}]}` off a queued
+    record, or None when `body` is not one. Anchored at the first line: a
+    comment that quotes the marker is not the record."""
+    lines = (body or "").splitlines()
+    if not lines:
+        return None
+    found = _QUEUED_LINE.match(lines[0].strip())
+    if not found:
+        return None
+    cards = []
+    for line in lines[1:]:
+        row = _QUEUE_ROW.match(line.strip())
+        if row:
+            cards.append({"place": int(row.group(1)),
+                          "identifier": row.group(2), "repo": row.group(3)})
+    return {"id": found.group(1),
+            "cards": sorted(cards, key=lambda c: c["place"])}
+
+
+def released_record(changes: list[dict]) -> str:
+    """The sweep's ONE comment per pass that changed the queue (DRE-5435): a
+    `🧺 groom-released: <id> — released: … · left the lane: …` line per batch
+    it touched, in queue order, never one per card. `taken out by hand` is
+    added only when a person took a card's label off: that card is out of the
+    queue too, and the thread has to say so for the standing to add up."""
+    def names(ids) -> str:
+        return ", ".join(ids) if ids else "none"
+    lines = []
+    for change in changes:
+        line = (f"{MARK} {RELEASED_TAG}: {change['id']} — released: "
+                f"{names(change['released'])} · left the lane: "
+                f"{names(change['left'])}")
+        if change.get("unqueued"):
+            line += f" · taken out by hand: {names(change['unqueued'])}"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def parse_released_record(body: str | None) -> list[dict]:
+    """Every `groom-released` line in `body`, as `released_record` takes them.
+    Each line is anchored at its start; anything else in the comment is not
+    read."""
+    def ids(cell: str | None) -> list[str]:
+        cell = (cell or "").strip()
+        return [] if cell in ("", "none") else [i.strip() for i in cell.split(",")]
+    out = []
+    for line in (body or "").splitlines():
+        found = _RELEASED_LINE.match(line.strip())
+        if found:
+            out.append({"id": found.group(1), "released": ids(found.group(2)),
+                        "left": ids(found.group(3)),
+                        "unqueued": ids(found.group(4))})
+    return out
+
+
+def queue_records(records: list[dict]) -> list[tuple[dict, str | None]]:
+    """The queue's own comments on the standing card, in thread order: each
+    `groom-queued` record and `groom-released` comment the PIPELINE wrote,
+    with its Linear time. A comment shaped like one from any other account is
+    not the queue: the label on the card is a person's lever, the record is
+    not."""
+    out = []
+    for record in records:
+        if not record.get("authored_by_pipeline"):
+            continue
+        body = record.get("body") or ""
+        if parse_queued_record(body) or parse_released_record(body):
+            out.append((record, record.get("created_at")))
+    return out
+
+
+def queue_standing(records: list[dict]) -> list[dict]:
+    """Every card still waiting in the groom queue, in release order: oldest
+    batch first, place order within a batch — queued, less released, less
+    left, less taken out by hand, read off the thread alone (DRE-5435).
+
+    Each entry is `{"id", "place", "identifier", "repo", "at"}`, `at` being
+    the queued record's own Linear time."""
+    batches, gone = [], set()
+    for record, at in queue_records(records):
+        body = record.get("body") or ""
+        queued = parse_queued_record(body)
+        if queued:
+            batches.append((queued, at))
+            continue
+        for change in parse_released_record(body):
+            for ident in (*change["released"], *change["left"],
+                          *change["unqueued"]):
+                gone.add((change["id"], ident))
+    return [{"id": queued["id"], "place": c["place"],
+             "identifier": c["identifier"], "repo": c["repo"], "at": at}
+            for queued, at in batches for c in queued["cards"]
+            if (queued["id"], c["identifier"]) not in gone]
 
 
 def drain_refused_record(pid: str, reason: str) -> str:
@@ -3949,6 +4118,12 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
                              "population (DRE-3150)")
 
 
+def _queued(card: dict) -> bool:
+    """Does this card carry QUEUED_LABEL — is it waiting in the groom queue?"""
+    return any((label.get("name") or "").lower() == QUEUED_LABEL
+               for label in ((card.get("labels") or {}).get("nodes") or []))
+
+
 def _build(args) -> dict:
     """Read the lane and propose. ONE model call unless `--no-judgement`.
 
@@ -3961,6 +4136,16 @@ def _build(args) -> dict:
     function or the model call inside it.
     """
     cards = read_population(linear_ops, args.lane)
+    # A card waiting in the groom queue is already approved and in the line
+    # (DRE-5435): it never comes round again. Off the offer before anything
+    # else reads the lane, the way a held repo's cards are, off the labels the
+    # population read already returned.
+    in_queue = [c["identifier"] for c in cards if _queued(c)]
+    if in_queue:
+        cards = [c for c in cards if not _queued(c)]
+        print(f"groomer: {_plural(len(in_queue), 'card')} carrying "
+              f"`{QUEUED_LABEL}` left out — already approved and waiting for "
+              f"a planner slot", file=sys.stderr)
     # The standing card's WHOLE thread, read once: the repo switch and the
     # CEO's per-card answers on every earlier proposal both live there, and
     # either can be the oldest comment on the card.

@@ -65,7 +65,7 @@ import reconcile  # noqa: E402
 from test_planner_queue_sweep import Board, _claimed, _waiting  # noqa: E402
 
 STANDING = "DRE-4541"
-OLDER, NEWER = "0ld0ba7c4e11", "ne3e7ba7c422"
+OLDER, NEWER = "01d0ba7c4e11", "fe3e7ba7c422"
 THIS = "dreadnought-foundry/bureau-pipeline"
 
 

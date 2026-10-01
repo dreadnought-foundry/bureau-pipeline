@@ -429,6 +429,8 @@ batch that was right apart from two rows.
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
 | `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
+| `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain | one per drain that queued a card, after the drained record — the cards past the free planner slots, in place order (DRE-5435) |
+| `🧺 groom-released: <id> — released: DRE-A, DRE-B · left the lane: DRE-C[ · taken out by hand: DRE-D]` | the reconcile sweep | one comment per pass that changed the queue, a line per batch it touched; pipeline-authored only, like `groom-queued` |
 | `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
 | `🧺 groom-release-repo: <slug>` | the CEO (console or by hand) | same |
 
@@ -536,7 +538,7 @@ agreed still moves. That used to refuse the whole batch — on 2026-09-16 two
 approved cards had moved on (DRE-3453 Done, DRE-3127 Canceled), nothing moved,
 and the CEO had to exclude both by hand and approve again.
 
-Ten refusals, all of them before any card moves — and every one of them but the
+Nine refusals, all of them before any card moves — and every one of them but the
 last is **written onto the proposal card** as
 `🧺 groom-drain-refused: <id> — <reason>`, then exits 2. A drain that refuses a
 batch and says so only in a workflow log is a stall with an alibi.
@@ -563,14 +565,6 @@ batch and says so only in a workflow log is a stall with an alibi.
 - **the planner slot ledger cannot be read** — the drain cannot say how many
   cards Planning can take, and an unknown count never reads as room (DRE-5326).
   Approve the batch again once Linear answers;
-- **no free planner slot, and nothing to cancel** — every slot is taken by a
-  planner running or waiting, and the batch has no Cancel row left to write
-  (it had none, or the CEO excluded every one), so the drain would write no
-  card at all (DRE-5326). It refuses rather than record itself as drained:
-  Intake is unchanged, so the next proposal over it is this same batch with
-  this same id, and a `groom-drained` record would spend that id — the
-  re-proposal never posted, a fresh approval refused as already drained. The
-  batch stays approvable; approve it again when a slot frees;
 - **a closing destination** — the drain never writes `Done` or `Duplicate`,
   and it never sends the Planning list to `Canceled`: it writes `Canceled` only
   for an agreed row of the Cancel table.
@@ -592,14 +586,38 @@ started emptied the fleet's shared Linear key. Before any card moves, the drain
 reads the planner slot ledger once (`planner_queue.py`). The free slots are the
 cap (`config/planner-queue.json`, 2) minus the planners running, the dispatched
 slots, and the cards already waiting in line — a card added to a line starts no
-sooner and only pushes the line toward the wait bound. The batch keeps its order
-and the additions come after it. Every card past the free slots stays in Intake
-with nothing written on it, as a `held back` row whose why is `planner slots:
-<free> free of <cap> — stays in Intake for the next proposal`. An agreed Cancel
-card starts no planner, so the Cancel list is never rationed, and an `already
-gone` card takes no slot. A drain that moves or cancels anything changes Intake,
-so the next proposal is a new batch with a new id, and the held-back cards are
-offered again. A drain that would write nothing refuses instead (above).
+sooner and only pushes the line toward the wait bound — less every card a groom
+queue standing on the card still holds, so a later batch queues behind an
+earlier one. The batch keeps its order and the additions come after it. An
+agreed Cancel card starts no planner, so the Cancel list is never rationed, and
+an `already gone` card takes no slot.
+
+**Every card past the free slots is queued, not refused** (DRE-5435). On
+2026-10-01 the CEO approved batch `37b77a9f795d` three times and was refused
+each time with `planner slots: 0 free of 2`; the drain used to refuse a batch
+the slots stopped entirely and leave it approvable, so the only way forward was
+to approve again until a slot happened to be free. Now one approval moves the
+whole batch into the line. A card past the slots stays in Intake and gains the
+`groom-queued` label — its one write: no lane, no cycle — and is a `held back`
+row whose why is `groom-queued: place <n> of <m>`. ONE `🧺 groom-queued: <id>`
+record follows the drained record, listing the queue in place order. The
+drained record is written whatever the slots took, so the batch is used up by
+it and a second approval is `already drained`.
+
+The reconcile sweep releases the queue (`release_groom_queue`, right after the
+planner line's backstop, on full sweeps of bureau-pipeline only): one card per
+slot the line has left, oldest batch first and place order within a batch,
+moved to `Planning` with its label removed — and Planning entry starts its plan
+run the way any Intake-to-Planning move does. A queued card that has left
+Intake is dropped with no state write; one whose label a person removed has
+been taken out of the queue by that person, and may be proposed again. Each
+pass that changed the queue writes ONE `🧺 groom-released` comment, so the
+queue's standing is readable off the thread alone: queued, less released, less
+left. `propose` never offers a card carrying `groom-queued`, and waiting in the
+queue is never escalated to the CEO — a queued card is in Intake, which no
+Planning watchdog or planner line reads. A queue that has stood still for the
+planner line's own bound with a slot free is ONE `no-code` card created in
+`Triage` for the operator.
 
 The ledger sees a released card only once its planner run posts a `claimed` or
 `waiting` receipt. Two drains approved back to back — several repos' batches
@@ -638,8 +656,8 @@ reordered, respelled or added beside it.
 
 Its five counts answer five different questions: **moved** is the approved
 Planning list that went, **held back** is what the CEO excluded on either list,
-or what the free planner slots could not take (DRE-5326), and is still in
-Intake, **added** is what the CEO reached into the lane for,
+or what the free planner slots could not take (DRE-5326) and is queued for them
+(DRE-5435), and is still in Intake, **added** is what the CEO reached into the lane for,
 **cancelled** is the agreed Cancel list that went to `Canceled`, and **refused**
 counts the *decisions* the drain would not honour — a marker the pipeline wrote,
 a decline with no reason, an exclusion naming a card on neither list. `#` is the
