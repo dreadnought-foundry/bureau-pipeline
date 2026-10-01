@@ -189,6 +189,9 @@ import planning_escalation  # noqa: E402
 # DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
 # turn for a planner is not a dead planner, and its wait has its own bound.
 import planner_queue  # noqa: E402
+# DRE-5435: the one repo whose sweep releases the groom queue — the repo that
+# starts waiting epics (DRE-5152), named once there.
+import epic_cap  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -2439,7 +2442,7 @@ def repair_frozen_planning_holds() -> set[str]:
     return repaired
 
 
-def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
+def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
     """The planner line's backstop (DRE-5178, epic DRE-5167). Full sweeps only.
 
     The end-of-run dispatch in `plan.yml` is the line's fast path, and it does
@@ -2483,6 +2486,12 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
     every planner run's claim step admits uncapped with only a warning — so
     here it is a `::error::` and a read failure: the sweep exits red for the
     medic.
+
+    Returns the slots the line has LEFT once it is served (DRE-5435): the cap
+    less every planner running, every slot dispatched and every card still
+    waiting, fleet-wide — `groomer.free_planner_slots`' arithmetic, read off
+    this pass's ledger. `release_groom_queue` releases into exactly those. An
+    unreadable config leaves none.
     """
     try:
         limit = planner_queue.cap()
@@ -2493,7 +2502,7 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
             f"— {e}. Every planner run is admitting without a cap until it is fixed."
         )
         _read_failures.append(f"planner-line: {e}")
-        return
+        return 0
     swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
     extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
     cards = active_cards(swept) + (active_cards(extra) if extra else [])
@@ -2589,6 +2598,222 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> None:
         f"dispatched of {limit}"
     )
     print(f"::warning::{depth}" if oldest > bound / 2 else depth)
+    return max(0, free - len(waiting))
+
+
+# --- the groom queue's release (DRE-5435) ------------------------------------
+#
+# An approved groom batch goes into the planner line instead of being refused:
+# the drain moves what the free planner slots take and QUEUES the rest — each
+# card stays in Intake under `groomer.QUEUED_LABEL`, and one `groom-queued`
+# record on the groomer's standing card lists them in place order. This is the
+# other half: the planner line's backstop (DRE-5178) releases the queue into
+# the slots it has left, one card per slot.
+#
+# ONE repo releases — the one that starts waiting epics (DRE-5152) — because
+# the queue lives on one card's thread and every repo's sweep reading it would
+# be the fleet paying for one read many times over, and racing itself for the
+# same slots.
+
+#: The lane a released card goes to. A module constant, so
+#: `ready_lane_writers.py` reads the destination at the call site.
+GROOM_RELEASE_TO = "Planning"
+
+#: The lane a stalled queue's notice is CREATED in (DRE-5292's rule, the
+#: fleet-outage card's): created there, never moved there, `no-code` and no
+#: `agent:*` role — nothing is built or planned off it.
+GROOM_STALL_LANE = "Triage"
+
+#: The stall notice's one fixed title, so `linear_ops.find_open` finds the
+#: card already open and a stall files one card, never one per pass.
+GROOM_STALL_TITLE = (
+    "bureau-pipeline: the groom queue has stalled — approved cards are not "
+    "reaching Planning"
+)
+
+
+def _groom_labelled(card: dict) -> bool:
+    return any(
+        (lbl.get("name") or "").lower() == groomer.QUEUED_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes") or []
+    )
+
+
+def release_groom_queue(free: int) -> list[str]:
+    """Release the groom queue into the planner slots the line has left
+    (DRE-5435). Full sweeps only, right after `serve_planner_line`, and only
+    by the sweep whose repo is `epic_cap.START_OWNER_SLUG`.
+
+    WHAT IT READS. The standing card's WHOLE thread, once (`groomer.
+    decision_records`, paginated — the proposal card outgrows the fifty-
+    comment window), and the board read this pass already paid for: Intake is
+    in SWEPT_LANES, labels included. The queue is `groomer.queue_standing` —
+    the pipeline's `groom-queued` records in thread order, less every card a
+    `groom-released` row has named — so the grammar is read one way, by the
+    module that writes it.
+
+    THE WALK. Oldest batch first, place order within a batch:
+
+      * a card that has left Intake — moved by hand, canceled, already in
+        Planning — is dropped from the line with no state write, its place
+        not held; its label comes off only if this pass's board read shows
+        it still carries one;
+      * a card still in Intake whose label a person removed has been taken
+        out of the queue by that person, and is never released;
+      * otherwise, while a slot is free, the card moves to Planning and its
+        label comes off. Entering Planning starts its plan run the way any
+        Intake-to-Planning move does, and the card joins the planner line
+        there with a fresh wait (DRE-5378). A move that fails is a write
+        failure and ends the releases for this pass.
+
+    ONE `🧺 groom-released` comment per pass that changed the queue, a line
+    per batch it touched — never one per card.
+
+    A STALL — the queue is not empty, this pass had a free slot, released
+    nothing, and nothing has changed the queue for the planner line's own
+    bound (`planner_queue.waiting_max()`) — is ONE `no-code` card created in
+    Triage, never a second while the first is open. Waiting in the queue is
+    never escalated to the CEO: a queued card is in Intake, where no Planning
+    watchdog, no planner line and no age-out reads it.
+
+    Returns the cards released. Raises whatever a Linear READ raises.
+    """
+    released: list[str] = []
+    if REPO_SLUG != epic_cap.START_OWNER_SLUG:
+        print(f"groom queue: released by the {epic_cap.START_OWNER_SLUG} sweep "
+              f"only — {REPO_SLUG!r} reads nothing")
+        return released
+    card = (os.environ.get(GROOM_CARD_ENV) or "").strip()
+    if not card:
+        print(f"groom queue: {GROOM_CARD_ENV} is not set for this sweep, so the "
+              "groomer's standing card cannot be read — nothing released")
+        return released
+    records = groomer.decision_records(linear_ops, card, whole_thread=True)
+    standing = groomer.queue_standing(records)
+    if not standing:
+        print("groom queue: empty — nothing to release")
+        return released
+    board = {c["identifier"]: c for c in active_cards(SWEPT_LANES)}
+    changes: dict[str, dict] = {}
+
+    def change(pid: str) -> dict:
+        return changes.setdefault(
+            pid, {"id": pid, "released": [], "left": [], "unqueued": []})
+
+    slots, halted, remaining = free, False, []
+    for entry in standing:
+        ident, pid = entry["identifier"], entry["id"]
+        found = board.get(ident)
+        lane = (found or {}).get("state", {}).get("name")
+        if lane != "Intake":
+            if found is not None and _groom_labelled(found):
+                try:
+                    linear_ops.remove_label(ident, groomer.QUEUED_LABEL)
+                except linear_ops.LinearError as e:
+                    _write_failures.append(f"{ident} groom-queued label: {e}")
+                    print(f"ERROR: groom queue: {ident}'s label could not be "
+                          f"removed: {e}", file=sys.stderr)
+            change(pid)["left"].append(ident)
+            print(f"groom queue: {ident} left Intake "
+                  f"({lane or 'off the swept board'}) — dropped from the line")
+            continue
+        if not _groom_labelled(found):
+            change(pid)["unqueued"].append(ident)
+            print(f"groom queue: {ident} is in Intake without "
+                  f"'{groomer.QUEUED_LABEL}' — taken out of the queue by hand")
+            continue
+        if halted or slots <= 0:
+            remaining.append(entry)
+            continue
+        try:
+            linear_ops.cmd_state(ident, GROOM_RELEASE_TO)
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} groom queue release: {e}")
+            print(f"ERROR: groom queue: {ident} was not moved to "
+                  f"{GROOM_RELEASE_TO}: {e}", file=sys.stderr)
+            halted = True
+            remaining.append(entry)
+            continue
+        slots -= 1
+        released.append(ident)
+        change(pid)["released"].append(ident)
+        try:
+            linear_ops.remove_label(ident, groomer.QUEUED_LABEL)
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} groom-queued label: {e}")
+            print(f"ERROR: groom queue: {ident} was released but its label "
+                  f"could not be removed: {e}", file=sys.stderr)
+        print(f"groom queue: {ident} released — batch {pid} place "
+              f"{entry['place']}, Intake → {GROOM_RELEASE_TO}")
+
+    if changes:
+        try:
+            linear_ops.cmd_comment(card, groomer.released_record(list(changes.values())))
+        except linear_ops.LinearError as e:
+            # The next pass reads a released card as having left Intake, so
+            # the thread catches up rather than releasing it twice.
+            _write_failures.append(f"{card} groom-released row: {e}")
+            print(f"ERROR: groom queue: the groom-released row did not post on "
+                  f"{card}: {e}", file=sys.stderr)
+    print(f"groom queue: {len(released)} released, {len(remaining)} waiting, "
+          f"{free} slot(s) free at the start of the pass")
+    if remaining and free > 0 and not released and not changes:
+        _report_groom_stall(records, remaining)
+    return released
+
+
+def _report_groom_stall(records: list[dict], remaining: list[dict]) -> None:
+    """File the ONE Triage card for a groom queue that has stood still past the
+    planner line's bound with a slot free — or say why it did not."""
+    bound = planner_queue.waiting_max()
+    changed = [_moment(at) for _record, at in groomer.queue_records(records)]
+    changed = [at for at in changed if at is not None]
+    if not changed:
+        print("groom queue: no release this pass, and no time on the queue's "
+              "own records to measure a stall by — not filed")
+        return
+    still = (datetime.now(UTC) - max(changed)).total_seconds() / 60
+    if still < bound:
+        return
+    if linear_ops.find_open(GROOM_STALL_TITLE):
+        print(f"groom queue: stalled {still / 60:.1f} h — the stall card is "
+              "already open; nothing filed")
+        return
+    batches = list(dict.fromkeys(entry["id"] for entry in remaining))
+    last = next((record.get("body") or "" for record, _at
+                 in reversed(groomer.queue_records(records))
+                 if groomer.parse_released_record(record.get("body"))), None)
+    body = "\n".join([
+        f"The groom queue on {os.environ.get(GROOM_CARD_ENV)} has not moved for "
+        f"{still / 60:.1f} hours, past the planner line's own bound of "
+        f"{bound / 60:g} hours. This pass had a free planner slot and released "
+        "nothing: every release write failed.",
+        "",
+        f"Waiting: {len(remaining)} cards, from batch "
+        f"{', '.join(f'`{b}`' for b in batches)}, first in line "
+        f"{remaining[0]['identifier']}.",
+        "",
+        "The last release written: "
+        + (f"`{last.strip().splitlines()[0]}`" if last else "none yet — no card "
+           "has been released from this queue."),
+        "",
+        "Nothing is escalated to the CEO for this: the cards are waiting in "
+        "Intake, already approved. The sweep log says why each move failed. "
+        "Once the moves land the queue drains on its own; close this card "
+        "then.",
+    ])
+    try:
+        issue = linear_ops.create_card(GROOM_STALL_TITLE, body,
+                                       repo_slug=epic_cap.START_OWNER_SLUG,
+                                       labels=(linear_ops.NO_CODE_LABEL,),
+                                       lane=GROOM_STALL_LANE)
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"groom queue stall card: {e}")
+        print(f"ERROR: groom queue: the stall card was not filed: {e}",
+              file=sys.stderr)
+        return
+    print(f"groom queue: stalled {still / 60:.1f} h — filed "
+          f"{issue['identifier']} in {GROOM_STALL_LANE}")
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -9705,6 +9930,7 @@ def main(
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
         repaired: set[str] = set()
+        line_left = 0
         if off_rail() and "repair_frozen_planning_holds" in OFF_RAIL_SKIPPED:
             print(off_rail_notice("repair_frozen_planning_holds",
                                   OFF_RAIL_SKIPPED["repair_frozen_planning_holds"]))
@@ -9729,7 +9955,7 @@ def main(
         else:
             try:
                 with _phase("serve_planner_line"):
-                    serve_planner_line(flagged | (repaired or set()))
+                    line_left = serve_planner_line(flagged | (repaired or set()))
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
@@ -9739,6 +9965,19 @@ def main(
             except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
                 _write_failures.append(f"planner-line: {e}")
                 print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        # The groom queue's release (DRE-5435), right after the line is served
+        # and into the slots it left — none when it could not be served. Its
+        # own try: a release that cannot read must not cost the sweep the rest
+        # of its work, and an unreadable thread is a READ failure.
+        try:
+            with _phase("release_groom_queue"):
+                release_groom_queue(line_left)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"groom queue: {e}")
+            print(f"ERROR: release_groom_queue: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"groom queue: {e}")
+            print(f"ERROR: release_groom_queue: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`
