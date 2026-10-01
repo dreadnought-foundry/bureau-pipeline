@@ -19,8 +19,10 @@ So:
   * every card past that is QUEUED (DRE-5435): it stays in Intake, gains the
     `groom-queued` label, and is a `held back` row whose why is
     `groom-queued: place N of M` — the summary line keeps the grammar the
-    console parses — and ONE `groom-queued` record follows the drained
-    record, listing the queue in place order;
+    console parses — and ONE `groom-queued` record, listing the queue in
+    place order, is written BEFORE the drained record, so a run that dies
+    between the two leaves a batch still approvable, never a queued card no
+    record lists;
   * an addition takes a slot like any other move; an agreed Cancel row does
     not, because a canceled card starts no planner;
   * a ledger the drain cannot read refuses the drain before any card moves,
@@ -53,6 +55,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import groomer  # noqa: E402
+import linear_ops  # noqa: E402
 import planner_queue  # noqa: E402
 
 from test_groomer_cancel_drain import (  # noqa: E402
@@ -351,10 +354,11 @@ def test_twenty_cards_into_a_full_line_are_twenty_queued_rows_and_one_queue(monk
     assert queued["id"] == proposal["id"]
     assert [(c["place"], c["identifier"]) for c in queued["cards"]] == list(
         enumerate(batch, 1))
-    # The two records, in that order, and no other comment anywhere.
+    # The two records, the queue first, and no other comment anywhere: the
+    # drained record spends the batch, so it is the last write.
     assert [b.split(":")[0] for t, b in ops.written] == [
-        f"{groomer.MARK} {groomer.DRAINED_TAG}",
-        f"{groomer.MARK} {groomer.QUEUED_TAG}"]
+        f"{groomer.MARK} {groomer.QUEUED_TAG}",
+        f"{groomer.MARK} {groomer.DRAINED_TAG}"]
     # A second approval of the same batch: already drained, nothing written.
     again = FakeOps(comments=_thread(proposal) + [
         {"body": b, "authored_by_pipeline": True} for t, b in ops.written] + [
@@ -404,6 +408,96 @@ def test_a_later_batch_queues_behind_a_standing_queue(monkeypatch):
     standing = groomer.queue_standing(after)
     assert [s["identifier"] for s in standing] == (
         ["DRE-800", "DRE-801", "DRE-802"] + batch)
+
+
+class _DiesOn(FakeOps):
+    """The drain fixture whose `cmd_comment` raises on the record it names —
+    Linear refusing the write, or the run dying right before it lands."""
+
+    def __init__(self, *args, dies_on, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dies_on = dies_on
+
+    def cmd_comment(self, identifier, body, *flags):
+        if body.startswith(f"{groomer.MARK} {self.dies_on}:"):
+            raise linear_ops.LinearError("HTTP 502 — the comment did not post")
+        super().cmd_comment(identifier, body, *flags)
+
+
+def _as_posted(ops):
+    return [{"body": b, "authored_by_pipeline": True}
+            for t, b in ops.written if t == PROPOSAL_CARD]
+
+
+def test_a_drained_record_that_fails_to_post_strands_no_queued_card(monkeypatch):
+    """The window the critic named: every queued card labelled, and the
+    record that spends the batch fails. The queue is already on the thread,
+    so the sweep can release every labelled card, and the batch is not used
+    up, so approving it again finishes the drain without listing a card
+    twice."""
+    proposal = _twenty()
+    batch = _planning(proposal)
+    ops = _DiesOn(comments=_thread(proposal), dies_on=groomer.DRAINED_TAG)
+    _slots(monkeypatch, 2)
+    with pytest.raises(linear_ops.LinearError):
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    assert _labelled(ops) == batch[2:]
+    thread = _thread(proposal) + _as_posted(ops)
+    # Every labelled card is in a queue the sweep reads: none is stranded.
+    assert [s["identifier"] for s in groomer.queue_standing(thread)] == batch[2:]
+
+    # Approved again: not AlreadyDrained. The two cards that moved are gone,
+    # two freed slots go to this batch's own queue, and the rest re-queue.
+    lanes = {i: "Planning" for i in batch[:2]}
+    again = FakeOps(comments=thread, lanes=lanes)
+    result = groomer.drain(again, card=PROPOSAL_CARD)
+    assert result["already_gone"] == batch[:2]
+    assert _planning_moves(again) == batch[2:4]
+    assert result["queued"] == batch[4:]
+    _drained(again)
+    # The two queued records overlap; the standing names each card once, and
+    # the two that moved on the second drain fall out as `left` at the sweep.
+    after = thread + _as_posted(again)
+    standing = [s["identifier"] for s in groomer.queue_standing(after)]
+    assert standing == batch[2:]
+
+
+def test_a_queued_record_that_fails_to_post_leaves_the_batch_unspent(monkeypatch):
+    proposal = _twenty()
+    batch = _planning(proposal)
+    ops = _DiesOn(comments=_thread(proposal), dies_on=groomer.QUEUED_TAG)
+    _slots(monkeypatch, 0)
+    with pytest.raises(linear_ops.LinearError):
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    # Nothing spent the batch: no drained record was attempted after it.
+    assert ops.written == []
+    again = FakeOps(comments=_thread(proposal))
+    result = groomer.drain(again, card=PROPOSAL_CARD)
+    assert result["queued"] == batch
+    assert [c["identifier"] for c in _queued(again)["cards"]] == batch
+    _drained(again)
+
+
+def test_the_standing_reads_the_thread_in_order_and_names_a_card_once():
+    """Queued twice for one batch is one place in the line; a card released
+    and then queued again by a later record of its batch stands again."""
+    first = {"body": groomer.queued_record("01d0ba7c4e11", [
+        {"identifier": "DRE-800", "repo": "portico"},
+        {"identifier": "DRE-801", "repo": "portico"}]),
+        "authored_by_pipeline": True}
+    out = {"body": groomer.released_record([
+        {"id": "01d0ba7c4e11", "released": [], "left": [],
+         "unqueued": ["DRE-800"]}]), "authored_by_pipeline": True}
+    second = {"body": groomer.queued_record("01d0ba7c4e11", [
+        {"identifier": "DRE-800", "repo": "portico"},
+        {"identifier": "DRE-801", "repo": "portico"}]),
+        "authored_by_pipeline": True}
+    assert [s["identifier"] for s in groomer.queue_standing(
+        [first, second])] == ["DRE-800", "DRE-801"]
+    assert [s["identifier"] for s in groomer.queue_standing(
+        [first, out])] == ["DRE-801"]
+    assert [s["identifier"] for s in groomer.queue_standing(
+        [first, out, second])] == ["DRE-801", "DRE-800"]
 
 
 def test_a_released_card_no_longer_stands_in_front(monkeypatch):
