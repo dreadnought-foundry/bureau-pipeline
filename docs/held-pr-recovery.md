@@ -127,7 +127,7 @@ conflict sweep, and dispatches at most once per sweep.
 | approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it | `approved-but-red: …` |
 | dead-fix-run | The last fix run died of a model/API error or ran out of turns, and its trigger was consumed | `dead fix run: …` |
 | answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
-| standing-verdict | A REQUEST_CHANGES verdict binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
+| standing-verdict | A blocking verdict — the critic's REQUEST_CHANGES or, since DRE-5230, the Verifier's FAIL — binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
 
 **The fourth is DRE-3130,** and it exists because the third-party failure it
 covers leaves nothing to retry. On portico PR #407 (DRE-3004) GitHub cancelled

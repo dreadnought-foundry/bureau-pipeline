@@ -3460,6 +3460,23 @@ def critic_comments(pr: dict) -> list[dict]:
     ]
 
 
+def verifier_comments(pr: dict) -> list[dict]:
+    """The PR's QA Verifier comments, oldest→newest — the same qa-bot-only
+    filter as critic_comments, so a forged FAIL is invisible (DRE-1998).
+
+    The marker must OPEN the first line (merge_gate.opens_with_marker), not
+    merely appear: the critic, the Verifier and the merge gate's status note
+    all post as the qa-bot, so a later note mentioning the Verifier would
+    otherwise become its "newest word" and mask a standing FAIL. It is the
+    same comment agent-fix's fetch step picks (DRE-5229)."""
+    return [
+        c
+        for c in pr.get("comments", [])
+        if is_qa_bot_comment(c)
+        and merge_gate.opens_with_marker(c.get("body"), merge_gate.VERIFIER_MARKER)
+    ]
+
+
 def critic_comment_bodies(pr: dict) -> list[str]:
     """Bodies of the PR's QA Critic comments, oldest→newest (critic_comments)."""
     return [c.get("body") or "" for c in critic_comments(pr)]
@@ -6621,7 +6638,9 @@ def retry_dead_fix_runs() -> None:
 
 def redispatch_standing_verdicts() -> None:
     """DRE-3130: re-dispatch the fix agent for a PR carrying a REQUEST_CHANGES
-    verdict on its current head that nobody is working.
+    verdict on its current head that nobody is working — or, since DRE-5230,
+    a Verifier FAIL on it, which DRE-5229 made a fix-loop trigger and the
+    same eviction can strand.
 
     The fourth fix-loop recovery route, beside fix_approved_but_red,
     retry_dead_fix_runs and restart_answered_blockers, and it covers the case
@@ -6643,7 +6662,10 @@ def redispatch_standing_verdicts() -> None:
         `VERDICT: REQUEST_CHANGES` and BINDS THE CURRENT HEAD SHA — read
         through merge_gate's own grammar, so a quoted verdict in prose is
         inert and a forged one is invisible (DRE-1998: a forged verdict must
-        not spawn dispatches);
+        not spawn dispatches) — OR the newest qa-bot-authored QA Verifier
+        comment (verifier_comments) carries `VERDICT: FAIL` bound to the
+        current head, read the same way. Each verdict is judged by every
+        rule below on its own; either one standing is one dispatch;
       * NO worker-bot comment is newer than that verdict. A fix attempt, a
         hold, a retry marker, DRE-2813's no-work notice — every one of them
         means the loop already moved, and this sweep stays quiet;
@@ -6673,26 +6695,35 @@ def redispatch_standing_verdicts() -> None:
     for pr in prs:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
-        verdicts = critic_comments(pr)
-        if not verdicts:
-            continue
-        newest = verdicts[-1]
-        line = merge_gate.first_line(newest.get("body") or "")
-        if merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER) != "REQUEST_CHANGES":
-            continue
-        # The CURRENT head only — no content carry. A verdict that binds an
-        # older commit was written about code this PR no longer proposes, and
-        # qa-review owns the next word on it.
-        if merge_gate.verdict_sha(line) != (pr.get("headRefOid") or ""):
-            continue
         comments = pr.get("comments") or []
-        at = next((i for i, c in enumerate(comments) if c is newest), -1)
-        if any(is_worker_bot_comment(c) for c in comments[at + 1:]):
-            continue  # the loop already spoke about this verdict
-        when = newest.get("createdAt")
-        # 20 minutes, the fix_approved_but_red literal. An unreadable
-        # timestamp is not an old one (DRE-2034) — it waits for the next sweep.
-        if not when or age_minutes(when) < 20:
+        standing = None
+        for verdicts, marker, token in (
+            (critic_comments(pr), merge_gate.CRITIC_MARKER, "REQUEST_CHANGES"),
+            (verifier_comments(pr), merge_gate.VERIFIER_MARKER, "FAIL"),
+        ):
+            if not verdicts:
+                continue
+            newest = verdicts[-1]
+            line = merge_gate.first_line(newest.get("body") or "")
+            if merge_gate.verdict_token(line, marker) != token:
+                continue
+            # The CURRENT head only — no content carry. A verdict that binds
+            # an older commit was written about code this PR no longer
+            # proposes, and qa-review / verify own the next word on it.
+            if merge_gate.verdict_sha(line) != (pr.get("headRefOid") or ""):
+                continue
+            at = next((i for i, c in enumerate(comments) if c is newest), -1)
+            if any(is_worker_bot_comment(c) for c in comments[at + 1:]):
+                continue  # the loop already spoke about this verdict
+            when = newest.get("createdAt")
+            # 20 minutes, the fix_approved_but_red literal. An unreadable
+            # timestamp is not an old one (DRE-2034) — it waits for the next
+            # sweep.
+            if not when or age_minutes(when) < 20:
+                continue
+            standing = token
+            break
+        if standing is None:
             continue
         # The budget, in the fix job's own shape. The GraphQL listing above
         # already proved this thread has comments, so an EMPTY REST read is
@@ -6714,20 +6745,21 @@ def redispatch_standing_verdicts() -> None:
         age = int(age_minutes(when))
         print(
             f"evicted-verdict: PR #{pr['number']} has a standing "
-            f"REQUEST_CHANGES on {pr['headRefOid']} from {age}m ago with no "
+            f"{standing} on {pr['headRefOid']} from {age}m ago with no "
             "fix run — re-dispatching fix agent"
         )
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         _post_pr_note(pr["number"], pipeline_act.receipt("fix-loop-restarted", (
             "🔁 The reconcile sweep re-dispatched the fix agent (DRE-3130). "
-            f"This pull request has carried a blocking critic verdict on its "
+            "This pull request has carried a blocking verdict (the critic's "
+            "REQUEST_CHANGES or the Verifier's FAIL) on its "
             f"current head for {age} minutes with no fix run working it, so "
             "the run that verdict should have started never arrived — most "
             "often because GitHub cancelled the trigger while it was pending "
             "(DRE-2810). Nothing is needed from you. One dispatch per "
             "verdict: this note is newer than the verdict, so the sweep will "
-            "not do it again until the critic speaks next."
+            "not do it again until the critic or the Verifier speaks next."
         )))
         return  # one dispatch per sweep; the busy-guard handles the rest
 
