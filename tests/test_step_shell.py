@@ -12,11 +12,14 @@ five. This suite pins:
   * the readers — `step_shell` and `workflow_source` see through the line, and
     `workflow_source` round-trips a `move`: the step's `run`, read back and
     parsed with `yaml.safe_load`, equals the original body, comments included;
-  * `code_lines` — what `verify` compares, with a heredoc body kept whole;
+  * `code_lines` — what `verify` compares, with a heredoc body and a line
+    inside a quoted string kept whole, and an arithmetic `<<` read as a shift;
   * `move` — mechanical, and refusing a body that still holds a `${{` once its
-    `--env` substitutions are applied;
-  * `verify` — red on a changed code line, a dropped env key and a dropped
-    `DRE-` reference, green on a comment-only edit;
+    `--env` substitutions are applied, or one where a substitution lands in
+    single quotes — `$( )` and a backtick quoting afresh inside double quotes;
+  * `verify` — red on a changed code line, a dropped env key, a dropped
+    `DRE-` reference and a substitution the shell reads literally, green on a
+    comment-only edit;
   * `rehearse` — all five moves of the contract table, applied to a throwaway
     copy of THIS tree, each verified against HEAD.
 """
@@ -316,6 +319,14 @@ def _assert_refused(root: Path, before: str, result, *needles: str) -> None:
         ('cat <<"EOF2"\n          ${{ github.repository }}\n          EOF2', 14),
         ("cat <<\\EOF2\n          ${{ github.repository }}\n          EOF2", 14),
         ("cat <<-'EOF2'\n          \t${{ github.repository }}\n          \tEOF2", 14),
+        # `$( )` and a backtick start their own quoting, inside double quotes too
+        ("echo \"repo: $(printf '%s' '${{ github.repository }}')\"", 13),
+        ("echo \"$(printf %s '${{ github.repository }}')\"", 13),
+        ("echo \"`printf %s '${{ github.repository }}'`\"", 13),
+        ("cat <<EOF2\n          $(printf %s '${{ github.repository }}')\n          EOF2", 14),
+        # `<<` in arithmetic is a shift, so no heredoc swallows the next line
+        ("x=$(( 1 << n ))\n          echo 'a ${{ github.repository }}'", 14),
+        ("(( x = n << m ))\n          echo 'a ${{ github.repository }}'", 14),
     ],
 )
 def test_move_refuses_a_substitution_the_shell_would_read_literally(tmp_path, line, number):
@@ -339,6 +350,10 @@ def test_move_refuses_a_substitution_the_shell_would_read_literally(tmp_path, li
         "cat <<< ${{ github.repository }}  # it's fine",
         # a quoted heredoc that has closed no longer quotes what follows
         "cat <<'EOF2'\n          literal\n          EOF2\n          echo ${{ github.repository }}",
+        # outside any single quote inside `$( )`, and after it has closed
+        "echo \"$(printf %s ${{ github.repository }})\"",
+        "echo \"$(printf '%s' x) it's ${{ github.repository }}\"",
+        "echo \"$(( 1 << 2 )) ${{ github.repository }}\"",
     ],
 )
 def test_move_substitutes_where_the_shell_expands(tmp_path, line):
@@ -507,6 +522,24 @@ def test_code_lines_keeps_a_heredoc_body_whole():
     ]
 
 
+def test_code_lines_reads_an_arithmetic_shift_as_no_heredoc():
+    text = textwrap.dedent(
+        """\
+        x=$(( 1 << n ))
+        # dropped: a comment, not a heredoc body
+        (( x <<= 1 ))
+
+        echo after
+        """
+    )
+    assert step_shell.code_lines(text) == ["x=$(( 1 << n ))", "(( x <<= 1 ))", "echo after"]
+
+
+def test_code_lines_keeps_a_line_inside_a_quoted_string_whole():
+    text = 'echo "one\n# kept: inside the string\n\ntwo"\n# dropped\n'
+    assert step_shell.code_lines(text) == ['echo "one', "# kept: inside the string", "", 'two"']
+
+
 # --- verify -----------------------------------------------------------------
 
 
@@ -592,6 +625,28 @@ def test_verify_fails_a_step_that_does_not_delegate(moved):
     repo, _tree = moved
     # the base tree itself: its step is still the inline block
     assert _verify(repo, repo, *_env_args())
+
+
+def test_verify_fails_a_substitution_the_shell_reads_literally(tmp_path):
+    """A move made by hand, past `move`'s refusal, still fails `verify`."""
+    line = "          gh pr view 7 --repo ${{ github.repository }}\n"
+    literal = "          echo \"$(printf %s '${{ github.repository }}')\"\n"
+    repo = _fixture_root(tmp_path, FIXTURE.replace(line, literal))
+    _git(repo, "init", "-q")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    out = tmp_path / "out"
+    out.mkdir()
+    tree = _fixture_root(out)
+    assert _move(tree, *ENVS).returncode == 0
+    script = tree / "scripts" / "do_thing.sh"
+    script.write_text(script.read_text().replace(
+        "gh pr view 7 --repo ${REPO}", "echo \"$(printf %s '${REPO}')\""
+    ))
+
+    problems = _verify(repo, tree, *_env_args())
+    assert len(problems) == 1, problems
+    assert "reads literally" in problems[0] and "line 13" in problems[0]
 
 
 def test_verify_cli_exit_codes(moved):

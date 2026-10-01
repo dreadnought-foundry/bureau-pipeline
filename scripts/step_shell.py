@@ -48,7 +48,9 @@ THE COMMANDS (these parse YAML, so they need PyYAML):
 `move` is mechanical: a move card writes no shell by hand. It refuses a body
 that still holds a `${{` once its `--env` substitutions are applied, and one
 where a substitution would land inside single quotes or a quoted heredoc —
-Actions fills those in, the shell leaves a `${NAME}` there alone. It
+Actions fills those in, the shell leaves a `${NAME}` there alone. Quoting is
+read as the shell nests it: `$( )`, `$(( ))` and a backtick start their own
+quoting even inside double quotes, and `<<` in arithmetic is a shift. It
 refuses to write anything unless reading the result back through
 `workflow_source` gives the body it moved. `verify` is the check each move
 card runs against `origin/main`. `rehearse` applies all five moves of
@@ -277,82 +279,167 @@ def _closes(line: str, word: str, dash: bool) -> bool:
     return (line.lstrip("\t") if dash else line) == word
 
 
+# The contexts `_scan` tracks. A frame is [kind, open parentheses]:
+#   "cmd"   commands — the body's top level, `$( )` and `` ` ` ``
+#   "arith" `$(( ))` and `(( ))`, where `<<` is a shift, not a heredoc
+#   '"'     double quotes, and "body" an unquoted heredoc's body
+#   "'"     single quotes, and "$'" ANSI-C quotes, where nothing expands
+_LITERAL = ("'", "$'")
+_QUOTES = ("'", "$'", '"')
+_WORD_START = " \t;&|()"
+
+
+def _scan(line: str, stack: list[list], literal: list[str],
+          heredocs: list[tuple[str, bool, bool]] | None) -> None:
+    """Walk one line of shell with `stack` the contexts open at its start,
+    leaving the contexts open at its end. Each `${{ }}` that sits where the
+    shell reads literally goes to `literal`; each heredoc the line opens goes
+    to `heredocs`, unless that is None (a heredoc body opens none).
+
+    `$(`, `$((` and a backtick open a fresh context wherever they sit, quotes
+    included, so a quote inside them is a quote again; the matching `)` or
+    backtick restores the context outside. A `${{ }}` is read whole, so a
+    quote inside it opens nothing; a `#` that starts a word among commands
+    ends the line's code."""
+    i = 0
+    while i < len(line):
+        frame = stack[-1]
+        kind = frame[0]
+        expression = _EXPRESSION.match(line, i)
+        if expression:
+            if kind in _LITERAL:
+                literal.append(expression.group())
+            i = expression.end()
+            continue
+        char = line[i]
+        if kind == "'":
+            if char == "'":
+                stack.pop()
+            i += 1
+            continue
+        if kind == "$'":
+            if char == "'":
+                stack.pop()
+            i += 2 if char == "\\" else 1
+            continue
+        if char == "\\":
+            i += 2
+            continue
+        if line.startswith("$((", i):
+            stack.append(["arith", 0])
+            i += 3
+            continue
+        if line.startswith("$(", i):
+            stack.append(["cmd", 0])
+            i += 2
+            continue
+        if char == "`":
+            if kind == "`":
+                stack.pop()
+            else:
+                stack.append(["`", 0])
+            i += 1
+            continue
+        if kind in ('"', "body"):
+            if char == '"' and kind == '"':
+                stack.pop()
+            i += 1
+            continue
+        # among commands, or in arithmetic
+        if line.startswith("$'", i):
+            stack.append(["$'", 0])
+            i += 2
+            continue
+        if char in "'\"":
+            stack.append([char, 0])
+            i += 1
+            continue
+        if char == "(":
+            if kind != "arith" and line.startswith("((", i) and (i == 0 or line[i - 1] in _WORD_START):
+                stack.append(["arith", 0])
+                i += 2
+                continue
+            frame[1] += 1
+        elif char == ")":
+            if frame[1]:
+                frame[1] -= 1
+            elif kind == "arith":
+                stack.pop()
+                i += 2 if line.startswith("))", i) else 1
+                continue
+            elif kind == "cmd" and len(stack) > 1:
+                stack.pop()
+        elif kind == "arith":
+            pass
+        elif char == "#" and (i == 0 or line[i - 1] in _WORD_START):
+            break
+        elif char == "<" and heredocs is not None and (opened := _HEREDOC.match(line, i)):
+            heredocs.append(_heredoc(opened))
+            i = opened.end()
+            continue
+        i += 1
+
+
+def _shell_lines(body: str) -> list[tuple[str, str, list[str]]]:
+    """Each line of a `run:` body as (line, where, literal).
+
+    `where` is "heredoc" for a heredoc's body and its terminator, "string"
+    for a line that starts inside a quoted string, else "code". `literal` is
+    each `${{ }}` on the line that the shell would read literally once it
+    became `${NAME}`: inside single quotes (`'...'` or `$'...'`), or in the
+    body of a heredoc whose delimiter is quoted (`<<'EOF'`, `<<"EOF"`,
+    `<<\\EOF`). Actions fills in a `${{ }}` wherever it sits."""
+    out: list[tuple[str, str, list[str]]] = []
+    stack: list[list] = [["cmd", 0]]
+    pending: list[tuple[str, bool, bool]] = []  # heredocs opened, bodies still to come
+    inside: list[list] | None = None  # the contexts open in an unquoted heredoc's body
+    for line in body.splitlines():
+        literal: list[str] = []
+        if pending and stack[-1][0] not in _QUOTES:
+            word, dash, quoted = pending[0]
+            if (inside is None or len(inside) == 1) and _closes(line, word, dash):
+                pending.pop(0)
+                inside = None
+            elif quoted:
+                literal = [m.group() for m in _EXPRESSION.finditer(line)]
+            else:
+                inside = inside or [["body", 0]]
+                _scan(line, inside, literal, None)
+            out.append((line, "heredoc", literal))
+            continue
+        where = "string" if stack[-1][0] in _QUOTES else "code"
+        _scan(line, stack, literal, pending)
+        out.append((line, where, literal))
+    return out
+
+
 def code_lines(text: str) -> list[str]:
     """The lines of a script or block that `verify` compares.
 
     Dropped: line 1 when it is the shebang, line 2 when it is exactly `set -e`,
-    blank lines and full-line `#` comments. A heredoc body is kept whole —
-    its blank and `#` lines are data, not comments."""
+    blank lines and full-line `#` comments. A heredoc body, and a line inside a
+    quoted string, is kept whole — its blank and `#` lines are data, not
+    comments."""
     lines = text.splitlines()
     start = 0
     if lines and lines[0].startswith("#!"):
         start = 1
         if len(lines) > 1 and lines[1] == SET_E:
             start = 2
-    kept: list[str] = []
-    pending: list[tuple[str, bool, bool]] = []  # heredoc terminators still open
-    for line in lines[start:]:
-        if pending:
-            kept.append(line)
-            if _closes(line, *pending[0][:2]):
-                pending.pop(0)
-            continue
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        kept.append(line)
-        pending += [_heredoc(match) for match in _HEREDOC.finditer(line)]
-    return kept
+    return [
+        line for line, where, _ in _shell_lines("\n".join(lines[start:]))
+        if where != "code" or (line.strip() and not line.strip().startswith("#"))
+    ]
 
 
 def _literal_expressions(body: str) -> list[tuple[int, str]]:
     """Each `${{ }}` in a `run:` body that the shell would read literally once
-    it became `${NAME}`, as (line number, expression).
-
-    Actions fills in a `${{ }}` wherever it sits, but the shell expands no
-    `${NAME}` inside single quotes (`'...'` or `$'...'`) or inside the body of
-    a heredoc whose delimiter is quoted (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`). A
-    `${{ }}` is read whole, so a quote inside it opens nothing; a `#` that
-    starts a word outside quotes ends the line's code."""
-    found: list[tuple[int, str]] = []
-    pending: list[tuple[str, bool, bool]] = []  # heredocs opened, bodies still to come
-    quote = None  # the quote still open at the end of a line, if any
-    for number, line in enumerate(body.splitlines(), 1):
-        if pending and quote is None:
-            word, dash, quoted = pending[0]
-            if _closes(line, word, dash):
-                pending.pop(0)
-            elif quoted:
-                found += [(number, m.group()) for m in _EXPRESSION.finditer(line)]
-            continue
-        i = 0
-        while i < len(line):
-            expression = _EXPRESSION.match(line, i)
-            if expression:
-                if quote == "'":
-                    found.append((number, expression.group()))
-                i = expression.end()
-                continue
-            char = line[i]
-            if quote == "'":
-                quote = None if char == "'" else quote
-            elif quote == '"':
-                if char == "\\":
-                    i += 1
-                elif char == '"':
-                    quote = None
-            elif char == "\\":
-                i += 1
-            elif char in "'\"":
-                quote = char
-            elif char == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
-                break
-            elif char == "<" and (opened := _HEREDOC.match(line, i)):
-                pending.append(_heredoc(opened))
-                i = opened.end()
-                continue
-            i += 1
-    return found
+    it became `${NAME}`, as (line number, expression)."""
+    return [
+        (number, expression)
+        for number, (_, _, literal) in enumerate(_shell_lines(body), 1)
+        for expression in literal
+    ]
 
 
 # --- shared by the commands -------------------------------------------------
@@ -381,6 +468,23 @@ def substitute(body: str, envs: Iterable[tuple[str, str]]) -> str:
         pattern = re.compile(r"\$\{\{\s*" + re.escape(expr) + r"\s*\}\}")
         body = pattern.sub(lambda _m, name=name: "${" + name + "}", body)
     return body
+
+
+def _literal_substitutions(body: str, envs: Iterable[tuple[str, str]], rel: str, step_name: str) -> str | None:
+    """Why substituting `envs` into `body` would change what it prints — a
+    `${{ }}` that would become a `${NAME}` the shell reads literally — or None."""
+    envs = tuple(envs)
+    literal = [
+        (number, expression) for number, expression in _literal_expressions(body)
+        if substitute(expression, envs) != expression
+    ]
+    if not literal:
+        return None
+    return (
+        f"{rel}: step {step_name!r} would substitute where the shell reads literally "
+        "(single quotes or a quoted heredoc): "
+        + ", ".join(f"line {number} of the run block: {expression}" for number, expression in literal)
+    )
 
 
 def _find_step_in(text: str, step_name: str, where: str) -> tuple[dict, dict, dict]:
@@ -477,16 +581,9 @@ def move(
             f"{rel}: step {step_name!r} sets {', '.join(settings)}; the script "
             f"would run as `bash <path>` with {SET_E!r} alone, so this is no mechanical move"
         )
-    literal = [
-        (number, expression) for number, expression in _literal_expressions(run)
-        if substitute(expression, envs) != expression
-    ]
+    literal = _literal_substitutions(run, envs, rel, step_name)
     if literal:
-        raise StepShellError(
-            f"{rel}: step {step_name!r} would substitute where the shell reads literally "
-            "(single quotes or a quoted heredoc): "
-            + ", ".join(f"line {number} of the run block: {expression}" for number, expression in literal)
-        )
+        raise StepShellError(literal)
 
     body = substitute(run, envs)
     if "${{" in body:
@@ -615,7 +712,9 @@ def verify(
       2. its `env:` holds every key the step had at `base`, plus the --env names;
       3. the script's `code_lines` equal the base block's, after the same
          --env substitution (and the script opens with the two opening lines);
-      4. every `DRE-<n>` in the base block appears in the script.
+      4. every `DRE-<n>` in the base block appears in the script;
+      5. no --env substitution lands where the shell reads the base block
+         literally, the refusal `move` makes.
 
     A step that already delegated at `base` is compared through its script
     there, so a move that has landed verifies against itself."""
@@ -645,6 +744,9 @@ def verify(
     text = path.read_text()
     if not text.startswith(OPENING):
         problems.append(f"{script}: lines 1-2 are not {SHEBANG!r} and {SET_E!r}")
+    literal = _literal_substitutions(base_block, envs, f"{rel}@{base}", step_name)
+    if literal:
+        problems.append(literal)
     want = code_lines(substitute(base_block, envs))
     got = code_lines(text)
     if got != want:
