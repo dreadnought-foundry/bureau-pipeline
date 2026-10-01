@@ -123,7 +123,9 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
     epic, and a one-off sent back to Planning is not one — on 2026-09-30 the
     line fired `agent-execute` for DRE-5198 and a build ran on a card waiting
     to be planned. Omit it and the labels decide, as they always have. An
-    event outside `EVENTS` raises before anything is sent.
+    event outside `EVENTS` raises before anything is sent. (DRE-5376) A one-off
+    card the planner has just revised carries no `agent:planner`, so
+    `review_rerun.py dispatch --route plan` names `agent-plan` the same way.
     """
     if event is not None and event not in EVENTS:
         raise ValueError(f"plan run {card['identifier']}: unknown event {event!r} "

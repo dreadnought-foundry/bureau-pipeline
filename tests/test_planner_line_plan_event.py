@@ -235,6 +235,10 @@ PLANNER_LINE_SITES = {
 }
 LABEL_RULE_SITES = {
     ("reconcile.py", "redispatch"),
+}
+# Passes `event=` from its `--route`: `activate` (the default) hands it None,
+# which is the label rule; `plan` hands it PLAN_EVENT (DRE-5376).
+ROUTED_SITES = {
     ("review_rerun.py", "_cmd_dispatch"),
 }
 
@@ -263,7 +267,7 @@ def _fire_calls() -> list[tuple[str, str, ast.Call]]:
 
 def test_every_fire_call_site_is_classified():
     sites = {(name, fn) for name, fn, _ in _fire_calls()}
-    assert sites == PLANNER_LINE_SITES | LABEL_RULE_SITES, (
+    assert sites == PLANNER_LINE_SITES | LABEL_RULE_SITES | ROUTED_SITES, (
         "a plan_run.fire call site was added or moved — say whether it serves "
         "the planner line (it must pass event=plan_run.PLAN_EVENT) or keeps "
         f"the label rule: {sorted(sites)}")

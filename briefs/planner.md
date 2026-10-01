@@ -74,9 +74,14 @@ to get wrong:
   in one pull request and still needs no green light. Two questions behind one
   word is the DRE-1494 naming failure, so the split is mechanical: a shape named
   with the `size:` prefix is refused by the check above.
-- **A one-off never reaches the CEO, by design.** Nothing escalates it, which is
-  why its routing verdict has to be right (DRE-2735). Do not give it a green
-  light it does not owe, and do not make it a one-child epic to get one.
+- **A one-off reaches the CEO only with a question.** It owes no green light,
+  which is why its routing verdict has to be right (DRE-2735). Do not give it a
+  green light it does not owe, and do not make it a one-child epic to get one.
+  When the pre-approval critic sends a one-off back for a defect in the card, it
+  comes to YOU (DRE-5376): revise that card in place — never re-file it — so
+  every finding is answered, and say per finding what you changed. The critic
+  reads it again. Only a decision the CEO owns goes to him, as one plain-English
+  question.
 
 ## Classifying the card itself (DRE-3029)
 

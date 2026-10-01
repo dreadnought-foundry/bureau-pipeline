@@ -671,14 +671,26 @@ class TestPlanYmlBranchesThreeWays:
         that no model reads is a one-off nothing judges: the shape stamp was
         the only reader on the fast path, and a business decision stamped
         `one-off` was routed FLEET and would have been built. The pre-approval
-        critic is the ONE agent step a one-off run may reach, and this asserts
-        it stays one — the cheap route stays cheap.
+        critic is the one agent step every one-off run reaches.
+
+        DRE-5376 added the one other: when that critic sends the card back, the
+        planner revises it. That step runs ONLY behind the one-off decision's
+        `revise` action, never on the shape alone, so a one-off the critic
+        passes, escalates or parks still asks exactly one model. Any other
+        agent step reachable from the one-off route fails here.
         """
         for producer in ("First critic — round 1 decision", "Second critic — decision"):
             assert "steps.route.outputs.mode" in _step(producer)["if"], (
                 f"{producer!r} must itself be mode-gated, or the steps that "
                 "hang off it escape the branch"
             )
+        # The revision hangs off the one-off decision, so the chain is walked
+        # here too: the decision itself runs on the one-off shape alone.
+        decision = _step("One-off critic — decision")
+        assert decision["id"] == "oneoff"
+        assert re.findall(r"steps\.shape\.outputs\.route == '([a-z-]+)'",
+                          decision["if"]) == ["one-off"]
+        revise_gate = "steps.oneoff.outputs.action == 'revise'"
         gated = ("steps.route.outputs.mode", "steps.pre1.outputs", "steps.post1.outputs")
         on_the_one_off_route = []
         for step in _steps():
@@ -686,7 +698,7 @@ class TestPlanYmlBranchesThreeWays:
                 condition = step.get("if", "")
                 shapes = re.findall(
                     r"steps\.shape\.outputs\.route == '([a-z-]+)'", condition)
-                if shapes == ["one-off"]:
+                if shapes == ["one-off"] or "steps.oneoff.outputs" in condition:
                     on_the_one_off_route.append(step.get("name"))
                     continue
                 assert any(g in condition for g in gated) or (
@@ -694,10 +706,20 @@ class TestPlanYmlBranchesThreeWays:
                     f"agent step {step.get('name')!r} is gated on neither the "
                     f"mode nor a shape a one-off cannot be"
                 )
-        assert on_the_one_off_route == ["Pre-approval critic — the one-off exit"], (
-            "exactly one agent step may run on the one-off route — the "
-            f"pre-approval critic (DRE-3041); found {on_the_one_off_route}"
+        assert on_the_one_off_route == [
+            "Pre-approval critic — the one-off exit",
+            "One-off revision — the planner answers the critic",
+        ], (
+            "exactly two agent steps may run on the one-off route — the "
+            "pre-approval critic (DRE-3041) and the planner's revision behind "
+            f"its send-back (DRE-5376); found {on_the_one_off_route}"
         )
+        assert _step("One-off revision — the planner answers the critic")["if"] \
+            == revise_gate, (
+                "the one-off revision must run on the critic's revise decision "
+                "and nothing else, or a one-off the critic passed asks a second "
+                "model"
+            )
         for fragment in ("Plan artifact — check", "Plan artifact — upload source"):
             assert "steps.route.outputs.mode == 'plan'" in _step(fragment)["if"]
         publish = _jobs()["publish"]["if"]

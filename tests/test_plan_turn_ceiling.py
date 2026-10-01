@@ -72,10 +72,11 @@ EPIC_STEP = "claude"
 EPIC_CEILING = 140
 
 # Every agent step plan.yml can run, and the ceiling each one carries.
-# `posta`, `oocritic` and the four re-plan steps are deliberately absent: their
-# ceilings are EXPRESSIONS — `posta` sized per plan since DRE-3241, `oocritic`
-# sized per card since DRE-4381, the re-plans sized per plan since DRE-5288 —
-# and all of them are asserted separately below.
+# `posta`, `oocritic`, `oorevise` and the four re-plan steps are deliberately
+# absent: their ceilings are EXPRESSIONS — `posta` sized per plan since
+# DRE-3241, `oocritic` and `oorevise` sized per card since DRE-4381 and
+# DRE-5376, the re-plans sized per plan since DRE-5288 — and all of them are
+# asserted separately below.
 #
 # This table is the "everything else is unchanged" assertion for DRE-3450.
 # Adding a step, or moving one of these numbers, is meant to fail here — which
@@ -96,7 +97,8 @@ CEILINGS = {
 # the step output each one reads it from. `posta` is sized from the plan it has
 # to read (DRE-3241); `oocritic` is sized from the card it has to read
 # (DRE-4381 — a fixed 20 killed two reads of DRE-4378 and told the CEO nothing
-# had checked the card).
+# had checked the card). `oorevise` reads the same output (DRE-5376): the
+# planner's revision of a sent-back one-off re-reads the files the critic read.
 #
 # The four re-plan steps left the table with DRE-5288: a ten-card revision of
 # epic DRE-5268 FINISHED at 86 turns and was failed at the literal 60 every one
@@ -106,6 +108,7 @@ CEILINGS = {
 SIZED = {
     "posta": "steps.postturns.outputs.max_turns",
     "oocritic": "steps.ooturns.outputs.max_turns",
+    "oorevise": "steps.ooturns.outputs.max_turns",
     "replan": "steps.replanturns.outputs.max_turns",
     "replan_retry": "steps.replanturns.outputs.max_turns",
     "postreplan": "steps.postreplanturns.outputs.max_turns",

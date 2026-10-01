@@ -44,7 +44,8 @@ EXPECTED_PROMPT_FILES = {
     "model-trial.yml": 1,
     # 6 → 7 with DRE-3041: the pre-approval critic reads the one-off exit.
     # 8 → 12 with DRE-3970: the four planner steps' re-runs on the next rung.
-    "plan.yml": 12,
+    # 12 → 13 with DRE-5376: the planner's revision of a sent-back one-off.
+    "plan.yml": 13,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,
