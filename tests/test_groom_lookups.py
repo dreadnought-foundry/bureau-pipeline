@@ -628,3 +628,427 @@ def test_main_unreadable_inputs_still_write_a_not_read_document(
     assert doc["why"].startswith("the leg's inputs could not be read: ")
     assert capsys.readouterr().out.strip().splitlines()[-1] == (
         f"groom-lookups: {OWNER} — not read: {doc['why']}")
+
+
+# ==========================================================================
+# DRE-5458 — the groom job's half (`cards`) and the verify leg's (`fold`)
+#
+# On 2026-09-29 every card was judged on nothing. The rule held here is per
+# card: a mapped card's lookup is `ok` only when the repo its own files live
+# in answered, whatever the other owners said; an unmapped card's when any
+# repo did; a card naming no file is never asked anything.
+# ==========================================================================
+FOLD_MAP = {
+    "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
+    "agent-bureau": "dreadnought-foundry/agent-bureau",
+    "atlas": "EveryBite/atlas",
+    "deltasolv": "DeltaSolv/deltasolv",
+}
+HOME = "dreadnought-foundry/bureau-pipeline"
+DF, EB, DS = "dreadnought-foundry", "EveryBite", "DeltaSolv"
+NO_TOKEN_DF = ("no token for dreadnought-foundry: the App's installation "
+               "could not be minted")
+NO_TOKEN_EB = "no token for EveryBite: the App's installation could not be minted"
+
+
+def test_the_lookup_state_constants():
+    assert gl.LOOKUP_STATES == ("ok", "failed", "none", "not-run")
+    assert gl.LOOKUP_FAILED == "lookup failed: "
+
+
+# --------------------------------------------------------------------------
+# paths_of and cards
+# --------------------------------------------------------------------------
+class FakeLops:
+    """`linear_ops` as `cards` uses it: `gql` counted, each aliased
+    `searchIssues` field answered from `found[path]`; `fail` raises on every
+    request."""
+
+    def __init__(self, found=None, *, fail=None):
+        self.found = found or {}
+        self.fail = fail
+        self.calls: list[tuple[str, dict]] = []
+
+    def gql(self, query, variables=None):
+        self.calls.append((query, dict(variables or {})))
+        if self.fail:
+            raise RuntimeError(self.fail)
+        return {alias: {"nodes": list(self.found.get(path, []))}
+                for alias, path in (variables or {}).items()}
+
+
+def issue(ident, *, created="2026-09-20T10:00:00.000Z", state="Backlog",
+          title=None):
+    return {"identifier": ident, "title": title or f"{ident} title",
+            "createdAt": created, "state": {"name": state}}
+
+
+def target(card, body, *, repository=HOME, excluded=None, created=CREATED):
+    return {"card": card, "repository": repository,
+            "repo_slug": (repository or "widgets").split("/")[-1],
+            "title": card, "body": body, "evidence": [], "list": "planning",
+            "context": {"created_at": created, "age_days": 30},
+            "excluded": excluded}
+
+
+NOW_ISO = "2026-10-01T13:00:00Z"
+
+
+def test_paths_of_reads_the_backticked_paths_as_written_up_to_max_paths():
+    body = ("Fix `scripts/a.py:12` and `docs/b.md`, then `c.ts`, "
+            "`d/e.yml` and `f.json`; `scripts/a.py` again. plain.py is prose.")
+    assert gl.paths_of({"body": body}) == (
+        ["scripts/a.py", "docs/b.md", "c.ts"], 2)
+    assert gl.paths_of({"body": "No file here."}) == ([], 0)
+    assert gl.paths_of({"body": None}) == ([], 0)
+
+
+def test_cards_makes_one_request_per_file_naming_row_and_none_for_the_rest():
+    rows = [target("DRE-1", "Edit `scripts/a.py`."),
+            target("DRE-2", "No file at all."),
+            target("DRE-3", "Edit `x.py`, `y.py`, `z.py` and `w.py`."),
+            target("DRE-4", "Nothing named either."),
+            target("DRE-5", "Edit `docs/groomer.md`.")]
+    lops = FakeLops()
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    assert len(lops.calls) == 3
+    for (query, variables), want in zip(
+            lops.calls, (["scripts/a.py"], ["x.py", "y.py", "z.py"],
+                         ["docs/groomer.md"])):
+        assert query.count("searchIssues(") == len(want) <= gl.MAX_PATHS
+        assert [variables[f"p{i}"] for i in range(len(want))] == want
+        for i in range(len(want)):
+            assert f"p{i}: searchIssues(term: $p{i}, first: 25)" in query
+    assert [r["lookups"]["looked_up"] for r in rows] == [
+        True, False, True, False, True]
+
+
+def test_a_looked_up_row_carries_the_contract_shape_before_fold():
+    rows = [target("DRE-1", "Edit `scripts/a.py`.")]
+    gl.cards(rows, lops=FakeLops(), now=NOW_ISO)
+    assert rows[0]["lookups"] == {
+        "looked_up": True, "ok": None, "why": None,
+        "paths": ["scripts/a.py"], "paths_left_out": 0, "newer_cards": [],
+        "newer_cards_why": None, "merged_prs": [], "cut": [], "owners": {}}
+
+
+def test_cards_keeps_newer_cards_only_and_writes_one_evidence_line_each():
+    found = {"scripts/a.py": [
+        issue("DRE-9", state="Done", title="Moved the roster onto the portal"),
+        issue("DRE-8", created="2026-08-01T00:00:00.000Z"),   # older
+        issue("DRE-1")],                                      # itself
+        "docs/b.md": [issue("DRE-7", state="In Progress", title="Doc it")]}
+    rows = [target("DRE-1", "Edit `scripts/a.py` and `docs/b.md`.")]
+    gl.cards(rows, lops=FakeLops(found), now=NOW_ISO)
+    look = rows[0]["lookups"]
+    assert look["newer_cards"] == [
+        {"identifier": "DRE-9", "title": "Moved the roster onto the portal",
+         "state": "Done", "path": "scripts/a.py"},
+        {"identifier": "DRE-7", "title": "Doc it", "state": "In Progress",
+         "path": "docs/b.md"}]
+    assert rows[0]["evidence"] == [
+        "newer card DRE-9 (Done) names scripts/a.py: "
+        "Moved the roster onto the portal",
+        "newer card DRE-7 (In Progress) names docs/b.md: Doc it"]
+
+
+def test_a_row_naming_no_file_is_not_asked_and_carries_its_own_state():
+    rows = [target("DRE-2", "No file."), target("DRE-4", "Nor here.")]
+    lops = FakeLops()
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    assert lops.calls == []
+    for r in rows:
+        assert r["lookups"] == {
+            "looked_up": False, "ok": True, "why": None, "paths": [],
+            "paths_left_out": 0, "newer_cards": [], "newer_cards_why": None,
+            "merged_prs": [], "cut": [], "owners": {}}
+        assert r["evidence"] == [
+            "the card names no file, so nothing was looked up"]
+
+
+def test_an_unmapped_row_naming_a_file_is_looked_up_like_a_mapped_one():
+    rows = [target("DRE-6", "Edit `lib/w.rb`.", repository=None)]
+    lops = FakeLops()
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    assert len(lops.calls) == 1
+    assert rows[0]["lookups"]["looked_up"] is True
+    assert rows[0]["lookups"]["paths"] == ["lib/w.rb"]
+    assert rows[0]["lookups"]["ok"] is None
+
+
+def test_an_excluded_row_is_not_looked_up_and_carries_null():
+    rows = [target("DRE-3", "Edit `scripts/a.py`.", excluded="hand-built")]
+    lops = FakeLops()
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    assert lops.calls == []
+    assert rows[0]["lookups"] is None
+    assert rows[0]["evidence"] == []
+
+
+def test_a_row_past_max_paths_is_looked_up_for_the_first_ones_and_says_so():
+    rows = [target("DRE-3", "Edit `a.py`, `b.py`, `c.py`, `d.py`, `e.py`.")]
+    lops = FakeLops()
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    [(query, variables)] = lops.calls
+    assert sorted(variables.values()) == ["a.py", "b.py", "c.py"]
+    assert query.count("searchIssues(") == gl.MAX_PATHS
+    assert rows[0]["lookups"]["paths"] == ["a.py", "b.py", "c.py"]
+    assert rows[0]["lookups"]["paths_left_out"] == 2
+    assert "2 more path(s) were not looked up" in rows[0]["evidence"]
+
+
+def test_a_refused_request_is_named_and_the_next_card_is_asked():
+    rows = [target("DRE-1", "Edit `a.py`."), target("DRE-2", "Edit `b.py`.")]
+    lops = FakeLops(fail="Linear said RATELIMITED")
+    gl.cards(rows, lops=lops, now=NOW_ISO)
+    assert len(lops.calls) == 2
+    for r in rows:
+        assert r["lookups"]["newer_cards"] == []
+        assert r["lookups"]["newer_cards_why"] == "Linear said RATELIMITED"
+        assert r["lookups"]["looked_up"] is True and r["lookups"]["ok"] is None
+
+
+# --------------------------------------------------------------------------
+# fold — over the layout the workflow produces
+# --------------------------------------------------------------------------
+def entry(*, read=True, why=None, merged=(), cut=(), unread=None):
+    return {"read": read, "why": why, "merged_prs": list(merged),
+            "cut": list(cut), "unread_repos": dict(unread or {})}
+
+
+def odoc(owner, cards, *, read=True, why=None):
+    return {"owner": owner, "read": read, "why": why, "requests": 3,
+            "budget": 600, "seconds": 1.0, "cards": cards}
+
+
+def merged(number, *, repo=HOME, path="scripts/a.py"):
+    return {"repo": repo, "number": number, "title": f"PR {number}",
+            "url": f"https://github.com/{repo}/pull/{number}",
+            "merged_at": "2026-09-12T08:30:00Z", "path": path}
+
+
+def looked(card, *, repository=HOME, paths=("scripts/a.py",), left_out=0):
+    r = target(card, "", repository=repository)
+    r["lookups"] = {"looked_up": True, "ok": None, "why": None,
+                    "paths": list(paths), "paths_left_out": left_out,
+                    "newer_cards": [], "newer_cards_why": None,
+                    "merged_prs": [], "cut": [], "owners": {}}
+    return r
+
+
+def lay(tmp_path, docs, *, under=None) -> Path:
+    """One directory per artifact, nothing at the top level — what
+    `download-artifact` with `merge-multiple: false` leaves. `under` names
+    the directory a document sits in when it is not its own owner's."""
+    base = tmp_path / "lookups"
+    base.mkdir(exist_ok=True)
+    for doc in docs:
+        name = (under or {}).get(doc["owner"], doc["owner"])
+        d = base / f"groom-lookups-{name}"
+        d.mkdir()
+        (d / f"lookups-{name}.json").write_text(json.dumps(doc),
+                                                encoding="utf-8")
+    return base
+
+
+def fold_cmd(tmp_path, rows, lookups_dir, repo_map=FOLD_MAP):
+    targets = tmp_path / "targets.json"
+    targets.write_text(json.dumps(rows), encoding="utf-8")
+    map_file = tmp_path / "fold-map.json"
+    map_file.write_text(json.dumps(repo_map), encoding="utf-8")
+    out = tmp_path / "targets-folded.json"
+    code = gl.main(["fold", "--targets", str(targets), "--lookups-dir",
+                    str(lookups_dir), "--out", str(out), "--repo-map",
+                    str(map_file)])
+    assert code == 0
+    return {r["card"]: r for r in json.loads(out.read_text(encoding="utf-8"))}
+
+
+def test_fold_mapped_home_read_is_ok_whatever_the_other_owners_said(tmp_path):
+    base = lay(tmp_path, [
+        odoc(DF, {"DRE-1": entry(merged=[merged(77)])}),
+        odoc(EB, {"DRE-1": entry(read=False, why=NO_TOKEN_EB)},
+             read=False, why=NO_TOKEN_EB)])
+    assert not list(base.glob("*.json"))
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]
+    look = got["lookups"]
+    assert (look["ok"], look["why"]) == (True, None)
+    assert look["merged_prs"] == [merged(77)]
+    assert look["owners"] == {
+        DF: {"read": True, "why": None},
+        EB: {"read": False, "why": NO_TOKEN_EB},
+        DS: {"read": False, "why": "no lookup record for DeltaSolv"}}
+    assert ("merged pull request #77 in dreadnought-foundry/bureau-pipeline "
+            "touched scripts/a.py on 2026-09-12: PR 77") in got["evidence"]
+    assert f"the lookup did not cover EveryBite: {NO_TOKEN_EB}" in got["evidence"]
+    assert ("the lookup did not cover DeltaSolv: no lookup record for "
+            "DeltaSolv") in got["evidence"]
+
+
+def _df_cut_by_its_clock():
+    """The morning the dreadnought-foundry leg ran out of clock before DRE-1
+    and EveryBite read every card with nothing found."""
+    why = "time budget of 300 s spent"
+    return [odoc(DF, {"DRE-1": entry(read=False, why=why),
+                      "DRE-2": entry(read=False, why=why)}, why=why),
+            odoc(EB, {"DRE-1": entry(), "DRE-2": entry()})]
+
+
+def test_fold_mapped_home_cut_by_its_clock_fails_though_another_answered(tmp_path):
+    got = fold_cmd(tmp_path, [looked("DRE-1")],
+                   lay(tmp_path, _df_cut_by_its_clock()))["DRE-1"]["lookups"]
+    assert got["ok"] is False
+    assert got["why"] == ("dreadnought-foundry/bureau-pipeline did not answer"
+                          " — time budget of 300 s spent")
+
+
+def test_fold_mapped_home_owner_with_no_token_fails_with_that_reason(tmp_path):
+    base = lay(tmp_path, [
+        odoc(DF, {"DRE-1": entry(read=False, why=NO_TOKEN_DF)},
+             read=False, why=NO_TOKEN_DF),
+        odoc(EB, {"DRE-1": entry()})])
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]["lookups"]
+    assert got["ok"] is False
+    assert got["why"] == f"{HOME} did not answer — {NO_TOKEN_DF}"
+
+
+def test_fold_mapped_home_owner_with_no_document_fails_named(tmp_path):
+    base = lay(tmp_path, [odoc(EB, {"DRE-1": entry()})])
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]["lookups"]
+    assert got["ok"] is False
+    assert got["why"] == (f"{HOME} did not answer — no lookup record for "
+                          "dreadnought-foundry")
+
+
+def test_fold_mapped_home_repo_refused_fails_with_its_own_reason(tmp_path):
+    base = lay(tmp_path, [
+        odoc(DF, {"DRE-1": entry(unread={HOME: "timed out after 20 s"})}),
+        odoc(EB, {"DRE-1": entry()})])
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]
+    assert got["lookups"]["ok"] is False
+    assert got["lookups"]["why"] == (f"{HOME} did not answer — timed out "
+                                     "after 20 s")
+    assert got["lookups"]["owners"][DF] == {"read": True, "why": None}
+    assert (f"the lookup did not cover {HOME}: timed out after 20 s"
+            in got["evidence"])
+
+
+def test_fold_a_card_mapped_to_everybite_is_ok_the_same_morning(tmp_path):
+    got = fold_cmd(tmp_path, [looked("DRE-1"),
+                              looked("DRE-2", repository="EveryBite/atlas")],
+                   lay(tmp_path, _df_cut_by_its_clock()))
+    assert got["DRE-1"]["lookups"]["ok"] is False
+    assert (got["DRE-2"]["lookups"]["ok"], got["DRE-2"]["lookups"]["why"]) == (
+        True, None)
+    assert ("the lookup did not cover dreadnought-foundry: time budget of "
+            "300 s spent") in got["DRE-2"]["evidence"]
+
+
+def test_fold_reads_the_owner_off_the_document_never_the_directory(tmp_path):
+    base = lay(tmp_path, [odoc(DF, {"DRE-1": entry()})],
+               under={DF: "DeltaSolv"})
+    assert (base / "groom-lookups-DeltaSolv" / "lookups-DeltaSolv.json").exists()
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]["lookups"]
+    assert got["ok"] is True
+    assert got["owners"][DF] == {"read": True, "why": None}
+    assert got["owners"][DS] == {"read": False,
+                                 "why": "no lookup record for DeltaSolv"}
+
+
+def test_fold_an_unmapped_row_is_ok_when_one_owner_read_it(tmp_path):
+    base = lay(tmp_path, [odoc(EB, {"DRE-6": entry()}),
+                          odoc(DF, {}, read=False, why=NO_TOKEN_DF)])
+    got = fold_cmd(tmp_path, [looked("DRE-6", repository=None)],
+                   base)["DRE-6"]["lookups"]
+    assert (got["ok"], got["why"]) == (True, None)
+
+
+def test_fold_an_unmapped_row_no_owner_read_fails_naming_each_reason(tmp_path):
+    why_eb = "rate limited: API rate limit exceeded"
+    base = lay(tmp_path, [
+        odoc(EB, {"DRE-6": entry(read=False, why=why_eb)}, why=why_eb),
+        odoc(DF, {}, read=False, why=NO_TOKEN_DF)])
+    got = fold_cmd(tmp_path, [looked("DRE-6", repository=None)],
+                   base)["DRE-6"]["lookups"]
+    assert got["ok"] is False
+    assert got["why"].startswith("no repo answered — ")
+    assert f"{DF}: {NO_TOKEN_DF}" in got["why"]
+    assert f"{EB}: {why_eb}" in got["why"]
+    assert f"{DS}: no lookup record for DeltaSolv" in got["why"]
+
+
+def test_fold_leaves_a_no_file_row_as_cards_wrote_it(tmp_path):
+    rows = [target("DRE-2", "No file.")]
+    gl.cards(rows, lops=FakeLops(), now=NOW_ISO)
+    before = json.loads(json.dumps(rows[0]))
+    got = fold_cmd(tmp_path, rows, lay(tmp_path, _df_cut_by_its_clock()))
+    assert got["DRE-2"] == before
+    assert got["DRE-2"]["lookups"]["ok"] is True
+    assert got["DRE-2"]["lookups"]["owners"] == {}
+    assert not any("did not cover" in e for e in got["DRE-2"]["evidence"])
+
+
+@pytest.mark.parametrize("layout", ["missing", "empty"])
+def test_fold_over_no_documents_still_writes_every_owner_unread(tmp_path,
+                                                                 layout):
+    base = tmp_path / "lookups"
+    if layout == "empty":
+        (base / "groom-lookups-dreadnought-foundry").mkdir(parents=True)
+        (base / "groom-lookups-dreadnought-foundry" / "notes.txt").write_text(
+            "x", encoding="utf-8")
+    excluded = target("DRE-3", "", excluded="hand-built")
+    excluded["lookups"] = None
+    got = fold_cmd(tmp_path, [looked("DRE-1"), excluded], base)
+    look = got["DRE-1"]["lookups"]
+    assert look["ok"] is False
+    assert look["owners"] == {o: {"read": False,
+                                  "why": f"no lookup record for {o}"}
+                              for o in (DF, EB, DS)}
+    assert got["DRE-3"]["lookups"] is None
+
+
+def test_fold_skips_a_file_that_is_not_json_and_says_so(tmp_path, capsys):
+    base = lay(tmp_path, [odoc(DF, {"DRE-1": entry()})])
+    bad = base / "groom-lookups-EveryBite"
+    bad.mkdir()
+    (bad / "lookups-EveryBite.json").write_text("{not json", encoding="utf-8")
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]["lookups"]
+    assert got["ok"] is True
+    assert got["owners"][EB] == {"read": False,
+                                 "why": "no lookup record for EveryBite"}
+    err = capsys.readouterr().err
+    assert "lookups-EveryBite.json" in err
+
+
+def test_fold_copies_a_cut_and_names_it_with_max_commits(tmp_path):
+    base = lay(tmp_path, [odoc(DF, {"DRE-1": entry(
+        cut=[{"repo": HOME, "path": "scripts/a.py"}])})])
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]
+    assert got["lookups"]["cut"] == [{"repo": HOME, "path": "scripts/a.py"}]
+    n = gl.MAX_COMMITS
+    assert (f"more than {n} commits touched scripts/a.py in {HOME} since the "
+            f"card was filed; only the newest {n} were followed to pull "
+            f"requests, so an older merged pull request may be missing"
+            ) in got["evidence"]
+    assert got["lookups"]["ok"] is True
+
+
+def test_fold_with_no_cut_writes_no_cut_line(tmp_path):
+    base = lay(tmp_path, [odoc(DF, {"DRE-1": entry()})])
+    got = fold_cmd(tmp_path, [looked("DRE-1")], base)["DRE-1"]
+    assert got["lookups"]["cut"] == []
+    assert not any(e.startswith("more than ") for e in got["evidence"])
+
+
+def test_fold_names_paths_left_out_once(tmp_path):
+    rows = [target("DRE-1", "`a.py` `b.py` `c.py` `d.py`")]
+    gl.cards(rows, lops=FakeLops(), now=NOW_ISO)
+    got = fold_cmd(tmp_path, rows, lay(tmp_path, [odoc(DF, {"DRE-1": entry()})]))
+    assert got["DRE-1"]["evidence"].count(
+        "1 more path(s) were not looked up") == 1
+
+
+def test_fold_function_skips_a_row_with_null_lookups():
+    r = target("DRE-3", "", excluded="hand-built")
+    r["lookups"] = None
+    assert gl.fold([r], [], repo_map=FOLD_MAP)[0]["lookups"] is None
