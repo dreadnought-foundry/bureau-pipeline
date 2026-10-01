@@ -85,7 +85,7 @@ def _steps(name: str) -> list:
 
 def publish_step(name: str) -> dict:
     """The one step that publishes the job's generated files."""
-    found = [s for s in _steps(name) if "bot_branch_pr.py" in (s.get("run") or "")]
+    found = [s for s in _steps(name) if "run" in s and "bot_branch_pr.py" in step_shell.step_shell(s)]
     assert len(found) == 1, f"{name}: expected one publish step, found {len(found)}"
     return found[0]
 

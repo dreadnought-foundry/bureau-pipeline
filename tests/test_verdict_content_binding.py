@@ -96,6 +96,11 @@ GREEN_CI = [{"name": "unit", "status": "completed", "conclusion": "success",
 PR_COMMITS = [{"sha": REVIEWED}, {"sha": HEAD}]
 
 
+def shell_of(step):
+    """The shell a workflow step runs, read through step_shell; "" for a `uses:` step."""
+    return step_shell.step_shell(step) if "run" in step else ""
+
+
 def critic_line(verdict, sha=None, cid=None):
     line = f"🔎 QA Critic — VERDICT: {verdict}"
     if sha:
@@ -1063,7 +1068,7 @@ class SkipReadsTheGatesRecordsTest(unittest.TestCase):
         self.step = next(
             s for s in yaml.safe_load(step_shell.workflow_source(QA_REVIEW_YML))
             ["jobs"]["review"]["steps"]
-            if "should_review_pr.py" in (s.get("run") or "")
+            if "should_review_pr.py" in shell_of(s)
         )
 
     def test_the_commit_record_is_fetched_and_passed(self):
@@ -1394,7 +1399,7 @@ class SkipRepublishesTheHeadBoundCheckTest(unittest.TestCase):
 
     def test_a_skip_republishes_the_review_check(self):
         publishers = self.step(
-            lambda s: "publish_review_check.py" in (s.get("run") or "")
+            lambda s: "publish_review_check.py" in shell_of(s)
         )
         self.assertTrue(publishers)
         conditions = " ".join(s.get("if", "") for s in publishers)
@@ -1412,14 +1417,15 @@ class SkipRepublishesTheHeadBoundCheckTest(unittest.TestCase):
     def test_the_skip_posts_nothing_on_the_pr(self):
         """A skip must be a SILENT no-op so the existing verdict stays the
         latest comment: every `gh pr comment` stays behind review == 'true'."""
-        for s in self.steps:
-            if "gh pr comment" in (s.get("run") or ""):
-                self.assertIn("review == 'true'", s.get("if", ""),
-                              f"step {s.get('name')!r} could comment on a skip")
+        commenters = self.step(lambda s: "gh pr comment" in shell_of(s))
+        self.assertTrue(commenters, "no step comments on the PR, so this guard checks nothing")
+        for s in commenters:
+            self.assertIn("review == 'true'", s.get("if", ""),
+                          f"step {s.get('name')!r} could comment on a skip")
 
     def test_the_republished_check_names_the_carried_sha(self):
         publishers = self.step(
-            lambda s: "publish_review_check.py" in (s.get("run") or "")
+            lambda s: "publish_review_check.py" in shell_of(s)
         )
         self.assertTrue(any("carried-from" in step_shell.step_shell(s) for s in publishers))
 
