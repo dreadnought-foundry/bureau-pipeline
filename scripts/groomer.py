@@ -364,6 +364,22 @@ CANCEL_TO = "Canceled"
 # absence of code.
 NEVER_WRITES = ("Duplicate", "Done")
 
+#: The lanes a card is finished in. A child in one of them is not open
+#: (DRE-5306): an epic whose children are all here is a finished container,
+#: judged like any card, and one with an open child is a live one.
+CLOSED_STATES = ("Done", "Canceled", "Duplicate")
+
+
+def open_children(card: dict) -> int:
+    """How many of `card["children"]["nodes"]` are not in `CLOSED_STATES` —
+    0 for a card with no `children` key. The one count of an epic's open
+    children: the verify agent's exclusion (DRE-5306) and the cancel guard
+    (DRE-5309) both read it."""
+    nodes = ((card or {}).get("children") or {}).get("nodes") or []
+    return sum(1 for node in nodes
+               if ((node or {}).get("state") or {}).get("name")
+               not in CLOSED_STATES)
+
 MARK = "🧺"
 PROPOSAL_TAG = "groom-proposal"
 

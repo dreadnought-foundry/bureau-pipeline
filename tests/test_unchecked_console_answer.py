@@ -404,20 +404,34 @@ def test_the_new_kind_is_distinct_from_every_other():
     assert len(kinds) == 7, "the new kind must be its own value, not an alias"
 
 
+#: Readers of the voice kinds outside `spoken_thread.py`, each with the test
+#: that holds it to UNCHECKED. `groom_verify_agent.py` names every kind in
+#: `BY_VOICE`, and an unchecked answer reads `withheld` (DRE-5306).
+OTHER_READERS = {
+    "groom_verify_agent.py": "tests/test_groom_verify_agent.py::"
+    "test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text",
+}
+
+
 def test_spoken_thread_is_the_only_reader_of_the_voice_kinds():
     """The card asks that EVERY reader of the kinds handles the new one. The
-    renders and the counts in `spoken_thread.py` are the whole set — pinned
-    here, so a second reader added later comes past this test rather than
-    silently missing UNCHECKED."""
+    renders and the counts in `spoken_thread.py`, plus OTHER_READERS, are the
+    whole set — pinned here, so a reader added later comes past this test
+    rather than silently missing UNCHECKED."""
     pattern = re.compile(
         r"spoken_thread\.(CEO_VIA_CONSOLE|PIPELINE|PERSON|INTEGRATION|"
         r"UNKNOWN|REFUSED|UNCHECKED)\b")
     readers = sorted(path.name for path in (ROOT / "scripts").glob("*.py")
                      if path.name != "spoken_thread.py"
                      and pattern.search(path.read_text(encoding="utf-8")))
-    assert readers == [], (
+    assert readers == sorted(OTHER_READERS), (
         f"{readers} now read the voice kinds and must handle UNCHECKED — an "
         "unchecked answer is not a refused one")
+    for name, test in OTHER_READERS.items():
+        text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert "spoken_thread.UNCHECKED" in text, name
+        path, func = test.split("::")
+        assert f"def {func}(" in (ROOT / path).read_text(encoding="utf-8"), test
 
 
 def test_every_kind_a_render_can_meet_is_rendered(transport):

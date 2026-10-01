@@ -380,6 +380,24 @@ says `unknown`, never zero. A record with no `verify` block renders byte for
 byte as before. The drain still reads the posted comment, never the artifact,
 and reads a verify-agent Cancel row exactly like any other.
 
+**What verify excludes without judging (DRE-5306).** `groom_verify_agent.py
+targets` reads each card with its board context — age, labels, parent,
+children, the last move and every comment with who said it — in one Linear
+request per card, and excludes four kinds before any agent runs, never by the
+model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
+Duplicate — an epic with no open child is judged like any card),
+`hand-built`, `moved into Intake on YYYY-MM-DD` (a move from another lane in
+the last seven days; it reads the move, not its author, since a move carries
+no signature and the console's move for the CEO looks like any workflow's),
+and `board context unread: <why>` (the card's read failed, or the pipeline's
+own Linear identity could not be read, in which case every card is excluded
+and none is read). An excluded card gets no agent and no token, and its
+verdict is `excluded` with the reason. It is dropped from the batch and stays
+where it is on the board: off the Planning list, the next still-needed spare
+takes its slot, it goes on no Cancel list and nothing moves it, and the page
+names it under `## Verified against main` with its reason. It is judged again
+on a morning none of the four holds.
+
 `propose` writes nothing but a comment carrying the proposal, and it writes that
 one at most once: before posting it reads the card and skips a proposal already
 there, so re-running it after a crash or a transient failure leaves the thread as
