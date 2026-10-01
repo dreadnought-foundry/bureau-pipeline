@@ -1073,11 +1073,10 @@ class SkipReadsTheGatesRecordsTest(unittest.TestCase):
     def test_the_commit_fetch_fails_soft_to_no_carry(self):
         """A blip must mean "review" (cheap), never a red run or a carry on
         unverifiable data — the `[]` substitute merge-gate.yml also writes."""
-        fetch = next(ln for ln in step_shell.step_shell(self.step).splitlines()
-                     if "/commits?per_page=100" in ln)
-        idx = step_shell.step_shell(self.step).splitlines().index(fetch)
-        self.assertIn("|| echo '[]'",
-                      step_shell.step_shell(self.step).splitlines()[idx + 1])
+        lines = step_shell.step_shell(self.step).splitlines()
+        fetch = next(ln for ln in lines if "/commits?per_page=100" in ln)
+        idx = lines.index(fetch)
+        self.assertIn("|| echo '[]'", lines[idx + 1])
 
     def test_it_fetches_what_the_gate_fetches(self):
         """Same call shape as merge-gate.yml, so neither can read a record
