@@ -51,6 +51,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import publish_review_check  # noqa: E402
+import step_shell  # noqa: E402
 from test_qa_review_no_verdict_message import run_post  # noqa: E402
 
 GATE = ROOT / "scripts" / "check_critic_result.py"
@@ -182,7 +183,7 @@ def fix_agent_trigger_phrase() -> str:
     own job condition — so a rename moves this test with it."""
     m = re.search(
         r"contains\(github\.event\.comment\.body,\s*'([^']+)'\)",
-        AGENT_FIX.read_text(),
+        step_shell.workflow_source(AGENT_FIX),
     )
     assert m, "agent-fix.yml no longer triggers on a comment body phrase"
     return m.group(1)

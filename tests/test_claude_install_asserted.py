@@ -44,7 +44,9 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
+import step_shell  # noqa: E402
 from test_qa_review_no_verdict_message import (  # noqa: E402
     AUTH_DEATH,
     gate_outputs,
@@ -78,7 +80,7 @@ def _action() -> dict:
 def _install_script() -> str:
     """The one `run:` block out of the composite action."""
     steps = _action()["runs"]["steps"]
-    runs = [s["run"] for s in steps if "run" in s]
+    runs = [step_shell.step_shell(s) for s in steps if "run" in s]
     assert len(runs) == 1, (
         f"the shared install action should be one shell step; found {len(runs)}"
     )
@@ -292,7 +294,7 @@ def _jobs_with_vendor_steps():
     """Every (workflow, job, steps) in .github/workflows that runs the model."""
     found = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        doc = yaml.safe_load(path.read_text()) or {}
+        doc = yaml.safe_load(step_shell.workflow_source(path)) or {}
         for job_name, job in (doc.get("jobs") or {}).items():
             steps = job.get("steps") or []
             if any(VENDOR_ACTION in str(s.get("uses", "")) for s in steps):

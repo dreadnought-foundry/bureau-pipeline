@@ -36,6 +36,7 @@ sys.path.insert(
 )
 
 import medic_classify  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "medic.yml"
@@ -119,7 +120,7 @@ class ClassifierTest(unittest.TestCase):
 
 # ── medic.yml wiring: back off, do not rerun/diagnose on a critic infra-crash ─
 def _medic_src() -> str:
-    return open(WORKFLOW).read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 class MedicWiringTest(unittest.TestCase):
@@ -162,7 +163,7 @@ class MedicWiringTest(unittest.TestCase):
         # The classifier keys off qa-review's marker phrase — if that string
         # ever drifts, this catches it so the two stay in lockstep.
         self.assertIn(
-            medic_classify.CRITIC_NEUTRAL_MARKER, open(QA_REVIEW).read()
+            medic_classify.CRITIC_NEUTRAL_MARKER, step_shell.workflow_source(QA_REVIEW)
         )
 
 

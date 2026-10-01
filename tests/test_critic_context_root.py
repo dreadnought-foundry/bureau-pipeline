@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 #: Where `actions/checkout` plants the pipeline, and what is left of it in
 #: the working tree after the move.
@@ -71,7 +75,7 @@ _IN_TREE_REF = re.compile(r"(?<![\w$])" + re.escape(IN_TREE) + r"(?![\w-])(/[^\s
 
 
 def _jobs() -> dict:
-    return yaml.safe_load(QA_REVIEW.read_text())["jobs"]
+    return yaml.safe_load(step_shell.workflow_source(QA_REVIEW))["jobs"]
 
 
 def _executable(run: str) -> str:
@@ -160,11 +164,11 @@ class AssembleStepRunsAfterTheMoveTest(unittest.TestCase):
         workspace, pipeline_dir = _lay_out_the_runner_after_the_move(td)
         steps = _jobs()["review"]["steps"]
         ctx = next(s for s in steps if s.get("id") == "ctx")
-        self.assertNotIn("${{", ctx["run"],
+        self.assertNotIn("${{", step_shell.step_shell(ctx),
                          "an unresolved GitHub expression would reach the shell")
         script = td / "ctx.sh"
         # `bash -e` is what Actions gives a `run:` step with no `shell:`.
-        script.write_text("set -e\n" + ctx["run"])
+        script.write_text("set -e\n" + step_shell.step_shell(ctx))
         env = dict(os.environ)
         env.update({
             "PIPELINE_DIR": str(pipeline_dir),
@@ -251,7 +255,7 @@ class NothingAfterTheMoveReadsTheOldPathTest(unittest.TestCase):
         # The card's criterion, without editing the workflow: the step as
         # written today with its --root taken away must be flagged.
         ctx = next(s for s in _jobs()["review"]["steps"] if s.get("id") == "ctx")
-        stripped = _ROOT_AT_PIPELINE_DIR.sub("", _executable(ctx["run"]))
+        stripped = _ROOT_AT_PIPELINE_DIR.sub("", _executable(step_shell.step_shell(ctx)))
         self.assertTrue(assemble_calls_without_the_moved_root(stripped),
                         "the guard cannot see a missing --root")
         for wrong in ('--root .bureau-pipeline', '--root "$GITHUB_WORKSPACE"'):

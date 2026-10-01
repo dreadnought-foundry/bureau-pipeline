@@ -80,6 +80,7 @@ sys.path.insert(0, SCRIPTS)
 
 import check_critic_result  # noqa: E402
 import pr_size_strategy as pss  # noqa: E402
+import step_shell  # noqa: E402
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -174,7 +175,7 @@ def strategy_for(compare_record=None, pr_json=None):
 
 
 def wf_steps(workflow="qa-review.yml", job="review"):
-    doc = yaml.safe_load(open(os.path.join(WF_DIR, workflow)))
+    doc = yaml.safe_load(step_shell.workflow_source(os.path.join(WF_DIR, workflow)))
     return doc["jobs"][job]["steps"]
 
 
@@ -190,7 +191,7 @@ def critic_prompts():
 
 
 def src(workflow="qa-review.yml"):
-    return open(os.path.join(WF_DIR, workflow)).read()
+    return step_shell.workflow_source(os.path.join(WF_DIR, workflow))
 
 
 #: The per-turn cost the wall-clock budget is sized against — the upper end
@@ -662,12 +663,12 @@ class WorkflowWiringTest(unittest.TestCase):
         ids = [s.get("id") for s in wf_steps()]
         self.assertIn("size", ids)
         self.assertLess(ids.index("size"), ids.index("critic"))
-        self.assertIn("pr_size_strategy.py", wf_step("size")["run"])
+        self.assertIn("pr_size_strategy.py", step_shell.step_shell(wf_step("size")))
 
     def test_the_size_step_reads_records_the_workflow_already_fetches(self):
-        run = wf_step("size")["run"]
+        run = step_shell.step_shell(wf_step("size"))
         self.assertIn("/tmp/qa-compare.json", run)
-        resolve = wf_step("pr")["run"]
+        resolve = step_shell.step_shell(wf_step("pr"))
         self.assertIn("/tmp/qa-compare.json", resolve)
         # The authoritative totals, from the same `gh pr view` the step
         # already calls — GitHub's compare record truncates at 300 files.
@@ -676,7 +677,7 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_the_size_step_cannot_leave_the_critic_without_a_turn_ceiling(self):
         """claude_args interpolates these outputs. An empty one would hand
         the action `--max-turns` with no value."""
-        run = wf_step("size")["run"]
+        run = step_shell.step_shell(wf_step("size"))
         self.assertRegex(run, r"max_turns=\d+")
         self.assertRegex(run, r"strategy=standard")
 
@@ -727,7 +728,7 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_the_oversized_path_fails_the_job_with_the_size_named(self):
         step = wf_step("oversize_fail")
         self.assertIn("steps.size.outputs.strategy == 'oversized'", step["if"])
-        run = step["run"]
+        run = step_shell.step_shell(step)
         self.assertIn("::error::", run)
         for token in ("steps.size.outputs.files", "steps.size.outputs.lines"):
             with self.subTest(token=token):
@@ -777,7 +778,7 @@ class WorkflowWiringTest(unittest.TestCase):
         raising `TURN_BUDGET["large"]` or the backoff sleep re-opens this
         test rather than silently re-opening the gap.
         """
-        doc = yaml.safe_load(open(os.path.join(WF_DIR, "qa-review.yml")))
+        doc = yaml.safe_load(step_shell.workflow_source(os.path.join(WF_DIR, "qa-review.yml")))
         timeout = doc["jobs"]["review"]["timeout-minutes"]
         first, retry = pss.turn_budget("large")
         backoff = retry_backoff_seconds()
@@ -812,7 +813,7 @@ class OversizedPostStepScenarioTest(unittest.TestCase):
     """
 
     def _run_post(self, td, **env_extra):
-        run = wf_step("post")["run"]
+        run = step_shell.step_shell(wf_step("post"))
         run = re.sub(r"\$\{\{[^}]*\}\}", "", run)  # env-only step; none survive
         self.assertNotIn("${{", run)
         os.mkdir(os.path.join(td, "bin"))
@@ -1281,14 +1282,14 @@ print(json.dumps(entries[start:start + per]))
 class RemovalWiringTest(unittest.TestCase):
     def test_the_size_step_can_reach_the_files_api(self):
         step = wf_step("size")
-        self.assertIn("--repo", step["run"])
-        self.assertIn("github.repository", step["run"])
+        self.assertIn("--repo", step_shell.step_shell(step))
+        self.assertIn("github.repository", step_shell.step_shell(step))
         self.assertIn("GH_TOKEN", json.dumps(step["env"]))
 
     def test_the_static_fallback_publishes_the_removal_counts_too(self):
         """Every other output the script writes has a `||` fallback; a
         missing one reads as an empty string in `${{ }}`."""
-        run = wf_step("size")["run"]
+        run = step_shell.step_shell(wf_step("size"))
         self.assertRegex(run, r"removed_files=\d+")
         self.assertRegex(run, r"removed_lines=\d+")
 
