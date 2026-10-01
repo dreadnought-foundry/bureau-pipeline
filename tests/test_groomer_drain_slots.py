@@ -355,6 +355,13 @@ def test_twenty_cards_into_a_full_line_are_twenty_queued_rows_and_one_queue(monk
     assert [b.split(":")[0] for t, b in ops.written] == [
         f"{groomer.MARK} {groomer.DRAINED_TAG}",
         f"{groomer.MARK} {groomer.QUEUED_TAG}"]
+    # A second approval of the same batch: already drained, nothing written.
+    again = FakeOps(comments=_thread(proposal) + [
+        {"body": b, "authored_by_pipeline": True} for t, b in ops.written] + [
+        _decision(groomer.APPROVAL_TAG, proposal)])
+    with pytest.raises(groomer.AlreadyDrained):
+        groomer.drain(again, card=PROPOSAL_CARD)
+    assert again.state_writes == [] and _labelled(again) == []
 
 
 def test_two_free_slots_move_the_first_two_and_queue_the_rest(monkeypatch):
