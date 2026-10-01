@@ -32,6 +32,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import fix_budget  # noqa: E402
+import fix_concurrency  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -53,14 +54,117 @@ class TriggerGateTest(unittest.TestCase):
         )
 
     def test_job_if_author_check_precedes_body_check(self):
-        # Author check must appear in the same `if` block as VERDICT phrase,
-        # and before it, so the `&&` short-circuits correctly.
+        # Author check must appear in the same `if` block as BOTH verdict
+        # phrases — the critic's REQUEST_CHANGES and, since DRE-5229, the
+        # Verifier's FAIL — and before each, so the `&&` short-circuits.
         src = workflow_src()
         author_pos = src.find("github.event.comment.user.login == 'agent-bureau-qa-bot[bot]'")
-        body_pos = src.find("contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES')")
         self.assertGreater(author_pos, 0, "author check not found in job if")
-        self.assertGreater(body_pos, 0, "body check not found in job if")
-        self.assertLess(author_pos, body_pos, "author check must precede body check")
+        for phrase in VERDICT_PHRASES:
+            body_pos = src.find(f"contains(github.event.comment.body, '{phrase}')")
+            self.assertGreater(body_pos, 0, f"{phrase!r} body check not found in job if")
+            self.assertLess(author_pos, body_pos, f"author check must precede {phrase!r}")
+
+
+# ── DRE-5229: the gate admits the Verifier's FAIL, inside the qa-bot clause ──
+
+#: The verdict phrases the qa-bot clause admits: the critic's word and the
+#: Verifier's. The Verifier's vocabulary is not changed to match the critic's
+#: — merge_gate.py and verify.yml read PASS/FAIL/SKIP — so the fixer learns it.
+VERDICT_PHRASES = ("VERDICT: REQUEST_CHANGES", "VERDICT: FAIL")
+
+QA_BOT = "agent-bureau-qa-bot[bot]"
+
+
+def job_if() -> str:
+    import yaml
+
+    return yaml.safe_load(workflow_src())["jobs"]["fix"]["if"]
+
+
+def top_level_clauses(expr: str) -> list:
+    """The job `if` split on its top-level `||` — each parenthesised clause is
+    one door into the fix agent."""
+    clauses, depth, start = [], 0, 0
+    for i, ch in enumerate(expr):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and expr.startswith("||", i):
+            clauses.append(expr[start:i].strip())
+            start = i + 2
+    clauses.append(expr[start:].strip())
+    return clauses
+
+
+def evaluate(expr: str, event: dict) -> bool:
+    """The LIVE expression, executed — through the evaluator the concurrency
+    audit already runs the shipped gate with, not a copy of it."""
+    return fix_concurrency._truthy(fix_concurrency.evaluate(expr, event))
+
+
+def comment_event(login: str, user_type: str, body: str) -> dict:
+    return fix_concurrency.comment_event(7, login, body, user_type=user_type)
+
+
+FAIL_BODY = "🧪 QA Verifier — VERDICT: FAIL @" + "a" * 40
+
+
+class VerifierFailGateTest(unittest.TestCase):
+    """DRE-5229: a Verifier FAIL wakes the fix agent, through the qa-bot
+    clause only."""
+
+    def _qa_clause(self) -> str:
+        clauses = [c for c in top_level_clauses(job_if()) if "VERDICT: FAIL" in c]
+        self.assertEqual(
+            len(clauses), 1,
+            "exactly one clause of the fix job's `if` must admit 'VERDICT: FAIL'",
+        )
+        return clauses[0]
+
+    def test_fail_phrase_sits_inside_the_qa_bot_clause(self):
+        clause = self._qa_clause()
+        self.assertIn(f"github.event.comment.user.login == '{QA_BOT}'", clause)
+        self.assertIn("contains(github.event.comment.body, 'VERDICT: FAIL')", clause)
+        self.assertLess(
+            clause.find("github.event.comment.user.login"),
+            clause.find("'VERDICT: FAIL'"),
+            "the author check must precede the FAIL phrase in its clause",
+        )
+
+    def test_a_qa_bot_fail_qualifies_through_that_clause(self):
+        self.assertTrue(evaluate(self._qa_clause(), comment_event(QA_BOT, "Bot", FAIL_BODY)))
+        self.assertTrue(evaluate(job_if(), comment_event(QA_BOT, "Bot", FAIL_BODY)))
+
+    def test_a_qa_bot_request_changes_still_qualifies(self):
+        body = "🔎 QA Critic — VERDICT: REQUEST_CHANGES @" + "a" * 40
+        self.assertTrue(evaluate(self._qa_clause(), comment_event(QA_BOT, "Bot", body)))
+
+    def test_a_qa_bot_pass_does_not_qualify(self):
+        body = "🧪 QA Verifier — VERDICT: PASS @" + "a" * 40
+        self.assertFalse(evaluate(job_if(), comment_event(QA_BOT, "Bot", body)))
+
+    def test_a_user_carrying_the_phrase_does_not_qualify_through_that_clause(self):
+        # The User clause admits any person on its own terms (DRE-3451 — the
+        # decision step then refuses anything that is not a decision); the
+        # FAIL phrase must not be what lets a person through.
+        self.assertFalse(evaluate(self._qa_clause(), comment_event("mallory", "User", FAIL_BODY)))
+
+    def test_another_bot_carrying_the_phrase_does_not_qualify_at_all(self):
+        for login in ("dependabot[bot]", "agent-bureau-bot[bot]", "github-actions[bot]"):
+            event = comment_event(login, "Bot", FAIL_BODY)
+            self.assertFalse(evaluate(self._qa_clause(), event), login)
+            self.assertFalse(evaluate(job_if(), event), login)
+
+    def test_the_user_clause_and_dispatch_are_untouched(self):
+        clauses = [" ".join(c.split()) for c in top_level_clauses(job_if())]
+        self.assertEqual(len(clauses), 3, clauses)
+        self.assertIn("github.event_name == 'workflow_dispatch'", clauses)
+        self.assertIn(
+            "(github.event.issue.pull_request && github.event.comment.user.type == 'User')",
+            clauses,
+        )
 
 
 class VerdictFilterTest(unittest.TestCase):
