@@ -27,11 +27,12 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 
 
 def evaluate_step():
     """The `Evaluate and merge` step, from the parsed YAML."""
-    doc = yaml.safe_load(WORKFLOW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
     steps = doc["jobs"]["evaluate"]["steps"]
     found = [s for s in steps if s.get("name") == "Evaluate and merge"]
     assert len(found) == 1, "expected exactly one 'Evaluate and merge' step"
@@ -40,13 +41,13 @@ def evaluate_step():
 
 def evaluate_step_run():
     """The `Evaluate and merge` step's run block, from the parsed YAML."""
-    return evaluate_step()["run"]
+    return step_shell.step_shell(evaluate_step())
 
 
 class ScriptInvocationTest(unittest.TestCase):
     def setUp(self):
         self.step = evaluate_step()
-        self.run_block = self.step["run"]
+        self.run_block = step_shell.step_shell(self.step)
 
     def test_workflow_calls_the_extracted_script(self):
         self.assertIn(
@@ -160,7 +161,7 @@ class ScriptInvocationTest(unittest.TestCase):
     def test_issue_comment_leg_still_requires_qa_bot_author(self):
         """The #57 event-leg filter is workflow territory (not the script):
         only a qa-bot-authored verdict comment wakes the gate at all."""
-        doc = yaml.safe_load(WORKFLOW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         # DRE-2508 put the filter on the entry job (`resolve`); DRE-4279 made
         # `evaluate` the entry for every event that names its PR, so the
         # filter lives on `evaluate` now — the one job every leg reaches.

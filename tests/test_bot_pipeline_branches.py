@@ -51,6 +51,7 @@ import bot_branch_harness as H  # noqa: E402
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
+import step_shell  # noqa: E402
 
 #: The two jobs this card fixes, and the branch each one is required to use.
 #: The names are the CEO's, quoted verbatim on the card — pinned as literals
@@ -72,7 +73,7 @@ def _verdict(token: str):
 
 
 def _doc(name: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / name).read_text())
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOWS / name))
 
 
 def _steps(name: str) -> list:
@@ -84,20 +85,20 @@ def _steps(name: str) -> list:
 
 def publish_step(name: str) -> dict:
     """The one step that publishes the job's generated files."""
-    found = [s for s in _steps(name) if "bot_branch_pr.py" in (s.get("run") or "")]
+    found = [s for s in _steps(name) if "run" in s and "bot_branch_pr.py" in step_shell.step_shell(s)]
     assert len(found) == 1, f"{name}: expected one publish step, found {len(found)}"
     return found[0]
 
 
 def declared_branch(name: str) -> str:
     """The `--branch` the workflow hands the publisher — read, never assumed."""
-    m = re.search(r"--branch\s+(\S+)", publish_step(name)["run"])
+    m = re.search(r"--branch\s+(\S+)", step_shell.step_shell(publish_step(name)))
     assert m, f"{name}: the publish step names no branch"
     return m.group(1)
 
 
 def declared_paths(name: str) -> list[str]:
-    return re.findall(r"--path\s+(\S+)", publish_step(name)["run"])
+    return re.findall(r"--path\s+(\S+)", step_shell.step_shell(publish_step(name)))
 
 
 def _uncommented(text: str) -> str:
@@ -108,7 +109,7 @@ def _uncommented(text: str) -> str:
 def _shell_gate_prefixes() -> set[str]:
     """merge-gate.yml's `case "$BRANCH" in …)` — the same read
     tests/test_pipeline_ownership.py makes, so the two agree by construction."""
-    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', MERGE_GATE.read_text())
+    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', step_shell.workflow_source(MERGE_GATE))
     assert m is not None, "merge-gate.yml: no branch case statement"
     return {p.strip().rstrip("*") for p in m.group(1).split("|")}
 
@@ -121,7 +122,7 @@ def _evaluate_if() -> str:
 
 def _gate_pattern() -> str:
     """The gate's branch `case` pattern, exactly as the shell reads it."""
-    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', MERGE_GATE.read_text())
+    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', step_shell.workflow_source(MERGE_GATE))
     assert m is not None, "merge-gate.yml: no branch case statement"
     return m.group(1)
 
@@ -157,7 +158,7 @@ class EachJobHasOneFixedBranchTest(unittest.TestCase):
     def test_neither_workflow_pushes_to_main(self):
         for workflow in JOB_BRANCHES:
             with self.subTest(workflow=workflow):
-                text = _uncommented((WORKFLOWS / workflow).read_text())
+                text = _uncommented(step_shell.workflow_source(WORKFLOWS / workflow))
                 self.assertNotIn("HEAD:main", text)
                 self.assertNotRegex(
                     text, r"git\s+push[^\n]*\bmain\b",
@@ -237,7 +238,7 @@ class TheTrustedListTest(unittest.TestCase):
         # `(?<![a-z])` so `dependabot/*` — which ends in the same four
         # characters — is not mistaken for the wildcard being banned.
         self.assertIsNone(re.search(r"(?<![a-z])bot/\*",
-                                    _uncommented(MERGE_GATE.read_text())))
+                                    _uncommented(step_shell.workflow_source(MERGE_GATE))))
         self.assertFalse(reconcile.pipeline_owns("bot/something-else"))
 
     def test_exactly_these_branches_gained_merge_rights(self):
@@ -336,7 +337,8 @@ class NoRepositorySettingIsChangedTest(unittest.TestCase):
         offenders = []
         for path in sorted(WORKFLOWS.glob("*.yml")) + \
                 sorted((ROOT / "scripts").rglob("*.py")):
-            text = path.read_text()
+            text = (step_shell.workflow_source(path) if path.parent == WORKFLOWS
+                    else path.read_text())
             for pattern in self.FORBIDDEN:
                 if re.search(pattern, text):
                     offenders.append(f"{path.relative_to(ROOT)}: {pattern}")
@@ -374,7 +376,7 @@ class BothPublishStepsRunTest(unittest.TestCase):
                 repo = self._repo(workflow)
                 before = repo.origin_ref("main")
                 self._regenerate(repo, workflow, "2026-09-16T00:00:00Z")
-                result = repo.run(publish_step(workflow)["run"])
+                result = repo.run(step_shell.step_shell(publish_step(workflow)))
                 self.assertEqual(result.returncode, 0,
                                  result.stdout + result.stderr)
                 self.assertEqual(repo.origin_ref("main"), before,
@@ -393,7 +395,7 @@ class BothPublishStepsRunTest(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 repo = self._repo(workflow)
                 before = repo.origin_ref("main")
-                result = repo.run(publish_step(workflow)["run"])
+                result = repo.run(step_shell.step_shell(publish_step(workflow)))
                 self.assertEqual(result.returncode, 0,
                                  result.stdout + result.stderr)
                 self.assertEqual(repo.pr_creates(), [])
@@ -406,7 +408,7 @@ class BothPublishStepsRunTest(unittest.TestCase):
                 repo = self._repo(workflow)
                 for day in range(16, 23):
                     self._regenerate(repo, workflow, f"2026-09-{day}T00:00:00Z")
-                    result = repo.run(publish_step(workflow)["run"])
+                    result = repo.run(step_shell.step_shell(publish_step(workflow)))
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
                 self.assertEqual(len(repo.pr_creates()), 1,

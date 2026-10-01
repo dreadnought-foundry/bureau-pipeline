@@ -58,6 +58,7 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 
 HEAD = "aa11" * 10
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
@@ -318,9 +319,9 @@ class WiringTest(unittest.TestCase):
     to a same-prefix addition on both sides, once per `main` tip."""
 
     def setUp(self):
-        doc = yaml.safe_load(WORKFLOW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = doc["jobs"]["evaluate"]["steps"]
-        runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+        runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
         assert len(runs) == 1, "expected exactly one 'Evaluate and merge' step"
         self.run_block = runs[0]
 
@@ -378,7 +379,7 @@ class WiringTest(unittest.TestCase):
     def test_merge_still_behind_qa_bot_token(self):
         """Author != merger: the merge still runs as the qa-bot App (the
         step's GH_TOKEN), not the workflow's own token."""
-        doc = yaml.safe_load(WORKFLOW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = doc["jobs"]["evaluate"]["steps"]
         step = next(s for s in steps if s.get("name") == "Evaluate and merge")
         self.assertEqual(step["env"]["GH_TOKEN"],

@@ -53,6 +53,7 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 
 # The live values from the failure, so the regression case below is the
 # incident rather than a paraphrase of it.
@@ -266,9 +267,9 @@ class WorkflowWiringTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.doc = yaml.safe_load(WORKFLOW.read_text())
+        cls.doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = cls.doc["jobs"]["evaluate"]["steps"]
-        runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+        runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
         assert len(runs) == 1
         cls.run_block = runs[0]
 

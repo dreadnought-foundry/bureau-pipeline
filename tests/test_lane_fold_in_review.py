@@ -35,6 +35,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -217,7 +218,7 @@ class TestNoWriterStillAimsAtTheRetiredLane:
     def test_no_workflow_writes_the_retired_lane(self):
         offenders = []
         for path in self.WORKFLOWS:
-            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for n, line in enumerate(step_shell.workflow_source(path).splitlines(), 1):
                 if line.lstrip().startswith("#"):
                     continue  # incident history may name the lane it happened in
                 if any(name in line for name in RETIRED_LANES):
@@ -225,8 +226,8 @@ class TestNoWriterStillAimsAtTheRetiredLane:
         assert not offenders, "\n".join(offenders)
 
     def test_the_gate_promotes_from_the_lanes_that_still_exist(self):
-        text = (ROOT / ".github" / "workflows" / "merge-gate.yml").read_text(
-            encoding="utf-8"
+        text = step_shell.workflow_source(
+            ROOT / ".github" / "workflows" / "merge-gate.yml"
         )
         assert '"In Review" "In Progress"' in text
 

@@ -34,6 +34,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "merge-gate.yml"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 
 HEAD = "0887908a" * 5
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
@@ -291,7 +292,7 @@ class UnreadableListingWaitsTest(unittest.TestCase):
 
     def test_merge_gate_yml_writes_that_substitute_on_a_failed_read(self):
         line = next(
-            ln for ln in WORKFLOW.read_text().splitlines()
+            ln for ln in step_shell.workflow_source(WORKFLOW).splitlines()
             if "|| echo" in ln and "/tmp/workflow-runs.json" in ln
         )
         self.assertIn(f"'{merge_gate.UNREADABLE_WORKFLOW_RUNS}'", line)

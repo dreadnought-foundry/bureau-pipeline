@@ -64,6 +64,7 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 
 HEAD = "aa11" * 10
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
@@ -365,9 +366,9 @@ class WiringTest(unittest.TestCase):
     a branch for its own sake."""
 
     def setUp(self):
-        doc = yaml.safe_load(WORKFLOW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = doc["jobs"]["evaluate"]["steps"]
-        runs = [s["run"] for s in steps if s.get("name") == "Evaluate and merge"]
+        runs = [step_shell.step_shell(s) for s in steps if s.get("name") == "Evaluate and merge"]
         assert len(runs) == 1, "expected exactly one 'Evaluate and merge' step"
         self.run_block = runs[0]
 
@@ -442,7 +443,7 @@ class WiringTest(unittest.TestCase):
     def test_merge_still_behind_qa_bot_token_and_head_pinned(self):
         """Untouched by this card: author != merger by App identity, and the
         merge is still pinned to the evaluated head (DRE-2117)."""
-        doc = yaml.safe_load(WORKFLOW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
         steps = doc["jobs"]["evaluate"]["steps"]
         step = next(s for s in steps if s.get("name") == "Evaluate and merge")
         self.assertEqual(step["env"]["GH_TOKEN"],

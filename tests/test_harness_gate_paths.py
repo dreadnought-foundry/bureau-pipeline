@@ -42,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 from harness import framework  # noqa: E402
 from harness import sandbox_health  # noqa: E402
 from harness import scenarios  # noqa: E402
@@ -308,7 +309,8 @@ class MarkerParityTest(unittest.TestCase):
         # The scenario greps for the exact string merge-gate.yml posts
         # (and uses as its own idempotence check) — drift here would make
         # the human-path assertions blind.
-        self.assertIn(gate_paths.HUMAN_WAIT_MARKER, MERGE_GATE_YML.read_text())
+        self.assertIn(gate_paths.HUMAN_WAIT_MARKER,
+                      step_shell.workflow_source(MERGE_GATE_YML))
 
 
 class BranchShapeTest(unittest.TestCase):

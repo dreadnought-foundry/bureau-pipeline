@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 import verdict_content  # noqa: E402
 from test_merge_gate_optional_fields import extraction_lines  # noqa: E402
 
@@ -154,7 +155,8 @@ class ForgedVerdictTest(unittest.TestCase):
         """The workflow claims the note 'carries NO verdict-shaped text'.
         Hold it to that: parse the real note text with the real verdict
         parser. If this ever fails, the gate can approve its own PRs."""
-        run_block = (ROOT / ".github" / "workflows" / "merge-gate.yml").read_text()
+        run_block = step_shell.workflow_source(
+            ROOT / ".github" / "workflows" / "merge-gate.yml")
         self.assertIn("♻️ Merge gate:", run_block,
                       "carry note text not found — has the arm been renamed?")
         note_lines = [

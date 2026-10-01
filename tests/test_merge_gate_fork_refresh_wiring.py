@@ -45,6 +45,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "merge-gate.yml"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import order_sensitive_refresh as osr  # noqa: E402
+import step_shell  # noqa: E402
 
 GUARD = '[ "$DECISION" = "merge" ] || exit 0'
 # Byte for byte as they stand on `main` before this card (criterion 7).
@@ -82,7 +83,7 @@ WORKER_LOGIN = "agent-bureau-bot[bot]"
 
 
 def evaluate_step() -> dict:
-    doc = yaml.safe_load(WORKFLOW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
     steps = doc["jobs"]["evaluate"]["steps"]
     found = [s for s in steps if s.get("name") == "Evaluate and merge"]
     assert len(found) == 1, "expected exactly one 'Evaluate and merge' step"
@@ -90,7 +91,7 @@ def evaluate_step() -> dict:
 
 
 def evaluate_body() -> str:
-    return evaluate_step()["run"]
+    return step_shell.step_shell(evaluate_step())
 
 
 def branch_span(block: str, opener: str) -> str:
@@ -212,7 +213,7 @@ class WiringTest(unittest.TestCase):
         self.assertIn("exit 0", tail)
 
     def test_the_header_records_the_rule_and_its_dre_2416_boundary(self):
-        header = WORKFLOW.read_text().split("\nname:", 1)[0]
+        header = step_shell.workflow_source(WORKFLOW).split("\nname:", 1)[0]
         for needle in ("DRE-4912", "DRE-2416", "order-sensitive",
                        "fork", "once per"):
             self.assertIn(needle, header)
