@@ -310,7 +310,7 @@ def test_a_dead_agent_run_is_unverified_and_the_card_stays_on_planning_marked(tm
     assert got["reason"] == "agent step failed"
     assert set(got) == {"card", "verdict", "summary", "proof", "reason",
                         "cost_usd", "duration_ms", "model", "started_at",
-                        "finished_at"}
+                        "finished_at", "lookup"}
     assert got["card"] == "DRE-102"
     assert got["cost_usd"] is None and got["duration_ms"] is None
     assert got["model"] is None
@@ -850,7 +850,7 @@ def test_the_fixture_is_dre_4416_as_it_read_on_2026_09_29():
     assert isinstance(rows, list) and len(rows) == 1
     [row] = rows
     assert set(row) == {"card", "repository", "repo_slug", "title", "body",
-                        "evidence", "list", "context", "excluded"}
+                        "evidence", "list", "context", "excluded", "lookups"}
     assert row["card"] == "DRE-4416"
     assert row["repository"] == "dreadnought-foundry/agent-bureau"
     assert row["repo_slug"] == "agent-bureau"
@@ -858,7 +858,8 @@ def test_the_fixture_is_dre_4416_as_it_read_on_2026_09_29():
     assert "claude_usage_reading" in row["body"]
     assert "0 rows" in row["body"]
     assert "S3 route" in row["body"] and "never merged" in row["body"]
-    [line] = row["evidence"]
+    # The first line is DRE-4966's; the lookup lines follow it (DRE-5458).
+    line = row["evidence"][0]
     assert "DRE-4587" in line and "Done" in line
     assert "claude_usage_reading" in line
     # It is the shape `targets` writes: already through the fence.
@@ -1382,3 +1383,220 @@ def test_the_doc_names_the_four_exclusions():
     assert "reads the move, not its author" in flat
     assert "an epic with no open child is judged like any card" in flat
     assert "dropped from the batch and stays where it is on the board" in flat
+
+
+# --------------------------------------------------------------------------
+# DRE-5458 — the lookup state, read first and carried on every verdict
+# --------------------------------------------------------------------------
+import groom_lookups  # noqa: E402
+
+PORTICO = "dreadnought-foundry/portico"
+HOME_WHY = f"{PORTICO} did not answer — time budget of 300 s spent"
+
+
+def lk(ok, *, why=None, looked_up=True):
+    return {"looked_up": looked_up, "ok": ok, "why": why,
+            "paths": ["src/roster.ts"] if looked_up else [],
+            "paths_left_out": 0, "newer_cards": [], "newer_cards_why": None,
+            "merged_prs": [], "cut": [], "owners": {}}
+
+
+def lrow(lookups, *, repository=PORTICO, excluded=None):
+    return {"card": "DRE-101", "repository": repository,
+            "repo_slug": "portico" if repository else "widgets",
+            "title": "Roster sync", "body": "Move the roster sync onto the "
+            "portal.", "evidence": [], "list": "planning",
+            "excluded": excluded, "lookups": lookups}
+
+
+def still_needed(tmp_path):
+    return raw_answer(tmp_path, "DRE-101", "still-needed", [PROOF_LINE],
+                      summary="The roster still double-counts.")
+
+
+def verdict_of(tmp_path, row, *, outcome="success"):
+    return gva.verdict(card="DRE-101", rows=[row], raw=str(still_needed(tmp_path)),
+                       execution_file=None, outcome=outcome,
+                       started_at="2026-09-27T06:00:00Z")
+
+
+def test_judge_unmapped_failed_lookup_keeps_the_unmapped_reason(tmp_path):
+    row = lrow(lk(False, why="no repo answered — x: y"), repository=None)
+    got = gva.judge(str(still_needed(tmp_path)), card="DRE-101", row=row,
+                    outcome="success")
+    assert got["verdict"] == "unverified"
+    assert got["reason"] == "repo not in config/repo-map.json: widgets"
+    assert got["lookup"] == "failed"
+
+
+def test_judge_unmapped_ok_lookup_keeps_the_unmapped_reason(tmp_path):
+    row = lrow(lk(True), repository=None)
+    got = gva.judge(str(still_needed(tmp_path)), card="DRE-101", row=row,
+                    outcome="success")
+    assert got["verdict"] == "unverified"
+    assert got["reason"] == "repo not in config/repo-map.json: widgets"
+    assert got["lookup"] == "ok"
+
+
+def test_judge_excluded_row_carries_lookup_none(tmp_path):
+    row = lrow(None, excluded="hand-built")
+    got = gva.judge(str(still_needed(tmp_path)), card="DRE-101", row=row,
+                    outcome="success")
+    assert (got["verdict"], got["lookup"]) == ("excluded", "none")
+
+
+def test_verdict_mapped_failed_lookup_is_unverified_whatever_the_answer(tmp_path):
+    got = verdict_of(tmp_path, lrow(lk(False, why=HOME_WHY)))
+    assert got["verdict"] == "unverified"
+    assert got["reason"] == groom_lookups.LOOKUP_FAILED + HOME_WHY
+    assert got["reason"] == f"lookup failed: {HOME_WHY}"
+    assert got["lookup"] == "failed"
+    assert got["proof"] == []
+
+
+def test_verdict_ok_lookup_is_judged_on_the_answer(tmp_path):
+    got = verdict_of(tmp_path, lrow(lk(True)))
+    assert (got["verdict"], got["reason"], got["lookup"]) == (
+        "still-needed", None, "ok")
+    assert got["proof"] == [PROOF_LINE]
+
+
+def test_verdict_no_file_row_is_judged_on_the_answer_with_lookup_none(tmp_path):
+    got = verdict_of(tmp_path, lrow(lk(True, looked_up=False)))
+    assert (got["verdict"], got["lookup"]) == ("still-needed", "none")
+
+
+def test_verdict_unfolded_row_is_judged_on_the_answer_with_not_run(tmp_path):
+    got = verdict_of(tmp_path, lrow(lk(None)))
+    assert (got["verdict"], got["lookup"]) == ("still-needed", "not-run")
+
+
+def test_verdict_carries_lookup_on_a_failed_step_too(tmp_path):
+    got = verdict_of(tmp_path, lrow(lk(True)), outcome="failure")
+    assert (got["verdict"], got["reason"], got["lookup"]) == (
+        "unverified", "agent step failed", "ok")
+
+
+UNMAPPED_ROW = {"card": "DRE-101", "repository": None, "repo_slug": "widgets",
+                "list": "planning"}
+
+
+def test_mark_unmapped_carries_the_documents_lookup():
+    mark = gva._mark(UNMAPPED_ROW, {"card": "DRE-101", "verdict": "unverified",
+                                    "reason": "x", "lookup": "failed"})
+    assert mark["verdict"] == "unverified"
+    assert mark["reason"] == "repo not in config/repo-map.json: widgets"
+    assert mark["lookup"] == "failed"
+
+
+def test_mark_with_no_lookup_key_or_no_document_is_not_run():
+    no_key = gva._mark(UNMAPPED_ROW, {"card": "DRE-101",
+                                      "verdict": "unverified", "reason": "x"})
+    assert no_key["lookup"] == "not-run"
+    none = gva._mark(UNMAPPED_ROW, None)
+    assert none["lookup"] == "not-run"
+    mapped = {"card": "DRE-101", "repository": PORTICO, "repo_slug": "portico",
+              "list": "planning"}
+    assert gva._mark(mapped, None)["lookup"] == "not-run"
+
+
+def test_mark_carries_lookup_on_every_verdict_it_returns():
+    mapped = {"card": "DRE-101", "repository": PORTICO, "repo_slug": "portico",
+              "list": "planning"}
+    doc = {"card": "DRE-101", "verdict": "still-needed", "summary": "s",
+           "proof": [PROOF_LINE], "reason": None, "lookup": "ok"}
+    assert gva._mark(mapped, doc)["lookup"] == "ok"
+    failed = {"card": "DRE-101", "verdict": "unverified", "summary": "s",
+              "proof": [], "reason": "lookup failed: x", "lookup": "failed"}
+    assert gva._mark(mapped, failed)["lookup"] == "failed"
+    excluded = {**mapped, "excluded": "hand-built"}
+    assert gva._mark(excluded, {"card": "DRE-101", "verdict": "excluded",
+                                "lookup": "none"})["lookup"] == "none"
+    # An unknown value is not a state: it reads as nothing known.
+    assert gva._mark(mapped, {**doc, "lookup": "maybe"})["lookup"] == "not-run"
+
+
+class CardTextWithLookups(CardText):
+    """`CardText`, also answering the lookup request `groom_lookups.cards`
+    makes — counted as `lookup` in `calls`."""
+
+    def gql(self, query, variables=None):
+        if "searchIssues" in query:
+            self.calls.append("lookup")
+            return {}
+        return super().gql(query, variables)
+
+
+def test_targets_adds_one_lookup_request_per_file_naming_card(tmp_path):
+    texts = {"DRE-101": ("A", "Edit `scripts/a.py`."),
+             "DRE-102": ("B", "Nothing named."),
+             "DRE-103": ("C", "Edit `src/b.ts` and `docs/c.md`."),
+             "DRE-104": ("D", "Nothing here either."),
+             "DRE-105": ("E", "Edit `infra/d.yml`.")}
+    lops = CardTextWithLookups(texts)
+    _, targets, _ = build_targets(tmp_path, small_proposal(5), lops=lops)
+    rows = read(targets)
+    cards = [r["card"] for r in rows]
+    assert len(rows) == 5
+    gql = [c for c in lops.calls if c != "viewer"]
+    assert len(gql) == 8
+    assert gql == cards + ["lookup"] * 3
+    assert [r["lookups"]["looked_up"] for r in rows] == [
+        True, False, True, False, True]
+
+
+def test_the_fixture_row_carries_lookups_folded_with_nothing_merged():
+    [row] = read(FIXTURE)
+    look = row["lookups"]
+    assert look["looked_up"] is True and look["ok"] is True
+    assert look["why"] is None
+    assert 0 < len(look["paths"]) <= groom_lookups.MAX_PATHS
+    assert look["merged_prs"] == [] and look["cut"] == []
+    assert look["newer_cards"] == [] and look["newer_cards_why"] is None
+    owners = []
+    for full in json.loads(gva.REPO_MAP.read_text()).values():
+        if full.split("/")[0] not in owners:
+            owners.append(full.split("/")[0])
+    assert look["owners"] == {o: {"read": True, "why": None} for o in owners}
+
+
+def test_prepare_over_the_fixture_shows_the_lookup_evidence_in_the_fence():
+    [row] = read(FIXTURE)
+    text = gva.prepare([row], "DRE-4416",
+                       brief=BRIEF.read_text(encoding="utf-8"))
+    ev_begin = text.index(gva.FENCE_BEGIN, text.index("## The Layer A evidence"))
+    fenced = text[ev_begin:text.index(gva.FENCE_END, ev_begin)]
+    left_out = row["lookups"]["paths_left_out"]
+    assert f"- {left_out} more path(s) were not looked up" in fenced
+
+
+def test_judge_over_the_fixture_reads_lookup_ok(tmp_path):
+    [row] = read(FIXTURE)
+    raw = raw_answer(tmp_path, "DRE-4416", "done-elsewhere", [PROOF_LINE])
+    got = gva.judge(str(raw), card="DRE-4416", row=row, outcome="success")
+    assert (got["verdict"], got["lookup"]) == ("done-elsewhere", "ok")
+
+
+def test_the_doc_says_what_the_lookups_do():
+    text = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+    section = text[text.index("### Compute, verify, then post"):
+                   text.index("## The decision vocabulary")]
+    flat = " ".join(section.split())
+    assert "The lookups before the agent runs" in flat
+    for phrase in (
+            "once per owner, on that owner's own token",
+            "a mapped card's lookup is judged by whether its own repo answered",
+            "an unmapped card's by whether any repo did",
+            "is named on the card and does not fail it",
+            "`lookup failed: <why>`",
+            "a card that names no file is not looked up and counts on neither "
+            "side of the stop",
+            "named in the evidence rather than read as nothing merged",
+            "an empty `lookup_budget` sizes the leg off the token's bucket",
+            "`0` spends nothing",
+            "a whole number is the cap",
+            "one Linear request per card that names a file"):
+        assert phrase in flat, phrase
+    for name in ("MAX_PATHS", "MAX_COMMITS", "MAX_REQUESTS", "BUDGET_SHARE",
+                 "MAX_SECONDS", "REQUEST_TIMEOUT"):
+        assert f"`{name}` = {getattr(groom_lookups, name)}" in flat, name

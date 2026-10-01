@@ -398,6 +398,42 @@ takes its slot, it goes on no Cancel list and nothing moves it, and the page
 names it under `## Verified against main` with its reason. It is judged again
 on a morning none of the four holds.
 
+**The lookups before the agent runs (DRE-5308, DRE-5458).** On 2026-09-29 the
+merged pull request search failed for every card and every card was judged on
+nothing, so each card that names files is now looked up before its agent runs,
+and how the lookup went travels with its verdict. Each card's paths are the
+backticked file paths in its body, the first `MAX_PATHS` = 3 of them; a card
+naming more says how many were left out. In the groom job, which holds the
+Linear key, `groom_lookups.cards` asks Linear for newer cards naming those
+paths, which costs one Linear request per card that names a file and none for
+any other — a 30-card morning adds at most 30 requests to the fleet key's
+2,500 an hour. Then the GitHub half runs once per owner, on that owner's own
+token, because an App installation token sees one installation: for each
+repo, the commits that touched each path since the card was filed, and the
+merged pull requests they belong to. In the verify leg `groom_lookups.py fold`
+reads every owner's document and decides each card on its own: a mapped
+card's lookup is judged by whether its own repo answered, and an unmapped
+card's by whether any repo did. Another owner being unread — no token, its
+clock spent, rate limited — is named on the card and does not fail it; it
+appears as `the lookup did not cover <owner>: <why>`, and so does a single
+repo that refused. A card's lookup counts as failed when its own repo did not
+answer, whatever the other owners said: it is `unverified` with the reason
+`lookup failed: <why>`, listed under "Not verified", and it returns the next
+morning. And a card that names no file is not looked up and counts on neither
+side of the stop: its agent judges it as before. A commits list cut at the
+newest `MAX_COMMITS` = 5 is named in the evidence rather than read as nothing
+merged, since an older merged pull request may be missing. The six caps, read
+off `scripts/groom_lookups.py`: `MAX_PATHS` = 3 paths per card,
+`MAX_COMMITS` = 5 commits per query, `MAX_REQUESTS` = 600 requests per owner,
+`BUDGET_SHARE` = 0.25 of the token's remaining bucket when no budget is given,
+`MAX_SECONDS` = 300 s of clock per owner, and `REQUEST_TIMEOUT` = 20 s per
+request. The workflow's `lookup_budget` input is the per-owner request
+budget: an empty `lookup_budget` sizes the leg off the token's bucket
+(`BUDGET_SHARE` of what remains, at most `MAX_REQUESTS`), `0` spends nothing,
+and a whole number is the cap. Every verdict carries its lookup state — `ok`,
+`failed`, `none` (no file named, or excluded) or `not-run` (no lookup was
+folded).
+
 `propose` writes nothing but a comment carrying the proposal, and it writes that
 one at most once: before posting it reads the card and skips a proposal already
 there, so re-running it after a crash or a transient failure leaves the thread as

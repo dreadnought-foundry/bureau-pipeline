@@ -25,7 +25,11 @@ and the four subcommands here are everything around it.
     card, a card moved into Intake from another lane in the last
     `EXCLUDE_DAYS` days, and a card whose board context could not be read.
     An excluded card gets no agent, its verdict is `excluded`, and `apply`
-    drops it from the batch and leaves it where it is on the board.
+    drops it from the batch and leaves it where it is on the board. And each
+    card's `lookups` block, through `groom_lookups.cards` (DRE-5458): the
+    lookup state it leads to is read first in `judge`, carried on every
+    verdict and every mark, and a mapped card whose own repo did not answer
+    is `unverified` with `lookup failed: <why>` whatever the agent said.
   * `prepare` — in the verify job, with no Linear key: the agent's whole
     input, and the moment it started.
   * `verdict` — always, even when the agent step died or never ran: the raw
@@ -70,6 +74,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import execution_result  # noqa: E402 — the one loader of the execution file
+import groom_lookups  # noqa: E402 — the lookups before the agent (DRE-5458)
 import groom_verify  # noqa: E402 — the spare count and source names
 import groomer  # noqa: E402 — proposal_id, assert_disjoint
 import linear_ops  # noqa: E402 — the Linear read `targets` makes
@@ -113,6 +118,10 @@ RAW_FILE = "verify-verdict.json"
 VERDICT_FILE = "verdict.json"
 
 STEP_OUTCOMES = ("success", "failure", "skipped", "cancelled")
+
+#: The lookup state every verdict carries — `groom_lookups.LOOKUP_STATES`.
+(_LOOKUP_OK, _LOOKUP_FAILED, _LOOKUP_NONE,
+ _LOOKUP_NOT_RUN) = groom_lookups.LOOKUP_STATES
 
 FENCE_BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 FENCE_END = "===== END UNTRUSTED CARD TEXT ====="
@@ -459,6 +468,9 @@ def targets(proposal: dict, *, lops, repo_map: dict,
             title=_clean(issue.get("title")),
             body=sanitize_untrusted.sanitize_body(issue.get("description") or ""),
             context=context, excluded=exclusion(issue, now=now))
+    # The newer cards naming each card's files (DRE-5458): one more request
+    # per card that names a file and is not excluded, none for any other.
+    groom_lookups.cards(out, lops=lops, now=now)
     return out
 
 
@@ -608,12 +620,30 @@ def _counts(item: dict, card_text: str) -> bool:
     return "source" in item and bool(quote) and quote not in card_text
 
 
+def _lookup_state(row: dict) -> str:
+    """The row's lookup state (DRE-5458): `none` for a card that names no
+    file or is excluded, `failed` or `ok` once `fold` decided it, and
+    `not-run` when no `fold` ran."""
+    look = row.get("lookups")
+    if (row.get("excluded") or not isinstance(look, dict)
+            or look.get("looked_up") is not True):
+        return _LOOKUP_NONE
+    if look.get("ok") is False:
+        return _LOOKUP_FAILED
+    return _LOOKUP_OK if look.get("ok") is True else _LOOKUP_NOT_RUN
+
+
 def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
-    """`{verdict, summary, proof, reason}` — the answer as the proposal may
-    read it. The target row first, then the step, then the file."""
+    """`{verdict, summary, proof, reason, lookup}` — the answer as the
+    proposal may read it. The target row first, then the step, then the
+    file."""
+    # The lookup state FIRST, and on every answer — the unmapped one too, so
+    # a morning of unmapped cards still counts in DRE-5317's stop.
+    lookup = _lookup_state(row)
+
     def unverified(reason: str, summary: str) -> dict:
         return {"verdict": UNVERIFIED, "summary": summary, "proof": [],
-                "reason": reason}
+                "reason": reason, "lookup": lookup}
 
     # Off the ROW, before anything else: `targets` decided it, and no raw
     # answer — and no step outcome — can change it.
@@ -621,11 +651,16 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
         return {"verdict": EXCLUDED, "proof": [],
                 "summary": "Not judged: the card was excluded before any "
                            "agent read it.",
-                "reason": _one_line(row["excluded"])}
+                "reason": _one_line(row["excluded"]), "lookup": lookup}
     if _is_unmapped(row):
         return unverified(unmapped_reason(row),
                           "No code was read: the card's repo is not one the "
                           "pipeline can check out.")
+    if lookup == _LOOKUP_FAILED:
+        return unverified(
+            groom_lookups.LOOKUP_FAILED + _one_line(row["lookups"].get("why")),
+            "Not judged: the lookup in the card's own repo did not answer, "
+            "so the agent's answer was not used.")
     if outcome != "success":
         reason = STEP_SKIPPED if outcome == "skipped" else STEP_FAILED
         return unverified(reason, f"The agent step did not succeed "
@@ -657,7 +692,7 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     if not any(_counts(p, card_text) for p in proof):
         return unverified(NO_PROOF, summary)
     return {"verdict": verdict, "summary": summary, "proof": proof,
-            "reason": None}
+            "reason": None, "lookup": lookup}
 
 
 def spend(execution_file) -> dict:
@@ -707,10 +742,15 @@ def read_verdicts(directory) -> dict[str, dict]:
 
 def _mark(row: dict, doc: dict | None) -> dict:
     """The `verify` field a verified row carries, plus the two times the
-    wall clock is read from."""
+    wall clock is read from, and the lookup state on every mark (DRE-5458):
+    the document's, else `none` for a row excluded, else `not-run` — an
+    unknown never reads as a failure."""
+    found = doc.get("lookup") if isinstance(doc, dict) else None
+    lookup = (found if found in groom_lookups.LOOKUP_STATES
+              else _LOOKUP_NONE if row.get("excluded") else _LOOKUP_NOT_RUN)
     blank = {"summary": None, "proof": [], "cost_usd": None,
              "duration_ms": None, "model": None, "started_at": None,
-             "finished_at": None}
+             "finished_at": None, "lookup": lookup}
     if row.get("excluded"):
         return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
                 "reason": _one_line(row["excluded"])}

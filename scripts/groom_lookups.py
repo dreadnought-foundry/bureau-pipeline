@@ -46,10 +46,25 @@ succeeded is not this leg's to say** — a card whose files live under another
 owner is not answered by this leg reading `[]` for it. That rule is DRE-5458's
 `fold`, which reads this document as declared in `owner`'s docstring.
 
+## Before the legs, and after them (DRE-5458)
+
+  * `cards` — in the groom job, which holds the Linear key: each target row's
+    paths (`paths_of`), and ONE Linear request per file-naming card for the
+    newer cards naming those paths. It writes the row's `lookups` block, which
+    the `owner` legs read.
+  * `fold` — in the verify leg: every leg's document folded into the rows,
+    and each looked-up card's `ok` decided **per card**. A mapped card is `ok`
+    only when the repo its own files live in answered, whatever the other
+    owners said — they are named in its evidence as not covered. An unmapped
+    card is `ok` when any repo in the map answered. A card naming no file was
+    never asked anything and is left as `cards` wrote it.
+
 CLI:
 
     python3 scripts/groom_lookups.py owner --owner <owner> --targets <file> \\
         --out <file> [--budget <text>] [--repo-map <file>]
+    python3 scripts/groom_lookups.py fold --targets <file> \\
+        --lookups-dir <dir> --out <file> [--repo-map <file>]
 """
 
 from __future__ import annotations
@@ -68,6 +83,8 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispatch_pool  # noqa: E402 — the one case-insensitive header reader
+import groomer  # noqa: E402 — `_FILE_REF`, the one reader of a card's paths
+import sanitize_untrusted  # noqa: E402 — Linear text is fenced data
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO_MAP = ROOT / "config" / "repo-map.json"
@@ -118,6 +135,35 @@ NO_REPOS = "no repo of {owner} in the repo map"
 
 USAGE_BUDGET = ('groom-lookups: --budget must be empty or a whole number, '
                 'got "{text}"')
+
+#: The lookup state every verdict carries (DRE-5458), exact. `ok`: the card's
+#: home repo answered (any repo, for an unmapped card); `failed`: it did not;
+#: `none`: the card names no file, or is excluded; `not-run`: no `fold` ran.
+#: DRE-5317 reads it for the morning-wide stop.
+LOOKUP_STATES = ("ok", "failed", "none", "not-run")
+#: The `unverified` reason prefix of a mapped card whose own repo did not
+#: answer: this, then the row's `lookups.why`.
+LOOKUP_FAILED = "lookup failed: "
+
+#: How many cards one aliased `searchIssues` field asks Linear for.
+SEARCH_FIRST = 25
+#: The `fold` command's input files, found at any depth under --lookups-dir.
+LOOKUPS_GLOB = "lookups-*.json"
+
+# The evidence lines, exact.
+NO_FILE_LINE = "the card names no file, so nothing was looked up"
+NEWER_CARD_LINE = "newer card {identifier} ({state}) names {path}: {title}"
+LEFT_OUT_LINE = "{n} more path(s) were not looked up"
+MERGED_LINE = ("merged pull request #{number} in {repo} touched {path} on "
+               "{day}: {title}")
+CUT_LINE = ("more than {n} commits touched {path} in {repo} since the card was "
+            "filed; only the newest {n} were followed to pull requests, so an "
+            "older merged pull request may be missing")
+NOT_COVERED_LINE = "the lookup did not cover {what}: {why}"
+# The `why` values `fold` writes, exact.
+NO_RECORD = "no lookup record for {owner}"
+DID_NOT_ANSWER = "{repo} did not answer — {why}"
+NO_REPO_ANSWERED = "no repo answered — {whys}"
 
 _LIST_ORDER = {"planning": 0, "spare": 1}
 _NEXT = re.compile(r'rel="?next"?')
@@ -392,6 +438,269 @@ def summary_line(doc: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# cards — the groom job's half (DRE-5458)                                      #
+# --------------------------------------------------------------------------- #
+
+def _moment(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _clean(text) -> str:
+    return sanitize_untrusted.sanitize_line(str(text or ""))
+
+
+def _say(row: dict, line: str) -> None:
+    """One evidence line, once: `fold` re-run over its own output, or the
+    paths-left-out line both halves name, is never written twice."""
+    evidence = row.setdefault("evidence", [])
+    if line not in evidence:
+        evidence.append(line)
+
+
+def _lookups(*, looked_up: bool, ok, paths=(), left_out: int = 0) -> dict:
+    return {"looked_up": looked_up, "ok": ok, "why": None,
+            "paths": list(paths), "paths_left_out": left_out,
+            "newer_cards": [], "newer_cards_why": None, "merged_prs": [],
+            "cut": [], "owners": {}}
+
+
+def paths_of(row) -> tuple[list[str], int]:
+    """The paths the row's body names in backticks — `groomer._FILE_REF`, the
+    full path as written, each once — the first `MAX_PATHS` of them, and how
+    many were left out."""
+    found: list[str] = []
+    for path in groomer._FILE_REF.findall((row or {}).get("body") or ""):
+        if path not in found:
+            found.append(path)
+    return found[:MAX_PATHS], max(0, len(found) - MAX_PATHS)
+
+
+def _search_query(n: int) -> str:
+    """One document, one aliased `searchIssues` field per path; each term a
+    variable, so a path is never spliced into the query text."""
+    params = ", ".join(f"$p{i}: String!" for i in range(n))
+    fields = "\n".join(
+        f"  p{i}: searchIssues(term: $p{i}, first: {SEARCH_FIRST}) "
+        "{ nodes { identifier title createdAt state { name } } }"
+        for i in range(n))
+    return f"query({params}) {{\n{fields}\n}}"
+
+
+def cards(rows, *, lops, now) -> list[dict]:
+    """Write each target row's `lookups` block, in place, and return the rows.
+
+    An excluded row carries `lookups: null`. A row whose body names no file
+    is asked nothing: `looked_up: false`, `ok: true`. Every other row —
+    an unmapped one included, since the legs span every repo in the map — is
+    looked up: ONE `lops.gql` request for the newer cards naming its paths,
+    with `ok: null` until `fold` decides it. A request Linear refuses is named
+    in `newer_cards_why` and the next card is asked; the card is not failed
+    for it. Linear's cost: one request per file-naming, non-excluded row."""
+    limit = _moment(now)
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("excluded"):
+            row["lookups"] = None
+            continue
+        paths, left_out = paths_of(row)
+        if not paths:
+            row["lookups"] = _lookups(looked_up=False, ok=True)
+            _say(row, NO_FILE_LINE)
+            continue
+        look = row["lookups"] = _lookups(looked_up=True, ok=None,
+                                         paths=paths, left_out=left_out)
+        if left_out:
+            _say(row, LEFT_OUT_LINE.format(n=left_out))
+        since = _moment((row.get("context") or {}).get("created_at"))
+        if since is None:
+            look["newer_cards_why"] = NO_CREATED_AT
+            continue
+        try:
+            found = lops.gql(_search_query(len(paths)),
+                             {f"p{i}": p for i, p in enumerate(paths)}) or {}
+        except Exception as e:  # noqa: BLE001 — a refused read is named, not fatal
+            look["newer_cards_why"] = _clean(_one_line(e)) or type(e).__name__
+            continue
+        seen: set[str] = set()
+        for i, path in enumerate(paths):
+            for node in ((found.get(f"p{i}") or {}).get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                ident = node.get("identifier")
+                at = _moment(node.get("createdAt"))
+                if (not ident or ident == row.get("card") or ident in seen
+                        or at is None or at <= since
+                        or (limit is not None and at > limit)):
+                    continue
+                seen.add(ident)
+                newer = {"identifier": _clean(ident),
+                         "title": _clean(node.get("title")),
+                         "state": _clean((node.get("state") or {}).get("name")),
+                         "path": path}
+                look["newer_cards"].append(newer)
+                _say(row, NEWER_CARD_LINE.format(**newer))
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# fold — the verify leg's half (DRE-5458)                                      #
+# --------------------------------------------------------------------------- #
+
+def _owners_of(repo_map: dict) -> list[str]:
+    """Every owner in the map, each once, in the map's order."""
+    out: list[str] = []
+    for full in (repo_map or {}).values():
+        owner = str(full).split("/")[0]
+        if owner and owner.lower() not in {o.lower() for o in out}:
+            out.append(owner)
+    return out
+
+
+def _entry(doc, card) -> dict | None:
+    entry = ((doc or {}).get("cards") or {}) if isinstance(doc, dict) else {}
+    found = entry.get(card) if isinstance(entry, dict) else None
+    return found if isinstance(found, dict) else None
+
+
+def _unread(entry) -> dict:
+    found = (entry or {}).get("unread_repos")
+    return found if isinstance(found, dict) else {}
+
+
+def _why_of(owner: str, doc, entry) -> str:
+    """Why this owner did not read the card, in order of what is known: the
+    card's own `why`, the owner's, or no document at all."""
+    for why in ((entry or {}).get("why"), (doc or {}).get("why")):
+        if why:
+            return _one_line(why)
+    return NO_RECORD.format(owner=owner)
+
+
+def _fold_row(row: dict, look: dict, owners: list[str], by_owner: dict,
+              repo_map: dict) -> None:
+    card = row.get("card")
+    look["owners"] = {}
+    merged = look.setdefault("merged_prs", [])
+    cut = look.setdefault("cut", [])
+    for owner in owners:
+        doc = by_owner.get(owner.lower())
+        entry = _entry(doc, card)
+        read = bool(entry and entry.get("read") is True)
+        why = None if read else _why_of(owner, doc, entry)
+        look["owners"][owner] = {"read": read, "why": why}
+        # A card the leg started and did not finish keeps what it found.
+        for pr in (entry or {}).get("merged_prs") or []:
+            if isinstance(pr, dict) and pr not in merged:
+                merged.append(pr)
+                _say(row, MERGED_LINE.format(
+                    number=pr.get("number"), repo=pr.get("repo"),
+                    path=pr.get("path"), day=str(pr.get("merged_at") or "")[:10],
+                    title=_clean(pr.get("title"))))
+        for item in (entry or {}).get("cut") or []:
+            if isinstance(item, dict) and item not in cut:
+                cut.append(item)
+                _say(row, CUT_LINE.format(n=MAX_COMMITS, path=item.get("path"),
+                                          repo=item.get("repo")))
+        if not read:
+            _say(row, NOT_COVERED_LINE.format(what=owner, why=why))
+        for repo, repo_why in _unread(entry).items():
+            if read:
+                _say(row, NOT_COVERED_LINE.format(what=repo,
+                                                  why=_one_line(repo_why)))
+    if look.get("paths_left_out"):
+        _say(row, LEFT_OUT_LINE.format(n=look["paths_left_out"]))
+
+    home = row.get("repository")
+    if home:
+        # Mapped: the card's own repo answered, or the card failed.
+        owner = str(home).split("/")[0]
+        doc = by_owner.get(owner.lower())
+        entry = _entry(doc, card)
+        read = bool(entry and entry.get("read") is True)
+        if read and home not in _unread(entry):
+            look["ok"], look["why"] = True, None
+            return
+        reason = (_one_line(_unread(entry)[home]) if read
+                  else _why_of(owner, doc, entry))
+        look["ok"] = False
+        look["why"] = DID_NOT_ANSWER.format(repo=home, why=reason)
+        return
+    # Unmapped: no home repo, so any repo in the map answering is an answer.
+    whys: list[str] = []
+    for owner in owners:
+        entry = _entry(by_owner.get(owner.lower()), card)
+        if not look["owners"][owner]["read"]:
+            whys.append(f"{owner}: {look['owners'][owner]['why']}")
+            continue
+        unread = _unread(entry)
+        if any(repo not in unread for repo in _repos_of(owner, repo_map)):
+            look["ok"], look["why"] = True, None
+            return
+        whys += [f"{repo}: {_one_line(why)}" for repo, why in unread.items()]
+    look["ok"] = False
+    look["why"] = NO_REPO_ANSWERED.format(whys="; ".join(whys))
+
+
+def fold(rows, docs: list[dict], *, repo_map) -> list[dict]:
+    """Fold every leg's document into the rows, in place, and return them.
+
+    Each looked-up row gets `owners[<owner>]` for every owner in the map, the
+    merged pull requests and cuts every leg found with one evidence line each,
+    one `the lookup did not cover …` line per owner or repo not read, and its
+    `ok` and `why` — decided by its own repo when it is mapped, by any repo
+    when it is not. A row that names no file, or whose `lookups` is null, is
+    left as it was. The owner is the document's own `owner` key."""
+    by_owner: dict[str, dict] = {}
+    for doc in docs or []:
+        if isinstance(doc, dict) and isinstance(doc.get("owner"), str):
+            by_owner.setdefault(doc["owner"].lower(), doc)
+    owners = _owners_of(repo_map)
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        look = row.get("lookups")
+        if isinstance(look, dict) and look.get("looked_up") is True:
+            _fold_row(row, look, owners, by_owner, repo_map)
+    return rows
+
+
+def _documents(directory) -> list[dict]:
+    """Every `lookups-*.json` at ANY depth under the directory — the workflow
+    downloads each leg's artifact into its own subdirectory. A file that does
+    not parse is skipped and said; a directory that does not exist is no
+    documents at all."""
+    base = Path(directory)
+    docs: list[dict] = []
+    if not base.is_dir():
+        return docs
+    for path in sorted(base.rglob(LOOKUPS_GLOB)):
+        if not path.is_file():
+            continue
+        try:
+            doc = _load(path)
+        except (OSError, ValueError) as e:
+            print(f"groom-lookups: skipped {path}: not readable JSON: "
+                  f"{_one_line(e)}", file=sys.stderr)
+            continue
+        if not isinstance(doc, dict) or not isinstance(doc.get("owner"), str) \
+                or not doc["owner"].strip():
+            print(f"groom-lookups: skipped {path}: no owner key",
+                  file=sys.stderr)
+            continue
+        docs.append(doc)
+    return docs
+
+
+# --------------------------------------------------------------------------- #
 # the command line                                                             #
 # --------------------------------------------------------------------------- #
 
@@ -411,6 +720,12 @@ def _parser() -> argparse.ArgumentParser:
     # every run, and on an ordinary morning that is the empty string.
     p.add_argument("--budget", default=None)
     p.add_argument("--repo-map", dest="repo_map", default=str(REPO_MAP))
+
+    p = sub.add_parser("fold", help="every leg's document, folded into the rows")
+    p.add_argument("--targets", required=True)
+    p.add_argument("--lookups-dir", dest="lookups_dir", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--repo-map", dest="repo_map", default=str(REPO_MAP))
     return parser
 
 
@@ -419,8 +734,38 @@ def _load(path) -> object:
         return json.load(fh)
 
 
+def _fold_main(args) -> int:
+    try:
+        rows = _load(args.targets)
+        repo_map = _load(args.repo_map)
+        if not isinstance(rows, list) or not isinstance(repo_map, dict):
+            raise ValueError("the targets file must be a list and the repo "
+                             "map an object")
+    except (OSError, ValueError) as e:
+        print(f"groom-lookups: fold could not read its inputs: {_one_line(e)}",
+              file=sys.stderr)
+        return 2
+    # No documents is still a fold: every owner unread, every looked-up card
+    # failed, and the agent still runs.
+    docs = _documents(args.lookups_dir)
+    fold(rows, docs, repo_map=repo_map)
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, indent=2)
+    looks = [r["lookups"] for r in rows
+             if isinstance(r, dict) and isinstance(r.get("lookups"), dict)]
+    ok = sum(1 for look in looks if look.get("looked_up") and look.get("ok"))
+    failed = sum(1 for look in looks
+                 if look.get("looked_up") and look.get("ok") is False)
+    none = sum(1 for look in looks if not look.get("looked_up"))
+    print(f"groom-lookups: folded {len(docs)} document(s) — {ok} card(s) ok, "
+          f"{failed} failed, {none} named no file")
+    return 0
+
+
 def main(argv=None, *, gh_run=None, clock=None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "fold":
+        return _fold_main(args)
     try:
         budget = parse_budget(args.budget)
     except ValueError:
