@@ -349,15 +349,15 @@ def test_off_rail_reads_the_bundled_snapshot_and_never_the_network(monkeypatch):
     gh.assert_not_called()
 
 
-def test_the_tag_is_off_rail():
-    assert reconcile.OFF_RAIL_TAG == "off-rail"
+def test_the_prefix_is_off_rail():
+    assert reconcile.OFF_RAIL_PREFIX == "off-rail"
 
 
 def test_the_notice_is_one_line_naming_the_slug_the_phase_and_the_write(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", SANDBOX)
     line = reconcile.off_rail_notice("flag_stranded", "escalated a stalled card")
     assert "\n" not in line
-    assert line.startswith(f"{reconcile.OFF_RAIL_TAG}: ")
+    assert line.startswith(f"{reconcile.OFF_RAIL_PREFIX}: ")
     assert SANDBOX in line
     assert "not on the routing rail" in line
     assert "flag_stranded" in line

@@ -9433,7 +9433,9 @@ def off_rail() -> bool:
     return REPO_SLUG not in validate_card.VALID_SLUGS
 
 
-OFF_RAIL_TAG = "off-rail"
+# A log prefix, not a `_TAG`: the skip line is not a pipeline act, and
+# `pipeline_act.py` reads every module-level `*_TAG` as one.
+OFF_RAIL_PREFIX = "off-rail"
 
 #: The fleet-wide board writers a sweep off the rail skips, in the order
 #: `main()` runs them, each with what it would have done. A ninth joins here
@@ -9461,7 +9463,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 def off_rail_notice(phase: str, would: str) -> str:
     """The one line a skipped phase prints instead of running."""
     return (
-        f"{OFF_RAIL_TAG}: {REPO_SLUG!r} is not on the routing rail "
+        f"{OFF_RAIL_PREFIX}: {REPO_SLUG!r} is not on the routing rail "
         "(config/repo-map.json), so this sweep writes to no board card it does "
         f"not own — skipped {phase}, which would have {would}"
     )
