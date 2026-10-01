@@ -61,7 +61,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
      only read that one repo, and holding no Linear key at all. Each agent
-     answers `still-needed`, `done`, `obsolete` or `unverified`, with proof. A
+     asks whether the card's problem can still be seen in that code — not
+     whether the card's own fix merged — and answers `still-needed`,
+     `partly-solved`, `done-elsewhere`, `obsolete`, `not-worth-it` or
+     `unverified` (DRE-5304). Every answer but `unverified` needs a
+     `file:line` proof from the code, or it is recorded `unverified` with
+     the reason `no proof`. `done-elsewhere`, `obsolete` and `not-worth-it`
+     put the card on the Cancel list; `partly-solved` keeps it in the batch.
+     `excluded` is the runner's word, never the agent's. A
      card whose repo is not in `config/repo-map.json` is reported
      `unverified`, naming the slug, and on its leg no code is read and no
      model is called. A leg that dies is `unverified` too, never
@@ -362,8 +369,9 @@ summary.
 
 When the record carries a `verify` block — written by
 `groom_verify_agent.py apply` — the page adds `## Verified against main` after
-the Cancel list: one line per verdict count (`still-needed`, `done`,
-`obsolete`, `unverified`), one line `Verify step: <N> cards, $<X.XX>, <M> min
+the Cancel list: one line per verdict count (`still-needed`, `partly-solved`,
+`done-elsewhere`, `obsolete`, `not-worth-it`, `unverified`, `excluded`), each
+card excluded without judgement by id with its reason, one line `Verify step: <N> cards, $<X.XX>, <M> min
 <S> s wall clock`, and each unverified card by id with its reason. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
 proof whole in the Reason cell, and a batch card's verdict is under its entry

@@ -1,0 +1,13 @@
+[
+  {
+    "card": "DRE-4416",
+    "repository": "dreadnought-foundry/agent-bureau",
+    "repo_slug": "agent-bureau",
+    "title": "agent-bureau: the console's claude_usage_reading table holds 0 rows — carry each run's usage reading into it",
+    "body": "The console's `claude_usage_reading` table holds 0 rows. Nothing carries a run's usage reading into it: the emit step writes the reading into the run's own log and stops there, so the Accounts panel has nothing to draw.\n\nThe fix is the S3 route: the emit step uploads each reading to the agent-log bucket, and a console consumer reads the bucket and inserts one row per reading into `claude_usage_reading`.\n\nThat fix never merged — its pull request was closed unmerged, and the table is still empty.\n\n## Acceptance criteria\n\n- [ ] The emit step uploads each usage reading to the agent-log bucket.\n- [ ] A console consumer reads the bucket and inserts one row per reading into `claude_usage_reading`.\n- [ ] After one run, `claude_usage_reading` holds at least one row.",
+    "evidence": [
+      "DRE-4587 is Done: the console's usage probe now inserts one row per window into claude_usage_reading each time it reads an account."
+    ],
+    "list": "planning"
+  }
+]

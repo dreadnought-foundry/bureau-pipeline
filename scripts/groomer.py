@@ -2616,12 +2616,15 @@ def _render_verified(proposal: dict) -> list:
     """What the verify matrix found and spent (DRE-4971) — or nothing, when
     the record carries no `verify` block.
 
-    One line per verdict count, the cost line in the grammar the sibling cards
-    share (`VERIFY_COST_LINE`), and every unverified card by id with its
-    reason. A Cancel it proved is already in the table above, its `file:line`
+    One line per verdict count, every card excluded without judgement by id
+    with its reason, the cost line in the grammar the sibling cards share
+    (`VERIFY_COST_LINE`), and every unverified card by id with its reason. A Cancel it proved is already in the table above, its `file:line`
     proof in the Reason cell. A cost or a clock the step could not read says
     `unknown` — never `$0.00` (`standards/console-honesty.md` rule 2).
     """
+    # Here, not at the top: `groom_verify_agent` imports this module.
+    import groom_verify_agent
+
     block = proposal.get("verify")
     if not block:
         return []
@@ -2629,15 +2632,28 @@ def _render_verified(proposal: dict) -> list:
     cost, clock = block.get("cost_usd"), block.get("wall_clock_seconds")
     w = [VERIFIED_HEADING, ""]
     w.append("A read-only agent read each card on the Planning list, and "
-             "the spares behind it, against the code on main, and answered "
-             "still-needed, done or obsolete with the file and line that "
-             "proves it. A card it proved done or obsolete is on the Cancel "
-             "list with that proof as its reason; a card it could not answer "
-             "for stays where the proposal put it.")
+             "the spares behind it, against the code on main, asked whether "
+             "the problem it describes can still be seen there, and answered "
+             "still-needed, partly-solved, done-elsewhere, obsolete or "
+             "not-worth-it with the file and line that proves it. A card it "
+             "proved done-elsewhere, obsolete or not-worth-it is on the "
+             "Cancel list with that proof as its reason; a partly-solved "
+             "card stays in the batch; a card it could not answer for stays "
+             "where the proposal put it; a card excluded without judgement "
+             "is dropped from the batch and stays where it is on the board.")
     w.append("")
-    for verdict in ("still-needed", "done", "obsolete", "unverified"):
+    for verdict in groom_verify_agent.VERDICTS:
         w.append(f"- {verdict}: {int(counts.get(verdict) or 0)}")
     w.append("")
+    excluded = block.get("excluded") or []
+    if excluded:
+        w.append("Excluded without judgement — each stays where it is on the "
+                 "board and is not in this batch:")
+        w.append("")
+        for entry in excluded:
+            w.append(f"- {entry.get('identifier')} — "
+                     f"{defang_reason(_line(entry.get('reason')))[0]}")
+        w.append("")
     w.append(VERIFY_COST_LINE.format(
         cards=int(block.get("cards") or 0),
         cost="cost unknown" if cost is None else f"${cost:.2f}",
