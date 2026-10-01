@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 HEAD = "a" * 40
 NEW_HEAD = "c" * 40
+OLD_HEAD = "b" * 40
 IDENT = "DRE-5231"
 # The strings the merge gate reads as verdict credentials. A receipt the sweep
 # writes must never carry one (standards/untrusted-content.md).
@@ -62,15 +63,17 @@ def _qa(body):
             "createdAt": "2026-09-30T00:00:00Z"}
 
 
-def _pr(head=HEAD, critic=None, verifier=None):
+def _pr(head=HEAD, critic=None, verifier=None, reviewed=None):
     """An open PR whose qa-bot thread carries the given verdict tokens, bound
-    to `head`. No baseRefName, so the content carry is never asked about and
-    verdict_bound reads the sha binding alone."""
+    to `reviewed` (default `head`). No baseRefName, so the content carry is
+    never asked about and verdict_bound reads the sha binding alone unless a
+    test patches the carry in."""
+    reviewed = reviewed or head
     comments = []
     if critic:
-        comments.append(_qa(f"🔎 QA Critic — VERDICT: {critic} @{head}\n\nok"))
+        comments.append(_qa(f"🔎 QA Critic — VERDICT: {critic} @{reviewed}\n\nok"))
     if verifier:
-        comments.append(_qa(f"🧪 QA Verifier — VERDICT: {verifier} @{head}\n\nno"))
+        comments.append(_qa(f"🧪 QA Verifier — VERDICT: {verifier} @{reviewed}\n\nno"))
     return {
         "number": 42,
         "headRefName": "agent/DRE-5231-review-nudge-cap",
@@ -212,6 +215,42 @@ class TestTheGateNudgeIsCapped:
         board = _Board()
         _, _, posted = board.sweep(_pr(critic="APPROVE"))
         assert "critic APPROVE, verifier none" in posted[0]
+
+
+class TestAVerdictCarriedByContentIsNamed:
+    """The head moved but the PR's content did not — a base merge. The critic's
+    APPROVE is carried by content (DRE-2340), so verdict_bound is True and the
+    gate is nudged; the receipt and the notice must name that APPROVE, never
+    print "critic none" for the verdict the sweep is acting on."""
+
+    def test_the_receipt_and_the_notice_name_the_earlier_head(self):
+        board = _Board()
+        pr = _pr(critic="APPROVE", verifier="FAIL", reviewed=OLD_HEAD)
+        with patch.object(
+            reconcile, "head_content_id_for", return_value="content"
+        ), patch.object(
+            reconcile, "pr_commit_shas_for", return_value=frozenset({OLD_HEAD})
+        ), patch.object(
+            reconcile.merge_gate, "carries_content", return_value=True
+        ):
+            assert reconcile.verdict_bound(pr)
+            for n in (1, 2, 3):
+                nudge, _, posted = board.sweep(pr)
+                nudge.assert_called_once_with("merge-gate.yml", 42)
+                receipt = posted[0]
+                assert f"gate-nudge @{HEAD} ({n}/3)" in receipt
+                assert (
+                    f"critic APPROVE from earlier head {OLD_HEAD[:7]}, "
+                    f"verifier FAIL from earlier head {OLD_HEAD[:7]}" in receipt
+                ), receipt
+                assert "none" not in receipt
+                assert "bound to this head" not in receipt
+            nudge, _, posted = board.sweep(pr)
+        nudge.assert_not_called()
+        notice = _cap_notices(posted)[0]
+        assert f"critic APPROVE from earlier head {OLD_HEAD[:7]}" in notice
+        assert "none" not in notice
+        assert "bound to this head" not in notice
 
 
 class TestTheReviewNudgeIsCapped:

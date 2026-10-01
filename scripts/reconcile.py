@@ -3626,21 +3626,30 @@ def verdict_bound(pr: dict) -> bool:
 
 
 def standing_verdict(comments: list[dict], marker: str, head: str) -> str:
-    """The token the newest of `comments` (critic_comments / verifier_comments)
-    carries when it binds `head` by sha — APPROVE, REQUEST_CHANGES, PASS, FAIL,
-    SKIP — else "none" (DRE-5231).
+    """What the newest of `comments` (critic_comments / verifier_comments)
+    says, for the review-nudge receipts that name what stands on `head` in
+    plain words (DRE-5231): its token — APPROVE, REQUEST_CHANGES, PASS, FAIL,
+    SKIP — when it names `head`; the token and the commit it names when that
+    is an earlier one; else "none".
 
-    For the review-nudge receipts, which name what stands on the head in plain
-    words. The sha binding only: a verdict carried across a head change by
-    content (verdict_bound) was written about another commit, and the receipt
-    says "bound to this head". Read through merge_gate's grammar, so a quoted
-    verdict is inert and a forged one is already gone from `comments`."""
+    The earlier commit is spelled out rather than dropped: verdict_bound also
+    carries a verdict across a head change by content (DRE-2340), and a
+    receipt reading "critic none" while the sweep nudges the gate on that very
+    APPROVE told a person the opposite of the truth. Whether the carry holds is
+    verdict_bound's call, not this one's — the receipt says only which commit
+    the verdict was written about. Read through merge_gate's grammar, so a
+    quoted verdict is inert and a forged one is already gone from
+    `comments`."""
     if not comments or not head:
         return "none"
     line = merge_gate.first_line(comments[-1].get("body") or "")
-    if merge_gate.verdict_sha(line) != head:
+    sha = merge_gate.verdict_sha(line)
+    token = merge_gate.verdict_token(line, marker)
+    if not sha or not token:
         return "none"
-    return merge_gate.verdict_token(line, marker) or "none"
+    if sha == head:
+        return token
+    return f"{token} from earlier head {sha[:7]}"
 
 
 def _review_nudge_key(tag: str, head: str) -> str:
@@ -3718,7 +3727,7 @@ def hand_review_nudge_to_person(
         )
     linear_ops.cmd_comment(
         ident,
-        f"{notice} critic {critic}, verifier {verifier} bound to this head — "
+        f"{notice} critic {critic}, verifier {verifier} — "
         f"{what} Re-triggering again would not change that, so the sweep has "
         f"stopped and labeled this card '{HOLD_LABEL}'. It stays in "
         f"{REVIEW_LANE} because its pull request is open. The way back: a "
@@ -9939,7 +9948,7 @@ def main(
                             ident,
                             f"🧹 Reconcile: {GATE_NUDGE_KEY} @{head} "
                             f"({spent + 1}/{REVIEW_NUDGE_CAP}) — critic {critic}, "
-                            f"verifier {verifier} bound to this head, and the gate "
+                            f"verifier {verifier}, and the gate "
                             "has not merged it; merge gate re-triggered.",
                         )
                 else:
