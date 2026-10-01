@@ -146,6 +146,34 @@ is left out of the batch for its age.
    newest created first among them. This is the production-issue lane: a card
    raised while debugging goes ahead of everything.
 2. **High next**, newest first. Otherwise High means nothing.
+
+   **An Urgent or High priority older than 21 days that nobody re-confirmed
+   is ranked as Medium** (DRE-5307). The priority dates from the newest
+   history entry that set it, or from the card's creation when none did.
+   Cards marked Urgent in August — DRE-2702, DRE-2563, DRE-2564, DRE-3681,
+   DRE-3530, 37 to 40 days old on 2026-09-29 — had opened every batch ahead
+   of that week's work. The page lists each one under **Priorities re-ranked
+   as Medium**: `DRE-N — Urgent set on YYYY-MM-DD, 38 days ago, not
+   re-confirmed — ranked as Medium`.
+
+   To re-confirm a priority, set it again in Linear, or comment on the card
+   with a first line that opens with `priority-confirmed` (any case, an emoji
+   before it is fine). Either one restarts the 21 days. A confirmation counts
+   only from a person's own Linear account, or from the CEO through the
+   console, whose signed answer is checked (`scripts/spoken_thread.py`).
+   Nothing else counts: not a comment the pipeline's own key wrote without
+   that signature, not an integration, and not an answer whose signature was
+   refused or could not be checked.
+
+   **Only Urgent or High cards older than 21 days are read**, the oldest read
+   first, at most 40 a morning (`MAX_READS` in `scripts/groom_priority.py`),
+   one Linear request each, plus one read of the pipeline's own identity. A
+   morning with no such card makes no request. **A card that was not read
+   keeps its priority and is named on the page**, one line per reason: `Kept
+   their priority, not read — <why>: DRE-A, DRE-B`. The reason is the read
+   budget being spent, Linear refusing the card's read, or the pipeline's own
+   Linear identity being unreadable — without it a person's comment cannot be
+   told apart from the pipeline's, and "cannot tell" never demotes a card.
 3. **Then everything else, newest first** — by creation day, going back from
    there, with no window. No card is left out of the batch for being old; it
    is reached when its turn comes, and the batch is the first `--capacity`
