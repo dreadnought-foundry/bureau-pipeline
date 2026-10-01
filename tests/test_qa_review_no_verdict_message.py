@@ -42,6 +42,9 @@ import test_critic_no_verdict_cause as no_verdict_cause  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 GATE = ROOT / "scripts" / "check_critic_result.py"
 
 # The run the operator was told never happened (attempt 2's retry).
@@ -69,10 +72,10 @@ AUTH_DEATH = {
 
 
 def _post_step_run() -> str:
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     for step in doc["jobs"]["review"]["steps"]:
         if step.get("id") == "post":
-            return step["run"]
+            return step_shell.step_shell(step)
     raise AssertionError("qa-review.yml has no step with id 'post'")
 
 
@@ -346,16 +349,16 @@ class BothGateStepsAreWiredTest(unittest.TestCase):
     to one that misses the other is how the retry stops reporting."""
 
     def test_both_gate_steps_pass_github_output_to_the_script(self):
-        doc = yaml.safe_load(QA_REVIEW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
         steps = {s.get("id"): s for s in doc["jobs"]["review"]["steps"]}
         for step_id in ("gate1", "gate2"):
-            run = steps[step_id]["run"]
+            run = step_shell.step_shell(steps[step_id])
             self.assertIn("check_critic_result.py", run)
             self.assertIn("--github-output", run,
                           f"{step_id} does not ask the gate for its outcome")
 
     def test_the_post_step_reads_both_attempts(self):
-        doc = yaml.safe_load(QA_REVIEW.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
         steps = {s.get("id"): s for s in doc["jobs"]["review"]["steps"]}
         env = steps["post"]["env"]
         self.assertIn("gate1.outputs.outcome", env["A1_OUTCOME"])

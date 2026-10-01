@@ -35,6 +35,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import test_qa_review_no_verdict_message as harness  # noqa: E402
 
+sys.path.insert(0, str(harness.ROOT / "scripts"))
+
+import step_shell  # noqa: E402
+
 QA_REVIEW = harness.QA_REVIEW
 
 FIRST_LINE = ("🔎 QA Critic could not run (infra error) — re-review needed, "
@@ -281,7 +285,7 @@ class AHostileRunnerNameIsDataTest(unittest.TestCase):
 
 
 def _steps():
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     return doc["jobs"]["review"]["steps"]
 
 
@@ -310,8 +314,8 @@ class TheFactsAreRecordedTest(unittest.TestCase):
                                ("a2_start", "critic_retry")):
             with self.subTest(stamp=stamp):
                 self.assertEqual(_step(stamp)["if"], _step(attempt)["if"])
-                self.assertIn("at=$(date +%s)", _step(stamp)["run"])
-                self.assertIn("$GITHUB_OUTPUT", _step(stamp)["run"])
+                self.assertIn("at=$(date +%s)", step_shell.step_shell(_step(stamp)))
+                self.assertIn("$GITHUB_OUTPUT", step_shell.step_shell(_step(stamp)))
 
     def test_each_stamp_sits_immediately_before_its_attempt(self):
         ids = [s.get("id") for s in _steps()]
@@ -325,13 +329,14 @@ class TheFactsAreRecordedTest(unittest.TestCase):
                 step = _step(gate)
                 self.assertEqual(step["env"]["ATTEMPT_STARTED"],
                                  f"${{{{ steps.{stamp}.outputs.at }}}}")
-                run = step["run"]
+                run = step_shell.step_shell(step)
                 self.assertIn("elapsed=", run)
                 self.assertLess(run.index("elapsed="),
                                 run.index("check_critic_result.py"))
 
     def test_the_two_gate_blocks_differ_only_by_attempt(self):
-        g1, g2 = _step("gate1")["run"], _step("gate2")["run"]
+        g1, g2 = (step_shell.step_shell(_step("gate1")),
+                  step_shell.step_shell(_step("gate2")))
         start = "# DRE-4885"
         self.assertIn(start, g1)
         end = "esac\n"
@@ -352,10 +357,10 @@ class TheFactsAreRecordedTest(unittest.TestCase):
                          "${{ steps.gate2.outputs.elapsed }}")
         self.assertEqual(env["BACKOFF_OUTCOME"],
                          "${{ steps.backoff.outcome }}")
-        self.assertNotIn("${{", _step("post")["run"])
+        self.assertNotIn("${{", step_shell.step_shell(_step("post")))
 
     def test_the_class_comes_from_the_one_reader(self):
-        run = _step("post")["run"]
+        run = step_shell.step_shell(_step("post"))
         self.assertIn("out_of_memory", run)
         self.assertIn("runner_class", run)
         self.assertNotIn("bureau-mini-light", run)

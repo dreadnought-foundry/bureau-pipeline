@@ -41,6 +41,9 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
 CRITIC_BRIEF = ROOT / "briefs" / "critic.md"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 #: The checkout `actions/checkout` plants, and the ONE path a `uses: ./…`
 #: local action can be resolved from (Actions resolves it under the workspace
@@ -49,7 +52,7 @@ IN_TREE = ".bureau-pipeline"
 
 
 def _doc() -> dict:
-    return yaml.safe_load(QA_REVIEW.read_text())
+    return yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
 
 
 def _steps() -> list[dict]:
@@ -107,7 +110,8 @@ class PipelineCheckoutLivesOutsideTheWorkspaceTest(unittest.TestCase):
             env_file = td / "github_env"
             env_file.touch()
             script = td / "relocate.sh"
-            script.write_text("set -euo pipefail\n" + _relocation_step()["run"])
+            script.write_text("set -euo pipefail\n"
+                              + step_shell.step_shell(_relocation_step()))
             env = dict(os.environ)
             env.update({
                 "GITHUB_WORKSPACE": str(workspace),
@@ -154,7 +158,8 @@ class PipelineCheckoutLivesOutsideTheWorkspaceTest(unittest.TestCase):
             env_file = td / "github_env"
             env_file.touch()
             script = td / "relocate.sh"
-            script.write_text("set -euo pipefail\n" + _relocation_step()["run"])
+            script.write_text("set -euo pipefail\n"
+                              + step_shell.step_shell(_relocation_step()))
             env = dict(os.environ)
             env.update({
                 "GITHUB_WORKSPACE": str(workspace),
@@ -258,7 +263,7 @@ class PostStepSurvivesAMissingCheckoutTest(unittest.TestCase):
             )
             gh.chmod(0o755)
 
-            run = _step("post")["run"]
+            run = step_shell.step_shell(_step("post"))
             for expr, value in {
                 "github.repository": "dreadnought-foundry/bureau-pipeline",
                 "github.run_id": "17252880151",

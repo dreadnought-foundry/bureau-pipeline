@@ -68,6 +68,9 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
 GATE = ROOT / "scripts" / "check_critic_result.py"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 # Attempt 1 of run 34170941436, as its execution file recorded it.
 RAN_CLEAN = {
@@ -146,7 +149,7 @@ def cause_for(execution, verdict_text=None) -> str:
 
 
 def _step(step_id: str) -> dict:
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     for step in doc["jobs"]["review"]["steps"]:
         if step.get("id") == step_id:
             return step
@@ -154,7 +157,7 @@ def _step(step_id: str) -> dict:
 
 
 def _step_by_name(name: str) -> dict:
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     for step in doc["jobs"]["review"]["steps"]:
         if step.get("name") == name:
             return step
@@ -175,7 +178,7 @@ def _resolve(text: str) -> str:
 def annotation(a1: dict, a2: dict) -> str:
     """Execute the REAL fail step's shell with two gates' real outputs."""
     step = _step("critic_fail")
-    run = _resolve(step["run"])
+    run = _resolve(step_shell.step_shell(step))
     assert "${{" not in run, "an unresolved GitHub expression reached the shell"
 
     # Whatever the step's env block names, resolved the way Actions would, with
@@ -407,7 +410,7 @@ class TheFallbackSentenceHasOneSourceTest(unittest.TestCase):
         import check_critic_result
 
         self.assertIn(check_critic_result.UNKNOWN_CAUSE_TEXT,
-                      _step("critic_fail")["run"])
+                      step_shell.step_shell(_step("critic_fail")))
 
     def test_every_cause_sentence_is_a_single_line(self):
         """A newline in a step output writes a step output of its own."""
@@ -436,7 +439,7 @@ class TheCommentNamesTheCauseTooTest(unittest.TestCase):
             step = _step("post")
             run = re.sub(
                 r"\$\{\{\s*github\.repository\s*\}\}",
-                "dreadnought-foundry/agent-bureau", step["run"])
+                "dreadnought-foundry/agent-bureau", step_shell.step_shell(step))
             run = re.sub(r"\$\{\{\s*github\.run_id\s*\}\}", "34170941436", run)
             assert "${{" not in run, "an unresolved expression reached the shell"
             run = run.replace("/tmp/", str(td) + "/")

@@ -42,6 +42,9 @@ ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
 CRITIC_GATE = ROOT / "scripts" / "check_critic_result.py"
 EVIDENCE_GATE = ROOT / "scripts" / "verdict_evidence.py"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 #: A completed review — the gate's `ok` path, so the ONLY thing that can
 #: make the verdict unreal is the evidence check.
@@ -102,10 +105,10 @@ The description is stale: it still promises the old subscriptions table.
 
 
 def _post_step_run() -> str:
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     for step in doc["jobs"]["review"]["steps"]:
         if step.get("id") == "post":
-            return step["run"]
+            return step_shell.step_shell(step)
     raise AssertionError("qa-review.yml has no step with id 'post'")
 
 

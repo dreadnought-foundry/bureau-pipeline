@@ -53,6 +53,7 @@ os.environ.setdefault("REPO_SLUG", "test")
 
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 # Full 40-hex SHAs, as GitHub's headRefOid returns them.
 SHA_REVIEWED = "aa11" * 10  # the commit the critic actually reviewed
@@ -253,7 +254,7 @@ class ProducerFormatTest(unittest.TestCase):
 
     @staticmethod
     def extract_compose_line(path, prefix):
-        text = path.read_text()
+        text = step_shell.workflow_source(path)
         lines = [
             ln.strip() for ln in text.splitlines() if ln.strip().startswith(prefix)
         ]
@@ -514,7 +515,7 @@ class BindingShapeTest(unittest.TestCase):
             (QA_REVIEW, "🔎 QA Critic — "),
             (VERIFY, "🧪 QA Verifier — "),
         ):
-            text = path.read_text()
+            text = step_shell.workflow_source(path)
             self.assertRegex(
                 text,
                 re.escape(marker) + r"[^\n]*@\$\{REVIEWED_SHA\}",

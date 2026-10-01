@@ -33,6 +33,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 VERDICT_BODY = "VERDICT: APPROVE\n\nLooks good. No findings.\n"
 MODEL = "claude-sonnet-5"
@@ -40,10 +43,10 @@ WHY = "advisory ladder top; nothing skipped"
 
 
 def _post_step_run() -> str:
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     for step in doc["jobs"]["review"]["steps"]:
         if step.get("id") == "post":
-            return step["run"]
+            return step_shell.step_shell(step)
     raise AssertionError("qa-review.yml has no step with id 'post'")
 
 

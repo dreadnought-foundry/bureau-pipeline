@@ -51,6 +51,8 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 QA_REVIEW = os.path.join(WF_DIR, "qa-review.yml")
 sys.path.insert(0, SCRIPTS)
 
+import step_shell  # noqa: E402
+
 BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 END = "===== END UNTRUSTED CARD TEXT ====="
 
@@ -82,7 +84,7 @@ def build(card, branch, body):
 
 
 def src() -> str:
-    return open(QA_REVIEW).read()
+    return step_shell.workflow_source(QA_REVIEW)
 
 
 def _steps():
@@ -317,7 +319,7 @@ class QaReviewWiringTest(unittest.TestCase):
         # teaches people to edit the test rather than read it; this one breaks
         # only if the guard actually goes away. The behavioural proof is in
         # test_qa_review_model_note.py, which EXECUTES the block with CARD="".
-        post = _step("post")["run"]
+        post = step_shell.step_shell(_step("post"))
         calls = [ln for ln in post.splitlines()
                  if "linear_ops.py" in ln and "comment" in ln]
         self.assertTrue(calls, "the Linear verdict comment call disappeared")
@@ -338,7 +340,7 @@ class LiveExtractionTest(unittest.TestCase):
     body. Pins the actual workflow wiring, not a re-implementation."""
 
     def _run_step(self, card: str, branch: str, body: str) -> str:
-        run_block = _step("cardctx")["run"]
+        run_block = step_shell.step_shell(_step("cardctx"))
         self.assertNotIn(
             "${{", run_block,
             "the cardctx run block must take its inputs via env only, so it "

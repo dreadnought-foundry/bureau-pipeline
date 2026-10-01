@@ -84,6 +84,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import execution_result  # noqa: E402
 import pr_size_strategy as pss  # noqa: E402
+import step_shell  # noqa: E402
 
 
 # ── the night of 2026-08-31, as the run logs recorded it ───────────────────
@@ -185,7 +186,7 @@ def gate_outputs(td: Path, execution: dict | None, verdict_text=None) -> dict:
 
 
 def wf_steps(job="review"):
-    doc = yaml.safe_load(QA_REVIEW.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(QA_REVIEW))
     return doc["jobs"][job]["steps"]
 
 
@@ -218,7 +219,7 @@ def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
     gh.write_text("#!/usr/bin/env bash\nexit 0\n")
     gh.chmod(0o755)
 
-    run = _resolve_expressions(wf_step("post")["run"])
+    run = _resolve_expressions(step_shell.step_shell(wf_step("post")))
     assert "${{" not in run, "an unresolved GitHub expression reached the shell"
     script = td / "post.sh"
     script.write_text("set -euo pipefail\n" + run.replace("/tmp/", str(td) + "/"))
@@ -621,7 +622,7 @@ class TheJobErrorAnnotationTest(unittest.TestCase):
     def _annotation(self, **env_extra) -> str:
         with tempfile.TemporaryDirectory() as raw:
             script = Path(raw) / "fail.sh"
-            run = _resolve_expressions(self.fail_step()["run"])
+            run = _resolve_expressions(step_shell.step_shell(self.fail_step()))
             self.assertNotIn("${{", run)
             script.write_text("set -uo pipefail\n" + run)
             env = dict(os.environ, A1_OUTCOME="", A2_OUTCOME="")

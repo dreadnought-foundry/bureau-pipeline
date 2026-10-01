@@ -80,6 +80,7 @@ CORPUS = os.path.join(os.path.dirname(__file__), "fixtures",
                       "critic-verdicts-2026-09.json")
 sys.path.insert(0, SCRIPTS)
 
+import step_shell  # noqa: E402
 import verdict_evidence as ve  # noqa: E402
 
 
@@ -91,7 +92,7 @@ def standard_body() -> str:
 
 
 def wf_steps(workflow="qa-review.yml", job="review"):
-    doc = yaml.safe_load(open(os.path.join(WF_DIR, workflow)))
+    doc = yaml.safe_load(step_shell.workflow_source(os.path.join(WF_DIR, workflow)))
     return doc["jobs"][job]["steps"]
 
 
@@ -107,7 +108,7 @@ def critic_prompts():
 
 
 def gate_shells():
-    return [wf_step(sid)["run"] for sid in ("gate1", "gate2")]
+    return [step_shell.step_shell(wf_step(sid)) for sid in ("gate1", "gate2")]
 
 
 def verdict(*body: str) -> str:
@@ -1095,7 +1096,7 @@ class GateWiringTest(unittest.TestCase):
     def test_the_post_step_has_an_evidence_branch(self):
         post = wf_step("post")
         self.assertIn("EVIDENCE", str(post.get("env", {})))
-        self.assertIn("qa-evidence-hold.md", post["run"])
+        self.assertIn("qa-evidence-hold.md", step_shell.step_shell(post))
 
     def test_the_hold_message_is_read_from_a_file_never_an_env_string(self):
         # The message quotes the critic's own findings, and the critic read
@@ -1105,10 +1106,10 @@ class GateWiringTest(unittest.TestCase):
         self.assertNotIn("EVIDENCE_MESSAGE", str(post.get("env", {})))
 
     def test_the_stale_hold_message_is_cleared_before_the_retry(self):
-        src = open(os.path.join(WF_DIR, "qa-review.yml")).read()
+        src = step_shell.workflow_source(os.path.join(WF_DIR, "qa-review.yml"))
         for step in wf_steps():
             if "Clear stale verdict before retry" in (step.get("name") or ""):
-                self.assertIn("qa-evidence-hold.md", step["run"])
+                self.assertIn("qa-evidence-hold.md", step_shell.step_shell(step))
                 return
         self.assertIn("qa-evidence-hold.md", src, "no clear-before-retry step")
 
