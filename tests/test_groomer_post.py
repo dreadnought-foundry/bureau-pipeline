@@ -439,7 +439,7 @@ def test_the_doc_says_which_two_shapes_post_no_proposal():
             "the judgement receipt still lands on the standing card carrying "
             "the not-posted clause",
             "a dry run posts nothing at all",
-            "the run stays green and the medic is not woken",
+            "run stays green and the medic is not woken",
             "the last line of the run's \"Post the verified proposal\" step",
             "a warning on the run's summary page"):
         assert phrase in paragraph, phrase
