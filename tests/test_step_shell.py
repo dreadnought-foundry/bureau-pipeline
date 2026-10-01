@@ -295,6 +295,160 @@ def test_move_refuses_a_step_the_workflow_does_not_have(tmp_path):
     assert not (root / "scripts" / "do_thing.sh").exists()
 
 
+def _assert_refused(root: Path, before: str, result, *needles: str) -> None:
+    assert result.returncode == 1, result.stdout + result.stderr
+    for needle in needles:
+        assert needle in result.stderr, result.stderr
+    assert (root / ".github/workflows/fixture.yml").read_text() == before
+    assert not (root / "scripts" / "do_thing.sh").exists()
+
+
+@pytest.mark.parametrize(
+    "line, number",
+    [
+        # Actions fills in the repository; the shell leaves `${REPO}` alone in '...'
+        ("echo 'repo is ${{ github.repository }}'", 13),
+        ("echo $'repo is ${{ github.repository }}'", 13),
+        # a single-quoted string that spans lines
+        ("echo 'repo\n          is ${{ github.repository }}'", 14),
+        # the body of a heredoc whose delimiter is quoted
+        ("cat <<'EOF2'\n          ${{ github.repository }}\n          EOF2", 14),
+        ('cat <<"EOF2"\n          ${{ github.repository }}\n          EOF2', 14),
+        ("cat <<\\EOF2\n          ${{ github.repository }}\n          EOF2", 14),
+        ("cat <<-'EOF2'\n          \t${{ github.repository }}\n          \tEOF2", 14),
+    ],
+)
+def test_move_refuses_a_substitution_the_shell_would_read_literally(tmp_path, line, number):
+    text = FIXTURE.replace(
+        "          gh pr view 7 --repo ${{ github.repository }}\n", f"          {line}\n"
+    )
+    root = _fixture_root(tmp_path, text)
+    before = (root / ".github/workflows/fixture.yml").read_text()
+    _assert_refused(root, before, _move(root, *ENVS), f"line {number}", "${{ github.repository }}")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # a quote inside double quotes, or inside the expression, opens nothing
+        "echo \"it's ${{ github.repository }}\"",
+        "echo \"${{ github.repository }}\" 'literal ${REPO}'",
+        # an unquoted heredoc delimiter expands its body
+        "cat <<EOF2\n          ${{ github.repository }}\n          EOF2",
+        # a here-string is not a heredoc, and a comment is not a string
+        "cat <<< ${{ github.repository }}  # it's fine",
+        # a quoted heredoc that has closed no longer quotes what follows
+        "cat <<'EOF2'\n          literal\n          EOF2\n          echo ${{ github.repository }}",
+    ],
+)
+def test_move_substitutes_where_the_shell_expands(tmp_path, line):
+    text = FIXTURE.replace(
+        "          gh pr view 7 --repo ${{ github.repository }}\n", f"          {line}\n"
+    )
+    root = _fixture_root(tmp_path, text)
+    result = _move(root, *ENVS)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "${REPO}" in (root / "scripts" / "do_thing.sh").read_text()
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["        shell: bash\n", "        working-directory: sub\n"],
+)
+def test_move_refuses_a_step_that_sets_its_shell_or_directory(tmp_path, key):
+    text = FIXTURE.replace("        if: always()\n", "        if: always()\n" + key)
+    root = _fixture_root(tmp_path, text)
+    before = (root / ".github/workflows/fixture.yml").read_text()
+    _assert_refused(root, before, _move(root, *ENVS), key.split(":")[0].strip())
+
+
+@pytest.mark.parametrize(
+    "anchor, defaults",
+    [
+        # the workflow's defaults
+        ("jobs:\n", "defaults:\n  run:\n    shell: bash\n"),
+        # the job's defaults
+        ("    steps:\n", "    defaults:\n      run:\n        working-directory: sub\n"),
+    ],
+)
+def test_move_refuses_a_step_whose_run_defaults_set_its_shell_or_directory(tmp_path, anchor, defaults):
+    text = FIXTURE.replace(anchor, defaults + anchor, 1)
+    assert yaml.safe_load(text)
+    root = _fixture_root(tmp_path, text)
+    before = (root / ".github/workflows/fixture.yml").read_text()
+    _assert_refused(root, before, _move(root, *ENVS), "defaults")
+
+
+# --- the two readers agree on what delegates --------------------------------
+
+
+AGREEMENT = textwrap.dedent(
+    """\
+    name: agreement
+    on: workflow_dispatch
+    jobs:
+      work:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Moved
+            env:
+              A: b
+            {run}
+          - name: After
+            run: echo after
+    """
+)
+
+
+@pytest.mark.parametrize(
+    "run, delegates",
+    [
+        ("run: bash .bureau-pipeline/scripts/hello.sh", True),
+        ("run: bash .bureau-pipeline/scripts/hello.sh  # a note", True),
+        ("run: 'bash .bureau-pipeline/scripts/hello.sh'", True),
+        ("run: 'bash .bureau-pipeline/scripts/hello.sh' # a note", True),
+        ('run: "bash .bureau-pipeline/scripts/hello.sh"', True),
+        ('run: "bash \\"$PIPELINE_DIR/scripts/hello.sh\\""', True),
+        ("run: 'bash \"$PIPELINE_DIR/scripts/hello.sh\"'", True),
+        ('run: "bash .bureau-pipeline/scripts/hello.sh\\n"', True),
+        ('run: "bash .bureau-pipeline/scripts/\\x68ello.sh"', True),
+        ("run: |\n      bash .bureau-pipeline/scripts/hello.sh", True),
+        ("run: |-  # a note\n      bash .bureau-pipeline/scripts/hello.sh\n", True),
+        ("run: >\n      bash\n      .bureau-pipeline/scripts/hello.sh", True),
+        ("run:\n      bash .bureau-pipeline/scripts/hello.sh", True),
+        ("run: bash\n      .bureau-pipeline/scripts/hello.sh", True),
+        # near misses, read the same way by both
+        ("run: bash .bureau-pipeline/scripts/hello.sh# not a comment", False),
+        ("run: 'bash .bureau-pipeline/scripts/hello.sh # inside the quotes'", False),
+        ("run: |\n      bash .bureau-pipeline/scripts/hello.sh  # in a block, this is shell", False),
+        ("run: |\n      bash .bureau-pipeline/scripts/hello.sh\n      echo done", False),
+        ("run: >\n      bash .bureau-pipeline/scripts/hello.sh\n\n      echo done", False),
+        ('run: "bash .bureau-pipeline/scripts/hello.sh\\techo"', False),
+    ],
+)
+def test_step_shell_and_workflow_source_agree_on_every_spelling(tmp_path, run, delegates):
+    """`step_shell` reads the YAML-parsed `run`; `workflow_source` reads the raw
+    line. Whatever the spelling, both see the same step as delegating or not."""
+    _write_script(tmp_path, "hello", "echo hello\n")
+    lines = run.split("\n")
+    text = AGREEMENT.replace("{run}", "\n".join([lines[0], *(f"      {l}" if l else "" for l in lines[1:])]))
+    path = tmp_path / "wf.yml"
+    path.write_text(text)
+    step = _step(text, "Moved")
+
+    assert (step_shell.delegated_script(step["run"]) is not None) is delegates
+    source = step_shell.workflow_source(path, root=tmp_path)
+    read = _step(source, "Moved")
+    if delegates:
+        assert step_shell.step_shell(step, root=tmp_path) == "#!/usr/bin/env bash\nset -e\necho hello\n"
+        assert read["run"] == "echo hello\n"
+    else:
+        assert step_shell.step_shell(step, root=tmp_path) == step["run"]
+        assert source == text
+    assert read["env"] == {"A": "b"}
+    assert _step(source, "After") == {"name": "After", "run": "echo after"}
+
+
 # --- code_lines -------------------------------------------------------------
 
 

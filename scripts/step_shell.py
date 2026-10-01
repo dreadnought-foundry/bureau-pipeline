@@ -24,7 +24,9 @@ THE SCRIPT FILE. Line 1 is `#!/usr/bin/env bash` and line 2 is `set -e`: that
 is the one option a `run:` block gets when its step sets no `shell:` — GitHub
 runs it as `bash -e {0}`, and `-o pipefail` comes only with an explicit
 `shell: bash`. None of the five steps sets `shell:` and the move adds none, so
-the script fails on exactly the lines the block fails on today. A `set` line
+the script fails on exactly the lines the block fails on today. `move` refuses
+a step that sets `shell:` or `working-directory:`, itself or through its job's
+or workflow's `defaults.run`, since the script would not run that way. A `set` line
 already inside a body is body and stays verbatim. After the two opening lines
 come the header — written by the move card, never by `move` — then the body.
 
@@ -44,7 +46,9 @@ THE COMMANDS (these parse YAML, so they need PyYAML):
     python3 scripts/step_shell.py rehearse --out DIR
 
 `move` is mechanical: a move card writes no shell by hand. It refuses a body
-that still holds a `${{` once its `--env` substitutions are applied, and it
+that still holds a `${{` once its `--env` substitutions are applied, and one
+where a substitution would land inside single quotes or a quoted heredoc —
+Actions fills those in, the shell leaves a `${NAME}` there alone. It
 refuses to write anything unless reading the result back through
 `workflow_source` gives the body it moved. `verify` is the check each move
 card runs against `origin/main`. `rehearse` applies all five moves of
@@ -85,11 +89,13 @@ _LINE = {
 _SCRIPT_NAME = re.compile(r"[a-z0-9_]+")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DRE = re.compile(r"DRE-\d+")
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
 # `<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`, `<<\WORD` — never `<<<`.
 _HEREDOC = re.compile(
     r"(?<!<)<<(?P<dash>-?)[ \t]*(?:'(?P<sq>[^']+)'|\"(?P<dq>[^\"]+)\"|\\?(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
 )
-_RUN_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?)run:[ \t]*(?P<value>\S.*?)\s*$")
+_RUN_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?)run:(?:[ \t]+(?P<value>\S.*?))?\s*$")
+_BLOCK_HEADER = re.compile(r"(?P<style>[|>])[-+0-9]*(?:[ \t]+#.*)?")
 _STEP_NAME = re.compile(r"^(?P<indent>\s*)-\s+name:\s*(?P<value>.+?)\s*$")
 
 
@@ -155,22 +161,92 @@ def _without_opening(text: str) -> str:
     return "".join(lines)
 
 
+_YAML_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
+    "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+    "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
+}
+
+
+def _unescape(text: str) -> str:
+    """A double-quoted YAML scalar's content with its escapes decoded."""
+    def one(match: re.Match) -> str:
+        code = match.group(1)
+        if code[0] in "xuU" and len(code) > 1:
+            return chr(int(code[1:], 16))
+        return _YAML_ESCAPES.get(code, match.group(0))
+
+    return re.sub(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)", one, text, flags=re.S)
+
+
+def _fold(lines: list[str]) -> str:
+    """Lines joined as YAML folds them: by a space, a blank line by a newline."""
+    out = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            out += "\n"
+        else:
+            out += ("" if not out or out.endswith("\n") else " ") + line
+    return out
+
+
+def _run_value(header: str, rest: list[str]) -> str | None:
+    """The `run:` value YAML reads from `header` (what follows `run:` on its
+    line) and `rest` (the lines nested under it), as far as `delegated_script`
+    can tell the difference; None when it is no scalar this reader knows."""
+    if header.startswith("#"):
+        header = ""
+    block = _BLOCK_HEADER.fullmatch(header)
+    if block:
+        lines = list(rest)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        indents = {_indent(line) for line in lines if line.strip()}
+        if block.group("style") == "|" or len(indents) > 1:
+            return "\n".join(line.strip() for line in lines) + "\n"
+        return _fold(lines) + "\n"
+    text = _fold([header, *rest])
+    if text.startswith("'"):
+        match = re.fullmatch(r"'((?:[^']|'')*)'(?:\s+#.*)?\s*", text, re.S)
+        return match.group(1).replace("''", "'") if match else None
+    if text.startswith('"'):
+        match = re.fullmatch(r'"((?:[^"\\]|\\.)*)"(?:\s+#.*)?\s*', text, re.S)
+        return _unescape(match.group(1)) if match else None
+    return re.split(r"\s#", text, maxsplit=1)[0]
+
+
 def _expand(text: str, read: Callable[[str], str]) -> str:
-    """`text` with each delegation line replaced by a `run: |` block of its
+    """`text` with each delegating `run:` replaced by a `run: |` block of its
     script's body, indented to the step. `read` maps `scripts/<name>.sh` to
-    that file's text."""
+    that file's text.
+
+    A `run:` delegates here exactly when `delegated_script` says so of the
+    value YAML reads for it — a plain, quoted or block scalar, a trailing
+    comment and a value carried onto the next lines included — so this
+    reader and `step_shell` agree on every step."""
+    lines = text.splitlines(keepends=True)
     out: list[str] = []
-    for line in text.splitlines(keepends=True):
-        match = _RUN_LINE.match(line)
-        script = delegated_script(match.group("value")) if match else None
-        if script is None:
-            out.append(line)
+    i = 0
+    while i < len(lines):
+        match = _RUN_LINE.match(lines[i])
+        if match is None:
+            out.append(lines[i])
+            i += 1
             continue
         lead = match.group("lead")
+        end = _block_end(lines, i, len(lead), len(lines))
+        value = _run_value(match.group("value") or "", [l.rstrip("\n") for l in lines[i + 1:end]])
+        script = delegated_script(value) if value is not None else None
+        if script is None:
+            out += lines[i:end]
+            i = end
+            continue
         indent = " " * (len(lead) + 2)
         out.append(f"{lead}run: |\n")
         for body_line in _without_opening(read(script)).splitlines():
             out.append(f"{indent}{body_line}\n" if body_line else "\n")
+        i = end
     return "".join(out)
 
 
@@ -189,6 +265,18 @@ def workflow_source(path, root: Path = ROOT) -> str:
     return _expand(path.read_text(), lambda script: (root / script).read_text())
 
 
+def _heredoc(match: re.Match) -> tuple[str, bool, bool]:
+    """A `_HEREDOC` match as (terminator, `<<-`, delimiter quoted)."""
+    word = match.group("sq") or match.group("dq") or match.group("bare")
+    quoted = match.group("bare") is None or "\\" in match.group(0)
+    return word, bool(match.group("dash")), quoted
+
+
+def _closes(line: str, word: str, dash: bool) -> bool:
+    """Whether `line` is the terminator of a heredoc opened with `word`."""
+    return (line.lstrip("\t") if dash else line) == word
+
+
 def code_lines(text: str) -> list[str]:
     """The lines of a script or block that `verify` compares.
 
@@ -202,22 +290,69 @@ def code_lines(text: str) -> list[str]:
         if len(lines) > 1 and lines[1] == SET_E:
             start = 2
     kept: list[str] = []
-    pending: list[tuple[str, bool]] = []  # heredoc terminators still open
+    pending: list[tuple[str, bool, bool]] = []  # heredoc terminators still open
     for line in lines[start:]:
         if pending:
             kept.append(line)
-            word, dash = pending[0]
-            if (line.lstrip("\t") if dash else line) == word:
+            if _closes(line, *pending[0][:2]):
                 pending.pop(0)
             continue
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         kept.append(line)
-        for match in _HEREDOC.finditer(line):
-            word = match.group("sq") or match.group("dq") or match.group("bare")
-            pending.append((word, bool(match.group("dash"))))
+        pending += [_heredoc(match) for match in _HEREDOC.finditer(line)]
     return kept
+
+
+def _literal_expressions(body: str) -> list[tuple[int, str]]:
+    """Each `${{ }}` in a `run:` body that the shell would read literally once
+    it became `${NAME}`, as (line number, expression).
+
+    Actions fills in a `${{ }}` wherever it sits, but the shell expands no
+    `${NAME}` inside single quotes (`'...'` or `$'...'`) or inside the body of
+    a heredoc whose delimiter is quoted (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`). A
+    `${{ }}` is read whole, so a quote inside it opens nothing; a `#` that
+    starts a word outside quotes ends the line's code."""
+    found: list[tuple[int, str]] = []
+    pending: list[tuple[str, bool, bool]] = []  # heredocs opened, bodies still to come
+    quote = None  # the quote still open at the end of a line, if any
+    for number, line in enumerate(body.splitlines(), 1):
+        if pending and quote is None:
+            word, dash, quoted = pending[0]
+            if _closes(line, word, dash):
+                pending.pop(0)
+            elif quoted:
+                found += [(number, m.group()) for m in _EXPRESSION.finditer(line)]
+            continue
+        i = 0
+        while i < len(line):
+            expression = _EXPRESSION.match(line, i)
+            if expression:
+                if quote == "'":
+                    found.append((number, expression.group()))
+                i = expression.end()
+                continue
+            char = line[i]
+            if quote == "'":
+                quote = None if char == "'" else quote
+            elif quote == '"':
+                if char == "\\":
+                    i += 1
+                elif char == '"':
+                    quote = None
+            elif char == "\\":
+                i += 1
+            elif char in "'\"":
+                quote = char
+            elif char == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
+                break
+            elif char == "<" and (opened := _HEREDOC.match(line, i)):
+                pending.append(_heredoc(opened))
+                i = opened.end()
+                continue
+            i += 1
+    return found
 
 
 # --- shared by the commands -------------------------------------------------
@@ -248,12 +383,13 @@ def substitute(body: str, envs: Iterable[tuple[str, str]]) -> str:
     return body
 
 
-def _find_step(text: str, step_name: str, where: str) -> dict:
+def _find_step_in(text: str, step_name: str, where: str) -> tuple[dict, dict, dict]:
+    """(workflow, job, step) for the one step named `step_name`."""
     import yaml
 
     data = yaml.safe_load(text) or {}
     found = [
-        step
+        (data, job, step)
         for job in (data.get("jobs") or {}).values()
         for step in (job or {}).get("steps") or []
         if isinstance(step, dict) and step.get("name") == step_name
@@ -261,6 +397,25 @@ def _find_step(text: str, step_name: str, where: str) -> dict:
     if len(found) != 1:
         raise StepShellError(f"{where}: {len(found)} steps named {step_name!r}, want exactly 1")
     return found[0]
+
+
+def _find_step(text: str, step_name: str, where: str) -> dict:
+    return _find_step_in(text, step_name, where)[2]
+
+
+# What a `run:` block runs under besides its text. The script runs as
+# `bash <path>` from the job's working directory with `set -e` alone, which
+# matches the block only when none of these is set.
+_RUN_SETTINGS = ("shell", "working-directory")
+
+
+def _run_settings(data: dict, job: dict, step: dict) -> list[str]:
+    """Each setting that changes how the step's block runs, named by where it is set."""
+    found = [f"`{key}:` on the step" for key in _RUN_SETTINGS if key in step]
+    for where, holder in (("job", job), ("workflow", data)):
+        run_defaults = ((holder or {}).get("defaults") or {}).get("run") or {}
+        found += [f"`{key}:` in the {where}'s defaults.run" for key in _RUN_SETTINGS if key in run_defaults]
+    return found
 
 
 def _unquote(value: str) -> str:
@@ -310,12 +465,28 @@ def move(
     rel = workflow_path(workflow)
     path = root / rel
     text = path.read_text()
-    step = _find_step(text, step_name, rel)
+    data, job, step = _find_step_in(text, step_name, rel)
     run = step.get("run")
     if not isinstance(run, str):
         raise StepShellError(f"{rel}: step {step_name!r} has no run block")
     if delegated_script(run) is not None:
         return "skipped"
+    settings = _run_settings(data, job, step)
+    if settings:
+        raise StepShellError(
+            f"{rel}: step {step_name!r} sets {', '.join(settings)}; the script "
+            f"would run as `bash <path>` with {SET_E!r} alone, so this is no mechanical move"
+        )
+    literal = [
+        (number, expression) for number, expression in _literal_expressions(run)
+        if substitute(expression, envs) != expression
+    ]
+    if literal:
+        raise StepShellError(
+            f"{rel}: step {step_name!r} would substitute where the shell reads literally "
+            "(single quotes or a quoted heredoc): "
+            + ", ".join(f"line {number} of the run block: {expression}" for number, expression in literal)
+        )
 
     body = substitute(run, envs)
     if "${{" in body:
