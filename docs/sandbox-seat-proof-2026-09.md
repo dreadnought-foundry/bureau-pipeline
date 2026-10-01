@@ -11,7 +11,7 @@ written on 2026-09-12 and names this path; the fence it proves (DRE-3632)
 merged on 2026-10-01 at 08:15:43 PT, so that is the day the observation could
 first be made. The path is kept so the card's link resolves.
 
-**Summary: 11 observations — 8 MET, 2 NOT MET, 1 NOT OBSERVED.**
+**Summary: 11 observations — 9 MET, 2 NOT MET, 0 NOT OBSERVED.**
 
 | # | observation | verdict |
 | -- | -- | -- |
@@ -19,7 +19,7 @@ first be made. The path is kept so the card's link resolves.
 | 2 | a sandbox sweep's `linear-budget:` line ends `budget: sandbox` | **MET** (§2.1) |
 | 3 | the sandbox merge gate for the probe PR carries no `linear-budget:` line, and its log shows the card was empty | **MET** (§2.2) |
 | 4 | the probe PR's CI run makes no Linear call | **MET** (§2.3) |
-| 5 | the fleet key's `x-ratelimit-requests-remaining`, read immediately before and after one hand-dispatched sandbox sweep | **NOT OBSERVED** (§2.4) |
+| 5 | the fleet key's `x-ratelimit-requests-remaining`, read immediately before and after one hand-dispatched sandbox sweep | **MET, with a caveat** (§2.4) — the fleet count did not fall (270 → 284), but a rolling refill could hide a small spend |
 | 6 | three consecutive sandbox sweeps print eight `off-rail:` lines each, none of the eight phases' action lines, exit 0 | **MET** (§3.1) |
 | 7 | a production sweep on the same day prints no `off-rail:` line | **MET** (§3.2) |
 | 8 | each of the eight phases is accounted for in that production sweep's log, by a `sweep-spend:` line or the phase's own quiet line | **NOT MET as written** (§3.2) — four of the eight phases print nothing when idle, by code |
@@ -172,15 +172,69 @@ There is no `secrets:` or `env:` block, so no Linear key reaches the job. The
 log's only test output is `5 passed, 128 warnings in 0.05s`, and the word
 "linear" does not appear in the log at all.
 
-### 2.4 The fleet header around a sandbox sweep — NOT OBSERVED as the card asks
+### 2.4 The fleet header around a hand-dispatched sandbox sweep — 12:45:59 to 12:47:17 PT
 
 The card asks for the fleet key's `x-ratelimit-requests-remaining` read
 immediately before and after one `bureau-harness` reconcile run **dispatched by
-hand**. This record's session was not permitted to dispatch a workflow run,
-so that observation was not made.
+hand**, "showing the sandbox run did not lower it, with the reading's own
+drift from other traffic stated honestly."
 
-In its place, and labeled as a substitute, the same two headers were read
-around the next **scheduled** harness sweep:
+**Who made this observation.** The session that wrote the rest of this record
+was not permitted to dispatch a workflow run. The coordinating session ran the
+dispatch and took the header readings after the CEO's go, which reached this
+record as relayed: "yes to … 3636", 2026-10-01, about 12:50 PT. That time is
+about four minutes after the dispatch (12:46:08 PT); both times are written
+here as given. The header readings below are the coordinator's, made with the
+fleet key read out of Secrets Manager `bureau/relay/linear-api-key` (viewer
+`Agent-Bureau`), from `x-ratelimit-requests-remaining` on a `{ viewer { name } }`
+query, with the key never printed. They are past readings and could not be
+re-taken; the run itself was re-read from its own log for this record.
+
+| when (PT) | fleet `x-ratelimit-requests-remaining` | note |
+| -- | -- | -- |
+| 12:45:59 | 271 / 2500 | window reset named 13:45:59 PT |
+| 12:46:05 | **270** / 2500 | read just before the dispatch |
+| 12:46:08 | — | `gh workflow run reconcile.yml -R dreadnought-foundry/bureau-harness` |
+| 12:47:17 | **284** / 2500 | read as soon as the run completed |
+
+The dispatched run is
+[36916708263](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/36916708263):
+event `workflow_dispatch`, started 12:46:08 PT, ended 12:47:14 PT, success.
+Its log, re-read for this record, has exactly eight `off-rail:` lines (all
+eight phases named, no forbidden line), and ends:
+
+```
+linear-budget: 2499 → 2494 (spent 5 this run (refilled mid-run); window resets 13:47 PT; budget: sandbox)
+```
+
+Its scope line reads `sweep-scope: full pass (schedule)` although the run was
+dispatched by hand; the label does not follow the trigger, and the pass is a
+full one either way. A **scheduled** harness sweep also overlapped the bracket:
+[36916761418](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/36916761418),
+12:46:34 to 12:47:49 PT, success, eight `off-rail:` lines,
+`linear-budget: 2499 → 2493 (spent 6 this run (refilled mid-run); window resets 13:47 PT; budget: sandbox)`.
+The 12:47:17 PT reading was taken while it was still running. Between them the
+two sandbox sweeps spent 11 requests, all on the sandbox's bucket.
+
+**What the bracket shows.** The fleet's count rose by 14 across the run,
+270 → 284. Its hour is rolling, so it refilled while other fleet traffic ran,
+and the reading cannot prove the fleet bucket was untouched to the request: a
+refill of that size could hide a small fleet spend. What it does show is that
+the fleet bucket did not drop by the sweep's 5 requests (or by the 11 the two
+overlapping sweeps spent), and the sweep itself reports `budget: sandbox` from
+a bucket that started at 2,499 while the fleet's stood at 270.
+
+**Verdict: MET, with that caveat.** The card's words are "did not lower it,
+with the reading's own drift … stated honestly," and the fleet count did not
+fall, with its drift stated; the caveat stays because a rise across a rolling
+window is consistent with "not lowered," not proof of "zero fleet requests,"
+which only the sweep's own `budget: sandbox` line from a separate 2,499 bucket
+carries.
+
+#### An earlier substitute reading, around a scheduled sweep
+
+Before the dispatch was approved, the same headers were read around the next
+scheduled harness sweep, by this record's session:
 
 | when (PT) | key | user | `x-ratelimit-requests-remaining` |
 | -- | -- | -- | -- |
@@ -208,10 +262,10 @@ spent three fleet and three sandbox requests.
 
 What the readings do show is the two buckets side by side: in the same
 minute the fleet stood at 277 → 220 and the sandbox at 2,499 → 2,498, and the
-sweep's own line says it spent 6 from a bucket that started at 2,499. The
-sandbox sweep did not draw from the fleet's bucket. But that is the §2.1
-argument again, not the bracket the card specifies, so **observation 5 is
-NOT OBSERVED.**
+sweep's own line says it spent 6 from a bucket that started at 2,499, so
+its own accounting puts the spend on the sandbox. That is the §2.1
+argument again, not the bracket the card specifies, which is why the
+hand-dispatched bracket above was taken.
 
 ## 3. The sandbox sweep holds its hands off
 
@@ -544,11 +598,6 @@ than counted as observations.
    schedule is now harmless to the board; the demo stub is not covered by this
    epic's fence (it stays on the fleet seat by DRE-3634's step 5), and whether
    its empty hold matters is a question for the epic that owns it.
-3. **The fleet-header bracket (§2.4) wants a hand-dispatched run.** A person
-   with permission to dispatch `bureau-harness`'s `reconcile.yml` reads the
-   fleet key's `x-ratelimit-requests-remaining` immediately before the
-   dispatch and immediately after the run completes, and records both with the
-   run id.
-4. **The identity declaration runs ahead of `main`.** `config/linear-identities.json`
+3. **The identity declaration runs ahead of `main`.** `config/linear-identities.json`
    says `LINEAR_API_KEY_SANDBOX` is read by `harness.yml`; it is not, until
    DRE-3650's card lands.
