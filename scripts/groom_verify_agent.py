@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The runner around the groom verify agent — one read-only agent per proposed
-card, a fixed-shape verdict, and the step that cancels a done or obsolete card
-with its proof (DRE-4970).
+card, a fixed-shape verdict, and the step that cancels a card whose problem is
+gone, or not worth solving, with its proof (DRE-4970, DRE-5304).
 
 `groom_verify.py` (DRE-4966) reads each proposed card against its comments,
 merged pull requests and other cards. It cannot read code, and code is where
@@ -10,8 +10,9 @@ DRE-2382's answer was: its file still existed, and only a reader of
 longer applied. So each card the proposal would put in front of the CEO — the
 Planning list and the spares behind it — gets one agent, holding
 `briefs/groom-verify.md`, the card, and its repo checked out read-only under
-`target/`. The agent answers `still-needed`, `done` or `obsolete`, each with
-proof. This file never calls a model: the vendor action in the workflow does,
+`target/`. The agent asks whether the card's problem can still be seen there,
+and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
+`not-worth-it`, each with a `file:line` proof. This file never calls a model: the vendor action in the workflow does,
 and the four subcommands here are everything around it.
 
   * `targets` — in the groom job, which holds the Linear key: every card to
@@ -22,8 +23,8 @@ and the four subcommands here are everything around it.
     input, and the moment it started.
   * `verdict` — always, even when the agent step died or never ran: the raw
     answer, checked, in the fixed shape the proposal reads.
-  * `apply` — back in the groom job: a Planning card proved done or obsolete
-    goes on the Cancel list with the proof as its reason, the next spare
+  * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
+    `obsolete` or `not-worth-it` goes on the Cancel list with the proof as its reason, the next spare
     still needed takes its slot, and the proposal id is recomputed.
 
 **A run that dies lands as `unverified`, never as `still-needed`.** Anything
@@ -71,13 +72,18 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO_MAP = ROOT / "config" / "repo-map.json"
 BRIEF = ROOT / "briefs" / "groom-verify.md"
 
-#: The four answers, exact strings — the proposal, the workflow and the page
-#: read these.
-STILL_NEEDED, DONE, OBSOLETE, UNVERIFIED = ("still-needed", "done", "obsolete",
-                                            "unverified")
-VERDICTS = (STILL_NEEDED, DONE, OBSOLETE, UNVERIFIED)
-#: The answers that cancel a card, and so need a `file:line` proof.
-CANCELS = (DONE, OBSOLETE)
+#: The verdicts, exact strings — the proposal, the workflow, the page and
+#: every sibling of DRE-5304 read these. The model gives one of the first five
+#: or `unverified`; `excluded` is the runner's word, never the model's.
+(STILL_NEEDED, PARTLY_SOLVED, DONE_ELSEWHERE, OBSOLETE, NOT_WORTH_IT,
+ UNVERIFIED, EXCLUDED) = ("still-needed", "partly-solved", "done-elsewhere",
+                          "obsolete", "not-worth-it", "unverified", "excluded")
+VERDICTS = (STILL_NEEDED, PARTLY_SOLVED, DONE_ELSEWHERE, OBSOLETE,
+            NOT_WORTH_IT, UNVERIFIED, EXCLUDED)
+#: The answers that put a card on the Cancel list.
+CANCELS = (DONE_ELSEWHERE, OBSOLETE, NOT_WORTH_IT)
+#: The answers that need no `file:line` proof — every other one does.
+_UNPROVED = (UNVERIFIED, EXCLUDED)
 
 #: Why a verdict is `unverified`, exact strings.
 STEP_FAILED = "agent step failed"
@@ -294,7 +300,7 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
 ```json
 {{
   "card": "{{card}}",
-  "verdict": "still-needed | done | obsolete | unverified",
+  "verdict": "still-needed | partly-solved | done-elsewhere | obsolete | not-worth-it | unverified",
   "summary": "One or two sentences.",
   "proof": [
     {{"file": "<path under target/>", "line": 1, "quote": "<the line>"}},
@@ -303,8 +309,8 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
 }}
 ```
 
-`done` and `obsolete` need at least one `file:line` proof from `target/`. If
-`target/` is absent or empty, the only answer is `unverified`."""
+Every answer but `unverified` needs at least one `file:line` proof from
+`target/`. If `target/` is absent or empty, the only answer is `unverified`."""
 
 
 def agent_input(row: dict, brief: str) -> str:
@@ -394,6 +400,8 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
         doc = _load(raw_path)
         if (not isinstance(doc, dict) or doc.get("card") != card
                 or doc.get("verdict") not in VERDICTS
+                # The model may not exclude a card: only `targets` may.
+                or doc.get("verdict") == EXCLUDED
                 or not isinstance(doc.get("summary"), str)
                 or not doc["summary"].strip()
                 or not isinstance(doc.get("proof"), list)):
@@ -407,7 +415,7 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
     card_text = _one_line(f"{row.get('title') or ''} {row.get('body') or ''}")
     if verdict == UNVERIFIED:
         return unverified(NO_PROOF, summary)
-    if verdict in CANCELS and not any(is_file_line(p) for p in proof):
+    if not any(is_file_line(p) for p in proof):
         return unverified(NO_PROOF, summary)
     if not any(_counts(p, card_text) for p in proof):
         return unverified(NO_PROOF, summary)
@@ -477,12 +485,12 @@ def _mark(row: dict, doc: dict | None) -> dict:
             "proof": [p for p in (doc.get("proof") if isinstance(
                 doc.get("proof"), list) else []) if isinstance(p, dict)],
             "reason": doc.get("reason")}
-    if mark["verdict"] not in VERDICTS:
+    if mark["verdict"] not in VERDICTS or mark["verdict"] == EXCLUDED:
         mark.update(verdict=UNVERIFIED, reason=UNREADABLE, proof=[])
-    elif mark["verdict"] in CANCELS and not any(
+    elif mark["verdict"] not in _UNPROVED and not any(
             is_file_line(p) for p in mark["proof"]):
         # `verdict` never writes this; a file that says it anyway is not
-        # allowed to cancel a card on no proof.
+        # allowed to stand, or cancel a card, on no proof.
         mark.update(verdict=UNVERIFIED, reason=NO_PROOF, proof=[])
     elif mark["verdict"] == UNVERIFIED and not mark["reason"]:
         mark["reason"] = NO_PROOF
@@ -588,7 +596,8 @@ def apply(proposal: dict, found: dict[str, dict],
         row.update(reason=groomer._rules_reason("now", row), trigger=None,
                    evidence=None, judged=False, reasons={})
         kept.append(row)
-    # A spare proved done or obsolete is canceled the same way, in order.
+    # A spare proved done elsewhere, obsolete or not worth it is canceled
+    # the same way, in order.
     canceled += [i for i in spare_ids
                  if marks[i]["verdict"] in CANCELS and i not in promoted]
 
@@ -657,6 +666,9 @@ def summary(marks: dict[str, dict], order: list[str], unfilled: int) -> dict:
         "cost_usd": round(sum(costs), 6) if costs else None,
         "wall_clock_seconds": wall,
         "unverified": [i for i in order if marks[i]["verdict"] == UNVERIFIED],
+        # `{"identifier", "reason"}` per card `targets` excluded without
+        # judgement — none yet: DRE-5306 writes the first.
+        "excluded": [],
         "slots_unfilled": unfilled,
     }
 

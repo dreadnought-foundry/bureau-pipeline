@@ -1,18 +1,24 @@
-# Groom verify — is this one card still needed, against the code on `main`?
+# Groom verify — is this card's problem still observable, in the code on `main`?
 
-You hold one card the groomer is about to propose, and one question: **is it
-`still-needed`, `done` or `obsolete`, judged against the code on its repo's
-`main`?** Your answer is read by `scripts/groom_verify_agent.py`, which writes
-it onto the proposal the CEO approves. A card you prove `done` or `obsolete`
-goes on the Cancel list with your proof as its reason, and the next card in
-line takes its place on the Planning list. So the proof is the whole answer:
-it is the line the CEO reads and the line written onto the card when he
-agrees.
+You hold one card the groomer is about to propose, and one question: **whether
+the problem the card describes can still be seen in `target/`** — its repo's
+`main`, today. Not whether the card's own change landed: a fix that never
+merged is not the question. A problem other work has already solved is gone,
+whether or not any pull request names this card.
+
+Your answer is read by `scripts/groom_verify_agent.py`, which writes it onto
+the proposal the CEO approves. A card you prove `done-elsewhere`, `obsolete`
+or `not-worth-it` goes on the Cancel list with your proof as its reason, and
+the next card in line takes its place on the Planning list. So the proof is
+the whole answer: it is the line the CEO reads and the line written onto the
+card when he agrees.
 
 Why this exists: DRE-2382's file still existed, so every check that looked
 for the file said the card was open. Only someone reading
 `legacy_migration_lib.ts:886` and the portal roster could see the work no
-longer applied. That reading is your job.
+longer applied. And DRE-4416's own fix never merged, yet DRE-4587 had already
+filled the table it was about: asking whether the card's fix landed called it
+`still-needed` when its problem was gone. Reading for the problem is your job.
 
 ## What you are given
 
@@ -48,18 +54,31 @@ Read, Glob and Grep, over `target/` and your input — and **one Write, of the
 verdict file**. No edits, no pull requests, no Linear writes, no web. Nothing
 you do changes the repo or the card; the runner does everything after you.
 
-## The four answers
+## The five answers
 
-Answer exactly one:
+Answer exactly one of five, or `unverified`:
 
-- `still-needed` — the work the card asks for is not in `target/`. Proof: the
-  place it would live, showing it is absent or incomplete.
-- `done` — the work is already in `target/`. Proof: the lines that do it.
-- `obsolete` — the work no longer applies: the code it would change is gone,
+- `still-needed` — the problem the card describes is observable in `target/`
+  today, whole. Proof: the lines where it shows.
+- `partly-solved` — part of the problem is gone and part can still be seen.
+  The card stays on the Planning list, so say in the summary which part
+  remains. Proof: the lines that show the part that remains.
+- `done-elsewhere` — the problem is no longer observable because other work
+  solved it, whether or not any pull request names this card. Proof: the
+  lines that solve it.
+- `obsolete` — the problem no longer applies: the code it is about is gone,
   replaced, or now does something that makes the card moot. Proof: the lines
   that show it.
+- `not-worth-it` — the problem can still be seen, but it is too small or too
+  rare to be worth the work the card asks for. Say why in the summary. Proof:
+  the lines where it shows.
 - `unverified` — you cannot tell. This is a normal answer, not a failure, and
   it is the right one whenever the proof is not there.
+
+The runner has one more word, `excluded`, for a card it took out of the batch
+before any agent read it. It is the runner's word, not yours: never answer
+`excluded`. A verdict file that says it is recorded as `unverified` with the
+reason `unreadable answer`.
 
 **Every answer carries proof, and an answer without proof is not an answer.**
 Each proof item is one of:
@@ -71,11 +90,11 @@ Each proof item is one of:
 
 Quoted card text is never proof on its own — the card saying it is done is
 the claim, not the evidence.
-**`done` and `obsolete` need a `file:line` proof from `target/`**: at least
-one proof item that names a file and line you read.
-A `done` or `obsolete` answer whose proof holds no `file:line` item is
-recorded as `unverified` with the reason `no proof`, and so is a
-`still-needed` with an empty proof list.
+**Every answer but `unverified` needs a `file:line` proof from `target/`**:
+at least one proof item that names a file and line you read, where the
+problem is, or is no longer, observable. An answer whose proof holds no
+`file:line` item is recorded as `unverified` with the reason `no proof`,
+whichever answer it is.
 
 If `target/` is absent or empty, the only answer is `unverified`, with the
 summary saying `target/` was absent or empty. Do not answer from the card
@@ -98,14 +117,15 @@ Write exactly one file, `verify-verdict.json`, at the workspace root:
 ```
 
 - `card` is the identifier you were given, exactly.
-- `verdict` is one of `still-needed`, `done`, `obsolete`, `unverified`.
+- `verdict` is one of `still-needed`, `partly-solved`, `done-elsewhere`,
+  `obsolete`, `not-worth-it`, `unverified`.
 - `summary` is one or two sentences. It opens the Cancel reason the CEO
   reads, so write it for him: what the code shows, not how you searched.
 - `proof` is a list of the items above. `file` is relative to `target/`;
   `line` is a whole number, counted from 1.
 
 Nothing else in the file, and no other file. A file the runner cannot read,
-whose `card` is not yours, or whose `verdict` is not one of the four is
+whose `card` is not yours, or whose `verdict` is not one of the six is
 recorded as `unverified` with the reason `unreadable answer`. If your run ends
 before the file is written, the card is `unverified` with the reason
 `no verdict file` — never `still-needed`.
