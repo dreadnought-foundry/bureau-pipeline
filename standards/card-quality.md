@@ -259,6 +259,26 @@ himself, so the record IS how he sees it. Every epic planned before that date
 still carries a second closing child; the gate reads past one rather than
 bouncing the plan, and no plan adds one back.
 
+**Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
+2026-09-30 that the operator runs a proof as soon as its build cards finish,
+and the card closes on the evidence that run records. The CEO is needed only
+for a real business decision, never to sign in so a step can be watched. A
+proof observes two kinds of thing, each by its own route:
+
+- **Live facts** — what the deployed system answers, what it records, which
+  keys it refuses — are observed against the real deployment through a
+  scripted, limited proof-reader identity, never through the CEO's account
+  (for Portico's portals, the standing identity DRE-5389 provides).
+- **On-screen steps** — click a button, see the result land — are observed in
+  a browser on a local run of the same released commit the deployment runs.
+
+**An on-screen step counts as proven only when both halves are seen:** its
+screen behavior on the local run, **and** the request it makes succeeding live.
+Either half alone proves nothing — a screen that works locally can still send
+a request the live system refuses, and a request seen live says nothing about
+the screen that sends it. The five conditions below do not change, and the
+proof still routes `WORKBENCH` or `OPERATOR`, never `FLEET`.
+
 Five conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
 convention that drifts:
