@@ -275,6 +275,7 @@ import console_receipt  # noqa: E402 — ONE reader of a console-signed decision
 import dead_run  # noqa: E402 — ONE Pacific clock for a time a person reads
 import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
+import groom_priority  # noqa: E402 — a stale Urgent or High ranks as Medium (DRE-5307)
 import groom_verify  # noqa: E402 — the check before posting (DRE-4966)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
 import linear_ops  # noqa: E402
@@ -947,7 +948,13 @@ def _priority(card: dict) -> int:
     Linear numbers priority 0 none, 1 Urgent, 2 High, 3 Medium, 4 Low. Anything
     that is not Urgent or High reads as 0 here — an unset priority and a Medium
     one get the same treatment, which is the point: only two lanes exist.
+
+    A card `groom_priority.annotate` marked `priority_stale` — an Urgent or
+    High older than three weeks that nobody re-confirmed — reads as 0 too: it
+    is ranked in the Medium band, and the page says so (DRE-5307).
     """
+    if card.get("priority_stale"):
+        return 0
     try:
         value = int(card.get("priority") or 0)
     except (TypeError, ValueError):
@@ -1541,6 +1548,15 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         proposal["excluded_before"] = left_out
     if held_cards:
         proposal["held_before"] = sorted(held_cards, key=_card_sort_key)
+    # The priorities ranked as Medium, and the ones not read (DRE-5307), off
+    # the cards `groom_priority.annotate` marked — absent when there are none,
+    # so a morning with neither proposes exactly what it did before.
+    stale = stale_priority_rows(cards)
+    if stale:
+        proposal["stale_priorities"] = stale
+    unread = priorities_unread(cards)
+    if unread:
+        proposal["priorities_unread"] = unread
     proposal["deprioritised"] = _deprioritised(proposal)
     proposal["judgement"] = _annotate(proposal, judgement, verdicts,
                                       declined=declined)
@@ -1561,6 +1577,27 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # sha-binding idea the merge gate uses).
     proposal["id"] = proposal_id(proposal)
     return proposal
+
+
+def stale_priority_rows(cards: list[dict]) -> list[dict]:
+    """One row per card ranked as Medium for a stale priority (DRE-5307),
+    longest-standing first."""
+    rows = [{"identifier": c["identifier"], **{k: c["priority_stale"][k] for k
+             in ("priority", "set_at", "days")}}
+            for c in cards if c.get("priority_stale")]
+    return sorted(rows, key=lambda r: (-r["days"],
+                                       _card_sort_key(r["identifier"])))
+
+
+def priorities_unread(cards: list[dict]) -> dict:
+    """`{why: [ids]}` — the candidates that kept their priority because they
+    were not read (DRE-5307)."""
+    out: dict = {}
+    for c in cards:
+        if c.get("priority_unread"):
+            out.setdefault(c["priority_unread"], []).append(c["identifier"])
+    return {why: sorted(ids, key=_card_sort_key)
+            for why, ids in sorted(out.items())}
 
 
 # --------------------------------------------------------------------------- #
@@ -2301,6 +2338,10 @@ def render_proposal(proposal: dict) -> str:
             f"{row['epic'] or '—'} | {_trim(row['title'])} | "
             f"{_cell(row.get('reason'), 90)} |")
     add("")
+    # Which priorities the order read as Medium, and which it could not read
+    # (DRE-5307). After the table rather than between it and the paragraph:
+    # the drain and the console read the table out of the batch's section.
+    w.extend(_render_stale_priorities(proposal))
     # The same reasons, in full, in their own section — the table above is
     # unchanged, because the console and the drain both read it back
     # (DRE-3764).
@@ -2384,6 +2425,26 @@ def render_proposal(proposal: dict) -> str:
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
     add("")
     return "\n".join(w)
+
+
+def _render_stale_priorities(proposal: dict) -> list:
+    """`## Priorities re-ranked as Medium` — one line per stale card, one per
+    reason a card kept its priority unread. Absent when neither (DRE-5307)."""
+    stale = proposal.get("stale_priorities") or []
+    unread = proposal.get("priorities_unread") or {}
+    if not stale and not unread:
+        return []
+    out = ["## Priorities re-ranked as Medium", ""]
+    for row in stale:
+        day = groom_priority._moment(row["set_at"])
+        on = day.astimezone(timezone.utc).date().isoformat() if day else "an unknown day"
+        out.append(f"- {row['identifier']} — {row['priority']} set on {on}, "
+                   f"{row['days']} days ago, not re-confirmed — ranked as "
+                   f"Medium")
+    for why, ids in unread.items():
+        out.append(f"- Kept their priority, not read — {why}: "
+                   f"{', '.join(ids)}")
+    return [*out, ""]
 
 
 def _render_batch_reasons(proposal: dict) -> list:
@@ -4211,6 +4272,15 @@ def _build(args) -> dict:
     excluded = set(standing["excluded"])
     on_offer = [c for c in offered(cards, holds)
                 if c["identifier"] not in excluded]
+    # An Urgent or High nobody re-confirmed in three weeks ranks as Medium
+    # (DRE-5307). In place, on the same dicts `propose` reads, so the first
+    # proposal and the one `verify_proposal` builds both see it.
+    reads = groom_priority.annotate(on_offer, lops=linear_ops, now=_now())
+    if reads["stale"] or reads["unread"]:
+        print(f"groomer: {_plural(len(reads['stale']), 'card')} ranked as "
+              f"Medium — {', '.join(reads['stale']) or 'none'}; "
+              f"{_plural(len(reads['unread']), 'card')} kept their priority "
+              f"unread", file=sys.stderr)
     if excluded:
         print(f"groomer: {_plural(len(excluded), 'card')} excluded on an "
               f"earlier proposal left out — {', '.join(standing['excluded'])}",
