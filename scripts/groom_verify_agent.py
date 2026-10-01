@@ -16,9 +16,16 @@ and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
 and the four subcommands here are everything around it.
 
   * `targets` — in the groom job, which holds the Linear key: every card to
-    verify, its title and body read through `linear_ops` and passed through
-    `sanitize_untrusted`, its repo mapped through `config/repo-map.json`; and
-    the matrix the workflow fans out over.
+    verify, its title, body and board context — age, labels, parent,
+    children, last move, and every comment with who said it — read through
+    `linear_ops` in one request and passed through `sanitize_untrusted`, its
+    repo mapped through `config/repo-map.json`; and the matrix the workflow
+    fans out over. It also decides which cards are EXCLUDED without
+    judgement (DRE-5306): a parent epic with an open child, a `hand-built`
+    card, a card moved into Intake from another lane in the last
+    `EXCLUDE_DAYS` days, and a card whose board context could not be read.
+    An excluded card gets no agent, its verdict is `excluded`, and `apply`
+    drops it from the batch and leaves it where it is on the board.
   * `prepare` — in the verify job, with no Linear key: the agent's whole
     input, and the moment it started.
   * `verdict` — always, even when the agent step died or never ran: the raw
@@ -56,8 +63,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -67,6 +75,7 @@ import groomer  # noqa: E402 — proposal_id, assert_disjoint
 import linear_ops  # noqa: E402 — the Linear read `targets` makes
 import planning_classify  # noqa: E402 — which model answered
 import sanitize_untrusted  # noqa: E402 — the fence, made mechanical
+import spoken_thread  # noqa: E402 — the one reader of who said a comment
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO_MAP = ROOT / "config" / "repo-map.json"
@@ -107,10 +116,52 @@ STEP_OUTCOMES = ("success", "failure", "skipped", "cancelled")
 
 FENCE_BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 FENCE_END = "===== END UNTRUSTED CARD TEXT ====="
+#: The section `agent_input` writes after the card's body (DRE-5306).
+CONTEXT_HEADING = "## The card's board context"
 
+#: The card and its board context, in ONE request per card (DRE-5306): each
+#: list bounded at fifty, so a request asks for at most 150 nested nodes.
 CARD_QUERY = """query($id: String!) {
-  issue(id: $id) { identifier title description }
+  issue(id: $id) {
+    identifier title description createdAt
+    labels { nodes { name } }
+    parent { identifier state { name } }
+    children(first: 50) { nodes { identifier state { name } } }
+    comments(first: 50) { nodes { body createdAt user { id } botActor { id } } }
+    history(first: 50) { nodes { createdAt fromState { name } toState { name } actor { id } botActor { id } } }
+  }
 }"""
+
+#: How recent a move into Intake keeps a card out of the morning's judgement.
+EXCLUDE_DAYS = 7
+#: `board context unread: <why>` when Linear would not say who the pipeline's
+#: own key is — exact; DRE-5307 names its own unread cards with it.
+VIEWER_UNREAD = "the pipeline's own Linear identity could not be read"
+#: The four exclusion reasons, exact (DRE-5306). Decided in `targets`, never
+#: by the model.
+EXCLUDE_EPIC = "parent epic with {n} open {children}"
+#: The label `reconcile.HAND_BUILT_LABEL` names: a person builds this card.
+HAND_BUILT = "hand-built"
+EXCLUDE_MOVED = "moved into Intake on {day}"
+EXCLUDE_UNREAD = "board context unread: {why}"
+_EXCLUSION_RE = re.compile(
+    r"(parent epic with [1-9]\d* open (child|children)|hand-built"
+    r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*)")
+INTAKE = "Intake"
+#: `prepare`'s whole output for an excluded card, and the prefix of the
+#: `not-now` and `sequence` reason `apply` writes for one.
+EXCLUDED_PREFIX = "excluded without judgement: "
+
+#: A comment's `by`: `spoken_thread`'s voice kind, in the words the agent
+#: reads. A withheld comment's text never reaches the agent.
+BY_VOICE = {spoken_thread.CEO_VIA_CONSOLE: "ceo",
+            spoken_thread.PERSON: "person",
+            spoken_thread.PIPELINE: "pipeline",
+            spoken_thread.INTEGRATION: "integration",
+            spoken_thread.UNKNOWN: "unknown",
+            spoken_thread.REFUSED: "withheld",
+            spoken_thread.UNCHECKED: "withheld"}
+WITHHELD = "withheld"
 
 #: The fields of a Planning row, copied off the sequence row a spare carries.
 _NOW_FIELDS = ("identifier", "title", "cycle", "cycle_id", "unit", "epic",
@@ -165,6 +216,11 @@ def _fenced(text: str) -> str:
             line = sanitize_untrusted.DEFANG_PREFIX + line
         out.append(line)
     return "\n".join(out)
+
+
+def is_exclusion(reason) -> bool:
+    """Is this one of the four exclusion reasons, in its exact shape?"""
+    return isinstance(reason, str) and bool(_EXCLUSION_RE.fullmatch(reason))
 
 
 def unmapped_reason(row: dict) -> str:
@@ -258,36 +314,161 @@ def _repo(row: dict, repo_map: dict) -> tuple[str | None, str | None]:
     return (repo_map.get(slug) if slug else None), slug
 
 
-def targets(proposal: dict, *, lops, repo_map: dict) -> list[dict]:
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _clean(text) -> str:
+    return sanitize_untrusted.sanitize_line(str(text or ""))
+
+
+def _state(node) -> str:
+    return ((node or {}).get("state") or {}).get("name") or ""
+
+
+def _nodes(issue: dict, field: str) -> list[dict]:
+    return [n for n in ((issue.get(field) or {}).get("nodes") or [])
+            if isinstance(n, dict)]
+
+
+def _by_key(node: dict, viewer: str) -> str:
+    """Whose key made a state move — read off the actor alone. A move carries
+    no console receipt, so a console move for the CEO reads `pipeline`."""
+    actor = (node.get("actor") or {}).get("id")
+    if not actor:
+        return spoken_thread.UNKNOWN
+    return spoken_thread.PIPELINE if actor == viewer else spoken_thread.PERSON
+
+
+def _moves(issue: dict) -> list[tuple[datetime, dict]]:
+    """Every move from one lane to another, newest first. An entry with no
+    `fromState` is the card's creation, never a move."""
+    found = []
+    for node in _nodes(issue, "history"):
+        at = _moment(node.get("createdAt"))
+        if (at and (node.get("fromState") or {}).get("name")
+                and (node.get("toState") or {}).get("name")):
+            found.append((at, node))
+    return sorted(found, key=lambda pair: pair[0], reverse=True)
+
+
+def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
+                  verifier=None) -> dict:
+    """The card's board context, every string through `sanitize_untrusted`.
+    Who said each comment is `spoken_thread.voices`'s answer, and a comment
+    it withholds is shown by its label alone."""
+    created = _moment(issue.get("createdAt"))
+    if created is None:
+        raise ValueError("Linear gave no readable createdAt for the card")
+    moves = _moves(issue)
+    last = None
+    if moves:
+        at, node = moves[0]
+        last = {"at": _clean(node.get("createdAt")),
+                "to": _clean(node["toState"]["name"]),
+                "by": _by_key(node, viewer)}
+    comments = sorted(_nodes(issue, "comments"),
+                      key=lambda n: _moment(n.get("createdAt"))
+                      or datetime.min.replace(tzinfo=timezone.utc))
+    said = []
+    for voice in spoken_thread.voices(comments, viewer, card=card,
+                                      verifier=verifier):
+        by = BY_VOICE.get(voice.kind, spoken_thread.UNKNOWN)
+        said.append({"at": _clean(voice.created_at), "by": by,
+                     "body": (_clean(voice.label) if by == WITHHELD
+                              else sanitize_untrusted.sanitize_body(
+                                  voice.body or ""))})
+    parent = issue.get("parent")
+    return {
+        "created_at": _clean(issue.get("createdAt")),
+        "age_days": max(0, (now - created).days),
+        "labels": [_clean(n.get("name")) for n in _nodes(issue, "labels")],
+        "parent": ({"identifier": _clean(parent.get("identifier")),
+                    "state": _clean(_state(parent))}
+                   if isinstance(parent, dict) else None),
+        "children": [{"identifier": _clean(n.get("identifier")),
+                      "state": _clean(_state(n))}
+                     for n in _nodes(issue, "children")],
+        "last_moved": last,
+        "comments": said,
+    }
+
+
+def exclusion(issue: dict, *, now: datetime) -> str | None:
+    """Why the card sits out the morning's judgement, or None. Decided here,
+    over what Linear said, and never by the model."""
+    n = groomer.open_children(issue)
+    if n:
+        return EXCLUDE_EPIC.format(n=n, children="child" if n == 1
+                                   else "children")
+    if HAND_BUILT in {label.get("name") for label in _nodes(issue, "labels")}:
+        return HAND_BUILT
+    # The newest move INTO Intake from another lane, whoever's key made it:
+    # nothing can tell the console's move for the CEO from a workflow's.
+    into = [at for at, node in _moves(issue)
+            if node["toState"]["name"] == INTAKE]
+    if into and now - into[0] <= timedelta(days=EXCLUDE_DAYS):
+        return EXCLUDE_MOVED.format(day=into[0].strftime("%Y-%m-%d"))
+    return None
+
+
+def _viewer(lops) -> str | None:
+    try:
+        return lops.viewer_id() or None
+    except Exception:  # noqa: BLE001 — an unread viewer is said, not fatal
+        return None
+
+
+def targets(proposal: dict, *, lops, repo_map: dict,
+            verifier=None) -> list[dict]:
+    """Every card to verify, read with its board context in one request
+    each, and the reason it is excluded without judgement or None.
+
+    The pipeline's own identity is read once, before any card. Without it
+    nobody can be told apart from the pipeline, so no card is read and every
+    one is excluded as unread — nothing is judged on a guess."""
     rows = {r["identifier"]: r for r in proposal["sequence"]}
+    cards = window(proposal)
+    viewer = _viewer(lops) if cards else None
+    now = _utcnow()
     out = []
-    for identifier, which in window(proposal):
+    for identifier, which in cards:
         row = rows.get(identifier) or {}
         repository, slug = _repo(row, repo_map)
-        evidence = _layer_a(proposal, identifier)
+        target = {"card": identifier, "repository": repository,
+                  "repo_slug": slug, "title": "", "body": "",
+                  "evidence": _layer_a(proposal, identifier), "list": which,
+                  "context": None, "excluded": None}
+        out.append(target)
+        if viewer is None:
+            target["excluded"] = EXCLUDE_UNREAD.format(why=VIEWER_UNREAD)
+            continue
         try:
-            issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue") or {}
-        except Exception as e:  # noqa: BLE001 — an unread card is said, not fatal
-            issue = {}
-            evidence.append(f"the card's text could not be read from Linear "
-                            f"this run: {_one_line(e)}")
-        out.append({
-            "card": identifier,
-            "repository": repository,
-            "repo_slug": slug,
-            "title": sanitize_untrusted.sanitize_line(
-                issue.get("title") or row.get("title") or ""),
-            "body": sanitize_untrusted.sanitize_body(issue.get("description") or ""),
-            "evidence": evidence,
-            "list": which,
-        })
+            issue = (lops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
+            if not isinstance(issue, dict):
+                raise ValueError("Linear returned no card")
+            context = board_context(issue, viewer, card=identifier, now=now,
+                                    verifier=verifier)
+        except Exception as e:  # noqa: BLE001 — an unread card is excluded, not fatal
+            # No title off the proposal row: a card with no children, labels
+            # or history read would pass for a judgeable one.
+            target["excluded"] = EXCLUDE_UNREAD.format(
+                why=_clean(_one_line(e)) or type(e).__name__)
+            continue
+        target.update(
+            title=_clean(issue.get("title")),
+            body=sanitize_untrusted.sanitize_body(issue.get("description") or ""),
+            context=context, excluded=exclusion(issue, now=now))
     return out
 
 
 def matrix(rows: list[dict]) -> list[dict]:
-    """The workflow's matrix: the empty string, not null, marks an unmapped
-    repo, so `matrix.repository != ''` reads it."""
-    return [{"card": r["card"], "repository": r.get("repository") or ""}
+    """The workflow's matrix: the empty string, not null, marks a card no
+    agent reads — an unmapped repo or an excluded card — so
+    `matrix.repository != ''` reads it."""
+    return [{"card": r["card"],
+             "repository": "" if r.get("excluded")
+             else r.get("repository") or ""}
             for r in rows]
 
 
@@ -313,14 +494,61 @@ Every answer but `unverified` needs at least one `file:line` proof from
 `target/`. If `target/` is absent or empty, the only answer is `unverified`."""
 
 
+def _context_lines(context) -> list[str]:
+    """The board-context section's fenced lines. Comments are text a person
+    wrote, so all of it sits inside the fence."""
+    if not isinstance(context, dict):
+        return ["Not read this run."]
+
+    def line(text) -> str:
+        return _fenced(_one_line(text))
+
+    parent = context.get("parent")
+    moved = context.get("last_moved")
+    lines = [f"Age: {context.get('age_days')} days "
+             f"(created {line(context.get('created_at'))})",
+             "Labels: " + (", ".join(line(label) for label
+                                     in context.get("labels") or []) or "none"),
+             "Parent: " + (f"{line(parent.get('identifier'))} "
+                           f"({line(parent.get('state'))})"
+                           if isinstance(parent, dict) else "none")]
+    children = context.get("children") or []
+    lines.append("Children:" + ("" if children else " none"))
+    lines += [f"- {line(c.get('identifier'))} ({line(c.get('state'))})"
+              for c in children]
+    lines.append("Last state move: " + (
+        f"to {line(moved.get('to'))} on {line(moved.get('at'))}, "
+        f"by: {line(moved.get('by'))}" if isinstance(moved, dict) else "none"))
+    comments = context.get("comments") or []
+    lines.append("Comments, oldest first:" + ("" if comments else " none"))
+    for comment in comments:
+        lines.append(f"- {line(comment.get('at'))}, by: {line(comment.get('by'))}")
+        body = _fenced(str(comment.get("body") or "")).strip("\n")
+        lines += [f"  {text}" if text else "" for text in body.split("\n")]
+    return lines
+
+
+def _body(text: str) -> str:
+    """The card's body, fenced — and a line mimicking the board-context
+    heading defanged, since the real section follows it inside the same
+    fence and a body must not be able to write a second one."""
+    return "\n".join(
+        sanitize_untrusted.DEFANG_PREFIX + line
+        if line.strip().lower().startswith(CONTEXT_HEADING.lower()) else line
+        for line in _fenced(text).split("\n"))
+
+
 def agent_input(row: dict, brief: str) -> str:
     card = row["card"]
     evidence = row.get("evidence") or []
+    # The board context sits inside the card's own fence, after the body:
+    # comments are text a person wrote, and none of it is an instruction.
     lines = [brief.rstrip("\n"), "", "## The card", "", FENCE_BEGIN,
              f"Card: {card}",
              f"Title: {_fenced(sanitize_untrusted.sanitize_line(row.get('title') or ''))}",
-             "", _fenced(row.get("body") or ""), FENCE_END, "",
-             "## The Layer A evidence", "", FENCE_BEGIN]
+             "", _body(row.get("body") or ""), "", CONTEXT_HEADING, ""]
+    lines += _context_lines(row.get("context"))
+    lines += [FENCE_END, "", "## The Layer A evidence", "", FENCE_BEGIN]
     lines += ([f"- {_fenced(_one_line(e))}" for e in evidence]
               or ["None recorded."])
     lines += [FENCE_END, "", "## The verdict file", "",
@@ -330,6 +558,8 @@ def agent_input(row: dict, brief: str) -> str:
 
 def prepare(rows: list[dict], card: str, *, brief: str) -> str:
     row = _target(rows, card)
+    if row.get("excluded"):
+        return EXCLUDED_PREFIX + _one_line(row["excluded"]) + "\n"
     if _is_unmapped(row):
         return NOT_VERIFIABLE + "\n"
     return agent_input(row, brief)
@@ -385,6 +615,13 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
         return {"verdict": UNVERIFIED, "summary": summary, "proof": [],
                 "reason": reason}
 
+    # Off the ROW, before anything else: `targets` decided it, and no raw
+    # answer — and no step outcome — can change it.
+    if row.get("excluded"):
+        return {"verdict": EXCLUDED, "proof": [],
+                "summary": "Not judged: the card was excluded before any "
+                           "agent read it.",
+                "reason": _one_line(row["excluded"])}
     if _is_unmapped(row):
         return unverified(unmapped_reason(row),
                           "No code was read: the card's repo is not one the "
@@ -474,6 +711,17 @@ def _mark(row: dict, doc: dict | None) -> dict:
     blank = {"summary": None, "proof": [], "cost_usd": None,
              "duration_ms": None, "model": None, "started_at": None,
              "finished_at": None}
+    if row.get("excluded"):
+        return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
+                "reason": _one_line(row["excluded"])}
+    # `apply` in the workflow has no targets file, so a document saying
+    # `excluded` is how it learns — believed only with one of the four
+    # reasons, and never over a row that says the card was not excluded.
+    if (isinstance(doc, dict) and doc.get("verdict") == EXCLUDED
+            and "excluded" not in row and is_exclusion(doc.get("reason"))):
+        return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
+                "summary": doc.get("summary"),
+                "reason": _one_line(doc["reason"])}
     if _is_unmapped(row):
         return {**blank, **_spend_of(doc), "verdict": UNVERIFIED,
                 "reason": unmapped_reason(row)}
@@ -529,6 +777,13 @@ def cancel_reason(mark: dict) -> str:
     return groomer.defang_reason("; ".join(parts))[0]
 
 
+def _excluded_fields(mark: dict) -> dict:
+    """What a `not-now` or `sequence` row of an excluded card says."""
+    return {"reason": EXCLUDED_PREFIX + _one_line(mark.get("reason")),
+            "cycle": None, "cycle_id": None, "projected": False,
+            "trigger": None, "evidence": None, "judged": False, "reasons": {}}
+
+
 def _verify_field(mark: dict) -> dict:
     return {k: mark.get(k) for k in ("verdict", "summary", "proof", "reason",
                                      "cost_usd", "duration_ms", "model")}
@@ -575,16 +830,24 @@ def apply(proposal: dict, found: dict[str, dict],
 
     canceled: list[str] = []
     promoted: dict[str, dict] = {}
-    kept, unfilled = [], 0
+    kept, unfilled, emptied = [], 0, 0
     for slot in now:
         identifier = slot["identifier"]
-        if marks.get(identifier, {}).get("verdict") not in CANCELS:
+        verdict_ = marks.get(identifier, {}).get("verdict")
+        if verdict_ not in CANCELS and verdict_ != EXCLUDED:
             kept.append(slot)
             continue
-        canceled.append(identifier)
+        # An excluded card leaves the Planning list by the same walk a
+        # Cancel takes, and goes on no other list: nothing moves it.
+        if verdict_ != EXCLUDED:
+            canceled.append(identifier)
         taker = next(queue, None)
         if taker is None:
-            unfilled += 1
+            # `slots_unfilled` counts what a Cancel emptied, as the page
+            # says; the excluded card is named under its own heading.
+            emptied += 1
+            if verdict_ != EXCLUDED:
+                unfilled += 1
             continue
         promoted[taker] = slot
         base = by_seq.get(taker) or waiting[taker]
@@ -602,13 +865,27 @@ def apply(proposal: dict, found: dict[str, dict],
                  if marks[i]["verdict"] in CANCELS and i not in promoted]
 
     kept.sort(key=lambda r: r["position"])
-    if unfilled:
+    if emptied:
         for n, row in enumerate(kept, 1):
             row["position"] = n
     outcomes["now"] = kept
     gone = set(canceled) | set(promoted)
     outcomes["not-now"] = [r for r in outcomes["not-now"]
                            if r["identifier"] not in gone]
+    # Every excluded card, Planning or spare, waits in `not-now` with the
+    # reason and nothing scheduled: no cycle, and no trigger for "Not now"
+    # to invent a plan from. It stays in Intake.
+    excluded = [r["card"] for r in rows if marks[r["card"]]["verdict"] == EXCLUDED]
+    waiting_now = {r["identifier"]: r for r in outcomes["not-now"]}
+    for identifier in excluded:
+        row = waiting_now.get(identifier)
+        if row is None:
+            base = by_seq.get(identifier) or {}
+            row = {"identifier": identifier, "title": base.get("title"),
+                   "repo": base.get("repo"), "older_than_window": False}
+            outcomes["not-now"].append(row)
+        row.update(_excluded_fields(marks[identifier]),
+                   reconsidered_in=None)
     for identifier in canceled:
         base = by_seq.get(identifier) or {}
         reason = cancel_reason(marks[identifier])
@@ -635,6 +912,8 @@ def apply(proposal: dict, found: dict[str, dict],
             row.update(outcome="now", cycle=now_row["cycle"],
                        cycle_id=now_row["cycle_id"], reason=now_row["reason"],
                        trigger=None)
+        elif identifier in excluded:
+            row.update(_excluded_fields(marks[identifier]), outcome="not-now")
 
     for rows_ in (outcomes["now"], outcomes["not-now"], outcomes["dead"], seq):
         for row in rows_:
@@ -667,8 +946,9 @@ def summary(marks: dict[str, dict], order: list[str], unfilled: int) -> dict:
         "wall_clock_seconds": wall,
         "unverified": [i for i in order if marks[i]["verdict"] == UNVERIFIED],
         # `{"identifier", "reason"}` per card `targets` excluded without
-        # judgement — none yet: DRE-5306 writes the first.
-        "excluded": [],
+        # judgement, in target order.
+        "excluded": [{"identifier": i, "reason": marks[i]["reason"]}
+                     for i in order if marks[i]["verdict"] == EXCLUDED],
         "slots_unfilled": unfilled,
     }
 
@@ -727,10 +1007,15 @@ def _run(args, *, lops) -> int:
         rows = targets(proposal, lops=lops, repo_map=_load(args.repo_map))
         _dump(args.out, rows)
         _dump(args.matrix_out, matrix(rows))
-        unmapped = [r["card"] for r in rows if _is_unmapped(r)]
+        unmapped = [r["card"] for r in rows
+                    if _is_unmapped(r) and not r.get("excluded")]
+        excluded = [f"{r['card']} ({r['excluded']})" for r in rows
+                    if r.get("excluded")]
         print(f"groom-verify: {len(rows)} card(s) to verify"
               + (f"; no repo to read for {', '.join(unmapped)}"
-                 if unmapped else ""))
+                 if unmapped else "")
+              + (f"; excluded without judgement: {', '.join(excluded)}"
+                 if excluded else ""))
         return 0
 
     if args.command == "prepare":
@@ -741,8 +1026,8 @@ def _run(args, *, lops) -> int:
         text = prepare(_targets_file(args.targets), args.card, brief=brief)
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text)
-        if text.strip() == NOT_VERIFIABLE:
-            print(NOT_VERIFIABLE)
+        if text.strip() == NOT_VERIFIABLE or text.startswith(EXCLUDED_PREFIX):
+            print(text.strip())
         else:
             print(f"groom-verify: wrote the agent input for {args.card}")
         return 0
