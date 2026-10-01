@@ -9412,6 +9412,63 @@ def _phase_name(fn) -> str:
     return getattr(fn, "__name__", "backstop")
 
 
+# ── A sweep off the routing rail (DRE-3632) ─────────────────────────────────
+# The harness sandbox runs this sweep with a `REPO_SLUG` that is not a key of
+# config/repo-map.json, and its README promises zero Linear writes. Most of a
+# pass is scoped to this repo's own cards or pull requests and does nothing
+# there. Eight phases are not: they write to any card whose `repo:` label is
+# absent, because an unlabeled card is everybody's (`_another_repos_card`) —
+# and the 130+ cards aged out of Intake on 2026-09-09/10 were that promise
+# broken by one such writer. `main()` skips exactly these eight when the
+# sweep is off the rail, and says so once per phase.
+
+
+def off_rail() -> bool:
+    """Is this sweep's repo off the routing rail?
+
+    The bundled snapshot, the same test `card_dependabot_prs` and
+    `report_fleet_reviewer_outage` spell inline — never `live_rail_slugs()`:
+    a sweep must not spend a request to decide whether it may spend requests.
+    """
+    return REPO_SLUG not in validate_card.VALID_SLUGS
+
+
+# A log prefix, not a `_TAG`: the skip line is not a pipeline act, and
+# `pipeline_act.py` reads every module-level `*_TAG` as one.
+OFF_RAIL_PREFIX = "off-rail"
+
+#: The fleet-wide board writers a sweep off the rail skips, in the order
+#: `main()` runs them, each with what it would have done. A ninth joins here
+#: deliberately, by name; tests/test_off_rail_writers.py pins the set.
+OFF_RAIL_SKIPPED: dict[str, str] = {
+    "drain_retiring_lanes":
+        "moved every card out of a retiring lane, whoever owns it",
+    "recover_limit_deaths":
+        "re-entered the stage a limit death left on unlabeled cards",
+    "report_fleet_reviewer_outage":
+        "appended to or closed the fleet's one reviewer-outage card",
+    "flag_stranded":
+        "labeled off-rail cards and escalated stalled unlabeled Planning cards",
+    "advance_urgent_intake":
+        "moved Urgent Intake cards to Planning board-wide",
+    "repair_frozen_planning_holds":
+        "escalated and un-held unlabeled Planning cards our watchdog froze",
+    "serve_planner_line":
+        "released expired planner-slot claims on any repo's card",
+    "carry_epics_out_of_todo":
+        "carried unlabeled epics out of Todo",
+}
+
+
+def off_rail_notice(phase: str, would: str) -> str:
+    """The one line a skipped phase prints instead of running."""
+    return (
+        f"{OFF_RAIL_PREFIX}: {REPO_SLUG!r} is not on the routing rail "
+        "(config/repo-map.json), so this sweep writes to no board card it does "
+        f"not own — skipped {phase}, which would have {would}"
+    )
+
+
 # The pass in flight, or None between passes. One process is one pass in
 # production; a test session is hundreds, and each opens its own.
 _pass_spend: SweepSpend | None = None
@@ -9587,6 +9644,12 @@ def main(
             # seventeen were cancelled by hand.
             settle_repair_cards,
         ):
+            # Off the rail (DRE-3632): a fleet-wide writer is not entered, so
+            # it prints no spend line and records no failure.
+            if off_rail() and _phase_name(backstop) in OFF_RAIL_SKIPPED:
+                print(off_rail_notice(_phase_name(backstop),
+                                      OFF_RAIL_SKIPPED[_phase_name(backstop)]))
+                continue
             try:
                 with _phase(_phase_name(backstop)):
                     backstop()
@@ -9596,8 +9659,11 @@ def main(
         # Stranded-card watchdog (DRE-1993) — BEFORE the nudge loop, so a
         # card flagged this very sweep is skipped below (its fetched labels
         # predate the hold label the watchdog just added).
-        with _phase("flag_stranded"):
-            flagged = flag_stranded()
+        if off_rail() and "flag_stranded" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("flag_stranded", OFF_RAIL_SKIPPED["flag_stranded"]))
+        else:
+            with _phase("flag_stranded"):
+                flagged = flag_stranded()
         # Intake's depth (DRE-2687, emptied of its move by DRE-4141). Full
         # sweeps only, exactly as the age-out that stood here was: the event
         # hooks run the dependency gate alone and nothing else. Its own try,
@@ -9621,46 +9687,58 @@ def main(
         # path that cannot read must not cost the sweep the rest of its work,
         # and an unreadable history, exclusion list or receipt search is a
         # READ failure — never "nothing was eligible".
-        try:
-            with _phase("advance_urgent_intake"):
-                advance_urgent_intake()
-        except ReconcileWriteError as e:
-            _write_failures.append(str(e))
-            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
-        except linear_ops.LinearError as e:
-            _read_failures.append(f"urgent fast path: {e}")
-            print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
+        if off_rail() and "advance_urgent_intake" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("advance_urgent_intake",
+                                  OFF_RAIL_SKIPPED["advance_urgent_intake"]))
+        else:
+            try:
+                with _phase("advance_urgent_intake"):
+                    advance_urgent_intake()
+            except ReconcileWriteError as e:
+                _write_failures.append(str(e))
+                print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
+            except linear_ops.LinearError as e:
+                _read_failures.append(f"urgent fast path: {e}")
+                print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
         repaired: set[str] = set()
-        try:
-            with _phase("repair_frozen_planning_holds"):
-                repaired = repair_frozen_planning_holds()
-        except ReconcileWriteError as e:
-            _write_failures.append(str(e))
-            print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
-        except linear_ops.LinearError as e:
-            _read_failures.append(f"planning-repair: {e}")
-            print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
+        if off_rail() and "repair_frozen_planning_holds" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("repair_frozen_planning_holds",
+                                  OFF_RAIL_SKIPPED["repair_frozen_planning_holds"]))
+        else:
+            try:
+                with _phase("repair_frozen_planning_holds"):
+                    repaired = repair_frozen_planning_holds()
+            except ReconcileWriteError as e:
+                _write_failures.append(str(e))
+                print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
+            except linear_ops.LinearError as e:
+                _read_failures.append(f"planning-repair: {e}")
+                print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
         # The planner line's backstop (DRE-5178): dead claims released, free
         # slots filled, the line's depth said. After the watchdog and the
         # repair, so a card either of them escalated this pass — still waiting
         # on this pass's board read — is not dispatched on its way out. Full
         # sweeps only: the event paths have returned or skip this block.
-        try:
-            with _phase("serve_planner_line"):
-                serve_planner_line(flagged | (repaired or set()))
-        except ReconcileWriteError as e:
-            _write_failures.append(str(e))
-            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
-        except linear_ops.LinearError as e:
-            _read_failures.append(f"planner-line: {e}")
-            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
-        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
-            _write_failures.append(f"planner-line: {e}")
-            print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+        if off_rail() and "serve_planner_line" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("serve_planner_line",
+                                  OFF_RAIL_SKIPPED["serve_planner_line"]))
+        else:
+            try:
+                with _phase("serve_planner_line"):
+                    serve_planner_line(flagged | (repaired or set()))
+            except ReconcileWriteError as e:
+                _write_failures.append(str(e))
+                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+            except linear_ops.LinearError as e:
+                _read_failures.append(f"planner-line: {e}")
+                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
+            except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+                _write_failures.append(f"planner-line: {e}")
+                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`
@@ -9688,8 +9766,12 @@ def main(
         # load-bearing (DRE-5347): a child's parent lane is read after the
         # carry, never before it, so an approved epic dragged into Todo is back
         # in In Progress by the time its children are asked about.
-        with _phase("carry_epics_out_of_todo"):
-            carry_epics_out_of_todo()
+        if off_rail() and "carry_epics_out_of_todo" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("carry_epics_out_of_todo",
+                                  OFF_RAIL_SKIPPED["carry_epics_out_of_todo"]))
+        else:
+            with _phase("carry_epics_out_of_todo"):
+                carry_epics_out_of_todo()
     # The WIP base and the nudge list, from the helper limit-recovery counts
     # its room from too (DRE-4934) — so the two cannot disagree. It drops the
     # epics `repo_epics(mine)` found above, the same set on the same cards.
