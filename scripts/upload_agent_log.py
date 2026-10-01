@@ -41,6 +41,15 @@ WHAT HAPPENS, in order, cheapest refusal first:
   7. one `put-object` with `--if-none-match '*'`, under
      `agent-logs/<slug>/<date>/<run-id>-<attempt>-<job>.json.gz`.
 
+THE RUN'S EFFORT LEVEL rides that same put as S3 user metadata (DRE-4906):
+`--effort high` adds `--metadata effort=high`, read back as `x-amz-meta-effort`.
+The level is decided per model in `config/models.yaml` and that config changes,
+so the value read later is not the value this run had — the run itself is the
+only place the true value exists. No `--effort`, no key. A value that is not
+one of `model_fallback.EFFORT_LEVELS` is refused and the key left absent, and
+the log is still uploaded: a wrong effort is never a reason to lose the log,
+and never a reason to guess.
+
 THE LOG ITSELF IS NEVER PRINTED — not to stdout, not to stderr, not to an
 Actions artifact. Only the scrub's own summary line (counts per secret NAME and
 per shape, which carry no part of a value) and the key that was written.
@@ -258,9 +267,34 @@ def run_scrub(log: Path, out_dir: Path, secrets: str, scrub: Path) -> Path:
     return scrubbed
 
 
+def effort_metadata(value):
+    """The `effort` metadata value for `--effort value`, or None for no key.
+
+    Accepted exactly as given when it is one of the levels the CLI's own
+    `--effort` is checked against — imported, never restated, so the two
+    cannot drift. Anything else is refused and said so on one line; it never
+    stops the upload.
+    """
+    if value is None:
+        return None
+    try:
+        from model_fallback import EFFORT_LEVELS
+    except Exception as unreadable:  # noqa: BLE001 — absent beats guessed
+        print(f"effort not recorded: the accepted levels could not be read "
+              f"({type(unreadable).__name__})")
+        return None
+    if value in EFFORT_LEVELS:
+        return value
+    # repr, and capped: the value came off a command line, and a newline in it
+    # must not become a line of its own in the Actions log.
+    print(f"effort not recorded: {value[:40]!r} is not one of "
+          f"{list(EFFORT_LEVELS)}")
+    return None
+
+
 def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
                token_file: Path, region: str, session: str,
-               scratch_home: Path) -> None:
+               scratch_home: Path, effort=None) -> None:
     """ONE single-part put, write-once. The CLI does the web-identity assume
     itself from the token file, so no credential is ever an argument.
 
@@ -268,6 +302,10 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
     `HOME`, and both config paths are `/dev/null`, so neither a `[default]
     endpoint_url` nor a profile left on a shared runner can redirect the assume
     or the put (see `AWS_ENV_KEEP`).
+
+    `effort`, already checked by `effort_metadata`, is one more argument on
+    this same call — never a second write, which the write-once rule would
+    refuse anyway.
     """
     scratch_home.mkdir(parents=True, exist_ok=True)
     env = {name: os.environ[name] for name in AWS_ENV_KEEP if name in os.environ}
@@ -290,6 +328,7 @@ def put_object(aws: str, body: Path, bucket: str, key: str, role: str,
          "--body", str(body),
          "--if-none-match", "*",
          "--content-type", "application/gzip",
+         *(["--metadata", f"effort={effort}"] if effort else []),
          "--output", "json"],
         capture_output=True, text=True, env=env)
     if result.returncode != 0:
@@ -337,6 +376,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-file", default="",
         help="The agent's execution record. Empty or missing is a recorded gap.")
+    # No `choices=`: argparse refuses a bad choice by exiting 2, and this
+    # script exits 0 always. `effort_metadata` does the refusing instead.
+    parser.add_argument(
+        "--effort", default=None,
+        help="The effort level this run was given (`claude --effort`). "
+             "Recorded as the object's `effort` metadata; omitted, or not one "
+             "of model_fallback.EFFORT_LEVELS, means no key.")
     return parser
 
 
@@ -406,7 +452,8 @@ def upload(args, secrets: str) -> None:
             token_file=token_file,
             region=os.environ.get("BUREAU_AGENT_LOG_REGION") or REGION,
             session=f"agent-log-{job}-{run_id}",
-            scratch_home=scratch_home)
+            scratch_home=scratch_home,
+            effort=effort_metadata(args.effort))
     finally:
         try:
             token_file.unlink()
