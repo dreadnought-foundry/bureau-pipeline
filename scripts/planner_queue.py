@@ -31,12 +31,16 @@ file RAISES; nothing falls back to a number nobody chose. `cap()` is the one
 reader of `max_running` and `waiting_max()` the one reader of
 `waiting_max_minutes`.
 
-THE NUMBER IS TWO (DRE-5326). It shipped as four. On 2026-09-30 a groom drain
-put nineteen cards into Planning at 07:05 PT, four planner and critic steps
-ran at once, and four together spent about 185-260 Linear requests a minute
-against a key that refills about 42 a minute (2,500 an hour). The key was at
-zero by 07:40 PT and every Linear-touching run in the fleet was refused. Two
-running spent about 27 a minute. The groom drain reads this ledger too, and
+THE NUMBER IS THREE (DRE-5634, 2026-10-02). It shipped as four, and DRE-5326
+dropped it to two: on 2026-09-30 a groom drain put nineteen cards into
+Planning at 07:05 PT, four planner and critic steps ran at once, and four
+together spent about 185-260 Linear requests a minute against a key that
+refills about 42 a minute (2,500 an hour). The key was at zero by 07:40 PT
+and every Linear-touching run in the fleet was refused. Two running spent
+about 27 a minute. Since 2026-10-02 09:37 PT the planners spend their own
+5,000-an-hour OAuth bucket instead of that key (DRE-5589, the token renewed
+by the console, DRE-5587), so planners no longer starve the sweeps, and the
+CEO raised the number to three. The groom drain reads this ledger too, and
 releases no more cards than there are free slots (`groomer.free_planner_slots`).
 
 THE RULES, in the order the ledger applies them.

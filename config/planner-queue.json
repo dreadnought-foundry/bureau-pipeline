@@ -1,1 +1,1 @@
-{"max_running": 2, "claim_ttl_minutes": 115, "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
+{"max_running": 3, "claim_ttl_minutes": 115, "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
