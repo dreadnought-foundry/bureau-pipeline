@@ -41,6 +41,16 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's own Linear bucket (DRE-5589): an OAuth token authorized
+      # as the fleet user, which writes as Agent-Bureau but is metered apart
+      # from the fleet key — 5,000 an hour against 2,500. The agent-bureau
+      # console keeps it fresh and publishes it as `Bearer <access token>`
+      # (DRE-5587); nothing in this repository ever refreshes it, because a
+      # refresh anywhere but the console spends the console's link (DRE-2532).
+      # OPTIONAL: a repo without it plans on the fleet key exactly as before,
+      # because every step below reads `LINEAR_PLANNER_KEY || LINEAR_API_KEY`.
+      LINEAR_PLANNER_KEY:
+        required: false
       BUREAU_APP_ID:
         required: true
       BUREAU_APP_PRIVATE_KEY:
@@ -179,8 +189,20 @@ jobs:
     # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
     # and a per-step declaration is thirty places for the next one to be added
     # without it.
+    #
+    # And WHICH BUCKET of that user's (DRE-5589). Every step that holds a
+    # Linear key holds `secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY`
+    # as LINEAR_API_KEY — the planner's OAuth token when the console has
+    # published one, the fleet key otherwise — and the fleet key again as
+    # LINEAR_API_KEY_FALLBACK. `||` falls back only on an EMPTY secret, and a
+    # token that later dies keeps its value, so linear_ops.gql steps onto the
+    # fallback on a 401 and nothing else (never a 400 or a rate limit), and
+    # says so in one `linear-key:` line. LINEAR_KEY_HOME is the token's home
+    # in config/linear-identities.json: the `linear-budget:` line names it
+    # while the token is what is being spent, and `fleet` otherwise.
     env:
       LINEAR_IDENTITY: fleet
+      LINEAR_KEY_HOME: planner-oauth
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -234,7 +256,8 @@ jobs:
       - name: Card-validation gate
         id: gate
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
@@ -287,7 +310,8 @@ jobs:
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           # The lane whose ENTRY the relay fired this dispatch on, lower-cased
@@ -380,7 +404,8 @@ jobs:
         id: slot
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ github.event.client_payload.identifier }}
           # Spelled exactly as the duplicate guard spells them, and through
           # env, never interpolated into the shell line (DRE-1996). Both
@@ -520,7 +545,8 @@ jobs:
         id: classify
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
           # the same switch — one auth block, no new secret (Q1/Q2 of the
           # vendor premortem). Which of the two is set also picks the transport.
@@ -551,7 +577,8 @@ jobs:
       - name: Classification transport failed — requeue, do not ask the CEO
         if: steps.classify.outputs.requeue == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py requeue \
             "${{ github.event.client_payload.identifier }}" \
@@ -572,7 +599,8 @@ jobs:
       - name: Classification refused — park the card for the CEO
         if: steps.classify.outputs.escalate == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
@@ -616,7 +644,8 @@ jobs:
       - name: Classifier heartbeat — the model that answered
         if: steps.classify.outputs.answered == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
@@ -626,7 +655,8 @@ jobs:
         id: shape
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_route.py decide \
             "${{ github.event.client_payload.identifier }}" \
@@ -677,7 +707,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # Reads the epic's own death marker (DRE-3824) — see the run block.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The rung the classifier fell from for capacity, or empty (DRE-3970).
           FELL_FROM: ${{ steps.classify.outputs.fell_from }}
         run: |
@@ -764,7 +795,8 @@ jobs:
         id: route
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
@@ -863,7 +895,8 @@ jobs:
       - name: Roll-up route — hand off
         if: steps.shape.outputs.route == 'roll-up'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_route.py exit \
             "${{ github.event.client_payload.identifier }}"
@@ -874,7 +907,8 @@ jobs:
       - name: Plan heartbeat
         if: steps.route.outputs.mode == 'plan'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
@@ -909,7 +943,8 @@ jobs:
         if: steps.route.outputs.mode == 'plan'
         env:
           CARD: ${{ github.event.client_payload.identifier }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
@@ -1070,7 +1105,8 @@ jobs:
         id: ooturns
         if: steps.shape.outputs.route == 'one-off'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           BODY="${{ runner.temp }}/one-off-card-body.md"
@@ -1135,7 +1171,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1233,7 +1270,8 @@ jobs:
         # another route.
         if: ${{ !cancelled() && steps.shape.outputs.route == 'one-off' }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           # The same file and the same fallback the post route's tombstone
@@ -1289,7 +1327,8 @@ jobs:
       - name: One-off critic — the read that ran out of turns
         if: ${{ !cancelled() && steps.shape.outputs.route == 'one-off' && steps.oneoff.outputs.ran_out == 'true' }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.oocritic.outputs.execution_file }}"
@@ -1354,7 +1393,8 @@ jobs:
         if: steps.oneoff.outputs.action == 'revise'
         env:
           CARD: ${{ github.event.client_payload.identifier }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
@@ -1392,7 +1432,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED runs.
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
@@ -1469,7 +1510,8 @@ jobs:
         id: oorevised
         if: ${{ !cancelled() && steps.oneoff.outputs.action == 'revise' }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The critic's findings, named on the card if the revision did not
           # finish. Through env, never interpolated — an agent wrote them.
           FINDINGS: ${{ steps.oneoff.outputs.findings }}
@@ -1521,7 +1563,8 @@ jobs:
       - name: One-off revision — read it again
         if: steps.oorevised.outputs.outcome == 'revised'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_oorereading.outputs.token }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
@@ -1554,7 +1597,8 @@ jobs:
       - name: One-off critic — escalate
         if: steps.oneoff.outputs.action == 'escalate' || steps.oorevised.outputs.outcome == 'asked'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
@@ -1569,7 +1613,8 @@ jobs:
       - name: One-off critic — park in Triage
         if: steps.oneoff.outputs.action == 'park' || steps.oorevised.outputs.outcome == 'unfinished'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           PARK_NOTE="${{ runner.temp }}/one-off-park.md"
@@ -1583,7 +1628,8 @@ jobs:
       - name: One-off route — checked on the way out
         if: steps.shape.outputs.route == 'one-off' && steps.oneoff.outputs.action == 'proceed'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_route.py exit \
             "${{ github.event.client_payload.identifier }}"
@@ -1646,7 +1692,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1863,7 +1910,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2044,7 +2092,8 @@ jobs:
         id: plan_done
         if: "!cancelled() && (steps.route.outputs.mode == 'plan') && (steps.claude.outcome == 'success' || steps.claude.outcome == 'failure')"
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
           FIRST_OUTCOME: ${{ steps.claude.outcome }}
           SECOND_OUTCOME: ${{ steps.claude_retry.outcome }}
@@ -2086,7 +2135,8 @@ jobs:
       - name: Record is_error death
         if: always() && steps.route.outputs.mode == 'plan'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # DRE-3970: the attempt that counted — the re-run on the next rung when
           # there was one — so the marker names the model that actually died.
           MODEL_USED: ${{ steps.plan_done.outputs.model || steps.model.outputs.model }}
@@ -2123,7 +2173,8 @@ jobs:
         id: kids
         if: steps.route.outputs.mode == 'plan'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
@@ -2165,7 +2216,8 @@ jobs:
       - name: Proof card — the epic's last child
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/proof-demo-children.json"
@@ -2213,7 +2265,8 @@ jobs:
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           RETURNED_CHILD: ${{ steps.shape.outputs.returned_child }}
           PARENT: ${{ steps.shape.outputs.parent }}
         run: |
@@ -2251,7 +2304,8 @@ jobs:
         id: uiepic
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           UI=$(python3 .bureau-pipeline/scripts/linear_ops.py child-descriptions "$EPIC" \
@@ -2332,7 +2386,8 @@ jobs:
       - name: Mechanical findings — posted before the critic reads them
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -2382,7 +2437,8 @@ jobs:
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2469,7 +2525,8 @@ jobs:
         id: pre1
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           # --with-authors: the round history the bound is counted from is
@@ -2517,7 +2574,8 @@ jobs:
         id: replanturns
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
@@ -2553,7 +2611,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2644,7 +2703,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2699,7 +2759,8 @@ jobs:
         id: replan_done
         if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && (steps.replan.outcome == 'success' || steps.replan.outcome == 'failure')"
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
           FIRST_OUTCOME: ${{ steps.replan.outcome }}
           SECOND_OUTCOME: ${{ steps.replan_retry.outcome }}
@@ -2731,7 +2792,8 @@ jobs:
       - name: Re-check the revised plan
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/proof-demo-children.json"
@@ -2773,7 +2835,8 @@ jobs:
       - name: Mechanical findings — the revised plan
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -2818,7 +2881,8 @@ jobs:
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2899,7 +2963,8 @@ jobs:
         id: pre2
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           # --with-authors: the round history the bound is counted from is
@@ -3032,7 +3097,8 @@ jobs:
       - name: Routing verdicts — the epic's children
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           # Read into a FILE and feed the stamper from it. This workflow sets
@@ -3092,7 +3158,8 @@ jobs:
         id: handoff
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.action == 'proceed' || steps.pre2.outputs.action == 'proceed')
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_handoff.outputs.token }}
           # The last decision's word: round 2's when round 2 ran.
           PRE_RESULT: ${{ steps.pre2.outputs.result || steps.pre1.outputs.result }}
@@ -3222,7 +3289,8 @@ jobs:
         id: sight
         if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           python3 .bureau-pipeline/scripts/linear_ops.py epics-in-flight --sight \
@@ -3267,7 +3335,8 @@ jobs:
         id: postturns
         if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           THREAD="${{ runner.temp }}/plan-critic-thread.json"
@@ -3299,7 +3368,8 @@ jobs:
         if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           THREAD="${{ runner.temp }}/plan-critic-thread.json"
@@ -3356,7 +3426,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3472,7 +3543,8 @@ jobs:
         if: always() && (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           # The same file and the same fallback the tombstone step reads, for
@@ -3601,7 +3673,8 @@ jobs:
       - name: Second critic — the review died
         if: steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_post.outputs.token }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
@@ -3693,7 +3766,8 @@ jobs:
       - name: Review — the review died
         if: steps.route.outputs.mode == 'review' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_post.outputs.token }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
@@ -3760,7 +3834,8 @@ jobs:
         id: post1
         if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && (steps.posta.outcome == 'success' || steps.postverdict.outputs.verdict != 'NO_RESULT')
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           # --with-authors: the round history the bound is counted from is
@@ -3817,7 +3892,8 @@ jobs:
       - name: Epic → Green Light — both critics passed
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/green-light-children.json"
@@ -3856,7 +3932,8 @@ jobs:
       - name: Review — the second critic passed a plan the first critic held
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
@@ -3879,7 +3956,8 @@ jobs:
       - name: Review — the second critic produced no result
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'NO_RESULT'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_post.outputs.token }}
           NO_RESULTS: ${{ steps.post1.outputs.no_results }}
         run: |
@@ -4015,7 +4093,8 @@ jobs:
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
@@ -4037,7 +4116,8 @@ jobs:
         id: postreplanturns
         if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
@@ -4073,7 +4153,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4195,7 +4276,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4282,7 +4364,8 @@ jobs:
         if: "!cancelled() && ((steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && (steps.postreplan.outcome == 'success' || steps.postreplan.outcome == 'failure')"
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
           FIRST_OUTCOME: ${{ steps.postreplan.outcome }}
           SECOND_OUTCOME: ${{ steps.postreplan_retry.outcome }}
@@ -4408,7 +4491,8 @@ jobs:
         if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
@@ -4447,7 +4531,8 @@ jobs:
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           BEFORE="${{ runner.temp }}/children-before.json"
@@ -4532,7 +4617,8 @@ jobs:
       - name: Second critic sent the plan back
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
           BOUND: ${{ steps.post1.outputs.bound }}
           FINDING: ${{ steps.post1.outputs.reason }}
@@ -4609,7 +4695,8 @@ jobs:
       - name: Review — the revised plan is reviewed again
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true' && steps.recheck_review.outputs.ok == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
           FINDING: ${{ steps.post1.outputs.reason }}
           ROUND: ${{ steps.post1.outputs.round }}
@@ -4647,7 +4734,8 @@ jobs:
       - name: Review — the bound parks the plan in Triage
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           FINDING: ${{ steps.post1.outputs.reason }}
           # Through env, never interpolated — it carries text an agent wrote.
           NOTE: ${{ steps.post1.outputs.note }}
@@ -4676,7 +4764,8 @@ jobs:
       - name: Activate the approved epic
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'proceed'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
@@ -4815,7 +4904,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4942,7 +5032,8 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -5032,7 +5123,8 @@ jobs:
         id: rollup_done
         if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && (steps.rollup.outcome == 'success' || steps.rollup.outcome == 'failure')"
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
           FIRST_OUTCOME: ${{ steps.rollup.outcome }}
           SECOND_OUTCOME: ${{ steps.rollup_retry.outcome }}
@@ -5077,7 +5169,8 @@ jobs:
         id: rollup_check
         if: steps.shape.outputs.route == 'roll-up'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/roll-up-children.json"
@@ -5108,7 +5201,8 @@ jobs:
       - name: Roll-up route — activate the split
         if: steps.shape.outputs.route == 'roll-up' && steps.rollup_check.outputs.escalated != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/epic_split.py activate "${{ github.event.client_payload.identifier }}"
 
@@ -5187,7 +5281,8 @@ jobs:
         if: always() && steps.slot.outputs.admitted == 'true'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ github.event.client_payload.identifier }}
         run: |
           python3 .bureau-pipeline/scripts/planner_queue.py release "$CARD" \
@@ -5198,7 +5293,8 @@ jobs:
         if: always() && steps.slot.outputs.admitted == 'true'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planner_queue.py next --github-output "$GITHUB_OUTPUT"
 
@@ -5218,7 +5314,8 @@ jobs:
         if: always() && steps.next_token.outcome == 'success'
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.next_token.outputs.token }}
           NEXT_CARD: ${{ steps.next.outputs.card }}
           NEXT_REPO: ${{ steps.next.outputs.repo }}
@@ -5357,9 +5454,11 @@ jobs:
     if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
-    # Same declaration, same reason (DRE-3321): this job reads the fleet key too.
+    # Same declaration, same reason (DRE-3321): this job reads the fleet key too
+    # — and the planner's token first when there is one (DRE-5589).
     env:
       LINEAR_IDENTITY: fleet
+      LINEAR_KEY_HOME: planner-oauth
     steps:
       - name: Mint bot token
         id: app
@@ -5460,7 +5559,8 @@ jobs:
       # The CEO's entry point, and the address anchored feedback binds to.
       - name: Plan artifact — announce
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           URL="${{ steps.publish.outputs.url }}"

@@ -354,7 +354,7 @@ agents:
     maxTurns: 140
     maxBudget: 8
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
     # document portal from a SEPARATE job in plan.yml, so the portal checkout
@@ -405,7 +405,7 @@ agents:
     maxTurns: 60
     maxBudget: 3
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -429,7 +429,7 @@ agents:
     maxTurns: 60
     maxBudget: 3
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
