@@ -79,7 +79,14 @@ supplement to this brief — it adds to these conventions, it does not replace t
   (Origin: atlas PR #7 / DRE-1226 collided with DRE-1208's 0012.)
 - **One PR per card**, branch `agent/DRE-N-<slug>`, title `feat(DRE-N): ...`
   (or fix/chore as appropriate). PR body: what + why in 2-3 sentences, card
-  URL, test evidence ("N new tests, all green locally").
+  URL, test evidence ("N new tests, all green locally"), and the `What's new:`
+  line written to `standards/whats-new.md` (most say `What's new: none`).
+- **A pull request held or sent back over its `What's new:` line** — a
+  merge-gate hold or a critic finding that reads `What's new: …` — is answered
+  in the pull request body (`gh pr edit <n> --body-file <file>`), then ONE
+  empty commit on the same branch (`git commit --allow-empty`), never a change
+  to the diff. `standards/whats-new.md` says why the empty commit is needed:
+  the critic reviews only a new head.
 
 ## Push before the credential expires (DRE-3043)
 
