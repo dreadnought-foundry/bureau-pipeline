@@ -632,11 +632,12 @@ class TestCommandLine:
 # --- the standard ------------------------------------------------------------
 
 
-class TestTheStandard:
-    @pytest.fixture(scope="class")
-    def text(self) -> str:
-        return STANDARD.read_text()
+@pytest.fixture(scope="module")
+def text() -> str:
+    return STANDARD.read_text()
 
+
+class TestTheStandard:
     def test_it_names_both_forms(self, text):
         assert "What's new: none" in text
         assert "What's new: <kind>, <audience>: <sentence>" in text
@@ -683,4 +684,4 @@ class TestTheStandard:
             whats_new.parse_line(line)
 
     def test_it_is_short(self, text):
-        assert len(text.splitlines()) <= 110
+        assert len(text.splitlines()) <= 100
