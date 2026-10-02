@@ -478,19 +478,13 @@ class TestTheLinesRuleRunsBeforeTheReviewSkip:
 # ===========================================================================
 class TestTheWatcherIsHandedPlanningEpics:
     def _report(self, board, epics):
-        handed = {}
-
-        def report(epics_in, thread_reader, lane_reader, *a, **kw):
-            handed["epics"] = set(epics_in)
-            handed["lane"] = lane_reader
-            return []
-
+        """What the sweep's phase hands `rereview_watch.report`: the scope
+        it computes off the board read (the phase's call is pinned below and
+        by test_rereview_watch's wiring test)."""
         with patch.object(reconcile, "active_cards",
-                          side_effect=board.active_cards), patch.object(
-            reconcile.rereview_watch, "report", side_effect=report
-        ):
-            reconcile.report_rereview_missing(epics)
-        return handed
+                          side_effect=board.active_cards):
+            watched, lane_of = reconcile.rereview_watch_scope(epics)
+        return {"epics": set(watched), "lane": lane_of}
 
     def test_a_planning_epic_with_children_is_handed_with_its_lane(self):
         board = _Board(_epic(labels=("repo:agent-bureau",)),
@@ -511,10 +505,18 @@ class TestTheWatcherIsHandedPlanningEpics:
         handed = self._report(board, set())
         assert EPIC not in handed["epics"]
 
-    def test_the_sweep_runs_it_inside_its_phase(self):
+    def test_the_sweep_hands_the_scope_to_the_watcher_inside_its_phase(self):
         source = inspect.getsource(reconcile.main)
         phase = source.index('_phase("report_rereview_missing")')
-        assert "report_rereview_missing(epics)" in source[phase:phase + 400]
+        block = source[phase:phase + 500]
+        assert "rereview_watch_scope(epics)" in block
+        assert "rereview_watch.report(watched, epic_thread, lane_of)" in block
+
+    def test_the_scope_reads_only_the_board_this_sweep_already_read(self):
+        """Both lanes are inside SWEPT_LANES, so `active_cards` serves them
+        from the one snapshot and the watcher's scope costs no request."""
+        assert set(reconcile.SWEEP_STATES + reconcile.PLANNING_LANE) <= set(
+            reconcile.SWEPT_LANES)
 
 
 # ===========================================================================

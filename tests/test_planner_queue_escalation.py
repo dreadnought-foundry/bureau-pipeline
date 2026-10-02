@@ -183,9 +183,9 @@ class _Board:
     def run(self, fn):
         real = reconcile.escalate_out_of_planning
 
-        def counted(card, reason):
+        def counted(card, reason, *rest, **kw):
             self.escalations.append((card["identifier"], reason))
-            return real(card, reason)
+            return real(card, reason, *rest, **kw)
 
         def no_question(*a, **kw):
             raise AssertionError(

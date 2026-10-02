@@ -120,9 +120,18 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: carry's cost is the number of epics a person has dragged into Todo, which
 #: the write layer keeps at zero for the pipeline's own writers (DRE-5316).
 #:
+#: It was 41 until DRE-5286 (measured 2026-10-01: 42) gave the Planning stall
+#: exit its under-review skip. The skip reads a stalled epic's critic records
+#: WITH authorship (`linear_ops.comment_records`), because a record counts only
+#: when the pipeline wrote it — and authorship needs the viewer. Every thread
+#: is served from the board read (no per-card read: 56 stalled epics with
+#: children on this board, 0 requests between them); the one new request is
+#: the pass's single `viewer` read, which nothing else on this board had paid
+#: for, charged to `flag_stranded`. 41 + 1 = 42.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 41
+REAL_BOARD_SWEEP_BUDGET = 42
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -221,10 +230,11 @@ class ReplayLinear(FakeLinear):
 #: The two lanes an escalation reaches, named by the sweep rather than here:
 #: the CEO's queue and the broken-card lane (the prose-blocker defect route).
 #: DRE-4141 deleted the Intake age-out, which was the first one's only writer
-#: here; DRE-4124 gave it another, Planning's stall escalation, which is what
-#: reaches it off this board now. Nothing reaches the second — and both lanes
-#: stay named, because a lane missing from this tuple is a decision the record
-#: cannot see.
+#: here; DRE-4124 gave it another, Planning's stall escalation — and DRE-5286
+#: moved that one to the second lane, Triage, which is what this board's 68
+#: stalled Planning cards reach now. Nothing reaches the first off this board —
+#: and both lanes stay named, because a lane missing from this tuple is a
+#: decision the record cannot see.
 _ESCALATION_LANES = (
     reconcile.ESCALATED_STATE, reconcile.prose_blockers.DEFECT_LANE,
 )
@@ -244,9 +254,9 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
       close    — a card or epic moved to Done.
 
     BOTH move seams are read, and that is not tidiness (DRE-4124). A lane can
-    be reached by walking a card along the rail (`cmd_advance`);
-    `planning_escalation.escalate` writes the lane directly (`cmd_state`),
-    because it parks a card rather than walking it along the rail. Reading
+    be reached by walking a card along the rail (`cmd_advance`); Planning's
+    stall exit writes the lane directly (`cmd_state`), because it parks a card
+    rather than walking it along the rail. Reading
     only the first is what made 68 stalled Planning
     cards — held under `needs-human` until this card, escalated after it —
     drop out of the record entirely rather than move buckets. A decision this

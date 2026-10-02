@@ -200,6 +200,7 @@ class CallsFromOtherModules(unittest.TestCase):
                 fh.write(textwrap.dedent('''
 
                     def probe_sweep_escalation(card):
+                        import planning_escalation
                         return planning_escalation.escalate(None, card, "probe")
                 '''))
             report = lane_callers.callers_of(ESCALATION, "escalate", root=str(root))
@@ -299,7 +300,10 @@ class CallsFromOtherModules(unittest.TestCase):
             first = main.body[1] if ast.get_docstring(main) else main.body[0]
             lines = text.splitlines(keepends=True)
             indent = " " * first.col_offset
+            # The probe brings its own import: reconcile.py no longer imports
+            # planning_escalation at all since DRE-5286.
             lines.insert(first.lineno - 1,
+                         f'{indent}import planning_escalation\n'
                          f'{indent}planning_escalation.escalate(None, "DRE-1", "probe")\n')
             path.write_text("".join(lines), encoding="utf-8")
             ast.parse(path.read_text(encoding="utf-8"))

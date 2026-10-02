@@ -207,7 +207,7 @@
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: the hold labels the card for a person, and scripts/reconcile.py declares no bound on how long an operator takes to answer it.",
-      "why": "The board said work was happening while nothing ran; DRE-1978 sat in Planning for seven days and the CEO found it by asking. One tag covers the conditions that all mean the same thing to a reader — no run has begun — because it is one idempotency key and splitting it would let the same card be flagged twice. PLANNING LEFT THIS ACT ON 2026-09-17 (DRE-4124): a held card is skipped by everything downstream, so a Planning card labelled here and never moved was frozen where nobody was ever asked — twenty-three such cards across the fleet, thirteen of them in Planning, the oldest for thirty-five days. A stalled Planning card is now escalated into the CEO's decision queue instead, by the same seam the planner's hand-planning escalation takes. Old receipts of this tag still stand on those cards and are what the repair pass reads to know the label was ours.",
+      "why": "The board said work was happening while nothing ran; DRE-1978 sat in Planning for seven days and the CEO found it by asking. One tag covers the conditions that all mean the same thing to a reader — no run has begun — because it is one idempotency key and splitting it would let the same card be flagged twice. PLANNING LEFT THIS ACT ON 2026-09-17 (DRE-4124): a held card is skipped by everything downstream, so a Planning card labelled here and never moved was frozen where nobody was ever asked — twenty-three such cards across the fleet, thirteen of them in Planning, the oldest for thirty-five days. A stalled Planning card is now moved instead — since DRE-5286 to Triage, the operator's queue, under the sweep's own stall-park note (declared `unconverted` below), because a card no planner and no critic has read carries no decision for the CEO. Old receipts of this tag still stand on those cards and are what the repair pass reads to know the label was ours.",
       "emits": {
         "file": "scripts/reconcile.py",
         "anchor": "no agent run has started. Observed: this card has sat in"
@@ -1120,6 +1120,13 @@
       "kind": "undeclared-act",
       "means": "A Backlog card whose blockers are all Done is promoted to Todo on its own.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "stall_park_note(ident, reason)",
+      "kind": "undeclared-act",
+      "means": "The Planning stall exit parks a card nothing has happened to — or one the planner line never served, or one the old rule froze — in Triage, the note landing first and saying what was seen and the way back (DRE-5286).",
+      "why": "Act-shaped, and the registry has no row for it. The note was `planning_escalation`'s question until DRE-5286 moved this exit to Triage, and that module's notes were already declared here rather than in the registry; giving the park a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber and a cadence — and the console is the registry's consumer, so it is its own card. It carries its own idempotency key, `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry; a trailer appended after the tag would leave that reading intact, but converting it moves a key two modules read."
     },
     {
       "file": "scripts/reconcile.py",
