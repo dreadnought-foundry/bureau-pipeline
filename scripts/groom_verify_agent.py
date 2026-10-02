@@ -36,7 +36,9 @@ and the four subcommands here are everything around it.
     answer, checked, in the fixed shape the proposal reads.
   * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
     `obsolete` or `not-worth-it` goes on the Cancel list with the proof as its reason, the next spare
-    still needed takes its slot, and the proposal id is recomputed. And it
+    still needed takes its slot, and the proposal id is recomputed — except
+    an epic with an open child, which keeps its place and is listed in
+    `cancels_refused` (DRE-5309). And it
     decides whether the morning is posted at all (DRE-5317): the lookup
     failed for every card that names a file, or the pre-post check searched
     no owner for merged pull requests, and `not_posted_why` says so —
@@ -830,8 +832,13 @@ def _excluded_fields(mark: dict) -> dict:
 
 
 def _verify_field(mark: dict) -> dict:
-    return {k: mark.get(k) for k in ("verdict", "summary", "proof", "reason",
-                                     "cost_usd", "duration_ms", "model")}
+    field = {k: mark.get(k) for k in ("verdict", "summary", "proof", "reason",
+                                      "cost_usd", "duration_ms", "model")}
+    # Only on a Cancel the guard refused (DRE-5309), so every other row keeps
+    # the shape it had.
+    if mark.get("refused"):
+        field["refused"] = mark["refused"]
+    return field
 
 
 def _target_rows(proposal: dict, rows: list[dict] | None,
@@ -873,13 +880,31 @@ def apply(proposal: dict, found: dict[str, dict],
                  and waiting[r["card"]].get("reconsidered_in") is not None]
     queue = iter(i for i in spare_ids if marks[i]["verdict"] == STILL_NEEDED)
 
+    # The cancel guard (DRE-5309): an epic with an open child is never a
+    # Cancel, whatever the agent proved about its text. A refused card keeps
+    # the place it had — its Planning slot, or its wait in `not-now`.
+    refused = proposal.setdefault("cancels_refused", [])
+
+    def refuse(identifier: str) -> bool:
+        if marks[identifier]["verdict"] not in CANCELS:
+            return False
+        refusal = groomer.cancel_refusal(
+            {"identifier": identifier, **(by_seq.get(identifier) or {})})
+        if refusal is None:
+            return False
+        marks[identifier]["refused"] = refusal
+        refused.append({"identifier": identifier, "refusal": refusal,
+                        "source": CANCEL_SOURCE})
+        return True
+
     canceled: list[str] = []
     promoted: dict[str, dict] = {}
     kept, unfilled, emptied = [], 0, 0
     for slot in now:
         identifier = slot["identifier"]
         verdict_ = marks.get(identifier, {}).get("verdict")
-        if verdict_ not in CANCELS and verdict_ != EXCLUDED:
+        if (verdict_ not in CANCELS and verdict_ != EXCLUDED
+                or identifier in marks and refuse(identifier)):
             kept.append(slot)
             continue
         # An excluded card leaves the Planning list by the same walk a
@@ -907,7 +932,8 @@ def apply(proposal: dict, found: dict[str, dict],
     # A spare proved done elsewhere, obsolete or not worth it is canceled
     # the same way, in order.
     canceled += [i for i in spare_ids
-                 if marks[i]["verdict"] in CANCELS and i not in promoted]
+                 if marks[i]["verdict"] in CANCELS and i not in promoted
+                 and not refuse(i)]
 
     kept.sort(key=lambda r: r["position"])
     if emptied:

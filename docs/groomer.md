@@ -242,6 +242,21 @@ lists' cards and positions (never a reason), so an approval binds to the
 cancellations as well as to the batch. A proposal is empty only when both lists
 are.
 
+**No proposal cancels an epic with an open child (DRE-5309).** On 2026-09-29
+DRE-4633, a live epic whose children were still being built, was put on the
+Cancel list by a match on another card's text. So every writer of a Cancel row
+— the `Superseded by:` line, the ranked read, the check before posting and the
+verify agent — asks `groomer.cancel_refusal` first, off the `open_children`
+count every row of the sequence carries (a child not Done, Canceled or
+Duplicate, read from the card's own `children`, since its children are rarely
+in the same lane). An epic whose children are all closed is a finished
+container and may be canceled like any card. A refused card stays where the
+order put it: in its Planning slot with the refusal as its Why, or waiting in
+`not-now`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
+`## Cancels refused`, after the Cancel list, naming who proposed the Cancel;
+the section is absent on a morning with none. The lane is read 50 cards a page
+(`POPULATION_PAGE`) because the `children` selection makes each page heavier.
+
 **The Cancel list's grammar is not ours.** The console's reader of the
 proposal comment — DRE-4682 in agent-bureau — is written against it, and so is
 the drain that will cancel an agreed card (DRE-4733). It is a table under
