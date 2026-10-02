@@ -34,6 +34,9 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "resume_branch.py"
 TDD_SCRIPT = ROOT / "scripts" / "check_tdd_commits.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 CARD = "DRE-7"
 
@@ -481,7 +484,7 @@ class ResumedHistoryPassesTddCheckTest(unittest.TestCase):
 
 
 def _steps() -> list:
-    return yaml.safe_load(WORKFLOW.read_text())["jobs"]["execute"]["steps"]
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["execute"]["steps"]
 
 
 def _step(step_id: str) -> dict:
@@ -532,9 +535,9 @@ class ResumeStepWiringTest(unittest.TestCase):
 
     def test_the_step_calls_decide_with_the_contract_paths(self):
         step = _step("resume")
-        text = step["run"] + json.dumps(step.get("env", {}))
-        self.assertIn("resume_branch.py decide", step["run"])
-        self.assertIn("--github-output", step["run"])
+        text = step_shell.step_shell(step) + json.dumps(step.get("env", {}))
+        self.assertIn("resume_branch.py decide", step_shell.step_shell(step))
+        self.assertIn("--github-output", step_shell.step_shell(step))
         self.assertIn("$RUNNER_TEMP/resume-note.md", text)
 
     def test_every_prompt_copy_carries_the_resume_text(self):
@@ -561,7 +564,7 @@ class ResumeStepWiringTest(unittest.TestCase):
         clause = step["env"]["RESUME_CLAUSE"]
         self.assertIn("format('resume={0}', steps.resume.outputs.branch)", clause)
         self.assertIn("format('resume=none ({0})'", clause)
-        heartbeat = [line for line in step["run"].splitlines()
+        heartbeat = [line for line in step_shell.step_shell(step).splitlines()
                      if "model-attempt:" in line]
         self.assertEqual(len(heartbeat), 1)
         self.assertIn("$RESUME_CLAUSE", heartbeat[0])
@@ -574,7 +577,7 @@ class ProofWiringTest(unittest.TestCase):
         for key in PROOF_STEPS:
             with self.subTest(step=key):
                 step = _proof_step(key)
-                self.assertEqual(len(PROOF_RE.findall(step["run"])), 1)
+                self.assertEqual(len(PROOF_RE.findall(step_shell.step_shell(step))), 1)
                 env = step["env"]
                 self.assertEqual(env["RESUME_BRANCH"],
                                  "${{ steps.resume.outputs.branch }}")
@@ -582,14 +585,14 @@ class ProofWiringTest(unittest.TestCase):
                                  "${{ steps.resume.outputs.sha }}")
 
     def test_every_site_uses_the_same_statement(self):
-        stmts = {PROOF_RE.findall(_proof_step(k)["run"])[0] for k in PROOF_STEPS}
+        stmts = {PROOF_RE.findall(step_shell.step_shell(_proof_step(k)))[0] for k in PROOF_STEPS}
         self.assertEqual(len(stmts), 1, stmts)
 
     def _run_sites(self, work, env):
         """Run the legacy lookup + the proof filter exactly as each step does."""
         results = []
         for key in PROOF_STEPS:
-            run = _proof_step(key)["run"]
+            run = step_shell.step_shell(_proof_step(key))
             lines = run.splitlines()
             start = next(i for i, l in enumerate(lines)
                          if l.strip().startswith("BRANCH=$(git branch -r"))

@@ -48,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import step_shell  # noqa: E402
 
 CARD = "DRE-2911"
 REPO = "dreadnought-foundry/agent-bureau"
@@ -76,7 +77,7 @@ RATELIMIT_LOG = (
 
 
 def report_step() -> dict:
-    for step in yaml.safe_load(open(WORKFLOW))["jobs"]["execute"]["steps"]:
+    for step in yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["execute"]["steps"]:
         if step.get("name") == "Report result to Linear":
             return step
     raise AssertionError("the Report step is gone from agent-task.yml")
@@ -272,7 +273,7 @@ def run_report(
     # The empty table is deliberate and load-bearing: substitute() raises on any
     # expression it has no value for and asserts none survive, so this harness
     # now FAILS THE MOMENT an interpolation is put back into the block.
-    run = substitute(report_step()["run"], {})
+    run = substitute(step_shell.step_shell(report_step()), {})
     script = os.path.join(td, "report.sh")
     with open(script, "w", encoding="utf-8") as fh:
         fh.write("set -eo pipefail\n" + run)

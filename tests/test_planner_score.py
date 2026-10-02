@@ -46,6 +46,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import planner_score  # noqa: E402
 import routing_verdict  # noqa: E402
+import step_shell  # noqa: E402
 import validate_card  # noqa: E402
 
 
@@ -1300,13 +1301,13 @@ class ReceiptWiringTest(unittest.TestCase):
         self.assertIn(planner_score.READINESS_BOUNCE_PREFIX, source)
 
     def test_the_escalation_prefix_is_the_workflows_own_words(self):
-        source = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text(
-            encoding="utf-8")
+        source = step_shell.workflow_source(
+            ROOT / ".github" / "workflows" / "agent-task.yml")
         self.assertIn(planner_score.ESCALATION_RECEIPT_PREFIX, source)
 
     def test_the_handback_prefix_is_the_workflows_own_words(self):
-        source = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text(
-            encoding="utf-8")
+        source = step_shell.workflow_source(
+            ROOT / ".github" / "workflows" / "agent-task.yml")
         self.assertIn(planner_score.HANDBACK_RECEIPT_PREFIX, source)
 
     def test_the_turn_cap_tag_is_dead_runs_own_constant(self):
@@ -1331,9 +1332,9 @@ class WorkflowWiringTest(unittest.TestCase):
 
         self.workflows = ROOT / ".github" / "workflows"
         self.reusable = yaml.safe_load(
-            (self.workflows / "planner-replay.yml").read_text(encoding="utf-8"))
+            step_shell.workflow_source(self.workflows / "planner-replay.yml"))
         self.stub = yaml.safe_load(
-            (self.workflows / "self-planner-replay.yml").read_text(encoding="utf-8"))
+            step_shell.workflow_source(self.workflows / "self-planner-replay.yml"))
 
     @staticmethod
     def _on(doc):
@@ -1362,7 +1363,7 @@ class WorkflowWiringTest(unittest.TestCase):
                 self.assertEqual(value, "read", f"{name} asks for write access")
 
     def test_the_harness_names_the_demo_repo_and_no_other(self):
-        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
         self.assertIn(planner_score.REPLAY_REPO, body)
         for slug in validate_card.VALID_SLUGS - {planner_score.REPLAY_REPO}:
             # \b-anchored: `repo:agent-bureau-demo` is not a mention of
@@ -1375,7 +1376,7 @@ class WorkflowWiringTest(unittest.TestCase):
             )
 
     def test_the_harness_runs_this_modules_guard_before_it_files_anything(self):
-        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
         self.assertIn("planner_score.py", body)
         self.assertIn("replay-card", body)
 
@@ -1383,7 +1384,7 @@ class WorkflowWiringTest(unittest.TestCase):
         """Nothing in Linear enforces unique titles, so the dedupe is ours to
         write — the same `find-open` guard red-main-repair.yml and
         model-drift.yml mint their cards behind."""
-        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
         self.assertIn("linear_ops.py find-open", body)
         self.assertLess(
             body.index("linear_ops.py find-open"),
@@ -1396,7 +1397,7 @@ class WorkflowWiringTest(unittest.TestCase):
         """standards/vendor-boundaries.md Q5, answered in the file that has to
         survive the crash. This PR adds a trigger and secrets wiring, which
         makes the harness boundary-touching and the answer mandatory."""
-        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
         self.assertIn("Q5", body)
         self.assertIn("vendor-boundaries", body)
 
@@ -1427,10 +1428,10 @@ class ReplayCrashRecoveryTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
         doc = yaml.safe_load(
-            (ROOT / ".github" / "workflows" / "planner-replay.yml")
-            .read_text(encoding="utf-8"))
+            step_shell.workflow_source(
+                ROOT / ".github" / "workflows" / "planner-replay.yml"))
         self.run_block = next(
-            step["run"]
+            step_shell.step_shell(step)
             for job in doc["jobs"].values()
             for step in job.get("steps") or []
             if self.STEP.lower() in (step.get("name") or "").lower()

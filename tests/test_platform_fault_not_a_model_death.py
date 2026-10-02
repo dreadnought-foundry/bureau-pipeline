@@ -54,13 +54,14 @@ import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import medic_classify  # noqa: E402
 import model_fallback  # noqa: E402
+import step_shell  # noqa: E402
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
 WORKFLOWS = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
 
 
 def workflow(name: str) -> str:
-    return open(os.path.join(WORKFLOWS, name)).read()
+    return step_shell.workflow_source(os.path.join(WORKFLOWS, name))
 
 
 # ── the DRE-2911 run trio, from the receipts ────────────────────────────────

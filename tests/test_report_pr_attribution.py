@@ -29,6 +29,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import card_pr  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-task.yml"
@@ -36,7 +37,7 @@ WORKFLOW = os.path.join(
 
 
 def report_step() -> str:
-    src = open(WORKFLOW).read()
+    src = step_shell.workflow_source(WORKFLOW)
     m = re.search(r"- name: Report result to Linear(.*)\Z", src, re.S)
     if not m:
         raise AssertionError("report step not found in agent-task.yml")

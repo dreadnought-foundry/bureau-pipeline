@@ -14,7 +14,12 @@ legitimately requeues to Todo for its first 2 attempts).
 
 import os
 import re
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-task.yml"
@@ -22,7 +27,7 @@ WORKFLOW = os.path.join(
 
 
 def blocker_branch() -> str:
-    src = open(WORKFLOW).read()
+    src = step_shell.workflow_source(WORKFLOW)
     m = re.search(r"elif \[ -f /tmp/agent-blocker\.txt \]; then(.*?)\n\s*else\b", src, re.S)
     if not m:
         raise AssertionError("blocker branch not found in agent-task.yml")
@@ -31,7 +36,7 @@ def blocker_branch() -> str:
 
 def report_step() -> str:
     """The 'Report result to Linear' step body in agent-task.yml."""
-    src = open(WORKFLOW).read()
+    src = step_shell.workflow_source(WORKFLOW)
     m = re.search(
         r"name:\s*Report result to Linear(.*?)(?:\n      - name:|\Z)", src, re.S
     )
@@ -60,7 +65,7 @@ class ProposeMachineryRetiredTest(unittest.TestCase):
     workflow — nothing may re-stamp or read it."""
 
     def test_no_proposed_marker_anywhere_in_build_workflow(self):
-        src = open(WORKFLOW).read()
+        src = step_shell.workflow_source(WORKFLOW)
         self.assertNotIn(
             "proposed", src,
             "the retired `proposed` propose-gate marker must not appear in agent-task.yml",
@@ -104,7 +109,7 @@ class EscalateByExceptionTest(unittest.TestCase):
     def test_gate_treats_escalation_as_evidence(self):
         # The agent-result gate must not flag an escalation (no branch/PR) as a
         # silent death — it passes --escalation-file so the gate stays green.
-        src = open(WORKFLOW).read()
+        src = step_shell.workflow_source(WORKFLOW)
         self.assertIn("--escalation-file /tmp/agent-escalation.txt", src)
 
 
@@ -118,7 +123,7 @@ class BlockerParksInBacklogTest(unittest.TestCase):
     def test_dead_run_branch_still_requeues_to_todo(self):
         # The dead-run path is nondeterministic (timeouts, turn limits) — a
         # fresh agent CAN succeed there, so its capped Todo requeue stays.
-        src = open(WORKFLOW).read()
+        src = step_shell.workflow_source(WORKFLOW)
         tail = src.split("agent-blocker.txt ]; then", 1)[1]
         dead_branch = tail.split("\n          else\n", 1)[1]
         self.assertIn('state "$CARD" "Todo"', dead_branch)

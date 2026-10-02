@@ -53,6 +53,7 @@ import check_agent_result  # noqa: E402
 import credential_clock  # noqa: E402
 import dead_run  # noqa: E402
 import push_rescue  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
 ENGINEER_BRIEF = ROOT / "briefs" / "engineer.md"
@@ -65,7 +66,7 @@ FRESH = "ghs_minted_for_the_push"
 
 
 def _steps() -> list[dict]:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["execute"]["steps"]
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["execute"]["steps"]
 
 
 def _step_index(name: str) -> int:
@@ -668,7 +669,7 @@ class TheWorkflowWiring(unittest.TestCase):
 
     def test_the_rescue_calls_the_script_with_the_fresh_token(self):
         step = _step("Push rescue")
-        self.assertIn("push_rescue.py", step["run"])
+        self.assertIn("push_rescue.py", step_shell.step_shell(step))
         self.assertIn("steps.pushtoken.outputs.token", step["env"]["PUSH_TOKEN"])
         # The job-start token was the fallback here until DRE-3098: that is the
         # credential the agent step held, the failure being rescued from may
@@ -688,7 +689,7 @@ class TheWorkflowWiring(unittest.TestCase):
         i = _step_index("Credential floor")
         self.assertLess(i, _step_index("Implement card"))
         step = _step("Credential floor")
-        self.assertIn("credential_clock.py", step["run"])
+        self.assertIn("credential_clock.py", step_shell.step_shell(step))
         self.assertEqual(
             step["env"]["LINEAR_API_KEY"], "${{ secrets.LINEAR_API_KEY }}"
         )
@@ -706,13 +707,13 @@ class TheWorkflowWiring(unittest.TestCase):
         )
 
     def test_the_floor_does_not_block_the_agent_step(self):
-        run = _step("Credential floor")["run"]
+        run = step_shell.step_shell(_step("Credential floor"))
         self.assertIn("&", run)
         self.assertIn("nohup", run)
 
     def test_the_report_step_hands_the_classifier_what_it_observed(self):
         step = _step("Report result to Linear")
-        run = step["run"]
+        run = step_shell.step_shell(step)
         self.assertIn("--work-on-runner", run)
         # DRE-3484: the rescue's observation still reaches the classifier, but
         # it arrives as env and is read as a shell variable rather than being

@@ -25,7 +25,12 @@ this file red; copied fixtures would not.
 import os
 import re
 import subprocess
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-task.yml"
@@ -35,7 +40,7 @@ LOOKUP_RE = re.compile(r"^\s*(BRANCH=\$\(git branch -r \|.*\))\s*$", re.M)
 
 
 def workflow_src() -> str:
-    return open(WORKFLOW).read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 # Every step in agent-task.yml that resolves a card to its branch. Four

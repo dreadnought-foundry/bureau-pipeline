@@ -53,6 +53,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import check_agent_result  # noqa: E402
 import deliver_rescue  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 AGENT_TASK = ROOT / ".github" / "workflows" / "agent-task.yml"
 CHECK = ROOT / "scripts" / "check_agent_result.py"
@@ -135,7 +136,7 @@ def test_the_classifier_still_calls_it_a_credential_expiry():
 # 2. the workflow: the failed read is not the last word
 # --------------------------------------------------------------------------
 def report_step() -> str:
-    src = AGENT_TASK.read_text()
+    src = step_shell.workflow_source(AGENT_TASK)
     m = re.search(
         r"name:\s*Report result to Linear(.*?)(?:\n      - name:|\Z)", src, re.S
     )
@@ -160,7 +161,7 @@ def test_the_gate_step_is_told_the_work_is_on_the_runner():
     "no branch, no PR, no note". A failed delivery has no branch and no PR by
     definition, and it is not a silent death — the medic must not be summoned
     to re-run a run that did the work."""
-    src = AGENT_TASK.read_text()
+    src = step_shell.workflow_source(AGENT_TASK)
     gate = re.search(r"name: Gate on agent result(.*?)\n      - name:", src, re.S)
     assert gate, "gate step not found"
     assert "rescue.outputs.local_work" in gate.group(1), (

@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import agent_marker  # noqa: E402
+import step_shell  # noqa: E402
 
 BRIEFS = ROOT / "briefs"
 STANDARDS = ROOT / "standards"
@@ -77,7 +78,7 @@ class TestTheHandBackRule:
 
     def test_the_hand_back_path_exists_in_the_build_workflow(self):
         # The brief may not promise a channel the workflow does not read.
-        wf = _read(ROOT / ".github" / "workflows" / "agent-task.yml")
+        wf = step_shell.workflow_source(ROOT / ".github" / "workflows" / "agent-task.yml")
         assert "/tmp/agent-handback.txt" in wf
         assert re.search(r'advance "\$CARD" "Planning"', wf), (
             "agent-task.yml reads the hand-back file but never moves the card "

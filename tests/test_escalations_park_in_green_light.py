@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -51,7 +52,7 @@ def read(rel: str) -> str:
 def report_step() -> str:
     m = re.search(
         r"name:\s*Report result to Linear(.*?)(?:\n      - name:|\Z)",
-        read(AGENT_TASK),
+        step_shell.workflow_source(AGENT_TASK, root=ROOT),
         re.S,
     )
     assert m, "'Report result to Linear' step not found in agent-task.yml"
@@ -73,7 +74,11 @@ def escalation_branch() -> str:
 def escalate_prompt_item() -> str:
     """Step 6 of the build agent's own prompt — what the agent is TOLD happens
     to its question."""
-    m = re.search(r"\n +6\. ESCALATE(.*?)\n +7\. ", read(AGENT_TASK), re.S)
+    m = re.search(
+        r"\n +6\. ESCALATE(.*?)\n +7\. ",
+        step_shell.workflow_source(AGENT_TASK, root=ROOT),
+        re.S,
+    )
     assert m, "the ESCALATE prompt item was not found in agent-task.yml"
     return m.group(1)
 
@@ -92,7 +97,11 @@ def plan_epic_gate_comment() -> str:
     critic` step — the plan route's last move since DRE-5284, which replaced
     `Epic → Green Light` — the justification the next editor of that routing
     reads first."""
-    m = re.search(r"((?:^ *#.*\n)+) *- name: Plan → second critic\n", read(PLAN), re.M)
+    m = re.search(
+        r"((?:^ *#.*\n)+) *- name: Plan → second critic\n",
+        step_shell.workflow_source(PLAN, root=ROOT),
+        re.M,
+    )
     assert m, "the 'Plan → second critic' step's comment was not found in plan.yml"
     return m.group(1)
 
