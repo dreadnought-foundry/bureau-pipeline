@@ -71,6 +71,8 @@ A surface whose releases should appear in Linear names its release pipeline in t
 }
 ```
 
+**What's new, before the Linear release** (DRE-5516). Every verified tag first publishes its `whats-new.json` (`scripts/whats_new_release.py`, `standards/whats-new.md`), then writes the Linear release. Its note gains a `## What's new` section above the card bullets, with one `* <Kind> — <title> <body>` bullet per published item. A release with nothing to say leaves the note exactly as before, and a surface with no `linear_pipelines` key gets the file but no note. When the file could not be published, the run says so in one `::warning title=What's new not published::` annotation and one `## What's new not published` block on its summary page. The usual cause is a caller stub that lacks `pull-requests: read`. The Linear release is still written, with no section. Like the Linear write, nothing the collector does can fail the release: if it raises, that is the one `WARNING the after-release step failed` line.
+
 ## What the train decides, in order
 
 One rule set, asked twice: once to build the matrix, and once inside each surface's own concurrency lane. `no-op` and `held` conclude the job green — they are the train working; only `refuse` is red.
