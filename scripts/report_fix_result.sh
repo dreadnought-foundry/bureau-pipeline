@@ -107,9 +107,9 @@ set -e
 #   retries once. A second exhaustion holds and names the remedy: split
 #   the fix or raise the budget, not a third run into the same wall.
 # 2026-08-26, DRE-2722, DRE-2776. A card this script parks goes to
-#   Triage with `needs-human`. It used to go to Plan Review, which
-#   DRE-2722 split: Green Light approves plans, and Triage holds what went
-#   wrong (DRE-2723). DRE-2776 (2026-08-27) then moved the engineer's
+#   Triage with `needs-human`. DRE-2722 split the one "needs you" lane
+#   in two: Green Light approves plans, and Triage holds what went wrong
+#   (DRE-2723). DRE-2776 (2026-08-27) then moved the engineer's
 #   escalate-by-exception question to Green Light, so the reason is the
 #   state of the card, not what the lane is for. Everything parked here is
 #   a card whose pipeline went wrong. A card waiting on a judgement goes to
