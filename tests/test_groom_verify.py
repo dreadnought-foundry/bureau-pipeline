@@ -31,6 +31,8 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_verify.py -v
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib
 import json
 import os
 import re
@@ -47,6 +49,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 import groom_context  # noqa: E402
 import groom_verify  # noqa: E402
 import groomer  # noqa: E402
+import lane_contract  # noqa: E402
 
 from test_groomer import CYCLES, NOW, card  # noqa: E402
 from test_groomer_approval_gate import FakeOps as GateOps  # noqa: E402
@@ -450,6 +453,65 @@ def test_a_cancel_superseded_by_an_approved_card_in_flight_stands(lane):
     linear = FakeLinear(lanes={"DRE-900": lane})
     got = checked(_lane_with_cancel("DRE-900"), linear=linear)
     assert [r["identifier"] for r in cancel(got)] == ["DRE-102"]
+
+
+# --------------------------------------------------------------------------
+# the in-flight lanes are read off the lane contract (DRE-5348)
+# --------------------------------------------------------------------------
+def _contract_with(**statuses):
+    """The committed contract with the named lanes' `status` replaced."""
+    doc = copy.deepcopy(lane_contract.load())
+    for entry in doc["lanes"]:
+        if entry["name"] in statuses:
+            entry["status"] = statuses[entry["name"]]
+    return doc
+
+
+@pytest.fixture
+def reload_against(monkeypatch, tmp_path):
+    """Re-import groom_verify with the lane contract at another path, and put
+    the committed one back afterwards."""
+    def _reload(doc):
+        path = tmp_path / "lane-contract.json"
+        path.write_text(json.dumps(doc), encoding="utf-8")
+        monkeypatch.setattr(lane_contract, "CONTRACT_PATH", str(path))
+        return importlib.reload(groom_verify)
+    yield _reload
+    monkeypatch.undo()
+    importlib.reload(groom_verify)
+
+
+def test_in_flight_on_the_committed_contract_is_the_four_lanes_in_flow_order():
+    assert lane_contract.lane("Hand-work", "arriving")
+    assert groom_verify.IN_FLIGHT == ("Backlog", "Todo", "In Progress", "In Review")
+
+
+def test_a_live_hand_work_lane_joins_in_flight_in_flow_order(reload_against):
+    fresh = reload_against(_contract_with(**{"Hand-work": "live"}))
+    assert fresh.IN_FLIGHT == (
+        "Backlog", "Todo", "Hand-work", "In Progress", "In Review")
+    assert fresh.lane_says("DRE-1", "Hand-work") == (
+        True, "DRE-1 is approved and in Hand-work")
+
+
+def test_while_hand_work_is_arriving_a_card_there_is_not_approved():
+    assert groom_verify.lane_says("DRE-1", "Hand-work") == (
+        False, "DRE-1 is in Hand-work and has not been approved")
+
+
+def test_a_contract_whose_only_work_lane_is_done_has_nothing_in_flight():
+    doc = copy.deepcopy(lane_contract.load())
+    doc["lanes"] = [entry for entry in doc["lanes"]
+                    if entry["segment"] != "work" or entry["name"] == "Done"]
+    assert groom_verify.in_flight(doc) == ()
+
+
+def test_a_live_hand_work_card_replacing_a_cancel_lets_it_stand(reload_against):
+    reload_against(_contract_with(**{"Hand-work": "live"}))
+    linear = FakeLinear(lanes={"DRE-900": "Hand-work"})
+    got = checked(_lane_with_cancel("DRE-900"), linear=linear)
+    assert [r["identifier"] for r in cancel(got)] == ["DRE-102"]
+    assert record(got, "DRE-102")["verdict"] == "cancel-stands"
 
 
 def test_a_cancel_superseded_by_a_merged_pr_stands_and_an_open_one_does_not():
