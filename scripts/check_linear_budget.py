@@ -21,6 +21,17 @@ also prints `sweep-spend: total <N> request(s) …`, counted by the process
 itself, and a run that printed one is charged that and its budget lines are
 not added. Every other workflow is still read off its budget lines.
 
+Every process now says its own count (Stage 2 #11), and that outranks both:
+
+    linear-calls: <N> request(s) this run (budget: <bucket>)
+
+N is the requests that process sent, counted by `linear_ops` itself — exact,
+known even when no rate-limit header came back, and free of anyone else's
+requests. A run that printed any is charged their sum, per bucket, and its
+`sweep-spend: total` and budget lines are not added: the sweep's total is a
+part of its own process's count, and it says nothing about the run's other
+processes. A log from before the line existed reads exactly as it did.
+
 A spend on ANOTHER BUCKET is kept in its own row (DRE-5589). The line ends
 `budget: <bucket>`, and the planner's OAuth token — the fleet user, metered
 apart from the fleet key — prints `budget: planner-oauth`. Adding that to the
@@ -80,6 +91,10 @@ _BUCKET_RE = re.compile(r";\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 _FLEET_BUCKETS = frozenset({"fleet", "undeclared"})
 # The last line of every sweep pass, reconcile.SweepSpend.report_total().
 _SWEEP_TOTAL_RE = re.compile(_LINE_START + r"sweep-spend: total (\d+) request")
+# The process's own count, linear_ops.calls_line() (Stage 2 #11), and the
+# bucket it names in the parentheses that close it.
+_CALLS_RE = re.compile(_LINE_START + r"linear-calls:\s*(\d+)\s+request")
+_CALLS_BUCKET_RE = re.compile(r"\(budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 
 UNKNOWN = "UNKNOWN"
 
@@ -104,13 +119,32 @@ def spent_from_log(log_text: str) -> list[int | None]:
 def bucket_of(line: str) -> str:
     """The bucket a budget line names — `""` for the fleet key's own (DRE-5589)."""
     m = _BUCKET_RE.search(line.rstrip())
-    bucket = m.group(1) if m else ""
+    return _fleet_or(m.group(1) if m else "")
+
+
+def _fleet_or(bucket: str) -> str:
     return "" if bucket in _FLEET_BUCKETS else bucket
+
+
+def calls_by_bucket(log_text: str) -> dict[str, list[int]]:
+    """Every `linear-calls:` line in `log_text`, per the bucket it names —
+    `""` for the fleet key's own, as `bucket_of` reads a budget line."""
+    out: dict[str, list[int]] = {}
+    for line in (log_text or "").splitlines():
+        m = _CALLS_RE.match(line)
+        if not m:
+            continue
+        b = _CALLS_BUCKET_RE.search(line.rstrip())
+        out.setdefault(_fleet_or(b.group(1) if b else ""), []).append(int(m.group(1)))
+    return out
 
 
 def run_spend_by_bucket(log_text: str) -> dict[str, list[int | None]]:
     """`run_spend_from_log`, split by the bucket each line names. A sweep's
     own total names none, and a sweep spends the fleet key, so it is `""`."""
+    calls = calls_by_bucket(log_text)
+    if calls:
+        return dict(calls)
     lines = (log_text or "").splitlines()
     totals = [int(m.group(1)) for m in map(_SWEEP_TOTAL_RE.match, lines) if m]
     if totals:
@@ -125,10 +159,19 @@ def run_spend_by_bucket(log_text: str) -> dict[str, list[int | None]]:
 
 
 def run_spend_from_log(log_text: str) -> list[int | None]:
-    """What ONE run spent, entry by entry: its `sweep-spend: total` lines when
-    it printed any — the pass's own count — and otherwise its budget lines
-    (`spent_from_log`). Never both: a sweep's budget line counts the same
-    requests again, plus whatever else drew on the shared key meanwhile."""
+    """What ONE run spent, entry by entry: its `linear-calls:` lines when it
+    printed any — each process's own count — else its `sweep-spend: total`
+    lines — the pass's own count — and otherwise its budget lines
+    (`spent_from_log`). Never two kinds: a sweep's total is a part of its own
+    process's count, and a budget line counts the same requests again, plus
+    whatever else drew on the shared key meanwhile."""
+    calls = [
+        int(m.group(1))
+        for m in map(_CALLS_RE.match, (log_text or "").splitlines())
+        if m
+    ]
+    if calls:
+        return calls
     totals = [
         int(m.group(1))
         for m in map(_SWEEP_TOTAL_RE.match, (log_text or "").splitlines())

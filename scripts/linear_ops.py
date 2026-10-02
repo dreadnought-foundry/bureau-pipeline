@@ -718,16 +718,37 @@ def requests_made() -> int:
     return _budget["calls"]
 
 
+def calls_line() -> str:
+    """The one line that says how many Linear requests THIS process sent:
+
+        linear-calls: <N> request(s) this run (budget: <bucket>)
+
+    N is `requests_made()` — the process's own count, exact, a retry and a
+    RATELIMITED answer included, a refusal sent without a request not. The
+    budget line's `spent N` is a difference between two readings of a SHARED
+    bucket, so a run that overlaps another is charged the other's requests,
+    and a run that saw no headers is `unknown`; nobody else's requests are in
+    this number (Stage 2 #11). `check_linear_budget.py` prefers it.
+
+    The bucket is the one the process is spending at exit. A run that fell
+    back from a refused token counts the refused request here too, under the
+    fleet key: that one request is the only thing the line cannot split."""
+    return f"linear-calls: {_budget['calls']} request(s) this run ({_budget_part()})"
+
+
 def _report_budget_at_exit() -> None:
-    """Print the budget line ONCE, on stderr, if any Linear call was made.
-    Registered with atexit; a process that never touched Linear says nothing."""
+    """Print the budget line and the calls line ONCE, on stderr, if any Linear
+    call was made. Registered with atexit; a process that never touched Linear
+    says nothing. Each line is printed on its own, so a failure composing one
+    can never cost the other."""
     if _budget["reported"] or not _budget["calls"]:
         return
     _budget["reported"] = True
-    try:
-        print(budget_line(), file=sys.stderr, flush=True)
-    except Exception:  # pragma: no cover — telemetry must never fail an exit
-        pass
+    for compose in (budget_line, calls_line):
+        try:
+            print(compose(), file=sys.stderr, flush=True)
+        except Exception:  # pragma: no cover — telemetry must never fail an exit
+            pass
 
 
 atexit.register(_report_budget_at_exit)
