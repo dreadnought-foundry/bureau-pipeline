@@ -562,3 +562,155 @@ def test_open_children_counts_the_children_not_in_a_closed_state():
 def test_open_children_of_a_card_with_no_children_key_is_zero():
     assert groomer.open_children(card("DRE-1")) == 0
     assert groomer.open_children({"children": None}) == 0
+
+
+# --------------------------------------------------------------------------
+# DRE-5307 — a stale Urgent or High is ranked as Medium, and the page says so
+# --------------------------------------------------------------------------
+STALE = {"priority": "Urgent", "set_at": "2026-07-29T12:00:00Z", "days": 38}
+
+
+def _stale(identifier, *, priority=1, stale=STALE, days=40):
+    marked = card(identifier, priority=priority, days=days)
+    marked["priority_stale"] = dict(stale)
+    return marked
+
+
+def _unread(identifier, why, *, priority=1, days=40):
+    kept = card(identifier, priority=priority, days=days)
+    kept["priority_unread"] = why
+    return kept
+
+
+def test_priority_reads_a_stale_card_as_unprioritised():
+    assert groomer._priority(card("DRE-1", priority=1)) == groomer.URGENT
+    assert groomer._priority(_stale("DRE-1")) == 0
+    assert groomer._priority(_stale("DRE-2", priority=2)) == 0
+
+
+def test_propose_writes_one_stale_priorities_row_per_stale_card():
+    cards = [_stale("DRE-2702"),
+             _stale("DRE-2564", priority=2, stale={
+                 "priority": "High", "set_at": "2026-08-01T12:00:00Z",
+                 "days": 35}),
+             card("DRE-5400", priority=3, days=0)]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
+    assert proposal["stale_priorities"] == [
+        {"identifier": "DRE-2702", "priority": "Urgent",
+         "set_at": "2026-07-29T12:00:00Z", "days": 38},
+        {"identifier": "DRE-2564", "priority": "High",
+         "set_at": "2026-08-01T12:00:00Z", "days": 35},
+    ]
+    # Ranked as Medium: the card created today goes ahead of both.
+    assert positions(proposal)[0] == "DRE-5400"
+
+
+def test_propose_names_the_cards_kept_unread_by_reason():
+    why = "read budget of 40 spent"
+    cards = [_unread("DRE-901", why), _unread("DRE-900", why),
+             _unread("DRE-3530", "Linear said no"), card("DRE-5400")]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=4, now=NOW)
+    assert proposal["priorities_unread"] == {
+        "Linear said no": ["DRE-3530"], why: ["DRE-900", "DRE-901"]}
+    assert "stale_priorities" not in proposal
+
+
+def test_a_proposal_with_nothing_stale_or_unread_carries_neither_key():
+    proposal = groomer.propose([card("DRE-1", priority=1, days=40)],
+                               cycles=CYCLES, capacity=3, now=NOW)
+    assert "stale_priorities" not in proposal
+    assert "priorities_unread" not in proposal
+    assert "## Priorities re-ranked as Medium" not in groomer.render_proposal(
+        proposal)
+
+
+def test_the_page_says_which_priorities_were_re_ranked_and_which_were_not_read():
+    cards = [_stale("DRE-2702"),
+             _unread("DRE-901", "read budget of 40 spent"),
+             _unread("DRE-900", "read budget of 40 spent"),
+             _unread("DRE-3530", "Linear said no"),
+             _unread("DRE-3681", groomer.groom_priority.VIEWER_UNREAD),
+             card("DRE-5400", priority=3, days=0)]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=6, now=NOW)
+    text = groomer.render_proposal(proposal)
+    assert text.count("## Priorities re-ranked as Medium") == 1
+    section = text.split("## Priorities re-ranked as Medium\n", 1)[1]
+    section = section.split("\n## ", 1)[0]
+    lines = [line for line in section.splitlines() if line.strip()]
+    assert ("- DRE-2702 — Urgent set on 2026-07-29, 38 days ago, not "
+            "re-confirmed — ranked as Medium") in lines
+    assert ("- Kept their priority, not read — read budget of 40 spent: "
+            "DRE-900, DRE-901") in lines
+    assert "- Kept their priority, not read — Linear said no: DRE-3530" in lines
+    assert ("- Kept their priority, not read — the pipeline's own Linear "
+            "identity could not be read: DRE-3681") in lines
+    # After the order paragraph, and the batch table still reads back whole:
+    # the drain parses it out of its own section.
+    assert text.index("## The batch, in order") < text.index(
+        "## Priorities re-ranked as Medium")
+    parsed = groomer.parse_proposal_comment(groomer.proposal_comment(proposal))
+    assert [row["identifier"] for row in parsed["batch"]] == positions(proposal)
+
+
+def test_the_section_prints_for_unread_cards_alone():
+    proposal = groomer.propose([_unread("DRE-3530", "Linear said no")],
+                               cycles=CYCLES, capacity=3, now=NOW)
+    text = groomer.render_proposal(proposal)
+    assert "## Priorities re-ranked as Medium" in text
+    assert "ranked as Medium\n" not in text.split(
+        "## Priorities re-ranked as Medium", 1)[1].split("\n## ", 1)[0]
+
+
+def _build_args(**extra):
+    args = dict(lane="Intake", capacity=3, batch_cycles=1, judgement=False,
+                window_days=groomer.WINDOW_DAYS, keep_answer=None,
+                post=None, card=None, hold_repo=[], verify=False,
+                priority=",".join(groomer.REPO_PRIORITY))
+    args.update(extra)
+    return argparse.Namespace(**args)
+
+
+def _patch_build(monkeypatch, cards):
+    import groom_priority
+    seen = []
+
+    def annotate(on_offer, *, lops, now, verifier=None):
+        seen.append(([c["identifier"] for c in on_offer], lops, now))
+        for c in on_offer:
+            if c["identifier"] == "DRE-2702":
+                c["priority_stale"] = dict(STALE)
+        return {"stale": ["DRE-2702"], "unread": {}}
+
+    monkeypatch.setattr(groomer, "_now", lambda: NOW)
+    monkeypatch.setattr(groomer, "read_population", lambda lops, l: list(cards))
+    monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
+    monkeypatch.setattr(groom_priority, "annotate", annotate)
+    return seen
+
+
+def test_build_annotates_the_on_offer_cards_before_proposing(monkeypatch):
+    cards = [card("DRE-2702", priority=1, days=40),
+             card("DRE-5400", priority=3, days=0)]
+    seen = _patch_build(monkeypatch, cards)
+    proposal = groomer._build(_build_args())
+    assert seen == [(["DRE-2702", "DRE-5400"], groomer.linear_ops, NOW)]
+    assert [r["identifier"] for r in proposal["stale_priorities"]] == [
+        "DRE-2702"]
+    assert positions(proposal)[0] == "DRE-5400"
+
+
+def test_build_the_verified_proposal_sees_the_annotation_too(monkeypatch):
+    import groom_verify
+    cards = [card("DRE-2702", priority=1, days=40),
+             card("DRE-5400", priority=3, days=0)]
+    _patch_build(monkeypatch, cards)
+
+    def broken(*a, **k):
+        raise RuntimeError("the check is down")
+
+    monkeypatch.setattr(groom_verify, "check", broken)
+    proposal = groomer._build(_build_args(verify=True))
+    assert "verification" in proposal
+    assert [r["identifier"] for r in proposal["stale_priorities"]] == [
+        "DRE-2702"]
+    assert positions(proposal)[0] == "DRE-5400"
