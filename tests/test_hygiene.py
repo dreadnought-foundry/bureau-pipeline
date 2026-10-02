@@ -619,6 +619,54 @@ class TestIdempotency:
             HOME, gh=FakeGh({key: json.dumps([pr(7, comments=[posted])])})))
         assert repeat["actions"][0]["outcome"] == "suppressed"
 
+    def test_a_receipt_older_than_a_cut_short_window_still_suppresses(
+        self, lanes, sent, monkeypatch
+    ):
+        write_lane(lanes, "closer", CLOSE_LANE)
+        _, body = _close()
+        busy = card("DRE-1", "Todo", "portico", comments=["chatter"] * 3)
+        busy["comments"]["pageInfo"]["hasNextPage"] = True
+        reads: list = []
+
+        def whole(ident, whole_thread=False):
+            reads.append((ident, whole_thread))
+            return [{"body": body}, {"body": "chatter"}]
+
+        monkeypatch.setattr(linear_ops, "comment_records", whole)
+        [action] = hygiene.run_leg(board_doc(busy), context(HOME))["actions"]
+        assert action["outcome"] == "suppressed"
+        assert reads == [("DRE-1", True)]
+
+    def test_a_whole_window_is_not_read_again(self, lanes, sent, monkeypatch):
+        write_lane(lanes, "closer", CLOSE_LANE)
+        monkeypatch.setattr(linear_ops, "comment_records",
+                            lambda *_a, **_k: pytest.fail("a whole window was read again"))
+        [action] = hygiene.run_leg(board_doc(card("DRE-1", "Todo", "portico")),
+                                   context(HOME))["actions"]
+        assert action["outcome"] == "executed"
+
+    def test_a_card_the_lane_read_for_itself_is_read_for_its_receipts(
+        self, lanes, sent, monkeypatch
+    ):
+        write_lane(lanes, "child", """
+            child = {"id": "uuid-DRE-8", "identifier": "DRE-8",
+                     "state": {"name": "Backlog"}, "children": {"nodes": []},
+                     "labels": {"nodes": [{"name": "repo:portico"}]}}
+            cause = "parent DRE-7 is Canceled"
+            body = hygiene.receipt("hygiene-card-cancel", cause, ["DRE-7"], ctx.now)
+            out.append(hygiene.Action(lane=LANE, target="DRE-8", act="hygiene-card-cancel",
+                cause=cause, evidence=["DRE-7"],
+                writes=[hygiene.linear_comment(child, body),
+                        hygiene.linear_state(child, "Canceled")]))
+        """)
+        posted = hygiene.receipt("hygiene-card-cancel", "parent DRE-7 is Canceled",
+                                 ["DRE-7"], NOW)
+        monkeypatch.setattr(linear_ops, "comment_records",
+                            lambda ident, whole_thread=False: [{"body": posted}])
+        [action] = hygiene.run_leg(board_doc(), context(HOME))["actions"]
+        assert action["outcome"] == "suppressed"
+        assert sent == []
+
     def test_a_second_pass_over_the_first_pass_receipts_executes_nothing(self, lanes, sent):
         write_lane(lanes, "closer", CLOSE_LANE)
         cards = [card("DRE-1", "Todo", "portico"), card("DRE-2", "Todo", "bureau-pipeline")]
