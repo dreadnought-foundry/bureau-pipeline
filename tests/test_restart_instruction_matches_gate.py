@@ -60,6 +60,7 @@ os.environ.setdefault("GH_TOKEN", "test")
 import fix_concurrency  # noqa: E402
 import fix_context  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "agent-fix.yml")
 SWEEP_STUB = os.path.join(REPO_ROOT, ".github", "workflows", "self-reconcile.yml")
@@ -78,7 +79,7 @@ BANNED = ("restarts itself", "no dispatch needed")
 
 
 def wf_src() -> str:
-    return open(WORKFLOW, encoding="utf-8").read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def fix_job_if() -> str:
@@ -204,7 +205,7 @@ class PrintedInstructionDrivesTheGateTest(unittest.TestCase):
         # "about 15 minutes" is a claim about a cron, so read the cron. (The
         # raw text, not yaml.safe_load: YAML 1.1 parses the `on:` key as the
         # boolean True, which is a worse thing to hardcode than a regex.)
-        stub = open(SWEEP_STUB, encoding="utf-8").read()
+        stub = step_shell.workflow_source(SWEEP_STUB)
         self.assertRegex(stub, r'cron:\s*"\*/15 \* \* \* \*"')
         self.assertIn("15 minutes", fix_context.RESTART_PROMISE)
 

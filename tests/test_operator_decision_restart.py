@@ -35,6 +35,7 @@ os.environ.setdefault("GH_TOKEN", "test")
 
 import fix_context  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -374,7 +375,7 @@ class SweepWiringTest(unittest.TestCase):
 
 
 def wf_src() -> str:
-    return open(WORKFLOW).read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def body_after(marker: str) -> str:

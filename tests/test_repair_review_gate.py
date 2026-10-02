@@ -31,12 +31,13 @@ SCRIPTS = os.path.join(REPO, "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import should_review_pr  # noqa: E402
+import step_shell  # noqa: E402
 
 SHA = "c" * 40
 
 
 def src(workflow: str) -> str:
-    return open(os.path.join(WF_DIR, workflow)).read()
+    return step_shell.workflow_source(os.path.join(WF_DIR, workflow))
 
 
 class RepairBranchIsReviewedTest(unittest.TestCase):

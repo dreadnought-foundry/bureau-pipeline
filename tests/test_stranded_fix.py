@@ -59,6 +59,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import merge_gate  # noqa: E402
 import stranded_fix as sf  # noqa: E402
+import step_shell  # noqa: E402
 
 MODULE = ROOT / "scripts" / "stranded_fix.py"
 MERGE_GATE_YML = ROOT / ".github" / "workflows" / "merge-gate.yml"
@@ -424,7 +425,7 @@ class PushDecision(unittest.TestCase):
 
 class AgentFixInstallsTheGuard(unittest.TestCase):
     def setUp(self):
-        self.doc = yaml.safe_load(AGENT_FIX_YML.read_text())
+        self.doc = yaml.safe_load(step_shell.workflow_source(AGENT_FIX_YML))
         self.steps = self.doc["jobs"]["fix"]["steps"]
 
     def _step(self, name: str) -> dict:
@@ -435,8 +436,8 @@ class AgentFixInstallsTheGuard(unittest.TestCase):
 
     def test_the_pre_push_hook_is_installed(self):
         step = self._step("Refuse a push onto a merged pull request")
-        self.assertIn("pre-push", step["run"])
-        self.assertIn("stranded_fix.py", step["run"])
+        self.assertIn("pre-push", step_shell.step_shell(step))
+        self.assertIn("stranded_fix.py", step_shell.step_shell(step))
 
     def test_it_is_installed_before_the_agent_runs(self):
         names = [s.get("name") for s in self.steps]
@@ -456,8 +457,8 @@ class AgentFixInstallsTheGuard(unittest.TestCase):
 
     def test_the_report_step_routes_a_stranded_fix_onward(self):
         report = self._step("Report")
-        self.assertIn("stranded_fix.py", report["run"])
-        self.assertIn("route", report["run"])
+        self.assertIn("stranded_fix.py", step_shell.step_shell(report))
+        self.assertIn("route", step_shell.step_shell(report))
 
 
 # --------------------------------------------------------------------------- #

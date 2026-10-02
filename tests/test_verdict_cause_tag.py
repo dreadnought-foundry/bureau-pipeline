@@ -56,6 +56,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import check_critic_result  # noqa: E402
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 import publish_review_check  # noqa: E402
 import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
@@ -135,8 +136,7 @@ CARRIED_WITH_CAUSE = Fixture(
 # ── workflow readers ───────────────────────────────────────────────────────
 
 def workflow(name):
-    with open(os.path.join(WF_DIR, name)) as f:
-        return yaml.safe_load(f)
+    return yaml.safe_load(step_shell.workflow_source(os.path.join(WF_DIR, name)))
 
 
 def critic_prompts():
@@ -167,7 +167,7 @@ def run_blocks(name):
     for job in doc["jobs"].values():
         for step in job.get("steps") or []:
             if step.get("run"):
-                out.append(step["run"])
+                out.append(step_shell.step_shell(step))
     return out
 
 

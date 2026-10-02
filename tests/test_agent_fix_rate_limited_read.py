@@ -56,6 +56,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-fix.yml"
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import step_shell  # noqa: E402
+
 REPO = "dreadnought-foundry/portico"
 PR = "582"
 SHA = "d9f2c1ab" + "0" * 32
@@ -84,7 +86,7 @@ VERDICT = (
 
 
 def wf_src() -> str:
-    return WORKFLOW.read_text(encoding="utf-8")
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def steps() -> list:
@@ -175,8 +177,9 @@ class Harness:
         open(self.out_file, "w").close()
         self.refuse_first = refuse_first
 
-    def run_step(self, name: str, values: dict) -> subprocess.CompletedProcess:
-        body = substitute(step_named(name)["run"], values)
+    def run_step(self, name: str, values: dict,
+                 env: dict | None = None) -> subprocess.CompletedProcess:
+        body = substitute(step_shell.step_shell(step_named(name)), values)
         script = os.path.join(self.td, "step.sh")
         with open(script, "w") as f:
             # `bash -e`, as Actions runs a `run:` block with no `shell:` —
@@ -203,6 +206,7 @@ class Harness:
                 EVENT_NAME="workflow_dispatch",
                 TRIGGERING_ACTOR="github-actions",
                 BUREAU_GH_READ_BACKOFF="0,0",
+                **(env or {}),
             ),
             capture_output=True,
             text=True,
@@ -229,6 +233,11 @@ def resolve(thread: list, refuse_first: int):
         proc = h.run_step("Resolve PR, mode, and attempt budget", {
             "github.event.issue.number || github.event.inputs.pr_number": PR,
             "github.repository": REPO,
+        }, env={
+            # The same two values again, as the env the step reads them from
+            # once its shell delegates to a script (DRE-3488).
+            "PR_NUMBER": PR,
+            "REPO": REPO,
         })
         return proc, h.outputs(), h.comment_reads()
 
@@ -366,7 +375,7 @@ class NoCommentReadIsPipedStraightIntoJqTest(unittest.TestCase):
         self.assertGreaterEqual(len(self._comment_reads()), 5, self._comment_reads())
 
     def test_the_resolve_step_reads_the_record_once_through_the_seam(self):
-        body = step_named("Resolve PR, mode, and attempt budget")["run"]
+        body = step_shell.step_shell(step_named("Resolve PR, mode, and attempt budget"))
         reads = [ln for ln in logical_lines(body)
                  if "gh api" in ln and _COMMENT_ENDPOINT.search(ln)]
         self.assertEqual(len(reads), 1, reads)

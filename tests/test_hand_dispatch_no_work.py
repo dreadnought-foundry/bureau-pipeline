@@ -60,6 +60,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/test")
 os.environ.setdefault("GH_TOKEN", "test")
 
 import fix_budget  # noqa: E402
+import step_shell  # noqa: E402
 import fix_context  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -362,7 +363,7 @@ class NoWorkIsReportedTest(unittest.TestCase):
 
 
 def wf_src() -> str:
-    return open(WORKFLOW, encoding="utf-8").read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def steps() -> list:
@@ -390,7 +391,7 @@ class WorkflowWiringTest(unittest.TestCase):
     RESOLVE = "Resolve PR, mode, and attempt budget"
 
     def test_the_resolve_step_calls_fix_budget(self):
-        self.assertIn("fix_budget.py decide", step_named(self.RESOLVE)["run"])
+        self.assertIn("fix_budget.py decide", step_shell.step_shell(step_named(self.RESOLVE)))
 
     def test_the_pipeline_scripts_are_checked_out_before_the_decision(self):
         # fix_budget.py lives in the pipeline checkout, which used to happen
@@ -411,23 +412,23 @@ class WorkflowWiringTest(unittest.TestCase):
         env = " ".join(f"{k}={v}" for k, v in (step.get("env") or {}).items())
         self.assertIn("github.triggering_actor", env)
         self.assertIn("github.event_name", env)
-        self.assertIn("github-actions", step["run"])
+        self.assertIn("github-actions", step_shell.step_shell(step))
 
     def test_a_re_armed_attempt_announces_itself_as_one(self):
         # The re-armed attempt is number 4 against a cap of 3, so the normal
         # "attempt N/3" line would misreport which budget it is spending.
-        run = step_named("Announce fix attempt")["run"]
+        run = step_shell.step_shell(step_named("Announce fix attempt"))
         self.assertIn("steps.pr.outputs.rearmed", run)
         self.assertIn("re-armed", run)
 
     def test_the_no_work_report_is_guarded_on_the_no_work_output(self):
         no_work = [
             s for s in steps()
-            if "no_work" in (s.get("if") or "") and "NO WORK DONE" in (s.get("run") or "")
+            if "no_work" in (s.get("if") or "") and "NO WORK DONE" in (step_shell.step_shell(s) if s.get("run") else "")
         ]
         self.assertEqual(len(no_work), 1, "no step reports a no-work dispatch")
-        self.assertIn("::notice::", no_work[0]["run"])
-        self.assertIn("GITHUB_STEP_SUMMARY", no_work[0]["run"])
+        self.assertIn("::notice::", step_shell.step_shell(no_work[0]))
+        self.assertIn("GITHUB_STEP_SUMMARY", step_shell.step_shell(no_work[0]))
 
 
 # ── the Resolve step, executed for real ────────────────────────────────────
@@ -514,7 +515,7 @@ def run_resolve(td, thread, actor="smeed652", event="workflow_dispatch",
     log = os.path.join(td, "gh-writes.jsonl")
 
     body = substitute(
-        step_named("Resolve PR, mode, and attempt budget")["run"],
+        step_shell.step_shell(step_named("Resolve PR, mode, and attempt budget")),
         {
             "github.event.issue.number || github.event.inputs.pr_number": "199",
             "github.repository": "dreadnought-foundry/bureau-pipeline",
@@ -538,6 +539,10 @@ def run_resolve(td, thread, actor="smeed652", event="workflow_dispatch",
             WORKER_LOGIN=WORKER,
             EVENT_NAME=event,
             TRIGGERING_ACTOR=actor,
+            # The two values substituted above, again as the env the step
+            # reads them from once its shell delegates to a script (DRE-3488).
+            PR_NUMBER="199",
+            REPO="dreadnought-foundry/bureau-pipeline",
         ),
         capture_output=True,
         text=True,

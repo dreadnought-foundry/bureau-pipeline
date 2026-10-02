@@ -51,6 +51,7 @@ os.environ.setdefault("GH_TOKEN", "test")
 import fix_budget  # noqa: E402
 import fix_concurrency  # noqa: E402
 import fix_convergence as fc  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "agent-fix.yml")
 QA_WORKFLOW = os.path.join(ROOT, ".github", "workflows", "qa-review.yml")
@@ -140,7 +141,7 @@ def fixture(name):
 
 
 def wf_src():
-    return open(WORKFLOW, encoding="utf-8").read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def report_step():
@@ -148,8 +149,7 @@ def report_step():
     from the source text on purpose: an `ATTEMPT:` line ANOTHER step owns
     satisfies a substring search of the whole file, which is exactly how
     `ATTEMPT: $ATTEMPT` shipped in this step under a green assertion."""
-    with open(WORKFLOW, encoding="utf-8") as fh:
-        steps = yaml.safe_load(fh)["jobs"]["fix"]["steps"]
+    steps = yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["fix"]["steps"]
     for step in steps:
         if step.get("name") == "Report":
             return step
@@ -158,8 +158,7 @@ def report_step():
 
 def critic_prompts():
     """The `prompt:` input of both critic attempts, from the PARSED yaml."""
-    with open(QA_WORKFLOW, encoding="utf-8") as fh:
-        steps = yaml.safe_load(fh)["jobs"]["review"]["steps"]
+    steps = yaml.safe_load(step_shell.workflow_source(QA_WORKFLOW))["jobs"]["review"]["steps"]
     by_id = {s.get("id"): s for s in steps}
     out = []
     for sid in ("critic", "critic_retry"):

@@ -22,7 +22,12 @@ agent-task.yml escalates. These tests pin the Report step's shell to that shape.
 
 import os
 import re
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -30,7 +35,7 @@ WORKFLOW = os.path.join(
 
 
 def report_step() -> str:
-    src = open(WORKFLOW).read()
+    src = step_shell.workflow_source(WORKFLOW)
     m = re.search(r"name:\s*Report\b(.*?)(?:\n      - name:|\Z)", src, re.S)
     if not m:
         raise AssertionError("'Report' step not found in agent-fix.yml")
@@ -66,7 +71,7 @@ class FixDisputeEscalatesTest(unittest.TestCase):
 
     def test_resolve_step_exposes_head_sha_output(self):
         # The pre-run head SHA must be captured as a step output for the compare.
-        src = open(WORKFLOW).read()
+        src = step_shell.workflow_source(WORKFLOW)
         self.assertIn('echo "head_sha=$HEAD_SHA"', src)
         self.assertIn("steps.pr.outputs.head_sha", src)
 
