@@ -86,7 +86,7 @@ Every queued run undid the `Green Light` the run ahead of it had written,
 and the relay turned that `Planning` entry into yet another dispatch. The
 loop is self-sustaining and only a person killed it.
 
-TWO CONDITIONS, either of which refuses (both unreadable → proceed):
+THREE CONDITIONS, any of which refuses (all unreadable → proceed):
 
 (c) QUEUED BEHIND A LIVE RUN — another run of this same workflow, on this
     same card, was already in flight when THIS dispatch was created. Read
@@ -101,6 +101,18 @@ TWO CONDITIONS, either of which refuses (both unreadable → proceed):
     time the run gets a runner, the entry it was fired for has already been
     served. This is the backstop, and it is what keeps an epic a planner run
     left in `Green Light` there.
+(e) PARKED FOR A PERSON (DRE-5277) — the dispatch was fired for the card
+    ENTERING Triage, and the card carries `needs-human` or its newest
+    comment carries `STALL_PARK_TAG`. The relay dispatches a plan run when
+    an `agent:planner` card enters Triage, and the route reads `triage` as
+    plan mode: back to Planning and a full re-plan. Under DRE-5268 every
+    pipeline park of an epic lands in Triage. A park `plan.yml` writes is
+    already refused by (c), because the parking run is still in flight; a
+    park the SWEEP writes (DRE-5278, DRE-5286) has no such cover, and a plan
+    that will not converge would loop between Planning and Triage with no
+    bound. The labels and the newest comment are read only for a `triage`
+    dispatch, so no other plan dispatch costs an extra read. A person moving
+    the card on to Planning is a `planning` dispatch and never meets this.
 
 Contract with agent-task.yml / plan.yml (the validate_card.py gate
 convention):
@@ -111,7 +123,7 @@ convention):
                       reconcile's blocker gate reads any non-machine comment
                       as a human reply); reporting failures never flip the
                       decision.
-  plan-gate <DRE-N>   the same, for a planner dispatch, on (c)/(d) above.
+  plan-gate <DRE-N>   the same, for a planner dispatch, on (c)/(d)/(e) above.
                       Reads the trigger lane from $TRIGGER_STATE, and from
                       $SENT_BY_RUN the planner run that asked for this one,
                       which is never its duplicate (DRE-4573).
@@ -131,6 +143,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 import card_pr  # ONE line between "abandoned" and "shipped" (DRE-2316)
+import dead_run
 import lane_contract
 import lane_scope
 import linear_ops
@@ -413,8 +426,37 @@ def window_may_be_short(runs: list, own_created_at: str) -> bool:
     return oldest > mine
 
 
+#: The tag the Planning stall exit's park note carries (DRE-5286). Declared
+#: here, where the guard that honors it lives; `reconcile.py` already imports
+#: this module and reads it from here.
+STALL_PARK_TAG = "planning-stall-park"
+
+#: The label a card parked for a person carries — `dead_run`'s, the one every
+#: other reader of the hold uses.
+HOLD_LABEL = dead_run.HOLD_LABEL
+
+#: The lane every pipeline park of an epic lands in (DRE-5268). From the
+#: contract, so a rename is one edit there.
+PARK_LANE = lane_contract.lane("Triage")["name"]
+
+
+def fired_for_park_lane(trigger_state: str) -> bool:
+    """Whether this dispatch was fired for the card ENTERING the park lane —
+    the only dispatch condition (e) reads the card's labels and comment for."""
+    return _canonical_lane(trigger_state).casefold() == PARK_LANE.casefold()
+
+
+def parked_for_a_person(labels: list | None, newest_comment: str) -> bool:
+    """`needs-human` on the card, or the stall exit's tag on its newest
+    comment."""
+    return (HOLD_LABEL in (labels or [])
+            or STALL_PARK_TAG in (newest_comment or ""))
+
+
 def plan_decide(identifier: str, trigger_state: str, current_lane: str,
-                in_flight: list, sent_by_run: str = "") -> Decision:
+                in_flight: list, sent_by_run: str = "",
+                labels: list | None = None,
+                newest_comment: str = "") -> Decision:
     """The planner's skip decision. `in_flight` is what
     `in_flight_when_dispatched` returned for this card; the lane pair is the
     dispatch's trigger lane against the card's lane as it is NOW.
@@ -425,7 +467,11 @@ def plan_decide(identifier: str, trigger_state: str, current_lane: str,
     counting it dropped every revised plan's round-2 review as a duplicate
     (DRE-4467, 2026-09-21). That ONE run is dropped before deciding; any other
     planner run in flight is still a duplicate, and the lane check is
-    unchanged."""
+    unchanged.
+
+    `labels` and `newest_comment` are read for condition (e) only, and only of
+    a dispatch fired for the park lane (DRE-5277): a card a person must look at
+    is not re-planned because it arrived where it was parked."""
     if sent_by_run:
         in_flight = [r for r in in_flight
                      if str(r.get("id")) != str(sent_by_run)]
@@ -441,6 +487,13 @@ def plan_decide(identifier: str, trigger_state: str, current_lane: str,
             True,
             f"{identifier} was dispatched on entering {trigger_state!r} and is "
             f"now in {current_lane!r} — that entry has already been planned",
+        )
+    if (fired_for_park_lane(trigger_state)
+            and parked_for_a_person(labels, newest_comment)):
+        return Decision(
+            True,
+            f"{identifier} is parked in {PARK_LANE} for a person — it "
+            "re-enters planning when a person moves it to Planning",
         )
     return Decision(
         False,
@@ -579,6 +632,19 @@ def _current_lane(identifier: str) -> str:
     return (issue.get("state") or {}).get("name") or ""
 
 
+def _card_labels(identifier: str) -> list:
+    """The card's label names, as they are NOW."""
+    issue = linear_ops.get_issue(identifier, fresh=True)
+    return [n.get("name") or "" for n in
+            ((issue.get("labels") or {}).get("nodes") or [])]
+
+
+def _newest_comment(identifier: str) -> str:
+    """The card's newest comment body, or '' when it has none."""
+    bodies = linear_ops.comment_bodies(identifier)
+    return bodies[-1] if bodies else ""
+
+
 def _plan_siblings(identifier: str, own_run_id: str) -> list:
     """The runs of this workflow, on this card, that were in flight when this
     dispatch was created. [] on any unreadable answer — fail-open.
@@ -659,7 +725,7 @@ def cmd_gate(identifier: str) -> None:
 def cmd_plan_gate(identifier: str) -> None:
     """The planner's gate (DRE-3409). Every read fails open on its own, so a
     GitHub blip costs the run-overlap half and a Linear blip costs the lane
-    half, and neither costs the epic its plan."""
+    half or the park half, and none of them costs the epic its plan."""
     own_run_id = os.environ.get("GITHUB_RUN_ID", "")
     if _is_rerun():
         # A re-run is somebody ASKING for this run again — a person in the
@@ -684,9 +750,24 @@ def cmd_plan_gate(identifier: str) -> None:
         print(f"lane read failed ({e}) — proceeding on fail-open",
               file=sys.stderr)
         lane = ""
+    trigger_state = os.environ.get("TRIGGER_STATE", "")
+    labels, newest = [], ""
+    if fired_for_park_lane(trigger_state):
+        # Condition (e)'s two reads, made for a park-lane dispatch only.
+        try:
+            labels = _card_labels(identifier)
+        except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
+            print(f"label read failed ({e}) — proceeding on fail-open",
+                  file=sys.stderr)
+        try:
+            newest = _newest_comment(identifier)
+        except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
+            print(f"comment read failed ({e}) — proceeding on fail-open",
+                  file=sys.stderr)
     decision = plan_decide(
-        identifier, os.environ.get("TRIGGER_STATE", ""), lane, in_flight,
+        identifier, trigger_state, lane, in_flight,
         sent_by_run=os.environ.get("SENT_BY_RUN", ""),
+        labels=labels, newest_comment=newest,
     )
     if decision.skip:
         _receipt(identifier, decision,

@@ -6,9 +6,8 @@ Four of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
     the failure kept in its write ledger so the run goes red;
-  * `review_rerun.py dispatch` — the retry of a dead post-approval review,
-    which asks for the ACTIVATE route with `trigger_state` / `reason`
-    (DRE-3286);
+  * `review_rerun.py dispatch` — the ask for the second critic's review, with
+    the `trigger_state` and `reason` it is given (DRE-3286, DRE-5277);
   * `planner_queue.py dispatch` and `reconcile.serve_planner_line` — the
     planner line serving the card whose turn has come (DRE-5180, DRE-5178).
     Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is

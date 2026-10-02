@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Should the post-approval review run AGAIN — at what ceiling, and how is that
-run asked for (DRE-3286).
+"""Should the second critic's review run AGAIN — at what ceiling, and how is
+that run asked for (DRE-3286, DRE-5277).
 
 One module, because two workflow cards follow this one (`review death → retry`
 and `re-plan → re-review`) and both of them need the same four answers. A rule
@@ -42,9 +42,13 @@ CLI:
               [--note-file NOTE]
                                       `action=retry|park|leave`, `runs=<ids>`,
                                       and the CEO-facing note for the park.
-  dispatch --epic E --repo OWNER/NAME --reason R [--route activate|plan]
-                                      the ACTIVATE-route repository_dispatch,
-                                      or with `--route plan` the planning run
+  dispatch --epic E --repo OWNER/NAME --reason R [--trigger-state S]
+           [--route activate|plan]
+                                      the second critic's review, asked for
+                                      in the lane `--trigger-state` names
+                                      (default `TRIGGER_STATE_ACTIVATE`, the
+                                      payload this has always sent), or with
+                                      `--route plan` the planning run
                                       that re-reads a one-off card the planner
                                       just revised (DRE-5376). Non-zero on a
                                       failed dispatch (DRE-2034: no receipt on
@@ -75,8 +79,17 @@ import plan_run  # noqa: E402
 #: plan route and re-plans an approved epic.
 TRIGGER_STATE_ACTIVATE = "in progress"
 
-#: Why the run was asked for, on the `reason` payload key. Three askers, three
-#: words, so a run can say which of them started it.
+#: The lane word every review ask the pipeline sends carries (DRE-5277): under
+#: DRE-5268 the second critic reads the plan while the epic still sits in
+#: Planning. One exception, passed explicitly by its sender: the activate
+#: route's hand-back of an approved epic the second critic has not passed
+#: (DRE-5281) sends `TRIGGER_STATE_ACTIVATE`, so the review run makes the move
+#: to Planning itself. `dispatch`'s default stays `TRIGGER_STATE_ACTIVATE`.
+TRIGGER_STATE_REVIEW = "planning"
+
+#: Why the run was asked for, on the `reason` payload key. One word per asker,
+#: so a run can say which of them started it.
+REASON_REVIEW = "review"               # the first critic passed it; the plan route asks
 REASON_REVIEW_RETRY = "review-retry"   # the review died; try again with headroom
 REASON_RE_REVIEW = "re-review"         # the plan changed; read it again
 REASON_RERUN_ACT = "re-run"            # a person asked, with the act below
@@ -182,7 +195,7 @@ def deaths_since_last_round(bodies: list, epic: str | None = None) -> list[dict]
 
 def ceiling_for_run(children, bodies: list,
                     epic: str | None = None) -> tuple[int, str]:
-    """`(max_turns, why)` for the post-approval review about to run.
+    """`(max_turns, why)` for the second critic's review about to run.
 
     Sized from the plan when the newest post-stage record is a round or there
     is none — `plan_critic.post_review_turns`, never a second copy of it. When
@@ -259,24 +272,28 @@ def after_death(bodies: list, epic: str | None,
 
 
 def park_note(bodies: list, epic: str) -> str:
-    """The CEO-facing note for the park, in plain English.
+    """The note for the park, in plain English.
 
     The death sentence itself is `plan_critic.post_release`'s, quoted rather
     than rewritten, so the note and the sweep's own refusal describe the same
-    run in the same words.
+    run in the same words. So is the lane the plan parks in
+    (`plan_critic.BOUND_PARK_LANE`, DRE-5268: every pipeline park of an epic
+    lands there) and the closing ask (`plan_critic.REAPPROVE_HOW`, which
+    DRE-5280 rewrites in that module).
     """
     deaths = deaths_since_last_round(bodies, epic)
     _state, detail = plan_critic.post_release(bodies, epic)
     listed = ", ".join(_runs(deaths))
     return (
-        f"🛑 **The post-approval review of {epic} has run out of turns "
+        f"🛑 **The second critic's review of {epic} has run out of turns "
         f"{len(deaths)} times** — runs {listed}. It is not being started "
         "again.\n\n"
         f"The most recent one: {plan_critic.one_line(detail)}.\n\n"
         "Nothing has been found wrong with the plan and nothing has started "
         "building. A review that keeps running out of turns is a plan that is "
         "too big to read in one pass, so this needs a person rather than a "
-        "third attempt.\n\n"
+        "third attempt. The plan parks in "
+        f"{plan_critic.BOUND_PARK_LANE} for the operator.\n\n"
         f"**What to do:** split the plan into smaller epics — then, once it "
         f"is smaller, {plan_critic.REAPPROVE_HOW}."
     )
@@ -311,15 +328,19 @@ def card_set_diff(before: list[str], after: list[str]) -> dict:
     return {"changed": bool(added or removed), "added": added, "removed": removed}
 
 
-def activate_payload(card: dict, reason: str | None = None) -> dict:
-    """The `client_payload` that asks for the ACTIVATE route.
+def review_payload(card: dict, reason: str | None = None,
+                   trigger_state: str = TRIGGER_STATE_ACTIVATE) -> dict:
+    """The `client_payload` that asks for the second critic's review, in the
+    lane `trigger_state` names.
 
     `plan_run.payload`'s, with `trigger_state` set — never a second hand-built
     copy of the six base fields, or the two dispatchers would come to describe
     one card differently.
     """
-    return plan_run.payload(card, trigger_state=TRIGGER_STATE_ACTIVATE,
-                            reason=reason)
+    return plan_run.payload(card, trigger_state=trigger_state, reason=reason)
+
+
+activate_payload = review_payload  # the name before DRE-5277
 
 
 # --- The CLI seams ----------------------------------------------------------
@@ -380,7 +401,7 @@ def _cmd_ceiling(args) -> int:
         turns = plan_critic.post_review_turns(args.children)
         why = f"could not read the thread ({exc}) — sized from the plan"
     _write_outputs(args.github_output, [("max_turns", str(turns))])
-    print(f"post-approval review ceiling: {turns} turns — {why}")
+    print(f"second critic's review ceiling: {turns} turns — {why}")
     return 0
 
 
@@ -400,8 +421,10 @@ def _cmd_after_death(args) -> int:
 
 
 def _cmd_dispatch(args) -> int:
-    """Ask for the epic's ACTIVATE run — or, with `--route plan`, for the
-    planning run that re-reads a one-off card the planner revised (DRE-5376).
+    """Ask for the second critic's review of the epic, in the lane
+    `--trigger-state` names (the route's own lane when it is not given) — or,
+    with `--route plan`, for the planning run that re-reads a one-off card the
+    planner revised (DRE-5376).
 
     Imported here rather than at module scope so `ceiling` and `card-set` — the
     two seams that must never fail — carry no Linear client at all.
@@ -423,6 +446,7 @@ def _cmd_dispatch(args) -> int:
               file=sys.stderr)
         return 1
     trigger_state, event = ROUTES[args.route]
+    trigger_state = args.trigger_state or trigger_state
     ok, err = plan_run.fire(card, args.repo,
                             trigger_state=trigger_state,
                             reason=args.reason,
@@ -434,9 +458,10 @@ def _cmd_dispatch(args) -> int:
     if not ok:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1
-    asked = ("post-approval review" if args.route == "activate"
+    asked = ("second critic's review" if args.route == "activate"
              else "planning run")
-    print(f"asked {args.repo} for {args.epic}'s {asked} ({args.reason})")
+    print(f"asked {args.repo} for {args.epic}'s {asked} ({args.reason}, "
+          f"trigger state {trigger_state!r})")
     return 0
 
 
@@ -473,10 +498,16 @@ def main(argv: list[str]) -> int:
     d.add_argument("--note-file", default=None)
     d.set_defaults(fn=_cmd_after_death)
 
-    f = sub.add_parser("dispatch", help="ask for the ACTIVATE-route run")
+    f = sub.add_parser("dispatch", help="ask for the second critic's review")
     f.add_argument("--epic", required=True)
     f.add_argument("--repo", required=True)
     f.add_argument("--reason", required=True)
+    # The two lane words `plan.yml`'s route step reads, and only those: a
+    # capitalized copy would silently take the plan route (see
+    # `TRIGGER_STATE_ACTIVATE`). Unset is the route's own lane — for the
+    # default `activate` route, `TRIGGER_STATE_ACTIVATE`, today's payload.
+    f.add_argument("--trigger-state", default=None,
+                   choices=(TRIGGER_STATE_REVIEW, TRIGGER_STATE_ACTIVATE))
     f.add_argument("--route", choices=sorted(ROUTES), default="activate")
     f.set_defaults(fn=_cmd_dispatch)
 
