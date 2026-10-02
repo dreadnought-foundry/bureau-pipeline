@@ -613,3 +613,32 @@ class TestWhatItMayWrite:
         spec.loader.exec_module(core_tests)
         assert MODULE_PATH.exists()
         assert core_tests.scan(MODULE_PATH) == []
+
+
+class TestAReadThatFails:
+    def test_a_failed_read_skips_that_pull_request_and_no_other(self, capsys):
+        doc = fixture()
+        del doc["gh"][f"gh run view 37010000100 --repo {BP} --log"]
+        ctx, gh = context(doc)
+
+        def failing(argv):
+            if " ".join(argv) == f"gh run view 37010000100 --repo {BP} --log":
+                raise RuntimeError("gh exited 1: HTTP 502")
+            return gh(argv)
+
+        ctx.gh = failing
+        items = lane.plan(hygiene.Board(lanes=doc["lanes"], prs=doc["prs"]), ctx)
+        assert actions(items, f"{BP}#601") == []
+        assert {a.target for a in actions(items)} == set(EXPECTED) - {f"{BP}#601"}
+        assert f"{BP}#601 skipped" in capsys.readouterr().err
+
+    def test_a_read_the_core_refuses_is_never_swallowed(self):
+        doc = fixture()
+        ctx, _gh = context(doc)
+
+        def refusing(argv):
+            raise hygiene.Forbidden("ctx.gh is read-only")
+
+        ctx.gh = refusing
+        with pytest.raises(hygiene.Forbidden):
+            lane.plan(hygiene.Board(lanes=doc["lanes"], prs=doc["prs"]), ctx)
