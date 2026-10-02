@@ -2096,13 +2096,14 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         self.assertIn("DRE-9003 migrates a table but no card runs it", refusal)
         self.assertIn(self.EPIC, refusal.splitlines()[0])
 
-    def test_the_unread_refusal_names_the_approval_lane_and_never_todo(self):
+    def test_the_unread_refusal_names_the_way_back_and_never_todo(self):
         """DRE-3088: an epic in Todo dispatches nothing (DRE-2725). This
         refusal used to tell the CEO to "move the epic to Todo again", which
-        is the one instruction that strands it forever."""
+        is the one instruction that strands it forever. Since DRE-5280 the way
+        back it names is the move to Planning (`REAPPROVE_HOW`)."""
         missing = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED, self._cycle())
-        self.assertIn(pc.APPROVAL_LANE, missing)
+        self.assertIn(pc.REVIEW_LANE, missing)
         self.assertNotIn("Todo", missing)
         self.assertEqual(pc.APPROVAL_LANE, "In Progress")
 
@@ -2994,7 +2995,10 @@ class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
     an epic already sitting there cannot be "moved to In Progress" — that was
     DRE-3241's edge, and the answer used to be a two-lane dance the CEO made by
     hand. Since DRE-3287 a comment whose whole body is `RERUN_REVIEW_ACT` asks
-    for the review directly, from any lane, so that is what the notices say."""
+    for the review directly — but the relay reads it only on an epic already In
+    Progress, and since DRE-5268 every pipeline park of an epic lands in Triage.
+    So since DRE-5280 the sentence names neither trigger: it names the move to
+    Planning, which fires the plan run from any lane."""
 
     EPIC = "DRE-3164"
     CHILD = "DRE-3167"
@@ -3004,11 +3008,26 @@ class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
         return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
 
     def test_the_sentence(self):
-        self.assertIn(rr.RERUN_REVIEW_ACT, pc.REAPPROVE_HOW)
-        self.assertIn(pc.APPROVAL_LANE, pc.REAPPROVE_HOW)
-        self.assertIn("Green Light", pc.REAPPROVE_HOW,
-                      "the epic that is parked there approves instead")
+        """DRE-5280: the way back from a park is the move to Planning. Every
+        pipeline park of an epic lands in Triage with `needs-human`, and the
+        relay reads the re-run act only on an epic already In Progress — so a
+        sentence that named the act, or an approval out of Green Light, would
+        send a person to a move that does nothing for a parked epic."""
+        self.assertIn(pc.BOUND_PARK_LANE, pc.REAPPROVE_HOW)
+        self.assertIn("needs-human", pc.REAPPROVE_HOW)
+        self.assertIn(pc.REVIEW_LANE, pc.REAPPROVE_HOW)
+        self.assertNotIn("Green Light", pc.REAPPROVE_HOW)
+        self.assertNotIn("approve", pc.REAPPROVE_HOW.lower())
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, pc.REAPPROVE_HOW)
         self.assertNotIn(RETIRED_MOVE, pc.REAPPROVE_HOW)
+
+    def test_the_sentence_survives_a_double_quoted_shell_string(self):
+        """plan.yml quotes the sentence inside a double-quoted shell string,
+        and its review-mode notes print it through `python3 -c`: a backtick, a
+        dollar sign or a double quote in it would be evaluated by the shell
+        rather than posted."""
+        for char in ("`", "$", '"'):
+            self.assertNotIn(char, pc.REAPPROVE_HOW)
 
     def test_the_sentence_embeds_the_act_and_so_can_never_BE_it(self):
         """DRE-3286's rule, re-pinned from the other side: the relay matches
@@ -3028,15 +3047,17 @@ class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
         self.assertIn("review_rerun.RERUN_REVIEW_ACT", source)
         self.assertNotIn("▶️", source, "the act's own literal, copied")
 
-    def test_the_one_refusal_that_asks_for_something_names_the_act(self):
-        """The only refusal left that asks the CEO for something: nobody has
-        reviewed this plan since he approved it. A dead review (DRE-3289) and a
-        send-back (DRE-3291) both re-run themselves, so both are pinned the
-        other way, below."""
+    def test_the_one_refusal_that_asks_for_something_names_the_way_back(self):
+        """The only refusal left that asks a person for something: nobody has
+        reviewed this plan on its current attempt. A dead review (DRE-3289) and
+        a send-back (DRE-3291) both re-run themselves, so both are pinned the
+        other way, below. Since DRE-5280 the ask is the move to Planning, read
+        through `REAPPROVE_HOW`, and never the act."""
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         self.assertIsNotNone(unread)
         self.assertIn(pc.REAPPROVE_HOW, unread)
-        self.assertIn(rr.RERUN_REVIEW_ACT, unread)
+        self.assertIn(pc.REVIEW_LANE, unread)
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, unread)
         self.assertNotIn(RETIRED_MOVE, unread)
         self.assertNotIn("again by moving it to In Progress", unread)
         self.assertNotIn("Todo", unread)
@@ -3772,15 +3793,15 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
     # --- the re-run sentence, and only it ------------------------------------
 
     def test_the_re_run_sentence_is_byte_identical(self):
-        """DRE-5280 rewrites this sentence together with plan.yml's copy and the
-        wiring assertion that pins the two; this card leaves it alone."""
+        """DRE-5280 rewrote this sentence, together with plan.yml's copy and the
+        wiring assertion that pins the two: clear needs-human, then the move to
+        Planning, where the plan is re-planned on a fresh attempt and read by
+        both critics again."""
         self.assertEqual(
             pc.REAPPROVE_HOW,
-            f"post a comment on the epic that says exactly "
-            f"{rr.RERUN_REVIEW_ACT} — the console's Approve does this "
-            f"for an epic already In Progress — or, for an epic sitting in "
-            f"Green Light, approve it (the console's Approve, or a move to "
-            f"In Progress)")
+            "clear needs-human, then move the epic from Triage to Planning, "
+            "where the planner re-plans it on a fresh attempt and both critics "
+            "read it again before it goes anywhere else")
 
     def test_no_other_string_asks_for_an_approval_out_of_green_light(self):
         """Every string in the module except `reapprove_how`'s own: no sentence

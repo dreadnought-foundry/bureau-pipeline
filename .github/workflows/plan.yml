@@ -761,6 +761,32 @@ jobs:
       # PT). The relay sends the lane the card ENTERED, lower-cased, and the
       # approval move is In Progress (DRE-2725) — so that is the one word this
       # step reads as approval.
+      #
+      # ...and a THIRD route, `review` (DRE-5280): the second critic reads the
+      # plan while the epic sits in Planning, before Green Light, on a run of
+      # its own. The table, as a contract (the reason words are
+      # `review_rerun`'s; the wiring test pins them to its constants):
+      #
+      #   trigger lane   reason                               mode
+      #   in progress    empty, re-run, re-review,            activate (unchanged)
+      #                  review-retry
+      #   in progress    review                               review — the
+      #                                                       activate route's
+      #                                                       hand-back (DRE-5281)
+      #   anything else  empty                                plan (unchanged)
+      #   anything else  review, re-review, review-retry,     review
+      #                  re-run
+      #
+      # `in progress` + `re-review` / `review-retry` stays `activate`: the
+      # pipeline's own re-asks on an approved epic, and the re-review watcher's
+      # In Progress re-ask (DRE-5278), arrive there until DRE-5281 makes this
+      # route the hand-back. A review run writes Planning ITSELF — an epic
+      # asked from Triage, or handed back from In Progress, comes back to
+      # Planning to be read — so no run both moves the lane and dispatches, and
+      # the relay's dispatch for that move arrives while this run is in flight
+      # and is refused as a duplicate. It opens a fresh attempt only when
+      # `activate-cycle` answers `open` — a person's re-run at a park, never a
+      # pipeline reason — exactly as the activate route does.
       - name: Route — plan or activate
         id: route
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'
@@ -772,8 +798,10 @@ jobs:
           MAX_WIP: ${{ inputs.max_wip }}
           # Why this run was asked for (DRE-4115): empty on the CEO's own
           # approval move, `re-run` on the act a person posts, `re-review` and
-          # `review-retry` when the pipeline asked for its own run. Through
-          # env, never interpolated — the value is a payload field.
+          # `review-retry` when the pipeline asked for its own run, `review`
+          # when the plan route or the activate route hands the plan to the
+          # second critic (DRE-5280). Through env, never interpolated — the
+          # value is a payload field.
           REASON: ${{ github.event.client_payload.reason }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
@@ -798,24 +826,19 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
           }
-          if [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
-            # DRE-2721: the activate route now only ROUTES. The state change,
-            # the announcement and the promotion moved to "Activate the
-            # approved epic" below, because the second critic runs between the
-            # CEO's approval and the children reaching agents — and after
-            # promotion a gap is no longer free to fix.
-            echo "mode=activate" >> "$GITHUB_OUTPUT"
-            # DRE-4115: a PERSON re-running a review the bound has parked has
-            # settled what the park asked about, so the review that follows
-            # opens a fresh attempt and judges the settled plan on its own
-            # rounds. Until this, only the plan route wrote a boundary, and
-            # DRE-3778 was approved five times and parked five times on
-            # "round 6 of 2". `activate-cycle` says `open` ONLY for a human
-            # ask (the act, or the approval move) at the bound — never for
-            # the pipeline's own `re-review` / `review-retry`, which would
-            # refund the budget on every round and cut the tombstone the
-            # retry ceiling reads out of the cycle. Read WITH AUTHORS: the
-            # bound it reads is this gate's credential.
+          # DRE-4115: a PERSON re-running a review the bound has parked has
+          # settled what the park asked about, so the review that follows
+          # opens a fresh attempt and judges the settled plan on its own
+          # rounds. Until this, only the plan route wrote a boundary, and
+          # DRE-3778 was approved five times and parked five times on
+          # "round 6 of 2". `activate-cycle` says `open` ONLY for a human
+          # ask (the act, or the approval move) at the bound — never for
+          # the pipeline's own `review` / `re-review` / `review-retry`, which
+          # would refund the budget on every round and cut the tombstone the
+          # retry ceiling reads out of the cycle. Read WITH AUTHORS: the
+          # bound it reads is this gate's credential. The activate route and
+          # the review route (DRE-5280) both ask it.
+          open_attempt_if_a_person_asked() {
             THREAD="${{ runner.temp }}/plan-critic-thread.json"
             python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
               --with-authors > "$THREAD" || echo "[]" > "$THREAD"
@@ -823,6 +846,33 @@ jobs:
                      --epic "$EPIC" --reason "$REASON" < "$THREAD")" = "open" ]; then
               open_attempt
             fi
+          }
+          # DRE-5280: the table above. In Progress is the approval lane, and
+          # there only the activate route's hand-back (`review`) is a review;
+          # from every other lane, any reason a review is asked with is one.
+          REVIEW=false
+          if [ "$FROM" = "in progress" ]; then
+            if [ "$REASON" = "review" ]; then REVIEW=true; fi
+          else
+            case "$REASON" in
+              review|re-review|review-retry|re-run) REVIEW=true ;;
+            esac
+          fi
+          if [ "$REVIEW" = "true" ]; then
+            # The review route. The epic comes back to Planning to be read —
+            # written here, by the run that reads it — and the second critic's
+            # steps below run on it (`mode == 'review'`).
+            echo "mode=review" >> "$GITHUB_OUTPUT"
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            open_attempt_if_a_person_asked
+          elif [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
+            # DRE-2721: the activate route now only ROUTES. The state change,
+            # the announcement and the promotion moved to "Activate the
+            # approved epic" below, because the second critic runs between the
+            # CEO's approval and the children reaching agents — and after
+            # promotion a gap is no longer free to fix.
+            echo "mode=activate" >> "$GITHUB_OUTPUT"
+            open_attempt_if_a_person_asked
           else
             echo "mode=plan" >> "$GITHUB_OUTPUT"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
@@ -3081,9 +3131,18 @@ jobs:
       # separate runs a re-approval produces — and only back as far as this
       # planning attempt's `plan-cycle:` boundary, so a re-plan does not carry
       # the old plan's rounds into the new one.
+      #
+      # TWO ROUTES RUN THESE STEPS (DRE-5280). `review` reads the plan while
+      # the epic sits in Planning, BEFORE Green Light, and has six outcomes of
+      # its own below, each gated on `mode == 'review'` and on the decision's
+      # own outputs — never on `action == 'proceed'` alone, which covers a
+      # critic that never decided. `activate` still runs the old post-approval
+      # review, with its outcomes unchanged, until DRE-5281 makes Approve mean
+      # go and narrows these steps to `review`. Every step name and id here is
+      # unchanged, so config/pipeline-acts.json's rows still match.
       - name: Select model — second critic
         id: postmodel
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         env:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
@@ -3105,21 +3164,30 @@ jobs:
       # critic is handed the epics it may reason about BY NAME, and the block
       # says in the same breath what it cannot see — a critic that does not
       # know what it was shown cannot tell you what it missed.
+      #
+      # `--sight` on both halves (DRE-5280): the epics in
+      # `plan_critic.SIGHT_STATES` — Green Light, Todo, In Progress AND
+      # Planning — and a block that names exactly the lanes read. Under
+      # DRE-5268 a plan is reviewed while its epic sits in Planning, so two
+      # plans read at the same moment would be invisible to each other's
+      # collision check without it; before, both sat in Green Light and saw
+      # each other. `sight --this` still drops this epic from its own list,
+      # which matters now that it is itself in Planning.
       - name: Second critic — cross-epic sight
         id: sight
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
-          python3 .bureau-pipeline/scripts/linear_ops.py epics-in-flight \
-            | python3 .bureau-pipeline/scripts/plan_critic.py sight --this "$EPIC" \
+          python3 .bureau-pipeline/scripts/linear_ops.py epics-in-flight --sight \
+            | python3 .bureau-pipeline/scripts/plan_critic.py sight --this "$EPIC" --sight \
             > "${{ runner.temp }}/plan-critic-sight.md"
           cat "${{ runner.temp }}/plan-critic-sight.md"
 
       - name: Second critic — context
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble plan-critic-post \
             > .bureau-pipeline/agent-context.md
@@ -3153,7 +3221,7 @@ jobs:
       # fifteen-card one — never the floor a fifteen-card plan died at.
       - name: Second critic — turn ceiling
         id: postturns
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3185,7 +3253,7 @@ jobs:
       # fallback reading (a finding raised again verbatim is still open)
       # still bounds the round.
       - name: Second critic — the previous round
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3206,7 +3274,7 @@ jobs:
       # and its reasons are on `Re-mint bot token — planner`.
       - name: Re-mint bot token — second critic
         id: app_posta
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3241,7 +3309,7 @@ jobs:
       # exiting non-zero so the job is as red for the medic as it was before.
       - name: Second critic — review (after approval)
         id: posta
-        if: steps.route.outputs.mode == 'activate'
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.slot.outputs.admitted == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -3360,7 +3428,7 @@ jobs:
       # decision and the activation below skipped.
       - name: Second critic — turns receipt
         id: postreceipt
-        if: always() && steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
+        if: always() && (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3407,7 +3475,7 @@ jobs:
       # paths need the answer.
       - name: Second critic — verdict or death?
         id: postverdict
-        if: always() && steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
+        if: always() && (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
         run: |
           python3 .bureau-pipeline/scripts/plan_critic.py read-result \
             --result-file "${{ runner.temp }}/plan-critic-post.md" \
@@ -3421,7 +3489,7 @@ jobs:
       # are on `Re-mint bot token — planner`.
       - name: Re-mint bot token — after the second critic
         id: app_post
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3564,6 +3632,82 @@ jobs:
           # exactly as silent as 2026-09-05.
           exit 1
 
+      # REVIEW MODE: the review DIED (DRE-5280). The same tombstone, the same
+      # record and the same `review_rerun.py after-death` reading as the
+      # activate-mode step above — that step's comment says why each line is
+      # shaped the way it is — with the two answers that write something
+      # pointed at the review route:
+      #
+      #   retry — `--reason review-retry --trigger-state planning`: the epic
+      #     sits in Planning, and the retry is a review run like this one. No
+      #     lane write.
+      #   park  — `needs-human`, then Triage, then `after-death`'s note. Never
+      #     Green Light: a plan no critic has finished reading is nothing for
+      #     the CEO to approve. The label goes first because the relay
+      #     dispatches a plan run the moment an `agent:planner` card enters
+      #     Triage, and the plan-gate refuses it only when the card already
+      #     carries the label.
+      #
+      # Placed after `Re-mint bot token — after the second critic` and before
+      # any re-plan, so its token is younger than every model step above it
+      # (DRE-3940). Ends red, exactly like the step above.
+      - name: Review — the review died
+        if: steps.route.outputs.mode == 'review' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app_post.outputs.token }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          RECORD="${{ runner.temp }}/plan-critic-death-record.txt"
+          python3 .bureau-pipeline/scripts/plan_critic.py died \
+            --stage post \
+            --epic "$EPIC" \
+            --run "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --step posta \
+            --ceiling "${{ steps.postturns.outputs.max_turns }}" \
+            --execution-file "$EXEC_FILE" \
+            --note-file "${{ runner.temp }}/plan-critic-death-note.md" \
+            --record-file "$RECORD"
+          # The note, then the tombstone ALONE in its own comment.
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-death-note.md")"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "$RECORD")"
+          SUBTYPE=$(sed -n 's/.*[[:space:]]subtype=\([^[:space:]]*\).*/\1/p' "$RECORD")
+          THREAD="${{ runner.temp }}/plan-critic-death-thread.json"
+          PARK_NOTE="${{ runner.temp }}/plan-critic-death-park.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD"
+          python3 .bureau-pipeline/scripts/review_rerun.py after-death \
+            --epic "$EPIC" \
+            --thread-file "$THREAD" \
+            --subtype "$SUBTYPE" \
+            --github-output "$GITHUB_OUTPUT" \
+            --note-file "$PARK_NOTE"
+          ACTION=$(sed -n 's/^action=//p' "$GITHUB_OUTPUT" | tail -1)
+          if [ "$ACTION" = "retry" ]; then
+            # The receipt is written FROM the dispatch's rc (DRE-2034).
+            if python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+                 --epic "$EPIC" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --reason review-retry --trigger-state planning; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🔁 The second critic's review is being run again by the pipeline, with a higher turn ceiling — nothing here is yours to decide, and the epic stays in Planning. If it runs out of turns a second time the epic parks in Triage with needs-human for an operator."
+            else
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🚨 The second critic's review could NOT be started again — the dispatch did not go through, so nothing is reading the plan. This run is red, so the medic picks it up; nothing here is yours to do."
+            fi
+          elif [ "$ACTION" = "park" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$PARK_NOTE")"
+          fi
+          exit 1
+
       # The review DECIDED — either it ran to its decision, or it was cut off
       # after writing its verdict (DRE-3501). The second half of that gate is
       # what makes a `continue-on-error` review safe: on a FAILED review this
@@ -3575,7 +3719,7 @@ jobs:
       # crash is not a rejection (standards/console-honesty.md rule 1).
       - name: Second critic — decision
         id: post1
-        if: steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.postverdict.outputs.verdict != 'NO_RESULT')
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && (steps.posta.outcome == 'success' || steps.postverdict.outputs.verdict != 'NO_RESULT')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3601,6 +3745,128 @@ jobs:
             "$(cat "${{ runner.temp }}/plan-critic-note.md")"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+
+      # --- REVIEW MODE: what the decision reached (DRE-5280) ------------------
+      #
+      # Each outcome below is gated on review mode AND on the decision's own
+      # outputs (`plan_critic.py decide`, DRE-5276), never on `action ==
+      # 'proceed'` alone: `proceed` covers a critic that never decided. Every
+      # Triage park labels first — the relay dispatches a plan run the moment an
+      # `agent:planner` card enters Triage, and the plan-gate refuses it only
+      # when the card already carries `needs-human` — and ends with
+      # `plan_critic.REAPPROVE_HOW`, read through the module rather than
+      # written here, so when DRE-5281 deletes the activate route's copy one
+      # copy remains.
+
+      # PASS, and the first critic's last word on this plan was a proceed: the
+      # ONE step on the plan-or-review path that writes Green Light, and the
+      # only one whose note says both critics read the plan and Approve starts
+      # the build. Both halves of the gate are in the `if:`: a second-critic
+      # PASS alone is not enough, because a person or the activate hand-back
+      # can send a plan the first critic HELD into review mode.
+      #
+      # The note quotes the first critic's own record word, read off its round
+      # record with `parse_markers` over an author-bound thread — the reading
+      # `pre_passed` takes — so a first critic that produced no result is never
+      # called a pass.
+      #
+      # The routing-verdict stamp is the backstop the activation step has run
+      # since DRE-4593: the review-mode re-plan re-runs no proof gate, so a
+      # card the second critic's send-back added would reach the promoter
+      # carrying no verdict. Stamped BEFORE the move, through a FILE rather
+      # than a pipe (this workflow sets no `shell:`, so it is `bash -e`
+      # without `pipefail`, and a pipe would hand the stamper an empty read).
+      - name: Epic → Green Light — both critics passed
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          CHILDREN="${{ runner.temp }}/green-light-children.json"
+          HELD="${{ runner.temp }}/green-light-children-held.md"
+          THREAD="${{ runner.temp }}/green-light-thread.json"
+          rm -f "$HELD"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+            --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
+          if [ -s "$HELD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$HELD")"
+          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD"
+          PRE_WORD=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c '
+          import json, sys
+          import plan_critic as pc
+          rows = [r for r in pc.parse_markers(json.load(open(sys.argv[1])))
+                  if r["stage"] == pc.STAGE_PRE]
+          print(rows[-1]["result"] if rows else "")
+          ' "$THREAD")
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+          if [ "$PRE_WORD" = "PASS" ]; then
+            READ="Both critics passed this plan: the first critic's record says PASS, and so does the second critic's."
+          else
+            READ="The second critic passed this plan. The first critic's record says ${PRE_WORD:-nothing}: it produced no result, which is not a rejection and not a pass, so the second critic was its only full reading."
+          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "✅ Ready for you in Green Light. ${READ} Approve starts the build; nothing is building until you do."
+
+      # PASS, but the first critic's last reading HELD the plan — reachable only
+      # when a person or the activate hand-back sends a plan the first critic
+      # parked at its bound into review mode. It has not been through both
+      # critics, so it never reaches Green Light: it parks for an operator.
+      - name: Review — the second critic passed a plan the first critic held
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "🛑 Parked in Triage with needs-human for an operator. The second critic passed this plan, but the first critic's last reading sent it back, so it has not been through both critics and does not go to Green Light. When it is settled, ${HOW}."
+
+      # NO_RESULT: a crash is not a rejection, and it is not a pass. Below
+      # `plan_critic.MAX_ROUNDS` no-result rounds on this attempt (read through
+      # the module, never restated) the review is asked for again; at it, the
+      # epic parks for an operator. `no_results` counts this round too, so the
+      # first no-result re-asks and the MAX_ROUNDS-th parks. A count that is
+      # not a number is unknown, and parks.
+      #
+      # The receipt is written FROM the dispatch's rc and never ahead of it
+      # (DRE-2034): the ⚠️ note follows a dispatch that went through, and a
+      # dispatch that did not leaves the step red for the medic. Its token is
+      # the one minted after the review, before any re-plan (DRE-3940).
+      - name: Review — the second critic produced no result
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'NO_RESULT'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app_post.outputs.token }}
+          NO_RESULTS: ${{ steps.post1.outputs.no_results }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          MAX=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.MAX_ROUNDS)')
+          HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          case "$NO_RESULTS" in ''|*[!0-9]*) NO_RESULTS="$MAX";; esac
+          if [ "$NO_RESULTS" -lt "$MAX" ]; then
+            if python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+                 --epic "$EPIC" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --reason review --trigger-state planning; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "⚠️ The second critic produced no result, which is not a rejection and not a pass. The review is being asked for again by the pipeline — nothing here is yours to decide, and the epic stays in Planning."
+            else
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🚨 The second critic produced no result, and its review could NOT be asked for again — the dispatch did not go through, so nothing is reading the plan. This run is red, so the medic picks it up; nothing here is yours to do."
+              exit 1
+            fi
+          else
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🛑 Parked in Triage with needs-human for an operator. The second critic could not decide on this plan ${NO_RESULTS} times on this planning attempt, so nobody has finished reading it and it does not go to Green Light. When it is settled, ${HOW}."
+          fi
 
       # The card set BEFORE the re-plan touches it (DRE-3291). The question the
       # step after the re-plan answers — did this revision change what the CEO
@@ -3637,7 +3903,7 @@ jobs:
       # that same default, the belt to those braces.
       - name: Turn ceiling — second critic's re-plan
         id: postreplanturns
-        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3669,7 +3935,7 @@ jobs:
       # SEND_BACK marker and no lane move.
       - name: Re-plan after the second critic sent it back
         id: postreplan
-        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -3738,7 +4004,7 @@ jobs:
       # below; the finish step after it fails the job where this step used to.
       - name: Re-plan after the second critic sent it back — out of capacity?
         id: postreplan_cap
-        if: "!cancelled() && (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && steps.postreplan.outcome == 'failure'"
+        if: "!cancelled() && ((steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan.outcome == 'failure'"
         env:
           EXEC_FILE: ${{ steps.postreplan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
@@ -3749,7 +4015,7 @@ jobs:
 
       - name: Re-mint bot token — Re-plan after the second critic sent it back on the next rung
         id: app_post_retry
-        if: (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && steps.postreplan_cap.outputs.retry == 'true'
+        if: ((steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3765,7 +4031,7 @@ jobs:
 
       - name: Re-plan after the second critic sent it back — on the next rung
         id: postreplan_retry
-        if: (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && steps.postreplan_cap.outputs.retry == 'true'
+        if: ((steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && steps.postreplan_cap.outputs.retry == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -3827,7 +4093,7 @@ jobs:
 
       - name: Re-plan after the second critic sent it back — finished?
         id: postreplan_done
-        if: "!cancelled() && (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && (steps.postreplan.outcome == 'success' || steps.postreplan.outcome == 'failure')"
+        if: "!cancelled() && ((steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold' && steps.slot.outputs.admitted == 'true') && (steps.postreplan.outcome == 'success' || steps.postreplan.outcome == 'failure')"
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3862,7 +4128,7 @@ jobs:
       # stands. Best-effort for the same reason as the re-plan: the park below
       # must happen whatever these steps do.
       - name: Mechanical findings — the revised plan (after approval)
-        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold'
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
@@ -3913,9 +4179,11 @@ jobs:
       # Fresh App token for the send-back dispatch (DRE-3940): the re-plan above
       # is a model run, and continue-on-error, so this runs after a failed one
       # too. The rule and its reasons are on `Re-mint bot token — planner`.
+      # Both routes spend it: the activate route's same-cards re-review and the
+      # review route's re-review (DRE-5280).
       - name: Re-mint bot token — send-back
         id: app_sendback
-        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -3944,17 +4212,18 @@ jobs:
       #     answered every one is not counted against the next; a plan that
       #     keeps growing NEW findings still parks after two answered
       #     revisions. The note is `decide`'s own sentence (`NOTE`), which
-      #     names the findings still open rather than a count, and the act it
-      #     asks for opens a FRESH attempt (the route step) — so it never
-      #     sends an operator into the act that re-parks the epic.
+      #     names the findings still open rather than a count, and the move
+      #     it asks for — `plan_critic.REAPPROVE_HOW`, quoted verbatim, which
+      #     since DRE-5280 is the move to Planning — opens a FRESH attempt on
+      #     the plan route, so it never sends an operator into a move that
+      #     re-parks the epic.
       #   THE CARD SET CHANGED (or the re-plan did not finish) — Green Light,
       #     as before, because the re-plan added or removed cards and that is a
       #     shape the CEO has not read. The notice names them by identifier and
       #     asks for the ONE move that is left: Approve from Green Light. Not
-      #     `plan_critic.REAPPROVE_HOW` — that sentence offers the re-run act
-      #     as well, and here the plan itself is what wants reading: asking for
-      #     the review without the read is the thing this branch exists to
-      #     avoid.
+      #     `plan_critic.REAPPROVE_HOW` — that sentence is the way back from a
+      #     park, and here the plan itself is what wants reading by the person
+      #     who approved it.
       #   THE SAME CARDS — no lane move at all, and the run asks for the review
       #     ITSELF (`repository_dispatch`, ACTIVATE route, `reason: re-review`).
       #     Until this card the workflow moved the epic to Green Light and asked
@@ -4008,7 +4277,7 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
             if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it. ${NOTE} ${CHANGED} When it is settled, clear needs-human, then post a comment on the epic that says exactly ▶️ re-run the review — the console's Approve does this for an epic already In Progress — or, for an epic sitting in Green Light, approve it (the console's Approve, or a move to In Progress). Either one opens a fresh planning attempt with its own rounds: the review judges the settled plan on what it finds then, never on the rounds counted here. Or route it through Planning for a fresh plan."
+              "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it. ${NOTE} ${CHANGED} When it is settled, clear needs-human, then move the epic from Triage to Planning, where the planner re-plans it on a fresh attempt and both critics read it again before it goes anywhere else."
           elif [ "$SET_CHANGED" != "false" ] || [ "$REPLAN_OUTCOME" != "success" ]; then
             # THE CARD SET CHANGED: cards you have not read, or a re-plan that
             # never finished. Either way the plan is yours to look at.
@@ -4039,6 +4308,80 @@ jobs:
               exit 1
             fi
           fi
+
+      # REVIEW MODE: a SEND_BACK below the bound (DRE-5280). The re-plan above
+      # has revised the plan (its prompt is unchanged in this card), and the
+      # review runs again as the next round — a step of its own, so DRE-5299
+      # can gate this dispatch on the revision's re-check. Nothing here is the
+      # CEO's to decide, so no card-set question is asked and no lane is
+      # written: the epic stays in Planning. Until DRE-5299 the revision lives
+      # in the cards, as it does on the activate route.
+      #
+      # The receipt is written FROM the dispatch's rc (DRE-2034), and a
+      # dispatch that did not go through leaves the step red for the medic.
+      # Its token is minted after the re-plan (`Re-mint bot token — send-back`).
+      - name: Review — the revised plan is reviewed again
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
+          FINDING: ${{ steps.post1.outputs.reason }}
+          ROUND: ${{ steps.post1.outputs.round }}
+          REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          if [ -s "$SUMMARY" ]; then
+            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+          elif [ "$REPLAN_OUTCOME" = "success" ]; then
+            CHANGED="The re-plan ran but wrote no summary."
+          else
+            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+          fi
+          case "$ROUND" in ''|*[!0-9]*) ROUND=1;; esac
+          NEXT=$((ROUND + 1))
+          if python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+               --epic "$EPIC" \
+               --repo "$GITHUB_REPOSITORY" \
+               --reason re-review --trigger-state planning; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+          else
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
+            exit 1
+          fi
+
+      # REVIEW MODE: the bound (DRE-5280). Two failed rounds on this attempt
+      # whose findings still stand, or a plan that keeps growing new ones —
+      # `decide`'s own reading (DRE-4115). `needs-human`, then Triage, then the
+      # 🛑 note: `decide`'s sentence (Triage, the operator, the findings still
+      # open), what the re-plan changed, and the way back. Never Green Light: a
+      # plan the second critic held twice is not one to ask anybody to approve.
+      - name: Review — the bound parks the plan in Triage
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          FINDING: ${{ steps.post1.outputs.reason }}
+          # Through env, never interpolated — it carries text an agent wrote.
+          NOTE: ${{ steps.post1.outputs.note }}
+          REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          if [ -s "$SUMMARY" ]; then
+            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+          elif [ "$REPLAN_OUTCOME" = "success" ]; then
+            CHANGED="The re-plan ran but wrote no summary — read the children before re-planning."
+          else
+            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+          fi
+          if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
+          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} ${CHANGED} When it is settled, ${HOW}."
 
       # Proceeding: the state change, the announcement and the event-driven
       # promotion that used to live in the route step. Reached on a PASS and on

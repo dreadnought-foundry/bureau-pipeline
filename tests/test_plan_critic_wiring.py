@@ -1095,7 +1095,10 @@ class EveryNoticeThatAsksForAReRunNamesTheAct(unittest.TestCase):
         self.assertEqual(run.count(pc.REAPPROVE_HOW), 1,
                          "only the parked notice names the re-run act")
         self.assertIn(pc.REAPPROVE_HOW, bound)
-        self.assertIn(rr.RERUN_REVIEW_ACT, bound)
+        # DRE-5280: the way back from a park is the move to Planning, not the
+        # act — the relay ignores the act on an epic that is not In Progress.
+        self.assertIn(pc.REVIEW_LANE, bound)
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, bound)
 
         self.assertNotIn(pc.REAPPROVE_HOW, changed)
         self.assertIn("Green Light", changed)
@@ -1262,6 +1265,326 @@ class TheResultFileDecidesNotTheStepOutcome(unittest.TestCase):
                                       env=dict(os.environ, GITHUB_OUTPUT=gho))
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(open(gho).read(), expected + "\n")
+
+
+# --- DRE-5280: the second critic reads the plan before Green Light ----------
+#
+# A `review` route of its own. The second critic's steps run in review mode
+# AND in activate mode (DRE-5281 narrows them to review), and review mode has
+# six outcomes of its own, each gated on the decision's own outputs — never on
+# `action == 'proceed'` alone, because `proceed` covers a critic that never
+# decided.
+
+REVIEW_MODE = "steps.route.outputs.mode == 'review'"
+ACTIVATE_MODE = "steps.route.outputs.mode == 'activate'"
+BOTH_MODES = f"({REVIEW_MODE} || {ACTIVATE_MODE})"
+SLOT_CLAUSE = "steps.slot.outputs.admitted == 'true'"
+
+GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
+REVIEW_HELD_PASS = "Review — the second critic passed a plan the first critic held"
+REVIEW_NO_RESULT = "Review — the second critic produced no result"
+REVIEW_DIED = "Review — the review died"
+REVIEW_RE_REVIEW = "Review — the revised plan is reviewed again"
+REVIEW_BOUND = "Review — the bound parks the plan in Triage"
+REVIEW_OUTCOMES = (GREEN_LIGHT_BOTH, REVIEW_HELD_PASS, REVIEW_NO_RESULT,
+                   REVIEW_DIED, REVIEW_RE_REVIEW, REVIEW_BOUND)
+
+# The steps that ran under `mode == 'activate'` before this card and now run in
+# both modes: `Select model — second critic` through `Second critic — decision`
+# (the activate-mode death excepted — it is an OUTCOME, and review mode has its
+# own), the re-plan with its turn ceiling and capacity retry, the mechanical
+# findings after it, and the mint the review-mode re-review dispatch spends.
+SHARED_STEPS = (
+    "Select model — second critic",
+    "Second critic — cross-epic sight",
+    "Second critic — context",
+    "Second critic — turn ceiling",
+    "Second critic — the previous round",
+    "Re-mint bot token — second critic",
+    "Second critic — review (after approval)",
+    "Second critic — turns receipt",
+    "Second critic — verdict or death?",
+    "Re-mint bot token — after the second critic",
+    "Second critic — decision",
+    "Turn ceiling — second critic's re-plan",
+    "Re-plan after the second critic sent it back",
+    "Re-plan after the second critic sent it back — out of capacity?",
+    "Re-mint bot token — Re-plan after the second critic sent it back on the next rung",
+    "Re-plan after the second critic sent it back — on the next rung",
+    "Re-plan after the second critic sent it back — finished?",
+    "Mechanical findings — the revised plan (after approval)",
+    "Re-mint bot token — send-back",
+)
+
+# The activate-mode outcomes, unchanged by this card (DRE-5281 retires them).
+ACTIVATE_ONLY_STEPS = (
+    "Second critic — the review died",
+    "Children before the re-plan",
+    "Re-plan — did the card set change?",
+    "Second critic sent the plan back",
+    "Activate the approved epic",
+)
+
+# The step ids the wiring tests and the act registry key on.
+CARD_STEP_IDS = ("route", "post1", "postmodel", "sight", "postturns", "posta",
+                 "postverdict", "postreplan", "cardset")
+
+GREEN_LIGHT_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Green Light"')
+TRIAGE_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Triage"')
+
+
+def exact_step(name: str) -> dict:
+    """The step called exactly `name` — `step_named` takes the FIRST step whose
+    name merely contains a fragment, and the review steps share words with
+    the activate ones above them."""
+    found = [s for s in steps() if s.get("name") == name]
+    if len(found) != 1:
+        raise AssertionError(f"{len(found)} steps named exactly {name!r}")
+    return found[0]
+
+
+def exact_index(name: str) -> int:
+    return next(i for i, s in enumerate(steps()) if s.get("name") == name)
+
+
+def gate_of(s: dict) -> str:
+    return str(s.get("if") or "")
+
+
+def run_of(s: dict) -> str:
+    return str(s.get("run") or "")
+
+
+def runs_in_review(s: dict) -> bool:
+    return REVIEW_MODE in gate_of(s)
+
+
+def review_only(s: dict) -> bool:
+    return runs_in_review(s) and ACTIVATE_MODE not in gate_of(s)
+
+
+def token_mint_index(name: str) -> int:
+    env = exact_step(name).get("env") or {}
+    ids = re.findall(r"^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.token \}\}$",
+                     str(env.get("GH_TOKEN") or ""))
+    assert len(ids) == 1, env.get("GH_TOKEN")
+    return next(i for i, s in enumerate(steps()) if s.get("id") == ids[0])
+
+
+class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
+    """DRE-5280, read off the rail."""
+
+    def test_the_route_step_reads_the_reason_words_review_rerun_owns(self):
+        run = run_of(exact_step(ROUTE))
+        for word in (rr.REASON_REVIEW, rr.REASON_RE_REVIEW,
+                     rr.REASON_REVIEW_RETRY, rr.REASON_RERUN_ACT):
+            self.assertIn(word, run)
+        self.assertIn(rr.TRIGGER_STATE_ACTIVATE, run)
+        for mode in ("plan", "review", "activate"):
+            self.assertIn(f'echo "mode={mode}" >> "$GITHUB_OUTPUT"', run)
+        # Review mode moves the epic to Planning itself, as a literal the
+        # writer check reads, and opens an attempt only on `activate-cycle`.
+        self.assertGreaterEqual(run.count('state "$EPIC" "Planning"'), 1)
+        self.assertIn("activate-cycle", run)
+        self.assertIn(SLOT_CLAUSE, gate_of(exact_step(ROUTE)))
+
+    def test_every_step_name_and_id_this_card_found_still_exists(self):
+        names = {s.get("name") for s in steps()}
+        for name in SHARED_STEPS + ACTIVATE_ONLY_STEPS + (ROUTE, "Epic → Green Light"):
+            self.assertIn(name, names)
+        ids = {s.get("id") for s in steps()}
+        for ident in CARD_STEP_IDS:
+            self.assertIn(ident, ids)
+
+    def test_the_shared_steps_run_in_both_modes(self):
+        for name in SHARED_STEPS:
+            with self.subTest(step=name):
+                gate = gate_of(exact_step(name))
+                self.assertIn(REVIEW_MODE, gate)
+                self.assertIn(ACTIVATE_MODE, gate)
+
+    def test_the_verdict_steps_and_the_decision_share_one_mode_predicate(self):
+        """The DRE-3241 trap, guarded in the new mode: were the decision to run
+        in review mode while `verdict or death?` did not, a failed review would
+        leave `verdict` empty, `'' != 'NO_RESULT'` would admit the decision,
+        and an empty result file would be decided as a round."""
+        for name in ("Second critic — turns receipt",
+                     "Second critic — verdict or death?",
+                     "Second critic — decision"):
+            with self.subTest(step=name):
+                self.assertIn(BOTH_MODES, gate_of(exact_step(name)))
+
+    def test_the_activate_outcomes_are_unchanged_and_never_run_in_review_mode(self):
+        for name in ACTIVATE_ONLY_STEPS:
+            with self.subTest(step=name):
+                gate = gate_of(exact_step(name))
+                self.assertIn(ACTIVATE_MODE, gate)
+                self.assertNotIn(REVIEW_MODE, gate)
+
+    def test_the_six_outcomes_are_review_only(self):
+        for name in REVIEW_OUTCOMES:
+            with self.subTest(step=name):
+                self.assertTrue(review_only(exact_step(name)), gate_of(exact_step(name)))
+
+    def test_no_outcome_is_gated_on_proceed_alone(self):
+        for name in REVIEW_OUTCOMES:
+            with self.subTest(step=name):
+                self.assertNotIn("action == 'proceed'", gate_of(exact_step(name)))
+
+    def test_the_only_green_light_write_in_review_mode_needs_both_critics(self):
+        writers = [s.get("name") for s in steps()
+                   if runs_in_review(s) and GREEN_LIGHT_WRITE.search(run_of(s))]
+        self.assertEqual(writers, [GREEN_LIGHT_BOTH])
+        gate = gate_of(exact_step(GREEN_LIGHT_BOTH))
+        self.assertIn("steps.post1.outputs.result == 'PASS'", gate)
+        self.assertIn("steps.post1.outputs.pre_passed == 'true'", gate)
+
+    def test_the_green_light_step_stamps_first_and_quotes_the_first_critics_word(self):
+        run = run_of(exact_step(GREEN_LIGHT_BOTH))
+        self.assertIn("plan_child_verdicts.py stamp", run)
+        self.assertLess(run.index("plan_child_verdicts.py stamp"),
+                        GREEN_LIGHT_WRITE.search(run).start())
+        self.assertIn("parse_markers", run,
+                      "the first critic's word is read off its own record")
+        self.assertIn("Approve", run)
+
+    def test_the_green_light_step_follows_the_plan_routes_own(self):
+        """Tests that locate the plan route's Green Light step by substring take
+        the FIRST match; the plan route's step must stay first until DRE-5284
+        retires it."""
+        self.assertLess(exact_index(GREEN_LIGHT), exact_index(GREEN_LIGHT_BOTH))
+        self.assertEqual(index_of(GREEN_LIGHT), exact_index(GREEN_LIGHT))
+
+    def test_a_pass_the_first_critic_held_reaches_exactly_one_step(self):
+        reached = [s.get("name") for s in steps()
+                   if runs_in_review(s)
+                   and "steps.post1.outputs.result == 'PASS'" in gate_of(s)
+                   and "steps.post1.outputs.pre_passed != 'true'" in gate_of(s)]
+        self.assertEqual(reached, [REVIEW_HELD_PASS])
+        run = run_of(exact_step(REVIEW_HELD_PASS))
+        self.assertIn("add-label", run)
+        self.assertIn("needs-human", run)
+        self.assertRegex(run, TRIAGE_WRITE)
+        self.assertNotRegex(run, GREEN_LIGHT_WRITE)
+
+    def test_no_result_reaches_one_outcome_that_asks_again_or_parks(self):
+        reached = [s.get("name") for s in steps()
+                   if runs_in_review(s)
+                   and "steps.post1.outputs.result == 'NO_RESULT'" in gate_of(s)]
+        self.assertEqual(reached, [REVIEW_NO_RESULT])
+        run = run_of(exact_step(REVIEW_NO_RESULT))
+        self.assertIn(f"--reason {rr.REASON_REVIEW} --trigger-state "
+                      f"{rr.TRIGGER_STATE_REVIEW}", run)
+        self.assertIn("plan_critic.MAX_ROUNDS", run, "read, never restated")
+        self.assertIn("NO_RESULTS", run)
+        self.assertIn("needs-human", run)
+        self.assertRegex(run, TRIAGE_WRITE)
+        self.assertNotRegex(run, GREEN_LIGHT_WRITE)
+        self.assertGreater(token_mint_index(REVIEW_NO_RESULT),
+                           exact_index("Second critic — review (after approval)"))
+
+    def test_a_send_back_below_the_bound_re_plans_then_dispatches_a_re_review(self):
+        reached = [s.get("name") for s in steps()
+                   if review_only(s)
+                   and "steps.post1.outputs.action == 'hold'" in gate_of(s)
+                   and "steps.post1.outputs.bound != 'true'" in gate_of(s)]
+        self.assertEqual(reached, [REVIEW_RE_REVIEW])
+        run = run_of(exact_step(REVIEW_RE_REVIEW))
+        self.assertIn(f"--reason {rr.REASON_RE_REVIEW} --trigger-state "
+                      f"{rr.TRIGGER_STATE_REVIEW}", run)
+        self.assertNotIn("linear_ops.py state", run, "a re-review writes no lane")
+        self.assertNotIn("add-label", run)
+        last_replan = exact_index(
+            "Re-plan after the second critic sent it back — on the next rung")
+        self.assertGreater(exact_index(REVIEW_RE_REVIEW), last_replan)
+        self.assertGreater(token_mint_index(REVIEW_RE_REVIEW), last_replan)
+
+    def test_a_re_review_receipt_hangs_off_the_dispatch(self):
+        run = run_of(exact_step(REVIEW_RE_REVIEW))
+        head, _, tail = run.partition("review_rerun.py dispatch")
+        self.assertNotIn("linear_ops.py comment", head)
+        self.assertRegex(run, r"if\s+python3\s+\S*review_rerun\.py dispatch")
+        self.assertIn("🔁", tail)
+        self.assertIn("could NOT", tail)
+        self.assertIn("exit 1", tail)
+
+    def test_the_bound_and_the_second_death_park_in_triage(self):
+        bound = exact_step(REVIEW_BOUND)
+        self.assertIn("steps.post1.outputs.bound == 'true'", gate_of(bound))
+        died = exact_step(REVIEW_DIED)
+        self.assertIn("steps.posta.outcome == 'failure'", gate_of(died))
+        self.assertIn("steps.postverdict.outputs.verdict == 'NO_RESULT'", gate_of(died))
+        for s in (bound, died):
+            with self.subTest(step=s.get("name")):
+                run = run_of(s)
+                self.assertIn("add-label", run)
+                self.assertIn("needs-human", run)
+                self.assertRegex(run, TRIAGE_WRITE)
+                self.assertNotRegex(run, GREEN_LIGHT_WRITE)
+        run = run_of(died)
+        self.assertIn(f"--reason {rr.REASON_REVIEW_RETRY} --trigger-state "
+                      f"{rr.TRIGGER_STATE_REVIEW}", run)
+        self.assertIn("review_rerun.py after-death", run)
+        self.assertIn("plan_critic.py died", run)
+        self.assertTrue(run.rstrip().endswith("exit 1"))
+        self.assertGreater(token_mint_index(REVIEW_DIED),
+                           exact_index("Second critic — review (after approval)"))
+
+    def test_no_review_only_step_but_one_writes_green_light(self):
+        for s in steps():
+            if review_only(s) and s.get("name") != GREEN_LIGHT_BOTH:
+                with self.subTest(step=s.get("name")):
+                    self.assertNotRegex(run_of(s), GREEN_LIGHT_WRITE)
+
+    def test_every_triage_park_in_review_mode_labels_before_it_moves(self):
+        """The relay dispatches a plan run the moment an `agent:planner` card
+        enters Triage, and the plan-gate refuses it only when the card already
+        carries `needs-human` (scripts/rereview_watch.py)."""
+        parks = [s for s in steps() if review_only(s) and TRIAGE_WRITE.search(run_of(s))]
+        self.assertEqual(sorted(s.get("name") for s in parks),
+                         sorted((REVIEW_HELD_PASS, REVIEW_NO_RESULT,
+                                 REVIEW_DIED, REVIEW_BOUND)))
+        for s in parks:
+            with self.subTest(step=s.get("name")):
+                run = run_of(s)
+                self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+
+    def test_the_re_run_sentence_is_read_from_its_module_never_a_literal(self):
+        for s in steps():
+            if review_only(s):
+                with self.subTest(step=s.get("name")):
+                    self.assertNotIn(pc.REAPPROVE_HOW, run_of(s))
+        for name in (REVIEW_HELD_PASS, REVIEW_NO_RESULT, REVIEW_BOUND):
+            with self.subTest(step=name):
+                self.assertIn("plan_critic.REAPPROVE_HOW", run_of(exact_step(name)))
+
+    def test_the_sight_step_reads_the_sight_states(self):
+        run = run_of(exact_step("Second critic — cross-epic sight"))
+        self.assertIn("linear_ops.py epics-in-flight --sight", run)
+        self.assertIn('plan_critic.py sight --this "$EPIC" --sight', run)
+
+    def test_every_review_mode_model_step_waits_for_its_planner_slot(self):
+        models = [s for s in steps()
+                  if runs_in_review(s) and str(s.get("uses") or "").split("@")[0] == ACTION]
+        self.assertEqual(
+            sorted(s.get("id") for s in models),
+            ["posta", "postreplan", "postreplan_retry"])
+        for s in models:
+            with self.subTest(step=s.get("name")):
+                self.assertIn(SLOT_CLAUSE, gate_of(s))
+
+    def test_every_review_mode_comment_is_declared_by_its_step(self):
+        sites = [site for site in car.sites()
+                 if site.path == ".github/workflows/plan.yml"
+                 and site.step in REVIEW_OUTCOMES]
+        self.assertTrue(sites)
+        declared = car.declarations()
+        for site in sites:
+            with self.subTest(site=site.where):
+                hits = [d for d in declared if car._matches(d, site)]
+                self.assertEqual(len(hits), 1)
+                self.assertEqual(hits[0].get("step"), site.step)
+                self.assertTrue((hits[0].get("why") or "").strip())
 
 
 if __name__ == "__main__":

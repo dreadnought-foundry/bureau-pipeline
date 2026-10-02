@@ -497,11 +497,14 @@ class TestTheRepairPass:
 #: this card removes. DRE-5231 added the review-nudge cap's hand-off
 #: (`hand_review_nudge_to_person`), which labels a card whose pull request is
 #: open and leaves it in `In Review` — the fourth reconcile.py site.
+#: DRE-5280 added plan.yml's four review-route parks (the review died, a
+#: second-critic PASS on a plan the first critic held, a no-result at the
+#: bound, and the bound), each pairing the label with a move to Triage.
 _LABEL_WRITERS = (
     ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 4),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
-    (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 2),
+    (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 6),
 )
 
 #: The two dead-run cap sites in `main()`, each of which pairs the label with a

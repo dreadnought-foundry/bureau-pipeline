@@ -1809,60 +1809,44 @@ APPROVAL_LANE = "In Progress"
 
 
 def reapprove_how() -> str:
-    """HOW to ask for the review again, in every notice that asks for it.
+    """HOW a person brings a parked plan back, in every notice that asks.
 
-    The relay has TWO triggers and this names both (DRE-3292):
+    Since DRE-5268 every pipeline park of an epic lands in `BOUND_PARK_LANE`
+    (Triage) with `needs-human`, and the way back is ONE move (DRE-5280):
+    clear the label, then move the epic to `REVIEW_LANE` (Planning). A move
+    into Planning fires the plan run for any card, the plan route opens a fresh
+    planning attempt, and both critics read the re-planned plan before it goes
+    anywhere else.
 
-      * a transition INTO In Progress, which is how a plan is approved
-        (`_is_epic_activation`). DRE-3241's edge is that an epic ALREADY
-        sitting there — which is where a dead or unread review leaves it —
-        cannot make that move, so this trigger reaches only an epic parked in
-        Green Light.
-      * a comment whose whole body is `review_rerun.RERUN_REVIEW_ACT`
-        (DRE-3287). That one asks for the review directly, from whichever lane
-        the epic is in, and it is what the console's Approve posts for an epic
-        already In Progress.
-
-    Until the relay learned the act, the only way to ask was to move the epic
-    out to Green Light and approve it back in — a two-lane dance asked of a
-    person for a review nothing else would start. Now the act is the ask, and
-    the approval is the second half for the epic that is parked.
+    Until DRE-5280 this sentence named the relay's two triggers instead (DRE-
+    3292): the comment `review_rerun.RERUN_REVIEW_ACT`, and an approval out of
+    Green Light. Neither reaches a parked epic any more. The relay reads the
+    act only on an epic already In Progress and ignores it in every other lane
+    (agent-bureau `cloud/relay/lambda_function.py`,
+    `_handle_rerun_review_act`, checked 2026-09-29), and an approval is the
+    CEO's answer to a plan both critics passed, never the way to re-run a
+    review. So the sentence names no act and no approval.
 
     One sentence, used by every refusal here and quoted verbatim by plan.yml's
-    own notices (the wiring test pins the two copies to each other), so no
-    receipt can point at a move that does nothing.
+    activate-route park notice (the wiring test pins the two copies to each
+    other); plan.yml's review-mode notes read it through this module, never as
+    a literal. Free of backticks, dollar signs and double quotes, because the
+    workflow quotes it inside a double-quoted shell string.
 
-    Its Green Light half — approving a parked epic to re-run its review — is
-    the old moment, and DRE-5280 retires it together with plan.yml's copy and
-    the wiring assertion that pins the two.
-
-    Because the act is embedded in prose, no notice built from this sentence
-    can BE the act: the relay matches the whole comment body (`is_rerun_act`),
-    so a notice that quoted it alone would re-run the review every time the
-    pipeline posted it (DRE-3286).
-
-    A function, not a constant, for one reason: the act belongs to
-    `review_rerun`, which imports THIS module. A top-level import here would
-    read a half-built module whenever `review_rerun` is the one imported
-    first, and the sentence would lose the act silently. Deferred, both orders
-    work — the same shape `linear_ops.cmd_epics_in_flight` uses to read
-    `IN_FLIGHT_EPIC_STATES` from here.
+    A function behind `REAPPROVE_HOW` (PEP 562, `__getattr__` below) because
+    every caller has always read it by that name.
     """
-    import review_rerun
-
     return (
-        f"post a comment on the epic that says exactly "
-        f"{review_rerun.RERUN_REVIEW_ACT} — the console's Approve does this "
-        f"for an epic already {APPROVAL_LANE} — or, for an epic sitting in "
-        f"Green Light, approve it (the console's Approve, or a move to "
-        f"{APPROVAL_LANE})"
+        f"clear needs-human, then move the epic from {BOUND_PARK_LANE} to "
+        f"{REVIEW_LANE}, where the planner re-plans it on a fresh attempt and "
+        f"both critics read it again before it goes anywhere else"
     )
 
 
 def __getattr__(name: str):
     """`plan_critic.REAPPROVE_HOW` — the constant every caller has always
-    read (PEP 562), built on first read so `reapprove_how`'s deferred import
-    can happen. Anything else is the AttributeError it would have been.
+    read (PEP 562), built from `reapprove_how` on each read. Anything else is
+    the AttributeError it would have been.
 
     `card_tells` rides the same seam for the same reason (DRE-3079): it IS
     `split_ledger.tells` — the ledger's own reader for DRE-2893's four tells,

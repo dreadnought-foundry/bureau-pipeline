@@ -425,14 +425,18 @@ class TheWriterIsDeclaredTest(unittest.TestCase):
 
     def test_every_site_that_stamps_also_adopts(self):
         """Adoption is part of `stamp`, not a second subcommand a site could
-        be wired without — so the three places plan.yml finishes a plan's
-        children all adopt, and none of them can drift apart from the others."""
+        be wired without — so the four places plan.yml finishes a plan's
+        children all adopt, and none of them can drift apart from the others.
+
+        The fourth is DRE-5280's `Epic → Green Light — both critics passed`,
+        the review route's one Green Light write, which stamps as a backstop
+        because the review-mode re-plan re-runs no proof gate."""
         src = MODULE.read_text(encoding="utf-8")
         self.assertTrue("cmd_advance" in src,
                         "the batch stamper performs the adoption move")
         runs = [s.get("run") or "" for s in wf_steps()]
         sites = [r for r in runs if "plan_child_verdicts.py stamp" in r]
-        self.assertEqual(len(sites), 3, "plan.yml's three planning-exit sites")
+        self.assertEqual(len(sites), 4, "plan.yml's four planning-exit sites")
 
     def test_the_move_is_not_a_second_state_writer(self):
         """One door. The lane write goes through `linear_ops`, which is what
