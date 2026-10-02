@@ -204,7 +204,7 @@ class TestTheTrailerIsAdditive:
         of what the pipeline used to say."""
         for name in pipeline_act.acts():
             emits = pipeline_act.record(name)["emits"]
-            text = (ROOT / emits["file"]).read_text(encoding="utf-8")
+            text = pipeline_act._source(emits["file"])
             assert text.count(emits["anchor"]) == 1, (
                 f"{name}: {emits['anchor']!r} must appear exactly once in "
                 f"{emits['file']} — an ambiguous anchor pins nothing"
