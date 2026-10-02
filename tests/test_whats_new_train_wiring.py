@@ -260,7 +260,8 @@ def test_the_note_renders_whats_new_above_the_card_bullets():
         label="portals", version="portals-v1.0.1", cards=CARDS, unnamed=[],
         first=False, whats_new=ITEMS)
     lines = note.splitlines()
-    assert lines[0] == "## portals 1.0.1"
+    # The headline is DRE-3854's, unchanged (tests/test_release_linear.py).
+    assert lines[0] == "## portals v1.0.1"
     heading = lines.index("## What's new")
     improved = lines.index(
         "* Improved — Searching a document now finds words inside tables.")

@@ -53,15 +53,29 @@ repository checked out at `RELEASE_SHA`. In return:
 Anything else the surface needs — a smoke test, a cache invalidation — stays
 inside the script, where it already is.
 
-**The Linear release is the one exception, and it is the train's.** A surface
-that names its Linear release pipeline in `release.json`'s top-level
+**There are two exceptions, and both are the train's.** The script owes
+nothing for either, and neither ever fails a release.
+
+**The first is `whats-new.json`, published for every surface** (DRE-5516).
+Once the script's tag is verified, the train collects the `What's new:` lines
+of the pull requests the release carries (`standards/whats-new.md`) and
+publishes them as the `whats-new.json` asset of the tag's GitHub Release
+(`scripts/whats_new_release.py`). It does this for every surface, pipeline or
+not. Reading a private repository's pull requests needs `pull-requests: read`
+in the stub below. A stub without it publishes nothing, and the run says so in
+one `What's new not published` annotation and a block on its summary page.
+
+**The second is the Linear release, for a surface that declares a pipeline.**
+A surface that names its Linear release pipeline in `release.json`'s top-level
 `linear_pipelines` key gets its release written by the train
-(`scripts/release_linear.py`): after the script's tag is verified, the release
-is synced with the tag as its version and the cards its changes named since the
-previous tag, completed, and given one note. The script owes nothing for it and
-should not write one of its own, or the surface gets two. It never fails a
-release. A script that already writes its own Linear release (agent-bureau's
-three, from before this seam) declares no pipeline here and is untouched.
+(`scripts/release_linear.py`): after the file above, the release is synced with
+the tag as its version and the cards its changes named since the previous tag,
+completed, and given one note. The note opens with a `## What's new` section
+rendered from the same items as the file, so the two never disagree. The
+script should not write a release of its own, or the surface gets two. A script
+that already writes its own Linear release (agent-bureau's three, from before
+this seam) declares no pipeline here and is untouched: it gets the file and no
+`## What's new` section in its note.
 
 ## The rollback
 
@@ -105,6 +119,7 @@ permissions:
   checks: read
   actions: write
   deployments: write
+  pull-requests: read
 
 jobs:
   call:

@@ -226,6 +226,7 @@ import intake_controls  # noqa: E402
 import merge_gate  # noqa: E402
 import release_decision  # noqa: E402 — the decision, as a message GitHub delivers (DRE-4768)
 import release_linear  # noqa: E402 — the Linear release every declared surface gets (DRE-3854)
+import whats_new_release  # noqa: E402 — the release's whats-new.json (DRE-5513, DRE-5516)
 
 #: The clock every window is read on. GitHub's `schedule:` takes UTC only and
 #: has no timezone field, so a cron line knows nothing about PT; the train
@@ -2279,6 +2280,23 @@ def render_markdown() -> str:
                  indent=2))
     w("```")
     w("")
+    w(
+        "**What's new, before the Linear release** (DRE-5516). Every verified "
+        "tag first publishes its `whats-new.json` (`scripts/whats_new_release.py`, "
+        "`standards/whats-new.md`), then writes the Linear release. Its note "
+        "gains a `## What's new` section above the card bullets, with one "
+        "`* <Kind> — <title> <body>` bullet per published item. A release with "
+        "nothing to say leaves the note exactly as before, and a surface with "
+        f"no `{release_linear.DATA_KEY}` key gets the file but no note. When the "
+        "file could not be published, the run says so in one "
+        "`::warning title=What's new not published::` annotation and one "
+        "`## What's new not published` block on its summary page. The usual "
+        "cause is a caller stub that lacks `pull-requests: read`. The Linear "
+        "release is still written, with no section. Like the Linear write, "
+        "nothing the collector does can fail the release: if it raises, that is "
+        "the one `WARNING the after-release step failed` line."
+    )
+    w("")
     w("## What the train decides, in order")
     w("")
     w(
@@ -2563,6 +2581,22 @@ def _step_summary(heading: str, lines) -> None:
         fh.write("\n")
 
 
+def _whats_new_not_published(surface: str, tag: str, problem: str) -> None:
+    """A release whose `whats-new.json` was not published says so where a
+    person looks (DRE-5516): one annotation and one summary block. The release
+    itself is live; `whats_new_release.py publish` re-runs the file by hand."""
+    _warning("What's new not published", problem)
+    _step_summary("What's new not published", [
+        f"`{surface}` released as `{tag}`, but its `whats-new.json` was not "
+        f"published: {problem}",
+        "",
+        "The caller's stub grants `pull-requests: read` (standards/"
+        "release-train.md, the stub block) — agent-bureau's and portico's "
+        "stubs do since DRE-5579 and DRE-5534. Once it does, "
+        "`whats_new_release.py publish` writes this release's file by hand.",
+    ])
+
+
 def _announce_channel(decision: Decision, out=print) -> None:
     """The channel row's second receipt line, and — when it is blocked or
     unknown — the warning and the summary block that make a green run say
@@ -2792,16 +2826,26 @@ def _cmd_release(args) -> int:
         _record_decision(decided, entry=entry, repo=args.repo, phase="release",
                          sha=args.sha, head=head, deployed=deployed, now=now)
 
+    def after_release(previous, decided: Decision) -> None:
+        """The surface is live: publish its `whats-new.json`, then write the
+        Linear release with the same items (DRE-5516). Whatever either
+        raises is `release()`'s one warning line, never a changed decision."""
+        released = dict(data=data, surface_name=args.surface, repo=args.repo,
+                        repo_root=args.repo_root, version=decided.tag,
+                        sha=args.sha, previous_tag=previous,
+                        out=lambda line: print(f"{TAG}: [{args.surface}] {line}"))
+        collected = whats_new_release.write(**released) or {}
+        problem = collected.get("problem")
+        if problem:
+            _whats_new_not_published(args.surface, decided.tag, problem)
+        release_linear.write(**released, whats_new=collected.get("items") or [])
+
     try:
         decision = release(
             entry, repo=args.repo, repo_root=args.repo_root, sha=args.sha,
             now=now, brake=brake(), dispatched=args.dispatched,
             checks=lambda: fetch_checks(args.repo, args.sha),
-            on_released=lambda previous, decided: release_linear.write(
-                data=data, surface_name=args.surface, repo=args.repo,
-                repo_root=args.repo_root, version=decided.tag, sha=args.sha,
-                previous_tag=previous,
-                out=lambda line: print(f"{TAG}: [{args.surface}] {line}")),
+            on_released=after_release,
             on_decided=write_decision,
         )
     except RuntimeError as err:

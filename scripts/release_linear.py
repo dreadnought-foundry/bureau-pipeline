@@ -294,11 +294,28 @@ def _card_number(identifier: str) -> int:
     return int(number) if number.isdigit() else -1
 
 
-def assemble_note(*, label: str, version: str, cards, unnamed, first: bool) -> str:
+def whats_new_bullet(item: dict) -> str:
+    """One `whats-new.json` item as a note bullet: `* Fixed — <title> <body>`,
+    the body left off when it is empty (DRE-5516)."""
+    text = " ".join(part for part in ((item.get("title") or "").strip(),
+                                      (item.get("body") or "").strip()) if part)
+    return f"* {(item.get('kind') or '').capitalize()} — {text}"
+
+
+def assemble_note(*, label: str, version: str, cards, unnamed, first: bool,
+                  whats_new=()) -> str:
     """A headline, one bullet per card (newest card first), and one line about
-    everything else. `unnamed` of `None` is UNKNOWN, rendered as UNKNOWN."""
+    everything else. `unnamed` of `None` is UNKNOWN, rendered as UNKNOWN.
+
+    `whats_new` is the release's published `whats-new.json` items (DRE-5516):
+    a `## What's new` section above the card bullets, one bullet per item in
+    the file's order. Empty, the note is byte for byte what it was before."""
     short = version[len(label) + 1:] if version.startswith(f"{label}-") else version
     lines = [f"## {label} {short}", ""]
+    if whats_new:
+        lines.extend(["## What's new", ""])
+        lines.extend(whats_new_bullet(item) for item in whats_new)
+        lines.append("")
     if cards:
         for card in sorted(cards, key=lambda c: _card_number(c.get("identifier", "")),
                            reverse=True):
@@ -381,13 +398,15 @@ def repository_input(repo: str) -> dict:
 
 def write(*, data, surface_name: str, repo: str, repo_root, version: str,
           sha: str, previous_tag: str | None, call=None, env=None,
-          out=print) -> dict | None:
+          out=print, whats_new=()) -> dict | None:
     """Write this release to the surface's Linear pipeline. NEVER raises.
 
     Returns `None` when the surface declares no pipeline (and prints nothing),
     otherwise a summary: `{"pipeline", "cards", "note", "problem"}` where
     `problem` is `None` on success and the first thing that went wrong
-    otherwise.
+    otherwise. `whats_new` is the release's published `whats-new.json` items,
+    rendered in the note (`assemble_note`); a surface with no pipeline drops
+    them by design.
     """
     pipeline_id = pipeline_for(data, surface_name)
     if not pipeline_id:
@@ -444,7 +463,8 @@ def write(*, data, surface_name: str, repo: str, repo_root, version: str,
             out(f"{TAG}: WARNING Linear did not attach: {', '.join(dropped)}")
         label = f"{repo.partition('/')[2] or repo}-{surface_name}"
         note = assemble_note(label=label, version=version, cards=cards,
-                             unnamed=uncarded(changes), first=not previous_tag)
+                             unnamed=uncarded(changes), first=not previous_tag,
+                             whats_new=whats_new)
         existing = [entry["id"] for entry in read.get("releaseNotes") or []]
         try:
             if existing:
