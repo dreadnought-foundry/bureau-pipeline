@@ -278,12 +278,16 @@ class TestRead:
         assert [c["identifier"] for c in doc["lanes"]["Triage"]] == ["DRE-2"]
         assert set(doc["lanes"]) == set(FIVE)
 
-    def test_hand_work_is_read_only_when_the_contract_declares_it(self):
+    def test_hand_work_is_read_only_once_the_contract_declares_it_live(self):
+        # DRE-5315 declared it `arriving` — named before the board has the
+        # state — and no live reader reads an arriving lane. The read takes it
+        # the day DRE-5240 flips it to live, with nothing here edited.
         assert "Hand-work" not in lane_contract.lane_names()
         assert sorted(hygiene.board_lanes()) == sorted(FIVE)
         contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
-        todo = next(entry for entry in contract["lanes"] if entry["name"] == "Todo")
-        contract["lanes"].append({**todo, "name": "Hand-work"})
+        hand_work = next(entry for entry in contract["lanes"] if entry["name"] == "Hand-work")
+        assert hand_work["status"] == "arriving"
+        hand_work["status"] = "live"
         assert sorted(hygiene.board_lanes(contract)) == sorted(FIVE + ["Hand-work"])
 
     def test_below_the_floor_it_stands_down_and_asks_nothing_more(
@@ -1237,6 +1241,11 @@ AMENDED = (
     ("Canceled", "writers"), ("Planning", "writers"), ("Backlog", "writers"),
     ("In Review", "writers"), ("Green Light", "exit"), ("Triage", "exit"),
     ("Todo", "exit"), ("In Progress", "exit"), ("In Review", "exit"),
+    # The card's one contract point with DRE-5240: whichever of the two lands
+    # second gives the Hand-work exit the sentence the Todo exit carries, or
+    # the agent could never close a proof that sits there. DRE-5315 landed
+    # the lane first.
+    ("Hand-work", "exit"),
 )
 
 
@@ -1247,6 +1256,12 @@ class TestTheLaneContract:
     @pytest.mark.parametrize("lane,clause", AMENDED)
     def test_each_amended_clause_admits_the_agent_in_its_own_words(self, lane, clause):
         assert "hygiene agent" in self._lane(lane)["clauses"][clause]["text"]
+
+    def test_the_hand_work_exit_carries_the_todo_exits_sentence(self):
+        sentence = ("Or the hygiene agent closes a card whose pull request merged "
+                    "while it sat here (DRE-5365).")
+        assert self._lane("Todo")["clauses"]["exit"]["text"].endswith(sentence)
+        assert self._lane("Hand-work")["clauses"]["exit"]["text"].endswith(sentence)
 
     def test_the_writer_glossary_carries_the_agent(self):
         entry = contract_doc()["writers"]["hygiene.py"]
