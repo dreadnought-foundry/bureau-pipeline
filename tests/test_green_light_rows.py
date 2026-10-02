@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -153,6 +154,14 @@ def _stub_callers(monkeypatch, contract, *, extra=None, missing=None, unread=Non
     return asked
 
 
+@pytest.fixture
+def declared_callers(monkeypatch):
+    """Caller discovery answers exactly what the contract declares, so a
+    site-rule test reads the site rule alone. The callers themselves are proved
+    by `TestCallers` and over the real repository."""
+    _stub_callers(monkeypatch, _contract())
+
+
 ESCALATE = ("scripts/planning_escalation.py", "escalate")
 CMD_EXIT = ("scripts/planning_route.py", "_cmd_exit")
 PARK = ("scripts/code_owner_hold.py", "park")
@@ -227,6 +236,18 @@ class TestTheRepositoryPasses:
             + f". Found now: {unread}"
         )
 
+    def test_the_bare_cli_exits_zero_from_a_terminal_with_no_repo_set(self):
+        # `reconcile` reads REPO at import; the CLI supplies a placeholder so
+        # its pure `destinations()` is read rather than six sites coming back
+        # unread from a bare terminal.
+        env = {k: v for k, v in os.environ.items() if k != "REPO"}
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "green_light_rows.py"), "check"],
+            cwd=ROOT, env=env, capture_output=True, text=True, timeout=300,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert "0 problem(s)" in done.stdout
+
     def test_the_unseen_writers_are_reported_as_the_sibling_reads_them(self, monkeypatch):
         monkeypatch.setattr(rlw, "unseen_writers", lambda contract=None: ("operator", "relay"))
         lines = []
@@ -240,6 +261,7 @@ class TestTheRepositoryPasses:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestANewWriterIsNamed:
     def test_a_script_that_writes_green_light_is_named_by_file_and_function(self, tmp_path):
         root = _copy_repo(tmp_path)
@@ -282,6 +304,7 @@ class TestANewWriterIsNamed:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestThePassedPlanGate:
     @pytest.mark.parametrize("weakened", [
         "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'proceed'",
@@ -311,6 +334,7 @@ def _queued_contract(where: str) -> dict:
     return contract
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestTheQueuedEpicGate:
     WHERE = "zz-queue.yml#Approved at the cap — wait in line"
 
@@ -359,6 +383,7 @@ class TestTheQueuedEpicGate:
         assert _named(found, "'queued-epic'", self.WHERE, "vocabulary"), found
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestTheAgentEscalationGate:
     def test_the_build_run_s_escalation_must_post_the_question_first(self, tmp_path):
         import planner_score
@@ -392,6 +417,7 @@ class TestTheAgentEscalationGate:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestTheRecords:
     def test_an_arrival_whose_site_is_gone_fails_by_name(self):
         contract = _contract()
@@ -426,6 +452,7 @@ class TestTheRecords:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("declared_callers")
 class TestUnreadDestinations:
     def test_without_reconcile_s_destinations_every_unread_site_is_a_problem(
             self, tmp_path, monkeypatch):
