@@ -49,14 +49,19 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      critic's last word was a proceed), each a condition of its own joined by
      `&&` at the top level — an `||` there, or a gate negated or inside an
      `||`, lets a plan through on one critic. `action == 'proceed'` is not
-     that gate — it covers a critic that never decided.
+     that gate — it covers a critic that never decided. A `passed-plan`
+     function (`planning_route.py#_cmd_exit`) has no `if:` of its own: it is
+     reconciled by its callers alone (rule 6), so a declared caller whose
+     `if:` is weakened is not seen here.
    * `queued-epic`: the step's shell adds the `epic-queued` label BEFORE it
      writes the lane, read as the shell reads it — a continued line joined, a
      comment dropped.
    * `question`: the unit is `planning_escalation.py#escalate` and no other.
    * `agent-escalation`: `agent-task.yml#Report result to Linear`, whose shell
-     posts the 🙋 escalation comment before the write, or
-     `code_owner_hold.py#park`.
+     posts the 🙋 escalation comment before the write — an argument opening
+     with the receipt, then a `linear_ops.py comment` on a later line, both
+     read as the shell reads them, so a receipt left in a comment is not one —
+     or `code_owner_hold.py#park`.
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -121,10 +126,9 @@ PASSED_PLAN_GATES = (
 )
 
 #: The label a queued epic carries (DRE-5275's contract clause). The literal is
-#: the card's: `epic_cap.QUEUED_LABEL` names the same string, and this module
-#: does not import `epic_cap`, because DRE-5129's queue write lands after this
-#: check and a rule exercised only on throwaway copies until then must not need
-#: that module.
+#: the contract clause's: `epic_cap.QUEUED_LABEL` names the same string today,
+#: and a rename there makes this rule fail closed — a queued-epic write whose
+#: label no longer matches goes red — rather than pass a row unlabeled.
 QUEUED_LABEL = "epic-queued"
 
 #: The one workflow unit an `agent-escalation` row may be written from, and
@@ -381,13 +385,34 @@ def _conjuncts(expr: str):
     return out
 
 
+def _shell_lines(text: str) -> list:
+    """`text` read as the shell reads it: a whole-line comment dropped, a
+    continued line joined, each line's arguments split with a trailing
+    comment dropped."""
+    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    return [lane_callers._shell_args(line)
+            for line in lane_callers._CONTINUATION.sub(" ", "\n".join(lines)).splitlines()]
+
+
 def _labels_queued(text: str) -> bool:
     """Whether `text`, read as the shell reads it, adds the queued label."""
-    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-    for line in lane_callers._CONTINUATION.sub(" ", "\n".join(lines)).splitlines():
-        args = lane_callers._shell_args(line)
+    for args in _shell_lines(text):
         if "add-label" in args and QUEUED_LABEL in args[args.index("add-label") + 1:]:
             return True
+    return False
+
+
+def _posts_receipt(text: str, receipt: str) -> bool:
+    """Whether `text`, read as the shell reads it, writes an argument opening
+    with `receipt` and then, on a later line, runs `linear_ops.py comment` —
+    the receipt posted, not merely echoed or left in a comment."""
+    written = False
+    for args in _shell_lines(text):
+        if written and any(
+                os.path.basename(a) == "linear_ops.py" and args[i + 1:i + 2] == ["comment"]
+                for i, a in enumerate(args)):
+            return True
+        written = written or any(a.startswith(receipt) for a in args)
     return False
 
 
@@ -434,11 +459,13 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
         if where == AGENT_ESCALATION_STEP:
             receipt = planner_score.ESCALATION_RECEIPT_PREFIX
             for write in writes_here:
-                if receipt not in _before_write(root, write):
+                if not _posts_receipt(_before_write(root, write), receipt):
                     out.append(
                         f"{where} ({write.where}) is an agent-escalation arrival, "
                         f"and its step does not post the escalation comment "
-                        f"(`{receipt}`) before it writes {lane}"
+                        f"(`{receipt}`, then `linear_ops.py comment`) before it "
+                        f"writes {lane} — a receipt left in a comment, or written "
+                        "and never posted, leaves a row with no question on it"
                     )
         elif where != CODE_OWNER_SITE:
             out.append(
