@@ -143,7 +143,10 @@ class TestEveryActHasARow:
             (".github/workflows/agent-fix.yml", "Conflict-resolution agent dispatched (round"),
             (".github/workflows/agent-fix.yml", "pushed — CI and critic review re-running."),
             (".github/workflows/agent-fix.yml", "blocked: $BLOCKER"),
-            (".github/workflows/medic.yml", 'linear_ops.py comment DRE-N "<report>"'),
+            # The diagnosis delivery step's write since Stage 2 fix #23; it
+            # was the agent prompt's `linear_ops.py comment DRE-N "<report>"`.
+            (".github/workflows/medic.yml",
+             'linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed'),
         ],
     )
     def test_the_acts_outside_reconcile_have_rows_too(self, emitter, anchor):

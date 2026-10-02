@@ -52,7 +52,7 @@ import pipeline_act  # noqa: E402
 
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "medic.yml")
 SNAPSHOT = ".bureau-pipeline/medic-card-snapshot.json"
-REPORT = ".bureau-pipeline/medic-diagnosis.md"
+REPORT = ".bureau-pipeline/medic-report.md"
 
 
 def _jobs() -> dict:
