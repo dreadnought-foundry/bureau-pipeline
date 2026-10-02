@@ -37,7 +37,8 @@ the plan-gate refuses that run only when the card already carries the label.
 THE PLANNER LINE IS NOT SILENCE (DRE-5167). A review asked for claims a planner
 slot like any plan run; with none free it posts a `waiting` receipt and the
 line's backstop (DRE-5178) dispatches it in order. An epic in line inside
-`waiting_max_minutes` is quiet whatever the age of its promise, and one past
+the line's bound (`planner_queue.overdue`) is quiet whatever the age of its
+promise, and one past
 the bound belongs to the stall watchdog's line rule (DRE-5177) — one owner per
 shape. Every line fact is `planner_queue`'s, read off pipeline-written
 receipts only.

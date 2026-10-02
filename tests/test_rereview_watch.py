@@ -379,9 +379,12 @@ class _Sweep:
 
     def __call__(self, reader, lanes, now=LATER):
         buf = io.StringIO()
+        # REPO pinned here: another test module may have set it first, and
+        # `report` dispatches to the sweep's own repository.
         with mock.patch.object(rw, "linear_ops", self.linear), \
                 mock.patch.object(rw.review_rerun, "main",
                                   side_effect=self._dispatch), \
+                mock.patch.dict(os.environ, {"REPO": REPO}), \
                 redirect_stdout(buf), redirect_stderr(io.StringIO()):
             spoke = rw.report(list(lanes), reader, lanes.get, now)
         return spoke, buf.getvalue()
