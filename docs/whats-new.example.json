@@ -1,0 +1,13 @@
+{
+  "product": "portico",
+  "release": "portals-v1.2.3",
+  "shipped": "2026-10-01T14:05:00-07:00",
+  "items": [
+    {"kind": "improved", "audience": "everyone",
+     "title": "Searching a document now finds words inside tables.",
+     "body": "", "open": "/documents"},
+    {"kind": "fixed", "audience": "moderators",
+     "title": "Approving a flagged post no longer hides the next one in the queue.",
+     "body": ""}
+  ]
+}
