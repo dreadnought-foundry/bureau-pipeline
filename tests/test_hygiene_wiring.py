@@ -67,6 +67,9 @@ def _bash(script, env, cwd):
     stub_dir = Path(cwd) / ".stub"
     stub_dir.mkdir(exist_ok=True)
     calls = Path(cwd) / ".calls"
+    # Fresh per run: a test that runs one step several times in one directory
+    # must read only this run's calls, never the last run's as well.
+    calls.unlink(missing_ok=True)
     stub = stub_dir / "python3"
     stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n')
     stub.chmod(0o755)

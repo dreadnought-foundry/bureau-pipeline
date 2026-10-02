@@ -226,7 +226,10 @@ class RoleKindsTest(unittest.TestCase):
 
     def test_every_agent_role_is_classified(self):
         cfg = _canonical()
-        registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]}
+        # A scripted entry (`model: null`, DRE-5369) runs no model and has no
+        # kind to classify; test_agents_registry.py holds it to that claim.
+        registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]
+                    if not ("model" in a and a["model"] is None)}
         self.assertEqual(
             sorted(cfg["agents"]), sorted(registry),
             "every agents.yaml role needs a kind in config/models.yaml",

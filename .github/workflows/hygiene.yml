@@ -1,0 +1,207 @@
+# The hygiene agent's clock (DRE-5369).
+#
+# The core is scripts/hygiene.py (DRE-5368): three commands, one per job here.
+# `read` reads the board once and applies the budget floor, `keep` runs every
+# discovered lane over one owner's leg through the guarded seam, and `summary`
+# posts one comment on the standing card when something changed. This file
+# only wires them; every decision a pass makes is in the core and its tests,
+# and the wiring itself is held by tests/test_hygiene_wiring.py.
+#
+# IT DOES NOT RUN LIVE ON MERGE. A scheduled pass is a dry run until the
+# repository variable HYGIENE_LIVE is exactly `true`, and a hand dispatch is a
+# dry run unless its `dry_run` input is exactly `false`. The value is computed
+# ONCE, in the `mode` step of `read`, and every writing call takes `--dry-run`
+# from it — anything that decision cannot read (an unset variable, `TRUE`, an
+# empty output from a `read` that never set it) is a dry run, never a live one.
+#
+# WHAT IT CAN CHANGE ON ITS OWN TOKEN: nothing. The workflow token is read
+# only. Every write goes out on a per-owner App token through the core's guard,
+# which reads each write's SHAPE before anything is sent.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`, the same actor the
+#      Reconcile, Nightly Watch and Fleet Wake schedules already run as. Each
+#      write goes out on the App installation token minted per owner, so a
+#      dispatch it makes starts as the App, the actor the fleet's stubs admit.
+#   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
+#      secrets store, so the Linear key and the App keys resolve. The
+#      cross-repo reads and writes cannot use `github.token`, which is scoped
+#      to this repository; an App token is scoped to ONE installation and the
+#      fleet spans several owners, so `keep` is a matrix over the roster's
+#      owners with a token minted per owner, exactly as nightly-watch.yml does.
+#   Q3 re-run — idempotent by construction: the seam suppresses an action
+#      whose target already carries a receipt with the same tag and cause, and
+#      the summary posts only when its digest moved or something was executed.
+#      The `hygiene` concurrency group queues a second pass behind the first,
+#      so a hand dispatch or a medic retry never reads the board while another
+#      pass has not yet posted its receipts.
+#   Q4 command limits — the App holds write on contents and on actions, so
+#      update-branch, rerun and dispatch are within its grant. A merge is kept
+#      out by the guard's shape rule, not by permission alone: the only
+#      workflow the agent may dispatch is the gate stub, and no constructor
+#      builds a merge call of any kind. Reads are one paged board
+#      read per pass and one pull-request list per repo per owner leg, hourly;
+#      below HYGIENE_BUDGET_FLOOR remaining Linear requests `read` answers
+#      go=false and nothing else runs.
+#   Q5 our crash — a pass that dies repeats next hour and its failure routes
+#      through the medic (self-medic.yml watches "Hygiene"). A board that could
+#      not be read is go=false and exit 1, never an empty board. A leg whose
+#      guarded write failed still uploads its ledger (`if: always()`), so the
+#      summary reports it; `fail-fast: false` so one owner's failure cannot
+#      stop the other owners' legs.
+name: Hygiene
+
+on:
+  schedule:
+    # Hourly at :37. Off the hour, clear of the sweep's */15, Nightly Watch's
+    # :23 and every :41 daily cron. agents.yaml's trigger names this minute
+    # and a wiring test pairs the two.
+    - cron: "37 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — read and report, write nothing. Uncheck to run live."
+        type: boolean
+        default: true
+
+# READ ONLY. The writes go out on the per-owner App token, through the guard.
+permissions:
+  contents: read
+  actions: read
+
+# One pass at a time, queued and never canceled: a pass in flight posts its
+# receipts before the next one reads the board.
+concurrency:
+  group: hygiene
+  cancel-in-progress: false
+
+jobs:
+  read:
+    name: Read the board
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+      go: ${{ steps.board.outputs.go }}
+      owners: ${{ steps.owners.outputs.owners }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The ONE place the dry-run value is computed. Fail closed: live only on
+      # an exact `true` variable for the schedule, or an exact `false` input
+      # for a dispatch; every other event, and every other value, is a dry run.
+      - name: Decide dry run
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
+          HYGIENE_LIVE: ${{ vars.HYGIENE_LIVE }}
+        run: |
+          dry_run=true
+          if [ "$EVENT" = "schedule" ]; then
+            if [ "$HYGIENE_LIVE" = "true" ]; then dry_run=false; fi
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$DISPATCH_DRY_RUN" = "false" ]; then dry_run=false; fi
+          fi
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "hygiene: event=$EVENT dry_run=$dry_run"
+
+      - name: Read the board and apply the budget floor
+        id: board
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HYGIENE_BUDGET_FLOOR: ${{ vars.HYGIENE_BUDGET_FLOOR }}
+        run: python3 scripts/hygiene.py read --out board.json
+
+      # The roster is config/repo-map.json, read the way Nightly Watch reads
+      # it, so an onboarded repo's owner gets a leg with no edit here.
+      - name: Owners in the roster
+        id: owners
+        run: python3 scripts/nightly_watch.py owners
+
+      - name: Keep the board for the legs
+        if: steps.board.outputs.go == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: board
+          path: board.json
+          retention-days: 1
+
+  keep:
+    name: Keep ${{ matrix.owner }}
+    needs: read
+    if: needs.read.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        owner: ${{ fromJSON(needs.read.outputs.owners) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the board
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: board
+
+      # Per owner, because an App installation token is scoped to ONE
+      # installation.
+      - name: Mint bot token (this owner's installation)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+
+      # Through env, never interpolated into the shell line. `--dry-run` is
+      # passed unless the one value is exactly `false`.
+      - name: Run the lanes over this owner's leg
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ matrix.owner }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HYGIENE_CARD: ${{ vars.HYGIENE_CARD }}
+          DRY_RUN: ${{ needs.read.outputs.dry_run }}
+        run: |
+          flag=--dry-run
+          if [ "$DRY_RUN" = "false" ]; then flag=; fi
+          python3 scripts/hygiene.py run --board board.json --owner "$OWNER" \
+            --ledger "ledger-$OWNER.json" $flag
+
+      # `run` exits 1 when a guarded write failed, AFTER writing the ledger;
+      # the summary still has to see that row.
+      - name: Keep the ledger for the summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ledger-${{ matrix.owner }}
+          path: ledger-${{ matrix.owner }}.json
+          retention-days: 1
+
+  summary:
+    name: Summarize
+    needs: [read, keep]
+    if: always() && needs.read.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch every leg's ledger
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ledger-*
+          path: ledgers
+          merge-multiple: true
+
+      - name: Post the summary when something changed
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HYGIENE_CARD: ${{ vars.HYGIENE_CARD }}
+          DRY_RUN: ${{ needs.read.outputs.dry_run }}
+        run: |
+          flag=--dry-run
+          if [ "$DRY_RUN" = "false" ]; then flag=; fi
+          python3 scripts/hygiene.py summarize ledgers/ledger-*.json $flag
