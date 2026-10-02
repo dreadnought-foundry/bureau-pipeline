@@ -66,7 +66,12 @@ _TURNS_RE = re.compile(r"--max-turns\s+(\d+)")
 
 
 def roster() -> list[dict]:
-    return yaml.safe_load((REPO / "agents.yaml").read_text())["agents"]
+    """The roster's MODEL-RUNNING agents. A scripted entry (DRE-5369) declares
+    `model: null` — key present, value null — and runs no model, so it has no
+    tools to grant; tests/test_agents_registry.py::test_scripted_agents_run_no_model
+    holds it to that claim."""
+    return [a for a in yaml.safe_load((REPO / "agents.yaml").read_text())["agents"]
+            if not ("model" in a and a["model"] is None)]
 
 
 def entry(name: str) -> dict:
