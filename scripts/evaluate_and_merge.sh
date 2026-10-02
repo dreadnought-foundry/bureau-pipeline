@@ -37,8 +37,8 @@ set -e
 #     dependabot/* (dependency bumps), and the three scheduled branches
 #     bot/standards-sync, bot/split-ledger and bot/model-drift, matched as
 #     literals. The dependabot and bot branches carry no card. The set is
-#     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes
-#     `bureau-card: <id>` when the branch names a card.
+#     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
+#     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer:
 #     mergeability, the draft flag, the head sha and its check runs, the
 #     three-dot compare of base against head, every page of the comments, the
@@ -177,10 +177,12 @@ set -e
 #   --slurp buffers, so a failure mid-pagination yields nothing and the `[]`
 #   substitute reads as "no verdicts yet", never as a partial record. The
 #   carry note's check reads the same record, so it sees every page too.
-# DRE-4407 (2026-09-20). The run echoes `bureau-card: <id>`, so a run GitHub
+# DRE-4407 (2026-09-20). The run echoes a `bureau-card` line, so a run GitHub
 #   records on `main` names its card; qa-review.yml says why. Only the echoed
 #   line: this job's name is a check-run name the reconcile sweep and branch
-#   protection read.
+#   protection read. The echo is the one line here carrying the marker with
+#   its colon: tests/test_dispatched_run_names_its_card.py runs this file up
+#   to the first such line, and a comment carrying it would end the run there.
 # DRE-4486 (2026-09-21). Four times an Agent Fix run finished after the merge
 #   and pushed onto a branch that had already merged. stranded_fix.py reads
 #   which pull requests have a fix run queued or running, and condition F
