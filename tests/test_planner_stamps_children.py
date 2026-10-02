@@ -666,7 +666,7 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
         names = [s.get("name") or "" for s in wf_steps()]
         self.assertLess(
             names.index(next(n for n in names if GATE in n)),
-            names.index(next(n for n in names if "Epic → Green Light" in n)))
+            names.index(next(n for n in names if "Plan → second critic" in n)))
 
     def test_it_runs_after_both_critic_rounds_have_settled(self):
         """A verdict is written ONCE — `stamp_card` refuses a card that already
@@ -683,13 +683,15 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
                              if "First critic — round 2 decision" in n)),
             names.index(next(n for n in names if GATE in n)))
 
-    def test_nothing_runs_between_it_and_the_green_light(self):
+    def test_nothing_runs_between_it_and_the_hand_off(self):
         """Pinned adjacent so it cannot drift back up the job: any step added
         between the two would be a step reading a plan whose children were
-        stamped for a reason nobody re-checked."""
+        stamped for a reason nobody re-checked. Since DRE-5284 the step after
+        it is the plan route's hand-off to the second critic, not Green
+        Light."""
         names = [s.get("name") or "" for s in wf_steps()]
         gate = names.index(next(n for n in names if GATE in n))
-        self.assertIn("Epic → Green Light", names[gate + 1])
+        self.assertEqual("Plan → second critic", names[gate + 1])
 
     def test_a_revised_plan_is_stamped_too(self):
         """A re-plan is the planner's output too: cards it added after round 1

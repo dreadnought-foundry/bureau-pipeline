@@ -189,8 +189,8 @@ class TheRunChecksThePlannersOutputTest(unittest.TestCase):
         names = [s.get("name") or "" for s in wf_steps()]
         self.assertLess(
             names.index(next(n for n in names if GATE in n)),
-            names.index(next(n for n in names if "Epic → Green Light" in n)),
-            "an epic missing the proof card must not reach the CEO",
+            names.index(next(n for n in names if "Plan → second critic" in n)),
+            "an epic missing the proof card must not reach the second critic",
         )
 
     def test_the_bounce_names_the_reason_and_returns_the_card_to_planning(self):

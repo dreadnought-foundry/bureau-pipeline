@@ -11,11 +11,12 @@ The walk, one method per observable the card asks for:
 
   1. A plan is SENT BACK by the first critic, with a stated reason, and the
      epic does not reach the CEO on that round.
-  2. A revised plan PASSES the first critic and the epic reaches Green Light.
+  2. A revised plan PASSES the first critic and is handed to the second
+     critic, in Planning (DRE-5284) — Green Light only after both critics.
   3. The second critic runs AFTER approval, against the approved text, and
      nothing promotes until it has.
-  4. Two failed rounds and the plan reaches the CEO anyway, with the critic's
-     stated reason attached — at both critics.
+  4. Two failed rounds and the plan parks for an operator in Triage, with the
+     critic's stated reason attached — at both critics (DRE-5276, DRE-5284).
   5. The send-back rate of the second critic is readable out of the thread the
      run wrote, over as many rounds as the epic has had.
   6. A real collision between two epics in flight is caught here and read from
@@ -263,6 +264,15 @@ def step(fragment: str) -> dict:
     raise AssertionError(f"no step named like {fragment!r} in plan.yml")
 
 
+# The plan route's last moves (DRE-5284).
+HANDOFF = "Plan → second critic"
+HANDOFF_MINT = "Re-mint bot token — hand-off to the second critic"
+PRE_PARK = "First critic — the bound parks in Triage"
+# Round 2 never ran: its outputs are empty, which is how Actions reads them.
+NOT_RUN_PRE2 = {"steps.pre2.outputs.action": "", "steps.pre2.outputs.bound": "",
+                "steps.pre2.outputs.result": ""}
+
+
 class CriticWalk(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -428,9 +438,19 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(second["result"], pc.PASS)
         self.assertEqual(second["round"], "2")
 
-        # And the epic reaches the CEO.
-        self._shell(" Green Light")
-        self.assertIn("state Green Light", self._log())
+        # And the plan is handed to the second critic — never to Green Light
+        # (DRE-5284): the review is asked for from Planning, and the note says
+        # where the plan is.
+        self._shell(HANDOFF, GH_TOKEN="t", PRE_RESULT=second["result"])
+        self.assertEqual([(p["client_payload"]["reason"],
+                           p["client_payload"]["trigger_state"])
+                          for p in self._dispatches()],
+                         [(rr.REASON_REVIEW, rr.TRIGGER_STATE_REVIEW)])
+        self.assertNotIn("state ", self._log())
+        self.assertNotIn("add-label", self._log())
+        note = self._thread()[-1]
+        self.assertIn("with the second critic", note)
+        self.assertIn("passed", note)
 
     # --- 3: the seam a round cannot pass over (DRE-3398) -------------------
 
@@ -465,7 +485,7 @@ class CriticWalk(unittest.TestCase):
 
     # --- 4: the bound, at the first critic --------------------------------
 
-    def test_two_failed_rounds_reach_the_ceo_anyway(self):
+    def test_two_failed_rounds_park_in_triage(self):
         self._critic_writes("pre", pc.SEND_BACK, "the epic's cards do not sum to the epic")
         self._shell("first critic — round 1 decision")
         self.assertEqual(self._outputs()["action"], "hold")
@@ -473,10 +493,8 @@ class CriticWalk(unittest.TestCase):
         self._critic_writes("pre", pc.SEND_BACK, "the epic's cards still do not sum to the epic")
         self._shell("first critic — round 2 decision")
         out = self._outputs()
-        # Since DRE-5276 the first critic's bound parks rather than proceeding;
-        # DRE-5284 rewrites this walk to drive the park itself. Until then the
-        # plan route still moves the epic to Green Light below, because no step
-        # reads the second round's action.
+        # Since DRE-5276 the first critic's bound parks rather than proceeding,
+        # and since DRE-5284 the plan route acts on it: one step, the park.
         self.assertEqual((out["action"], out["bound"]), ("hold", "true"),
                          "a plan circled past the bound instead of parking")
         self.assertIn("still do not sum", self._note(),
@@ -484,8 +502,98 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("two failed rounds", self._note().lower())
         self.assertIn("still do not sum", self._record())
 
-        self._shell(" Green Light")
-        self.assertIn("state Green Light", self._log())
+        decided = {"steps.pre1.outputs.action": "hold",
+                   "steps.pre1.outputs.bound": "false",
+                   **{f"steps.pre2.outputs.{k}": v for k, v in out.items()}}
+        self.assertEqual(
+            self._reached_on_the_plan_route(decided, after="First critic — round 2 decision"),
+            [PRE_PARK])
+        self._shell(PRE_PARK, NOTE=out["note"], FINDING=out["reason"])
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertNotIn("state Green Light", self._log())
+        self.assertEqual(self._dispatches(), [])
+        park = self._thread()[-1]
+        self.assertIn("🛑", park)
+        self.assertIn(pc.BOUND_PARK_LANE, park)
+        self.assertIn(out["note"][:60], park)
+        self.assertTrue(park.rstrip().endswith(pc.REAPPROVE_HOW + "."), park[-200:])
+
+    def test_a_bound_at_round_one_goes_straight_to_the_park(self):
+        """A resumed attempt that already carries one send-back: `decide`
+        answers the bound at THIS run's round 1, because the round count is
+        read off the epic's records. Nothing buys a third round — no turn
+        ceiling, no re-mint, no re-plan, no round 2 — and the park is the one
+        plan-route outcome reached."""
+        self._pipeline_comment(pc.cycle_marker(EPIC))
+        self._pipeline_comment(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK,
+                                         "the cards do not sum to the epic"))
+        self._critic_writes("pre", pc.SEND_BACK, "the cards still do not sum to the epic")
+        self._shell("first critic — round 1 decision")
+        out = self._outputs()
+        self.assertEqual((out["action"], out["bound"]), ("hold", "true"))
+        decided = {f"steps.pre1.outputs.{k}": v for k, v in out.items()}
+        decided.update(NOT_RUN_PRE2)
+        self.assertEqual(self._reached_on_the_plan_route(decided), [PRE_PARK])
+        self._shell(PRE_PARK, NOTE=out["note"], FINDING=out["reason"])
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertEqual(self._dispatches(), [])
+
+    def test_a_first_critic_no_result_is_handed_on_and_never_called_a_pass(self):
+        self._shell("first critic — round 1 decision")  # no result file at all
+        out = self._outputs()
+        self.assertEqual((out["action"], out["result"]), ("proceed", pc.NO_RESULT))
+        decided = {f"steps.pre1.outputs.{k}": v for k, v in out.items()}
+        decided.update(NOT_RUN_PRE2)
+        self.assertEqual(self._reached_on_the_plan_route(decided), [HANDOFF_MINT, HANDOFF])
+        self._shell(HANDOFF, GH_TOKEN="t", PRE_RESULT=out["result"])
+        self.assertEqual(len(self._dispatches()), 1)
+        note = self._thread()[-1]
+        self.assertIn("with the second critic", note)
+        self.assertIn("no result", note.lower())
+        self.assertNotIn("passed", note)
+
+    def test_a_hand_off_that_did_not_go_through_is_said_and_leaves_the_run_red(self):
+        """DRE-2034: no receipt on an unconfirmed dispatch. The epic stays in
+        Planning carrying the first critic's PASS record; the re-review watcher
+        (DRE-5278) owns it from there."""
+        self._critic_writes("pre", pc.PASS)
+        self._shell("first critic — round 1 decision")
+        self._shell(HANDOFF, expect_rc=1, GH_TOKEN="t", PRE_RESULT=pc.PASS,
+                    STUB_GH_RC="1")
+        self.assertEqual(self._dispatches(), [])
+        self.assertEqual(self._lane_writes(), [])
+        note = self._thread()[-1]
+        self.assertIn("🚨", note)
+        self.assertIn("could NOT", note)
+        self.assertTrue(pc.pre_passed(self._records()),
+                        "the first critic's PASS record is what the watcher reads")
+
+    def _reached_on_the_plan_route(self, known: dict, after: str | None = None) -> list[str]:
+        """Which plan-route steps that READ the first critic's decision it makes
+        known true — the same three-valued walker the review walks use. `after`
+        skips the steps up to and including the named one, which already ran."""
+        class Gates(Walk):
+            def _name(self, text):
+                if text in self.known:
+                    return self.known[text]
+                return super()._name(text)
+
+            def _call(self, name, args):
+                if name in ("success", "always"):
+                    return True
+                if name in ("cancelled", "failure"):
+                    return False
+                return Walk._call(name, args)
+        facts = {"steps.route.outputs.mode": "plan", "steps.kids.outputs.count": "3",
+                 **known}
+        walk = Gates(facts, set())
+        doc = yaml.safe_load(open(WF).read())
+        plan = doc["jobs"]["plan"]["steps"]
+        if after is not None:
+            plan = plan[[s.get("name") for s in plan].index(after) + 1:]
+        return [s["name"] for s in plan
+                if re.search(r"steps\.pre[12]\.outputs\.", str(s.get("if") or ""))
+                and truth(walk.evaluate(str(s["if"]))) is True]
 
     # --- 3: the second critic, after approval ------------------------------
 
