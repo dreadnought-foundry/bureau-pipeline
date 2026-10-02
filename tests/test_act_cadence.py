@@ -99,7 +99,7 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_thirty_one_acts(self):
+    def test_the_registry_still_declares_forty_three_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
         field being data rather than a default.
@@ -113,8 +113,9 @@ class TestEveryActDeclaresItsCadence:
         age-out, which was the one act nothing performs any more; thirty since
         DRE-4378 added the hold a pull request gets in a repo that has no fix
         agent to dispatch; thirty-one since DRE-4717 added the receipt a
-        roll-up's split leaves on its parent."""
-        assert len(pipeline_act.acts()) == 31
+        roll-up's split leaves on its parent; forty-three since DRE-5368
+        added the hygiene agent's twelve acts, every one of them null."""
+        assert len(pipeline_act.acts()) == 43
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

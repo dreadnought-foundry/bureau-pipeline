@@ -741,6 +741,222 @@
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
       }
+    },
+    {
+      "name": "hygiene-gate-redispatch",
+      "tag": "hyg-gate-redispatched",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A pull request the merge gate stopped looking at is handed back to it: the hygiene agent dispatches the repository's own gate stub, and the gate decides for itself whether anything merges.",
+      "state": "unchanged",
+      "next_actor": "merge-gate.yml",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is the gate's own run on the pull request, timed by .github/workflows/merge-gate.yml and seen through the merge-gate-watch act; scripts/hygiene.py only asked it to look again, and nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The agent asks the gate to look again and nothing more — the dispatch names exactly one workflow per repository, the stub reconcile.gate_workflow() names, and the guard refuses any other.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-gate-redispatched\""
+      }
+    },
+    {
+      "name": "hygiene-branch-refresh",
+      "tag": "hyg-branch-refreshed",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A pull request whose branch fell behind its base is brought up to date through GitHub's update-branch call, pinned to the head sha the agent read, so the gate can look at it again.",
+      "state": "unchanged",
+      "next_actor": "merge-gate.yml",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is the gate's own run on the pull request, timed by .github/workflows/merge-gate.yml and seen through the merge-gate-watch act; scripts/hygiene.py only asked it to look again, and nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Pinned to the head it read, so a push that lands between the read and the write is refused by GitHub rather than overwritten.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-branch-refreshed\""
+      }
+    },
+    {
+      "name": "hygiene-check-rerun",
+      "tag": "hyg-check-rerun",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A required check that failed for a reason outside the change is re-run, failed jobs only, naming the run the agent read.",
+      "state": "unchanged",
+      "next_actor": "merge-gate.yml",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: what follows is the gate's own run on the pull request, timed by .github/workflows/merge-gate.yml and seen through the merge-gate-watch act; scripts/hygiene.py only asked it to look again, and nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The cause line names the run id, so the same failed run is re-run once and a new failure is a new cause.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-check-rerun\""
+      }
+    },
+    {
+      "name": "hygiene-decision-needed",
+      "tag": "hyg-decision-needed",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A row the agent will not clear because it needs a person's decision is left for a person, with the evidence it read and its recommendation named on it.",
+      "state": "held",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the row is a person's now, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the cause is unchanged.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. A HOLD: the agent clears nothing here and leaves the row for a person, which is the line the agent never crosses — it never approves and never decides. Its idempotency key is (tag, cause), so the same row is said once per cause rather than every hour. It discharges nothing: a hold starts an obligation, it does not end one. Declared a hold in agent-bureau first (PR #3023) and copied here, so the console's agreement test reads the same kind tag by tag.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-decision-needed\""
+      }
+    },
+    {
+      "name": "hygiene-pr-close",
+      "tag": "hyg-pr-closed",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An open pull request that has nothing left to do — its work landed another way, or its card is closed — is closed with the evidence named on it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the row is a person's now, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the cause is unchanged.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The operator is next because a closed pull request is reopened, if ever, by a person.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-pr-closed\""
+      }
+    },
+    {
+      "name": "hygiene-resend-to-planning",
+      "tag": "hyg-resent-to-planning",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A Green Light row that was never a decision — a planner that died, a classifier transport failure, a child without acceptance criteria, an escalation that asks for a split or an access, a stall park — is sent back to Planning with the cause named.",
+      "state": "unchanged",
+      "next_actor": "plan.yml",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: what follows is the planner's own run, started by the relay when the card enters Planning and timed by .github/workflows/plan.yml's own acts; scripts/hygiene.py sent the card and nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. It never approves, and a real question stays in Green Light.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-resent-to-planning\""
+      }
+    },
+    {
+      "name": "hygiene-card-close",
+      "tag": "hyg-card-closed",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A build card whose pull request merged while the merge seam was not watching is closed on the merge event the agent read back off GitHub, never on its own claim.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is closed and nothing follows it — scripts/hygiene.py wrote the record of a fact it read back off GitHub, and there is no next stage to expect.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The cause line names the pull request and its merge; the guard refuses to close a card with children.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-card-closed\""
+      }
+    },
+    {
+      "name": "hygiene-proof-close",
+      "tag": "hyg-proof-closed",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A proof card whose merged record meets every criterion in its own table is closed, under the CEO's standing rule of 2026-09-30 that a proof shown proven with evidence is approved.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is closed and nothing follows it — scripts/hygiene.py wrote the record of a fact it read back off GitHub, and there is no next stage to expect.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The cause line names the merged record the agent read; a criterion the record does not meet leaves the card for a person instead.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-proof-closed\""
+      }
+    },
+    {
+      "name": "hygiene-triage-return",
+      "tag": "hyg-triage-returned",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked hand-built and parked — is returned to Backlog, never Todo.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass; nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Backlog and never Todo, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-triage-returned\""
+      }
+    },
+    {
+      "name": "hygiene-review-move",
+      "tag": "hyg-moved-to-review",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A proof card sitting in Triage whose pull request is already open is moved to In Review, the lane its pull request says it is in.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is in the review lane the sweep already watches, and scripts/reconcile.py's In Review nudges time it from here; nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. The cause line names the open pull request the agent read.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-moved-to-review\""
+      }
+    },
+    {
+      "name": "hygiene-card-cancel",
+      "tag": "hyg-card-canceled",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A childless card whose parent epic is Canceled or Duplicate is canceled with the parent's state named on it: the person decided on the parent, and the agent writes the consequence down.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card is closed and nothing follows it — scripts/hygiene.py wrote the record of a fact it read back off GitHub, and there is no next stage to expect.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Never deciding anything: the guard refuses to cancel a card with children.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-card-canceled\""
+      }
+    },
+    {
+      "name": "hygiene-cause-name",
+      "tag": "hyg-cause-named",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A row left for a person gets the cause the agent read named on it, so whoever opens it starts from the evidence rather than from the board.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the row is a person's now, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the cause is unchanged.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. A HOLD: the agent clears nothing here and leaves the row for a person, which is the line the agent never crosses — it never approves and never decides. Its idempotency key is (tag, cause), so the same row is said once per cause rather than every hour. It discharges nothing: a hold starts an obligation, it does not end one. Declared a hold in agent-bureau first (PR #3023) and copied here, so the console's agreement test reads the same kind tag by tag.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-cause-named\""
+      }
     }
   ],
   "console": {
@@ -2148,6 +2364,13 @@
       "kind": "undeclared-act",
       "means": "A write that would have put an epic in Todo was refused and nothing was written; the card is told the right move — In Progress for an approved epic, where its children promote, or Green Light for the CEO's approval (DRE-5316).",
       "why": "Act-shaped — the pipeline refused a lane write by itself and says so on the card — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the refusal ships first as an undeclared act, exactly as DRE-4150's urgent fast path did. This is the ONE posting site: the write seam (linear_ops.guarded_state_write) and the two siblings that carry an epic out of Todo (DRE-5319, DRE-5347) all post through epic_todo_gate.post_refusal and add no second row. Its opener `🚫 epic-not-todo: <identifier> → <move>` is a live key: post_refusal posts only when no comment on the card already carries it, so a writer retrying every sweep says it once per card and move. A trailer after the body would not touch the opener."
+    },
+    {
+      "file": "scripts/hygiene.py",
+      "anchor": "cmd_comment(card, summary_body)",
+      "kind": "not-an-act",
+      "means": "The hygiene agent's hourly summary — what each lane cleared, with its PT time, and what it left and why — posted to the standing HYGIENE_CARD only when an action ran or the set of left rows changed.",
+      "why": "A REPORT about a pass, not something the pipeline did to a piece of work. Every act the pass took already carries its own 🧹 receipt and trailer on the card or pull request it acted on; the summary restates them for a person and creates no obligation, hands nothing to anybody and discharges nothing, so the three questions a trailer answers all read 'not applicable'. Declared the way Nightly Watch's report is (DRE-5368)."
     }
   ]
 }

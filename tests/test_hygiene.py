@@ -1044,7 +1044,7 @@ class TestSummarize:
         first = body.splitlines()[0]
         assert first == f"{hygiene.SUMMARY_MARK} {digest_of([])} · {hygiene.pt(datetime.now(UTC))}"
         assert "DRE-1" in body
-        assert len(s.reads) == 1
+        assert len(s.reads) <= 1  # an executed action posts whatever the newest says
 
     def test_the_summary_says_what_was_cleared_with_its_time_and_what_was_left(
         self, tmp_path, monkeypatch
@@ -1065,6 +1065,7 @@ class TestSummarize:
         s = Summary(monkeypatch, newest=summary_with(digest_of(["DRE-5"])))
         hygiene.main(["summarize", ledger(tmp_path, "a", left=[("DRE-6", "stuck")])])
         assert len(s.posts) == 1
+        assert len(s.reads) == 1
         assert s.posts[0][1].splitlines()[0].split()[3] == digest_of(["DRE-6"])
 
     def test_the_same_left_set_with_no_action_posts_nothing_even_when_a_why_changed(
