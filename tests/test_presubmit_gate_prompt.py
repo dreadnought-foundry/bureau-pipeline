@@ -37,12 +37,16 @@ the first three author no code and the last two are their own cards.
 
 import os
 import re
+import sys
 import unittest
 
 import yaml
 
 REPO = os.path.join(os.path.dirname(__file__), "..")
 WF_DIR = os.path.join(REPO, ".github", "workflows")
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+
+import step_shell  # noqa: E402
 
 TASK_WF = "agent-task.yml"
 FIX_WF = "agent-fix.yml"
@@ -82,8 +86,7 @@ DIFF_RE = re.compile(r"git diff")
 
 
 def workflow(name: str) -> dict:
-    with open(os.path.join(WF_DIR, name)) as f:
-        return yaml.safe_load(f)
+    return yaml.safe_load(step_shell.workflow_source(os.path.join(WF_DIR, name)))
 
 
 def agent_prompt(name: str) -> str:
@@ -329,7 +332,7 @@ class FixAgentPrePushGateTest(unittest.TestCase):
         # The interpolation above is only real if the step output it names is
         # actually produced — a typo'd expression renders as the empty string
         # and the instruction quietly becomes `git diff ..HEAD`.
-        body = open(os.path.join(WF_DIR, FIX_WF)).read()
+        body = step_shell.workflow_source(os.path.join(WF_DIR, FIX_WF))
         self.assertRegex(
             body,
             re.compile(r'head_sha=\$HEAD_SHA" >> "\$GITHUB_OUTPUT"'),

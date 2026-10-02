@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import lane_scope  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
@@ -77,7 +78,7 @@ GENERATED_HISTORY = ("config/split-ledger.json", "docs/split-ledger.md")
 
 
 def src(name: str) -> str:
-    return open(os.path.join(WORKFLOWS, name)).read()
+    return step_shell.workflow_source(os.path.join(WORKFLOWS, name))
 
 
 def tracked_files() -> list[str]:

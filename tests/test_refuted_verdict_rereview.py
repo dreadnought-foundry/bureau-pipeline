@@ -55,6 +55,7 @@ sys.path.insert(0, SCRIPTS)
 
 import fix_handoff  # noqa: E402
 import review_card_context as rcc  # noqa: E402
+import step_shell  # noqa: E402
 
 BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 END = "===== END UNTRUSTED CARD TEXT ====="
@@ -83,11 +84,11 @@ REFUTATION = (
 
 
 def workflow_src(path: str = AGENT_FIX) -> str:
-    return open(path, encoding="utf-8").read()
+    return step_shell.workflow_source(path)
 
 
 def steps(path: str = AGENT_FIX, job: str = "fix") -> list:
-    return yaml.safe_load(open(path, encoding="utf-8"))["jobs"][job]["steps"]
+    return yaml.safe_load(step_shell.workflow_source(path))["jobs"][job]["steps"]
 
 
 def step_named(name: str, path: str = AGENT_FIX, job: str = "fix") -> dict:
@@ -198,7 +199,7 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
     # The Report block carries no `${{ }}` any more — every substitution moved
     # to the step's `env:` (DRE-3951/DRE-3484), so the values ride env below
     # and this call now proves the block is expression-free.
-    run = substitute(step_named("Report")["run"], {})
+    run = substitute(step_shell.step_shell(step_named("Report")), {})
     # The step's scratch files (the refutation the agent wrote, the thread
     # dump, the composed receipts) live at /tmp in CI; the harness must not
     # write there, so every one of them is redirected into the sandbox.
@@ -499,7 +500,7 @@ class ReportRefutedBranchTest(unittest.TestCase):
     def test_the_refuted_branch_is_read_before_the_blocker_branch(self):
         # Both files could exist if the agent hedged; `refuted` is the more
         # specific outcome and must win, or the re-review never happens.
-        code = step_named("Report")["run"]
+        code = step_shell.step_shell(step_named("Report"))
         self.assertLess(
             code.index("--kind refutation"),
             code.index("--kind blocker"),
@@ -515,11 +516,11 @@ class ReportRefutedBranchTest(unittest.TestCase):
 
 class QaReviewCarriesTheRefutationTest(unittest.TestCase):
     def test_the_card_context_step_passes_the_refutation(self):
-        run = step_named("Build card review context", QA_REVIEW, "review")["run"]
+        run = step_shell.step_shell(step_named("Build card review context", QA_REVIEW, "review"))
         self.assertIn("--refutation-file", run)
 
     def test_the_fetch_is_identity_filtered_and_head_bound(self):
-        run = step_named("Build card review context", QA_REVIEW, "review")["run"]
+        run = step_shell.step_shell(step_named("Build card review context", QA_REVIEW, "review"))
         self.assertIn(WORKER_BOT, run)
         self.assertIn("refuted-finding @", run)
 
@@ -553,13 +554,13 @@ class QaReviewCarriesTheRefutationTest(unittest.TestCase):
         self.assertNotIn("stale", proc.stdout)
 
     def test_the_verdict_says_why_there_are_two_of_them(self):
-        run = step_named("Post verdict or neutral status", QA_REVIEW, "review")["run"]
+        run = step_shell.step_shell(step_named("Post verdict or neutral status", QA_REVIEW, "review"))
         self.assertIn("re-review after refutation", run)
 
     def test_the_note_never_touches_the_verdict_header(self):
         # `head -1` is what merge_gate, verdict_content and verdict_cause all
         # parse. The note is a FOOTER or it breaks every one of them.
-        run = step_named("Post verdict or neutral status", QA_REVIEW, "review")["run"]
+        run = step_shell.step_shell(step_named("Post verdict or neutral status", QA_REVIEW, "review"))
         note_at = run.index("re-review after refutation")
         header_at = run.index("🔎 QA Critic — $(head -1 /tmp/qa-verdict.md)")
         self.assertGreater(note_at, header_at)
@@ -606,7 +607,7 @@ class StubCanDispatchTheReviewTest(unittest.TestCase):
         # re-review dispatch rides the workflow's own GITHUB_TOKEN — which
         # only has it if the CALLING STUB grants it.
         doc = yaml.safe_load(
-            open(os.path.join(WF_DIR, "self-agent-fix.yml"), encoding="utf-8")
+            step_shell.workflow_source(os.path.join(WF_DIR, "self-agent-fix.yml"))
         )
         self.assertEqual((doc.get("permissions") or {}).get("actions"), "write")
 

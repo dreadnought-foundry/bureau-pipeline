@@ -63,6 +63,7 @@ import limit_recovery  # noqa: E402
 import planning_escalation  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
+import step_shell  # noqa: E402
 import validate_card  # noqa: E402
 
 #: The card the whole repair pass is named after: thirty-five days in Planning.
@@ -519,7 +520,10 @@ _DEAD_RUN_PARK = r'linear_ops\.add_label\(ident, HOLD_LABEL\)\s*\n(?:\s*#.*\n)*\
 class TestTheOtherWritersAreUnchanged:
     @pytest.mark.parametrize("path,anchor,count", _LABEL_WRITERS)
     def test_the_writer_count_is_what_this_card_left(self, path, anchor, count):
-        text = (ROOT / path).read_text(encoding="utf-8")
+        if path.startswith(".github/workflows/"):
+            text = step_shell.workflow_source(ROOT / path)
+        else:
+            text = (ROOT / path).read_text(encoding="utf-8")
         found = len(re.findall(anchor, text))
         assert found == count, (
             f"{path} writes {reconcile.HOLD_LABEL} at {found} site(s), expected "

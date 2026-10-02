@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import fix_dead_run  # noqa: E402
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 from verdict_content import content_id  # noqa: E402
 
 HEAD = "0226c32587d1e0f4a9bb1c2d3e4f5061728394a5"
@@ -317,7 +318,7 @@ def comment_reads():
     """Every `gh api` READ of the comment record in every workflow here."""
     found = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        for lineno, line in logical_lines(path.read_text(encoding="utf-8")):
+        for lineno, line in logical_lines(step_shell.workflow_source(path)):
             if "gh api" not in line or not _COMMENT_ENDPOINT.search(line):
                 continue
             if any(flag in line for flag in _WRITE_FLAGS):
@@ -327,8 +328,8 @@ def comment_reads():
 
 
 def step_body(workflow: str, job: str, name: str) -> str:
-    doc = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
-    runs = [s["run"] for s in doc["jobs"][job]["steps"] if s.get("name") == name]
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOWS / workflow))
+    runs = [step_shell.step_shell(s) for s in doc["jobs"][job]["steps"] if s.get("name") == name]
     assert len(runs) == 1, f"expected exactly one {name!r} step in {workflow}"
     return runs[0]
 

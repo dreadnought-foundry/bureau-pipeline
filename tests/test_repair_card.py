@@ -44,6 +44,7 @@ import repair_card  # noqa: E402
 import repair_context  # noqa: E402
 import routing_verdict  # noqa: E402
 import should_review_pr  # noqa: E402
+import step_shell  # noqa: E402
 import validate_card  # noqa: E402
 
 SHA = "44891f372381773127f8d6dc1a82205f6565517b"
@@ -65,7 +66,7 @@ MERGE_GATE_PATTERN = (
 
 
 def wf(name: str) -> str:
-    return open(os.path.join(WF_DIR, name)).read()
+    return step_shell.workflow_source(os.path.join(WF_DIR, name))
 
 
 class FakeOps:

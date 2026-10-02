@@ -46,6 +46,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/test")
 os.environ.setdefault("GH_TOKEN", "test")
 
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 RECONCILE_SRC = ROOT / "scripts" / "reconcile.py"
@@ -53,7 +54,7 @@ RECONCILE_SRC = ROOT / "scripts" / "reconcile.py"
 
 def _shell_gate_prefixes(workflow: str) -> set[str]:
     """The branch prefixes a workflow's `case "$BRANCH" in …)` accepts."""
-    text = (WORKFLOWS / workflow).read_text()
+    text = step_shell.workflow_source(WORKFLOWS / workflow)
     m = re.search(r'case "\$BRANCH" in ([^)]+)\)', text)
     assert m is not None, f"{workflow}: no branch case statement"
     return {p.strip().rstrip("*") for p in m.group(1).split("|")}

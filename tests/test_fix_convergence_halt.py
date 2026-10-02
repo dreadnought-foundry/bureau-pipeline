@@ -46,6 +46,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import fix_convergence as fc  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "agent-fix.yml")
 SCRIPT = os.path.join(ROOT, "scripts", "fix_convergence.py")
@@ -86,8 +87,7 @@ DECISION = "**Operator decision** — the approach is right; take one more run."
 
 
 def workflow_src() -> str:
-    with open(WORKFLOW, encoding="utf-8") as fh:
-        return fh.read()
+    return step_shell.workflow_source(WORKFLOW)
 
 
 def resolve_step() -> str:

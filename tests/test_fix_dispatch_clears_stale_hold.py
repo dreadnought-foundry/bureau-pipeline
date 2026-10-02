@@ -36,6 +36,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -43,6 +44,9 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "agent-fix.yml")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+
+import step_shell  # noqa: E402
 
 HOLD_LABEL = "needs-human"
 CARD = "DRE-2509"
@@ -70,7 +74,7 @@ GO_GUARD = (
 
 
 def steps() -> list:
-    return yaml.safe_load(open(WORKFLOW))["jobs"]["fix"]["steps"]
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOW))["jobs"]["fix"]["steps"]
 
 
 def step_named(name: str) -> dict:
@@ -118,7 +122,7 @@ def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0,
         f"sys.exit({linear_exit})\n",
     )
     run = substitute(
-        step_named("Announce fix attempt")["run"],
+        step_shell.step_shell(step_named("Announce fix attempt")),
         {
             "steps.pr.outputs.mode": mode,
             "steps.pr.outputs.attempt": "2",
@@ -209,7 +213,7 @@ class AnnounceClearsStaleHoldTest(unittest.TestCase):
         # Executable lines only — the step's comments explain the choice and
         # name `unpark` while doing no such thing.
         code = "\n".join(
-            ln for ln in step_named("Announce fix attempt")["run"].splitlines()
+            ln for ln in step_shell.step_shell(step_named("Announce fix attempt")).splitlines()
             if not ln.lstrip().startswith("#")
         )
         self.assertIn("remove-label", code)
@@ -302,7 +306,7 @@ def run_resolve(td: str, comments: list, merge_state: str = "CLEAN"):
     open(out_file, "w").close()
 
     run = substitute(
-        step_named("Resolve PR, mode, and attempt budget")["run"],
+        step_shell.step_shell(step_named("Resolve PR, mode, and attempt budget")),
         {
             "github.event.issue.number || github.event.inputs.pr_number": PR,
             "github.repository": REPO,
@@ -329,6 +333,10 @@ def run_resolve(td: str, comments: list, merge_state: str = "CLEAN"):
             WORKER_LOGIN=WORKER_BOT,
             EVENT_NAME="workflow_dispatch",
             TRIGGERING_ACTOR="github-actions",
+            # The two values substituted above, again as the env the step
+            # reads them from once its shell delegates to a script (DRE-3488).
+            PR_NUMBER=PR,
+            REPO=REPO,
         ),
         capture_output=True,
         text=True,

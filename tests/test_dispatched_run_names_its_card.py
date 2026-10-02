@@ -63,6 +63,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import medic_retry  # noqa: E402 — the one card-resolution rule, run for real
+import step_shell  # noqa: E402
 
 # A pull request number that arrives from OUTSIDE the pull request's own event:
 # a `workflow_dispatch` input, or the issue a comment was left on. Either way
@@ -131,8 +132,7 @@ print(out[jq.lstrip(".")] if jq else json.dumps(out))
 
 
 def _doc(name: str) -> dict:
-    with open(WORKFLOWS / name, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return yaml.safe_load(step_shell.workflow_source(WORKFLOWS / name))
 
 
 def discovered() -> dict[str, list[str]]:
@@ -144,7 +144,7 @@ def discovered() -> dict[str, list[str]]:
     """
     found: dict[str, list[str]] = {}
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        text = path.read_text(encoding="utf-8")
+        text = step_shell.workflow_source(path)
         triggers = _doc(path.name).get("on", _doc(path.name).get(True))
         if not isinstance(triggers, dict) or "workflow_call" not in triggers:
             continue
@@ -158,7 +158,7 @@ def printing_step(name: str) -> tuple[str, dict] | tuple[None, None]:
     """The `(job id, step)` that says the card, or `(None, None)`."""
     for job_id, job in (_doc(name).get("jobs") or {}).items():
         for step in job.get("steps") or []:
-            if "bureau-card:" in (step.get("run") or ""):
+            if step.get("run") and "bureau-card:" in step_shell.step_shell(step):
                 return job_id, step
     return None, None
 
@@ -188,7 +188,7 @@ def run_card_fragment(name: str, head_ref: str) -> str:
     """
     job_id, step = printing_step(name)
     assert step is not None, f"{name} prints no `bureau-card:` line"
-    lines = step["run"].splitlines()
+    lines = step_shell.step_shell(step).splitlines()
     cut = next(i for i, line in enumerate(lines) if "bureau-card:" in line)
     script = _render("\n".join(lines[: cut + 1]))
     env = {k: _render(str(v)) for k, v in (step.get("env") or {}).items()}
@@ -276,8 +276,8 @@ class EveryDiscoveredWorkflowSaysItsCardTest(unittest.TestCase):
             with self.subTest(workflow=name):
                 _, step = printing_step(name)
                 self.assertIsNotNone(step, f"{name} prints no card line")
-                self.assertIn("headRefName", step["run"])
-                self.assertIn("grep -oiE 'DRE-[0-9]+'", step["run"])
+                self.assertIn("headRefName", step_shell.step_shell(step))
+                self.assertIn("grep -oiE 'DRE-[0-9]+'", step_shell.step_shell(step))
 
     def test_the_line_is_echoed_and_no_check_run_name_carries_it(self):
         """plan.yml's OTHER half — the job NAME — is deliberately not copied.
@@ -287,7 +287,7 @@ class EveryDiscoveredWorkflowSaysItsCardTest(unittest.TestCase):
             with self.subTest(workflow=name):
                 _, step = printing_step(name)
                 self.assertIsNotNone(step, f"{name} prints no card line")
-                self.assertIn(CARD_ECHO, step["run"])
+                self.assertIn(CARD_ECHO, step_shell.step_shell(step))
                 for job_id, job in (_doc(name).get("jobs") or {}).items():
                     self.assertNotIn(
                         "bureau-card:", str(job.get("name") or ""),
@@ -331,7 +331,7 @@ class TheMedicReadsWhatTheWorkflowPrintsTest(unittest.TestCase):
                 _, step = printing_step(name)
                 self.assertIsNotNone(step, f"{name} prints no card line")
                 source = next(
-                    line for line in step["run"].splitlines() if "bureau-card:" in line
+                    line for line in step_shell.step_shell(step).splitlines() if "bureau-card:" in line
                 )
                 echoed = (
                     f"call / x\tUNKNOWN STEP\t2026-09-20T09:14:00.1234567Z "

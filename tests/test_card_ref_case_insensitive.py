@@ -30,11 +30,15 @@ below is what fails when a third appears with no class of its own.
 
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import step_shell  # noqa: E402
 
 
 def card_extraction_lines(workflow: str) -> list:
@@ -44,7 +48,7 @@ def card_extraction_lines(workflow: str) -> list:
     `dependabot_card.py` and extracts from no shell text itself); it is pinned
     by tests/test_dependabot_card.py and is not an extraction site in the
     DRE-2003 sense, so it is dropped here."""
-    text = (WORKFLOWS / workflow).read_text()
+    text = step_shell.workflow_source(WORKFLOWS / workflow)
     return [
         ln.strip()
         for ln in text.splitlines()

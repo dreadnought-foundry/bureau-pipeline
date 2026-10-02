@@ -31,8 +31,13 @@ QA_BOT_LOGIN/ROSTER together, in one commit.
 """
 import os
 import re
+import sys
 import unittest
 from glob import glob
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import step_shell  # noqa: E402
 
 WORKFLOWS_DIR = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows"
@@ -110,7 +115,7 @@ def classify(line):
 def occurrences(path):
     """(lineno, line, count) for every line carrying the login literal."""
     out = []
-    for lineno, line in enumerate(open(path).read().splitlines(), start=1):
+    for lineno, line in enumerate(step_shell.workflow_source(path).splitlines(), start=1):
         count = line.count(QA_BOT_LOGIN)
         if count:
             out.append((lineno, line, count))
@@ -179,7 +184,7 @@ class TriggerGateEqualityTest(unittest.TestCase):
     def job_if(self, filename, job):
         import yaml
 
-        doc = yaml.safe_load(open(os.path.join(WORKFLOWS_DIR, filename)))
+        doc = yaml.safe_load(step_shell.workflow_source(os.path.join(WORKFLOWS_DIR, filename)))
         return doc["jobs"][job]["if"]
 
     def test_merge_gate_issue_comment_leg_requires_qa_login(self):
@@ -208,7 +213,7 @@ class RenameProcedureDocumentedTest(unittest.TestCase):
     turns a silent partial rename into a deliberate, greppable change."""
 
     def comment_block_above_job_if(self, filename):
-        lines = open(os.path.join(WORKFLOWS_DIR, filename)).read().splitlines()
+        lines = step_shell.workflow_source(os.path.join(WORKFLOWS_DIR, filename)).splitlines()
         literal_idx = next(
             i for i, ln in enumerate(lines)
             if JOB_IF_EQUALITY in ln and not ln.lstrip().startswith("#")

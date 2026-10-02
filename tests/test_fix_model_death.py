@@ -31,6 +31,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import fix_dead_run  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -268,7 +269,7 @@ class CliTest(unittest.TestCase):
 
 
 def report_step() -> str:
-    src = open(WORKFLOW).read()
+    src = step_shell.workflow_source(WORKFLOW)
     m = re.search(r"name:\s*Report\b(.*?)(?:\n      - name:|\Z)", src, re.S)
     if not m:
         raise AssertionError("'Report' step not found in agent-fix.yml")
@@ -282,7 +283,7 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_fix_step_exposes_execution_file(self):
         # The Report step can only read is_error if the claude step has an id
         # and its execution_file output is consumed.
-        src = open(WORKFLOW).read()
+        src = step_shell.workflow_source(WORKFLOW)
         self.assertIn("id: claude", src)
         self.assertIn("steps.claude.outputs.execution_file", report_step())
 
