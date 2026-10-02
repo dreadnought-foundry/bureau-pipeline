@@ -267,6 +267,7 @@ Since DRE-3632 the sandbox's own sweep holds that promise mechanically: a sweep 
 DRE-2726 added the first Linear READ (the `lane_contract` scenario's one
 `query` for the board's workflow states and their occupancy). The promise above
 is about writes and is unchanged: no mutation, and still no card addressed.
+Since DRE-3651 that read is made as the `bureau-sandbox` seat, not as the fleet: `harness.yml` hands the driver `secrets.LINEAR_API_KEY_SANDBOX` and the job declares `LINEAR_IDENTITY: sandbox`, so a run on `main` spends the sandbox's hour and its budget line ends `budget: sandbox`.
 
 ## What the sandbox must provide (operator card DRE-2097)
 
