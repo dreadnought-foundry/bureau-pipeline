@@ -188,7 +188,7 @@ The lane where a person's work waits. A WORKBENCH or OPERATOR card is built by a
 | --- | --- | --- |
 | **entrance** | A card enters on a WORKBENCH or OPERATOR routing verdict, the two whose actor is `operator` in config/routing-verdicts.json. The sweep moves it here, stamping the marks the verdict declares — `hand-built`, plus `no-code` for OPERATOR — before the move. Nothing is dispatched for it, it takes no slot under the WIP cap, it carries no stall window, and it is never reported as stalled. An epic never enters.  
 _Waiting on: DRE-5240 creates the state, points WORKBENCH and OPERATOR here and teaches the sweep the move; asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **exit** | The person working it opens a pull request, and the sweep's hand-built-to-review move carries the card to In Review — or, for an OPERATOR card, the person closes it Done.  
+| **exit** | The person working it opens a pull request, and the sweep's hand-built-to-review move carries the card to In Review — or, for an OPERATOR card, the person closes it Done. Or the hygiene agent closes a card whose pull request merged while it sat here (DRE-5365).  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **writers** | The sweep, which moves a WORKBENCH or OPERATOR card here and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.  
 Permitted writers: `reconcile.py`, `linear_ops.py`, `operator` | Phase 2 — live |
