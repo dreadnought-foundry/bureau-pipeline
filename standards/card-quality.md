@@ -175,6 +175,23 @@ would only prove today's are still fixed. What it CANNOT see is in its own
 docstring — above all a hand write in the Linear UI, which nothing in the
 pipeline can prevent.
 
+**And every row in `Green Light` is one somebody declared** (DRE-5282). `python3
+scripts/green_light_rows.py check` takes the same discovered writes and keeps the
+ones into `Green Light`, the CEO's queue, then reconciles them both ways against
+the `arrivals` the lane contract declares on that lane's entrance. The kinds are
+the contract's vocabulary, read off it and never counted here: today a plan both
+critics passed (`passed-plan`), the planner's business question (`question`), a
+build's escalation to a person (`agent-escalation`), and an approved epic queued
+under the cap (`queued-epic`). A write no record declares fails by location, a
+record with no write fails by name, and a kind outside the vocabulary fails by
+word. Each site's own gate is read rather than trusted: a passed plan's step must
+be gated on both critics' pass, and a queued epic's step must add `epic-queued`
+before it moves the card. A write made through a function is attributed to its
+CALLER: the callers of each lane-writing function are discovered and must be the
+ones its record declares, which is how the sweep's old stall exit, borrowing the
+planner's question, would now be named. A destination the discovery cannot read
+is a problem here, never a pass, because it could be `Green Light`.
+
 `break-glass` is unchanged by this and is not an exception to it. It is a
 bypass of the **Todo-entry gate**, applied by hand by the operator, recorded and
 counted — and the card comes back to `Planning` for the classification it
