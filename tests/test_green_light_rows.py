@@ -426,7 +426,9 @@ class TestTheRecords:
             "where": "plan.yml#A step nobody wrote", "evidence": "x", "card": "DRE-0",
         })
         found = grl.problems(contract=contract)
-        assert _named(found, "plan.yml#A step nobody wrote"), found
+        # Named once, by name: a gate read off a step that is not there would
+        # only repeat it.
+        assert len(_named(found, "plan.yml#A step nobody wrote")) == 1, found
 
     def test_a_kind_outside_the_vocabulary_fails_by_word(self):
         contract = _contract()
