@@ -87,7 +87,8 @@ empty log has always classified as `normal`, which means retry.
 CLI:
 
     python3 medic_retry.py decide --branch <head-ref> --log <file> \
-        [--run-started-at <iso>] [--workflow <failed workflow's name>]
+        [--run-started-at <iso>] [--workflow <failed workflow's name>] \
+        [--snapshot <file to leave the card read in>]
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
 
@@ -102,6 +103,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import re
 import sys
@@ -704,11 +706,40 @@ def _read(path: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def write_snapshot(path: str, card: str, facts: dict | None) -> None:
+    """Leave the gate's card read behind for the steps after it, or clear it.
+
+    Stage 2 fix #23. The limit step de-duplicates its marker against the
+    card's comments, and used to ask Linear for the same window this gate had
+    just read. The file is `json.dumps` of the bodies' window, so the step's
+    grep reads it exactly as it read `dump-comments`.
+
+    `facts` None (no card, or a read that failed open) REMOVES the file: a
+    stale snapshot from an earlier job on the same machine must never stand in
+    for this card's read, and a missing file is what sends the step back to
+    Linear. Never raises: telemetry for a later step must not take the gate
+    down (every medic job `needs: classify`).
+    """
+    if not path:
+        return
+    try:
+        if facts is None:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(dict(facts, card=card), f)
+    except OSError as e:
+        print(f"::warning::medic retry gate: card snapshot not written ({e})",
+              file=sys.stderr)
+
+
 def _decide_cli(args) -> int:
     log_text = _read(args.log)
     card = card_for_run(args.branch, log_text)
     stall = stream_watchdog.stall_from_log(log_text)
     parked, witness, repeat = "", "", ""
+    write_snapshot(args.snapshot, card or "", None)
     if card:
         try:
             facts = card_facts(card)
@@ -721,6 +752,7 @@ def _decide_cli(args) -> int:
                 file=sys.stderr,
             )
         else:
+            write_snapshot(args.snapshot, card, facts)
             # Stage 2 fix #23: a bookkeeping rerun is not new work, so the park
             # is not its business. The card is still read and still named —
             # the other two rules read its receipts, and medic.yml's limit
@@ -781,6 +813,9 @@ def main(argv=None) -> int:
     # Stage 2 fix #23. The failed workflow's name, which decides whether the
     # park rule applies (`park_rule_applies`). Absent means the rule applies.
     gate.add_argument("--workflow", default="")
+    # Stage 2 fix #23. Where to leave the card read for the limit step, so it
+    # does not ask Linear for the same comments again (`write_snapshot`).
+    gate.add_argument("--snapshot", default="")
 
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)

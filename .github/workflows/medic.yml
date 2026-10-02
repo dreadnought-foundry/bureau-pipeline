@@ -230,7 +230,8 @@ jobs:
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
             --run-started-at "$RUN_STARTED_AT" \
             --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
-            --workflow "$WORKFLOW_NAME") || OUT=""
+            --workflow "$WORKFLOW_NAME" \
+            --snapshot "$RUNNER_TEMP/medic-card.json") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
           fi
@@ -304,8 +305,19 @@ jobs:
           fi
           # EXACTLY ONE marker per run: a re-run attempt reuses the run id,
           # and the classify job runs on every failed attempt.
-          if python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null \
-               | grep -qE "limit-death:.* run=${RUN_ID}([^0-9]|$)"; then
+          #
+          # Against the card read the retry gate above already made (Stage 2
+          # fix #23): it leaves that read in $RUNNER_TEMP, so this check costs
+          # no second Linear request. The file is missing only when the gate's
+          # read failed open, and then this asks Linear itself, as it always
+          # did.
+          SNAPSHOT="$RUNNER_TEMP/medic-card.json"
+          if [ -s "$SNAPSHOT" ]; then
+            COMMENTS=$(cat "$SNAPSHOT")
+          else
+            COMMENTS=$(python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null) || COMMENTS=""
+          fi
+          if printf '%s' "$COMMENTS" | grep -qE "limit-death:.* run=${RUN_ID}([^0-9]|$)"; then
             echo "$CARD already carries the marker for run $RUN_ID — not posting a second"
             exit 0
           fi

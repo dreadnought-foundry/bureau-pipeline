@@ -260,5 +260,47 @@ class MedicWiringTest(unittest.TestCase):
         )
 
 
+class TheLimitStepRunsOnTheSnapshotTest(unittest.TestCase):
+    """The limit step EXECUTED, through the harness
+    tests/test_medic_limit_death_wiring.py drives it with (its python3 shim
+    records every call), with the gate's snapshot in $RUNNER_TEMP."""
+
+    def _run(self, snapshot_comments):
+        import test_medic_limit_death_wiring as wiring
+
+        with tempfile.TemporaryDirectory() as temp:
+            if snapshot_comments is not None:
+                with open(os.path.join(temp, "medic-card.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump({"card": "DRE-3062", "state": "In Progress",
+                               "labels": [], "comments": snapshot_comments}, f)
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": temp}):
+                return wiring.run_step()
+
+    def test_this_runs_marker_in_the_snapshot_posts_nothing_and_asks_nothing(self):
+        import test_medic_limit_death_wiring as wiring
+
+        result = self._run([{"body": wiring.MARKER, "created_at": ""}])
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=true", result["outputs"])
+        self.assertEqual([], [c for c in result["calls"] if "dump-comments" in c])
+        self.assertEqual([], [c for c in result["calls"] if "linear_ops.py comment" in c])
+
+    def test_a_snapshot_without_the_marker_posts_it_without_a_second_read(self):
+        result = self._run([{"body": "🧠 model-attempt: x", "created_at": ""}])
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertEqual([], [c for c in result["calls"] if "dump-comments" in c])
+        self.assertEqual(
+            1, len([c for c in result["calls"] if "linear_ops.py comment" in c])
+        )
+
+    def test_no_snapshot_falls_back_to_reading_the_card(self):
+        result = self._run(None)
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertEqual(
+            1, len([c for c in result["calls"] if "dump-comments" in c])
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
