@@ -547,9 +547,30 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # A review the PIPELINE asked for is not a card arriving at Planning
+      # (DRE-5644). Its reason — `review`, `re-review` or `review-retry`, from
+      # any lane — says the plan is written and the second critic is to read
+      # it; the route step below sends it there. The classifier is the front
+      # door, and on 2026-10-02 it ran on DRE-3698's automatic re-review (run
+      # 37054561328, 12:32 PT) instead: the stamp had scrolled past the comment
+      # window, the classifier read the epic afresh, its self-check failed, and
+      # the escalation below parked the epic in Green Light as a CEO decision.
+      # So the classifier is skipped on a review ask, and with it the three
+      # steps gated on its outputs. The words live in `review_rerun.REVIEW_ASKS`
+      # beside the route table's own; the reason comes through env, never
+      # interpolated — it is a payload field.
+      - name: Dispatch reason — a review the pipeline asked for?
+        id: ask
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        env:
+          REASON: ${{ github.event.client_payload.reason }}
+        run: |
+          python3 .bureau-pipeline/scripts/review_rerun.py review-ask \
+            --reason "$REASON" --github-output "$GITHUB_OUTPUT"
+
       - name: Classify the card — one-off, epic or wave
         id: classify
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.ask.outputs.review != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}

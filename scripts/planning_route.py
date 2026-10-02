@@ -718,7 +718,10 @@ def _say_once(lops, identifier: str, tag: str | None, body: str) -> None:
 def _cmd_decide(identifier: str, github_output: str | None) -> int:
     import linear_ops
 
-    bodies = linear_ops.comment_bodies(identifier)
+    # The whole thread (DRE-5644): the shape stamp is written once, on the way
+    # in, and a busy epic pushes it out of the fifty-comment window. Read off the
+    # window, a stamped epic is refused as a card nobody classified.
+    bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
     try:
         route = decide(identifier, bodies)
     except Unroutable as refusal:
@@ -767,7 +770,7 @@ def _cmd_exit(identifier: str) -> int:
     # Read the card WHOLE: the routing check reads the acceptance criteria, and
     # the list API truncates a description without saying so.
     card = critic_score.read_card(linear_ops, identifier)
-    bodies = linear_ops.comment_bodies(identifier)
+    bodies = linear_ops.comment_bodies(identifier, whole_thread=True)  # DRE-5644
     plan = exit_plan(card, bodies)
 
     if plan.escalation is not None:

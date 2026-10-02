@@ -657,7 +657,9 @@ def stamp(
     (`planning_classify.py`, DRE-3029) — so the pre-write refusal, the comment
     and the marks cannot come apart between them.
     """
-    refusal = stamp_refusal(name, lops.comment_bodies(identifier), doc)
+    # The whole thread (DRE-5644): a stamp past the fifty-comment window is
+    # still the card's stamp, and writing a second over it makes two.
+    refusal = stamp_refusal(name, lops.comment_bodies(identifier, whole_thread=True), doc)
     if refusal is not None:
         return refusal
     lops.cmd_comment(identifier, shape_comment(name, reason, doc, by=by, model=model))
@@ -683,7 +685,7 @@ def _cmd_stamp(identifier: str, name: str, reason: str) -> int:
 def _cmd_read(identifier: str) -> int:
     import linear_ops
 
-    bodies = linear_ops.comment_bodies(identifier)
+    bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
     notice = fault(identifier, bodies)
     try:
         name = shape_on(bodies)
