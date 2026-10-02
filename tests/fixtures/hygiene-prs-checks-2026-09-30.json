@@ -1,0 +1,481 @@
+{
+  "lanes": {
+    "Green Light": [],
+    "Todo": [],
+    "Triage": [],
+    "In Progress": [],
+    "In Review": [
+      {
+        "id": "uuid-DRE-4101",
+        "identifier": "DRE-4101",
+        "title": "synthetic DRE-4101",
+        "description": "synthetic",
+        "createdAt": "2026-09-28T00:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:portico"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": []
+        }
+      },
+      {
+        "id": "uuid-DRE-4102",
+        "identifier": "DRE-4102",
+        "title": "synthetic DRE-4102",
+        "description": "synthetic",
+        "createdAt": "2026-09-28T00:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:portico"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": []
+        }
+      },
+      {
+        "id": "uuid-DRE-4103",
+        "identifier": "DRE-4103",
+        "title": "synthetic DRE-4103",
+        "description": "synthetic",
+        "createdAt": "2026-09-28T00:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:portico"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": []
+        }
+      },
+      {
+        "id": "uuid-DRE-4104",
+        "identifier": "DRE-4104",
+        "title": "synthetic DRE-4104",
+        "description": "synthetic",
+        "createdAt": "2026-09-28T00:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": []
+        }
+      },
+      {
+        "id": "uuid-DRE-4105",
+        "identifier": "DRE-4105",
+        "title": "synthetic DRE-4105",
+        "description": "synthetic",
+        "createdAt": "2026-09-28T00:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Review"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:portico"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": []
+        }
+      }
+    ]
+  },
+  "prs": {
+    "dreadnought-foundry/portico": [
+      {
+        "number": 101,
+        "title": "feat: synthetic change 101",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4101-search-tables",
+        "headRefOid": "4f1c2a9e00000000000000000000000000000000",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91001/job/1"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91002/job/2"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "lint",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91002/job/3"
+          }
+        ]
+      },
+      {
+        "number": 102,
+        "title": "feat: synthetic change 102",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4102-export-csv",
+        "headRefOid": "7b3d5e1111111111111111111111111111111111",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "api-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91011/job/11"
+          }
+        ]
+      },
+      {
+        "number": 103,
+        "title": "feat: synthetic change 103",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4103-flag-queue",
+        "headRefOid": "a90e44c222222222222222222222222222222222",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91021/job/21"
+          }
+        ]
+      },
+      {
+        "number": 105,
+        "title": "feat: synthetic change 105",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4105-first-try",
+        "headRefOid": "e1d2c3b444444444444444444444444444444444",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91041/job/41"
+          }
+        ]
+      },
+      {
+        "number": 106,
+        "title": "feat: synthetic change 106",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4106-retired-idea",
+        "headRefOid": "0aa1bb2c55555555555555555555555555555555",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91051/job/51"
+          }
+        ]
+      },
+      {
+        "number": 107,
+        "title": "feat: synthetic change 107",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4107-shipped-twice",
+        "headRefOid": "9f8e7d6c66666666666666666666666666666666",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91061/job/61"
+          }
+        ]
+      },
+      {
+        "number": 108,
+        "title": "feat: synthetic change 108",
+        "body": "synthetic",
+        "headRefName": "dependabot/npm_and_yarn/vite-5.4.9",
+        "headRefOid": "5d5d5d5d77777777777777777777777777777777",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "web-tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/portico/actions/runs/91071/job/71"
+          }
+        ]
+      }
+    ],
+    "dreadnought-foundry/bureau-pipeline": [
+      {
+        "number": 104,
+        "title": "feat: synthetic change 104",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4104-retry-bound",
+        "headRefOid": "c25f8d0733333333333333333333333333333333",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T18:10:00Z",
+        "comments": [
+          {
+            "author": {
+              "login": "bot"
+            },
+            "body": "🧹 hygiene: hyg-check-rerun — tests red in run 91031, green in run 91032 at head c25f8d0 · 10:05 PT\nevidence: run 91031, run 91032, check tests, head c25f8d0\n\n📎 pipeline-act: hygiene-check-rerun · kind: recovery · state: unchanged · next: merge-gate.yml · discharges: nothing · subscriber: hygiene.yml · tag: hyg-check-rerun",
+            "createdAt": "2026-09-30T17:00:00Z"
+          }
+        ],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/91033/job/33"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "tests",
+            "workflowName": "Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-09-30T18:00:00Z",
+            "completedAt": "2026-09-30T18:09:00Z",
+            "detailsUrl": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/91034/job/34"
+          }
+        ]
+      }
+    ]
+  },
+  "gh": {
+    "gh run list --repo dreadnought-foundry/portico --branch agent/DRE-4101-search-tables --json databaseId,name,conclusion,headSha --limit 50": "[{\"databaseId\": 91002, \"name\": \"Tests\", \"conclusion\": \"success\", \"headSha\": \"4f1c2a9e00000000000000000000000000000000\"}, {\"databaseId\": 91001, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"4f1c2a9e00000000000000000000000000000000\"}, {\"databaseId\": 90990, \"name\": \"Tests\", \"conclusion\": \"success\", \"headSha\": \"1111111111111111111111111111111111111111\"}]",
+    "gh run list --repo dreadnought-foundry/portico --branch agent/DRE-4102-export-csv --json databaseId,name,conclusion,headSha --limit 50": "[{\"databaseId\": 91011, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"7b3d5e1111111111111111111111111111111111\"}]",
+    "gh run view 91011 --repo dreadnought-foundry/portico --log-failed": "api-tests\tRun tests\t2026-09-30T18:04:11Z Fetching fixtures from the API\napi-tests\tRun tests\t2026-09-30T18:04:12Z gh: No server is currently available to service your request. (HTTP 503)\napi-tests\tRun tests\t2026-09-30T18:04:12Z ##[error]Process completed with exit code 1.\n",
+    "gh run list --repo dreadnought-foundry/portico --branch agent/DRE-4103-flag-queue --json databaseId,name,conclusion,headSha --limit 50": "[{\"databaseId\": 91021, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"a90e44c222222222222222222222222222222222\"}, {\"databaseId\": 91020, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"a90e44c222222222222222222222222222222222\"}]",
+    "gh run view 91021 --repo dreadnought-foundry/portico --log-failed": "web-tests\tRun tests\t2026-09-30T18:05:40Z FAILED tests/test_queue.py::test_approving_keeps_next - AssertionError: assert 2 == 3\nweb-tests\tRun tests\t2026-09-30T18:05:40Z ##[error]Process completed with exit code 1.\n",
+    "gh run list --repo dreadnought-foundry/bureau-pipeline --branch agent/DRE-4104-retry-bound --json databaseId,name,conclusion,headSha --limit 50": "[{\"databaseId\": 91034, \"name\": \"Tests\", \"conclusion\": \"success\", \"headSha\": \"c25f8d0733333333333333333333333333333333\"}, {\"databaseId\": 91033, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"c25f8d0733333333333333333333333333333333\"}, {\"databaseId\": 91032, \"name\": \"Tests\", \"conclusion\": \"success\", \"headSha\": \"c25f8d0733333333333333333333333333333333\"}, {\"databaseId\": 91031, \"name\": \"Tests\", \"conclusion\": \"failure\", \"headSha\": \"c25f8d0733333333333333333333333333333333\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4101": "[{\"number\": 101, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/101\", \"headRefName\": \"agent/DRE-4101-search-tables\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4102": "[{\"number\": 102, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/102\", \"headRefName\": \"agent/DRE-4102-export-csv\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4103": "[{\"number\": 103, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/103\", \"headRefName\": \"agent/DRE-4103-flag-queue\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/bureau-pipeline --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4104": "[{\"number\": 104, \"url\": \"https://github.com/dreadnought-foundry/bureau-pipeline/pull/104\", \"headRefName\": \"agent/DRE-4104-retry-bound\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4105": "[{\"number\": 110, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/110\", \"headRefName\": \"agent/DRE-4105-second-try\", \"state\": \"MERGED\"}, {\"number\": 105, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/105\", \"headRefName\": \"agent/DRE-4105-first-try\", \"state\": \"OPEN\"}, {\"number\": 99, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/99\", \"headRefName\": \"agent/DRE-4105-abandoned\", \"state\": \"CLOSED\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4106": "[{\"number\": 106, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/106\", \"headRefName\": \"agent/DRE-4106-retired-idea\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/portico --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4107": "[{\"number\": 107, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/107\", \"headRefName\": \"agent/DRE-4107-shipped-twice\", \"state\": \"OPEN\"}, {\"number\": 95, \"url\": \"https://github.com/dreadnought-foundry/portico/pull/95\", \"headRefName\": \"agent/DRE-4107-first-try\", \"state\": \"CLOSED\"}]"
+  }
+}
