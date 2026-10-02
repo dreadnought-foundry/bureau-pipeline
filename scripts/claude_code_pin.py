@@ -87,7 +87,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_action_pins  # noqa: E402
 import github_output  # noqa: E402
-from model_adoption_actions import _quiet, load_trial  # noqa: E402
+from model_adoption_actions import WHATS_NEW_NONE, _quiet, load_trial  # noqa: E402
 from model_adoption_actions import _trial as _trial_section  # noqa: E402
 from model_catalog import CATALOG_URL  # noqa: E402
 from model_fallback import auth_headers  # noqa: E402
@@ -691,7 +691,8 @@ def pr_body(pin, trial=None) -> str:
         "update type, so a vendor release never arrives as a bare bump: it arrives "
         "here, trialled (DRE-3416's 2026-09-08 outage was an untrialled release).",
     ])
-    body = "\n\n".join([first, raise_table, why, _trial_section(trial), changes, gate])
+    body = "\n\n".join([WHATS_NEW_NONE, first, raise_table, why,
+                        _trial_section(trial), changes, gate])
     return _quiet(body) + "\n"
 
 

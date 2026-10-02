@@ -108,6 +108,12 @@ _VERDICT_MARKERS = (
 )
 
 
+#: The first line of every pull request body this module renders. A model swap
+#: changes nothing a person using a product sees (`standards/whats-new.md`,
+#: DRE-5573) — and the `agent/` branches the workflow opens on owe the line.
+WHATS_NEW_NONE = "What's new: none"
+
+
 class Refused(ValueError):
     """A Decision (or a config edit) this module will not act on. Exit 2."""
 
@@ -385,6 +391,7 @@ def _summary(decision) -> str:
 
 def pr_body(decision, trial=None) -> str:
     body = "\n\n".join([
+        WHATS_NEW_NONE,
         _summary(decision),
         _evidence(decision),
         _trial(trial),
