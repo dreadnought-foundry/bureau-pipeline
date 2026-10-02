@@ -25,6 +25,7 @@ import copy
 import json
 import os
 import sys
+import urllib.error
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,6 +38,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene  # noqa: E402
 import hygiene_prs_checks as lane  # noqa: E402
+import linear_ops  # noqa: E402
 import medic_classify  # noqa: E402
 from test_hygiene import scan  # noqa: E402 — the core's static scan, not a copy
 
@@ -98,6 +100,8 @@ class FakeLinear:
         self.calls.append(dict(variables or {}))
         ident = (variables or {}).get("id")
         state = self.states.get(ident)
+        if isinstance(state, BaseException):
+            raise state  # a read that failed the way `linear_ops.gql` fails in the run
         if state is None:
             return {"issue": None}
         return {"issue": {"identifier": ident, "state": {"name": state}}}
@@ -415,6 +419,13 @@ class TestAMootPullRequest:
 # --------------------------------------------------------------------------- #
 
 HTTP_502 = RuntimeError("gh exited 1: HTTP 502: Bad Gateway")
+#: The ways `ctx.linear` fails in the run: the network past `linear_ops._send`'s
+#: one retry, an API error, and the rate limit.
+LINEAR_FAILURES = (
+    urllib.error.URLError("timed out"),
+    linear_ops.LinearError("Linear API returned 503 from https://api.linear.app/graphql"),
+    linear_ops.LinearRateLimited("Linear API returned 400: RATELIMITED"),
+)
 
 
 class TestAnUnreadablePullRequest:
@@ -422,9 +433,10 @@ class TestAnUnreadablePullRequest:
     row, never an act, and every other pull request still gets its rows."""
 
     def _others_still_act(self, items, but):
+        but = {but} if isinstance(but, str) else set(but)
         acted = {a.target for a in actions(items)}
         expected = {f"{PORTICO}#101", f"{PORTICO}#102", f"{PORTICO}#105", f"{PORTICO}#106"}
-        assert acted == expected - {but}
+        assert acted == expected - but
         assert f"{PORTICO}#107" in {r.target for r in left(items)}
 
     def test_a_pr_list_that_fails_leaves_the_pull_request(self):
@@ -479,6 +491,18 @@ class TestAnUnreadablePullRequest:
         assert "log expired" in row.recommendation
         self._others_still_act(items, but=target)
 
+    @pytest.mark.parametrize("failure", LINEAR_FAILURES, ids=lambda f: type(f).__name__)
+    def test_a_card_state_that_cannot_be_read_leaves_the_pull_request(self, failure):
+        """The Canceled card's pull request is not closed and the Done card's
+        is not read as "no state": each gets the one unreadable row."""
+        items, *_ = run(states={"DRE-4106": failure, "DRE-4107": failure})
+        for number in (106, 107):
+            target = f"{PORTICO}#{number}"
+            assert actions(items, target) == []
+            [row] = left(items, target)
+            assert row.why == f"could not read the state of DRE-4{number}"
+        self._others_still_act(items, but={f"{PORTICO}#106", f"{PORTICO}#107"})
+
     def test_a_refusal_is_never_swallowed_as_unreadable(self, monkeypatch):
         """The core's read-only wrapper refusing an argv is a lane bug, not a
         flaky read: it still stops the pass."""
@@ -500,6 +524,23 @@ class TestAnUnreadablePullRequest:
         ledger = hygiene.run_leg({"lanes": doc["lanes"]}, ctx)
         assert len(ledger["actions"]) == 3
         assert f"{PORTICO}#101" in {r["target"] for r in ledger["left"]}
+
+    @pytest.mark.parametrize("failure", LINEAR_FAILURES, ids=lambda f: type(f).__name__)
+    def test_the_leg_still_writes_its_ledger_when_linear_fails(self, monkeypatch, failure):
+        doc = fixture()
+        _, ctx, gh, _ = build(doc, states={"DRE-4106": failure, "DRE-4107": failure})
+        monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [lane])
+        ctx.dry_run = True
+        answers = dict(doc["gh"])
+        for repo in sorted(ctx.repos):
+            answers[" ".join(hygiene.pr_list_argv(repo))] = json.dumps(doc["prs"].get(repo, []))
+        gh.answers = answers
+        ledger = hygiene.run_leg({"lanes": doc["lanes"]}, ctx)
+        assert {a["target"] for a in ledger["actions"]} == {
+            f"{PORTICO}#101", f"{PORTICO}#102", f"{PORTICO}#105"}
+        whys = {r["target"]: r["why"] for r in ledger["left"]}
+        assert whys[f"{PORTICO}#106"] == "could not read the state of DRE-4106"
+        assert whys[f"{PORTICO}#107"] == "could not read the state of DRE-4107"
 
 
 class TestStaleOrAbsentData:

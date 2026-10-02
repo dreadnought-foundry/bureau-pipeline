@@ -29,11 +29,13 @@ two acts, never a third:
    that supersedes nothing. A `Done` card with no other merged pull request is
    LEFT: closing it could discard shipped work, and a person decides.
 
-A read that fails — a 502, an expired run log, a payload that is not JSON —
-is not "no evidence". The pull request it was for gets a `Left` row naming
-what could not be read, nothing is rerun or closed on it, and every other pull
-request still gets its rows. A refusal by the core's read-only wrapper is not
-a failed read: it is a lane bug, and it still stops the pass.
+A read that fails — a 502, an expired run log, a payload that is not JSON, a
+Linear read of a card's state that cannot reach Linear or that Linear answers
+with an error — is not "no evidence". The pull request it was for gets a
+`Left` row naming what could not be read, nothing is rerun or closed on it,
+and every other pull request still gets its rows. A refusal by the core's
+read-only wrapper is not a failed read: it is a lane bug, and it still stops
+the pass.
 
 It never merges. The only `gh` argv this module builds are reads handed to
 `ctx.gh`; its writes are the core's constructors' argv, and the core's shape
@@ -240,15 +242,18 @@ def _flaky(ctx: hygiene.Context, repo: str, pull: dict):
 
 def _card_state(board: hygiene.Board, ctx: hygiene.Context, ident: str) -> str | None:
     """The card's lane: off the board read when the card is on it, else one
-    counted `ctx.linear` read. None when Linear does not know the card."""
+    counted `ctx.linear` read. None when Linear answers that it does not know
+    the card; a read that fails — the network, a 5xx, the rate limit — is
+    `Unreadable`, never "no state"."""
     for cards in board.lanes.values():
         for card in cards:
             if card.get("identifier") == ident:
                 return (card.get("state") or {}).get("name")
+    what = f"the state of {ident}"
     try:
         data = ctx.linear(_ISSUE_STATE, {"id": ident})
-    except linear_ops.LinearError:
-        return None  # an unknown card is not a state — nothing is closed on it
+    except (linear_ops.LinearError, OSError) as e:  # LinearRateLimited is one too
+        raise Unreadable(what, e) from e
     return (((data or {}).get("issue") or {}).get("state") or {}).get("name")
 
 
