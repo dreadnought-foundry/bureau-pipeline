@@ -276,6 +276,50 @@ class TheHeldParkSaysWhatIsTrue(unittest.TestCase):
                               "first critic", note)
                 self.assertIn(pc.REAPPROVE_HOW, note)
 
+    def test_an_unreadable_thread_is_named_unreadable_not_unrecorded(self):
+        """`None` is a thread nobody could read (console-honesty rule 2): the
+        note must not tell the operator the first critic never looked."""
+        note = pc.held_park_note(None)
+        self.assertIn("could not be read", note)
+        self.assertNotIn("nothing on this epic records", note)
+        self.assertNotIn("sent it back", note)
+        self.assertIn(pc.REAPPROVE_HOW, note)
+
+    def test_a_pass_on_record_claims_nothing_it_cannot_back(self):
+        thread = [{"body": "plan-critic: stage=pre round=1 result=PASS "
+                           "collisions=0", "authored_by_pipeline": True}]
+        note = pc.held_park_note(thread)
+        self.assertIn("result=PASS", note)
+        self.assertIn("could not be confirmed", note)
+        self.assertNotIn("sent it back", note)
+        self.assertNotIn("nothing on this epic records", note)
+
+    def test_an_unknown_result_word_is_named_as_not_a_pass(self):
+        with mock.patch.object(pc, "pre_word", return_value="SOMETHING_NEW"):
+            note = pc.held_park_note([])
+        self.assertIn("says SOMETHING_NEW, which is not a pass", note)
+        self.assertNotIn("sent it back", note)
+
+    def test_the_cli_names_empty_or_invalid_stdin_unreadable(self):
+        """plan.yml writes `: > "$THREAD"` when the dump fails, so an empty
+        stdin is the failed read, and must not print the no-record line."""
+        for stdin in ("", "not json", '{"not": "a list"}'):
+            with self.subTest(stdin=stdin):
+                done = subprocess.run(
+                    [sys.executable, str(PLAN_CRITIC), "held-park"],
+                    input=stdin, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("could not be read", done.stdout)
+                self.assertNotIn("nothing on this epic records", done.stdout)
+
+    def test_the_cli_reads_an_empty_list_as_read_and_unrecorded(self):
+        """`[]` is a thread that WAS read and holds no first-critic record —
+        the line between it and an unreadable thread."""
+        printed = run_plan_critic(["held-park"], []).stdout
+        self.assertIn("nothing on this epic records a reading by the first "
+                      "critic", printed)
+        self.assertNotIn("could not be read", printed)
+
     def test_the_park_step_reads_its_sentence_through_the_module(self):
         steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         found = [s for job in steps["jobs"].values()
