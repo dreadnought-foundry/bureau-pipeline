@@ -221,7 +221,7 @@ def _decide(tmp_path, threads: dict, family: dict):
         return family
 
     with patch.object(linear_ops, "comment_bodies",
-                      side_effect=lambda i: list(threads.get(i, []))), \
+                      side_effect=lambda i, **_kw: list(threads.get(i, []))), \
          patch.object(linear_ops, "gql", side_effect=gql), \
          patch.object(linear_ops, "cmd_comment"), \
          patch.object(linear_ops, "count_comments", return_value=0):

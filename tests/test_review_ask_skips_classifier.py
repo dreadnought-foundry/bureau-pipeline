@@ -404,11 +404,12 @@ class TheStampIsReadOffTheWholeThread(unittest.TestCase):
         self.assertEqual(lops.posted, [], "a stamped card is told nothing")
 
     def test_every_reader_of_a_stamp_asks_for_the_whole_thread(self):
-        """The two route commands and the shape CLI's read take the same
-        reading as the three above; a window here is the same bug."""
+        """The shape CLI's read takes the same reading as the three above; a
+        window here is the same bug. `planning_route._cmd_exit` is left on the
+        window on purpose: its list also feeds the routing-verdict readers,
+        which are not scoped to the newest return receipt (see its comment)."""
         for fn in (planning_classify.run, planning_shape.stamp,
-                   planning_shape._cmd_read, planning_route._cmd_decide,
-                   planning_route._cmd_exit):
+                   planning_shape._cmd_read, planning_route._cmd_decide):
             with self.subTest(reader=fn.__qualname__):
                 src = inspect.getsource(fn)
                 self.assertIn("comment_bodies(", src)

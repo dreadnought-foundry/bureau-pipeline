@@ -770,7 +770,13 @@ def _cmd_exit(identifier: str) -> int:
     # Read the card WHOLE: the routing check reads the acceptance criteria, and
     # the list API truncates a description without saying so.
     card = critic_score.read_card(linear_ops, identifier)
-    bodies = linear_ops.comment_bodies(identifier, whole_thread=True)  # DRE-5644
+    # The window, not the whole thread, on purpose (DRE-5644 left it): this
+    # list also feeds `routing_verdict.verdicts_on` and its `stamp_refusal`,
+    # which read every verdict on the thread rather than from the newest return
+    # receipt the way `planning_shape.shape_on` does. Read whole, a one-off
+    # that came back (DRE-4370) would see its old verdict and refuse the new
+    # one. The exit serves one-off and roll-up cards, whose threads stay short.
+    bodies = linear_ops.comment_bodies(identifier)
     plan = exit_plan(card, bodies)
 
     if plan.escalation is not None:
