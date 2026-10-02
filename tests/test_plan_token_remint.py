@@ -71,6 +71,8 @@ POOL_STEP_IDS = {READER_MINT_ID, "probe_2", "probe_3", "probe_4"}
 # installation, and is `continue-on-error` by design — a failed mint leaves
 # the card waiting for the sweep. Pinned in tests/test_planner_queue_wiring.py.
 OWNER_MINT_IDS = {"next_token"}
+# The second critic's own route (DRE-5280), as the step gates spell it.
+REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 
 
 def _steps() -> list[dict]:
@@ -147,6 +149,46 @@ class NoTokenOutlivesAModelRun(unittest.TestCase):
             mint = _index_of_id(step_id)
             self.assertEqual(_action(steps[mint]), MINT_ACTION, step_id)
             self.assertLess(mint, i, f"{_label(i, step)} reads a later step's token")
+
+    def test_every_review_mode_consumer_reads_a_mint_that_runs_in_review_mode(self):
+        # DRE-5280: the second critic's steps run on the `review` route as well
+        # as the activate route. A consumer gated into review mode whose mint
+        # was still gated on activate alone would read an EMPTY token there —
+        # the positional rule above holds and the step still dies on
+        # `Bad credentials`.
+        steps = _steps()
+        consumers = [
+            (i, step, step_id) for i, step, step_id in _consumers()
+            if REVIEW_MODE in str(step.get("if") or "")
+        ]
+        self.assertTrue(consumers, "no step reads a token in review mode")
+        for i, step, step_id in consumers:
+            mint = steps[_index_of_id(step_id)]
+            self.assertIn(REVIEW_MODE, str(mint.get("if") or ""),
+                          f"{_label(i, step)} reads `{step_id}`, which is not "
+                          "minted in review mode")
+
+    def test_every_review_mode_model_step_is_preceded_by_a_review_mode_mint(self):
+        # The card's own words: every model step is preceded by a re-mint,
+        # including in review mode. Three model steps run there — the review,
+        # the re-plan and its re-run on the next rung — and each reads a token
+        # minted after the model step before it.
+        steps = _steps()
+        models = [
+            (i, s) for i, s in enumerate(steps)
+            if _action(s) == MODEL_ACTION and REVIEW_MODE in str(s.get("if") or "")
+        ]
+        self.assertEqual(sorted(s.get("id") for _i, s in models),
+                         ["posta", "postreplan", "postreplan_retry"])
+        for i, s in models:
+            ids = _token_step_ids(s)
+            self.assertEqual(len(ids), 1, _label(i, s))
+            mint = _index_of_id(ids[0])
+            self.assertEqual(_action(steps[mint]), MINT_ACTION, _label(i, s))
+            self.assertIn(REVIEW_MODE, str(steps[mint].get("if") or ""), _label(i, s))
+            earlier = [j for j in range(i) if _action(steps[j]) == MODEL_ACTION]
+            if earlier:
+                self.assertGreater(mint, max(earlier), _label(i, s))
 
     def test_the_first_critic_reads_a_token_minted_after_the_planner(self):
         # The incident step, named, so a rewrite of the general rule above
