@@ -8,7 +8,8 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → S → F → 4.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → S → F → 4 → W
+→ O.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -272,6 +273,18 @@ F. FIX RUN IN FLIGHT (DRE-4486) — the Agent Fix lane's own record for this
    ahead of it: a conflicted draft still routes to the fix agent, because
    the branch has to be reconciled with its base whatever the flag says.
 
+W. WHAT'S NEW LINE (DRE-5511) — the pull request body's `What's new:` line
+   (`standards/whats-new.md`), read by `whats_new.py`. The critic sends a
+   lineless pull request back first; this is the deterministic backstop for
+   a review that was carried or skipped. A branch that owes a line
+   (`required_for`), opened after the cutover (`enforced_for`), whose body
+   has no line that parses is `hold`, its reason opening `What's new: `.
+   OFF — never a hold — when no body was passed or the body file is empty,
+   and when the creation time is empty or unparseable or there is no cutover
+   file: a blip never holds a pull request on a fact nobody read. Evaluated
+   after condition 4, so it never pre-empts a pending review, a stack hold
+   or a fix in flight. Wording is the critic's, not the gate's.
+
 O. CODE-OWNER REVIEW (DRE-4341) — the base branch's rules, the pull
    request's reviews and CODEOWNERS, gathered by `code_owner_hold.py gather`
    and read by `code_owner_hold.read_owners`. On 2026-09-19 Portico #616 was
@@ -286,8 +299,8 @@ O. CODE-OWNER REVIEW (DRE-4341) — the base branch's rules, the pull
    Green Light for that person (`code_owner_hold.py hold`). UNKNOWN — any
    read that failed, or an approval that cannot be proved to be an owner's —
    is NOT a hold: the gate merges as before, so a refusal still fails the
-   step loudly, never a silent hold. Evaluated LAST, after condition 4, so
-   the approval the note asks for is the one thing left.
+   step loudly, never a silent hold. Evaluated LAST, after conditions 4 and
+   W, so the approval the note asks for is the one thing left.
 
 STRUCTURED / ANCHORED verdict parsing (DRE-1992 scope note, 2026-07-09):
 a comment merely QUOTING a verdict marker must not count as one. A comment
@@ -321,7 +334,9 @@ Contract with merge-gate.yml:
     (the record `stacked_prs.py gather` writes — condition S, DRE-4103;
     unreadable holds), --owners-file (the record `code_owner_hold.py
     gather` writes — condition O, DRE-4341; unreadable is UNKNOWN and merges
-    as before), all optional;
+    as before), --pr-body-file / --pr-created-at (the pull request's body
+    and GitHub's `createdAt` — condition W, DRE-5511; an empty or unreadable
+    body, or an empty or unparseable time, is OFF), all optional;
     omitted = the pre-DRE-2039/2416 behavior for every caller that never
     passes them. The compare payload must NOT be trimmed (DRE-2340): its
     `files[]` is what the head's content id is computed from.
@@ -385,6 +400,11 @@ import stacked_prs  # noqa: E402
 # request's reviews and CODEOWNERS say about a required code-owner review is
 # read in ONE module, by the gatherer, the gate and the hold arm alike.
 import code_owner_hold  # noqa: E402
+
+# Condition W's record (DRE-5511). Which branches owe a `What's new:` line,
+# when the rule is on and what a line must look like live in ONE module, read
+# by the gate, the critic's context, the collector and the train alike.
+import whats_new  # noqa: E402
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -1127,6 +1147,39 @@ def evaluate_owners(owners) -> tuple:
     return None, None
 
 
+def evaluate_whats_new(head_branch, pr_body, pr_created_at) -> Optional[Decision]:
+    """Condition W (DRE-5511). None = proceed. A pull request that owes a
+    `What's new:` line (`standards/whats-new.md`), opened after the rule was
+    switched on, whose body has no line that parses is a `hold`: only an
+    edited body and a new head lift it.
+
+    Every fact nobody read is OFF, never a hold — an empty creation time, one
+    that does not parse, no cutover file — because a blip must not hold a
+    pull request on a fact nobody read. Wording is not judged here: a line
+    that parses passes, and its wording is the critic's finding.
+    """
+    if not whats_new.required_for(head_branch or ""):
+        return None
+    if not pr_created_at:
+        return None
+    try:
+        if not whats_new.enforced_for(pr_created_at):
+            return None
+    except whats_new.WhatsNewError:
+        return None
+    try:
+        whats_new.parse_line(pr_body)
+    except whats_new.WhatsNewError as error:
+        problem = error.problem
+        # The workflow posts this reason as a comment by the qa-bot, and the
+        # problem quotes the author's own line: never let it carry a marker.
+        if any(m.lower() in problem.lower()
+               for m in ("VERDICT:", CRITIC_MARKER, VERIFIER_MARKER)):
+            problem = "The `What's new:` line does not fit either accepted form."
+        return Decision("hold", f"What's new: {problem} (standards/whats-new.md)")
+    return None
+
+
 def decide(*args, owners=None, **kwargs) -> Decision:
     """The whole gate — `_decide`'s conditions, then condition O (DRE-4341)
     over `owners`, `code_owner_hold.read_owners`'s answer. Every decision
@@ -1159,9 +1212,11 @@ def _decide(
     stack=None,
     branch_commits=None,
     owners=None,
+    pr_body=None,
+    pr_created_at=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4 → O, first
-    blocker wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4 → W → O,
+    first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
@@ -1216,7 +1271,14 @@ def _decide(
     `owners` is condition O's reading (DRE-4341), evaluated after condition
     4: reaching it means every other condition said merge, so the one thing
     the hold's note asks for — the code owner's approval — is the one thing
-    left."""
+    left.
+
+    `pr_body` / `pr_created_at` are condition W's record (DRE-5511), the
+    pull request's body and GitHub's `createdAt` for it, evaluated after
+    condition 4 and before O so it never pre-empts a pending review, a stack
+    hold or a fix in flight. The defaults (None), and an empty body,
+    reproduce the pre-DRE-5511 behavior for every caller that never passes
+    them."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1285,6 +1347,13 @@ def _decide(
     blocked = evaluate_draft(is_draft)
     if blocked:
         return _decided(blocked)
+
+    # Condition W (DRE-5511): the body's `What's new:` line, only when a
+    # caller passed the body — the backstop for a review carried or skipped.
+    if pr_body:
+        blocked = evaluate_whats_new(head_branch, pr_body, pr_created_at)
+        if blocked:
+            return _decided(blocked)
 
     # Condition O (DRE-4341), last: GitHub would refuse this merge for a
     # missing code-owner review, so it is a hold that names who, not a merge
@@ -1391,6 +1460,18 @@ def build_parser() -> argparse.ArgumentParser:
                              "reviews and CODEOWNERS (DRE-4341). A file that "
                              "cannot be read is UNKNOWN: the gate merges as "
                              "before and a refusal stays loud")
+    # Condition W's record (DRE-5511) — optional; omitting the body, or an
+    # empty body file, reproduces the pre-DRE-5511 behavior.
+    parser.add_argument("--pr-body-file", default="",
+                        help="the pull request's body as text — condition W "
+                             "holds a body with no `What's new:` line "
+                             "(standards/whats-new.md). Empty or unreadable "
+                             "is OFF: the gate decides as it did before")
+    parser.add_argument("--pr-created-at", default="",
+                        help="GitHub's createdAt for the pull request (ISO "
+                             "8601) — the rule binds only pull requests "
+                             "opened after the cutover. Empty or unparseable "
+                             "is OFF, never a hold")
     return parser
 
 
@@ -1529,12 +1610,26 @@ def main(argv=None) -> int:
         except (OSError, json.JSONDecodeError) as e:
             owners = code_owner_hold.unknown(f"cannot read the owners record: {e}")
 
+    # DRE-5511: a body nobody could read is no body — condition W is off and
+    # the note says so. A blip never holds a pull request on a fact unread.
+    pr_body, body_note = None, None
+    if args.pr_body_file:
+        try:
+            with open(args.pr_body_file) as f:
+                pr_body = f.read() or None
+        except (OSError, UnicodeDecodeError) as e:
+            body_note = (f"cannot read the pull request body ({e}) — the "
+                         "What's new: condition is off (DRE-5511)")
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
         unfinished, stack, branch_commits, owners=owners,
+        pr_body=pr_body, pr_created_at=args.pr_created_at or None,
     )
+    if body_note:
+        decision.notes.append(body_note)
     for note in decision.notes:
         print(f"note={note}")
     print(f"decision={decision.action}")
