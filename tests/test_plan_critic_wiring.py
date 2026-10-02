@@ -6,10 +6,9 @@ rail:
 
   1. ORDER — the first critic runs BEFORE the epic reaches Green Light (it
      protects the CEO's attention, so it cannot run after the CEO has spent
-     it), and the second runs on the review route before Green Light
-     (DRE-5284) and again AFTER approval, BEFORE the children promote (an
-     adversarial pass is only worth much against a fixed target, and after
-     promotion the gap is no longer free to fix).
+     it), and the second runs after it and ALSO before Green Light (DRE-5280),
+     so the activate route runs no review at all: Approve means go (DRE-5281),
+     and nothing promotes before the second critic has passed the plan.
   2. THE BOUND — the plan route carries at most two critic rounds, opens the
      planning cycle those rounds are counted from, and a plan still held at
      the bound parks in Triage for an operator (DRE-5284) rather than looping.
@@ -155,61 +154,57 @@ class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
 
 
 POST_REPLAN = "Re-plan after the second critic sent it back"
-SENT_BACK = "Second critic sent the plan back"
-SNAPSHOT = "Children before the re-plan"
-CARD_SET = "Re-plan — did the card set change?"
-
-# The three branches of the sent-back step, each opened by a comment of its
-# own so a test can read one branch without guessing at shell indentation.
-BOUND_BRANCH = "# THE BOUND"
-CHANGED_BRANCH = "# THE CARD SET CHANGED"
-SAME_BRANCH = "# THE SAME CARDS"
-
-
-def sent_back_branches() -> tuple[str, str, str]:
-    """`(bound, changed, same)` — the three bodies, in the order they branch."""
-    run = str(step_named(SENT_BACK).get("run") or "")
-    for marker in (BOUND_BRANCH, CHANGED_BRANCH, SAME_BRANCH):
-        assert marker in run, f"{marker!r} is not in the sent-back step"
-    bound, rest = run.split(BOUND_BRANCH, 1)[1].split(CHANGED_BRANCH, 1)
-    changed, same = rest.split(SAME_BRANCH, 1)
-    return bound, changed, same
+# The review route's two hold outcomes (DRE-5280): below the bound the revised
+# plan is reviewed again, at it the plan parks in Triage. Since DRE-5281 they
+# are the only send-back outcomes — the activate route runs no review.
+RE_REVIEW = "Review — the revised plan is reviewed again"
+BOUND_PARK = "Review — the bound parks the plan in Triage"
+# What DRE-5281 deleted with the activate route's review: the snapshot, the
+# card-set diff and the activate-mode send-back that read them, and the
+# activate-mode death.
+RETIRED_STEPS = ("Children before the re-plan", "Re-plan — did the card set change?",
+                 "Second critic sent the plan back", "Second critic — the review died")
 
 
-class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
-    """DRE-3088, read off the rail. A held plan is revised once before it goes
-    back to the CEO; a plan held twice parks; and no receipt names Todo."""
+class ASendBackRevisesThenParks(unittest.TestCase):
+    """DRE-3088, read off the rail as DRE-5281 leaves it. A held plan is
+    revised before anyone reads it again; a plan held twice parks for an
+    operator in Triage; and no receipt names Todo."""
 
-    def test_the_re_plan_runs_between_the_decision_and_the_park(self):
+    def test_the_re_plan_runs_between_the_decision_and_the_outcomes(self):
         self.assertLess(index_of(SECOND), index_of(POST_REPLAN))
-        self.assertLess(index_of(POST_REPLAN), index_of(SENT_BACK))
-        self.assertLess(index_of(SENT_BACK), index_of(ACTIVATE))
+        self.assertLess(index_of(POST_REPLAN), index_of(RE_REVIEW))
+        self.assertLess(index_of(POST_REPLAN), index_of(BOUND_PARK))
+        self.assertLess(index_of(BOUND_PARK), index_of(ACTIVATE))
 
     def test_the_re_plan_is_gated_on_a_hold_and_cannot_strand_the_epic(self):
         replan = step_named(POST_REPLAN)
         self.assertIn("action == 'hold'", str(replan.get("if")))
-        self.assertIn("mode == 'activate'", str(replan.get("if")))
+        self.assertIn("mode == 'review'", str(replan.get("if")))
+        self.assertNotIn("mode == 'activate'", str(replan.get("if")))
         self.assertTrue(replan.get("continue-on-error"),
-                        "a re-plan that dies must not stop the Green Light move")
+                        "a re-plan that dies must not stop the outcome after it")
         self.assertIn("RE-plan", str(replan["with"]["prompt"]))
         self.assertIn("post1.outputs.reason", str(replan["with"]["prompt"]))
 
     def test_the_park_reads_the_bound_and_stamps_needs_human(self):
-        run = str(step_named(SENT_BACK).get("run") or "")
-        self.assertIn('"$BOUND" = "true"', run)
-        bound, _changed, _same = sent_back_branches()
-        self.assertIn("add-label", bound)
-        self.assertIn("needs-human", bound)
-        self.assertIn("Green Light", bound)
+        park = step_named(BOUND_PARK)
+        self.assertIn("steps.post1.outputs.bound == 'true'", str(park.get("if")))
+        run = str(park.get("run") or "")
+        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertIn('state "$EPIC" "Triage"', run)
+        self.assertNotIn('state "$EPIC" "Green Light"', run)
 
     def test_no_receipt_on_the_activate_route_names_todo(self):
-        for fragment in (SENT_BACK,):
-            run = str(step_named(fragment).get("run") or "")
-            self.assertIn("In Progress", run)
-            self.assertNotIn("Todo", run)
+        run = str(step_named(ACTIVATE).get("run") or "")
+        self.assertIn("In Progress", run)
+        self.assertNotIn("Todo", run)
 
-    def test_the_activate_step_is_reached_only_on_proceed(self):
-        self.assertIn("action == 'proceed'", str(step_named(ACTIVATE).get("if")))
+    def test_the_activate_step_runs_on_the_activate_route_alone(self):
+        """No critic decision gates it any more: it reads the second critic's
+        state off the thread itself (`post-state`)."""
+        self.assertEqual(str(step_named(ACTIVATE).get("if")).strip(),
+                         "steps.route.outputs.mode == 'activate'")
 
     def test_the_approval_lane_is_a_live_lane_of_the_contract(self):
         sys.path.insert(0, os.path.join(ROOT, "scripts"))
@@ -224,96 +219,11 @@ class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
         self.assertIn("never Todo", text)
 
 
-class OnlyAnAddedOrRemovedCardParksAfterASendBack(unittest.TestCase):
-    """DRE-3291, read off the rail. A re-plan that changed no card SET is not a
-    decision the CEO has to make — he approved those cards already — so the run
-    re-reviews the plan itself instead of asking him for a fifth approval."""
-
-    def test_the_snapshots_bracket_the_re_plan(self):
-        self.assertLess(index_of(SNAPSHOT), index_of(POST_REPLAN))
-        self.assertLess(index_of(POST_REPLAN), index_of(CARD_SET))
-        self.assertLess(index_of(CARD_SET), index_of(SENT_BACK))
-
-    def test_neither_snapshot_can_strand_a_held_epic(self):
-        """Both are gated exactly like the re-plan and both are best-effort:
-        the park below must never depend on either of them running."""
-        for fragment in (SNAPSHOT, CARD_SET):
-            s = step_named(fragment)
-            self.assertIn("action == 'hold'", str(s.get("if")), fragment)
-            self.assertIn("mode == 'activate'", str(s.get("if")), fragment)
-            self.assertTrue(s.get("continue-on-error"), fragment)
-
-    def test_the_before_snapshot_is_taken_from_the_live_children(self):
-        run = str(step_named(SNAPSHOT).get("run") or "")
-        self.assertIn("children-json", run)
-        self.assertIn("children-before.json", run)
-
-    def test_the_diff_is_the_shared_contract_and_unknown_reads_as_changed(self):
-        """`review_rerun.py card-set` owns the answer (DRE-3286), and a
-        snapshot that is missing or empty is CHANGED — unknown is unknown, and
-        the CEO reads it (standards/console-honesty.md rule 2)."""
-        s = step_named(CARD_SET)
-        self.assertEqual(s.get("id"), "cardset")
-        run = str(s.get("run") or "")
-        self.assertIn("review_rerun.py card-set", run)
-        self.assertIn("--before", run)
-        self.assertIn("--after", run)
-        self.assertIn("children-after.json", run)
-        self.assertIn("changed=true", run)
-
-    def test_the_bound_is_read_before_the_card_set(self):
-        """"Two REAL send-backs still park" is out of this card's scope, so the
-        bound branch is first and nothing below it can reach a parked plan."""
-        run = str(step_named(SENT_BACK).get("run") or "")
-        self.assertLess(run.index('"$BOUND" = "true"'), run.index("$SET_CHANGED"))
-        bound, _changed, _same = sent_back_branches()
-        self.assertNotIn("review_rerun.py dispatch", bound)
-
-    def test_a_changed_card_set_parks_and_names_the_cards(self):
-        _bound, changed, _same = sent_back_branches()
-        self.assertIn('state "$EPIC" "Green Light"', changed)
-        self.assertIn("${ADDED", changed)
-        self.assertIn("${REMOVED", changed)
-        self.assertNotIn("review_rerun.py dispatch", changed,
-                         "a shape the CEO has not seen is not re-reviewed behind him")
-
-    def test_a_re_plan_that_did_not_finish_takes_the_same_branch(self):
-        run = str(step_named(SENT_BACK).get("run") or "")
-        self.assertIn('"$REPLAN_OUTCOME" != "success"', run)
-
-    def test_the_same_card_set_dispatches_a_re_review_and_moves_no_lane(self):
-        _bound, _changed, same = sent_back_branches()
-        self.assertIn("review_rerun.py dispatch", same)
-        self.assertIn(f"--reason {rr.REASON_RE_REVIEW}", same)
-        self.assertIn('--repo "$GITHUB_REPOSITORY"', same)
-        self.assertNotIn("linear_ops.py state", same,
-                         "a re-review never writes the epic's lane")
-        self.assertNotIn("add-label", same)
-
-    def test_the_dispatch_runs_under_the_app_token(self):
-        """Q1/Q2: `repos/.../dispatches` needs contents:write, which the App
-        token holds and the stub's own `github.token` does not."""
-        assert_app_token_minted_after_review(self, SENT_BACK)
-
-    def test_a_failed_re_review_dispatch_is_said_and_never_claimed_as_started(self):
-        """DRE-2034: no receipt on an unconfirmed dispatch. Both receipts hang
-        off the dispatch's exit status, and the failure leaves the step red so
-        the medic picks the run up — nothing else would, because no lane was
-        written."""
-        _bound, _changed, same = sent_back_branches()
-        head, _, tail = same.partition("review_rerun.py dispatch")
-        self.assertNotIn("linear_ops.py comment", head,
-                         "a re-review receipt written before the dispatch is attempted")
-        self.assertRegex(same, r"if\s+python3\s+\S*review_rerun\.py dispatch")
-        self.assertIn("🔁", tail)
-        self.assertIn("could NOT", tail)
-        self.assertLess(tail.index("🔁"), tail.index("could NOT"))
-        self.assertIn("exit 1", tail)
-
-
-class TheSecondCriticRunsAfterApproval(unittest.TestCase):
-    def test_it_runs_on_the_activate_route(self):
-        self.assertIn("mode == 'activate'", str(step_named(SECOND).get("if")))
+class TheSecondCriticRunsBeforeTheChildrenPromote(unittest.TestCase):
+    def test_it_runs_on_the_review_route_alone(self):
+        gate = str(step_named(SECOND).get("if"))
+        self.assertIn("mode == 'review'", gate)
+        self.assertNotIn("mode == 'activate'", gate)
 
     def test_it_runs_before_the_children_are_promoted(self):
         """`This is the last point at which a gap is free to fix — after this
@@ -333,8 +243,13 @@ class TheSecondCriticRunsAfterApproval(unittest.TestCase):
             "a step promotes the epic's children before the second critic runs",
         )
 
-    def test_promotion_is_gated_on_the_critics_decision(self):
-        self.assertIn("action", str(step_named(ACTIVATE).get("if") or "").lower())
+    def test_promotion_is_gated_on_the_critics_recorded_pass(self):
+        """DRE-5281: the gate is the promoter's own reading of the thread,
+        `post-state`, compared with the module's word — never a literal."""
+        run = str(step_named(ACTIVATE).get("run") or "")
+        self.assertIn("plan_critic.py post-state", run)
+        self.assertIn("plan_critic.POST_RELEASED", run)
+        self.assertNotIn(f'"{pc.POST_RELEASED}"', run)
 
     def test_it_is_handed_the_cross_epic_sight_block(self):
         self.assertLess(index_of(SIGHT), index_of(SECOND))
@@ -730,24 +645,26 @@ class TheStandard(unittest.TestCase):
                       "the run this card's number was measured from")
 
 
-# --- DRE-3241: the post-approval review's ceiling, and what a dead one leaves ---
+# --- DRE-3241: the second critic's review ceiling, and what a dead one leaves ---
 
 CEILING = "Second critic — turn ceiling"
-DIED = "Second critic — the review died"
+# The death step. Until DRE-5281 the activate route had one of its own; the
+# review route's (DRE-5280) is now the only one.
+DIED = "Review — the review died"
 DECISION = "Second critic — decision"
 
 
 class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
-    """The ceiling is computed on the activate route — `steps.kids` only
+    """The ceiling is computed on the review route — `steps.kids` only
     exists on the plan route — through the one sizer in review_rerun.py, which
     reads the plan for a first run and the epic's own thread for a retry
     (DRE-3289), with the fifteen-card number as the fallback so a bare
     `--max-turns` can never reach the action (qa-review.yml's shape)."""
 
-    def test_the_ceiling_step_runs_before_the_review_on_the_activate_route(self):
+    def test_the_ceiling_step_runs_before_the_review_on_the_review_route(self):
         self.assertLess(index_of(CEILING), index_of(SECOND))
         step = step_named(CEILING)
-        self.assertIn("mode == 'activate'", str(step.get("if")))
+        self.assertIn("mode == 'review'", str(step.get("if")))
         run = str(step.get("run") or "")
         self.assertIn("linear_ops.py children", run)
         self.assertIn("review_rerun.py ceiling", run)
@@ -822,7 +739,7 @@ class ADeadReviewWritesItsTombstone(unittest.TestCase):
         self.assertLess(index_of(DIED), index_of(DECISION))
         gate = str(step_named(DIED).get("if") or "")
         self.assertIn("steps.posta.outcome == 'failure'", gate)
-        self.assertIn("mode == 'activate'", gate)
+        self.assertIn("mode == 'review'", gate)
         self.assertNotIn("failure()", gate,
                          "`continue-on-error` on the review keeps the job "
                          "green there, so `failure()` would never be true and "
@@ -873,8 +790,8 @@ class ADeadReviewWritesItsTombstone(unittest.TestCase):
 
 
 class ADeadReviewRetriesItselfOnce(unittest.TestCase):
-    """DRE-3289. A dead post-approval review used to leave the epic In
-    Progress with nothing scheduled, and the only way to run the review again
+    """DRE-3289. A dead second-critic review used to leave the epic with
+    nothing scheduled, and the only way to run the review again
     was a person moving it Green Light → In Progress. Now the same step that
     writes the tombstone asks `review_rerun.py` what to do about it: retry
     once at a higher ceiling, park on the second death, or leave a non-turn
@@ -892,10 +809,11 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
                                    0, run.index("review_rerun.py after-death")),
                         run.index("dump-comments"))
 
-    def test_a_retry_dispatches_the_activate_route_and_moves_no_lane(self):
+    def test_a_retry_dispatches_the_review_route_and_moves_no_lane(self):
         run = str(step_named(DIED).get("run") or "")
         self.assertIn("review_rerun.py dispatch", run)
-        self.assertIn(f"--reason {rr.REASON_REVIEW_RETRY}", run)
+        self.assertIn(f"--reason {rr.REASON_REVIEW_RETRY} --trigger-state "
+                      f"{rr.TRIGGER_STATE_REVIEW}", run)
         self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
         retry = run.split('"retry"')[1].split('"park"')[0]
         self.assertNotIn("linear_ops.py state", retry,
@@ -934,7 +852,8 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         park = run.split('"park"')[1]
         self.assertIn("add-label", park)
         self.assertIn("needs-human", park)
-        self.assertIn('state "$EPIC" "Green Light"', park)
+        self.assertIn('state "$EPIC" "Triage"', park)
+        self.assertNotIn('state "$EPIC" "Green Light"', park)
         self.assertIn('cat "$PARK_NOTE"', park,
                       "the note after-death wrote, not a rival sentence")
         self.assertIn('--note-file "$PARK_NOTE"', run,
@@ -993,11 +912,11 @@ class TheReviewSaysWhatItSpent(unittest.TestCase):
         self.assertEqual(step_named(RECEIPT).get("id"), "postreceipt")
 
     def test_it_runs_on_both_the_verdict_path_and_the_death_path(self):
-        """`always()`-style, gated on the activate route AND on `posta` having
+        """`always()`-style, gated on the review route AND on `posta` having
         RUN: never on an earlier step's failure, where `posta` is `skipped`."""
         gate = str(step_named(RECEIPT).get("if") or "")
         self.assertIn("always()", gate)
-        self.assertIn("mode == 'activate'", gate)
+        self.assertIn("mode == 'review'", gate)
         self.assertIn("steps.posta.outcome == 'success'", gate)
         self.assertIn("steps.posta.outcome == 'failure'", gate)
         self.assertNotIn("skipped", gate)
@@ -1088,37 +1007,31 @@ class EveryNoticeThatAsksForAReRunNamesTheAct(unittest.TestCase):
     and none of them asks for a lane move the epic cannot make."""
 
     def test_the_sent_back_notices_ask_only_for_the_move_that_is_left(self):
-        """DRE-3291 split this three ways, and each branch asks for a different
-        thing — or for nothing.
+        """Read off the review-mode notices since DRE-5281 deleted the
+        activate route's three-way send-back.
 
-        The BOUND still asks for the re-run in `REAPPROVE_HOW`'s exact words:
-        the epic is parked, and clearing needs-human then asking for the review
-        again is a person's job. The CHANGED branch has just moved the epic to
-        Green Light itself and the plan there is genuinely his to read, so it
-        asks for the single move that is left. The SAME-CARDS branch asks for
-        nothing at all, because nothing there is the CEO's."""
-        run = str(step_named(SENT_BACK).get("run") or "")
-        bound, changed, same = sent_back_branches()
-        self.assertEqual(run.count(pc.REAPPROVE_HOW), 1,
-                         "only the parked notice names the re-run act")
-        self.assertIn(pc.REAPPROVE_HOW, bound)
+        The BOUND park asks for the way back in `REAPPROVE_HOW`'s words, read
+        through the module at run time (never a literal): the epic is parked,
+        and clearing needs-human then moving it to Planning is a person's job.
+        The re-review asks for nothing at all, because nothing there is
+        anyone's to decide — the CEO has not seen the plan yet."""
+        bound = str(step_named(BOUND_PARK).get("run") or "")
+        self.assertIn("plan_critic.REAPPROVE_HOW", bound)
+        self.assertNotIn(pc.REAPPROVE_HOW, bound)
         # DRE-5280: the way back from a park is the move to Planning, not the
         # act — the relay ignores the act on an epic that is not In Progress.
-        self.assertIn(pc.REVIEW_LANE, bound)
+        self.assertIn(pc.REVIEW_LANE, pc.REAPPROVE_HOW)
         self.assertNotIn(rr.RERUN_REVIEW_ACT, bound)
 
-        self.assertNotIn(pc.REAPPROVE_HOW, changed)
-        self.assertIn("Green Light", changed)
-        self.assertIn(pc.APPROVAL_LANE, changed,
-                      "the changed-set notice still names the approval move")
-
-        self.assertNotIn(pc.REAPPROVE_HOW, same)
+        same = str(step_named(RE_REVIEW).get("run") or "")
+        self.assertNotIn("REAPPROVE_HOW", same)
         self.assertNotIn(pc.APPROVAL_LANE, same,
-                         "an unchanged card set asks the CEO for no move at all")
+                         "a revision asks the CEO for no move at all")
         self.assertNotIn("Approve", same)
 
-        self.assertNotIn("by moving the epic to In Progress", run)
-        self.assertNotIn("Todo", run)
+        for run in (bound, same):
+            self.assertNotIn("by moving the epic to In Progress", run)
+            self.assertNotIn("Todo", run)
 
     def test_the_tombstone_note_comes_from_the_module_that_owns_the_sentence(self):
         """The dead-review note is generated by `plan_critic.py died` and the
@@ -1186,7 +1099,7 @@ class TheResultFileDecidesNotTheStepOutcome(unittest.TestCase):
     def test_it_runs_on_both_the_verdict_path_and_the_death_path(self):
         gate = str(step_named(VERDICT).get("if") or "")
         self.assertIn("always()", gate)
-        self.assertIn("mode == 'activate'", gate)
+        self.assertIn("mode == 'review'", gate)
         self.assertIn("steps.posta.outcome == 'success'", gate)
         self.assertIn("steps.posta.outcome == 'failure'", gate)
 
@@ -1276,15 +1189,14 @@ class TheResultFileDecidesNotTheStepOutcome(unittest.TestCase):
 
 # --- DRE-5280: the second critic reads the plan before Green Light ----------
 #
-# A `review` route of its own. The second critic's steps run in review mode
-# AND in activate mode (DRE-5281 narrows them to review), and review mode has
-# six outcomes of its own, each gated on the decision's own outputs — never on
-# `action == 'proceed'` alone, because `proceed` covers a critic that never
-# decided.
+# A `review` route of its own. The second critic's steps ran in review mode
+# AND in activate mode until DRE-5281 narrowed them to review alone, and review
+# mode has six outcomes of its own, each gated on the decision's own outputs —
+# never on `action == 'proceed'` alone, because `proceed` covers a critic that
+# never decided.
 
 REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 ACTIVATE_MODE = "steps.route.outputs.mode == 'activate'"
-BOTH_MODES = f"({REVIEW_MODE} || {ACTIVATE_MODE})"
 SLOT_CLAUSE = "steps.slot.outputs.admitted == 'true'"
 
 GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
@@ -1296,11 +1208,10 @@ REVIEW_BOUND = "Review — the bound parks the plan in Triage"
 REVIEW_OUTCOMES = (GREEN_LIGHT_BOTH, REVIEW_HELD_PASS, REVIEW_NO_RESULT,
                    REVIEW_DIED, REVIEW_RE_REVIEW, REVIEW_BOUND)
 
-# The steps that ran under `mode == 'activate'` before this card and now run in
-# both modes: `Select model — second critic` through `Second critic — decision`
-# (the activate-mode death excepted — it is an OUTCOME, and review mode has its
-# own), the re-plan with its turn ceiling and capacity retry, the mechanical
-# findings after it, and the mint the review-mode re-review dispatch spends.
+# The second critic's own steps: `Select model — second critic` through
+# `Second critic — decision`, the re-plan with its turn ceiling and capacity
+# retry, the mechanical findings after it, and the mint the re-review dispatch
+# spends. DRE-5280 ran them in both modes; DRE-5281 narrowed them to review.
 SHARED_STEPS = (
     "Select model — second critic",
     "Second critic — cross-epic sight",
@@ -1323,18 +1234,14 @@ SHARED_STEPS = (
     "Re-mint bot token — send-back",
 )
 
-# The activate-mode outcomes, unchanged by this card (DRE-5281 retires them).
-ACTIVATE_ONLY_STEPS = (
-    "Second critic — the review died",
-    "Children before the re-plan",
-    "Re-plan — did the card set change?",
-    "Second critic sent the plan back",
-    "Activate the approved epic",
-)
+# The activate route as DRE-5281 leaves it: a fresh token for the hand-back's
+# dispatch, then the activation that reads the second critic's state.
+ACTIVATE_MINT = "Re-mint bot token — activate"
+ACTIVATE_ONLY_STEPS = (ACTIVATE_MINT, "Activate the approved epic")
 
 # The step ids the wiring tests and the act registry key on.
 CARD_STEP_IDS = ("route", "post1", "postmodel", "sight", "postturns", "posta",
-                 "postverdict", "postreplan", "cardset")
+                 "postverdict", "postreplan", "postreplan_retry")
 
 GREEN_LIGHT_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Green Light"')
 TRIAGE_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Triage"')
@@ -1403,12 +1310,14 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         for ident in CARD_STEP_IDS:
             self.assertIn(ident, ids)
 
-    def test_the_shared_steps_run_in_both_modes(self):
+    def test_the_second_critics_steps_run_in_review_mode_alone(self):
+        """DRE-5281: `mode == 'review'` alone — the activate route runs no
+        review, and no step of the second critic's runs on it."""
         for name in SHARED_STEPS:
             with self.subTest(step=name):
                 gate = gate_of(exact_step(name))
                 self.assertIn(REVIEW_MODE, gate)
-                self.assertIn(ACTIVATE_MODE, gate)
+                self.assertNotIn(ACTIVATE_MODE, gate)
 
     def test_the_verdict_steps_and_the_decision_share_one_mode_predicate(self):
         """The DRE-3241 trap, guarded in the new mode: were the decision to run
@@ -1419,14 +1328,16 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                      "Second critic — verdict or death?",
                      "Second critic — decision"):
             with self.subTest(step=name):
-                self.assertIn(BOTH_MODES, gate_of(exact_step(name)))
+                gate = gate_of(exact_step(name))
+                self.assertIn(REVIEW_MODE, gate)
+                self.assertNotIn(ACTIVATE_MODE, gate)
 
-    def test_the_activate_outcomes_are_unchanged_and_never_run_in_review_mode(self):
+    def test_the_activate_route_is_two_steps_and_never_runs_in_review_mode(self):
+        on_activate = [s.get("name") for s in steps() if ACTIVATE_MODE in gate_of(s)]
+        self.assertEqual(on_activate, list(ACTIVATE_ONLY_STEPS))
         for name in ACTIVATE_ONLY_STEPS:
             with self.subTest(step=name):
-                gate = gate_of(exact_step(name))
-                self.assertIn(ACTIVATE_MODE, gate)
-                self.assertNotIn(REVIEW_MODE, gate)
+                self.assertEqual(gate_of(exact_step(name)).strip(), ACTIVATE_MODE)
 
     def test_the_six_outcomes_are_review_only(self):
         for name in REVIEW_OUTCOMES:
@@ -1598,6 +1509,221 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                 self.assertEqual(len(hits), 1)
                 self.assertEqual(hits[0].get("step"), site.step)
                 self.assertTrue((hits[0].get("why") or "").strip())
+
+
+# --- DRE-5281: Approve means go ---------------------------------------------
+#
+# The activate route runs no review. `Activate the approved epic` reads the
+# second critic's state off the epic's thread (`plan_critic.py post-state`):
+# on POST_RELEASED it activates exactly as before; on anything else it writes
+# no lane and asks for the review the plan missed, from In Progress, and the
+# review run moves the epic to Planning itself. Read off the rail.
+
+ANY_LANE_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "([^"]+)"')
+QUEUED_LABEL = re.compile(r'linear_ops\.py add-label "\$EPIC" epic-queued')
+HAND_BACK = (f"--reason {rr.REASON_REVIEW} "
+             f'--trigger-state "{rr.TRIGGER_STATE_ACTIVATE}"')
+
+
+def activate_branches() -> tuple[str, str]:
+    """`(released, handed_back)` — the two bodies of the activation's one
+    branch, split on the shell's own `else`, so each can be read alone."""
+    run = run_of(exact_step(ACTIVATE))
+    head, sep, rest = run.partition('if [ "$POST" = "$RELEASED" ]; then')
+    assert sep, "the activation does not branch on the module's released word"
+    depth, lines, released, handed = 0, rest.splitlines(), [], []
+    target = released
+    for line in lines:
+        word = line.strip()
+        if word.startswith("if ") or word.startswith("if\t"):
+            depth += 1
+        elif word == "fi":
+            if depth == 0:
+                break
+            depth -= 1
+        elif word == "else" and depth == 0:
+            target = handed
+            continue
+        target.append(line)
+    return "\n".join(released), "\n".join(handed)
+
+
+def route_activate_branch() -> str:
+    """The route step's activate branch: between `mode=activate` and the
+    plan route's `else`."""
+    run = run_of(exact_step(ROUTE))
+    start = run.index('echo "mode=activate"')
+    return run[start:run.index('echo "mode=plan"', start)]
+
+
+class ApproveMeansGo(unittest.TestCase):
+
+    def test_no_activate_mode_step_runs_a_model(self):
+        models = [s.get("name") for s in steps()
+                  if ACTIVATE_MODE in gate_of(s)
+                  and str(s.get("uses") or "").split("@")[0] == ACTION]
+        self.assertEqual(models, [])
+
+    def test_no_activate_mode_step_writes_green_light(self):
+        for s in steps():
+            if ACTIVATE_MODE in gate_of(s):
+                with self.subTest(step=s.get("name")):
+                    self.assertNotRegex(run_of(s), GREEN_LIGHT_WRITE)
+
+    def test_the_route_step_writes_green_light_only_after_queueing_the_epic(self):
+        """The one form a neighbor may add here (DRE-5136, after this card):
+        a Green Light write in the route step that the same shell labels
+        `epic-queued` before. Any other Green Light write is refused, and as
+        this card leaves `main` there is none at all."""
+        run = run_of(exact_step(ROUTE))
+        writes = [m.start() for m in GREEN_LIGHT_WRITE.finditer(run)]
+        for at in writes:
+            with self.subTest(at=at):
+                queued = [m.start() for m in QUEUED_LABEL.finditer(run[:at])]
+                self.assertTrue(queued, "a Green Light write with no epic-queued label before it")
+        self.assertNotRegex(route_activate_branch(), GREEN_LIGHT_WRITE)
+
+    def test_the_only_activate_mode_lane_write_is_in_progress_on_released(self):
+        writes = [(s.get("name"), lane) for s in steps() if ACTIVATE_MODE in gate_of(s)
+                  for lane in ANY_LANE_WRITE.findall(run_of(s))]
+        self.assertEqual(writes, [(ACTIVATE, pc.APPROVAL_LANE)])
+        released, handed = activate_branches()
+        self.assertEqual(ANY_LANE_WRITE.findall(released), [pc.APPROVAL_LANE])
+        self.assertEqual(ANY_LANE_WRITE.findall(handed), [])
+        self.assertNotRegex(route_activate_branch(), ANY_LANE_WRITE)
+
+    def test_no_activate_mode_step_writes_planning(self):
+        for s in steps():
+            if ACTIVATE_MODE in gate_of(s):
+                with self.subTest(step=s.get("name")):
+                    self.assertNotRegex(run_of(s), PLANNING_WRITE)
+        self.assertNotRegex(route_activate_branch(), PLANNING_WRITE)
+
+    def test_the_branch_is_the_promoters_own_word(self):
+        run = run_of(exact_step(ACTIVATE))
+        self.assertIn("dump-comments", run)
+        self.assertIn("--with-authors", run)
+        self.assertIn('plan_critic.py post-state --epic "$EPIC"', run)
+        self.assertIn("plan_critic.POST_RELEASED", run)
+        self.assertLess(run.index("post-state"), run.index('if [ "$POST" = "$RELEASED" ]'))
+
+    def test_released_is_todays_activation(self):
+        released, _handed = activate_branches()
+        order = ["plan_child_verdicts.py stamp", 'state "$EPIC" "In Progress"',
+                 "▶️ Epic activated", "reconcile.py --promote-only"]
+        at = [released.index(cmd) for cmd in order]
+        self.assertEqual(at, sorted(at))
+        self.assertNotIn("review_rerun.py", released)
+
+    def test_anything_else_dispatches_the_review_and_writes_no_lane(self):
+        _released, handed = activate_branches()
+        self.assertIn("review_rerun.py dispatch", handed)
+        self.assertIn(HAND_BACK, handed)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', handed)
+        self.assertNotIn("linear_ops.py state", handed)
+        self.assertNotIn("add-label", handed)
+        self.assertNotIn("--promote-only", handed)
+        self.assertNotIn("plan_child_verdicts.py", handed)
+
+    def test_the_hand_back_note_hangs_off_the_dispatch(self):
+        """DRE-2034: no receipt on an unconfirmed dispatch."""
+        _released, handed = activate_branches()
+        head, _, tail = handed.partition("review_rerun.py dispatch")
+        self.assertNotIn("linear_ops.py comment", head)
+        self.assertRegex(handed, r"if\s+python3\s+\S*review_rerun\.py dispatch")
+        self.assertIn("↩️", tail)
+        self.assertIn("could NOT", tail)
+        self.assertLess(tail.index("↩️"), tail.index("could NOT"))
+        self.assertIn("exit 1", tail)
+
+    def test_the_hand_back_runs_under_a_token_minted_on_the_activate_route(self):
+        at = token_mint_index(ACTIVATE)
+        self.assertEqual(steps()[at].get("name"), ACTIVATE_MINT)
+        self.assertEqual(at, exact_index(ACTIVATE) - 1)
+        self.assertEqual(gate_of(steps()[at]).strip(), ACTIVATE_MODE)
+
+    def test_the_hand_back_reaches_the_review_route(self):
+        """The dispatch's payload is a row of the route table that reads
+        `review` — In Progress plus the review reason — so the run it starts
+        moves the epic to Planning itself."""
+        run = run_of(exact_step(ROUTE))
+        self.assertIn('if [ "$FROM" = "in progress" ]; then', run)
+        self.assertIn('if [ "$REASON" = "review" ]; then REVIEW=true; fi', run)
+        self.assertEqual(rr.TRIGGER_STATE_ACTIVATE, "in progress")
+        self.assertEqual(rr.REASON_REVIEW, "review")
+
+    def test_review_mode_steps_are_gated_on_review_alone(self):
+        for s in steps():
+            if REVIEW_MODE in gate_of(s):
+                with self.subTest(step=s.get("name")):
+                    self.assertNotIn(ACTIVATE_MODE, gate_of(s))
+
+    def test_the_activate_routes_review_steps_are_gone(self):
+        names = {s.get("name") for s in steps()}
+        ids = {s.get("id") for s in steps()}
+        for name in RETIRED_STEPS:
+            with self.subTest(step=name):
+                self.assertNotIn(name, names)
+        self.assertNotIn("cardset", ids)
+
+    def test_no_prompt_says_the_ceo_approved_the_plan_being_reviewed(self):
+        for s in steps():
+            prompt = str((s.get("with") or {}).get("prompt") or "")
+            with self.subTest(step=s.get("name")):
+                self.assertNotRegex(prompt, r"(?i)CEO (has )?approved")
+                self.assertNotIn("post-approval", prompt.lower())
+                self.assertNotIn("the normal one", prompt,
+                                 "review is the only route a re-plan runs on now")
+
+    def test_the_activations_comments_are_declared_by_its_step(self):
+        sites = [site for site in car.sites()
+                 if site.path == ".github/workflows/plan.yml" and site.step == ACTIVATE]
+        self.assertGreaterEqual(len(sites), 4)
+        declared = car.declarations()
+        for site in sites:
+            with self.subTest(site=site.where):
+                hits = [d for d in declared if car._matches(d, site)]
+                self.assertEqual(len(hits), 1)
+                self.assertEqual(hits[0].get("step"), ACTIVATE)
+                self.assertTrue((hits[0].get("why") or "").strip())
+
+    def test_the_standard_carries_no_landing_paragraph(self):
+        self.assertNotIn("**Landing**", open(STANDARD).read())
+
+    def test_the_post_approval_order_is_gone_from_the_rail(self):
+        """The card's sweep, as a test: the words for the old order survive
+        only where they are history."""
+        swept = [os.path.join(ROOT, ".github", "workflows", "plan.yml"),
+                 os.path.join(ROOT, "standards", "plan-critic.md"),
+                 os.path.join(ROOT, "config", "lane-contract.json"),
+                 os.path.join(ROOT, "docs", "lane-contract.md"),
+                 os.path.join(ROOT, "agents.yaml")]
+        swept += [os.path.join(ROOT, "scripts", n)
+                  for n in sorted(os.listdir(os.path.join(ROOT, "scripts")))
+                  if n.endswith(".py")]
+        briefs = os.path.join(ROOT, "briefs")
+        swept += [os.path.join(briefs, n) for n in sorted(os.listdir(briefs))]
+        hits = []
+        for path in swept:
+            if not os.path.isfile(path):
+                continue
+            lines = open(path, encoding="utf-8").read().splitlines()
+            for n, line in enumerate(lines):
+                if "post-approval" not in line.lower():
+                    continue
+                # The one dated history note the card keeps: dead_run.py's
+                # DRE-3499 comment, which names the epic that retired the order.
+                if (path.endswith(os.path.join("scripts", "dead_run.py"))
+                        and "DRE-5268" in " ".join(lines[n:n + 3])):
+                    continue
+                hits.append(f"{os.path.relpath(path, ROOT)}:{n + 1}")
+        self.assertEqual(hits, [])
+        acts = json.load(open(os.path.join(ROOT, "config", "pipeline-acts.json")))
+        rows = acts["unconverted"] + list(acts.get("acts") or [])
+        loud = [r.get("anchor") or r.get("means") for r in rows if isinstance(r, dict)
+                and any("post-approval" in str(r.get(k) or "").lower()
+                        for k in ("means", "anchor"))]
+        self.assertEqual(loud, [])
 
 
 # --- DRE-5299: the review-mode re-plan carries the plan artifact -------------
