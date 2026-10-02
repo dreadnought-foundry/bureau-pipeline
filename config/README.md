@@ -34,6 +34,14 @@ of it is ever a runtime lookup.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`epic-cap.json`** — the cap on epics in motion and the roll-up switch
+  (DRE-5129, DRE-5134): `cap`, how many epics may be In Progress at once, and
+  `count_rollup_parents`, whether a roll-up parent takes a slot. Set by the
+  CEO on 2026-09-28 (`decided`, `decided_by`, `why`): 45 epics were in motion,
+  14 of them real builds, so the cap fits those plus one slot, and a roll-up
+  parent holds no cards of its own. Read on the pipeline side only through
+  `scripts/epic_cap.py`, and by the console over the GitHub contents API —
+  no second copy of the number lives anywhere else.
 - **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
   "file the planner cap at 4"): how many planner runs may hold a slot at once,
   how long a claim lives, how long a dispatch reserves a slot, and how long a
