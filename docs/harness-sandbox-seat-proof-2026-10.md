@@ -140,7 +140,11 @@ cannot count the harness's one request. What it does show is *which bucket* that
 ### 2.4 Every run that printed a spend line in the window
 
 Every run in the six repo-map repos and in `bureau-harness` whose life
-overlapped 16:37:49 to 16:46:01 PT was listed with `gh run list`. Each log was
+overlapped 16:37:49 to 16:46:01 PT was listed with `gh run list`. The first
+listing read each repo's 100 newest runs. A second listing, by creation date
+back to 14:30 PT, found two long runs the first had missed: portico's Agent
+Task 37073680791, which printed a fleet line inside the window (in the table),
+and bureau-pipeline's Pipeline Tests 37077266163, which printed none. Each log was
 read with `gh run view --log` for lines that open with `linear-budget:` or
 `sweep-spend: total`. Logs that were not ready at the first pass were read
 again at about 16:54 PT. Lines stamped inside the window:
@@ -154,14 +158,16 @@ again at about 16:54 PT. Lines stamped inside the window:
 | portico | [37078588810](https://github.com/dreadnought-foundry/portico/actions/runs/37078588810) | Linear Sync | 16:40:03 `1300 → 1299 (spent 1 …; budget: fleet)`; 16:40:04 `1298 → 1298 (spent 0 …)`; `sweep-spend: total 0 request(s)` at 16:40:11 and 16:41:13 | fleet |
 | portico | [37078699087](https://github.com/dreadnought-foundry/portico/actions/runs/37078699087) | Reconcile | 16:40:57 `1300 → 1300 (spent 0 …; budget: fleet)` | fleet |
 | portico | [37078701192](https://github.com/dreadnought-foundry/portico/actions/runs/37078701192) | Reconcile | 16:41:18 `1309 → 1309 (spent 0 …; budget: fleet)` | fleet |
+| portico | [37073680791](https://github.com/dreadnought-foundry/portico/actions/runs/37073680791) | Agent Task (created 15:39:50 PT, ended 16:46:04 PT) | 16:45:57 `1437 → 1436 (spent 1 …; budget: undeclared)` | fleet |
 
-All the other overlapping runs printed no such line: 28 of portico's 33, 2
-of bureau-pipeline's 3 (a skipped Merge Gate and a Promote Channel run), and
+All the other overlapping runs printed no such line: 28 of portico's 34, 3
+of bureau-pipeline's 4 (a skipped Merge Gate, a Promote Channel run and the
+Pipeline Tests run), and
 40 of bureau-harness's 41, including the harness's own probe
 PRs' CI, critic and merge-gate runs. Some of those had no log because they
 were skipped. Two portico runs were still in progress at the second read
-(Release train 37078748720 and CI 37079106902), and neither workflow prints a
-budget line. Portico QA Review 37079107324 started at 16:45:59 PT and printed
+(Release train 37078748720 and CI 37079106902). No run of either workflow
+read here printed a budget line. Portico QA Review 37079107324 started at 16:45:59 PT and printed
 its first line at 16:46:30 PT, after the window. `atlas`, `deltasolv`,
 `agent-bureau` and `agent-bureau-demo` had no run in the window. No
 `bureau-harness` reconcile sweep ran in the window.
@@ -170,14 +176,15 @@ its first line at 16:46:30 PT, after the window. `atlas`, `deltasolv`,
 cannot be traced to runs: the fleet's hour is rolling, and it refilled as
 requests from an hour earlier aged out. The in-window fleet lines show the
 same climb: 1,259 at 16:38:48, 1,273 at 16:39:15, 1,300 at 16:40:03, 1,309 at
-16:41:18, and 1,436 at 16:46:01. What can be traced is every fleet spend
+16:41:18, 1,436 at 16:45:57 (the portico Agent Task's line), and 1,436 at
+16:46:01. What can be traced is every fleet spend
 inside the window:
 
-- **3 requests** on the runs' own budget lines: portico QA Review (1),
-  portico Merge Gate (1) and portico Linear Sync (1). Linear Sync's own
-  `sweep-spend: total` lines say 0. `check_linear_budget.py` charges a run
-  that printed a sweep total by that total, so by the script's rule the
-  window holds 2. This record counts 3, the larger number.
+- **4 requests** on the runs' own budget lines: portico QA Review (1),
+  portico Merge Gate (1), portico Linear Sync (1) and portico Agent Task (1).
+  Linear Sync's own `sweep-spend: total` lines say 0. `check_linear_budget.py`
+  charges a run that printed a sweep total by that total, so by the script's
+  rule the window holds 3. This record counts 4, the larger number.
 - **2 requests** by this record's own header reads (before and after).
 - **0 requests** by the harness. It printed no fleet line, and its one line
   names `sandbox` at 2,499.
