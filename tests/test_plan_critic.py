@@ -1986,13 +1986,38 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         self.assertEqual(state, pc.POST_HELD)
         self.assertIn("no proof card", detail)
 
-    def test_a_crash_is_not_a_rejection(self):
-        """console-honesty rule 1, unchanged: a critic that produced no result
-        did not decide anything, and `decide` already lets the plan proceed on
-        one. The gate must agree with the route, or the two disagree about the
-        same marker."""
-        state, _ = pc.post_release(
+    def test_a_crash_is_not_a_rejection_and_not_a_pass_either(self):
+        """console-honesty rule 1, read both ways (DRE-5281). A critic that
+        produced no result did not decide anything: it does not get to stop
+        the plan, and it does not get to release it. Since Approve means go,
+        the activate route activates only on a newest PASS, so the promoter
+        holds a newest NO_RESULT as a review that has not passed this plan —
+        the same reading the route takes, or the two disagree about the same
+        marker."""
+        state, detail = pc.post_release(
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)), self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+        self.assertEqual(detail, "the second critic produced no result on this "
+                                 "attempt, so it has not passed this plan")
+
+    def test_a_no_result_after_a_pass_holds_too(self):
+        """The NEWEST round is the reading. A pass the re-plan has since
+        superseded, then a review that produced nothing, has not passed the
+        plan as it now stands."""
+        state, _ = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.PASS),
+                        pc.marker(pc.STAGE_POST, 2, pc.NO_RESULT)), self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    def test_a_pass_before_the_approval_comment_still_releases(self):
+        """Under DRE-5268 the second critic passes a plan BEFORE the CEO reads
+        it, so the PASS record sits above the approval in the thread. Where the
+        approval comment falls is not part of the reading."""
+        state, _ = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.PASS),
+                        "✅ Ready for you in Green Light. Approve starts the build.",
+                        "▶️ Approved — the epic moves to In Progress."),
+            self.EPIC)
         self.assertEqual(state, pc.POST_RELEASED)
 
     def test_the_bound_parks_after_two_failed_rounds(self):
@@ -2100,12 +2125,46 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         """DRE-3088: an epic in Todo dispatches nothing (DRE-2725). This
         refusal used to tell the CEO to "move the epic to Todo again", which
         is the one instruction that strands it forever. Since DRE-5280 the way
-        back it names is the move to Planning (`REAPPROVE_HOW`)."""
+        back from a park is the move to Planning (`REAPPROVE_HOW`), and since
+        DRE-5281 the way back for an epic already In Progress is the re-run
+        act."""
         missing = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         self.assertIn(pc.REVIEW_LANE, missing)
         self.assertNotIn("Todo", missing)
         self.assertEqual(pc.APPROVAL_LANE, "In Progress")
+
+    def test_the_unread_refusal_names_the_act_for_an_epic_in_progress(self):
+        """DRE-5281. An epic that reached In Progress without the second
+        critic's pass was approved under the old rule. The way back is the act
+        — the relay reads it on an epic In Progress, and the activate route
+        hands the epic to the review it missed — and the plan comes back to
+        Green Light passed, for one Approve. "Green Light" appears in that one
+        sentence and nowhere else in the refusal: nothing here sends the plan
+        back to the CEO unreviewed."""
+        import review_rerun as rr
+        for thread in (self._cycle(),
+                       self._cycle(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT))):
+            missing = pc.promotion_refusal(
+                self.CHILD, self.EPIC, self.APPROVED, thread)
+            with self.subTest(newest=thread[-1]["body"][:40]):
+                self.assertEqual(pc.refusal_tag(missing), pc.POST_UNREAD_TAG)
+                self.assertIn(rr.RERUN_REVIEW_ACT, missing)
+                self.assertIn(pc.APPROVAL_LANE, missing)
+                self.assertIn("old rule", missing)
+                sentences = [" ".join(s.split()) for s in
+                             re.split(r"(?<=[.!?])\s+|\n\s*\n", missing)]
+                green = [s for s in sentences if "Green Light" in s]
+                self.assertEqual(len(green), 1, green)
+                self.assertIn("passed", green[0])
+                self.assertIn("comes back", green[0])
+                self.assertNotIn(rr.RERUN_REVIEW_ACT, green[0])
+
+    def test_a_no_result_refusal_says_the_critic_produced_nothing(self):
+        missing = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)))
+        self.assertIn("produced no result on this attempt", missing)
 
     def test_the_sent_back_refusal_says_the_review_re_runs_itself(self):
         """DRE-3291: a send-back is answered by a re-plan, and a re-plan that
@@ -3051,13 +3110,20 @@ class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
         """The only refusal left that asks a person for something: nobody has
         reviewed this plan on its current attempt. A dead review (DRE-3289) and
         a send-back (DRE-3291) both re-run themselves, so both are pinned the
-        other way, below. Since DRE-5280 the ask is the move to Planning, read
-        through `REAPPROVE_HOW`, and never the act."""
+        other way, below. Since DRE-5280 the ask for a PARKED epic is the move
+        to Planning, read through `REAPPROVE_HOW`. Since DRE-5281 the refusal
+        also names the act, for an epic already In Progress — the one lane the
+        relay reads it in — because the activate route now hands such an epic
+        to the review it missed; the act sits under its own In Progress
+        heading and never inside the park's sentence."""
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         self.assertIsNotNone(unread)
         self.assertIn(pc.REAPPROVE_HOW, unread)
         self.assertIn(pc.REVIEW_LANE, unread)
-        self.assertNotIn(rr.RERUN_REVIEW_ACT, unread)
+        in_progress, _, parked = unread.partition(f"in {pc.BOUND_PARK_LANE}")
+        self.assertIn(rr.RERUN_REVIEW_ACT, in_progress)
+        self.assertIn(pc.APPROVAL_LANE, in_progress)
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, parked)
         self.assertNotIn(RETIRED_MOVE, unread)
         self.assertNotIn("again by moving it to In Progress", unread)
         self.assertNotIn("Todo", unread)
@@ -3609,10 +3675,11 @@ class TheDeadReviewCliOverItsCeiling(unittest.TestCase):
 # half of both critics, and until DRE-5276 it still described the second one as
 # reading a plan the CEO had approved: "The CEO has APPROVED this plan", a
 # first-critic bound that "proceeds to the CEO regardless", notes that parked a
-# plan "for you". What follows pins the new moment, the constants and outputs
-# the workflow cards of DRE-5268 read, and the one deliberate exception —
-# `post_release` still reads a newest NO_RESULT as a release until DRE-5281,
-# because the live activate route still activates on one until then.
+# plan "for you". What follows pins the new moment, and the constants and
+# outputs the workflow cards of DRE-5268 read. DRE-5276 left one deliberate
+# exception — `post_release` read a newest NO_RESULT as a release while the
+# live activate route still activated on one — and DRE-5281 closed it in the
+# same pull request that made the route activate on a newest PASS alone.
 
 import ast  # noqa: E402
 import re  # noqa: E402
@@ -3960,16 +4027,18 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
                 self.assertNotIn("for you", note)
                 self.assertNotIn("approve", note.lower())
 
-    # --- the promoter's reading, pinned as it stands until DRE-5281 ----------
+    # --- the promoter's reading, which the activate route branches on --------
 
-    def test_post_release_and_post_state_read_todays_words(self):
-        """DRE-5281 turns the first row into POST_NOT_RUN in the pull request
-        that stops the activate route activating on a no-result round; until
-        then the promoter agrees with the route."""
+    def test_post_release_and_post_state_read_the_same_word(self):
+        """DRE-5281: a newest NO_RESULT is POST_NOT_RUN — the activate route
+        hands such an epic to the review it missed, and the promoter holds its
+        children — and only a newest PASS is POST_RELEASED, wherever the
+        approval comment falls. `post-state` prints `post_release`'s word, so
+        the route and the sweep read one answer."""
         rows = [
             ("newest post round NO_RESULT",
              self._attempt(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)),
-             pc.POST_RELEASED),
+             pc.POST_NOT_RUN),
             ("newest post round PASS, before the approval comment",
              self._attempt(pc.marker(pc.STAGE_POST, 1, pc.PASS),
                            "✅ Approved — the epic moves to In Progress."),
