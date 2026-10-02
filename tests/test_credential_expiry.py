@@ -690,8 +690,14 @@ class TheWorkflowWiring(unittest.TestCase):
         self.assertLess(i, _step_index("Implement card"))
         step = _step("Credential floor")
         self.assertIn("credential_clock.py", step_shell.step_shell(step))
+        # The planner's bucket first, the fleet key when none is published
+        # (Stage 2 fix #12).
         self.assertEqual(
-            step["env"]["LINEAR_API_KEY"], "${{ secrets.LINEAR_API_KEY }}"
+            step["env"]["LINEAR_API_KEY"],
+            "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
+        )
+        self.assertEqual(
+            step["env"]["LINEAR_API_KEY_FALLBACK"], "${{ secrets.LINEAR_API_KEY }}"
         )
         self.assertIn("steps.minted.outputs.at", step["env"]["MINTED_AT"])
 

@@ -560,10 +560,17 @@ class ReviewWorkflowsEnforceItTest(unittest.TestCase):
                 ]
                 self.assertTrue(steps, f"{wf}: no Select model step")
                 for step in steps:
+                    # The planner's bucket first, the fleet key when none is
+                    # published (Stage 2 fix #12) — a key either way.
                     self.assertEqual(
                         (step.get("env") or {}).get("LINEAR_API_KEY"),
-                        "${{ secrets.LINEAR_API_KEY }}",
+                        "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
                         f"{wf}: the select step cannot read the card",
+                    )
+                    self.assertEqual(
+                        (step.get("env") or {}).get("LINEAR_API_KEY_FALLBACK"),
+                        "${{ secrets.LINEAR_API_KEY }}",
+                        f"{wf}: the select step has no fleet key to fall back to",
                     )
 
     def test_no_review_workflow_hardcodes_the_reviewers_model(self):
