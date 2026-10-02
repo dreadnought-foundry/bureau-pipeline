@@ -21,21 +21,26 @@ WHAT THIS FILE PINS, and why each half is here:
     stub `aws` and a stub OIDC endpoint: no upload without a successful scrub,
     one single-part `put-object` carrying `If-None-Match`, the key under the
     store's own prefix, nothing of the log on stdout or stderr, and exit 0 on
-    every gap — no OIDC token (portico), no AWS CLI (the self-hosted minis), a
-    log over the cap.
+    every gap — no OIDC token (a calling stub that grants no `id-token: write`),
+    no AWS CLI (the self-hosted minis), a log over the cap.
 
 ON `id-token: write`, WHICH THIS FILE DELIBERATELY DOES NOT ASSERT INSIDE THE
 REUSABLE WORKFLOWS. A called job that asks for more permission than its caller
 granted fails the WHOLE run at startup — release-train.yml says so in its own
 header comment, and it is why that workflow declares no job-level `permissions:`
-block either. portico forbids `id-token: write` outright
-(`.github/scripts/assert-credential-free.sh`), so a `permissions:` block here
-would not give the upload a token: it would take portico's agent runs away
+block either. So a `permissions:` block here would not give the upload a token:
+it would take the agent runs of every caller that has not granted it away
 entirely. The grant belongs in the CALLING STUB (DRE-4348 scaffold + agent-bureau,
 DRE-4349..4353 per repo), and the reusable inherits it. What is asserted here is
 the half that lives in this repo: no uploading job declares a `permissions:`
 block, and the uploader ASKS the runner for a token with the `sts.amazonaws.com`
 audience and records a gap when there is none.
+
+(Until Stage 2 fix #25 this file, the uploader and six workflow comments said
+portico forbade `id-token: write` by policy. It no longer does: portico's agent
+stubs grant it, and its credential-free gate exempts exactly that line for
+them. A false reason left in a comment is the one the next reader acts on, so
+`test_no_file_still_says_portico_forbids_the_grant` keeps it out.)
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -217,9 +223,34 @@ class StepShapeTest(unittest.TestCase):
                         job.get("permissions"),
                         f"{path.name} [{name}] declares a job-level "
                         f"`permissions:` block — a called job may never ask "
-                        f"for more than its caller granted, and portico grants "
-                        f"no `id-token: write` at all",
+                        f"for more than its caller granted, and a caller that "
+                        f"grants no `id-token: write` would lose the whole run",
                     )
+
+    def test_no_file_still_says_portico_forbids_the_grant(self):
+        """Stage 2 fix #25: the claim was true once and is not now — portico's
+        agent stubs grant `id-token: write`, and its credential-free gate
+        exempts that line for them. Every file that carried it is checked,
+        the uploader's own refusal message included, because that message is
+        printed into every run that has no token and would send the reader to
+        the wrong repo's policy. Spelled in pieces so this file does not trip
+        its own check."""
+        stale = re.compile("portico" + r"\s+(forbids|grants\s+no)", re.I)
+        carriers = [
+            *(WORKFLOWS / f"{name}.yml"
+              for name in ("agent-task", "agent-fix", "qa-review", "verify",
+                           "medic", "plan")),
+            UPLOADER,
+        ]
+        hits = []
+        for path in carriers:
+            text = " ".join(
+                line.strip().lstrip("#").strip()
+                for line in path.read_text(encoding="utf-8").splitlines()
+            )
+            hits.extend(f"{path.name}: …{text[max(0, m.start() - 40):m.end() + 40]}…"
+                        for m in stale.finditer(text))
+        self.assertEqual([], hits, "\n".join(hits))
 
 
 class NeverAnArtifactTest(unittest.TestCase):
@@ -571,7 +602,8 @@ class UploaderBehaviourTest(unittest.TestCase):
     # ---- every gap is recorded, and none of them fails the run ----------
 
     def test_no_oidc_token_is_a_recorded_gap(self):
-        """portico forbids `id-token: write`. That is a gap, not an error."""
+        """A calling stub that grants no `id-token: write`. That is a gap, not
+        an error."""
         result = self._run(env=self._env(ACTIONS_ID_TOKEN_REQUEST_URL=None))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self._calls(), [])
