@@ -1,5 +1,5 @@
 """RED-first: a groom drain releases no more cards than there are free planner
-slots, and the cap is two (DRE-5326).
+slots, and the cap is three (DRE-5634; two from DRE-5326).
 
 On 2026-09-30 at 07:05 PT one groom drain moved nineteen Intake cards to
 Planning at once. The planner cap kept four planner and critic agent steps
@@ -11,7 +11,7 @@ two planners running the spend was about 27 a minute.
 
 So:
 
-  * the committed cap is two;
+  * the committed cap is three (DRE-5634);
   * the drain reads the planner slot ledger once before any card moves, and
     moves no more cards to Planning than the free slots — the cap minus the
     planners running, the dispatched slots, and the cards already waiting in
