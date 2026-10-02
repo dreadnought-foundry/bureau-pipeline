@@ -176,8 +176,7 @@ CLOSING_LANES = ("Done", "Canceled")
 
 #: The read-only `gh`: these verbs, and `gh api` carrying none of the flags
 #: that make it a write.
-READ_VERBS = (("pr", "list"), ("pr", "view"), ("pr", "checks"),
-              ("run", "list"), ("run", "view"))
+READ_VERBS = ("pr list", "pr view", "pr checks", "run list", "run view")
 _API_WRITE_LONG = ("--method", "--field", "--raw-field", "--input")
 _API_WRITE_SHORT = ("-X", "-f", "-F")
 
@@ -617,7 +616,7 @@ def read_gh_refusal(argv: list) -> str | None:
     a = [str(x) for x in argv or []]
     if a[:1] != ["gh"] or len(a) < 2:
         return f"{shlex.join(a)} is not a gh read"
-    if tuple(a[1:3]) in READ_VERBS:
+    if len(a) >= 3 and " ".join(a[1:3]) in READ_VERBS and " " not in a[1] + a[2]:
         return None
     if a[1] == "api":
         for arg in a[2:]:
