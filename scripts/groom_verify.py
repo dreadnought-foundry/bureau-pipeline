@@ -65,6 +65,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groom_context  # noqa: E402 — the merged-PR reader DRE-4964 built
+import lane_contract  # noqa: E402 — the lanes a replacement may be in
 import planning_escalation  # noqa: E402 — the plain-English write guard
 
 #: Cards read past the morning's Planning list, in proposal order — the slots a
@@ -88,9 +89,20 @@ VERDICTS = ("cancel", "clean", "unread", "cancel-stands", "cancel-rejected",
 
 #: Lanes a replacement card may be in and count as real. `Done` is done; the
 #: rest are past Planning — a card only reaches them with a routing verdict,
-#: which is what "approved" means on this board (`config/lane-contract.json`).
+#: which is what "approved" means on this board. The in-flight list is read
+#: off the lane contract (`config/lane-contract.json`) at import: the live
+#: lanes of its `work` segment other than `DONE`, in flow order, so a lane
+#: the contract makes live joins it with no edit here (DRE-5348).
 DONE = ("Done",)
-IN_FLIGHT = ("Backlog", "Todo", "In Progress", "In Review")
+
+
+def in_flight(contract: dict | None = None) -> tuple:
+    """The live `work` lanes of the contract that are not `DONE`."""
+    return tuple(lane["name"] for lane in lane_contract.lanes(contract=contract)
+                 if lane["segment"] == "work" and lane["name"] not in DONE)
+
+
+IN_FLIGHT = in_flight()
 
 #: GitHub search allows five boolean operators a query, so five cards a query.
 SEARCH_CHUNK = 5
