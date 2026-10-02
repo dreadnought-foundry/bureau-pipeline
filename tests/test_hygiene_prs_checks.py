@@ -78,7 +78,10 @@ class FakeGh:
         key = " ".join(argv)
         if key not in self.answers:
             raise AssertionError(f"the fixture has no answer for {key!r}")
-        return self.answers[key]
+        answer = self.answers[key]
+        if isinstance(answer, BaseException):
+            raise answer  # a read that failed the way `gh` fails in the run
+        return answer
 
     def __call__(self, argv):
         self.calls.append(list(argv))
@@ -384,12 +387,147 @@ class TestAMootPullRequest:
         assert actions(items, f"{PORTICO}#106") == []
         assert left(items, f"{PORTICO}#106") == []
 
+    def test_an_older_merged_pull_request_closes_nothing(self):
+        """A rework on a branch the card search cannot see: the search finds
+        only the card's first, older, merged pull request — and the open one
+        is the newer of the two."""
+        doc = _rework(merged=50)
+        items, *_ = run(doc)
+        assert actions(items, f"{PORTICO}#120") == []
+        assert left(items, f"{PORTICO}#120") == []
+
+    def test_the_same_rework_with_a_newer_merged_one_is_closed(self):
+        """The negative above is not vacuous: make the merged one newer and it acts."""
+        items, *_ = run(_rework(merged=130))
+        [action] = actions(items, f"{PORTICO}#120")
+        assert action.cause == "superseded by merged #130"
+
     def test_a_closed_pull_request_is_not_also_rerun(self):
         doc = fixture()
         p = pull(doc, PORTICO, 105)
         p["statusCheckRollup"][0]["conclusion"] = "FAILURE"
         items, *_ = run(doc)
         assert [a.act for a in actions(items, f"{PORTICO}#105")] == ["hygiene-pr-close"]
+
+
+# --------------------------------------------------------------------------- #
+# a read that fails, and data that is stale or absent                          #
+# --------------------------------------------------------------------------- #
+
+HTTP_502 = RuntimeError("gh exited 1: HTTP 502: Bad Gateway")
+
+
+class TestAnUnreadablePullRequest:
+    """A read that fails is not "no evidence": the pull request gets a `Left`
+    row, never an act, and every other pull request still gets its rows."""
+
+    def _others_still_act(self, items, but):
+        acted = {a.target for a in actions(items)}
+        expected = {f"{PORTICO}#101", f"{PORTICO}#102", f"{PORTICO}#105", f"{PORTICO}#106"}
+        assert acted == expected - {but}
+        assert f"{PORTICO}#107" in {r.target for r in left(items)}
+
+    def test_a_pr_list_that_fails_leaves_the_pull_request(self):
+        doc = fixture()
+        doc["gh"][_cards(PORTICO, "DRE-4105")] = HTTP_502
+        items, *_ = run(doc)
+        target = f"{PORTICO}#105"
+        assert actions(items, target) == []
+        [row] = left(items, target)
+        assert row.why == "could not read the pull requests of DRE-4105"
+        assert "HTTP 502" in row.recommendation
+        self._others_still_act(items, but=target)
+
+    def test_a_pr_list_that_is_not_json_is_card_prs_lookup_error_and_leaves_it(self):
+        doc = fixture()
+        doc["gh"][_cards(PORTICO, "DRE-4106")] = "<html>502</html>"
+        items, *_ = run(doc)
+        target = f"{PORTICO}#106"
+        assert actions(items, target) == []
+        assert [r.why for r in left(items, target)] == [
+            "could not read the pull requests of DRE-4106"]
+        self._others_still_act(items, but=target)
+
+    def test_a_run_list_that_fails_leaves_the_pull_request(self):
+        doc = fixture()
+        doc["gh"][_runs(PORTICO, "agent/DRE-4101-search-tables")] = HTTP_502
+        items, *_ = run(doc)
+        target = f"{PORTICO}#101"
+        assert actions(items, target) == []
+        assert [r.why for r in left(items, target)] == [
+            "could not read the runs of agent/DRE-4101-search-tables"]
+        self._others_still_act(items, but=target)
+
+    def test_a_run_list_that_is_not_json_leaves_the_pull_request(self):
+        doc = fixture()
+        doc["gh"][_runs(PORTICO, "agent/DRE-4101-search-tables")] = "not json"
+        items, *_ = run(doc)
+        target = f"{PORTICO}#101"
+        assert actions(items, target) == []
+        assert [r.why for r in left(items, target)] == [
+            "could not read the runs of agent/DRE-4101-search-tables"]
+        self._others_still_act(items, but=target)
+
+    def test_a_failed_log_that_cannot_be_read_leaves_the_pull_request(self):
+        doc = fixture()
+        doc["gh"][_log(PORTICO, 91011)] = RuntimeError("gh run view exited 1: log expired")
+        items, *_ = run(doc)
+        target = f"{PORTICO}#102"
+        assert actions(items, target) == []
+        [row] = left(items, target)
+        assert row.why == "could not read the log of run 91011"
+        assert "log expired" in row.recommendation
+        self._others_still_act(items, but=target)
+
+    def test_a_refusal_is_never_swallowed_as_unreadable(self, monkeypatch):
+        """The core's read-only wrapper refusing an argv is a lane bug, not a
+        flaky read: it still stops the pass."""
+        monkeypatch.setattr(lane, "run_list_argv",
+                            lambda repo, branch: ["gh", "pr", "merge", "101", "--repo", repo])
+        with pytest.raises(hygiene.Forbidden):
+            run()
+
+    def test_the_leg_still_writes_its_ledger(self, monkeypatch):
+        doc = fixture()
+        _, ctx, gh, _ = build(doc)
+        monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [lane])
+        ctx.dry_run = True
+        answers = dict(doc["gh"])
+        answers[_runs(PORTICO, "agent/DRE-4101-search-tables")] = HTTP_502
+        for repo in sorted(ctx.repos):
+            answers[" ".join(hygiene.pr_list_argv(repo))] = json.dumps(doc["prs"].get(repo, []))
+        gh.answers = answers
+        ledger = hygiene.run_leg({"lanes": doc["lanes"]}, ctx)
+        assert len(ledger["actions"]) == 3
+        assert f"{PORTICO}#101" in {r["target"] for r in ledger["left"]}
+
+
+class TestStaleOrAbsentData:
+    @pytest.mark.parametrize("listed", ["", "[]"])
+    def test_an_empty_run_list_proves_no_green_twin(self, listed):
+        doc = fixture()
+        doc["gh"][_runs(PORTICO, "agent/DRE-4101-search-tables")] = listed
+        doc["gh"][_log(PORTICO, 91001)] = REAL
+        items, *_ = run(doc)
+        assert actions(items, f"{PORTICO}#101") == []
+        assert left(items, f"{PORTICO}#101") == []
+
+    @pytest.mark.parametrize("listed", ["", "[]"])
+    def test_an_empty_run_list_still_reads_the_log(self, listed):
+        doc = fixture()
+        doc["gh"][_runs(PORTICO, "agent/DRE-4101-search-tables")] = listed
+        doc["gh"][_log(PORTICO, 91001)] = UPSTREAM
+        items, *_ = run(doc)
+        [action] = actions(items, f"{PORTICO}#101")
+        assert action.cause.startswith("web-tests red in run 91001, upstream_5xx at head ")
+
+    def test_a_pull_request_with_no_check_rollup_reads_no_run(self):
+        doc = fixture()
+        del pull(doc, PORTICO, 101)["statusCheckRollup"]
+        items, _, _, gh, _ = run(doc)
+        assert actions(items, f"{PORTICO}#101") == []
+        listed = {c[c.index("--branch") + 1] for c in gh.calls if c[:3] == ["gh", "run", "list"]}
+        assert "agent/DRE-4101-search-tables" not in listed
 
 
 # --------------------------------------------------------------------------- #
@@ -454,3 +592,22 @@ def _runs(repo, branch):
 
 def _log(repo, run_id):
     return " ".join(lane.run_log_argv(repo, run_id))
+
+
+def _cards(repo, ident):
+    """The `gh pr list` argv `card_pr.find` runs for a card, as the fixture keys it."""
+    return (f"gh pr list --repo {repo} --state all --limit 30 "
+            f"--json number,url,headRefName,state --search head:agent/{ident}")
+
+
+def _rework(*, merged):
+    """The fixture plus open #120, a rework of DRE-4108 on a `ui/` branch, whose
+    card search finds only merged #<merged> on the card's `agent/` branch."""
+    doc = fixture()
+    doc["prs"][PORTICO].append({
+        **pull(doc, PORTICO, 106), "number": 120, "headRefName": "ui/DRE-4108-rework",
+        "headRefOid": "e" * 40, "comments": []})
+    doc["gh"][_cards(PORTICO, "DRE-4108")] = json.dumps([{
+        "number": merged, "url": f"https://github.com/{PORTICO}/pull/{merged}",
+        "headRefName": "agent/DRE-4108-first", "state": "MERGED"}])
+    return doc

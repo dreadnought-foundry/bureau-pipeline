@@ -23,9 +23,17 @@ two acts, never a third:
 
 2. **A moot or superseded pull request is closed, with the evidence.** The
    card its branch names has a newer pull request that merged (`card_pr.find`,
-   through `ctx.gh`), or the card is `Canceled` or `Duplicate`. A `Done` card
-   with no other merged pull request is LEFT: closing it could discard shipped
-   work, and a person decides.
+   through `ctx.gh`), or the card is `Canceled` or `Duplicate`. Newer means a
+   higher number: the card search sees only `agent/<card>` branches, so a
+   rework on any other branch finds the card's OLDER merged pull request, and
+   that supersedes nothing. A `Done` card with no other merged pull request is
+   LEFT: closing it could discard shipped work, and a person decides.
+
+A read that fails — a 502, an expired run log, a payload that is not JSON —
+is not "no evidence". The pull request it was for gets a `Left` row naming
+what could not be read, nothing is rerun or closed on it, and every other pull
+request still gets its rows. A refusal by the core's read-only wrapper is not
+a failed read: it is a lane bug, and it still stops the pass.
 
 It never merges. The only `gh` argv this module builds are reads handed to
 `ctx.gh`; its writes are the core's constructors' argv, and the core's shape
@@ -83,25 +91,58 @@ def run_log_argv(repo: str, run_id: int | str) -> list:
     return ["gh", "run", "view", str(run_id), "--repo", repo, "--log-failed"]
 
 
+class Unreadable(Exception):
+    """A read a decision rests on could not be made. Never "no evidence"."""
+
+    def __init__(self, what: str, error: BaseException):
+        super().__init__(what)
+        self.what = what
+        self.error = error
+
+
 def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
     out: list = []
     for repo in sorted(board.prs):
         if repo not in ctx.repos:
             continue
         for pull in board.prs[repo]:
-            closing = _moot(board, ctx, repo, pull)
-            if closing is not None:
-                out.append(closing)
-                if isinstance(closing, hygiene.Action):
-                    continue  # a pull request being closed is not also re-run
-            rerun = _flaky(ctx, repo, pull)
-            if rerun is not None:
-                out.append(rerun)
+            rows: list = []
+            try:
+                closing = _moot(board, ctx, repo, pull)
+                if closing is not None:
+                    rows.append(closing)
+                if not isinstance(closing, hygiene.Action):  # a closed one is not also re-run
+                    rerun = _flaky(ctx, repo, pull)
+                    if rerun is not None:
+                        rows.append(rerun)
+            except Unreadable as e:
+                rows.append(_unreadable(repo, pull, e))
+            out.extend(rows)
     return out
 
 
 def _target(repo: str, pull: dict) -> str:
     return f"{repo}#{pull['number']}"
+
+
+def _read(ctx: hygiene.Context, argv: list, what: str) -> str:
+    """`ctx.gh`, a failed read raised as `Unreadable` — a refusal is not one."""
+    try:
+        return ctx.gh(argv)
+    except hygiene.Forbidden:
+        raise
+    except (RuntimeError, OSError) as e:
+        raise Unreadable(what, e) from e
+
+
+def _unreadable(repo: str, pull: dict, e: Unreadable) -> hygiene.Left:
+    error = (str(e.error).splitlines() or [type(e.error).__name__])[0][:200]
+    return hygiene.Left(
+        lane=LANE, target=_target(repo, pull),
+        why=f"could not read {e.what}",
+        recommendation=f"{error} — nothing was rerun or closed on it; the next pass "
+                       "reads it again, so read it by hand only if this row repeats",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +190,7 @@ def _proof(ctx: hygiene.Context, repo: str, head: str, runs: list,
                 and r.get("headSha") == head and r.get("conclusion") == GREEN):
             green = str(r["databaseId"])
             return f"green in run {green}", [f"run {run_id}", f"run {green}"]
-    log = ctx.gh(run_log_argv(repo, run_id))
+    log = _read(ctx, run_log_argv(repo, run_id), f"the log of run {run_id}")
     for signature, matches in SIGNATURES:
         if matches(log):
             return signature, [f"run {run_id}", f"log {signature}"]
@@ -162,7 +203,12 @@ def _flaky(ctx: hygiene.Context, repo: str, pull: dict):
     if not red or not head:
         return None
     sha7 = head[:7]
-    runs = json.loads(ctx.gh(run_list_argv(repo, pull["headRefName"])) or "[]")
+    branch = pull["headRefName"]
+    what = f"the runs of {branch}"
+    try:
+        runs = json.loads(_read(ctx, run_list_argv(repo, branch), what) or "[]")
+    except ValueError as e:  # a payload that is not JSON is unreadable, not empty
+        raise Unreadable(what, e) from e
     for check, run_id, workflow in red:
         proof = _proof(ctx, repo, head, runs, check, run_id, workflow)
         if proof is None:
@@ -212,8 +258,13 @@ def _moot(board: hygiene.Board, ctx: hygiene.Context, repo: str, pull: dict):
         return None
     ident = match.group(1)
     number = pull["number"]
-    newest = card_pr.find(ident, repo=repo, run=lambda args: ctx.gh(["gh", *args]))
-    if card_pr.pr_state(newest) == card_pr.MERGED and newest.get("number") != number:
+    what = f"the pull requests of {ident}"
+    try:
+        newest = card_pr.find(ident, repo=repo,
+                              run=lambda args: _read(ctx, ["gh", *args], what))
+    except card_pr.PrLookupError as e:  # its bad-JSON answer — never "none"
+        raise Unreadable(what, e) from e
+    if card_pr.pr_state(newest) == card_pr.MERGED and (newest.get("number") or 0) > number:
         merged = newest["number"]
         return _close(ctx, repo, pull, f"superseded by merged #{merged}",
                       [f"{repo}#{merged}", ident, f"{repo}#{number}"])
