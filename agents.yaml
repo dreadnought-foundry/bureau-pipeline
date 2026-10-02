@@ -358,7 +358,11 @@ agents:
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
     # document portal from a SEPARATE job in plan.yml, so the portal checkout
-    # never enters the planner's workspace and stays out of its reach.
+    # never enters the planner's workspace and stays out of its reach. The
+    # review route (DRE-5299) reads the published source in the plan job, and
+    # the reach is still unchanged: that checkout persists no credentials, one
+    # file is copied out of it, and it is removed before any agent step runs
+    # (tests/test_agents_registry.py, `job_repos`).
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/planner.md
     workflow: .github/workflows/plan.yml

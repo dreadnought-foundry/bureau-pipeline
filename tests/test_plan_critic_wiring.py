@@ -53,6 +53,7 @@ sys.path.insert(0, SCRIPTS)
 
 import assemble_context as ac  # noqa: E402
 import check_act_receipts as car  # noqa: E402
+import plan_artifact as pa  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import review_rerun as rr  # noqa: E402
 
@@ -1484,11 +1485,17 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                            exact_index("Second critic — review (after approval)"))
 
     def test_a_send_back_below_the_bound_re_plans_then_dispatches_a_re_review(self):
+        # DRE-5299 put the plan artifact on this path: the portal mint, the
+        # checkout and the published-source read before the re-plan, the
+        # re-check and the upload after it — and the re-review, last, only
+        # once the re-check has passed the revision.
         reached = [s.get("name") for s in steps()
                    if review_only(s)
                    and "steps.post1.outputs.action == 'hold'" in gate_of(s)
                    and "steps.post1.outputs.bound != 'true'" in gate_of(s)]
-        self.assertEqual(reached, [REVIEW_RE_REVIEW])
+        self.assertEqual(reached, [PORTAL_MINT, PORTAL_CHECKOUT, PUBLISHED_SOURCE,
+                                   REVIEW_RECHECK, REVIEW_UPLOAD, REVIEW_RE_REVIEW])
+        self.assertIn(RECHECK_OK, gate_of(exact_step(REVIEW_RE_REVIEW)))
         run = run_of(exact_step(REVIEW_RE_REVIEW))
         self.assertIn(f"--reason {rr.REASON_RE_REVIEW} --trigger-state "
                       f"{rr.TRIGGER_STATE_REVIEW}", run)
@@ -1543,7 +1550,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         parks = [s for s in steps() if review_only(s) and TRIAGE_WRITE.search(run_of(s))]
         self.assertEqual(sorted(s.get("name") for s in parks),
                          sorted((REVIEW_HELD_PASS, REVIEW_NO_RESULT,
-                                 REVIEW_DIED, REVIEW_BOUND)))
+                                 REVIEW_DIED, REVIEW_BOUND, REVIEW_RECHECK)))
         for s in parks:
             with self.subTest(step=s.get("name")):
                 run = run_of(s)
@@ -1584,6 +1591,221 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                 hits = [d for d in declared if car._matches(d, site)]
                 self.assertEqual(len(hits), 1)
                 self.assertEqual(hits[0].get("step"), site.step)
+                self.assertTrue((hits[0].get("why") or "").strip())
+
+
+# --- DRE-5299: the review-mode re-plan carries the plan artifact -------------
+#
+# The re-plan inherited from the activate route lived in the cards alone. A
+# review run cannot reach the plan run's upload (an artifact download reads
+# the current run only), so the previous text comes from the one place a
+# review run CAN read it — the portal, where `plan_artifact.publish` keeps the
+# source beside the page — or, with no portal, the artifact is written fresh.
+# Then the revision goes through the plan route's own gates, is uploaded, and
+# the `publish` job publishes it from this same run.
+
+REVIEW_REPLAN = (f"{REVIEW_MODE} && steps.post1.outputs.action == 'hold' && "
+                 "steps.post1.outputs.bound != 'true'")
+PORTAL_MINT = "Mint bot token — portal checkout (review)"
+PORTAL_CHECKOUT = "Plan artifact — portal checkout (review)"
+PUBLISHED_SOURCE = "Plan artifact — published source"
+REVIEW_RECHECK = "Re-check the revised plan — review mode"
+REVIEW_UPLOAD = "Plan artifact — upload source (review)"
+RECHECK_OK = "steps.recheck_review.outputs.ok == 'true'"
+POST_REPLAN = "Re-plan after the second critic sent it back"
+POST_REPLAN_DONE = "Re-plan after the second critic sent it back — finished?"
+POST_MECHANICAL = "Mechanical findings — the revised plan (after approval)"
+ARTIFACT_NAME = "plan-source-${{ github.event.client_payload.identifier }}"
+PLANNING_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Planning"')
+
+
+def job(name: str) -> dict:
+    return yaml.safe_load(wf_src())["jobs"][name]
+
+
+def job_step(job_name: str, name: str) -> dict:
+    found = [s for s in job(job_name).get("steps") or [] if s.get("name") == name]
+    if len(found) != 1:
+        raise AssertionError(f"{len(found)} {job_name}-job steps named {name!r}")
+    return found[0]
+
+
+class _Facts:
+    """`test_planner_queue_wiring.Walk` resolves only `steps.*.outputs`; the
+    `publish` job's gate reads `needs.plan.outputs`, so the facts are handed
+    to it by name."""
+
+    @staticmethod
+    def walk(known: dict):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_planner_queue_wiring import Walk, truth  # noqa: E402
+
+        class Facts(Walk):
+            def _name(self, text):
+                if text in self.known:
+                    return self.known[text]
+                return super()._name(text)
+
+        return Facts(known, set()), truth
+
+
+class TheReviewReplanCarriesThePlanArtifact(unittest.TestCase):
+    """DRE-5299, read off the rail."""
+
+    def test_every_new_step_runs_on_the_review_re_plan_only(self):
+        for name in (PORTAL_MINT, PORTAL_CHECKOUT, PUBLISHED_SOURCE,
+                     REVIEW_RECHECK, REVIEW_UPLOAD):
+            with self.subTest(step=name):
+                self.assertIn(REVIEW_REPLAN, gate_of(exact_step(name)))
+                self.assertNotIn(ACTIVATE_MODE, gate_of(exact_step(name)))
+
+    def test_the_step_ids_the_contract_publishes(self):
+        for name, ident in ((PORTAL_MINT, "app_portal"),
+                            (PORTAL_CHECKOUT, "pubsrc_checkout"),
+                            (PUBLISHED_SOURCE, "pubsrc"),
+                            (REVIEW_RECHECK, "recheck_review")):
+            with self.subTest(step=name):
+                self.assertEqual(exact_step(name).get("id"), ident)
+
+    def test_the_portal_mint_is_the_primary_app_and_feeds_one_checkout(self):
+        mint = exact_step(PORTAL_MINT)
+        publish_mint = job_step("publish", "Mint bot token")
+        self.assertEqual(mint.get("uses"), publish_mint.get("uses"))
+        self.assertEqual(mint.get("with"), publish_mint.get("with"))
+        self.assertIn("vars.PLAN_PORTAL_REPO != ''", gate_of(mint))
+        self.assertFalse(mint.get("continue-on-error"))
+        checkout = exact_step(PORTAL_CHECKOUT)
+        self.assertEqual(exact_index(PORTAL_CHECKOUT), exact_index(PORTAL_MINT) + 1)
+        self.assertIn("vars.PLAN_PORTAL_REPO != ''", gate_of(checkout))
+        self.assertEqual(checkout.get("uses"),
+                         job_step("publish", "Plan artifact — portal checkout").get("uses"))
+        self.assertEqual((checkout.get("with") or {}).get("token"),
+                         "${{ steps.app_portal.outputs.token }}")
+        self.assertIs(checkout.get("continue-on-error"), True)
+        readers = [s.get("name") for s in steps()
+                   if "steps.app_portal.outputs.token" in yaml.safe_dump(s)]
+        self.assertEqual(readers, [PORTAL_CHECKOUT])
+        for s in steps():
+            if str(s.get("uses") or "").startswith("actions/checkout@"):
+                with self.subTest(step=s.get("name") or s.get("uses")):
+                    self.assertNotIn("steps.app_post.outputs.token", yaml.safe_dump(s))
+
+    def test_the_artifact_steps_precede_the_re_plan_and_the_re_check_follows_it(self):
+        replan = exact_index(POST_REPLAN)
+        self.assertLess(exact_index(PORTAL_MINT), exact_index(PORTAL_CHECKOUT))
+        self.assertLess(exact_index(PORTAL_CHECKOUT), exact_index(PUBLISHED_SOURCE))
+        self.assertLess(exact_index(PUBLISHED_SOURCE), replan)
+        self.assertGreater(exact_index(REVIEW_RECHECK), exact_index(POST_REPLAN_DONE))
+        self.assertGreater(exact_index(POST_MECHANICAL), exact_index(REVIEW_RECHECK))
+        self.assertGreater(exact_index(REVIEW_UPLOAD), exact_index(REVIEW_RECHECK))
+        self.assertGreater(exact_index(REVIEW_RE_REVIEW), exact_index(REVIEW_UPLOAD))
+
+    def test_the_published_source_is_read_through_the_module(self):
+        source = exact_step(PUBLISHED_SOURCE)
+        run = run_of(source)
+        self.assertIn("plan_artifact.py path", run)
+        self.assertIn("plan_artifact.SOURCE_NAME", run, "read, never restated")
+        self.assertNotIn(pa.SOURCE_NAME, run)
+        self.assertIn(".plan-portal", run)
+        self.assertIn("plan-artifact.md", run)
+        self.assertIn("found=true", run)
+        self.assertIn("found=false", run)
+        self.assertIn("steps.pubsrc_checkout.outcome", yaml.safe_dump(source))
+        self.assertIs(source.get("continue-on-error"), True,
+                      "a source that cannot be read is written fresh, never a red run")
+
+    def test_the_re_check_runs_the_plan_routes_gates_in_order(self):
+        run = run_of(exact_step(REVIEW_RECHECK))
+        order = ["validate_card.py check-children", "plan_artifact.py check",
+                 "proof_and_demo.py check", "plan_child_verdicts.py stamp"]
+        at = [run.index(cmd) for cmd in order]
+        self.assertEqual(at, sorted(at), "the gates run in the plan route's order")
+        self.assertIn("child-descriptions", run)
+        self.assertIn("plan_artifact.py ui-epic", run)
+        self.assertIn("--ui", run)
+        self.assertIn('> "$CHILDREN"', run)
+        self.assertIn("ok=true", run)
+        self.assertIn("ok=false", run)
+        self.assertFalse(exact_step(REVIEW_RECHECK).get("continue-on-error"))
+
+    def test_a_refused_revision_parks_in_triage_for_an_operator(self):
+        run = run_of(exact_step(REVIEW_RECHECK))
+        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertRegex(run, TRIAGE_WRITE)
+        self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+        self.assertIn("plan_critic.REAPPROVE_HOW", run)
+        self.assertNotIn(pc.REAPPROVE_HOW, run)
+        self.assertNotRegex(run, GREEN_LIGHT_WRITE)
+        self.assertNotRegex(run, PLANNING_WRITE)
+        self.assertTrue(run.rstrip().endswith("exit 1"))
+
+    def test_the_re_review_and_the_upload_wait_for_the_re_check(self):
+        self.assertIn(RECHECK_OK, gate_of(exact_step(REVIEW_RE_REVIEW)))
+        self.assertIn(RECHECK_OK, gate_of(exact_step(REVIEW_UPLOAD)))
+
+    def test_the_upload_is_the_plan_routes_upload_again(self):
+        ours = exact_step(REVIEW_UPLOAD)
+        theirs = exact_step("Plan artifact — upload source")
+        self.assertEqual(ours.get("uses"), theirs.get("uses"))
+        self.assertEqual(ours.get("with"), theirs.get("with"))
+        self.assertEqual((ours.get("with") or {}).get("if-no-files-found"), "error")
+
+    def test_the_artifact_name_is_one_literal_at_three_sites(self):
+        sites = [s for s in steps()
+                 if str((s.get("with") or {}).get("name") or "").startswith("plan-source-")]
+        self.assertEqual([s.get("name") for s in sites],
+                         ["Plan artifact — upload source", REVIEW_UPLOAD,
+                          "Plan artifact — fetch source"])
+        self.assertEqual({s["with"]["name"] for s in sites}, {ARTIFACT_NAME})
+
+    def test_the_plan_job_publishes_replanned(self):
+        self.assertEqual(job("plan")["outputs"].get("replanned"),
+                         "${{ steps.recheck_review.outputs.ok }}")
+
+    def test_the_publish_job_admits_a_review_run_only_once_it_replanned(self):
+        gate = str(job("publish").get("if") or "")
+        rows = [
+            ({"needs.plan.outputs.mode": "plan", "needs.plan.outputs.kids": "3"}, True),
+            ({"needs.plan.outputs.mode": "plan", "needs.plan.outputs.kids": "0"}, False),
+            ({"needs.plan.outputs.mode": "review", "needs.plan.outputs.replanned": "true"}, True),
+            ({"needs.plan.outputs.mode": "review", "needs.plan.outputs.replanned": "false"}, False),
+            ({"needs.plan.outputs.mode": "review", "needs.plan.outputs.replanned": ""}, False),
+            ({"needs.plan.outputs.mode": "activate", "needs.plan.outputs.replanned": "true"}, False),
+        ]
+        for known, expected in rows:
+            facts = {"needs.plan.outputs.mode": "", "needs.plan.outputs.kids": "",
+                     "needs.plan.outputs.replanned": "", **known}
+            walk, truth = _Facts.walk(facts)
+            with self.subTest(**known):
+                self.assertIs(truth(walk.evaluate(gate)), expected)
+
+    def test_nothing_reads_another_runs_artifacts(self):
+        # A cross-run download needs `actions: read`, which no plan stub grants.
+        src = wf_src()
+        self.assertNotIn("gh run " + "download", src)
+        self.assertNotIn("actions/" + "artifacts", src)
+
+    def test_both_re_plan_prompts_say_where_the_artifact_is(self):
+        for name in (POST_REPLAN, POST_REPLAN + " — on the next rung"):
+            with self.subTest(step=name):
+                prompt = str((exact_step(name).get("with") or {}).get("prompt") or "")
+                self.assertIn("steps.pubsrc.outputs.found", prompt)
+                self.assertIn("plan-artifact.md", prompt)
+                self.assertIn("plan_artifact.py check", prompt)
+                self.assertIn("standards/plan-artifact.md", prompt)
+                self.assertIn("ledger-check", prompt)
+
+    def test_the_re_checks_comments_are_declared_by_its_step(self):
+        sites = [site for site in car.sites()
+                 if site.path == ".github/workflows/plan.yml"
+                 and site.step == REVIEW_RECHECK]
+        self.assertGreaterEqual(len(sites), 3)
+        declared = car.declarations()
+        for site in sites:
+            with self.subTest(site=site.where):
+                hits = [d for d in declared if car._matches(d, site)]
+                self.assertEqual(len(hits), 1)
+                self.assertEqual(hits[0].get("step"), REVIEW_RECHECK)
                 self.assertTrue((hits[0].get("why") or "").strip())
 
 

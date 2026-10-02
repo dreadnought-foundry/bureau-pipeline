@@ -194,6 +194,10 @@ jobs:
     outputs:
       mode: ${{ steps.route.outputs.mode }}
       kids: ${{ steps.kids.outputs.count }}
+      # DRE-5299: `true` when a review-mode re-plan's revision passed the
+      # plan's own gates and its artifact was uploaded for `publish`; read by
+      # that job's `if:` and by nothing else.
+      replanned: ${{ steps.recheck_review.outputs.ok }}
     steps:
       # The same fact, said once as the first line of the job's own output
       # (DRE-3223) — the form the medic greps for at the start of a line, and
@@ -2922,7 +2926,9 @@ jobs:
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
       # Hand the checked source to the publish job — jobs do not share a
-      # workspace, and the portal deliberately never enters this one.
+      # workspace, and the portal is never written from this one. (The review
+      # route reads the published source out of a portal checkout below,
+      # DRE-5299, and removes it before the re-plan runs.)
       - name: Plan artifact — upload source
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -3794,6 +3800,101 @@ jobs:
               "🛑 Parked in Triage with needs-human for an operator. The second critic could not decide on this plan ${NO_RESULTS} times on this planning attempt, so nobody has finished reading it and it does not go to Green Light. When it is settled, ${HOW}."
           fi
 
+      # --- REVIEW MODE: the re-plan carries the plan artifact (DRE-5299) -----
+      #
+      # The plan run wrote the artifact, checked it, uploaded it and published
+      # it; a review run is a separate run and cannot reach that upload — an
+      # artifact download reads the current run only, and a cross-run read
+      # needs an Actions permission no plan stub grants. So the previous text
+      # comes from the one place a review run CAN read it: the portal, where
+      # `plan_artifact.publish` stores the source beside the page. Where no
+      # portal is configured, the re-plan writes the artifact fresh. Every
+      # step here runs only when a review-mode re-plan runs at all — a hold
+      # below the bound; at the bound nothing is revised.
+      #
+      # Vendor boundary (standards/vendor-boundaries.md):
+      #   Q1 actor — the checkout initiates as the PRIMARY bureau App
+      #      installation, minted here, the same App the `publish` job's portal
+      #      checkout uses on every plan run. Never `steps.app_post`: that token
+      #      is minted from the dispatch-pool App `steps.pool` picked, and
+      #      nothing proves those Apps are installed on the portal. Never the
+      #      start-of-job `steps.app` either: this runs after the second
+      #      critic's model step, and that token can have expired (DRE-3940).
+      #   Q2 secrets — no new secret and no new permission: BUREAU_APP_ID and
+      #      BUREAU_APP_PRIVATE_KEY are the reusable's declared secrets, already
+      #      held by this job for its start-of-job mint.
+      #   Q3 retry/re-run — a portal with no page for this epic, or a checkout
+      #      the App is refused, is `found=false` and the artifact is written
+      #      fresh; a re-run reads whatever is published at that moment.
+      #   Q4 limitations — a git checkout, not the Actions API, so no `actions:`
+      #      permission is involved anywhere.
+      #   Q5 our own crash — a crash in the read leaves `found` unset, which the
+      #      re-plan reads as fresh.
+      #
+      # The mint is not `continue-on-error` (a mint that cannot happen goes red
+      # at the mint, the rule on `Re-mint bot token — planner`), and its token
+      # is read by the checkout directly below it and by nothing else.
+      - name: Mint bot token — portal checkout (review)
+        id: app_portal
+        if: vars.PLAN_PORTAL_REPO != '' && steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # `continue-on-error`: a portal the App cannot read is `found=false`
+      # below, never a red run. `persist-credentials: false`: the re-plan after
+      # this is a model step with Bash, and a token persisted into
+      # .plan-portal/.git/config would be one read away from it.
+      - name: Plan artifact — portal checkout (review)
+        id: pubsrc_checkout
+        if: vars.PLAN_PORTAL_REPO != '' && steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.PLAN_PORTAL_REPO }}
+          token: ${{ steps.app_portal.outputs.token }}
+          path: .plan-portal
+          persist-credentials: false
+
+      # The version the CEO's link shows, copied to where the re-plan edits it.
+      # The page's directory and the source's file name are the module's
+      # (`plan_artifact.py path`, `plan_artifact.SOURCE_NAME`), never restated.
+      # Anything short of a copied file — no portal configured, a checkout that
+      # failed, no page for this epic, a copy that failed — is `found=false`,
+      # said in the log, and the re-plan writes the artifact fresh. The portal
+      # checkout is removed afterwards: the planner's workspace holds no other
+      # repository, exactly as before this card.
+      - name: Plan artifact — published source
+        id: pubsrc
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        continue-on-error: true
+        env:
+          CHECKOUT: ${{ steps.pubsrc_checkout.outcome }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          ART="${{ runner.temp }}/plan-artifact.md"
+          rm -f "$ART"
+          if [ "$CHECKOUT" != "success" ] || [ ! -d .plan-portal ]; then
+            echo "no published source: the portal checkout did not run or did not succeed (outcome: ${CHECKOUT:-skipped}) — the artifact is written fresh"
+          else
+            PAGE=$(python3 .bureau-pipeline/scripts/plan_artifact.py path "$EPIC") || PAGE=""
+            NAME=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_artifact; print(plan_artifact.SOURCE_NAME)') || NAME=""
+            SRC=".plan-portal/$(dirname "$PAGE")/$NAME"
+            if [ -n "$PAGE" ] && [ -n "$NAME" ] && [ -f "$SRC" ] && cp "$SRC" "$ART"; then
+              echo "published source found at $SRC — the re-plan revises it"
+            else
+              echo "no published source for $EPIC in the portal (looked for ${SRC}) — the artifact is written fresh"
+              rm -f "$ART"
+            fi
+          fi
+          rm -rf .plan-portal
+          if [ -f "$ART" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # The card set BEFORE the re-plan touches it (DRE-3291). The question the
       # step after the re-plan answers — did this revision change what the CEO
       # approved, or only what a card says — needs both sides of the edit, and
@@ -3849,9 +3950,12 @@ jobs:
       # Same shape as the pre-approval `Re-plan after send-back`: the planner
       # in RE-plan mode, editing the existing children in place. It runs on
       # every hold, round 1 and round 2 alike, so an epic already one round in
-      # still comes back revised. There is no plan-artifact.md in this mode —
-      # the artifact job only runs on the plan route — so the revision lives in
-      # the cards, and the summary file below is what the CEO reads.
+      # still comes back revised. On the activate route there is no
+      # plan-artifact.md, so the revision lives in the cards and the summary
+      # file below is what the CEO reads. On the review route (DRE-5299) the
+      # artifact is part of the revision: the published source when
+      # `Plan artifact — published source` found one, otherwise written fresh,
+      # and `Re-check the revised plan — review mode` checks it after.
       #
       # `continue-on-error`: the Green Light move below must never depend on
       # this agent finishing. A re-plan that dies at its turn cap leaves the
@@ -3908,6 +4012,27 @@ jobs:
             missing — do NOT duplicate cards, and do not delete work the critic
             did not object to. Every card you create or change must meet
             standards/card-quality.md.
+
+            THE PLAN ARTIFACT. This run's published-source step reads
+            `${{ steps.pubsrc.outcome }}`, and whether it found the published
+            plan artifact reads `${{ steps.pubsrc.outputs.found }}`.
+              - The step reads `skipped`, or nothing: this run carries no plan
+                artifact. The revision lives in the cards alone; write none.
+              - It found one (`true`): the published plan artifact — the
+                version the CEO's link shows — is at
+                ${{ runner.temp }}/plan-artifact.md. Rewrite it in place so it
+                describes the plan as you revised it.
+              - Anything else: there is NO previous artifact on disk. Write it
+                with `Write`, to exactly ${{ runner.temp }}/plan-artifact.md,
+                from `standards/plan-artifact.md` in your assembled context, the
+                epic and the cards as you revised them — every section the
+                standard names, with a ```ledger-check record for every child.
+            Either way it must pass:
+              python3 .bureau-pipeline/scripts/plan_artifact.py check \
+                "${{ runner.temp }}/plan-artifact.md"
+            The run re-checks the cards and this file after you finish, and a
+            revision that fails either is parked for an operator. You do not
+            render or publish it — the run does.
 
             Then WRITE a plain-English summary of what changed — which cards
             were added, which were rewritten and why, in business terms, no
@@ -4003,6 +4128,27 @@ jobs:
             did not object to. Every card you create or change must meet
             standards/card-quality.md.
 
+            THE PLAN ARTIFACT. This run's published-source step reads
+            `${{ steps.pubsrc.outcome }}`, and whether it found the published
+            plan artifact reads `${{ steps.pubsrc.outputs.found }}`.
+              - The step reads `skipped`, or nothing: this run carries no plan
+                artifact. The revision lives in the cards alone; write none.
+              - It found one (`true`): the published plan artifact — the
+                version the CEO's link shows — is at
+                ${{ runner.temp }}/plan-artifact.md. Rewrite it in place so it
+                describes the plan as you revised it.
+              - Anything else: there is NO previous artifact on disk. Write it
+                with `Write`, to exactly ${{ runner.temp }}/plan-artifact.md,
+                from `standards/plan-artifact.md` in your assembled context, the
+                epic and the cards as you revised them — every section the
+                standard names, with a ```ledger-check record for every child.
+            Either way it must pass:
+              python3 .bureau-pipeline/scripts/plan_artifact.py check \
+                "${{ runner.temp }}/plan-artifact.md"
+            The run re-checks the cards and this file after you finish, and a
+            revision that fails either is parked for an operator. You do not
+            render or publish it — the run does.
+
             Then WRITE a plain-English summary of what changed — which cards
             were added, which were rewritten and why, in business terms, no
             file paths — to ${{ runner.temp }}/post-replan-summary.md. The CEO
@@ -4044,10 +4190,102 @@ jobs:
           fi
           exit "$RC"
 
+      # REVIEW MODE (DRE-5299): the revision goes through the plan route's own
+      # gates — the same four `Re-check the revised plan` runs, in its order —
+      # before anything reviews it again or publishes it. The UI reading is
+      # taken here, off the cards, because `Plan artifact — UI epic?` runs on
+      # the plan route only and its output is not set in this mode.
+      #
+      # A pass writes `ok=true`: the children are stamped (a card the revision
+      # added carries its verdict before the sweep reads it), and the upload
+      # and the re-review below run. A refusal is a plan that does not converge
+      # on its own, which goes to the operator and never to the CEO (epic
+      # DRE-5268, rule 4): the gate's own bounce note where it wrote one, then
+      # `needs-human`, then Triage — labeled first, because a plan run fires
+      # when an `agent:planner` card enters Triage and the plan-gate refuses it
+      # only for a card already carrying `needs-human` (DRE-5277, DRE-5278) —
+      # then a note naming the failing gate, ending with
+      # `plan_critic.REAPPROVE_HOW` read from the module. `ok=false` is written
+      # BEFORE the Linear writes, so a write that fails still leaves the gate
+      # shut, and the step exits non-zero after the note and the move.
+      #
+      # Every gate is an `if !` (this workflow is `bash -e` without `pipefail`)
+      # and the children are read into a FILE and redirected into the stamper,
+      # the rule every stamp site follows (tests/test_planner_stamps_children.py).
+      - name: Re-check the revised plan — review mode
+        id: recheck_review
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          ART="${{ runner.temp }}/plan-artifact.md"
+          CHILDREN="${{ runner.temp }}/review-recheck-children.json"
+          BOUNCE_FILE="${{ runner.temp }}/review-recheck-bounce.md"
+          HELD="${{ runner.temp }}/review-recheck-held.md"
+          rm -f "$BOUNCE_FILE" "$HELD"
+          FAILED=""
+          if ! python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"; then
+            FAILED="the child card check (validate_card.py check-children) refused one or more of its cards"
+          fi
+          if [ -z "$FAILED" ]; then
+            UI=$(python3 .bureau-pipeline/scripts/linear_ops.py child-descriptions "$EPIC" \
+                   | python3 .bureau-pipeline/scripts/plan_artifact.py ui-epic)
+            echo "UI epic: $UI"
+            UI_FLAG=""
+            if [ "$UI" = "true" ]; then UI_FLAG="--ui"; fi
+            if ! python3 .bureau-pipeline/scripts/plan_artifact.py check "$ART" $UI_FLAG; then
+              FAILED="the plan artifact check (plan_artifact.py check) refused the revised artifact"
+            fi
+          fi
+          if [ -z "$FAILED" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+            if ! python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                   --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+              FAILED="the proof-card check (proof_and_demo.py check) refused the revised cards"
+            fi
+          fi
+          if [ -z "$FAILED" ]; then
+            python3 .bureau-pipeline/scripts/plan_child_verdicts.py stamp \
+              --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
+            if [ -s "$HELD" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "$(cat "$HELD")"
+            fi
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "the revision passed the plan's own gates"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error::the revision did not pass the plan's own gates: $FAILED"
+          BOUNCED=""
+          if [ -s "$BOUNCE_FILE" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$BOUNCE_FILE")"
+            # The proof check's note is written for the plan route, where a
+            # bounce goes back to Planning; on this route it parks, so the
+            # note below says which lane is true.
+            BOUNCED=" The note above lists what the proof card is missing; it says the epic is back in Planning, but a revision the plan's own gates refuse parks in Triage instead."
+          fi
+          if [ "$REPLAN_OUTCOME" != "success" ]; then
+            WHY="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), and ${FAILED}.${BOUNCED}"
+          else
+            WHY="The re-plan finished, but ${FAILED}.${BOUNCED}"
+          fi
+          HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "🛑 Parked in Triage with needs-human for an operator. The second critic sent this plan back and the planner revised it, but the revision did not pass the plan's own gates, so it is not reviewed again and it does not go to Green Light. ${WHY} When it is settled, ${HOW}."
+          exit 1
+
       # The mechanical findings, re-run against the revision, so the next
       # round's critic — and the CEO — read checks against the plan as it now
       # stands. Best-effort for the same reason as the re-plan: the park below
-      # must happen whatever these steps do.
+      # must happen whatever these steps do. On the review route it runs after
+      # the re-check (DRE-5299), so its note describes the plan the re-review
+      # reads — and a revision the re-check refused stops the job before it.
       - name: Mechanical findings — the revised plan (after approval)
         if: (steps.route.outputs.mode == 'review' || steps.route.outputs.mode == 'activate') && steps.post1.outputs.action == 'hold'
         continue-on-error: true
@@ -4062,6 +4300,19 @@ jobs:
                 --note-file "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
+
+      # REVIEW MODE (DRE-5299): hand the re-checked revision to the publish
+      # job, exactly as the plan route's `Plan artifact — upload source` does —
+      # same action, same name, same path. `publish` downloads it from this
+      # same run, diffs it against the PUBLISHED source for the version record,
+      # and republishes at the epic's one address.
+      - name: Plan artifact — upload source (review)
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true' && steps.recheck_review.outputs.ok == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plan-source-${{ github.event.client_payload.identifier }}
+          path: ${{ runner.temp }}/plan-artifact.md
+          if-no-files-found: error
 
       # Did the re-plan change what the CEO APPROVED, or only what a card says
       # (DRE-3291)? That is the whole of the branch below. A re-plan that
@@ -4228,18 +4479,17 @@ jobs:
           fi
 
       # REVIEW MODE: a SEND_BACK below the bound (DRE-5280). The re-plan above
-      # has revised the plan (its prompt is unchanged in this card), and the
-      # review runs again as the next round — a step of its own, so DRE-5299
-      # can gate this dispatch on the revision's re-check. Nothing here is the
-      # CEO's to decide, so no card-set question is asked and no lane is
-      # written: the epic stays in Planning. Until DRE-5299 the revision lives
-      # in the cards, as it does on the activate route.
+      # has revised the plan, and the review runs again as the next round — a
+      # step of its own, gated on the revision's re-check (DRE-5299): a
+      # revision the plan's own gates refused is parked by the re-check and is
+      # never re-reviewed. Nothing here is the CEO's to decide, so no card-set
+      # question is asked and no lane is written: the epic stays in Planning.
       #
       # The receipt is written FROM the dispatch's rc (DRE-2034), and a
       # dispatch that did not go through leaves the step red for the medic.
       # Its token is minted after the re-plan (`Re-mint bot token — send-back`).
       - name: Review — the revised plan is reviewed again
-        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
+        if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true' && steps.recheck_review.outputs.ok == 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
@@ -4977,9 +5227,16 @@ jobs:
   #      markdown on every run and the publish is the last step, so a crash
   #      leaves the previously published version standing and the next plan
   #      run republishes over it.
+  #
+  # A review run publishes too (DRE-5299), but only when its re-plan's revision
+  # passed the plan's own gates (`replanned`): the source it downloads was
+  # uploaded by this same run in both modes, so `Plan artifact — fetch source`
+  # is unchanged, and the version record diffs the revision against the
+  # PUBLISHED source exactly as for a plan run. A review run with no re-plan,
+  # or one whose re-check refused the revision, publishes nothing.
   publish:
     needs: plan
-    if: needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0'
+    if: (needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0') || (needs.plan.outputs.mode == 'review' && needs.plan.outputs.replanned == 'true')
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # Same declaration, same reason (DRE-3321): this job reads the fleet key too.
