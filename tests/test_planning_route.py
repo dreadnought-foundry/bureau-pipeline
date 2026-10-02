@@ -732,10 +732,17 @@ class TestPlanYmlBranchesThreeWays:
         vocabulary declares, so moving `epic` in the file turns this red rather
         than letting the two drift apart in silence.
         """
-        step = _step("Epic → Green Light")
+        # Since DRE-5284 the plan route hands the plan to the second critic and
+        # writes no lane; the vocabulary's destination is written by the review
+        # route's one Green Light step, after both critics passed it.
+        handoff = _step("Plan → second critic")
+        assert "linear_ops.py state" not in handoff["run"]
+        assert "review_rerun.py dispatch" in handoff["run"]
         destination = planning_route.route_for("epic").destination
-        assert f'state "$EPIC" "{destination}"' in step["run"]
-        assert "steps.route.outputs.mode == 'plan'" in step["if"]
+        writers = [s.get("name") for s in _steps()
+                   if f'state "$EPIC" "{destination}"' in (s.get("run") or "")
+                   and "steps.route.outputs.mode == 'review'" in str(s.get("if") or "")]
+        assert writers == ["Epic → Green Light — both critics passed"], writers
 
     def test_the_plan_and_activate_split_is_untouched(self):
         """The CEO's two verbs still decide plan vs activate: the shape says
