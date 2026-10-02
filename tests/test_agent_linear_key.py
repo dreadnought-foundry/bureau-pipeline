@@ -58,6 +58,12 @@ ACTION = "anthropics/claude-code-action"
 # something else (a hardcoded string, a different secret) is not compliant.
 REQUIRED_ENV_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 
+# The planner's workflow hands its own Linear bucket first and the fleet key
+# when none is published (DRE-5589) — still a key that reaches the process.
+REQUIRED_ENV_EXPR_BY_WORKFLOW = {
+    "plan.yml": "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
+}
+
 # Steps that deliberately run WITHOUT Linear, keyed (workflow file, step
 # name), each with the reason it is not an oversight.
 DOCUMENTED_EXCEPTIONS = {
@@ -174,11 +180,12 @@ class TestAgentLinearKey:
             if (wf_name, step_name) in DOCUMENTED_EXCEPTIONS:
                 continue
             value = (step.get("env") or {}).get("LINEAR_API_KEY")
-            if value != REQUIRED_ENV_EXPR:
+            expected = REQUIRED_ENV_EXPR_BY_WORKFLOW.get(wf_name, REQUIRED_ENV_EXPR)
+            if value != expected:
                 missing.append(
                     f"{wf_name}: step {step_name!r} has "
                     f"LINEAR_API_KEY={value!r}, expected "
-                    f"{REQUIRED_ENV_EXPR!r} — the agent runs linear_ops.py "
+                    f"{expected!r} — the agent runs linear_ops.py "
                     f"from Bash and reads the key from its environment"
                 )
         assert not missing, "\n".join(

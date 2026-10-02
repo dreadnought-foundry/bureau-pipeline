@@ -110,8 +110,9 @@ def test_every_such_step_carries_the_fleet_key_as_its_fallback():
 def test_no_step_reads_the_planner_key_under_any_other_name():
     """The planner key reaches a process only as the primary; anywhere else it
     would be a copy nothing falls back from."""
-    text = PLAN.read_text(encoding="utf-8")
-    uses = text.count("secrets.LINEAR_PLANNER_KEY")
+    code = [line for line in PLAN.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")]
+    uses = sum(line.count("secrets.LINEAR_PLANNER_KEY") for line in code)
     assert uses == len(_key_steps(_plan())), uses
 
 

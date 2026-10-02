@@ -21,6 +21,14 @@ also prints `sweep-spend: total <N> request(s) …`, counted by the process
 itself, and a run that printed one is charged that and its budget lines are
 not added. Every other workflow is still read off its budget lines.
 
+A spend on ANOTHER BUCKET is kept in its own row (DRE-5589). The line ends
+`budget: <bucket>`, and the planner's OAuth token — the fleet user, metered
+apart from the fleet key — prints `budget: planner-oauth`. Adding that to the
+fleet key's row would charge the fleet for requests it never paid, so a row is
+(repo, workflow, bucket) and prints as `Agent Plan [planner-oauth]`. The fleet
+key's own lines (`budget: fleet`, `undeclared`, or no owner at all) stay in
+today's row, unlabeled.
+
 Both markers are read only where they OPEN a line — after the job/step/
 timestamp prefix `gh run view --log` adds. GitHub echoes a step's script into
 the log before running it, and the Sweep step's script names `linear-budget:`
@@ -66,6 +74,10 @@ _SPENT_RE = re.compile(
     _LINE_START + r"linear-budget:\s*(\d+)\s*→\s*(\d+)\s*\(spent\s+(\d+)\s+this run"
 )
 _SEEN_RE = re.compile(_LINE_START + r"linear-budget:")
+# The owner part linear_ops.budget_line() ends every line with (DRE-3321), and
+# the words that mean the fleet key's own bucket — today's unlabeled row.
+_BUCKET_RE = re.compile(r";\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
+_FLEET_BUCKETS = frozenset({"fleet", "undeclared"})
 # The last line of every sweep pass, reconcile.SweepSpend.report_total().
 _SWEEP_TOTAL_RE = re.compile(_LINE_START + r"sweep-spend: total (\d+) request")
 
@@ -89,6 +101,29 @@ def spent_from_log(log_text: str) -> list[int | None]:
     return out
 
 
+def bucket_of(line: str) -> str:
+    """The bucket a budget line names — `""` for the fleet key's own (DRE-5589)."""
+    m = _BUCKET_RE.search(line.rstrip())
+    bucket = m.group(1) if m else ""
+    return "" if bucket in _FLEET_BUCKETS else bucket
+
+
+def run_spend_by_bucket(log_text: str) -> dict[str, list[int | None]]:
+    """`run_spend_from_log`, split by the bucket each line names. A sweep's
+    own total names none, and a sweep spends the fleet key, so it is `""`."""
+    lines = (log_text or "").splitlines()
+    totals = [int(m.group(1)) for m in map(_SWEEP_TOTAL_RE.match, lines) if m]
+    if totals:
+        return {"": totals}
+    out: dict[str, list[int | None]] = {}
+    for line in lines:
+        if not _SEEN_RE.match(line):
+            continue
+        m = _SPENT_RE.match(line)
+        out.setdefault(bucket_of(line), []).append(int(m.group(3)) if m else None)
+    return out or {"": []}
+
+
 def run_spend_from_log(log_text: str) -> list[int | None]:
     """What ONE run spent, entry by entry: its `sweep-spend: total` lines when
     it printed any — the pass's own count — and otherwise its budget lines
@@ -106,23 +141,25 @@ def aggregate(observations) -> list[dict]:
     """Rows per (repo, workflow) from `(repo, workflow, log_text)` triples —
     one triple per run. Sorted by total spent, descending, then by name so
     equal totals print in a stable order."""
-    rows: dict[tuple[str, str], dict] = {}
+    rows: dict[tuple[str, str, str], dict] = {}
     for repo, workflow, log_text in observations:
-        row = rows.setdefault(
-            (repo, workflow),
-            {"repo": repo, "workflow": workflow, "runs": 0, "total": 0,
-             "max": 0, "unknown_lines": 0},
-        )
-        row["runs"] += 1
-        run_total = 0
-        for spent in run_spend_from_log(log_text):
-            if spent is None:
-                row["unknown_lines"] += 1
-                continue
-            run_total += spent
-        row["total"] += run_total
-        row["max"] = max(row["max"], run_total)
-    return sorted(rows.values(), key=lambda r: (-r["total"], r["repo"], r["workflow"]))
+        for bucket, spends in run_spend_by_bucket(log_text).items():
+            row = rows.setdefault(
+                (repo, workflow, bucket),
+                {"repo": repo, "workflow": workflow, "budget": bucket, "runs": 0,
+                 "total": 0, "max": 0, "unknown_lines": 0},
+            )
+            row["runs"] += 1
+            run_total = 0
+            for spent in spends:
+                if spent is None:
+                    row["unknown_lines"] += 1
+                    continue
+                run_total += spent
+            row["total"] += run_total
+            row["max"] = max(row["max"], run_total)
+    return sorted(rows.values(),
+                  key=lambda r: (-r["total"], r["repo"], r["workflow"], r["budget"]))
 
 
 def render_table(rows: list[dict], unknown_repos: list[str], *,
@@ -133,8 +170,11 @@ def render_table(rows: list[dict], unknown_repos: list[str], *,
     lines = [f"linear budget, last {hours:g}h", header, "-" * len(header)]
     for r in rows:
         note = f"  ({r['unknown_lines']} line(s) unknown/rolled)" if r["unknown_lines"] else ""
+        # The bucket survives the column's cut; the workflow name gives way.
+        suffix = f" [{r['budget']}]" if r.get("budget") else ""
+        label = r["workflow"][:32 - len(suffix)] + suffix
         lines.append(
-            f"{r['repo']:<20} {r['workflow'][:32]:<32} {r['runs']:>5} "
+            f"{r['repo']:<20} {label[:32]:<32} {r['runs']:>5} "
             f"{r['total']:>7} {r['max']:>8}{note}"
         )
     for repo in sorted(unknown_repos):

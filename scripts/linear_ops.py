@@ -367,15 +367,10 @@ _IDENTITIES_PATH = os.path.join(
 )
 
 
-def declared_identity_names() -> tuple[str, ...]:
-    """The identity names `config/linear-identities.json` declares.
+def _declared_rows() -> list:
+    """The identity rows `config/linear-identities.json` declares, or none.
 
-    Read from the file rather than restated here, so a third identity added to
-    the declaration is a word this seam may print without a code change. Read
-    on every call: this runs at most twice in a process (one refusal, one exit
-    line) and a cache would only add a way for a test's file to go stale.
-
-    Fail-soft — an unreadable declaration yields no names, so every value
+    Fail-soft — an unreadable declaration yields no rows, so every value
     reports `undeclared` rather than failing a call over telemetry. The loader
     is local by necessity, not preference: `check_linear_identities` imports
     THIS module, so reusing its reader would be a circular import.
@@ -383,9 +378,37 @@ def declared_identity_names() -> tuple[str, ...]:
     try:
         with open(_IDENTITIES_PATH, encoding="utf-8") as fh:
             rows = json.load(fh)["identities"]
-        return tuple(row["name"] for row in rows)
+        return [row for row in rows if isinstance(row, dict)]
     except (OSError, ValueError, KeyError, TypeError):  # pragma: no cover
+        return []
+
+
+def declared_identity_names() -> tuple[str, ...]:
+    """The identity names `config/linear-identities.json` declares.
+
+    Read from the file rather than restated here, so a third identity added to
+    the declaration is a word this seam may print without a code change. Read
+    on every call: this runs at most twice in a process (one refusal, one exit
+    line) and a cache would only add a way for a test's file to go stale.
+    """
+    try:
+        return tuple(row["name"] for row in _declared_rows())
+    except KeyError:  # pragma: no cover
         return ()
+
+
+def declared_home_names(identity: str) -> tuple[str, ...]:
+    """The names of `identity`'s extra homes in the declaration (DRE-5589).
+
+    A home is another copy of the same user's key — and for the planner's
+    OAuth token, another BUCKET on the same user: Linear meters an OAuth app's
+    token apart from the user's API key, 5,000 an hour against 2,500.
+    """
+    for row in _declared_rows():
+        if row.get("name") == identity:
+            homes = row.get("homes") or []
+            return tuple(h["name"] for h in homes if isinstance(h, dict) and "name" in h)
+    return ()
 
 
 def declared_identity() -> str:
@@ -401,10 +424,106 @@ def declared_identity() -> str:
     return value if value in declared_identity_names() else UNDECLARED
 
 
+# ── Whose BUCKET is it? (DRE-5589) ──────────────────────────────────────────
+# A user is not always one bucket. An OAuth app authorized as the fleet user
+# writes as Agent-Bureau but is metered on its own 5,000 an hour, measured on
+# 2026-10-01 at 21:41 PT: the key read 351/2500 and the token 4998/5000, and 61
+# requests on the token moved the key by 6. plan.yml hands its steps that token
+# as `LINEAR_API_KEY` when the console has published one, the fleet key in
+# `LINEAR_API_KEY_FALLBACK` beside it, and the token's home in
+# `LINEAR_KEY_HOME`. The line names the home only while the process is really
+# spending it: the two keys differ (a token was published) and no 401 has
+# moved it onto the fleet key.
+#
+# The planner never refreshes the token. The console is the one refresher
+# (DRE-2532) — a refresh anywhere else spends the console's link and stops the
+# chain until someone re-authorizes — so a dead token is never repaired here,
+# only stepped around, for the rest of this one process.
+FALLBACK_ENV = "LINEAR_API_KEY_FALLBACK"
+HOME_ENV = "LINEAR_KEY_HOME"
+
+#: Linear's code for a key it will not accept. Read off the BODY, like the
+#: rate limit: the refusal can arrive as a 401, as a 400, or as a 200 carrying
+#: an `errors` payload.
+_AUTH_MARKER = "AUTHENTICATION_ERROR"
+
+
+def _primary_key() -> str:
+    return os.environ.get("LINEAR_API_KEY") or ""
+
+
+def _fallback_key() -> str | None:
+    """The fleet key to fall back to, or None when there is nothing to fall
+    back TO: no fallback set, one equal to the primary (no token was
+    published, so `||` already chose the fleet key), or a fallback already
+    taken — a 401 on the fleet key itself is the fleet key's own failure."""
+    if _budget["fell_back"]:
+        return None
+    primary, fallback = _primary_key(), os.environ.get(FALLBACK_ENV) or ""
+    return fallback if primary and fallback and fallback != primary else None
+
+
+def is_auth_refusal(status: int, body: str) -> bool:
+    """True when Linear refused the KEY — and only then.
+
+    Never a rate limit, whatever the status: Linear answers quota exhaustion
+    with a 400 on the wire (DRE-2923), and a rate limit on the planner's bucket
+    is not a reason to spend the fleet's. Never a 429. Never a 400 whose body
+    does not say AUTHENTICATION_ERROR — a malformed query is a code defect,
+    and the fleet key would refuse it just the same.
+    """
+    if status == 429 or rate_limit_condition(body):
+        return False
+    return status == 401 or _AUTH_MARKER in (body or "")
+
+
+def spending_bucket() -> str:
+    """The bucket this process is spending: the declared home while the
+    published token is in use, otherwise the declared identity.
+
+    A home the declaration does not carry under that identity is not a bucket
+    — the same rule `declared_identity` applies, for the same reason: the word
+    lands on lines parsed one line at a time."""
+    identity = declared_identity()
+    if _budget["fell_back"]:
+        return identity
+    primary, fallback = _primary_key(), os.environ.get(FALLBACK_ENV) or ""
+    if not (primary and fallback and primary != fallback):
+        return identity
+    home = (os.environ.get(HOME_ENV) or "").strip()
+    return home if home in declared_home_names(identity) else identity
+
+
+class _KeyRefused(Exception):
+    """Internal: the primary key was refused and a fallback is available."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+def _fall_back(why: str) -> None:
+    """Switch this process onto the fleet key, and say so ONCE.
+
+    The readings start over: what the token's bucket had left says nothing
+    about the fleet key's, and a line spanning both would report a spend that
+    happened in neither. Never a key on the line — names only."""
+    refused = spending_bucket()
+    identity = declared_identity()
+    if refused == identity:
+        refused = "the primary key"
+    _budget["fell_back"] = True
+    for field in ("first", "last", "reset_ms", "limit"):
+        _budget[field] = None
+    _budget["refilled"] = False
+    print(f"linear-key: {refused} refused ({why}) — fell back to {identity}",
+          file=sys.stderr, flush=True)
+
+
 def _budget_part() -> str:
     """The one part both rate-limit lines end with, composed in ONE place so
     the refusal and the budget line can never disagree about the owner."""
-    return f"budget: {declared_identity()}"
+    return f"budget: {spending_bucket()}"
 
 
 def _api_error(code: int | str, body: str) -> LinearError:
@@ -442,6 +561,9 @@ def _api_error(code: int | str, body: str) -> LinearError:
 # answer. `gh run view --log` shows both streams, so the reader is unaffected.
 _REMAINING_HEADER = "x-ratelimit-requests-remaining"
 _RESET_HEADER = "x-ratelimit-requests-reset"  # epoch milliseconds
+# The bucket's size (DRE-5589): 2,500 on a user's API key, 5,000 on an OAuth
+# app's token — the one reading that says which bucket answered.
+_LIMIT_HEADER = "x-ratelimit-requests-limit"
 _PT = ZoneInfo("America/Los_Angeles")
 
 # Process state: one process is one run. Reset only by tests (conftest).
@@ -460,6 +582,8 @@ def _reset_budget_state() -> None:
         refused_after=None,  # calls sent before the stop armed; None = not armed
         condition=None,  # the named condition the stop was armed with
         reported=False,  # the exit line was printed
+        limit=None,  # last bucket size seen (DRE-5589)
+        fell_back=False,  # a refused key moved this process onto the fleet key
     )
 
 
@@ -482,6 +606,9 @@ def _note_response_headers(headers) -> None:
     RATELIMITED 400 is the response that carries `remaining=0`."""
     remaining = _int_header(headers, _REMAINING_HEADER)
     reset_ms = _int_header(headers, _RESET_HEADER)
+    limit = _int_header(headers, _LIMIT_HEADER)
+    if limit is not None:
+        _budget["limit"] = limit
     if remaining is not None:
         if _budget["first"] is None:
             _budget["first"] = remaining
@@ -536,7 +663,7 @@ def _refusal() -> LinearRateLimited:
 def budget_line() -> str:
     """The one line that says what this process spent of WHOSE Linear hour:
 
-        linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT; budget: <identity>)
+        linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT; limit <L>; budget: <bucket>)
 
     N is first − last, never negative. A run that ENDS above where it started
     (last > first) says `window rolled` instead of a number — that and
@@ -549,7 +676,12 @@ def budget_line() -> str:
     the headerless one included (DRE-3321): three non-human users mean three
     hourly budgets, and a spend nobody can attribute is the thing this line
     exists to end. Everything before it keeps its place, so
-    `check_linear_budget.py` reads `spent N` / `window rolled` unchanged."""
+    `check_linear_budget.py` reads `spent N` / `window rolled` unchanged.
+
+    The owner is the BUCKET (DRE-5589): `planner-oauth` while a planner spends
+    the OAuth token's own hour, the identity otherwise. `limit <L>` sits just
+    before it when Linear sent the bucket's size — 5,000 on that token, 2,500
+    on a key."""
     first, last = _budget["first"], _budget["last"]
     if first is None or last is None:
         return f"linear-budget: unknown (no rate-limit headers seen; {_budget_part()})"
@@ -562,6 +694,8 @@ def budget_line() -> str:
     parts = [spent, f"window resets {_reset_clock()} PT"]
     if _budget["refused_after"] is not None:
         parts.append(f"refused after {_budget['refused_after']} calls")
+    if _budget["limit"] is not None:
+        parts.append(f"limit {_budget['limit']}")
     # LAST, always: every other part keeps the place it has always had, so the
     # readers that parse this line (check_linear_budget.py) are untouched.
     parts.append(_budget_part())
@@ -674,6 +808,10 @@ def api_key(*, env=None, run=None) -> str:
     """
     env = os.environ if env is None else env
     key = env.get("LINEAR_API_KEY")
+    if key and _budget["fell_back"]:
+        # A refused planner token moved this process onto the fleet key
+        # (DRE-5589); every later call goes there.
+        return env.get(FALLBACK_ENV) or key
     if key:
         return key
     if env.get("GITHUB_ACTIONS") == "true":
@@ -711,46 +849,14 @@ def gql(query: str, variables: dict | None = None) -> dict:
     if _budget["refused_after"] is not None:
         raise _refusal()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
-    for attempt in range(_MAX_ATTEMPTS):
-        # A fresh Request per attempt: a retry re-sends the call, it does not
-        # re-drive an object urllib has already handled.
-        req = urllib.request.Request(
-            API,
-            data=payload,
-            headers={
-                "Authorization": api_key(),
-                "Content-Type": "application/json",
-            },
-        )
-        # B310: URL is the constant https://api.linear.app endpoint, no user
-        # input.
-        _budget["calls"] += 1
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-                _note_response_headers(getattr(resp, "headers", None))
-                out = json.loads(resp.read())
-            break
-        except urllib.error.HTTPError as exc:
-            _note_response_headers(getattr(exc, "headers", None))
-            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
-                _note_transient(exc)
-                time.sleep(RETRY_BACKOFF_SECONDS)
-                continue
-            # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message
-            # is `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
-            # traceback that ends inside urllib without naming the call. The
-            # reason is in the body and it was being thrown away.
-            raise _api_error(exc.code, _error_body(exc)) from exc
-        except OSError as exc:
-            # URLError IS an OSError, and so are the bare ConnectionResetError /
-            # TimeoutError a socket raises mid-read — one clause covers both
-            # ways the 2026-09-04 faults arrived (DRE-3087). Anything this
-            # retry cannot clear propagates untouched, exactly as before.
-            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
-                _note_transient(exc)
-                time.sleep(RETRY_BACKOFF_SECONDS)
-                continue
-            raise
+    try:
+        out = _send(payload)
+    except _KeyRefused as refused:
+        # A dead planner token (DRE-5589): `||` in plan.yml falls back only on
+        # an EMPTY secret, and the console never un-publishes a token it could
+        # not keep alive. This one request goes again on the fleet key, once.
+        _fall_back(refused.why)
+        out = _send(payload)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         condition = rate_limit_condition(errors)
@@ -782,6 +888,63 @@ def gql(query: str, variables: dict | None = None) -> dict:
             )
         raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
+
+
+def _send(payload: bytes) -> dict:
+    """One request through the one-shot transient retry (DRE-3087), answered
+    as parsed JSON. Raises `_KeyRefused` when the key itself was refused and
+    there is a different key to fall back to; every other failure raises
+    exactly as it always has."""
+    for attempt in range(_MAX_ATTEMPTS):
+        # A fresh Request per attempt: a retry re-sends the call, it does not
+        # re-drive an object urllib has already handled.
+        req = urllib.request.Request(
+            API,
+            data=payload,
+            headers={
+                "Authorization": api_key(),
+                "Content-Type": "application/json",
+            },
+        )
+        # B310: URL is the constant https://api.linear.app endpoint, no user
+        # input.
+        _budget["calls"] += 1
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+                _note_response_headers(getattr(resp, "headers", None))
+                out = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as exc:
+            _note_response_headers(getattr(exc, "headers", None))
+            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
+                _note_transient(exc)
+                time.sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message
+            # is `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
+            # traceback that ends inside urllib without naming the call. The
+            # reason is in the body and it was being thrown away.
+            body = _error_body(exc)
+            if _fallback_key() and is_auth_refusal(exc.code, body):
+                raise _KeyRefused(
+                    str(exc.code) if exc.code == 401 else _AUTH_MARKER
+                ) from exc
+            raise _api_error(exc.code, body) from exc
+        except OSError as exc:
+            # URLError IS an OSError, and so are the bare ConnectionResetError /
+            # TimeoutError a socket raises mid-read — one clause covers both
+            # ways the 2026-09-04 faults arrived (DRE-3087). Anything this
+            # retry cannot clear propagates untouched, exactly as before.
+            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
+                _note_transient(exc)
+                time.sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            raise
+    if out.get("errors") and _fallback_key() and is_auth_refusal(
+        200, json.dumps(out["errors"])
+    ):
+        raise _KeyRefused(_AUTH_MARKER)
+    return out
 
 
 def gql_paged(

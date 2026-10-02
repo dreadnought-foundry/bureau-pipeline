@@ -94,7 +94,10 @@ def test_each_context_step_hands_the_script_its_card_and_key_through_env():
         env = step.get("env") or {}
         assert env.get("CARD") == "${{ github.event.client_payload.identifier }}", (
             f"{workflow}: {name} must name the card in env")
-        assert env.get("LINEAR_API_KEY") == "${{ secrets.LINEAR_API_KEY }}", (
+        # plan.yml hands the planner's own bucket first (DRE-5589).
+        expected = ("${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
+                    if workflow == "plan.yml" else "${{ secrets.LINEAR_API_KEY }}")
+        assert env.get("LINEAR_API_KEY") == expected, (
             f"{workflow}: {name} must carry the fleet's Linear key in env")
         assert "${{" not in _people_line(step["run"]), (
             f"{workflow}: the new line must not add to the compiled expression")

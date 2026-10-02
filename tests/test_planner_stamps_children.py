@@ -633,8 +633,9 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
 
     def test_it_can_reach_linear(self):
         step = step_named(GATE)
+        # The planner's own bucket first, the fleet key otherwise (DRE-5589).
         self.assertEqual((step.get("env") or {}).get("LINEAR_API_KEY"),
-                         "${{ secrets.LINEAR_API_KEY }}")
+                         "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}")
 
     def test_it_runs_only_when_the_planner_created_children(self):
         gate = step_named(GATE).get("if", "")

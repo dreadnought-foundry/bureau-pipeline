@@ -293,7 +293,10 @@ def test_the_activation_passes_the_card_id_and_nothing_else():
 
 def test_the_activation_hands_linear_its_key():
     step = _by_name("Roll-up route — activate the split")
-    assert step["env"]["LINEAR_API_KEY"] == "${{ secrets.LINEAR_API_KEY }}"
+    # The planner's own bucket first, the fleet key otherwise (DRE-5589).
+    assert step["env"]["LINEAR_API_KEY"] == (
+        "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
+    )
 
 
 # ---------------------------------------------------------------------------
