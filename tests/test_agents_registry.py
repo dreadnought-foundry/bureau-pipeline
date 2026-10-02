@@ -257,6 +257,42 @@ def repo_scope_drift(entry, path):
     return problems
 
 
+def is_scripted(entry):
+    """A SCRIPTED agent (DRE-5369): a roster entry that declares `model:
+    null`, because its workflow runs a script and never a model — the hygiene
+    agent is the first. The key must be PRESENT and null: an entry whose
+    generated model region was deleted has no `model` key at all, and that is
+    drift, never a reason to skip the checks below."""
+    return "model" in entry and entry["model"] is None
+
+
+def scripted_drift(entry, path):
+    """Every way a scripted entry can be wrong about its workflow.
+
+    A scripted agent has no agent step, so the step-scoped checks above have
+    nothing to read and would pass on anything. What it does have: no model
+    call at all — a `claude-code-action` step in its workflow means the entry
+    lies about what runs — and every step in the file is its own, so the
+    credentials it is handed are the secret names the FILE references."""
+    path = Path(path)
+    src = path.read_text()
+    doc = yaml.safe_load(src) or {}
+    problems = [
+        f"{entry['name']}: declares `model: null` (scripted) but {path.name} "
+        f"runs a model in step {name!r} ({ACTION})"
+        for _job_id, _job, _step, name in agent_steps(doc)
+    ]
+    if entry.get("tools") or entry.get("maxTurns") is not None:
+        problems.append(f"{entry['name']}: a scripted agent declares no tools "
+                        f"and no turn budget")
+    declared, actual = set(entry["credentials"]), set(_SECRET_RE.findall(src))
+    if declared != actual:
+        problems.append(
+            f"{entry['name']}: roster credentials {sorted(declared)} != "
+            f"{sorted(actual)} referenced by the steps of {path.name}")
+    return problems
+
+
 class AgentsRegistryTest(unittest.TestCase):
     def test_every_agent_workflow_has_an_entry(self):
         covered = {a["workflow"].split("/")[-1] for a in load()}
@@ -284,8 +320,13 @@ class AgentsRegistryTest(unittest.TestCase):
         resolves through `turn_budget.default_budget()`, which reads
         `config/turn-budgets.json` — the same file the workflow's own selector
         reads. A roster entry describes the budget a card gets when it asks for
-        nothing; a `turns:` label can still select a rung below it."""
+        nothing; a `turns:` label can still select a rung below it.
+
+        DRE-5369: a scripted entry (`model: null`) takes no turns, so it has
+        no ceiling to match; `test_scripted_agents_run_no_model` holds it."""
         for a in load():
+            if is_scripted(a):
+                continue
             src = open(os.path.join(ROOT, a["workflow"])).read()
             declared = [
                 int(literal or fallback) if (literal or fallback)
@@ -409,7 +450,9 @@ class AgentsRegistryTest(unittest.TestCase):
         step's environment."""
         pool = {"BUREAU_APP_ID_2", "BUREAU_APP_ID_3", "BUREAU_APP_ID_4"}
         with_linear, with_pool, declares_linear = set(), set(), set()
-        workflows = {a["workflow"] for a in load()}
+        # The seven are the workflows that run a MODEL. A scripted agent
+        # (DRE-5369) has no agent step for this surface to describe.
+        workflows = {a["workflow"] for a in load() if not is_scripted(a)}
         self.assertEqual(7, len(workflows), "the fleet is no longer seven "
                                             "agent workflows — re-read the "
                                             "surface before editing this")
@@ -453,14 +496,38 @@ class AgentsRegistryTest(unittest.TestCase):
         The old assertion (`model` appears verbatim in the workflow source) is
         exactly what a hardcoded `--model claude-sonnet-4-6` satisfied, which is
         how the critic/verifier/medic bypassed selection while this test stayed
-        green. The contract now: the workflow SELECTS, and pins nothing."""
+        green. The contract now: the workflow SELECTS, and pins nothing.
+
+        A scripted entry (`model: null`, DRE-5369) selects nothing because it
+        runs no model; that it really runs none is the next test's job."""
         for a in load():
+            if is_scripted(a):
+                continue
             src = open(os.path.join(ROOT, a["workflow"])).read()
             self.assertIn("model_fallback.py select", src,
                           f"{a['name']}: {a['workflow']} does not select a model")
             self.assertNotRegex(
                 src, r"--model\s+claude-",
                 f"{a['name']}: {a['workflow']} hardcodes a model id")
+
+    def test_scripted_agents_run_no_model(self):
+        """`model: null` is a claim that the workflow makes no model call; the
+        two skips above are only safe while that claim is checked."""
+        scripted = [a for a in load() if is_scripted(a)]
+        self.assertEqual(["hygiene"], [a["name"] for a in scripted])
+        for a in scripted:
+            problems = scripted_drift(a, os.path.join(ROOT, a["workflow"]))
+            self.assertEqual([], problems, "\n".join(problems))
+
+    def test_only_a_present_null_model_is_scripted(self):
+        """The skip predicate, pinned from both sides: every model-running
+        entry is checked, and an entry that LOST its model line is not waved
+        through as scripted."""
+        for a in load():
+            self.assertEqual(is_scripted(a), a["name"] == "hygiene", a["name"])
+        self.assertTrue(is_scripted({"name": "x", "model": None}))
+        self.assertFalse(is_scripted({"name": "x"}))
+        self.assertFalse(is_scripted({"name": "x", "model": "claude-opus-5-5"}))
 
     def test_every_agent_has_a_valid_category(self):
         # category groups the roster in the console by business function
@@ -622,6 +689,41 @@ class DriftFixtureTest(unittest.TestCase):
         problems = repo_scope_drift(_ENTRY, self._write(widened))
         self.assertTrue(problems, "an undeclared repo checkout passed")
         self.assertIn("dreadnought-foundry/agent-bureau", problems[0])
+
+    def test_a_scripted_entry_whose_workflow_runs_a_model_fails(self):
+        """DRE-5369. `model: null` turns off the turns and model-selection
+        checks, so a workflow that quietly runs `claude-code-action` behind a
+        scripted entry would be an agent nothing budgets or selects for."""
+        path = self._write(_FIXTURE)
+        entry = dict(_ENTRY, model=None, tools=[], maxTurns=None)
+        problems = scripted_drift(entry, path)
+        self.assertTrue(any(ACTION in p and "Implement card" in p for p in problems),
+                        f"a scripted entry over an agent step passed: {problems}")
+
+    def test_a_scripted_entry_over_a_script_is_clean_and_credentials_still_bite(self):
+        """The control for the test above, and the credential half: with no
+        agent step the step-scoped credential check reads nothing, so a
+        scripted entry is held to the secrets its file references."""
+        script = """
+name: scripted
+on:
+  schedule:
+    - cron: "37 * * * *"
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 scripts/hygiene.py read --out board.json
+"""
+        path = self._write(script)
+        entry = dict(_ENTRY, model=None, tools=[], maxTurns=None)
+        self.assertEqual([], scripted_drift(entry, path))
+        widened = dict(entry, credentials=["LINEAR_API_KEY", "BUREAU_APP_ID"])
+        problems = scripted_drift(widened, path)
+        self.assertTrue(problems and "BUREAU_APP_ID" in problems[0], problems)
 
     def test_an_invocation_that_declares_no_tools_fails(self):
         """Silence is not a tool list. Deleting the flag must not read as
