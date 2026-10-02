@@ -58,7 +58,7 @@ if: (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_
 
 **Which reusable the woken runs ran.** Each woken run's `classify` log names
 the commit it resolved. bureau-pipeline's stub calls `medic.yml@main`; its 50
-woken runs resolved to 11 different `main` commits as `main` moved, the first
+woken runs resolved to 13 different `main` commits as `main` moved, the first
 `db6adf6d` at 06:29:57 PT and the last `30d51fe3` at 22:13:44 PT.
 agent-bureau's stub calls `medic.yml@stable`; its 106 woken runs resolved to 22
 different `stable` commits as the channel advanced, the first `e35fa81b` at
