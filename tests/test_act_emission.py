@@ -34,6 +34,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -501,6 +502,40 @@ def _drive_roll_up_split(mp):
         cmd_comment=posted,
         cmd_advance=lambda *_a, **_k: None,
     ), "DRE-1")
+
+
+#: The hygiene agent's twelve acts (DRE-5368). The core composes every one of
+#: them through `hygiene.receipt` and posts it through its one comment seam,
+#: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
+#: lanes are sibling cards. So each driver hands the real seam the receipt a
+#: lane would, at a fixed cause, evidence and clock, and the capture pins the
+#: wording the core gives it — first rendered here, like the proof hold above.
+HYGIENE_ACTS = (
+    "hygiene-gate-redispatch", "hygiene-branch-refresh", "hygiene-check-rerun",
+    "hygiene-decision-needed", "hygiene-pr-close", "hygiene-resend-to-planning",
+    "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
+    "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
+)
+
+
+def _hygiene_driver(act: str):
+    def drive(mp):
+        import hygiene  # noqa: PLC0415 — only these drivers need it
+
+        def posted(_identifier, text, *_flags):
+            raise _Posted(text)
+
+        mp.setattr(hygiene.linear_ops, "cmd_comment", posted)
+        card = {"id": "uuid-1", "identifier": "DRE-1",
+                "labels": {"nodes": []}, "children": {"nodes": []}}
+        now = datetime(2026, 9, 30, 21, 5, tzinfo=UTC)
+        body = hygiene.receipt(act, "the cause a lane read", ["run 1", "PR #7"], now)
+        hygiene.send(hygiene.linear_comment(card, body), None)
+    return drive
+
+
+for _act in HYGIENE_ACTS:
+    site(f"hygiene/{_act}", _act)(_hygiene_driver(_act))
 
 
 # --------------------------------------------------------------------------- #

@@ -268,6 +268,44 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
+## The hygiene agent's twelve rows — `🧹 hyg-*` (DRE-5368)
+
+| Act name | Tag | Kind | Next actor |
+| -- | -- | -- | -- |
+| `hygiene-gate-redispatch` | `hyg-gate-redispatched` | recovery | `merge-gate.yml` |
+| `hygiene-branch-refresh` | `hyg-branch-refreshed` | recovery | `merge-gate.yml` |
+| `hygiene-check-rerun` | `hyg-check-rerun` | recovery | `merge-gate.yml` |
+| `hygiene-decision-needed` | `hyg-decision-needed` | hold | `operator` |
+| `hygiene-pr-close` | `hyg-pr-closed` | recovery | `operator` |
+| `hygiene-resend-to-planning` | `hyg-resent-to-planning` | recovery | `plan.yml` |
+| `hygiene-card-close` | `hyg-card-closed` | recovery | `operator` |
+| `hygiene-proof-close` | `hyg-proof-closed` | recovery | `operator` |
+| `hygiene-triage-return` | `hyg-triage-returned` | recovery | `reconcile.py` |
+| `hygiene-review-move` | `hyg-moved-to-review` | recovery | `reconcile.py` |
+| `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
+| `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
+
+The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
+person clears by hand today. Every row is emitted from that one file, whose
+table of tags is each row's anchor, and every receipt opens
+`🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
+trailer. **Which** act a pass takes is decided by a lane module
+(`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
+all twelve through one seam, which is why `tests/test_check_act_receipts.py`
+counts a site composing a computed act name as composing the acts its own file
+declares.
+
+Every row declares a `null` cadence and none is `dispatched`: what follows a
+gate re-dispatch is the gate's own run, timed by its own acts, and every other
+row hands the work to a person, the planner or the sweep. The kinds are copied
+from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — two holds and ten
+recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
+cause), applied by the core's write seam and never restated by a lane.
+
+The hourly **summary** the pass posts to its standing card is not one of these:
+it is a report about the pass, declared `not-an-act` in the `unconverted`
+block, the way Nightly Watch's report is.
+
 ## Why this exists
 
 The console has always checked this. Its
