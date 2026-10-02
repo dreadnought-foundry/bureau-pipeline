@@ -950,6 +950,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -965,6 +966,7 @@
         "project": null,
         "band": 0,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -980,6 +982,7 @@
         "project": null,
         "band": 1,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -995,6 +998,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1010,6 +1014,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1025,6 +1030,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1040,6 +1046,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1055,6 +1062,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1070,6 +1078,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1085,6 +1094,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1100,6 +1110,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1115,6 +1126,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1130,6 +1142,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1145,6 +1158,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1160,6 +1174,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1175,6 +1190,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1190,6 +1206,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1205,6 +1222,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1220,6 +1238,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1235,6 +1254,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1250,6 +1270,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1265,6 +1286,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1280,6 +1302,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1295,6 +1318,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1310,6 +1334,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1325,6 +1350,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1340,6 +1366,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1355,6 +1382,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1370,6 +1398,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1385,6 +1414,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1400,6 +1430,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1415,6 +1446,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1430,6 +1462,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 16,
         "cycle_id": null,
         "projected": true,
@@ -1445,6 +1478,7 @@
         "project": null,
         "band": 2,
         "deferred": false,
+        "open_children": 0,
         "cycle": 16,
         "cycle_id": null,
         "projected": true,
@@ -1463,7 +1497,8 @@
           "epic": null,
           "repo": "portico",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         },
         {
           "identifier": "DRE-101",
@@ -1475,7 +1510,8 @@
           "epic": null,
           "repo": "portico",
           "projected": false,
-          "band": 0
+          "band": 0,
+          "open_children": 0
         },
         {
           "identifier": "DRE-102",
@@ -1487,7 +1523,8 @@
           "epic": null,
           "repo": "agent-bureau",
           "projected": false,
-          "band": 1
+          "band": 1,
+          "open_children": 0
         },
         {
           "identifier": "DRE-120",
@@ -1499,7 +1536,8 @@
           "epic": null,
           "repo": "bureau-pipeline",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         },
         {
           "identifier": "DRE-132",
@@ -1511,7 +1549,8 @@
           "epic": null,
           "repo": "bureau-pipeline",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         },
         {
           "identifier": "DRE-121",
@@ -1523,7 +1562,8 @@
           "epic": null,
           "repo": "portico",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         },
         {
           "identifier": "DRE-133",
@@ -1535,7 +1575,8 @@
           "epic": null,
           "repo": "portico",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         },
         {
           "identifier": "DRE-109",
@@ -1547,7 +1588,8 @@
           "epic": null,
           "repo": "agent-bureau",
           "projected": false,
-          "band": 2
+          "band": 2,
+          "open_children": 0
         }
       ],
       "not-now": [
@@ -1557,7 +1599,8 @@
           "repo": "agent-bureau",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-110",
@@ -1565,7 +1608,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-122",
@@ -1573,7 +1617,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-134",
@@ -1581,7 +1626,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-111",
@@ -1589,7 +1635,8 @@
           "repo": "portico",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-123",
@@ -1597,7 +1644,8 @@
           "repo": "portico",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-105",
@@ -1605,7 +1653,8 @@
           "repo": "portico",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-104",
@@ -1613,7 +1662,8 @@
           "repo": "portico",
           "reconsidered_in": 13,
           "projected": false,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-112",
@@ -1621,7 +1671,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-124",
@@ -1629,7 +1680,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-107",
@@ -1637,7 +1689,8 @@
           "repo": "portico",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-113",
@@ -1645,7 +1698,8 @@
           "repo": "portico",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-125",
@@ -1653,7 +1707,8 @@
           "repo": "portico",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-114",
@@ -1661,7 +1716,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-126",
@@ -1669,7 +1725,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-115",
@@ -1677,7 +1734,8 @@
           "repo": "portico",
           "reconsidered_in": 14,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-127",
@@ -1685,7 +1743,8 @@
           "repo": "portico",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-116",
@@ -1693,7 +1752,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-128",
@@ -1701,7 +1761,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-117",
@@ -1709,7 +1770,8 @@
           "repo": "portico",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-129",
@@ -1717,7 +1779,8 @@
           "repo": "portico",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-118",
@@ -1725,7 +1788,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-130",
@@ -1733,7 +1797,8 @@
           "repo": "bureau-pipeline",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-119",
@@ -1741,7 +1806,8 @@
           "repo": "portico",
           "reconsidered_in": 15,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-131",
@@ -1749,7 +1815,8 @@
           "repo": "portico",
           "reconsidered_in": 16,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         },
         {
           "identifier": "DRE-106",
@@ -1757,7 +1824,8 @@
           "repo": "portico",
           "reconsidered_in": 16,
           "projected": true,
-          "older_than_window": false
+          "older_than_window": false,
+          "open_children": 0
         }
       ],
       "dead": []
@@ -1811,6 +1879,7 @@
     },
     "unhonoured_constraints": [],
     "unstated_supersessions": [],
+    "cancels_refused": [],
     "deprioritised": [],
     "id": "a85999f18b18"
   }

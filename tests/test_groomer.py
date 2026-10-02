@@ -714,3 +714,203 @@ def test_build_the_verified_proposal_sees_the_annotation_too(monkeypatch):
     assert [r["identifier"] for r in proposal["stale_priorities"]] == [
         "DRE-2702"]
     assert positions(proposal)[0] == "DRE-5400"
+
+
+# --------------------------------------------------------------------------
+# no proposal cancels an epic with an open child (DRE-5309)
+# --------------------------------------------------------------------------
+# DRE-4633's shape on 2026-09-29: a live parent epic in Intake whose children
+# were still being built, put on the Cancel list by a match on another card's
+# text. Its children are not in Intake, so they are not in the population —
+# only the epic's own `children` field says it has them.
+EPIC = "DRE-4633"
+
+
+def epic(identifier=EPIC, children=(("DRE-4634", "Done"),
+                                    ("DRE-4635", "In Progress")), **kw):
+    """`card`, with the `children` field `POPULATION_QUERY` reads."""
+    c = card(identifier, **kw)
+    c["children"] = {"nodes": [{"identifier": i, "state": {"name": s}}
+                               for i, s in children]}
+    return c
+
+
+def _epic_lane(**kw):
+    """The epic newest, so it is in the morning's set, and three cards behind
+    it — capacity 3 puts the epic and DRE-1, DRE-2 in the set."""
+    return [epic(days=0, **kw)] + [card(f"DRE-{n}", days=n)
+                                   for n in range(1, 4)]
+
+
+def _refused(proposal):
+    return {r["identifier"]: r for r in proposal["cancels_refused"]}
+
+
+def _assert_refused_onto_planning(proposal, source):
+    refusal = "DRE-4633 is an epic with 1 open child"
+    assert EPIC not in [r["identifier"] for r in proposal["outcomes"]["dead"]], (
+        "an epic with an open child is on the Cancel list")
+    assert EPIC in positions(proposal), "the refused card lost its slot"
+    row = next(r for r in proposal["outcomes"]["now"]
+               if r["identifier"] == EPIC)
+    assert row["reason"] == refusal
+    assert row["open_children"] == 1
+    assert _refused(proposal)[EPIC] == {"identifier": EPIC,
+                                        "refusal": refusal, "source": source}
+    seq = {r["identifier"]: r for r in proposal["sequence"]}
+    assert seq[EPIC]["outcome"] == "now" and seq[EPIC]["reason"] == refusal
+
+
+def test_cancel_refusal_reads_the_open_children_count():
+    assert groomer.cancel_refusal({"identifier": "DRE-9", "open_children": 0}) is None
+    assert groomer.cancel_refusal({"identifier": "DRE-9"}) is None
+    assert (groomer.cancel_refusal({"identifier": "DRE-9", "open_children": 1})
+            == "DRE-9 is an epic with 1 open child")
+    assert (groomer.cancel_refusal({"identifier": "DRE-9", "open_children": 2})
+            == "DRE-9 is an epic with 2 open children")
+
+
+def test_sequence_writes_the_open_children_count_on_every_row():
+    rows = groomer.sequence(_epic_lane(description="Superseded by: DRE-4700"))
+    by_id = {r["identifier"]: r for r in rows}
+    assert by_id[EPIC]["open_children"] == 1
+    assert all(by_id[f"DRE-{n}"]["open_children"] == 0 for n in range(1, 4))
+
+
+def test_a_superseded_line_on_an_epic_with_an_open_child_is_refused():
+    """The description's `Superseded by: DRE-M`, DRE-M Done — and the epic
+    still has a child In Progress."""
+    proposal = groomer.propose(
+        _epic_lane(description="Superseded by: DRE-4700"),
+        cycles=CYCLES, capacity=3, now=NOW)
+    _assert_refused_onto_planning(proposal, groomer.DEAD_FROM_LINE)
+    for name in ("now", "not-now", "dead"):
+        for row in proposal["outcomes"][name]:
+            assert "open_children" in row, f"a {name} row has no count"
+    assert all("open_children" in r for r in proposal["sequence"])
+
+
+def test_a_likely_done_from_the_ranked_read_on_an_epic_with_an_open_child_is_refused():
+    cards = _epic_lane()
+    answer = "\n".join([
+        f"{EPIC} | likely-done | a merge already did it | pull request 274",
+        ranked(["DRE-1", "DRE-2", "DRE-3"])])
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW,
+                               judgement=judged(cards, answer))
+    _assert_refused_onto_planning(proposal, groomer.DEAD_FROM_JUDGEMENT)
+
+
+def test_the_checks_evidence_on_an_epic_with_an_open_child_is_refused():
+    """A sibling saying it covers the epic, Done — the pre-post check's
+    evidence, applied inside `propose(verified=…)`."""
+    from test_groom_verify import FakeGh, FakeLinear, OWNERS, other
+    linear = FakeLinear({EPIC: {"siblings": [
+        other(EPIC, "Intake"),
+        other("DRE-4700", "Done", f"This card supersedes {EPIC}.")]}})
+    proposal = groomer.verify_proposal(
+        _epic_lane(), dict(cycles=CYCLES, capacity=3, now=NOW),
+        lops=linear, run=FakeGh(), owners=OWNERS)
+    _assert_refused_onto_planning(proposal, groomer.DEAD_FROM_CHECK)
+    text = groomer.render_proposal(proposal)
+    assert f"Moved to Cancel: {EPIC}" not in text
+
+
+def test_an_epic_whose_children_are_all_closed_is_cancelable_as_before():
+    cards = _epic_lane(children=(("DRE-4634", "Done"),
+                                 ("DRE-4635", "Canceled"),
+                                 ("DRE-4636", "Duplicate")),
+                       description="Superseded by: DRE-4700")
+    assert groomer.open_children(cards[0]) == 0
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
+    dead = [r for r in proposal["outcomes"]["dead"] if r["identifier"] == EPIC]
+    assert dead and dead[0]["source"] == groomer.DEAD_FROM_LINE
+    assert dead[0]["open_children"] == 0
+    assert proposal["cancels_refused"] == []
+    assert "## Cancels refused" not in groomer.render_proposal(proposal)
+
+
+def test_a_refused_card_outside_the_batch_stays_not_now_and_is_not_listed():
+    """A writer's Cancel is acted on only inside the morning's set: outside
+    it the card was never going on the Cancel list, so nothing was refused."""
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)] + [
+        epic(days=9, description="Superseded by: DRE-4700")]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
+    later = {r["identifier"] for r in proposal["outcomes"]["not-now"]}
+    assert EPIC in later
+    assert proposal["cancels_refused"] == []
+
+
+def test_the_page_lists_each_refused_cancel_after_the_cancel_table():
+    cards = _epic_lane(description="Superseded by: DRE-4700") + [
+        card("DRE-77", days=0, description="Superseded by: DRE-4701")]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
+    text = groomer.render_proposal(proposal)
+    assert "## Cancels refused" in text
+    assert text.index(groomer.CANCEL_HEADING) < text.index("## Cancels refused")
+    section = text.split("## Cancels refused", 1)[1].split("\n## ", 1)[0]
+    lines = [ln for ln in section.splitlines() if ln.startswith("- ")]
+    assert len(lines) == 1
+    assert "DRE-4633 is an epic with 1 open child" in lines[0]
+    assert "Superseded by:" in lines[0]
+    assert groomer.DEAD_FROM_LINE in lines[0]
+
+
+def test_the_refusal_moves_no_proposal_id_beyond_the_lists():
+    """`proposal_id` digests the two lists and nothing else: the new keys do
+    not move it, only the lists the refusal changed."""
+    proposal = groomer.propose(
+        _epic_lane(description="Superseded by: DRE-4700"),
+        cycles=CYCLES, capacity=3, now=NOW)
+    assert proposal["cancels_refused"], "nothing was refused"
+    stripped = {**proposal, "cancels_refused": [], "sequence": []}
+    assert groomer.proposal_id(stripped) == proposal["id"]
+
+
+# --------------------------------------------------------------------------
+# the population read carries the children, at a page Linear will answer
+# --------------------------------------------------------------------------
+class PagedLinear:
+    """Linear's paging, honouring the page size the QUERY asks for."""
+
+    def __init__(self, nodes):
+        self.nodes, self.pages = nodes, []
+
+    def gql(self, query, variables=None):
+        import re
+        size = int(re.search(r"issues\(first: (\d+)", query).group(1))
+        after = (variables or {}).get("after")
+        start = int(after) if after else 0
+        page = self.nodes[start:start + size]
+        self.pages.append(len(page))
+        end = start + len(page)
+        return {"issues": {"nodes": page, "pageInfo": {
+            "hasNextPage": end < len(self.nodes), "endCursor": str(end)}}}
+
+    def gql_paged(self, query, variables=None, *, connection="issues"):
+        import linear_ops
+        real = linear_ops.gql
+        linear_ops.gql = self.gql
+        try:
+            return linear_ops.gql_paged(query, variables, connection=connection)
+        finally:
+            linear_ops.gql = real
+
+
+def test_the_population_query_pages_at_fifty_and_carries_the_children():
+    assert groomer.POPULATION_PAGE == 50
+    assert "issues(first: 50, after: $after" in groomer.POPULATION_QUERY
+    assert ("children(first: 50) { nodes { identifier state { name } } }"
+            in groomer.POPULATION_QUERY)
+
+
+def test_a_120_card_lane_is_read_in_three_pages_and_every_row_counts_children():
+    nodes = [epic(f"DRE-{n:04d}", children=(("DRE-9", "In Progress"),)
+                  if n % 2 else ()) for n in range(120)]
+    fake = PagedLinear(nodes)
+    got = groomer.read_population(fake, lane="Intake")
+    assert fake.pages == [50, 50, 20]
+    assert len(got) == 120
+    rows = groomer.sequence(got)
+    assert len(rows) == 120
+    assert all(r["open_children"] == (1 if int(r["identifier"][4:]) % 2 else 0)
+               for r in rows)

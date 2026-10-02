@@ -384,6 +384,21 @@ def open_children(card: dict) -> int:
                if ((node or {}).get("state") or {}).get("name")
                not in CLOSED_STATES)
 
+
+def cancel_refusal(row: dict) -> str | None:
+    """Why `row` may not go on the Cancel list, or None when it may (DRE-5309).
+
+    One rule, read off the row's `open_children` count: an epic with an open
+    child is a live one, whatever a `Superseded by:` line, the ranked read,
+    the check or the verify agent says about its own text. DRE-4633 was put
+    on the Cancel list on 2026-09-29 while its children were being built.
+    Every writer of a Cancel row asks this, so none of them can skip it."""
+    n = int(row.get("open_children") or 0)
+    if n <= 0:
+        return None
+    return (f"{row['identifier']} is an epic with {n} open "
+            f"{'child' if n == 1 else 'children'}")
+
 MARK = "🧺"
 PROPOSAL_TAG = "groom-proposal"
 
@@ -653,8 +668,14 @@ class WillNotClose(RuntimeError):
 # The lane travels as a VARIABLE, never interpolated into the query text, and
 # the query declares $after / selects pageInfo because `gql_paged` refuses one
 # that cannot paginate.
+#
+# `children` is how the cancel guard knows a card is a live epic (DRE-5309):
+# its children are rarely in the same lane, so the population cannot say. The
+# nested selection multiplies what one page costs Linear, so a page is 50
+# cards rather than 100 — `gql_paged` follows the cursor either way.
+POPULATION_PAGE = 50
 POPULATION_QUERY = """query($lane: String!, $after: String) {
-  issues(first: 100, after: $after, filter: {state: {name: {eq: $lane}}}) {
+  issues(first: %d, after: $after, filter: {state: {name: {eq: $lane}}}) {
     nodes {
       identifier title description createdAt priority
       state { name }
@@ -665,10 +686,11 @@ POPULATION_QUERY = """query($lane: String!, $after: String) {
       inverseRelations(first: 20) { nodes {
         type issue { identifier state { name } }
       } }
+      children(first: 50) { nodes { identifier state { name } } }
     }
     pageInfo { hasNextPage endCursor }
   }
-}"""
+}""" % POPULATION_PAGE
 
 CYCLES_QUERY = """query {
   cycles(first: 50) { nodes { id number startsAt endsAt completedAt } }
@@ -680,7 +702,8 @@ SET_CYCLE = """mutation($id: String!, $input: IssueUpdateInput!) {
 
 
 def read_population(lops, lane: str = "Intake") -> list[dict]:
-    """Every card in `lane`, followed to exhaustion."""
+    """Every card in `lane`, followed to exhaustion, `POPULATION_PAGE` at a
+    time."""
     return lops.gql_paged(POPULATION_QUERY, {"lane": lane})
 
 
@@ -1207,6 +1230,9 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
                 "project": ((by_id[cid].get("project") or {}) or {}).get("name"),
                 "band": unit["band"],
                 "deferred": key not in batchable,
+                # On every row, so each writer of a Cancel can ask
+                # `cancel_refusal` without the card in hand (DRE-5309).
+                "open_children": open_children(by_id[cid]),
             })
     return rows
 
@@ -1408,6 +1434,24 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # also declined is reported as declined rather than batched.
     for identifier in check_keep:
         to_cancel.pop(identifier, None)
+    # An epic with an open child is never a Cancel, whoever proposed it
+    # (DRE-5309). Taken out of both writers' lists HERE, before the slots are
+    # filled, so a refused card is planned like any other and keeps the slot
+    # it had; the refusal is said on the page only for a card the walk below
+    # puts in the morning's set — outside it nothing was going to be cancelled.
+    refusing: dict = {}
+    for card in cards:
+        refusal = cancel_refusal({"identifier": card["identifier"],
+                                  "open_children": open_children(card)})
+        if refusal is None:
+            continue
+        if card["identifier"] in check_cancel:
+            refusing[card["identifier"]] = (DEAD_FROM_CHECK, refusal)
+        elif card["identifier"] in to_cancel:
+            refusing[card["identifier"]] = (to_cancel[card["identifier"]][0],
+                                            refusal)
+        check_cancel.pop(card["identifier"], None)
+        to_cancel.pop(card["identifier"], None)
 
     collisions = collision_report(cards)
     broken: list = []
@@ -1451,7 +1495,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # plus Cancel together, units never split — and each card in it goes on
     # exactly one of the two lists. Each list is numbered from 1 in the rules'
     # order, so the page reads as two lists and not as one with holes in it.
-    now_rows, later_rows, dead = [], [], []
+    now_rows, later_rows, dead, refused = [], [], [], []
     for row in ordered:
         if row["identifier"] in check_cancel:
             dead.append({"identifier": row["identifier"],
@@ -1460,13 +1504,15 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                          "check_reason": defang_reason(
                              check_cancel[row["identifier"]])[0],
                          "position": len(dead) + 1, "epic": row["epic"],
-                         "band": row["band"]})
+                         "band": row["band"],
+                         "open_children": row["open_children"]})
             continue
         if row["identifier"] in declined:
             later_rows.append({"identifier": row["identifier"],
                                "title": row["title"], "repo": row["repo"],
                                "reconsidered_in": None, "projected": False,
-                               "older_than_window": False})
+                               "older_than_window": False,
+                               "open_children": row["open_children"]})
             continue
         row = planned[row["identifier"]]
         if row["cycle"] in batch_numbers and row["identifier"] in to_cancel:
@@ -1475,12 +1521,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                          "title": row["title"], "repo": row["repo"],
                          "superseded_by": target, "source": source,
                          "position": len(dead) + 1, "epic": row["epic"],
-                         "band": row["band"]})
+                         "band": row["band"],
+                         "open_children": row["open_children"]})
         elif row["cycle"] in batch_numbers:
+            if row["identifier"] in refusing:
+                source, refusal = refusing[row["identifier"]]
+                refused.append({"identifier": row["identifier"],
+                                "refusal": refusal, "source": source})
             now_rows.append({**{k: row[k] for k in
                                 ("identifier", "title", "position", "cycle",
                                  "cycle_id", "unit", "epic", "repo",
-                                 "projected", "band")},
+                                 "projected", "band", "open_children")},
                              **({"held": True} if row.get("held") else {}),
                              "position": len(now_rows) + 1})
         else:
@@ -1491,7 +1542,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                                "title": row["title"], "repo": row["repo"],
                                "reconsidered_in": row["cycle"],
                                "projected": row["projected"],
-                               "older_than_window": False})
+                               "older_than_window": False,
+                               "open_children": row["open_children"]})
 
     # The declined rows carry no cycle here either: the sequence is what the
     # console and the audit read, and a row that says `not-now` beside a cycle
@@ -1540,6 +1592,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         "collisions": collisions,
         "unhonoured_constraints": broken,
         "unstated_supersessions": unstated,
+        # Every Cancel the guard refused in the morning's set (DRE-5309) —
+        # `[]` on a morning with none. Not in the id's digest: the lists are.
+        "cancels_refused": refused,
     }
     # The CEO's earlier answers, said on the page (DRE-4966) — and absent when
     # there are none, so a thread with no per-card marker proposes exactly
@@ -1567,6 +1622,12 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         for row in rows:
             if row["identifier"] in check_keep:
                 row["reason"] = defang_reason(check_keep[row["identifier"]])[0]
+    # …and a refused Cancel's Why is the refusal (DRE-5309), on the same rows.
+    said = {r["identifier"]: r["refusal"] for r in refused}
+    for rows in (proposal["outcomes"]["now"], proposal["sequence"]):
+        for row in rows:
+            if row["identifier"] in said:
+                row["reason"] = said[row["identifier"]]
     # `proposed ∩ unranked = ∅`, checked on the thing that was actually built
     # rather than trusted from the filter above (DRE-3544).
     assert_disjoint(proposal)
@@ -2350,6 +2411,9 @@ def render_proposal(proposal: dict) -> str:
     # (DRE-4727) — the console's reader takes no section to mean no
     # cancellation, which is what most mornings are.
     w.extend(_render_cancel(proposal))
+    # Every Cancel the guard refused (DRE-5309), right after the list it was
+    # kept off — absent on a morning with none.
+    w.extend(_render_cancels_refused(proposal))
     # What the verify matrix found and spent (DRE-4971). Absent when the record
     # carries no `verify` block, so a run without it renders as before.
     w.extend(_render_verified(proposal))
@@ -2507,6 +2571,10 @@ def _verdict_line(mark: dict) -> str:
     verdict = mark.get("verdict") or "unverified"
     said = mark.get("reason") if verdict == "unverified" else mark.get("summary")
     line = f"Verified against main: **{_line(verdict)}**"
+    # A Cancel answer the guard refused (DRE-5309) says so instead: the card
+    # is on the Planning list, and the summary argues for the other list.
+    if mark.get("refused"):
+        return line + f" — Cancel refused: {_line(mark['refused'])}"
     if said:
         line += f" — {defang_reason(_line(said))[0]}"
     return line
@@ -2688,6 +2756,35 @@ def _render_cancel(proposal: dict) -> list:
                  f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
                  f"{row.get('epic') or '—'} | {_cell(row.get('title'))} | "
                  f"{_whole_cell(row.get('reason'))} |")
+    w.append("")
+    return w
+
+
+#: Who proposed a Cancel the guard refused, as the page names them. The last
+#: key is `groom_verify_agent.CANCEL_SOURCE`, written out because that module
+#: imports this one.
+_REFUSED_FROM = {
+    DEAD_FROM_LINE: "its own `Superseded by:` line",
+    DEAD_FROM_JUDGEMENT: "the ranked read",
+    DEAD_FROM_CHECK: "the check before posting",
+    "verify-agent": "the verify agent",
+}
+
+
+def _render_cancels_refused(proposal: dict) -> list:
+    """`## Cancels refused` — one line per Cancel the guard kept off the list
+    (DRE-5309): the refusal, who proposed the Cancel, and the source key. Nothing
+    at all when none was refused, so such a morning renders as before."""
+    rows = proposal.get("cancels_refused") or []
+    if not rows:
+        return []
+    w = ["## Cancels refused", ""]
+    for row in rows:
+        source = row.get("source")
+        w.append(f"- {row['identifier']}: {_line(row.get('refusal'))} — "
+                 f"proposed for Cancel by "
+                 f"{_REFUSED_FROM.get(source, 'a writer')} (`{source}`), and "
+                 f"kept where the order put it.")
     w.append("")
     return w
 

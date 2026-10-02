@@ -559,11 +559,14 @@ def settle(proposal: dict, result: dict) -> dict:
     checked = set(result["checked"])
     planning = [r["identifier"] for r in
                 sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])]
+    # A Cancel the guard refused (DRE-5309) was not moved: `propose` kept the
+    # card where the order put it and listed it under `cancels_refused`.
+    refused = {r["identifier"] for r in proposal.get("cancels_refused") or []}
     proposal["verification"] = {
         "spare": result["spare"],
         "cards": result["cards"],
         "unread": result["unread"],
-        "moved_to_cancel": [i for i in result["cancel"]],
+        "moved_to_cancel": [i for i in result["cancel"] if i not in refused],
         "cancels_rejected": [i for i in result["keep"]],
         "not_checked": [i for i in planning if i not in checked],
         "merged_prs_searched": result.get("merged_prs_searched"),
