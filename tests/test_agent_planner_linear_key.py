@@ -86,7 +86,7 @@ def _key_steps(doc: dict) -> list[tuple[str, str, dict]]:
 def _evaluate(expr: str, secrets: dict) -> str:
     """GitHub's `a || b` over the secrets context: an unset secret reads as
     the empty string, and `||` returns the first operand that is not falsy,
-    else the last. Modelled rather than trusted, as in
+    else the last. Modeled rather than trusted, as in
     tests/test_planner_linear_key.py."""
     m = re.fullmatch(r"\$\{\{\s*(.+?)\s*\}\}", expr.strip())
     assert m, f"not a single expression: {expr!r}"
