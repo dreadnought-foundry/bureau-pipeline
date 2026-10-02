@@ -63,14 +63,17 @@ class MappingTest(unittest.TestCase):
         # verdict, and a verdict asserting what a command did carries the run.
         # design-system.md (DRE-3938) goes to the two roles that produce and
         # gate design work — the frontend build agent and the critic whose
-        # checklist says whether a design is really done.
+        # checklist says whether a design is really done. whats-new.md
+        # (DRE-5510) goes, last, to every role that writes or judges a pull
+        # request body — the four build roles, the critic, and the fix agent
+        # that adds a missing line when the critic sends a pull request back.
         expected = {
-            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
-            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md"],
-            "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
-            "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
+            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
+            "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
+            "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
             "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md", "whats-new.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             # The two plan critics (DRE-2721). Different questions, so
             # different context: the pre stage judges the SHAPE of a plan that
@@ -80,7 +83,7 @@ class MappingTest(unittest.TestCase):
             # to, plus the vendor premortem that catches a false claim.
             "plan-critic-pre": ["comms.md", "untrusted-content.md", "card-quality.md", "design-parity.md", "plan-artifact.md", "plan-critic.md"],
             "plan-critic-post": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "plan-artifact.md", "plan-critic.md"],
-            "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
+            "fix": ["comms.md", "untrusted-content.md", "engineering.md", "whats-new.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
         }
         self.assertEqual(set(expected), set(ac.ROLE_STANDARDS))
@@ -101,6 +104,27 @@ class MappingTest(unittest.TestCase):
             self.assertNotIn(
                 "vendor-boundaries.md", ac.standards_for(role),
                 f"{role} must not carry the vendor-boundaries standard",
+            )
+
+    def test_whats_new_reaches_the_pr_body_roles_only(self):
+        # DRE-5510: the What's New line lives in the pull request body, so the
+        # standard must reach every role that writes one or judges one. The
+        # fix agent reads no brief, so this rail entry is how it learns the
+        # grammar it writes when the critic sends a pull request back. The
+        # planner, verifier, medic and both plan critics never write or judge
+        # a pull request body — keeping their context lean is deliberate.
+        # Appended LAST so no existing entry's position moves.
+        for role in ("engineer", "frontend", "devops", "database-architect",
+                     "critic", "fix"):
+            self.assertEqual(
+                ac.standards_for(role)[-1], "whats-new.md",
+                f"{role} must receive the whats-new standard as its last entry",
+            )
+        for role in ("planner", "verifier", "medic", "plan-critic-pre",
+                     "plan-critic-post"):
+            self.assertNotIn(
+                "whats-new.md", ac.standards_for(role),
+                f"{role} must not carry the whats-new standard",
             )
 
     def test_console_honesty_reaches_the_console_roles_only(self):
@@ -180,7 +204,7 @@ class AssembleTest(unittest.TestCase):
         expected = [
             "comms.md", "untrusted-content.md", "engineering.md",
             "architecture.md", "card-quality.md", "vendor-boundaries.md",
-            "console-honesty.md", "engineer.md",
+            "console-honesty.md", "whats-new.md", "engineer.md",
         ]
         self.assertEqual([os.path.basename(p) for p in seen], expected)
         for name in expected:
@@ -275,6 +299,112 @@ class RealFilesTest(unittest.TestCase):
                 f"agents.yaml rosters {entry['name']!r} but ROLE_STANDARDS has "
                 f"no {role!r} key -- standards_for() would KeyError",
             )
+
+    def test_cli_assemble_engineer_carries_the_whats_new_standard(self):
+        # DRE-5510, end to end through the CLI the workflows call: the
+        # engineer's assembled context fences the What's New standard in.
+        import subprocess
+
+        run = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "assemble_context.py"),
+             "assemble", "engineer", "--root", REPO],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("===== BEGIN standards/whats-new.md =====", run.stdout)
+        self.assertIn("What's New standard", run.stdout)
+
+
+def _read_repo(*parts):
+    with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+def _bullets(text):
+    """Split markdown into top-level blocks: each `- ` bullet with its
+    continuation lines, and each plain paragraph."""
+    blocks, cur = [], []
+    for line in text.splitlines():
+        if line.startswith("- ") or not line.strip() or line.startswith("#"):
+            if cur:
+                blocks.append(" ".join(cur))
+            cur = [line.strip()] if line.strip() and not line.startswith("#") else []
+        else:
+            cur.append(line.strip())
+    if cur:
+        blocks.append(" ".join(cur))
+    return blocks
+
+
+class WhatsNewBriefsTest(unittest.TestCase):
+    """DRE-5510: the two briefs that carry a pull-request-body recipe name the
+    `What's new:` line in it, point at the standard rather than restating its
+    grammar, and tell the builder how a held pull request is answered."""
+
+    BRIEFS = ("engineer.md", "devops.md")
+
+    def _recipe(self, brief):
+        hits = [b for b in _bullets(_read_repo("briefs", brief))
+                if b.startswith("- **One PR per card**")]
+        self.assertEqual(len(hits), 1, f"{brief}: one 'One PR per card' bullet")
+        return hits[0]
+
+    def test_the_pr_body_recipe_names_the_line_and_points_at_the_standard(self):
+        for brief in self.BRIEFS:
+            recipe = self._recipe(brief)
+            self.assertIn("What's new:", recipe, brief)
+            self.assertIn("standards/whats-new.md", recipe, brief)
+
+    def test_the_briefs_do_not_restate_the_grammar(self):
+        # The standards README rule: state a rule once, have the briefs point
+        # to it. The kinds and audiences are the grammar's vocabulary.
+        for brief in self.BRIEFS:
+            text = _read_repo("briefs", brief)
+            for word in ("<kind>", "<audience>", "moderators", "admins",
+                         "`improved`", "(open:"):
+                self.assertNotIn(word, text, f"{brief} restates {word!r}")
+
+    def test_a_held_pull_request_is_answered_in_the_body_plus_an_empty_commit(self):
+        # Operator pre-review, 2026-10-01: a merge-gate hold or a critic
+        # finding about the line is answered in the pull request body, then
+        # one empty commit on the same branch — never a diff change — and the
+        # brief points at the standard for why (the critic reviews only a new
+        # head).
+        for brief in self.BRIEFS:
+            blocks = [b for b in _bullets(_read_repo("briefs", brief))
+                      if "gh pr edit" in b]
+            self.assertEqual(len(blocks), 1, f"{brief}: one held-PR answer")
+            block = blocks[0]
+            for needle in ("What's new:", "hold", "critic", "--body-file",
+                           "empty commit", "same branch", "never",
+                           "standards/whats-new.md"):
+                self.assertIn(needle, block, f"{brief}: held-PR answer lacks {needle!r}")
+
+
+class WhatsNewReadmeTest(unittest.TestCase):
+    """DRE-5510: standards/README.md says who receives what, and that table
+    must agree with ROLE_STANDARDS — the What's New rows included."""
+
+    def _per_role_table(self):
+        rows = {}
+        text = _read_repo("standards", "README.md")
+        section = text.split("The per-role mapping:", 1)[1].split("\n## ", 1)[0]
+        for line in section.splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) != 2 or cells[0] in ("Role", "---"):
+                continue
+            for role in cells[0].split(" / "):
+                rows[role.strip()] = [s.strip() + ".md"
+                                      for s in cells[1].split(",")]
+        return rows
+
+    def test_the_per_role_table_matches_role_standards(self):
+        self.assertEqual(self._per_role_table(), ac.ROLE_STANDARDS)
+
+    def test_the_standards_table_lists_whats_new_as_injected(self):
+        rows = [line for line in _read_repo("standards", "README.md").splitlines()
+                if line.startswith("| `whats-new.md` |")]
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("not injected", rows[0])
 
 
 if __name__ == "__main__":
