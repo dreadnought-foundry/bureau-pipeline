@@ -991,6 +991,41 @@ def evaluate_checks(check_runs, review_suites=frozenset(),
     return None
 
 
+def precheck(check_runs, workflow_runs, merge_state: str = "",
+             head_branch: str = "",
+             review_workflows=DEFAULT_REVIEW_WORKFLOWS) -> Optional[Decision]:
+    """Condition 1's `wait`, answered before the gate reads anything else
+    (Stage 2 #19). Returns that wait, or None: evaluate in full.
+
+    The gate woke 3–6 times per head and most of those wakes found CI still
+    running, after reading the compare record, every page of comments, the
+    commits, the fix lane, the open pull requests and the owner rules — none
+    of which condition 1 looks at. It needs only the check runs and the runs
+    listing, so evaluate_and_merge.sh reads those two first and asks here.
+
+    The order of `_decide` is kept, which is what makes the early answer the
+    full answer (tests/test_merge_gate_one_read.py proves the parity):
+    condition 0 runs first and DIRTY is `conflict` whatever CI says, so a
+    conflict is never answered early; condition D runs next and needs the
+    commits and the author, so a dependabot/* branch is never answered early
+    (for any other branch condition D is None by construction). What is left
+    is condition 1 itself, over the same records with the same review-path
+    exclusion by verified origin (DRE-1994) and the same unfinished-run rule
+    (DRE-5045). `workflow_runs` None is the unreadable listing, and condition
+    1 waits on it exactly as the full decision does."""
+    if evaluate_conflict(merge_state):
+        return None
+    if (head_branch or "").startswith(DEPENDABOT_BRANCH_PREFIX):
+        return None
+    paths = frozenset(review_workflows)
+    if workflow_runs is None:
+        review_suites, unfinished = frozenset(), None
+    else:
+        review_suites = review_suite_ids(workflow_runs, paths)
+        unfinished = unfinished_runs(workflow_runs, paths)
+    return evaluate_checks(check_runs, review_suites, unfinished)
+
+
 def commit_shas(pr_commits) -> frozenset:
     """The sha set of a `GET pulls/{pr}/commits` payload — the carry's
     condition 4 record.
@@ -1475,12 +1510,100 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_precheck_parser() -> argparse.ArgumentParser:
+    """`merge_gate.py precheck`: condition 1's wait from its two records."""
+    parser = argparse.ArgumentParser(
+        prog="merge_gate.py precheck",
+        description="Answer condition 1's wait from the check runs and the "
+                    "runs listing alone (Stage 2 #19); prints precheck=wait "
+                    "or precheck=evaluate, then reason=.",
+    )
+    parser.add_argument("--check-runs-file", required=True,
+                        help="raw REST payload of GET commits/{sha}/check-runs")
+    parser.add_argument("--workflow-runs-file", required=True,
+                        help="raw REST payload of GET actions/runs?head_sha=<sha>, "
+                             f"or {UNREADABLE_WORKFLOW_RUNS} when the read failed")
+    parser.add_argument("--review-workflows",
+                        default=",".join(DEFAULT_REVIEW_WORKFLOWS),
+                        help="the same review paths the full decision excludes")
+    parser.add_argument("--merge-state", default="",
+                        help="GitHub's mergeStateStatus — DIRTY is never "
+                             "answered early (condition 0 comes first)")
+    parser.add_argument("--head-branch", default="",
+                        help="dependabot/* is never answered early "
+                             "(condition D comes first and needs the commits)")
+    return parser
+
+
 def _die(msg: str) -> "NoReturn":  # noqa: F821
     print(f"merge_gate: {msg}", file=sys.stderr)
     sys.exit(2)
 
 
+def _read_check_runs(path: str) -> list:
+    """The check-runs record, or exit 2 — a caller that broke."""
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read check runs: {e}")
+    check_runs = payload.get("check_runs") if isinstance(payload, dict) else payload
+    if not isinstance(check_runs, list):
+        _die("check-runs payload has no check_runs list")
+    return check_runs
+
+
+def _read_workflow_runs(path: str):
+    """The runs listing as a list, or None for the workflow's substitute for
+    a failed read (DRE-5045). It is not a listing and is not judged as one —
+    condition 1 waits on it. Anything ELSE without a list is still a caller
+    that broke, and exits 2."""
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read workflow runs: {e}")
+    if payload == json.loads(UNREADABLE_WORKFLOW_RUNS):
+        return None
+    workflow_runs = (
+        payload.get("workflow_runs") if isinstance(payload, dict) else payload
+    )
+    if not isinstance(workflow_runs, list):
+        _die("workflow-runs payload has no workflow_runs list")
+    return workflow_runs
+
+
+def _review_paths(raw: str) -> frozenset:
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
+def precheck_main(argv) -> int:
+    """Exit 0 with `precheck=wait` or `precheck=evaluate`; exit 2 on a
+    record that cannot be read, which evaluate_and_merge.sh reads as
+    `evaluate` — the full decision then meets the same record and answers
+    exactly as it did before there was a precheck."""
+    args = build_precheck_parser().parse_args(argv)
+    decision = precheck(
+        _read_check_runs(args.check_runs_file),
+        _read_workflow_runs(args.workflow_runs_file),
+        merge_state=args.merge_state,
+        head_branch=args.head_branch,
+        review_workflows=_review_paths(args.review_workflows),
+    )
+    if decision is None:
+        print("precheck=evaluate")
+        print("reason=condition 1 does not wait on these records — the full "
+              "decision reads the rest")
+    else:
+        print("precheck=wait")
+        print(f"reason={decision.reason}")
+    return 0
+
+
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["precheck"]:
+        return precheck_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     if not _HEAD_SHA_RE.match(args.head_sha or ""):
@@ -1499,14 +1622,7 @@ def main(argv=None) -> int:
              f"got {args.is_draft!r}")
     is_draft = DRAFT_VALUES[draft_raw]
 
-    try:
-        with open(args.check_runs_file) as f:
-            payload = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        _die(f"cannot read check runs: {e}")
-    check_runs = payload.get("check_runs") if isinstance(payload, dict) else payload
-    if not isinstance(check_runs, list):
-        _die("check-runs payload has no check_runs list")
+    check_runs = _read_check_runs(args.check_runs_file)
 
     # DRE-4139: the workflow writes `gh api --paginate --slurp`'s array of
     # PAGES, so it is flattened here — one flat list, every page of it.
@@ -1518,27 +1634,14 @@ def main(argv=None) -> int:
     except ValueError as e:
         _die(f"comments payload is not a comment record: {e}")
 
-    try:
-        with open(args.workflow_runs_file) as f:
-            payload = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        _die(f"cannot read workflow runs: {e}")
-    review_paths = frozenset(
-        p.strip() for p in args.review_workflows.split(",") if p.strip()
-    )
-    # DRE-5045: the workflow's substitute for a failed read. It is not a
-    # listing and is not judged as one — condition 1 waits on it. Anything
-    # ELSE without a list is still a caller that broke, and exits 2.
-    if payload == json.loads(UNREADABLE_WORKFLOW_RUNS):
+    workflow_runs = _read_workflow_runs(args.workflow_runs_file)
+    review_paths = _review_paths(args.review_workflows)
+    # DRE-5045: None is the workflow's substitute for a failed read, and
+    # condition 1 waits on it.
+    if workflow_runs is None:
         review_suites = frozenset()
         unfinished = None
     else:
-        workflow_runs = (
-            payload.get("workflow_runs") if isinstance(payload, dict)
-            else payload
-        )
-        if not isinstance(workflow_runs, list):
-            _die("workflow-runs payload has no workflow_runs list")
         review_suites = review_suite_ids(workflow_runs, review_paths)
         unfinished = unfinished_runs(workflow_runs, review_paths)
 

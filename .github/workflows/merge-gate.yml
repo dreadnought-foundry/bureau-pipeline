@@ -240,6 +240,22 @@ jobs:
     # sync_review_state.py files a formal APPROVE beside every APPROVE verdict
     # comment, which already woke the gate — and not a fork's, which gets no
     # secrets to mint the token with and is never gated anyway.
+    #
+    # The critic's own completion is NOT a wake (Stage 2 #20). Its verdict
+    # comment is: the comment leg above runs the gate on it, and the run
+    # finishing seconds later woke the gate a second time for the same
+    # answer. The gate never waits on the critic's run — its check runs and
+    # the run itself sit at a review path, excluded from condition 1 by
+    # verified origin (DRE-1994, DRE-5045) — so with no new verdict that wake
+    # could only repeat the last evaluation. A review that crashed without
+    # commenting is decided `wait` with or without it, and
+    # reconcile.recover_crashed_reviews re-dispatches the review, whose
+    # comment is the wake. Every stub listing it names it `QA Review` (the
+    # scaffold's, agent-bureau's, and this repo's own pr-review.yml).
+    # `Verify` is deliberately still a wake: verify.yml is no review path, so
+    # the gate waits on the Verifier's run as CI; its verdict comment posts
+    # before that run ends, and an out-of-scope Verify posts none. Its
+    # completion is the wake that merges.
     if: >
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' &&
@@ -255,6 +271,7 @@ jobs:
         github.event.pull_request.head.repo.full_name == github.repository) ||
        (github.event_name == 'workflow_run' &&
         github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.name != 'QA Review' &&
         (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
          startsWith(github.event.workflow_run.head_branch, 'repair/') ||
          startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
@@ -282,6 +299,10 @@ jobs:
     concurrency:
       group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.pull_request.number || github.event.inputs.pr_number }}
       cancel-in-progress: false
+    # Whose Linear hour this job spends (DRE-3321): the card advance and the
+    # merge comment ride the fleet key. Job level, so every step inherits it.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - name: Mint qa-bot token (author != merger)
         id: qa
