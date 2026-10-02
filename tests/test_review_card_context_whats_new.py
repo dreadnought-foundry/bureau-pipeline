@@ -138,6 +138,7 @@ def test_the_existing_output_is_unchanged_above_the_block(rule_on):
     for card, branch in ((CARD, BRANCH), ("", "chore/whatever")):
         context = _context(NO_LINE, card=card, branch=branch,
                            refutation="evidence", acts_consumer=note)
+        _block(context)
         above = context.split("\n\n" + HEADER, 1)[0]
         if card:
             # The card shape ignores the branch, so the same card on a head
