@@ -96,9 +96,8 @@ set -e
 # the rule as it holds now, once, and names the cards that got it there.
 #
 # 2026-07-09 · DRE-1988. The loop takes instructions only from the qa-bot:
-#   a "QA Critic" verdict counts toward the mode only when
-#   agent-bureau-qa-bot[bot] authored it, because any commenter can type the
-#   marker. The same card set the discipline WORKER_LOGIN follows: the
+#   a "QA Critic" verdict counts toward the mode only when the QA bot
+#   identity authored it, because any commenter can type the marker. The same card set the discipline WORKER_LOGIN follows: the
 #   identity comes from this run's minted token, never a hardcoded name an
 #   App rename outdates.
 #
