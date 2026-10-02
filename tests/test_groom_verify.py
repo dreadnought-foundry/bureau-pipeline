@@ -322,6 +322,101 @@ def test_a_done_sibling_that_covers_it_moves_it():
 
 
 # --------------------------------------------------------------------------
+# the reason names the other card and quotes the sentence (DRE-5305)
+# --------------------------------------------------------------------------
+#: "Supersedes DRE-102." inside a longer paragraph, with a sentence on either
+#: side of it — the reason quotes the one sentence, never the paragraph.
+PARAGRAPH = ("The export moved to the new reader last week. Supersedes "
+             "DRE-102. The old path stays until the console stops calling it.")
+
+
+def _other_cards_item(proposal, identifier="DRE-102"):
+    items = [e for e in record(proposal, identifier)["evidence"]
+             if e["source"] == "other_cards"]
+    assert items, f"no other_cards evidence for {identifier}"
+    return items[0]
+
+
+def test_a_done_sibling_superseding_it_is_named_and_its_sentence_quoted():
+    """The 2026-09-29 morning: the proposal asked to cancel DRE-4633 on a
+    match nobody could check from the page, because the line said only that
+    the other card "says it supersedes or covers this card"."""
+    linear = FakeLinear({"DRE-102": {"siblings": [
+        other("DRE-102", "Intake"), other("DRE-3230", "Done", PARAGRAPH)]}})
+    got = checked(linear=linear)
+    item = _other_cards_item(got)
+    assert item == {
+        "source": "other_cards", "card": "DRE-3230",
+        "quote": "Supersedes DRE-102.",
+        "text": 'DRE-3230 (Done) says: "Supersedes DRE-102."'}
+    assert cancel(got)[0]["reason"] == item["text"]
+
+
+@pytest.mark.parametrize("where", ["search", "related", "siblings"])
+def test_every_route_to_another_card_carries_the_same_shape(where):
+    """`searchIssues`, a `related` relation and a sibling under the same
+    parent are three ways to the same evidence, and the page and the drain
+    rely on one shape for all of them."""
+    linear = FakeLinear({"DRE-102": {where: [
+        other("DRE-3230", "In Progress", PARAGRAPH)]}})
+    item = _other_cards_item(checked(linear=linear))
+    assert item == {
+        "source": "other_cards", "card": "DRE-3230",
+        "quote": "Supersedes DRE-102.",
+        "text": 'DRE-3230 (approved and in In Progress) says: '
+                '"Supersedes DRE-102."'}
+
+
+def test_the_sentence_runs_to_a_newline_and_drops_the_line_lead():
+    """A description line is a sentence too: the quote stops at the line's
+    end, and the list marker in front of it is not part of what it says."""
+    linear = FakeLinear({"DRE-102": {"search": [other(
+        "DRE-3230", "Done",
+        "## Scope\n- Absorbs DRE-102 and its probe\n- Ships the reader")]}})
+    item = _other_cards_item(checked(linear=linear))
+    assert item["quote"] == "Absorbs DRE-102 and its probe"
+
+
+def test_a_long_sentence_is_cut_to_the_quote_length():
+    sentence = "Supersedes DRE-102 " + "and the rest of the reader " * 20
+    linear = FakeLinear({"DRE-102": {"search": [other(
+        "DRE-3230", "Done", sentence)]}})
+    item = _other_cards_item(checked(linear=linear))
+    assert len(item["quote"]) == groom_verify.QUOTE_CHARS
+    assert item["quote"].startswith("Supersedes DRE-102 and the rest")
+    assert item["quote"].endswith("…")
+
+
+@pytest.mark.parametrize("sentence", [
+    "Supersedes DRE-102 by moving the read into scripts/groom_verify.py.",
+    "Supersedes DRE-102 — `render_proposal()` now draws the table.",
+])
+def test_a_quoted_sentence_carrying_code_is_replaced_like_a_comment(sentence):
+    """The same guard a comment quote passes through: the CEO reads a sentence
+    saying where the words are, and the record keeps them."""
+    linear = FakeLinear({"DRE-102": {"search": [other(
+        "DRE-3230", "Done", sentence)]}})
+    got = checked(linear=linear)
+    item = _other_cards_item(got)
+    assert item["quote"] == sentence
+    assert item["text"] == ("DRE-3230 (Done) says it supersedes or covers "
+                            "this card; its words are in the proposal record")
+    assert groom_verify.planning_escalation.refusal(item["text"]) is None
+    assert sentence not in groomer.render_proposal(got)
+
+
+def test_the_cancel_table_reason_names_the_card_and_quotes_the_sentence():
+    linear = FakeLinear({"DRE-102": {"search": [other(
+        "DRE-3230", "Done", PARAGRAPH)]}})
+    page = groomer.render_proposal(checked(linear=linear))
+    rows = [line for line in page.splitlines()
+            if line.startswith("|") and "| DRE-102 |" in line]
+    assert rows, "the Cancel table has no row for DRE-102"
+    reason = rows[0].rstrip(" |").rsplit(" | ", 1)[-1]
+    assert reason == 'DRE-3230 (Done) says: "Supersedes DRE-102."'
+
+
+# --------------------------------------------------------------------------
 # a Cancel needs a real replacement
 # --------------------------------------------------------------------------
 def _superseded(identifier, target, days):
