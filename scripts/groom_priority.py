@@ -22,7 +22,13 @@ pipeline's own key, so "not the viewer" would throw his confirmation away. A
 comment counts when its voice is `CEO_VIA_CONSOLE` (a receipt whose signature
 verifies) or `PERSON` (another Linear user's own account), and under no other
 kind: not the pipeline's key without a receipt, not an integration, not a
-receipt refused or left unchecked, and nothing when the viewer is unknown.
+receipt refused, and nothing when the viewer is unknown.
+
+AN UNCHECKED CONFIRMATION IS "CANNOT TELL". A console answer whose key could
+not be fetched is `UNCHECKED`: the check never ran, so it is neither his voice
+nor a forgery (DRE-4153). When such an answer opens with `priority-confirmed`
+after the cutoff and nothing counted confirms the priority, the card is not
+read as stale — it keeps its band and is named under `unread`.
 
 WHAT IT COSTS. A candidate is an Urgent or High card created more than
 `STALE_DAYS` ago — a priority cannot predate its card, and both fields are on
@@ -59,6 +65,9 @@ URGENT, HIGH = 1, 2
 NAMES = {URGENT: "Urgent", HIGH: "High"}
 #: The voices whose `priority-confirmed` counts, and no other.
 COUNTED = (spoken_thread.CEO_VIA_CONSOLE, spoken_thread.PERSON)
+#: Why a card keeps its band when the only confirmation is a console answer
+#: whose check could not run.
+UNCHECKED_CONFIRMATION = "a console confirmation could not be checked"
 
 #: `history(first: n)` is the n NEWEST entries, so the newest setting of the
 #: priority is in the page whenever any of the last fifty is one.
@@ -112,29 +121,47 @@ def candidates(cards: list[dict], *, now: datetime) -> list[dict]:
     return [card for _, _, card in sorted(found, key=lambda t: t[:2])]
 
 
-def _first_line(voice: spoken_thread.Voice) -> str:
-    """The first line the speaker wrote — for the CEO's console answer, the
-    first line of his words, under the console's heading."""
-    text = voice.body or ""
-    if voice.kind == spoken_thread.CEO_VIA_CONSOLE:
+class CannotTell(Exception):
+    """Whether the priority was re-confirmed cannot be known — the card keeps
+    its band and is named, never demoted."""
+
+
+def _first_line(text: str | None, *, console: bool) -> str:
+    """The first line the speaker wrote — for a console answer, the first line
+    of the CEO's words, under the console's heading."""
+    text = text or ""
+    if console:
         text = console_receipt.answer_text(text)
     lines = [line for line in text.replace("\r", "").split("\n") if line.strip()]
-    if voice.kind == spoken_thread.CEO_VIA_CONSOLE and lines \
-            and _ANSWER_HEAD.match(lines[0].strip()):
+    if console and lines and _ANSWER_HEAD.match(lines[0].strip()):
         lines = lines[1:]
     return lines[0].strip() if lines else ""
 
 
 def confirmed_since(nodes: list[dict], viewer: str, *, card: str,
                     cutoff: datetime, verifier=None) -> bool:
-    """Did a person say `priority-confirmed` after `cutoff`?"""
+    """Did a person say `priority-confirmed` after `cutoff`? Raises
+    `CannotTell` when the only such answer is the console's and its check
+    could not run.
+
+    `spoken_thread.UNCHECKED` withholds the words, so the marker is read off
+    the comment itself — one voice per node, in order. Unverified text is safe
+    to read here: it can only keep a card's band, never move one up."""
     ordered = sorted(nodes, key=lambda n: n.get("createdAt") or "")
-    for voice in spoken_thread.voices(ordered, viewer, card=card,
-                                      verifier=verifier):
+    unchecked = False
+    for node, voice in zip(ordered, spoken_thread.voices(
+            ordered, viewer, card=card, verifier=verifier), strict=True):
         at = _moment(voice.created_at)
-        if (voice.kind in COUNTED and at and at > cutoff
-                and _MARKER.match(_first_line(voice))):
+        if not (at and at > cutoff):
+            continue
+        if voice.kind in COUNTED and _MARKER.match(_first_line(
+                voice.body, console=voice.kind == spoken_thread.CEO_VIA_CONSOLE)):
             return True
+        if voice.kind == spoken_thread.UNCHECKED and _MARKER.match(
+                _first_line(node.get("body"), console=True)):
+            unchecked = True
+    if unchecked:
+        raise CannotTell(UNCHECKED_CONFIRMATION)
     return False
 
 

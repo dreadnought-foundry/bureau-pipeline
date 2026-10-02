@@ -163,7 +163,11 @@ is left out of the batch for its age.
    console, whose signed answer is checked (`scripts/spoken_thread.py`).
    Nothing else counts: not a comment the pipeline's own key wrote without
    that signature, not an integration, and not an answer whose signature was
-   refused or could not be checked.
+   refused. A console answer opening with `priority-confirmed` whose
+   signature could not be checked — the console's key could not be fetched,
+   so the check never ran — neither counts nor demotes: the card keeps its
+   priority and is named under the line below, `a console confirmation could
+   not be checked`.
 
    **Only Urgent or High cards older than 21 days are read**, the oldest read
    first, at most 40 a morning (`MAX_READS` in `scripts/groom_priority.py`),
@@ -171,9 +175,10 @@ is left out of the batch for its age.
    morning with no such card makes no request. **A card that was not read
    keeps its priority and is named on the page**, one line per reason: `Kept
    their priority, not read — <why>: DRE-A, DRE-B`. The reason is the read
-   budget being spent, Linear refusing the card's read, or the pipeline's own
-   Linear identity being unreadable — without it a person's comment cannot be
-   told apart from the pipeline's, and "cannot tell" never demotes a card.
+   budget being spent, Linear refusing the card's read, a console
+   confirmation that could not be checked, or the pipeline's own Linear
+   identity being unreadable — without it a person's comment cannot be told
+   apart from the pipeline's, and "cannot tell" never demotes a card.
 3. **Then everything else, newest first** — by creation day, going back from
    there, with no window. No card is left out of the batch for being old; it
    is reached when its turn comes, and the batch is the first `--capacity`

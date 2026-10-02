@@ -241,6 +241,45 @@ def test_a_receipt_the_verifier_refuses_does_not_confirm():
     assert found["stale"] == ["DRE-2702"]
 
 
+def test_an_unchecked_console_confirmation_keeps_the_band_and_names_the_card():
+    """The console's key could not be fetched, so the check never ran — not a
+    refusal (DRE-4153). Cannot tell never demotes: the card keeps Urgent and
+    the page names it."""
+    old = card("DRE-2702", priority=1, days=40)
+    answer = console_answer("priority-confirmed", card_id="DRE-2702", days=3)
+    verifier = FakeVerifier(why=console_receipt.CouldNotCheck(
+        "the console's public key could not be read — timed out"))
+    found = annotate([old], FakeLinear(
+        {"DRE-2702": ([set_to(1, 38)], [answer])}), verifier=verifier)
+    assert verifier.checked == 1
+    assert found == {"stale": [], "unread": {
+        "DRE-2702": groom_priority.UNCHECKED_CONFIRMATION}}
+    assert "priority_stale" not in old
+    assert old["priority_unread"] == groom_priority.UNCHECKED_CONFIRMATION
+    assert bands([old])["DRE-2702"] == groomer.BAND_URGENT
+
+
+def test_an_unchecked_answer_that_does_not_confirm_still_demotes():
+    old = card("DRE-2702", priority=1, days=40)
+    answer = console_answer("Leave this one for now", card_id="DRE-2702",
+                            days=3)
+    verifier = FakeVerifier(why=console_receipt.CouldNotCheck("timed out"))
+    found = annotate([old], FakeLinear(
+        {"DRE-2702": ([set_to(1, 38)], [answer])}), verifier=verifier)
+    assert found == {"stale": ["DRE-2702"], "unread": {}}
+
+
+def test_a_counted_confirmation_beside_an_unchecked_one_keeps_the_band_quietly():
+    old = card("DRE-2702", priority=1, days=40)
+    comments = [console_answer("priority-confirmed", card_id="DRE-2702",
+                               days=4),
+                comment("priority-confirmed", 3)]
+    verifier = FakeVerifier(why=console_receipt.CouldNotCheck("timed out"))
+    found = annotate([old], FakeLinear(
+        {"DRE-2702": ([set_to(1, 38)], comments)}), verifier=verifier)
+    assert found == {"stale": [], "unread": {}}
+
+
 def test_an_integration_comment_does_not_confirm():
     old = card("DRE-2702", priority=1, days=40)
     comments = [comment("priority-confirmed", 3, by=None)]
