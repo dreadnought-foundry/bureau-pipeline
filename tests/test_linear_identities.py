@@ -69,13 +69,14 @@ FLEET_KEY = "lin_api_FLEETFLEETFLEETFLEET0001"
 TOOLS_KEY = "lin_api_TOOLSTOOLSTOOLSTOOLS0002"
 RELAY_KEY = "lin_api_RELAYRELAYRELAYRELAY0003"
 SANDBOX_KEY = "lin_api_SANDBOXSANDBOXSANDB0004"
+PLANNER_KEY = "Bearer lin_oauth_PLANNERPLANNERPLAN0005"
 FLEET_ID = "cebc4c53-fad2-410f-be31-f920b6ad773f"
 TOOLS_ID = "0913a8db-0000-4000-8000-000000000002"
 SANDBOX_ID = "0913a8db-0000-4000-8000-000000000003"
 
 
 def _env(fleet=FLEET_KEY, tools=TOOLS_KEY, relay=RELAY_KEY,
-         sandbox=SANDBOX_KEY) -> dict:
+         sandbox=SANDBOX_KEY, planner=PLANNER_KEY) -> dict:
     env = {}
     if fleet is not None:
         env["LINEAR_API_KEY_FLEET"] = fleet
@@ -85,17 +86,21 @@ def _env(fleet=FLEET_KEY, tools=TOOLS_KEY, relay=RELAY_KEY,
         env["LINEAR_API_KEY_RELAY"] = relay
     if sandbox is not None:
         env["LINEAR_API_KEY_SANDBOX"] = sandbox
+    if planner is not None:
+        env["LINEAR_PLANNER_KEY"] = planner
     return env
 
 
 def _viewer(fleet: dict | None = None, tools: dict | None = None,
-            relay: dict | None = None, sandbox: dict | None = None):
+            relay: dict | None = None, sandbox: dict | None = None,
+            planner: dict | None = None):
     """A fake `viewer { id name admin }` keyed on which key was presented.
 
     The relay's key is a SECOND copy of the fleet key, so its default answer
     is the fleet user — the same id, which is exactly what
     `one_user_per_identity` asserts. The sandbox's key is a THIRD user, which
-    is what `must_differ_from` asserts.
+    is what `must_differ_from` asserts. The planner's OAuth token (DRE-5589)
+    is the fleet user again, on its own bucket — the same id.
     """
     answers = {
         FLEET_KEY: fleet or {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False},
@@ -103,6 +108,7 @@ def _viewer(fleet: dict | None = None, tools: dict | None = None,
         RELAY_KEY: relay or {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False},
         SANDBOX_KEY: sandbox or {"id": SANDBOX_ID, "name": "bureau-sandbox",
                                  "admin": False},
+        PLANNER_KEY: planner or {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False},
     }
 
     def viewer(key: str) -> dict:
@@ -145,9 +151,11 @@ class TheDeclaration(unittest.TestCase):
         self.assertEqual(by_name["sandbox"]["must_differ_from"],
                          ["fleet", "operator-tools"])
         # The fleet key has a SECOND home: the relay Lambda's own copy
-        # (DRE-3334). operator-tools has none.
+        # (DRE-3334), and a THIRD: the planner's OAuth token, the same user on
+        # its own bucket (DRE-5589). operator-tools has none.
         homes = by_name["fleet"]["homes"]
-        self.assertEqual([h["name"] for h in homes], ["relay"])
+        self.assertEqual([h["name"] for h in homes], ["relay", "planner-oauth"])
+        self.assertEqual(homes[1]["env"], "LINEAR_PLANNER_KEY")
         self.assertEqual(homes[0]["env"], "LINEAR_API_KEY_RELAY")
         self.assertIn("bureau/relay/linear-api-key", homes[0]["lives_in"])
         self.assertEqual(by_name["operator-tools"].get("homes", []), [])
@@ -311,6 +319,29 @@ class TheCheck(unittest.TestCase):
         self.assertNotIn("must_differ_from", text)
 
 
+class ThePlannerHome(unittest.TestCase):
+    """The fleet user's OAuth token, the planner's own bucket (DRE-5589)."""
+
+    def test_the_planner_token_on_the_fleet_user_is_ok(self):
+        code, text = _run(_env(), _viewer())
+        self.assertEqual(code, 0, text)
+        self.assertIn("[OK] fleet/planner-oauth:", text)
+        self.assertNotIn(PLANNER_KEY, text)
+
+    def test_a_planner_token_on_another_user_breaks_one_user_per_identity(self):
+        sandbox = {"id": SANDBOX_ID, "name": "bureau-sandbox", "admin": False}
+        code, text = _run(_env(), _viewer(planner=sandbox))
+        self.assertNotEqual(code, 0, text)
+        broke = [line for line in text.splitlines() if "one_user_per_identity" in line]
+        self.assertTrue(broke, text)
+        self.assertIn("fleet/planner-oauth", broke[0])
+
+    def test_an_unpublished_planner_token_is_unknown_never_a_pass(self):
+        code, text = _run(_env(planner=None), _viewer())
+        self.assertNotEqual(code, 0, text)
+        self.assertIn("LINEAR_PLANNER_KEY", text)
+
+
 class TheRelayHome(unittest.TestCase):
     """The fleet key's second home — the relay Lambda's copy (DRE-3334)."""
 
@@ -318,7 +349,8 @@ class TheRelayHome(unittest.TestCase):
         code, text = _run(_env(), _viewer())
         self.assertEqual(code, 0, text)
         oks = [line for line in text.splitlines() if "[OK]" in line]
-        self.assertEqual(len(oks), 4, text)
+        # Five: three first homes, the relay, and the planner's token.
+        self.assertEqual(len(oks), 5, text)
         self.assertIn("[OK] fleet:", text)
         self.assertIn("[OK] fleet/relay:", text)
         self.assertIn("[OK] operator-tools:", text)
@@ -420,11 +452,12 @@ class TheSandboxSeat(unittest.TestCase):
     check hold it apart from both others.
     """
 
-    def test_three_distinct_non_admin_users_are_four_ok_lines_and_exit_zero(self):
+    def test_three_distinct_non_admin_users_are_five_ok_lines_and_exit_zero(self):
+        # Five: the three first homes plus the fleet's relay and planner homes.
         code, text = _run(_env(), _viewer())
         self.assertEqual(code, 0, text)
         oks = [line for line in text.splitlines() if "[OK]" in line]
-        self.assertEqual(len(oks), 4, text)
+        self.assertEqual(len(oks), 5, text)
         self.assertIn("[OK] sandbox: LINEAR_API_KEY_SANDBOX resolves to "
                       "'bureau-sandbox'", text)
         self.assertIn(SANDBOX_ID, text)

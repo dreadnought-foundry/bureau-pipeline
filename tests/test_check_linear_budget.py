@@ -265,3 +265,44 @@ def test_max_per_run_is_what_the_whole_run_spent():
     rows = clb.aggregate([("atlas", "Agent Plan", two_processes),
                           ("atlas", "Agent Plan", one_process)])
     assert (rows[0]["runs"], rows[0]["total"], rows[0]["max"]) == (2, 22, 12)
+
+
+def test_the_planner_bucket_is_kept_apart_from_the_fleet_key(monkeypatch):
+    """DRE-5589: a planner on its own OAuth bucket says `budget: planner-oauth`
+    — a different 5,000-an-hour bucket, so adding its spend to the fleet key's
+    row would charge the fleet for requests it never paid. One run whose token
+    died mid-run spends on both, and each spend lands in its own row."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    monkeypatch.setenv(linear_ops.HOME_ENV, "planner-oauth")
+    monkeypatch.setenv("LINEAR_API_KEY", "Bearer planner")
+    monkeypatch.setenv(linear_ops.FALLBACK_ENV, "lin_api_fleet")
+    linear_ops._reset_budget_state()
+    linear_ops._note_response_headers({"x-ratelimit-requests-remaining": "4998"})
+    linear_ops._note_response_headers({"x-ratelimit-requests-remaining": "4938"})
+    planner_line = linear_ops.budget_line()
+    assert planner_line.endswith("; budget: planner-oauth)")
+    rows = clb.aggregate([
+        ("atlas", "Agent Plan", _log(planner_line)),
+        ("atlas", "Agent Plan", _log(
+            planner_line,
+            "linear-budget: 351 → 345 (spent 6 this run; window resets 16:00 PT; budget: fleet)",
+        )),
+    ])
+    got = {(r["workflow"], r["budget"]): (r["runs"], r["total"]) for r in rows}
+    assert got == {
+        ("Agent Plan", "planner-oauth"): (2, 120),
+        ("Agent Plan", ""): (1, 6),
+    }
+    text = clb.render_table(rows, [])
+    assert "Agent Plan [planner-oauth]" in text
+
+
+def test_a_line_on_the_fleet_key_or_naming_no_bucket_stays_in_todays_row():
+    rows = clb.aggregate([
+        ("atlas", "Reconcile", _log("linear-budget: 9 → 8 (spent 1 this run; window resets 16:00 PT; budget: fleet)")),
+        ("atlas", "Reconcile", _log("linear-budget: 8 → 6 (spent 2 this run; window resets 16:00 PT; budget: undeclared)")),
+        ("atlas", "Reconcile", _log("linear-budget: 6 → 3 (spent 3 this run; window resets 16:00 PT)")),
+    ])
+    assert [(r["workflow"], r["budget"], r["runs"], r["total"]) for r in rows] == [
+        ("Reconcile", "", 3, 6),
+    ]
