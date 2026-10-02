@@ -400,6 +400,29 @@ class AfterADeath(unittest.TestCase):
         self.assertLess(note.index("once it is smaller"),
                         note.index(pc.REAPPROVE_HOW))
 
+    def test_the_park_note_says_the_plan_parks_in_triage_for_the_operator(self):
+        """DRE-5277: every pipeline park of an epic lands in Triage
+        (`plan_critic.BOUND_PARK_LANE`), and the note says so."""
+        note = rr.park_note(_pipeline(pc.cycle_marker(EPIC), _round(),
+                                      _death(run="11"), _death(run="22")), EPIC)
+        self.assertEqual(pc.BOUND_PARK_LANE, "Triage")
+        self.assertIn(pc.BOUND_PARK_LANE, note)
+        self.assertIn("operator", note)
+        self.assertIn("11", note)
+        self.assertIn("22", note)
+        self.assertTrue(note.rstrip().endswith(pc.REAPPROVE_HOW + "."), note[-200:])
+
+    def test_the_park_note_names_no_green_light_outside_the_quoted_sentence(self):
+        """`REAPPROVE_HOW` is `plan_critic`'s and DRE-5280 rewrites it; the rest
+        of the note is this module's and no longer sends anyone to Green
+        Light, nor calls the review post-approval."""
+        note = rr.park_note(_pipeline(pc.cycle_marker(EPIC), _round(),
+                                      _death(run="11"), _death(run="22")), EPIC)
+        own = note.replace(pc.REAPPROVE_HOW, "")
+        self.assertNotIn("Green Light", own)
+        self.assertNotIn("post-approval", own.lower())
+        self.assertIn("second critic", own)
+
 
 # --- 6. Which cards changed --------------------------------------------------
 
@@ -590,6 +613,70 @@ class TheDispatchSubcommand(unittest.TestCase):
         rc, _gh, _gql = self._dispatch(returncode=1, stderr="HTTP 403")
         self.assertNotEqual(rc, 0)
 
+    def _dispatch_with(self, *extra, returncode=0, stderr=""):
+        gh = _FiredDispatch(returncode, stderr)
+        with mock.patch.object(linear_ops, "gql", return_value={"issue": CARD}), \
+                mock.patch.object(plan_run.subprocess, "run", gh):
+            rc = rr.main(["dispatch", "--epic", EPIC, "--repo", "o/n", *extra])
+        return rc, gh
+
+    def test_a_review_ask_in_planning_carries_the_planning_lane_and_the_review_reason(self):
+        """DRE-5277: the plan route's own hand-off to the second critic."""
+        rc, gh = self._dispatch_with("--reason", rr.REASON_REVIEW,
+                                     "--trigger-state", rr.TRIGGER_STATE_REVIEW)
+        self.assertEqual(rc, 0)
+        self.assertEqual(gh.sent["client_payload"]["trigger_state"], "planning")
+        self.assertEqual(gh.sent["client_payload"]["reason"], "review")
+        # Still the activate route's event, chosen by `plan_run.fire`'s label rule.
+        self.assertEqual(gh.sent["event_type"], "agent-plan")
+
+    def test_the_activate_routes_hand_back_sends_review_in_progress(self):
+        """DRE-5281's hand-back of an approved epic the second critic has not
+        passed: the review run makes the move to Planning itself."""
+        rc, gh = self._dispatch_with("--reason", rr.REASON_REVIEW,
+                                     "--trigger-state", rr.TRIGGER_STATE_ACTIVATE)
+        self.assertEqual(rc, 0)
+        self.assertEqual(gh.sent["client_payload"]["trigger_state"], "in progress")
+        self.assertEqual(gh.sent["client_payload"]["reason"], "review")
+
+    def test_no_trigger_state_still_sends_todays_payload(self):
+        """The two activate-mode lines `plan.yml` carries pass no
+        `--trigger-state` until DRE-5281 deletes them; a `planning` default
+        would send an old-rule epic's re-review into a full re-plan."""
+        rc, gh = self._dispatch_with("--reason", rr.REASON_RE_REVIEW)
+        self.assertEqual(rc, 0)
+        self.assertEqual(gh.sent["client_payload"]["trigger_state"], "in progress")
+
+    def test_a_failed_review_ask_exits_non_zero(self):
+        rc, _gh = self._dispatch_with("--reason", rr.REASON_REVIEW,
+                                      "--trigger-state", rr.TRIGGER_STATE_REVIEW,
+                                      returncode=1, stderr="HTTP 403")
+        self.assertNotEqual(rc, 0)
+
+    def test_a_trigger_state_in_the_wrong_case_is_refused_not_sent(self):
+        """A capitalized lane word is not the one `plan.yml` routes on."""
+        with self.assertRaises(SystemExit):
+            self._dispatch_with("--reason", rr.REASON_REVIEW,
+                                "--trigger-state", "In Progress")
+
+    def test_the_route_plan_re_read_is_unchanged(self):
+        rc, gh = self._dispatch_with("--reason", rr.REASON_ONE_OFF_REVISE,
+                                     "--route", "plan")
+        self.assertEqual(rc, 0)
+        self.assertEqual(gh.sent["client_payload"]["trigger_state"],
+                         rr.TRIGGER_STATE_PLANNING)
+        self.assertEqual(gh.sent["event_type"], rr.PLAN_EVENT)
+
+    def test_the_dispatch_names_the_second_critics_review(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc, _gh = self._dispatch_with("--reason", rr.REASON_REVIEW,
+                                          "--trigger-state", rr.TRIGGER_STATE_REVIEW)
+        self.assertEqual(rc, 0)
+        self.assertIn("second critic's review", buf.getvalue())
+
     def test_an_unreadable_card_exits_non_zero_rather_than_crashing(self):
         with mock.patch.object(linear_ops, "gql", side_effect=RuntimeError("boom")):
             rc = rr.main(["dispatch", "--epic", EPIC, "--repo", "o/n",
@@ -608,6 +695,27 @@ class TheSharedStrings(unittest.TestCase):
         self.assertEqual(rr.REASON_RE_REVIEW, "re-review")
         self.assertEqual(rr.REASON_RERUN_ACT, "re-run")
         self.assertEqual(rr.RERUN_REVIEW_ACT, "▶️ re-run the review")
+
+    def test_the_review_lane_and_reason_are_the_declared_contract(self):
+        """DRE-5277, read by the other cards of DRE-5268."""
+        self.assertEqual(rr.REASON_REVIEW, "review")
+        self.assertEqual(rr.TRIGGER_STATE_REVIEW, "planning")
+        self.assertEqual(len({rr.REASON_REVIEW, rr.REASON_RE_REVIEW,
+                              rr.REASON_REVIEW_RETRY, rr.REASON_RERUN_ACT}), 4)
+
+    def test_review_payload_takes_the_lane_and_activate_payload_still_works(self):
+        built = rr.review_payload(CARD, rr.REASON_REVIEW, rr.TRIGGER_STATE_REVIEW)
+        self.assertEqual(built["trigger_state"], "planning")
+        self.assertEqual(built["reason"], "review")
+        self.assertEqual(rr.activate_payload(CARD, rr.REASON_RE_REVIEW),
+                         plan_run.payload(CARD, trigger_state="in progress",
+                                          reason="re-review"))
+
+    def test_nothing_calls_the_review_post_approval_any_more(self):
+        for name in ("review_rerun.py", "plan_run.py"):
+            with open(os.path.join(SCRIPTS, name), encoding="utf-8") as f:
+                with self.subTest(name=name):
+                    self.assertNotIn("post-approval", f.read().lower())
 
     def test_the_act_is_the_whole_comment_body_or_it_is_not_the_act(self):
         self.assertTrue(rr.is_rerun_act(rr.RERUN_REVIEW_ACT))

@@ -211,3 +211,199 @@ def test_plan_yml_hands_the_sender_to_the_gate():
     for step in gate:
         assert step.get("env", {}).get("SENT_BY_RUN") == \
             "${{ github.event.client_payload.sent_by_run }}"
+
+
+# --- the plan route's own ask for the second critic, in Planning (DRE-5277) --
+#
+# Under DRE-5268 the second critic reads the plan while the epic still sits in
+# Planning, and the plan run asks for that review itself once the first critic
+# has passed the plan: `review_rerun.py dispatch --reason review
+# --trigger-state planning`, sent from inside the run that is still finishing.
+# The guard already admits it — the sender is dropped (DRE-4573) and the lane
+# it was fired for is the lane the epic is in — so these pin that rather than
+# change it.
+
+def test_the_plan_runs_own_review_ask_is_admitted_while_the_epic_is_in_planning():
+    d = dedupe_dispatch.plan_decide("DRE-4467", rr.TRIGGER_STATE_REVIEW,
+                                    "Planning", _in_flight([SENDER]),
+                                    sent_by_run=SENDER["id"])
+    assert d.skip is False, d.reason
+
+
+def test_a_second_identical_ask_while_a_review_run_is_in_flight_is_a_duplicate():
+    # The first ask's review run is OTHER, still going when the second ask was
+    # created. Both asks name the same sender; the review run is not it.
+    d = dedupe_dispatch.plan_decide("DRE-4467", rr.TRIGGER_STATE_REVIEW,
+                                    "Planning", _in_flight([SENDER, OTHER]),
+                                    sent_by_run=SENDER["id"])
+    assert d.skip is True
+    assert OTHER["id"] in d.reason
+
+
+def test_the_review_ask_is_admitted_end_to_end_through_the_gate(monkeypatch, tmp_path):
+    """The payload `review_rerun.py dispatch` really writes, read by the gate
+    exactly as `plan.yml` hands it over (TRIGGER_STATE, SENT_BY_RUN)."""
+    monkeypatch.setenv("GITHUB_RUN_ID", SENDER["id"])
+    gh = _FiredDispatch()
+    with mock.patch.object(linear_ops, "gql", return_value={"issue": CARD}), \
+            mock.patch.object(plan_run.subprocess, "run", gh):
+        rc = rr.main(["dispatch", "--epic", "DRE-4467", "--repo", "o/n",
+                      "--reason", rr.REASON_REVIEW,
+                      "--trigger-state", rr.TRIGGER_STATE_REVIEW])
+    assert rc == 0
+    sent = gh.sent["client_payload"]
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_RUN_ID", REVIEW_RUN_ID)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("TRIGGER_STATE", sent["trigger_state"])
+    monkeypatch.setenv("SENT_BY_RUN", sent["sent_by_run"])
+    with mock.patch.object(dedupe_dispatch, "_plan_siblings", return_value=[SENDER]), \
+            mock.patch.object(dedupe_dispatch, "_current_lane", return_value="Planning"), \
+            mock.patch.object(dedupe_dispatch.linear_ops, "cmd_comment") as receipt:
+        dedupe_dispatch.cmd_plan_gate("DRE-4467")
+    assert "skip=false" in out.read_text()
+    receipt.assert_not_called()
+
+
+# --- a parked epic stays parked (DRE-5277) ----------------------------------
+#
+# When an `agent:planner` card ENTERS Triage the relay dispatches a plan run
+# with `trigger_state: triage`, and the route reads that as plan mode: back to
+# Planning and a full re-plan. A park written by the sweep (DRE-5278, DRE-5286)
+# has no in-flight run to cover it, so without this rule the park is undone
+# within seconds. These drive the gate with a synthetic `triage` payload.
+
+TRIAGE = "triage"
+STALL_NOTE = "🛑 Planning stalled — parked for a person. (planning-stall-park)"
+
+
+def test_the_stall_park_tag_is_the_declared_contract():
+    assert dedupe_dispatch.STALL_PARK_TAG == "planning-stall-park"
+
+
+def test_a_triage_dispatch_on_a_card_carrying_needs_human_is_skipped():
+    d = dedupe_dispatch.plan_decide("DRE-4467", TRIAGE, "Triage", [],
+                                    labels=["agent:planner", "needs-human"],
+                                    newest_comment="")
+    assert d.skip is True
+    assert "Planning" in d.reason, "the reason says how it re-enters"
+
+
+def test_a_triage_dispatch_whose_newest_comment_is_the_stall_park_is_skipped():
+    d = dedupe_dispatch.plan_decide("DRE-4467", TRIAGE, "Triage", [],
+                                    labels=["agent:planner"],
+                                    newest_comment=STALL_NOTE)
+    assert d.skip is True
+    assert "Planning" in d.reason
+
+
+def test_a_triage_dispatch_on_a_card_with_neither_proceeds():
+    d = dedupe_dispatch.plan_decide("DRE-4467", TRIAGE, "Triage", [],
+                                    labels=["agent:planner"],
+                                    newest_comment="a person's comment")
+    assert d.skip is False, d.reason
+
+
+def test_the_lane_word_is_matched_however_the_relay_cases_it():
+    d = dedupe_dispatch.plan_decide("DRE-4467", "Triage", "Triage", [],
+                                    labels=["needs-human"])
+    assert d.skip is True
+
+
+def test_the_rule_never_touches_a_planning_dispatch():
+    # A person moving a parked epic from Triage to Planning is how it re-enters.
+    for state in ("planning", "Planning"):
+        d = dedupe_dispatch.plan_decide("DRE-4467", state, "Planning", [],
+                                        labels=["needs-human"],
+                                        newest_comment=STALL_NOTE)
+        assert d.skip is False, d.reason
+
+
+def test_an_older_stall_park_comment_is_not_the_newest():
+    # The rule reads the NEWEST comment only; the caller hands it that one.
+    d = dedupe_dispatch.plan_decide("DRE-4467", TRIAGE, "Triage", [],
+                                    labels=[], newest_comment="later comment")
+    assert d.skip is False
+
+
+class _Reader:
+    """A stubbed Linear reader that records every call made of it."""
+
+    def __init__(self, answer=None, error=None):
+        self.calls = []
+        self.answer = answer
+        self.error = error
+
+    def __call__(self, identifier):
+        self.calls.append(identifier)
+        if self.error:
+            raise self.error
+        return self.answer
+
+
+def _gate_with_park_reads(_gate_env, monkeypatch, trigger, labels, newest):
+    monkeypatch.setenv("TRIGGER_STATE", trigger)
+    monkeypatch.delenv("SENT_BY_RUN", raising=False)
+    with mock.patch.object(dedupe_dispatch, "_plan_siblings", return_value=[]), \
+            mock.patch.object(dedupe_dispatch, "_current_lane",
+                              return_value="Triage" if trigger == TRIAGE else "Planning"), \
+            mock.patch.object(dedupe_dispatch, "_card_labels", labels), \
+            mock.patch.object(dedupe_dispatch, "_newest_comment", newest), \
+            mock.patch.object(dedupe_dispatch.linear_ops, "cmd_comment") as receipt:
+        dedupe_dispatch.cmd_plan_gate("DRE-4467")
+    return _gate_env.read_text(), receipt
+
+
+def test_cmd_plan_gate_makes_no_park_read_for_a_planning_dispatch(_gate_env, monkeypatch):
+    labels, newest = _Reader(["needs-human"]), _Reader(STALL_NOTE)
+    written, _receipt = _gate_with_park_reads(_gate_env, monkeypatch, "planning",
+                                              labels, newest)
+    assert "skip=false" in written
+    assert labels.calls == [] and newest.calls == []
+
+
+def test_cmd_plan_gate_makes_no_park_read_for_an_in_progress_dispatch(_gate_env, monkeypatch):
+    labels, newest = _Reader(["needs-human"]), _Reader(STALL_NOTE)
+    _gate_with_park_reads(_gate_env, monkeypatch, "in progress", labels, newest)
+    assert labels.calls == [] and newest.calls == []
+
+
+def test_cmd_plan_gate_skips_a_triage_dispatch_on_a_parked_card(_gate_env, monkeypatch):
+    labels, newest = _Reader(["needs-human"]), _Reader("")
+    written, receipt = _gate_with_park_reads(_gate_env, monkeypatch, TRIAGE,
+                                             labels, newest)
+    assert "skip=true" in written
+    assert labels.calls == ["DRE-4467"]
+    receipt.assert_called_once()
+
+
+def test_cmd_plan_gate_skips_a_triage_dispatch_after_a_stall_park(_gate_env, monkeypatch):
+    labels, newest = _Reader([]), _Reader(STALL_NOTE)
+    written, _receipt = _gate_with_park_reads(_gate_env, monkeypatch, TRIAGE,
+                                              labels, newest)
+    assert "skip=true" in written
+    assert newest.calls == ["DRE-4467"]
+
+
+def test_cmd_plan_gate_fails_open_on_an_unreadable_card(_gate_env, monkeypatch):
+    labels = _Reader(error=RuntimeError("Linear 500"))
+    newest = _Reader(error=RuntimeError("Linear 500"))
+    written, receipt = _gate_with_park_reads(_gate_env, monkeypatch, TRIAGE,
+                                             labels, newest)
+    assert "skip=false" in written
+    receipt.assert_not_called()
+
+
+def test_the_park_readers_read_labels_and_the_newest_comment(monkeypatch):
+    issue = {"labels": {"nodes": [{"name": "needs-human"}, {"name": "agent:planner"}]},
+             "state": {"name": "Triage"}}
+    with mock.patch.object(dedupe_dispatch.linear_ops, "get_issue",
+                           return_value=issue), \
+            mock.patch.object(dedupe_dispatch.linear_ops, "comment_bodies",
+                              return_value=["old", STALL_NOTE]):
+        assert dedupe_dispatch._card_labels("DRE-4467") == ["needs-human", "agent:planner"]
+        assert dedupe_dispatch._newest_comment("DRE-4467") == STALL_NOTE
+    with mock.patch.object(dedupe_dispatch.linear_ops, "comment_bodies",
+                           return_value=[]):
+        assert dedupe_dispatch._newest_comment("DRE-4467") == ""
