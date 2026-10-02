@@ -1625,8 +1625,8 @@ jobs:
       # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
       # every path of its own: the runs worth keeping are the ones that died,
       # and keeping a log must never change this job's conclusion. Anything
-      # that stops it — a refused scrub, no OIDC token (portico forbids
-      # `id-token: write` by policy), no AWS CLI (the self-hosted minis may
+      # that stops it — a refused scrub, no OIDC token (a calling stub that
+      # grants no `id-token: write`), no AWS CLI (the self-hosted minis may
       # not have one), a log over the single-part cap — is recorded as a GAP
       # on the run instead.
       #

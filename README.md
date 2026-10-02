@@ -192,13 +192,13 @@ permission than the stub that calls it. It degrades rather than breaks — a stu
 without it mints no token, the upload records a gap, and the run itself is
 unaffected — so an un-updated fleet stub loses its logs and nothing else.
 
-**portico is the deliberate exception, on both stubs.** Its
-`.github/scripts/assert-credential-free.sh` forbids `id-token: write` outright
-("OIDC token minting; only needed to authenticate to a cloud"), which is that
-repo's standing position that its CI holds no cloud credentials at all. That is
-an open question with the CEO — raised when DRE-4353 rolled this grant across
-the fleet, settled separately — and until it is settled portico keeps both maps
-minus `id-token: write` and takes the recorded gap.
+**portico grants it too.** It used to be the exception: its
+`.github/scripts/assert-credential-free.sh` refused `id-token: write` in any
+workflow, as that repo's position that its CI holds no cloud credentials. The
+question was settled after DRE-4353 rolled the grant across the fleet — the
+check now exempts exactly that line for portico's thin agent stubs, and those
+stubs carry it — so portico's agent runs keep their logs like every other
+repo's (Stage 2 fix #25 removed the last comments that still said otherwise).
 
 Inside a called workflow, `github.event`, `github.event_name`, and
 `github.repository` are the CALLER's, so all payload references and job-level

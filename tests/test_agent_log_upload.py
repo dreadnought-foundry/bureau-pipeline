@@ -235,12 +235,14 @@ class StepShapeTest(unittest.TestCase):
         printed into every run that has no token and would send the reader to
         the wrong repo's policy. Spelled in pieces so this file does not trip
         its own check."""
-        stale = re.compile("portico" + r"\s+(forbids|grants\s+no)", re.I)
+        stale = re.compile("portico" + r"\s+(forbids|grants\s+no)"
+                           r"|is the deliberate exception", re.I)
         carriers = [
             *(WORKFLOWS / f"{name}.yml"
               for name in ("agent-task", "agent-fix", "qa-review", "verify",
                            "medic", "plan")),
             UPLOADER,
+            REPO / "README.md",
         ]
         hits = []
         for path in carriers:
