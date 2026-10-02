@@ -24,8 +24,10 @@ read once with `gh api`; its line is collected unless the branch owes none
 (`exempt`), the line says `none`, there is no line (`no line`), it does not
 parse, or its title fails the wording check — every one of those is named in a
 printed line and none of them is fatal: a pull request merged before the gate
-existed is ordinary. A first release collects nothing, as the Linear release
-attaches nothing.
+existed is ordinary. A pull request GitHub will not read — a 404, a 502, a
+`(#n)` that names an issue — is skipped the same way, as `unreadable`, and the
+release's other sentences still publish. A first release collects nothing, as
+the Linear release attaches nothing.
 
 THE RULE'S SWITCH IS NOT ASKED
 ------------------------------
@@ -42,10 +44,18 @@ THE VENDOR, ANSWERED (standards/vendor-boundaries.md)
 * The asset needs `contents: write`, already in the caller stub. Reading a
   private repository's pull requests needs `pull-requests: read`, which the
   stubs grant through DRE-5579 (agent-bureau and the scaffold template) and
-  DRE-5534 (portico). A forbidden answer is one `problem` naming `caller stub
-  lacks pull-requests: read`, and nothing is published; DRE-5516 turns that
-  problem into a run annotation and a summary block.
+  DRE-5534 (portico). A forbidden answer — GitHub's `Resource not accessible
+  by integration` — is one `problem` naming `caller stub lacks pull-requests:
+  read`, and nothing is published; DRE-5516 turns that problem into a run
+  annotation and a summary block. GitHub answers a rate limit with a 403 too,
+  so a 403 alone never names the permission: a rate limit is its own
+  `problem` and nothing is published, because every read after it would fail
+  the same way and `publish` re-runs it by hand once the limit resets. Any
+  other 403 skips that one pull request as `unreadable`.
 * A re-run after the tag is idempotent: the asset is clobbered.
+* A release this module creates is made with `--latest=false`: it exists to
+  carry the file, and on a repository with several surfaces the last one to
+  publish would otherwise take GitHub's Latest pointer.
 * A crash after the tag loses only this lap's file, which `publish` re-creates
   by hand.
 
@@ -70,6 +80,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from gh_read_retry import is_rate_limit_refusal  # noqa: E402
 from release_linear import changes_since, surface_filter  # noqa: E402
 from whats_new import (  # noqa: E402
     Entry, WhatsNewError, check_wording, parse_line, required_for, validate)
@@ -90,13 +101,21 @@ DATA_PATH = ".github/bureau/release.json"
 
 _MERGE_SUBJECT = re.compile(r"^Merge pull request #(\d+) from ")
 _SQUASH_SUBJECT = re.compile(r"\(#(\d+)\)\s*$")
-_FORBIDDEN_ANSWER = re.compile(
-    r"HTTP 403|forbidden|not accessible by integration", re.I)
+_FORBIDDEN_ANSWER = re.compile(r"not accessible by integration", re.I)
 _NO_LINE = "no `What's new:` line"
 
 
 class Forbidden(RuntimeError):
     """GitHub refused to read a pull request: the token lacks the scope."""
+
+
+class RateLimited(RuntimeError):
+    """GitHub is throttling the token: every read after this one fails too."""
+
+
+class Unreadable(RuntimeError):
+    """GitHub would not answer for this one pull request; its message is
+    `gh`'s stderr."""
 
 
 def _run(argv, *, env=None):
@@ -113,15 +132,19 @@ def pull_request_number(message: str) -> int | None:
 
 
 def read_pull_request(repo: str, number: int, *, run, env) -> dict:
-    """`{"head", "body"}` for one pull request. Raises Forbidden on a 403,
-    RuntimeError on any other failure."""
+    """`{"head", "body"}` for one pull request. Raises Forbidden when the token
+    lacks the scope, RateLimited when GitHub is throttling it, Unreadable on
+    any other failure."""
     code, out, err = run(["gh", "api", f"repos/{repo}/pulls/{number}",
                           "--jq", "{head: .head.ref, body: .body}"], env=env)
     if code != 0:
-        if _FORBIDDEN_ANSWER.search(err or ""):
+        answer = (err or "").strip()
+        if is_rate_limit_refusal(answer):
+            raise RateLimited(f"GitHub rate limited the read of #{number} ({answer})")
+        if _FORBIDDEN_ANSWER.search(answer):
             raise Forbidden(f"{FORBIDDEN} — GitHub refused to read #{number} "
-                            f"({(err or '').strip()})")
-        raise RuntimeError(f"gh api could not read #{number}: {(err or '').strip()}")
+                            f"({answer})")
+        raise Unreadable(answer or f"gh api exited {code}")
     answer = json.loads(out)
     return {"head": answer.get("head") or "", "body": answer.get("body") or ""}
 
@@ -156,7 +179,12 @@ def collect(changes, *, repo: str, run, env, out) -> tuple:
         if number in seen:
             continue
         seen.add(number)
-        pull = read_pull_request(repo, number, run=run, env=env)
+        try:
+            pull = read_pull_request(repo, number, run=run, env=env)
+        except Unreadable as error:
+            skipped.append((number, f"unreadable: {error}"))
+            out(f"{TAG}: #{number} skipped — unreadable: {error}")
+            continue
         entry, reason = judge(pull["head"], pull["body"])
         if entry is None:
             skipped.append((number, reason))
@@ -197,7 +225,7 @@ def publish(document: dict, *, repo: str, tag: str, run, env) -> str | None:
             code, out, err = run(["gh", "release", "create", tag, str(asset),
                                   "--repo", repo, "--title", tag,
                                   "--notes", f"What's new in {tag}",
-                                  "--verify-tag"], env=env)
+                                  "--verify-tag", "--latest=false"], env=env)
             url = next((line.strip() for line in reversed(out.splitlines())
                         if line.strip().startswith("http")), "")
             command = "gh release create"

@@ -15,7 +15,10 @@ What this file pins:
   4. a first release and a release with nothing to say publish nothing;
   5. the asset is created on a tag with no release and clobbered on one that
      has a release, and the URL is the one `gh` printed;
-  6. nothing GitHub does — a forbidden read, a refused release — raises;
+  6. nothing GitHub does — a forbidden read, a refused release — raises; only
+     `Resource not accessible by integration` names the missing permission,
+     a rate limit is a problem of its own, and one pull request GitHub will
+     not read is skipped while the rest still publish;
   7. `shipped` is the injected clock on the Pacific clock, to the second;
   8. `publish --dry-run` prints the document and publishes nothing.
 
@@ -327,6 +330,7 @@ def test_a_tag_with_no_release_gets_one_created_with_the_asset(tmp_path):
     assert create[:4] == ["gh", "release", "create", TAG]
     assert Path(create[4]).name == "whats-new.json"
     assert "--verify-tag" in create
+    assert "--latest=false" in create
     assert create[create.index("--title") + 1] == TAG
     assert create[create.index("--notes") + 1] == f"What's new in {TAG}"
     assert create[create.index("--repo") + 1] == REPO
@@ -360,6 +364,44 @@ def test_a_forbidden_read_names_the_missing_permission_and_publishes_nothing(tmp
     assert result["items"] == [] and result["url"] is None
     assert gh.releases() == []
     assert any("caller stub lacks pull-requests: read" in line for line in lines)
+
+
+@pytest.mark.parametrize("stderr", [
+    "gh: API rate limit exceeded for installation. (HTTP 403)\n",
+    "gh: You have exceeded a secondary rate limit. (HTTP 403)\n"])
+def test_a_rate_limited_read_is_not_a_missing_permission(tmp_path, stderr):
+    repo, sha = _scenario(tmp_path)
+    gh = FakeGh(_pulls(), fail={f"gh api repos/{REPO}/pulls/17": (1, "", stderr)})
+    result = _write(repo, sha, gh)
+    assert result["problem"]
+    assert whats_new_release.FORBIDDEN not in result["problem"]
+    assert "rate limit" in result["problem"]
+    assert result["items"] == [] and gh.releases() == []
+
+
+def test_a_bare_403_is_not_a_missing_permission(tmp_path):
+    repo, sha = _scenario(tmp_path)
+    gh = FakeGh(_pulls(), fail={f"gh api repos/{REPO}/pulls/17": (
+        1, "", "gh: Forbidden (HTTP 403)\n")})
+    result = _write(repo, sha, gh)
+    assert whats_new_release.FORBIDDEN not in (result["problem"] or "")
+
+
+@pytest.mark.parametrize("stderr", ["gh: Not Found (HTTP 404)\n",
+                                    "gh: HTTP 502: Bad Gateway\n"])
+def test_one_unreadable_pull_request_is_skipped_and_the_rest_still_publish(tmp_path, stderr):
+    repo, sha = _scenario(tmp_path)
+    gh = FakeGh(_pulls(), fail={f"gh api repos/{REPO}/pulls/17": (1, "", stderr)})
+    lines = []
+    result = _write(repo, sha, gh, lines=lines)
+    assert result["problem"] is None
+    reasons = dict(result["skipped"])
+    assert reasons[17] == f"unreadable: {stderr.strip()}"
+    assert any(line.startswith("whats-new: #17 skipped — unreadable: ") for line in lines)
+    assert [item["title"] for item in result["items"]] == [
+        "Searching a document now finds words inside tables."]
+    [(_, document)] = gh.published
+    assert document["items"] == result["items"]
 
 
 def test_a_refused_release_returns_the_stderr_as_the_problem(tmp_path):
