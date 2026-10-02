@@ -57,6 +57,6 @@
     "fix-attempt-landed/fix": "🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running.",
     "fix-attempt-landed/conflict": "🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running.",
     "fix-attempt-disputed": "🛑 Fix attempt $ATTEMPT blocked: $BLOCKER\n\n          $FORMAT",
-    "run-failure-diagnosed": "\"<report>\""
+    "run-failure-diagnosed": "\"$(cat \"$REPORT\")\""
   }
 }
