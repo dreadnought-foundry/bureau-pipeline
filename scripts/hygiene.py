@@ -35,7 +35,9 @@ Lists each of the owner's repos' open pull requests once, hands every
 discovered lane the cards and pull requests in this leg's scope, and executes
 what the lanes return through one guarded seam. A lane never writes: it returns
 `Action`s (each carrying the `Write`s the constructors below built) and `Left`
-rows for a person.
+rows for a person. Exit 0 on a completed or dry pass, 1 when a write the guard
+allowed then failed, and 3 when a lane proposed a write the guard refuses —
+every write of every action is guarded before any is sent, so nothing was.
 
 ## Three rules, here and nowhere else
 

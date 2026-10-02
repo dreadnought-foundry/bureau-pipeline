@@ -814,6 +814,23 @@ class TestGuard:
         with pytest.raises(hygiene.Forbidden):
             hygiene.guard(forged, context(HOME))
 
+    def test_a_refused_lane_exits_three_and_writes_no_ledger(self, lanes, sent, monkeypatch, tmp_path):
+        write_lane(lanes, "bad", """
+            for c in board.cards(ctx, "Todo"):
+                out.append(hygiene.Action(lane=LANE, target=c["identifier"],
+                    act="hygiene-card-close", cause="x", evidence=["y"],
+                    writes=[hygiene.linear_state(c, "Todo")]))
+        """)
+        board = tmp_path / "board.json"
+        board.write_text(json.dumps(board_doc(card("DRE-1", "Todo", "portico"))))
+        monkeypatch.setattr(hygiene, "GH_RUNNER", FakeGh())
+        monkeypatch.delenv("HYGIENE_DRY_RUN", raising=False)
+        ledger = tmp_path / "ledger.json"
+        assert hygiene.main(["run", "--board", str(board), "--owner", HOME,
+                             "--ledger", str(ledger)]) == 3
+        assert not ledger.exists()
+        assert sent == []
+
     def test_the_guard_runs_before_anything_is_sent(self, lanes, sent):
         write_lane(lanes, "bad", """
             for c in board.cards(ctx, "Todo"):
