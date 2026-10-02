@@ -542,3 +542,81 @@ def test_the_refusal_carries_no_key_and_no_url_but_the_api_host(transport,
     message = str(refused.value)
     assert "SECRETVALUE" not in message
     assert message.count("http") == 1 and linear_ops.API in message
+
+
+# ── Stage 2 #11: the run's OWN request count, printed ───────────────────────
+# `spent N` on the budget line is a difference between two readings of a
+# SHARED bucket, so every run that overlaps another is charged the other's
+# requests too — and a run that saw no headers says `unknown`. The seam has
+# always counted the requests it sent (`requests_made()`); it just never said
+# the number. In the busiest hour 600–950 requests could be pinned on no run.
+# So the exit prints a second line beside the budget line:
+#
+#     linear-calls: <N> request(s) this run (budget: <bucket>)
+#
+# N is the process's own count, exact — nobody else's requests are in it.
+def test_the_calls_line_is_the_processes_own_count_and_names_the_bucket(
+    transport, monkeypatch
+):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(
+        _Resp(headers=_headers(2400)),
+        # Another run spent 40 meanwhile: the budget line is charged them,
+        # the calls line is not.
+        _Resp(headers=_headers(2359)),
+        _Resp(headers=_headers(2357)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert "spent 43 this run" in linear_ops.budget_line()
+    assert linear_ops.calls_line() == (
+        "linear-calls: 3 request(s) this run (budget: fleet)"
+    )
+
+
+def test_the_calls_line_is_exact_even_when_no_headers_came_back(transport):
+    """The budget line can only say `unknown` here; the count still knows."""
+    transport(_Resp(), _Resp())
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.budget_line().startswith("linear-budget: unknown")
+    assert linear_ops.calls_line() == (
+        "linear-calls: 2 request(s) this run (budget: undeclared)"
+    )
+
+
+def test_the_calls_line_counts_the_request_that_was_rate_limited(transport):
+    """A RATELIMITED answer is a request sent; the refusals after it are not."""
+    transport(_Resp(headers=_headers(1)), _ratelimited_400(_headers(0)))
+    linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    assert linear_ops.calls_line().startswith("linear-calls: 2 request(s) this run")
+
+
+def test_the_exit_hook_prints_both_lines_once_on_stderr(transport, capsys,
+                                                        monkeypatch):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(_Resp(headers=_headers(50)), _Resp(headers=_headers(48)))
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    linear_ops._report_budget_at_exit()
+    linear_ops._report_budget_at_exit()
+    out, err = capsys.readouterr()
+    assert out == "", "stdout is parsed by $(...) callers — the line must not land there"
+    assert err.splitlines() == [
+        linear_ops.budget_line(),
+        "linear-calls: 2 request(s) this run (budget: fleet)",
+    ]
+
+
+def test_the_calls_line_carries_no_key_and_no_url(transport, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_api_SECRETVALUE")
+    transport(_Resp(headers=_headers(10)))
+    linear_ops.gql(QUERY)
+    line = linear_ops.calls_line()
+    assert "SECRETVALUE" not in line
+    assert "http" not in line and "api.linear.app" not in line
