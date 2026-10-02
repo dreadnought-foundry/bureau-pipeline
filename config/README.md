@@ -43,7 +43,7 @@ of it is ever a runtime lookup.
   `scripts/epic_cap.py`, and by the console over the GitHub contents API —
   no second copy of the number lives anywhere else.
 - **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
-  "file the planner cap at 4"): how many planner runs may hold a slot at once,
+  "file the planner cap at 4"; two from DRE-5326, three from DRE-5634): how many planner runs may hold a slot at once,
   how long a claim lives, how long a dispatch reserves a slot, and how long a
   card may wait before the watchdog treats it as stuck. Read only through
   `scripts/planner_queue.py`, which finds it beside itself and raises on a bad

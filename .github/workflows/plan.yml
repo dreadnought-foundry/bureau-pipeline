@@ -332,12 +332,14 @@ jobs:
 
       # --- The fleet-wide planner slot: claim or wait (DRE-5179) ------------
       #
-      # Every planner run in every repo shares ONE Linear key, and on
+      # Every planner run in every repo shared ONE Linear key, and on
       # 2026-09-28 nineteen `agent-plan` runs released in one minute drained
-      # it. The cap is two planners across the fleet (epic DRE-5167; four
-      # until DRE-5326 — four out-spent Linear's refill), and
-      # `planner_queue.py` (DRE-5176) keeps its ledger as receipts on the cards
-      # themselves. This step is where a run asks for a slot: after the two
+      # it. Since DRE-5589 the planners spend their own bucket —
+      # `LINEAR_PLANNER_KEY`, with the fleet key as the fallback on a 401 —
+      # so the cap is three planners across the fleet (DRE-5634; epic
+      # DRE-5167; four until DRE-5326 — four out-spent Linear's refill — then
+      # two until DRE-5634), and `planner_queue.py` (DRE-5176) keeps its
+      # ledger as receipts on the cards themselves. This step is where a run asks for a slot: after the two
       # bail gates, before the pool probes, the classifier — the first model
       # call — and the route step. It claims, then reads the ledger; under the
       # cap it answers `admitted=true`, otherwise it posts the card's

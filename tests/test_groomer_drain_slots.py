@@ -1,5 +1,5 @@
 """RED-first: a groom drain releases no more cards than there are free planner
-slots, and the cap is two (DRE-5326).
+slots, and the cap is three (DRE-5634; two from DRE-5326).
 
 On 2026-09-30 at 07:05 PT one groom drain moved nineteen Intake cards to
 Planning at once. The planner cap kept four planner and critic agent steps
@@ -11,7 +11,7 @@ two planners running the spend was about 27 a minute.
 
 So:
 
-  * the committed cap is two;
+  * the committed cap is three (DRE-5634);
   * the drain reads the planner slot ledger once before any card moves, and
     moves no more cards to Planning than the free slots — the cap minus the
     planners running, the dispatched slots, and the cards already waiting in
@@ -106,11 +106,12 @@ def _queued(ops):
 # --------------------------------------------------------------------------
 # the cap
 # --------------------------------------------------------------------------
-def test_the_committed_cap_is_two(monkeypatch):
-    """Four planners out-spend Linear's refill four to six times over; two
-    spent about 27 requests a minute on the same board."""
+def test_the_committed_cap_is_three(monkeypatch):
+    """Four planners out-spent the fleet key's refill four to six times over
+    (DRE-5326, two on 2026-09-30). Since DRE-5589 the planners spend their own
+    5,000-an-hour OAuth bucket, and DRE-5634 raised the cap to three."""
     monkeypatch.delenv(planner_queue.CONFIG_ENV, raising=False)
-    assert planner_queue.cap() == 2
+    assert planner_queue.cap() == 3
 
 
 # --------------------------------------------------------------------------
@@ -232,10 +233,10 @@ def test_free_slots_are_the_cap_minus_running_and_waiting(monkeypatch):
     monkeypatch.delenv(planner_queue.CONFIG_ENV, raising=False)
     running = _slot_card("DRE-7001", "Planning", "claimed", 1)
     waiting = _slot_card("DRE-7002", "Planning", "waiting", 2)
-    assert REAL_FREE_SLOTS(_Board(board=[])) == (2, 2)
-    assert REAL_FREE_SLOTS(_Board(board=[running])) == (1, 2)
+    assert REAL_FREE_SLOTS(_Board(board=[])) == (3, 3)
+    assert REAL_FREE_SLOTS(_Board(board=[running])) == (2, 3)
     # A card waiting in line is owed the next slot before anything new is.
-    assert REAL_FREE_SLOTS(_Board(board=[running, waiting])) == (0, 2)
+    assert REAL_FREE_SLOTS(_Board(board=[running, waiting])) == (1, 3)
 
 
 def test_the_drain_reads_the_ledger_it_is_handed(monkeypatch):
@@ -246,8 +247,8 @@ def test_the_drain_reads_the_ledger_it_is_handed(monkeypatch):
     ops = _Board(comments=_thread(proposal),
                  board=[_slot_card("DRE-7001", "Planning", "claimed", 1)])
     groomer.drain(ops, card=PROPOSAL_CARD)
-    assert _planning_moves(ops) == _planning(proposal)[:1]
-    assert "planner slots: 1 free of 2" in _drained(ops)
+    assert _planning_moves(ops) == _planning(proposal)[:2]
+    assert "planner slots: 2 free of 3" in _drained(ops)
 
 
 def test_an_unreadable_ledger_refuses_before_any_card_moves(monkeypatch):
