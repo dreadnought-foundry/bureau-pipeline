@@ -171,9 +171,17 @@ def main():
     elif cmd == "children-detail":
         # The fuller record the routing-verdict stamper reads (DRE-4593). Same
         # card set as `children-json`, with the three fields that read pulls.
+        # STUB_DETAIL hands a walk its own records whole — the proof check
+        # reads titles, bodies, labels and relations (DRE-5299).
+        if os.environ.get("STUB_DETAIL"):
+            print(os.environ["STUB_DETAIL"])
+            return
         cards = os.environ.get("STUB_CARDS", "DRE-9001,DRE-9002").split(",")
         print(json.dumps([{"identifier": c, "title": c, "body": "",
                            "labels": [], "blocked_by": []} for c in cards if c]))
+    elif cmd == "child-descriptions":
+        # The bodies the UI reading is taken from (`plan_artifact.py ui-epic`).
+        print(os.environ.get("STUB_DESCRIPTIONS", ""))
     elif cmd == "epics-in-flight":
         # Logged with its flags, so a walk can see WHICH lanes the run asked
         # for: `--sight` reads Planning too (DRE-5278, run by DRE-5280).
@@ -1532,7 +1540,20 @@ class CriticWalk(unittest.TestCase):
         decided = self._decided()
         self.assertEqual((decided["steps.post1.outputs.action"],
                           decided["steps.post1.outputs.bound"]), ("hold", "false"))
-        self.assertEqual(self._reached(decided), [name])
+        # DRE-5299: the revision is read, re-checked and uploaded on this path,
+        # and the re-review is reached only once the re-check passed it.
+        self.assertEqual(self._reached(decided),
+                         ["Plan artifact — published source",
+                          "Re-check the revised plan — review mode"])
+        self.assertEqual(
+            self._reached(dict(decided, **{"steps.recheck_review.outputs.ok": "false"})),
+            ["Plan artifact — published source",
+             "Re-check the revised plan — review mode"])
+        self.assertEqual(
+            self._reached(dict(decided, **{"steps.recheck_review.outputs.ok": "true"})),
+            ["Plan artifact — published source",
+             "Re-check the revised plan — review mode",
+             "Plan artifact — upload source (review)", name])
         # Nothing here is the CEO's to decide, so the card-set question is not
         # asked in review mode.
         cardset = step("Re-plan — did the card set change?")
@@ -1854,6 +1875,180 @@ class CriticWalk(unittest.TestCase):
         out = self._outputs()
         self.assertEqual(out["action"], "proceed")
         self.assertEqual(out["result"], pc.NO_RESULT)
+
+
+# --- DRE-5299: the review-mode re-plan carries the plan artifact -------------
+#
+# Two steps of plan.yml's own shell, walked with CriticWalk's harness: the
+# published-source read the re-plan starts from, and the re-check that runs the
+# plan route's gates over the revision. Real `plan_artifact.py`,
+# `proof_and_demo.py` and `plan_critic.py`; Linear, the child-card validator
+# and the verdict stamper are recording stubs.
+
+from test_plan_artifact_scenario import V1 as VALID_ARTIFACT  # noqa: E402
+from test_proof_and_demo import _plan as proof_plan  # noqa: E402
+
+import plan_artifact as pa  # noqa: E402
+
+PUBLISHED_SOURCE = "Plan artifact — published source"
+REVIEW_RECHECK = "Re-check the revised plan — review mode"
+
+VALIDATE_STUB = '''#!/usr/bin/env python3
+import os, sys
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write("validate " + " ".join(sys.argv[1:]) + "\\n")
+sys.exit(int(os.environ.get("STUB_VALIDATE_RC", "0")))
+'''
+
+
+class ReviewReplanArtifactWalk(unittest.TestCase):
+    """The published source the re-plan starts from, and the gates the revision
+    has to pass before anything reviews it again or publishes it."""
+
+    setUp_critic = CriticWalk.setUp
+    _stub = CriticWalk._stub
+    _shell = CriticWalk._shell
+    _outputs = CriticWalk._outputs
+    _log = CriticWalk._log
+    _records = CriticWalk._records
+    _thread = CriticWalk._thread
+
+    def setUp(self):
+        self.setUp_critic()
+        # The whole pipeline checkout, as the run has it: the gates import
+        # their siblings and read config/ and agents.yaml at import time.
+        # The stubs are written back over the real modules afterwards.
+        scripts = os.path.join(self.pipeline, "scripts")
+        shutil.copytree(SCRIPTS, scripts, dirs_exist_ok=True)
+        shutil.copytree(os.path.join(ROOT, "config"),
+                        os.path.join(self.pipeline, "config"), dirs_exist_ok=True)
+        shutil.copy(os.path.join(ROOT, "agents.yaml"),
+                    os.path.join(self.pipeline, "agents.yaml"))
+        self._stub("linear_ops.py", LINEAR_STUB)
+        self._stub("reconcile.py", RECONCILE_STUB)
+        self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
+        self._stub("validate_card.py", VALIDATE_STUB)
+        self.artifact = os.path.join(self.tmp, "plan-artifact.md")
+        self.portal = os.path.join(self.tmp, ".plan-portal")
+
+    # --- the published source ----------------------------------------------
+
+    def _publish_page(self, text: str = VALID_ARTIFACT):
+        """The portal as `plan_artifact.publish` leaves it: page and source."""
+        pa.publish(text, EPIC, self.portal)
+
+    def _read_source(self, checkout: str):
+        out = self._shell(PUBLISHED_SOURCE, CHECKOUT=checkout)
+        return self._outputs().get("found"), out
+
+    def test_a_published_page_is_the_revision_s_starting_text(self):
+        self._publish_page()
+        found, _ = self._read_source("success")
+        self.assertEqual(found, "true")
+        self.assertEqual(open(self.artifact).read(), VALID_ARTIFACT)
+        self.assertFalse(os.path.exists(self.portal),
+                         "the portal checkout leaves the planner's workspace")
+
+    def test_a_portal_with_no_page_for_this_epic_is_written_fresh(self):
+        pa.publish(VALID_ARTIFACT, OTHER_EPIC, self.portal)
+        found, out = self._read_source("success")
+        self.assertEqual(found, "false")
+        self.assertFalse(os.path.exists(self.artifact))
+        self.assertIn("fresh", out.stdout)
+
+    def test_no_portal_configured_is_written_fresh(self):
+        found, out = self._read_source("skipped")
+        self.assertEqual(found, "false")
+        self.assertFalse(os.path.exists(self.artifact))
+        self.assertIn("fresh", out.stdout)
+
+    def test_a_checkout_that_failed_is_written_fresh(self):
+        # Whatever a failed checkout left on disk is not read.
+        self._publish_page()
+        found, out = self._read_source("failure")
+        self.assertEqual(found, "false")
+        self.assertFalse(os.path.exists(self.artifact))
+        self.assertIn("fresh", out.stdout)
+
+    def test_both_re_plan_prompts_name_the_found_case_and_the_fresh_case(self):
+        for name in ("Re-plan after the second critic sent it back",
+                     "Re-plan after the second critic sent it back — on the next rung"):
+            doc = yaml.safe_load(open(WF).read())
+            (s,) = [x for x in doc["jobs"]["plan"]["steps"] if x.get("name") == name]
+            prompt = s["with"]["prompt"]
+            with self.subTest(step=name):
+                self.assertIn("${{ steps.pubsrc.outputs.found }}", prompt)
+                self.assertIn("${{ steps.pubsrc.outcome }}", prompt)
+                self.assertIn("`true`", prompt)
+                self.assertIn("NO previous artifact on disk", prompt)
+                self.assertIn("standards/plan-artifact.md", prompt)
+                self.assertIn("ledger-check", prompt)
+
+    # --- the re-check --------------------------------------------------------
+
+    def _recheck(self, children: list, expect_rc: int, outcome: str = "success",
+                 **env):
+        return self._shell(REVIEW_RECHECK, expect_rc=expect_rc,
+                           STUB_DETAIL=json.dumps(children),
+                           REPLAN_OUTCOME=outcome, **env)
+
+    def _lane_writes(self) -> list[str]:
+        return [line for line in self._log().splitlines()
+                if line.startswith(("state ", "add-label "))]
+
+    def test_a_revision_that_passes_every_gate_is_stamped_and_moves_nowhere(self):
+        with open(self.artifact, "w") as f:
+            f.write(VALID_ARTIFACT)
+        self._recheck(proof_plan(), 0)
+        self.assertEqual(self._outputs().get("ok"), "true")
+        log = self._log()
+        self.assertIn("validate check-children " + EPIC, log)
+        self.assertIn("stamp-verdicts stamp --epic " + EPIC, log)
+        self.assertEqual(self._lane_writes(), [])
+        self.assertNotIn("comment ", log)
+
+    def test_a_revision_whose_proof_card_is_not_last_parks_in_triage(self):
+        with open(self.artifact, "w") as f:
+            f.write(VALID_ARTIFACT)
+        kids = proof_plan(order=["DRE-9091", "DRE-9001", "DRE-9002", "DRE-9003"])
+        self._recheck(kids, 1)
+        self.assertEqual(self._outputs().get("ok"), "false")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        log = self._log()
+        self.assertNotIn("stamp-verdicts", log)
+        self.assertNotIn("state Green Light", log)
+        self.assertNotIn("state Planning", log)
+        thread = self._thread()
+        self.assertEqual(len(thread), 2, thread)
+        self.assertIn("is not the epic's last child", thread[0])
+        self.assertIn("proof", thread[-1].lower())
+        self.assertTrue(thread[-1].rstrip().endswith(pc.REAPPROVE_HOW + "."),
+                        thread[-1][-200:])
+        # The label is on before the move, and the note follows both.
+        lines = log.splitlines()
+        self.assertLess(lines.index("add-label needs-human"), lines.index("state Triage"))
+        self.assertGreater(max(i for i, x in enumerate(lines) if x.startswith("comment ")),
+                           lines.index("state Triage"))
+
+    def test_a_revision_with_no_artifact_names_the_re_plan_that_did_not_finish(self):
+        # The fresh case, and the re-plan died before it wrote anything: the
+        # artifact check refuses a missing file, and the note says why.
+        self._recheck(proof_plan(), 1, outcome="failure")
+        self.assertEqual(self._outputs().get("ok"), "false")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        note = self._thread()[-1]
+        self.assertIn("plan artifact", note)
+        self.assertIn("did not finish", note)
+        self.assertNotIn("stamp-verdicts", self._log())
+
+    def test_invalid_children_park_before_any_other_gate_runs(self):
+        with open(self.artifact, "w") as f:
+            f.write(VALID_ARTIFACT)
+        self._recheck(proof_plan(), 1, STUB_VALIDATE_RC="1")
+        self.assertEqual(self._outputs().get("ok"), "false")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertIn("child card", self._thread()[-1])
+        self.assertNotIn("stamp-verdicts", self._log())
 
 
 if __name__ == "__main__":

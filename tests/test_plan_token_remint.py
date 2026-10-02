@@ -71,6 +71,15 @@ POOL_STEP_IDS = {READER_MINT_ID, "probe_2", "probe_3", "probe_4"}
 # installation, and is `continue-on-error` by design — a failed mint leaves
 # the card waiting for the sweep. Pinned in tests/test_planner_queue_wiring.py.
 OWNER_MINT_IDS = {"next_token"}
+# The review-mode re-plan's portal checkout mint (DRE-5299): a mint of the
+# PRIMARY App for one `actions/checkout` of the plan portal, not a re-mint of
+# the reader. The dispatch-pool Apps are never pointed at the portal, because
+# nothing proves they are installed there; the `publish` job's portal checkout,
+# which every plan run proves, mints the primary App. Pinned in
+# `ThePortalMintIsThePrimaryAppForOneCheckout` below.
+PORTAL_MINT_IDS = {"app_portal"}
+PORTAL_CHECKOUT = "Plan artifact — portal checkout (review)"
+CHECKOUT_ACTION = "actions/checkout"
 # The second critic's own route (DRE-5280), as the step gates spell it.
 REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 
@@ -214,6 +223,7 @@ class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
             and s.get("id") != START_MINT_ID
             and s.get("id") not in POOL_STEP_IDS
             and s.get("id") not in OWNER_MINT_IDS
+            and s.get("id") not in PORTAL_MINT_IDS
         ]
 
     def test_there_are_re_mints(self):
@@ -258,6 +268,89 @@ class EveryReMintIsTheReaderMintAgain(unittest.TestCase):
         spent = {step_id for _i, _s, step_id in _consumers()}
         for i, step in self._re_mints():
             self.assertIn(step.get("id"), spent, f"{_label(i, step)} is never read")
+
+
+def _publish_steps() -> list[dict]:
+    doc = yaml.safe_load(PLAN.read_text(encoding="utf-8"))
+    return doc["jobs"]["publish"]["steps"]
+
+
+def _publish_step_named(name: str) -> dict:
+    found = [s for s in _publish_steps() if str(s.get("name") or "") == name]
+    if len(found) != 1:
+        raise AssertionError(f"{len(found)} publish-job steps named {name!r}")
+    return found[0]
+
+
+class ThePortalMintIsThePrimaryAppForOneCheckout(unittest.TestCase):
+    """DRE-5299. The review-mode re-plan reads the published plan source out of
+    the plan portal, and the checkout that does it needs a token the portal
+    accepts. That token is a fresh mint of the PRIMARY App — the identity the
+    `publish` job's portal checkout uses on every plan run — minted directly
+    before its one consumer, so no model run lies between them."""
+
+    REVIEW_REPLAN = ("steps.route.outputs.mode == 'review' && "
+                     "steps.post1.outputs.action == 'hold' && "
+                     "steps.post1.outputs.bound != 'true'")
+
+    def test_it_is_the_pinned_mint_with_the_publish_jobs_inputs(self):
+        steps = _steps()
+        (step_id,) = PORTAL_MINT_IDS
+        mint = steps[_index_of_id(step_id)]
+        publish_mint = _publish_step_named("Mint bot token")
+        self.assertEqual(_action(mint), MINT_ACTION)
+        self.assertEqual(mint.get("uses"), publish_mint.get("uses"))
+        self.assertEqual(mint.get("with"), publish_mint.get("with"))
+        self.assertEqual((mint.get("with") or {}).get("app-id"),
+                         "${{ secrets.BUREAU_APP_ID }}")
+
+    def test_it_is_gated_on_a_portal_and_the_review_re_plan(self):
+        (step_id,) = PORTAL_MINT_IDS
+        gate = str(_steps()[_index_of_id(step_id)].get("if") or "")
+        self.assertIn("vars.PLAN_PORTAL_REPO != ''", gate)
+        self.assertIn(self.REVIEW_REPLAN, gate)
+
+    def test_it_fails_loudly(self):
+        # A mint that cannot happen goes red at the mint — the rule on
+        # `Re-mint bot token — planner`.
+        (step_id,) = PORTAL_MINT_IDS
+        self.assertFalse(_steps()[_index_of_id(step_id)].get("continue-on-error"))
+
+    def test_exactly_one_step_reads_it_the_checkout_right_after_it(self):
+        (step_id,) = PORTAL_MINT_IDS
+        readers = [(i, s) for i, s, sid in _consumers() if sid == step_id]
+        self.assertEqual([s.get("name") for _i, s in readers], [PORTAL_CHECKOUT])
+        (at, checkout), = readers
+        self.assertEqual(at, _index_of_id(step_id) + 1,
+                         "the mint immediately precedes its one consumer")
+        self.assertEqual(_action(checkout), CHECKOUT_ACTION)
+        self.assertEqual((checkout.get("with") or {}).get("token"),
+                         "${{ steps.app_portal.outputs.token }}")
+
+    def test_no_model_step_reads_it(self):
+        (step_id,) = PORTAL_MINT_IDS
+        for i, step, sid in _consumers():
+            if sid == step_id:
+                self.assertNotEqual(_action(step), MODEL_ACTION, _label(i, step))
+
+    def test_the_pool_token_reaches_no_checkout(self):
+        # `steps.app_post` is minted from the dispatch-pool App the job picked,
+        # and nothing proves those Apps are installed on the portal.
+        for i, step in enumerate(_steps()):
+            if _action(step) == CHECKOUT_ACTION:
+                self.assertNotIn("app_post", _token_step_ids(step), _label(i, step))
+
+    def test_the_checkout_matches_the_publish_jobs_portal_checkout(self):
+        checkout = _steps()[_index_named(PORTAL_CHECKOUT)]
+        theirs = _publish_step_named("Plan artifact — portal checkout")
+        self.assertEqual(checkout.get("uses"), theirs.get("uses"))
+        with_ = checkout.get("with") or {}
+        self.assertEqual(with_.get("repository"), "${{ vars.PLAN_PORTAL_REPO }}")
+        self.assertEqual(with_.get("path"), ".plan-portal")
+        # The very next model step has Bash: a persisted token in
+        # .plan-portal/.git/config would be one `cat` from a planner.
+        self.assertIs(with_.get("persist-credentials"), False)
+        self.assertIs(checkout.get("continue-on-error"), True)
 
 
 class SelfPlanRidesTheSameJob(unittest.TestCase):

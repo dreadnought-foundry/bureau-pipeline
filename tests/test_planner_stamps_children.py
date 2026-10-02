@@ -622,6 +622,11 @@ def step_named(fragment: str) -> dict:
 
 
 GATE = "Routing verdicts"
+# The review route's re-check of a plan the second critic sent back (DRE-5299):
+# a revision is the planner's output too, so a card it added carries its
+# verdict before the sweep reads it. Named in full — `step_named` takes the
+# FIRST step containing a fragment, and the plan route's re-check comes first.
+REVIEW_RECHECK = "Re-check the revised plan — review mode"
 
 
 class WiredIntoThePlanRunTest(unittest.TestCase):
@@ -692,6 +697,14 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
         run = step_named("Re-check the revised plan")["run"]
         self.assertIn("plan_child_verdicts.py stamp", run)
 
+    def test_a_plan_revised_on_the_review_route_is_stamped_too(self):
+        """DRE-5299: the review-mode re-plan's re-check is a stamp site, after
+        the proof check and only once every gate has passed."""
+        run = step_named(REVIEW_RECHECK)["run"]
+        self.assertIn("plan_child_verdicts.py stamp", run)
+        self.assertLess(run.index("proof_and_demo.py check"),
+                        run.index("plan_child_verdicts.py stamp"))
+
     def test_the_activate_route_stamps_before_it_promotes(self):
         """The backstop, and the one that closes the last gap: the post-approval
         re-plan (after the second critic sends a plan back) re-runs no proof
@@ -721,7 +734,7 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
                 self.assertNotIn("shell", step, step.get("name"))
         self.assertNotIn("defaults", doc)
         for name in ("Routing verdicts", "Re-check the revised plan",
-                     "Activate the approved epic"):
+                     "Activate the approved epic", REVIEW_RECHECK):
             run = step_named(name)["run"]
             stamp = next(line for line in run.splitlines()
                          if "plan_child_verdicts.py stamp" in line)
@@ -735,7 +748,7 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
         that can see a plan's whole child set. Nothing upstream rejects a child
         with no acceptance criteria, so without this the card freezes in
         Backlog and only a run log says so."""
-        for name in (GATE, "Activate the approved epic"):
+        for name in (GATE, "Activate the approved epic", REVIEW_RECHECK):
             run = step_named(name)["run"]
             self.assertIn("--comment-file", run, name)
             self.assertIn('linear_ops.py comment "$EPIC"', run, name)
