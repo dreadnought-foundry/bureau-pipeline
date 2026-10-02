@@ -53,6 +53,13 @@ def wf_steps() -> list[dict]:
 
 
 def _located(fragment: str) -> tuple[dict, dict]:
+    # An exact name first: the review route's `Plan artifact — published
+    # source` (DRE-5299) sits in the plan job, above the `publish` job's
+    # `Plan artifact — publish`, and contains its name.
+    for job in wf_jobs().values():
+        for s in job.get("steps") or []:
+            if fragment.lower() == (s.get("name") or "").lower():
+                return s, job
     for job in wf_jobs().values():
         for s in job.get("steps") or []:
             if fragment.lower() in (s.get("name") or "").lower():
@@ -205,13 +212,34 @@ class PublishTest(unittest.TestCase):
         # The planner's repoScope in agents.yaml says caller + pipeline, and
         # DRE-2729 checks that against the job the agent runs in. Publishing
         # from a separate job is what keeps that true.
-        plan_job = wf_jobs()["plan"]
-        repos = [
-            (s.get("with") or {}).get("repository", "")
-            for s in plan_job["steps"]
+        #
+        # The review route reads the published SOURCE out of the portal
+        # (DRE-5299), so the plan job checks it out once — and the property
+        # this test exists for still holds, stated directly rather than by
+        # proxy: the checkout leaves no credential behind, and its directory is
+        # removed before any agent step runs, so no agent ever has it in reach.
+        # Every portal checkout in the plan job is held to both.
+        steps = wf_jobs()["plan"]["steps"]
+        portal = [
+            i for i, s in enumerate(steps)
             if str(s.get("uses") or "").startswith("actions/checkout")
+            and (s.get("with") or {}).get("repository") == "${{ vars.PLAN_PORTAL_REPO }}"
         ]
-        self.assertNotIn("${{ vars.PLAN_PORTAL_REPO }}", repos)
+        for i in portal:
+            with_ = steps[i].get("with") or {}
+            self.assertIs(with_.get("persist-credentials"), False, steps[i].get("name"))
+            path = with_.get("path")
+            self.assertTrue(path, steps[i].get("name"))
+            removed = None
+            for j in range(i + 1, len(steps)):
+                self.assertNotEqual(
+                    str(steps[j].get("uses") or "").split("@")[0],
+                    "anthropics/claude-code-action",
+                    f"an agent step runs while {path} is still on disk")
+                if f"rm -rf {path}" in str(steps[j].get("run") or ""):
+                    removed = j
+                    break
+            self.assertIsNotNone(removed, f"nothing removes {path}")
 
     def test_the_publish_step_uses_the_stable_path_helper(self):
         step = step_named("Plan artifact — publish")

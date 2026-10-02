@@ -2009,6 +2009,30 @@
       "why": "Act-shaped, and the registry has no row for it — it is the review route's bound, the same debt as the activate route's `🛑 Parked for you with needs-human`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
     },
     {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$HELD\")\"",
+      "step": "Re-check the revised plan — review mode",
+      "kind": "not-an-act",
+      "means": "The routing-verdict note from the review route's re-check: the children of a revision the second critic asked for that no writer will stamp (DRE-4593, DRE-5299).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK — these cards state no exit condition, so nothing can say who builds them — where an act is something the pipeline did about the work on its own. It has its own writer (scripts/plan_child_verdicts.py), its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Re-check the revised plan — review mode",
+      "kind": "not-an-act",
+      "means": "The proof-and-demo send-back, re-run against a plan revised on the review route after the second critic sent it back (DRE-2746, DRE-5299).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 Parked in Triage with needs-human for an operator. The second critic sent this plan back and the planner revised it",
+      "step": "Re-check the revised plan — review mode",
+      "kind": "undeclared-act",
+      "means": "A revision the second critic asked for did not pass the plan's own gates (the child card check, the plan artifact check or the proof-card check, named in the note), so it is not reviewed again: the epic parks in Triage with needs-human for an operator (DRE-5299).",
+      "why": "Act-shaped, and the registry has no row for it — it is a review-route park, the same debt as DRE-5280's review-route parks. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the review route's other parks did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
+    },
+    {
       "file": "scripts/limit_recovery.py",
       "anchor": "recovery_receipt(marker, why, what)",
       "kind": "undeclared-act",

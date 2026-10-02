@@ -131,12 +131,40 @@ def job_repos(job):
     """The repositories checked out into the agent's workspace.
 
     The job is the unit here, not the step: steps in one job share one
-    workspace, so a repo any step checks out is a repo the agent can read."""
+    workspace, so a repo any step checks out is a repo the agent can read.
+
+    With ONE exception, and it is narrow by construction (DRE-5299): a
+    checkout that persists no credentials AND whose path a `run:` step
+    removes before the next agent step runs is never in any agent's
+    workspace — no agent step ever starts while it is on disk, and no token
+    was left behind in it. The review-mode re-plan reads the published plan
+    source out of the plan portal that way. Both conditions are required; a
+    checkout that misses either is counted as reach, exactly as before."""
+    steps = job.get("steps") or []
     repos = set()
-    for step in job.get("steps") or []:
+    for i, step in enumerate(steps):
         if str(step.get("uses") or "").split("@")[0] == "actions/checkout":
+            if _gone_before_any_agent_step(steps, i):
+                continue
             repos.add((step.get("with") or {}).get("repository") or CALLER)
     return repos
+
+
+def _gone_before_any_agent_step(steps, at):
+    """True when the checkout at `steps[at]` persists no credentials and its
+    path is removed (`rm -rf <path>`) by a `run:` step before the next agent
+    step in the job."""
+    with_ = steps[at].get("with") or {}
+    path = str(with_.get("path") or "").strip()
+    if with_.get("persist-credentials") is not False or not path:
+        return False
+    removal = re.compile(r"(?m)^\s*rm -rf " + re.escape(path) + r"\s*$")
+    for step in steps[at + 1:]:
+        if str(step.get("uses") or "").split("@")[0] == ACTION:
+            return False
+        if removal.search(str(step.get("run") or "")):
+            return True
+    return False
 
 
 def tools_drift(entry, path):
@@ -299,6 +327,27 @@ class AgentsRegistryTest(unittest.TestCase):
         for a in load():
             problems = repo_scope_drift(a, os.path.join(ROOT, a["workflow"]))
             self.assertEqual([], problems, "\n".join(problems))
+
+    def test_a_checkout_is_only_out_of_reach_when_both_conditions_hold(self):
+        """DRE-5299's exception, pinned from both sides: a checkout with no
+        persisted credentials, removed before the next agent step, is out of
+        reach — and dropping either condition, or putting an agent step before
+        the removal, puts it back in."""
+        portal = "${{ vars.PLAN_PORTAL_REPO }}"
+
+        def job(persist=False, remove=True, agent_first=False):
+            checkout = {"uses": "actions/checkout@sha",
+                        "with": {"repository": portal, "path": ".plan-portal",
+                                 "persist-credentials": persist}}
+            removal = {"run": "cp a b\nrm -rf .plan-portal\n" if remove else "cp a b\n"}
+            agent = {"uses": ACTION + "@sha"}
+            tail = [agent, removal] if agent_first else [removal, agent]
+            return {"steps": [{"uses": "actions/checkout@sha"}, checkout] + tail}
+
+        self.assertEqual(job_repos(job()), {CALLER})
+        self.assertIn(portal, job_repos(job(persist=True)))
+        self.assertIn(portal, job_repos(job(remove=False)))
+        self.assertIn(portal, job_repos(job(agent_first=True)))
 
     def test_credentials_are_names_never_values(self):
         """The roster records what an agent can reach, never how to reach it.

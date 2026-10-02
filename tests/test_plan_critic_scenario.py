@@ -141,6 +141,22 @@ def gql(query, variables=None):
     }}
 
 
+# The proof check stamps the proof card through `routing_verdict.stamp_card`
+# (DRE-3039), which imports this module and calls these three. A card's own
+# verdict is not the epic's thread, so it is logged under its own prefix and
+# never appended to the thread a walk reads (DRE-5299).
+def comment_bodies(identifier):
+    return []
+
+
+def cmd_comment(identifier, body):
+    log("card-verdict " + identifier)
+
+
+def add_label(identifier, label):
+    log("card-mark " + identifier + " " + label)
+
+
 def main():
     cmd, *args = sys.argv[1:]
     if cmd == "dump-comments":
