@@ -306,6 +306,8 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
     file, unit = _split_where(where)
     out: list[str] = []
     if kind == "passed-plan" and not _is_function(where):
+        if not writes_here:
+            return out  # no write there: rule 2 names the site, once
         step = _step(root, file, unit)
         gate = " ".join(str((step or {}).get("if") or "").split())
         missing = [g for g in PASSED_PLAN_GATES if g not in gate]
