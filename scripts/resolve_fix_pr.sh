@@ -23,8 +23,8 @@ set -e
 #      any pull request that is not OPEN, with go=false.
 #   3. Derives the card from the branch name, the first DRE-<n> in any
 #      case, upper-cased; empty for a repair branch, and every card write
-#      downstream is guarded on it. It prints `bureau-card: <card>` to the
-#      log.
+#      downstream is guarded on it. It prints the card line the medic
+#      reads to the log (DRE-4407).
 #   4. Reads the whole comment thread ONCE, every page, through
 #      gh_read_retry.py into $TMPD/thread.json. A refusal is retried; one
 #      that persists stops the step with its reason and writes no go=true.
@@ -207,8 +207,10 @@ set -e
 #   an unreadable thread stops the step rather than reading as empty.
 #
 # 2026-09-20 · DRE-4407. A run GitHub records on the default branch, as a
-#   dispatch is, names its card in its log as `bureau-card: <card>`, so the
+#   dispatch is, names its card in its log on the card line below, so the
 #   medic can find the card for it; qa-review.yml carries the full reason.
+#   Only that line may carry the card prefix: the medic's test cuts the
+#   step at the first line that does.
 #
 # 2026-10-02 · DRE-5224. The step's shell moved to this file. In the
 #   workflow it was a 17,921-character block holding seven expressions,
