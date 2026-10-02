@@ -3110,13 +3110,20 @@ class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
         """The only refusal left that asks a person for something: nobody has
         reviewed this plan on its current attempt. A dead review (DRE-3289) and
         a send-back (DRE-3291) both re-run themselves, so both are pinned the
-        other way, below. Since DRE-5280 the ask is the move to Planning, read
-        through `REAPPROVE_HOW`, and never the act."""
+        other way, below. Since DRE-5280 the ask for a PARKED epic is the move
+        to Planning, read through `REAPPROVE_HOW`. Since DRE-5281 the refusal
+        also names the act, for an epic already In Progress — the one lane the
+        relay reads it in — because the activate route now hands such an epic
+        to the review it missed; the act sits under its own In Progress
+        heading and never inside the park's sentence."""
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         self.assertIsNotNone(unread)
         self.assertIn(pc.REAPPROVE_HOW, unread)
         self.assertIn(pc.REVIEW_LANE, unread)
-        self.assertNotIn(rr.RERUN_REVIEW_ACT, unread)
+        in_progress, _, parked = unread.partition(f"in {pc.BOUND_PARK_LANE}")
+        self.assertIn(rr.RERUN_REVIEW_ACT, in_progress)
+        self.assertIn(pc.APPROVAL_LANE, in_progress)
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, parked)
         self.assertNotIn(RETIRED_MOVE, unread)
         self.assertNotIn("again by moving it to In Progress", unread)
         self.assertNotIn("Todo", unread)

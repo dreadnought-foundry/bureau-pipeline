@@ -276,6 +276,32 @@ PRE_PARK = "First critic — the bound parks in Triage"
 REVIEW_RE_REVIEW = "Review — the revised plan is reviewed again"
 REVIEW_BOUND = "Review — the bound parks the plan in Triage"
 REVIEW_DIED = "Review — the review died"
+# The second critic's own steps — the reading, the decision, the re-plan and
+# the mints between them. They ran in both modes until DRE-5281 narrowed them
+# to review; the outcome walks below ask which OUTCOMES a decision reaches, so
+# they leave these out exactly as they did while the steps carried the
+# activate clause.
+SECOND_CRITIC_STEPS = (
+    "Select model — second critic",
+    "Second critic — cross-epic sight",
+    "Second critic — context",
+    "Second critic — turn ceiling",
+    "Second critic — the previous round",
+    "Re-mint bot token — second critic",
+    "Second critic — review (before Green Light)",
+    "Second critic — turns receipt",
+    "Second critic — verdict or death?",
+    "Re-mint bot token — after the second critic",
+    "Second critic — decision",
+    "Turn ceiling — second critic's re-plan",
+    "Re-plan after the second critic sent it back",
+    "Re-plan after the second critic sent it back — out of capacity?",
+    "Re-mint bot token — Re-plan after the second critic sent it back on the next rung",
+    "Re-plan after the second critic sent it back — on the next rung",
+    "Re-plan after the second critic sent it back — finished?",
+    "Mechanical findings — the revised plan (review)",
+    "Re-mint bot token — send-back",
+)
 # Round 2 never ran: its outputs are empty, which is how Actions reads them.
 NOT_RUN_PRE2 = {"steps.pre2.outputs.action": "", "steps.pre2.outputs.bound": "",
                 "steps.pre2.outputs.result": ""}
@@ -924,6 +950,7 @@ class CriticWalk(unittest.TestCase):
         # no post round, so `post-state` reads POST_NOT_RUN and the epic is
         # handed to the review it is owed — no lane write here; the review run
         # moves it to Planning itself.
+        self._clear_log()
         self._activate()
         self.assertEqual(self._lane_writes(), [])
         self.assertNotIn("promote", self._log())
@@ -951,6 +978,7 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(self._record(), pc.cycle_marker(EPIC))
         # ...and on the fresh attempt nothing has passed the plan, so Approve
         # does not start the build: the plan gets its review first.
+        self._clear_log()
         self._activate()
         self.assertNotIn("state In Progress", self._log())
         self.assertEqual(self._dispatches()[-1]["client_payload"]["reason"],
@@ -1687,9 +1715,9 @@ class CriticWalk(unittest.TestCase):
 
     def _reached(self, known: dict) -> list[str]:
         """Which REVIEW-MODE outcome steps a decision reaches: every step gated
-        on review mode and not on activate mode, whose `if:` the decision's own
-        outputs make KNOWN true — read by the same three-valued walker the
-        planner-slot wiring tests use."""
+        on review mode that is not one of the second critic's own steps, whose
+        `if:` the decision's own outputs make KNOWN true — read by the same
+        three-valued walker the planner-slot wiring tests use."""
         class Gates(Walk):
             def _name(self, text):
                 # A step's outcome is a fact the walk is handed, like its outputs.
@@ -1702,6 +1730,8 @@ class CriticWalk(unittest.TestCase):
         for s in doc["jobs"]["plan"]["steps"]:
             gate = str(s.get("if") or "")
             if (self.REVIEW_MODE not in gate) or (self.ACTIVATE_MODE in gate):
+                continue
+            if s.get("name") in SECOND_CRITIC_STEPS:
                 continue
             if truth(walk.evaluate(gate)) is True:
                 out.append(s["name"])

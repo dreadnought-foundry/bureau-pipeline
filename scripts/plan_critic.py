@@ -1787,7 +1787,9 @@ def collision_counts(bodies: list) -> dict:
 
 #: The sweep may promote — the second critic has released this plan.
 POST_RELEASED = "released"
-#: No post-critic round on this planning attempt at all. The incident.
+#: No post-critic round on this planning attempt that decided anything: none
+#: at all (the incident), or a newest round that produced no result
+#: (DRE-5281 — a crash is not a pass either).
 POST_NOT_RUN = "not-run"
 #: The critic ran and declined to release the plan — one send-back with the
 #: bound unspent, or two with it spent and the epic parked (DRE-3088).
@@ -1796,8 +1798,9 @@ POST_HELD = "held"
 #: DIED before it decided (DRE-3241). Not a rejection, not a round, and not a
 #: release either — nothing has read the plan, so the children wait for the
 #: review to run again. Distinct from `NO_RESULT`, which is a review that RAN
-#: TO ITS DECISION and wrote nothing usable: that one proceeds inside the same
-#: run with a ⚠️ note the CEO can see; this one left a red job and no decision.
+#: TO ITS DECISION and wrote nothing usable: the review route asks for that one
+#: again with a ⚠️ note (DRE-5280) and the promoter reads it as POST_NOT_RUN
+#: (DRE-5281); this one left a red job and no decision.
 POST_DIED = "died"
 
 #: The lane a CEO moves an epic to in order to APPROVE its plan. Approval is
@@ -1827,11 +1830,11 @@ def reapprove_how() -> str:
     CEO's answer to a plan both critics passed, never the way to re-run a
     review. So the sentence names no act and no approval.
 
-    One sentence, used by every refusal here and quoted verbatim by plan.yml's
-    activate-route park notice (the wiring test pins the two copies to each
-    other); plan.yml's review-mode notes read it through this module, never as
-    a literal. Free of backticks, dollar signs and double quotes, because the
-    workflow quotes it inside a double-quoted shell string.
+    One sentence, used by the refusals here; plan.yml's notes read it through
+    this module, never as a literal (the activate route's park notice, which
+    quoted it verbatim, went with that route's review in DRE-5281). Free of
+    backticks, dollar signs and double quotes, because the workflow quotes it
+    inside a double-quoted shell string.
 
     A function behind `REAPPROVE_HOW` (PEP 562, `__getattr__` below) because
     every caller has always read it by that name.
@@ -1907,17 +1910,20 @@ GATED_FROM = "2026-09-05T00:00:00Z"
 def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
     """Has the second critic released this epic's children? `(state, detail)`.
 
-    `state` is one of POST_RELEASED / POST_NOT_RUN / POST_HELD, and `detail` is
-    the critic's own words when it has any.
+    `state` is one of POST_RELEASED / POST_NOT_RUN / POST_HELD / POST_DIED, and
+    `detail` is the critic's own words when it has any.
 
-    The two ways a plan is released, and each of them is one the route
-    already takes — the gate and `decide` must agree about the same marker or
-    the sweep and the activate route disagree about the same epic:
+    ONE way a plan is released (DRE-5281): the newest post round on this
+    attempt is `result=PASS` — wherever the approval comment falls in the
+    thread, because under DRE-5268 the pass is recorded before the CEO reads
+    the plan. The activate route branches on this same answer (`post-state`),
+    so the sweep and the route cannot disagree about the same epic.
 
-      * `result=PASS` — the critic passed it.
-      * `result=NO_RESULT` — a crash is not a rejection (console-honesty rule
-        1). The critic did not decide anything, so it does not get to stop
-        anything, and the route proceeds on one too.
+    A newest `result=NO_RESULT` is POST_NOT_RUN. A crash is not a rejection
+    (console-honesty rule 1), and it is not a pass either: the critic decided
+    nothing, so the children wait for a round that decided. Until DRE-5281 the
+    activate route proceeded on one and this function released on it to
+    agree; the route and this reading changed in the same pull request.
 
     MAX_ROUNDS failed rounds — the bound — does NOT release the children
     (DRE-3088). Two failed rounds at the second critic and the plan parks for
@@ -1966,8 +1972,9 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
     if last["result"] == PASS:
         return POST_RELEASED, "the second critic passed this plan"
     if last["result"] == NO_RESULT:
-        return POST_RELEASED, (
-            "the second critic produced no result — a crash is not a rejection"
+        return POST_NOT_RUN, (
+            "the second critic produced no result on this attempt, so it has "
+            "not passed this plan"
         )
     failed = [r for r in rows if r["result"] not in (PASS, NO_RESULT)]
     # The bound, read off the same record `decide` wrote (DRE-4115): the
@@ -2090,24 +2097,35 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
     when = _ts(green_lit_at).astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
     # Every refusal says the same thing first (DRE-5276): the children wait
     # because the second critic has not passed this plan on its CURRENT
-    # attempt. Nothing here promises a lane move; the way back for an epic
-    # already In Progress under the new moment is DRE-5281's sentence, added
-    # with the route that honors it.
+    # attempt. The way back for an epic already In Progress is DRE-5281's
+    # sentence, added with the route that honors it: the act, which the relay
+    # reads on an epic In Progress, reaches the activate route, and that
+    # route hands the epic to the review it missed.
     # "has not passed it" is the phrase the sweep's own tests read the hold by
     # (tests/test_reconcile_promotion.py), kept whole.
     waiting = "the second critic has not passed it on this plan's current attempt"
     if state == POST_NOT_RUN:
+        import review_rerun  # deferred: it imports this module
+
+        why = (detail[:1].upper() + detail[1:] + "." if detail else
+               "Nothing on this attempt records a review by the second "
+               "critic, so nobody has asked what an agent will get wrong with "
+               "this plan as the specification.")
         return (
             f"🚨 {POST_UNREAD_TAG}: {identifier}'s epic {epic} was approved at "
             f"{when} but {waiting} — holding.\n\n"
             "Two critics read a plan, and its children promote only once the "
-            "second has passed it on the plan's current attempt. Nothing on "
-            "this attempt records a review by the second critic, so nobody has "
-            "asked what an agent will get wrong with this plan as the "
-            "specification.\n\n"
-            f"**To let it through:** {reapprove_how()}. That re-runs the "
-            "second critic's review, and the children promote on the next "
-            "sweep once it passes."
+            "second has passed it on the plan's current attempt. "
+            f"{why}\n\n"
+            f"**If the epic is {APPROVAL_LANE}**, it was approved under the "
+            "old rule, before both critics had read it. To get it the review "
+            f"it missed, post `{review_rerun.RERUN_REVIEW_ACT}` on the epic: "
+            f"the relay reads that act on an epic {APPROVAL_LANE}, and the "
+            "activate route then hands it to the review. It comes back to "
+            "Green Light passed, for one Approve.\n\n"
+            f"**If the epic is parked in {BOUND_PARK_LANE}:** "
+            f"{reapprove_how()}. Either way the children promote on the next "
+            "sweep once the second critic has passed the plan."
         )
     if state == POST_DIED:
         deaths = parse_deaths(current_cycle(bodies, epic))
@@ -2259,9 +2277,10 @@ def decide(result: str, prior_send_backs: int, reason: str = "",
 
     A NO_RESULT proceeds at both critics — a crash is not a rejection — but
     what "proceed" means differs, and the note says which. At the first critic
-    the plan goes on to the second, the reader that follows. At the second the
-    note keeps the words the activate route reads until DRE-5281; the Green
-    Light write reads `result`, never `action`.
+    the plan goes on to the second, the reader that follows. At the second no
+    route acts on `proceed` any more: the review route's outcomes read
+    `result`, never `action` (DRE-5280), and the activate route, which
+    proceeded on it until DRE-5281, runs no review.
 
     Nothing circles a third time on either side.
     """
