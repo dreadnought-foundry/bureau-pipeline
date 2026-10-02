@@ -1515,7 +1515,8 @@ jobs:
           # block containing an interpolation is compiled by GitHub into ONE
           # `format()` expression whose format string is the whole script, with
           # every literal brace doubled — and a single expression may not exceed
-          # 21,000 characters. This script is ~23,000. On 2026-09-09 that made
+          # 21,000 characters. This script was ~23,000 inline (it now lives in
+          # scripts/report_agent_result.sh, DRE-5223). On 2026-09-09 that made
           # the file unparseable and every agent-execute dispatch in the fleet
           # was refused at 06:15 PT with no job and no log, for 3h20m. The two
           # step outputs it used to read inline now arrive as env, the other
