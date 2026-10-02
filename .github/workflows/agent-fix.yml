@@ -1678,7 +1678,9 @@ jobs:
           # A block with no substitutions is never compiled as an expression,
           # so the ceiling stops applying to the longest script in the fleet's
           # busiest workflow, and the next line added here cannot refuse every
-          # consumer repo at dispatch with no job and no log (DRE-3484).
+          # consumer repo at dispatch with no job and no log (DRE-3484). That
+          # reason is history: the block now lives in
+          # scripts/report_fix_result.sh (DRE-5225).
           PR: ${{ steps.pr.outputs.number }}
           ATTEMPT: ${{ steps.pr.outputs.attempt }}
           MODE: ${{ steps.pr.outputs.mode }}

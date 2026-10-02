@@ -1,11 +1,174 @@
 #!/usr/bin/env bash
 set -e
+# What this script does
+#
+# The `Report` step of agent-fix.yml runs this file once the fix agent
+# has finished. It says on the pull request what the round did, or why
+# it did nothing, and moves the card when a person has to step in. It
+# posts nothing it cannot prove belongs to this run.
+#
+# 1. It proves the critic verdict the run worked from is this run's:
+#    `fix_handoff.py check` reads the handoff the job opened, keyed to
+#    (repo, PR, head). When that fails the script prints an error, posts
+#    nothing and exits 1. `fix_handoff.py attribution` then gives the
+#    one line every comment it posts ends with, naming the card and the
+#    pull request the comment answers.
+# 2. It handles a pull request that merged while the run was working.
+#    `stranded_fix.py local-compare` lists the local commits the base
+#    does not hold, and `stranded_fix.py route` decides whether any work
+#    is stranded and whether the push reached the branch. When work is
+#    stranded it files one card with `linear_ops.py oneoff`, unless
+#    `find-open` finds that card already. It posts nothing on the merged
+#    pull request and exits 0.
+# 3. It reads the agent's three handoff files through `fix_handoff.py
+#    read`: the refutation, the blocker and the conflict agent's no-push
+#    reason. Exit 4 means the file is not this run's, and the script
+#    refuses.
+# 4. It reads the answer format from `fix_context.py --answer-format`.
+#    Every comment that holds the pull request quotes it.
+# 5. It routes the round. The first of these that holds takes it:
+#    - Refutation: the agent answered the finding with evidence. The
+#      first one on this head posts `fix-finding-refuted`, then
+#      dispatches the critic once more on DISPATCH_TOKEN (pr-review.yml
+#      in this repo, qa-review.yml elsewhere). If the dispatch fails, the
+#      card is parked. A second one on the same head posts
+#      `fix-attempt-disputed` with both quoted and parks the card.
+#    - Blocker: the agent disputes the finding and pushed nothing. It
+#      posts `fix-attempt-disputed` with the answer format and parks.
+#    - The head did not move: `fix_dead_run.py decide` reads every page
+#      of the thread and answers retry (an outage), retry-turns (out of
+#      turns, retried once), hold-turns, hold, or anything else, which
+#      is no progress. The no-progress body comes from `fix_budget.py
+#      no-push`. Every answer but the two retries parks the card.
+#    - The head moved: it posts `fix-attempt-landed`, worded as a fix
+#      attempt or, in conflict mode, a conflict resolution round. In fix
+#      mode the round's convergence classification from
+#      `fix_convergence.py` is appended.
+#    Every receipt is composed by `pipeline_act.py receipt` and falls
+#    back to the bare body with `|| printf` when composition fails.
+# 6. Parking means the `needs-human` label and a move to Triage through
+#    `linear_ops.py advance`, falling back to `state --park`. Each park
+#    also posts a plain-English note on the card.
+#
+# Inputs, all from the step's `env:`:
+#   GH_TOKEN         the worker App's token: every PR read and comment
+#   LINEAR_API_KEY   Linear's key, read by linear_ops.py
+#   CARD             the card's identifier; empty skips every card write
+#   PRE_SHA          the PR head the run started from, the handoff's key
+#                    and the "did the head move" baseline
+#   DISPATCH_TOKEN   the workflow's own github.token, used only for the
+#                    re-review dispatch
+#   CLASSIFICATION   the round's convergence classification, composed by
+#                    fix_convergence.py
+#   REPO             the repository, owner/name
+#   PR               the pull request number
+#   ATTEMPT          this round's attempt number
+#   MODE             `fix` or `conflict`
+#   EXEC_FILE        the agent's execution record (default: the runner's
+#                    claude-execution-output.json)
+#   RUN_URL          this run's URL, named in the dead-run and no-push
+#                    bodies
+# RUNNER_TEMP, which the runner sets, holds the handoff.
+#
+# Incident history
+#
+# One note per rule, in the date order git history gives for when it
+# reached this block. Where a later card changed a rule, its note states
+# the rule as it holds now and names every card that shaped it.
+#
+# 2026-06-28, DeltaSolv PR #64/#74. Only a new commit re-runs CI and the
+#   critic. A dispute or a fix that pushed nothing leaves the latest
+#   verdict at REQUEST_CHANGES, the critic never re-fires and the merge
+#   gate holds for good: a ~20h stall that ended in a hand merge. So a
+#   round with no forward progress goes to a person, never to a "review
+#   re-running" receipt.
+# 2026-07-10, DRE-1995. Every marker the script counts is read only when
+#   the worker bot wrote it. Anyone can comment a marker, and a planted
+#   one would burn a re-review or park a healthy PR.
+# 2026-07-11, DRE-2018, DRE-4139. A model death is not a failed fix. The
+#   2026-07-10 DeltaSolv token outage read as agent failures in the CEO's
+#   queue. `fix_dead_run.py` answers retry for an outage (a marker the
+#   reconcile sweep re-dispatches on, with no park and no attempt spent)
+#   and hold after the cap. The cap counts consecutive worker-bot deaths
+#   since the last push, so a recovered outage does not pre-exhaust it
+#   (DRE-2018). It reads every page of the thread: unpaginated, the read
+#   saw GitHub's oldest 30 comments, and on a long PR a dead loop kept
+#   being retried (DRE-4139, 2026-09-17).
+# 2026-08-12, DRE-2409, DRE-2199, DRE-2399, DRE-3951. Every comment that
+#   holds the PR quotes the answer format from its one source,
+#   `fix_context.py`, or the operator writes a sentence the loop never
+#   sees: portico #132 (DRE-2199) and agent-bureau #2034 (DRE-2399) each
+#   needed a hand dispatch (DRE-2409). Since 2026-09-15 every comment
+#   also ends with the attribution line, after the format and after the
+#   act's trailer, so the body the registry froze is untouched (DRE-3951).
+# 2026-08-25, DRE-2312. Running out of turns is not an outage. It used to
+#   post the outage line, which sent the operator to the credential chain
+#   for a run that never had a service problem. It now says so and
+#   retries once. A second exhaustion holds and names the remedy: split
+#   the fix or raise the budget, not a third run into the same wall.
+# 2026-08-26, DRE-2722, DRE-2776. A card this script parks goes to
+#   Triage with `needs-human`. It used to go to Plan Review, which
+#   DRE-2722 split: Green Light approves plans, and Triage holds what went
+#   wrong (DRE-2723). DRE-2776 (2026-08-27) then moved the engineer's
+#   escalate-by-exception question to Green Light, so the reason is the
+#   state of the card, not what the lane is for. Everything parked here is
+#   a card whose pipeline went wrong. A card waiting on a judgement goes to
+#   Green Light. Both stop the loop (reconcile's PARKED_STATES).
+# 2026-08-29, DRE-2813, DRE-2817. The round's classification rides the
+#   push marker rather than a comment of its own (DRE-2817, 2026-09-08). A
+#   further worker-bot comment would outrank a standing operator decision
+#   (DRE-2813). The budget counts on "🔧 Fix attempt" and the
+#   fix-vs-conflict read-back keys on "pushed — CI and critic review
+#   re-running", and both still open the body. The classification is a
+#   fixed vocabulary and integers, never thread text.
+# 2026-09-01, DRE-2826. Every receipt goes through the one writer,
+#   `pipeline_act.py receipt`, which returns the body byte for byte and
+#   appends the act's trailer. The two push wordings are one act,
+#   fix-attempt-landed. `|| printf` keeps the comment when composition
+#   fails: a lost trailer is a missing machine-readable line, while a lost
+#   comment is a disputed fix nobody is told about.
+# 2026-09-04, DRE-3084, DRE-2696, DRE-2056, DRE-1254. The fixer may answer
+#   the critic instead of obeying it. Its evidence is often what the
+#   critic cannot read, such as the live card, since the critic holds no
+#   Linear key on purpose (DRE-2696). Before this, the verdict stood, the
+#   card went to Triage and a person re-ran the review by hand: three PRs
+#   on 2026-09-03. A refutation is read before the blocker. It earns one
+#   re-review per head, and the receipt is the counter: `refuted-finding
+#   @<sha8>`, the key qa-review.yml reads back. The receipt is posted
+#   before the dispatch, because the re-review reads it off the thread.
+#   The dispatch targets pr-review.yml in this repo, where qa-review.yml
+#   is workflow_call-only and a dispatch 422s (DRE-2056). It rides the
+#   workflow's own token, because the App token holds no Actions
+#   permission (DRE-1254). A stub without `actions: write` 403s, and the
+#   card is parked rather than promised a re-review that will not run.
+# 2026-09-15, DRE-3951, DRE-3484. The handoff is keyed to (repo, PR,
+#   head). The agent used to write fixed paths under /tmp, which any
+#   earlier run could leave behind. What cannot be proved to be this
+#   run's is refused, because a comment on the wrong pull request is
+#   worse than no comment. Every value the step hands the script rides
+#   `env:`, and the block carried no Actions expression. That was to stay
+#   under the expression ceiling: GitHub compiles a block holding one
+#   expression into a single format() call capped at 21,000 characters,
+#   and this block had passed 18,000 (DRE-3484). That reason is history
+#   now that the block is this file, where Actions substitutes nothing.
+# 2026-09-21, DRE-4486, DRE-4183, DRE-4460. A PR that merged while the run
+#   worked it gets nothing on the PR and a card for any stranded work.
+#   portico #611 took its fix nine minutes after the merge (DRE-4183),
+#   nobody knew until an audit six weeks later, and the bug was refiled as
+#   DRE-4460. The commits are read from the local clone, because the push
+#   may have been refused (the work exists only here) or may have
+#   recreated a deleted branch. `--pushed` says which. A card, not a
+#   comment: the CEO's answer of 2026-09-21. `find-open` makes it one card
+#   per branch.
+# 2026-09-25, DRE-4849. The conflict agent may leave a reason for ending
+#   without a push. It is read with the other two handoff files, so a
+#   foreign one refuses before anything is posted, and quoted only on the
+#   no-progress escalation. `fix_budget.no_push_body` owns the wording,
+#   and the reason travels by file so none of it meets the shell.
+# 2026-10-02, DRE-5225. The block moved here from the step's `run:`,
+#   verbatim, with `step_shell.py move`.
 
-# DRE-3951 — every read and every comment below belongs to THIS
-# (repo, PR, head) or nothing is posted at all. `handoff` reads only
-# what the open step stamped for this run; `refuse` is what happens
-# when something is there and cannot be proved to be ours, because a
-# comment on the wrong pull request is worse than no comment.
+# Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
   "$CMD" --base "$RUNNER_TEMP" --repo "$REPO" --pr "$PR" --sha "$PRE_SHA" "$@"; }
 refuse() { echo "::error::$1 — posting nothing on $REPO#$PR (DRE-3951)"; exit 1; }
@@ -13,31 +176,7 @@ handoff check || refuse "the critic verdict is not this run's"
 # The one-line trailer every comment below carries: what it answers.
 ANSWERS=$(handoff attribution --card "$CARD")
 
-# DRE-4486 — the pull request merged while this run was working it.
-#
-# Everything below this block reports ON the pull request: a fix
-# attempt to re-review, a dispute for the critic to answer, a park
-# for a human. None of it means anything once the PR is merged —
-# the card is Done, the reviewer will not look again, and the merge
-# gate has nothing left to gate. What the run owes instead is a
-# record of the work that has nowhere to go, which is exactly what
-# the four earlier occurrences were missing: portico #611
-# (DRE-4183) took its fix nine minutes after the merge and nobody
-# knew until a stale-branch audit six weeks later, by which time
-# the bug it fixed was live and refiled as DRE-4460.
-#
-# The commits are read from the LOCAL clone, not from a compare
-# against origin, because both outcomes have to be nameable: the
-# pre-push guard above may have refused the push (the work exists
-# only here) or the run may be on a channel that predates the guard
-# (the work is on a branch GitHub deleted at merge and the push
-# recreated). `--pushed` says which, and the card says so plainly
-# rather than implying the work is recoverable when it is not.
-#
-# Filed as a card, not a comment: the CEO's answer of 2026-09-21
-# chose a card, and a comment on a merged pull request is read by
-# nobody. ONE card per branch — `find-open` is the idempotency key,
-# so a second run on the same branch appends nothing.
+# Merged while this run worked it: a card for stranded work, nothing on the PR (DRE-4486).
 PRSTATE=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || true)
 if [ "$PRSTATE" = "MERGED" ]; then
   BASEREF=$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null || true)
@@ -76,39 +215,14 @@ REFUTED_RC=0; REFUTATION=$(handoff read --kind refutation) || REFUTED_RC=$?
 if [ "$REFUTED_RC" -eq 4 ]; then refuse "the refutation is not this run's"; fi
 BLOCKED_RC=0; BLOCKER=$(handoff read --kind blocker) || BLOCKED_RC=$?
 if [ "$BLOCKED_RC" -eq 4 ]; then refuse "the blocker is not this run's"; fi
-# DRE-4849: the conflict agent's reason for ending without a push.
-# Read here, with the other two, so a foreign one refuses before
-# anything is posted; quoted only on the no-new-commit escalation.
+# The conflict agent's no-push reason, read with the other two (DRE-4849).
 REASON_RC=0; REASON=$(handoff read --kind reason) || REASON_RC=$?
 if [ "$REASON_RC" -eq 4 ]; then refuse "the no-push reason is not this run's"; fi
 
-# The copy-pasteable answer format, from its ONE source (DRE-2409).
-# Every comment below that HOLDS this PR quotes it: the escalate-by-
-# exception exit door has to state what an answer looks like, or the
-# operator writes a perfectly sensible sentence the loop never sees
-# (portico #132 / DRE-2199 and agent-bureau #2034 / DRE-2399, both
-# of which then needed a hand dispatch).
+# The answer format, from its one source (DRE-2409).
 FORMAT=$(python3 .bureau-pipeline/scripts/fix_context.py --answer-format)
 
-# Park-to-human helper. A dispute or a no-progress fix run leaves the
-# branch's LATEST critic verdict at REQUEST_CHANGES with no new commit
-# to re-review — so the critic never re-fires and merge-gate correctly
-# but permanently HOLDS ("latest verdict is not APPROVE — holding").
-# The card then sits silently in the review lane forever (DeltaSolv PR #64/#74,
-# 2026-06-28: ~20h stall, hand-merged). So route it to the human:
-# Triage (the lane for a card that went wrong, DRE-2722/2723) + a
-# needs-human stamp, with a plain-English note. The CEO answers and
-# moves the card → Todo (proceed) or → Backlog (drop).
-#
-# Triage and not Green Light, and the reason is the STATE OF THE CARD,
-# not what the lane is for (DRE-2776 moved the engineer's
-# escalate-by-exception question to Green Light, so "that lane is for
-# epics" stopped being true). Everything that reaches this function is
-# a card whose pipeline went wrong — a fix loop that would not
-# converge, a run with no forward progress, a cap exhausted. A card
-# waiting on a JUDGEMENT goes to Green Light; a card that broke goes
-# here. Both are human queues and both stop the loop (reconcile's
-# PARKED_STATES); they differ in what the human is being asked for.
+# Broken card: Triage plus needs-human. A judgement call is Green Light (DRE-2722, DRE-2776).
 park_for_human() {
   [ -n "$CARD" ] || return 0
   python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
@@ -116,27 +230,7 @@ park_for_human() {
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }
 
-# DRE-3084 — the fixer ANSWERED the critic instead of obeying it.
-#
-# Read BEFORE the blocker file, because it is the more specific
-# outcome and the two are not the same act: a blocker asks a HUMAN
-# to settle a disagreement the fixer cannot; a refutation settles it
-# with evidence the critic could not read (the live card — the
-# critic holds no Linear key on purpose, DRE-2696 — a test run, the
-# merge base) and needs only the reviewer to look again. Before this
-# card there was no such outcome: the verdict stood, the card went to
-# Triage with `needs-human`, and a person ran `gh run rerun` hours
-# later (agent-bureau #2247 hand-merged 17:15 PT, bureau-pipeline
-# #251 approved on a hand re-run at 22:04 PT, agent-bureau-demo #9
-# refuted 23:55 and approved 00:01 — all 2026-09-03).
-#
-# ONE re-review per HEAD, and the receipt IS the counter: the body
-# carries `refuted-finding @<sha8>`, the same key qa-review.yml
-# reads back to put the refutation in the critic's context. A second
-# refutation on the same commit is a loop, not a re-review, so it
-# escalates exactly as a blocker does, with both quoted. A new
-# commit is a new head and earns its own re-review, like every other
-# budget in this loop.
+# A refutation, read before the blocker: one re-review per head (DRE-3084).
 if [ "$REFUTED_RC" -eq 0 ]; then
   SHA8=${PRE_SHA:0:8}
   REFUTE_KEY="refuted-finding @$SHA8"
@@ -144,9 +238,7 @@ if [ "$REFUTED_RC" -eq 0 ]; then
     "repos/$REPO/issues/$PR/comments?per_page=100" \
     > /tmp/refuted-thread.json 2>/dev/null \
     || echo '[]' > /tmp/refuted-thread.json
-  # Worker-bot authored ONLY (DRE-1995): anyone can comment this
-  # marker, and a planted one would either burn the one re-review a
-  # healthy PR is owed or park it outright.
+  # Worker-bot authored only (DRE-1995).
   PRIOR=$(jq -r --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("refuted-finding @" + $sha8))] | last | .body // ""' < /tmp/refuted-thread.json || true)
   if [ -z "${PRIOR:-}" ]; then
     REFUTED_TAIL="Nothing was pushed and nothing needs to be. The pipeline is having the reviewer look at this same commit once more with the evidence above attached to its context as untrusted data: if the evidence stands the reviewer says so, and if it does not it says which part fails."
@@ -168,27 +260,14 @@ $REFUTE_KEY"
     python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
       --body "$REFUTED_BODY" --out /tmp/act-fix-refuted.md \
       || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted.md
-    # Posted BEFORE the dispatch, and that order is load-bearing:
-    # the re-review reads this comment off the thread to build its
-    # context, so dispatching first races the write.
+    # Posted before the dispatch: the re-review reads it off the thread.
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
     gh pr comment "$PR" --repo $REPO \
       --body-file /tmp/act-fix-refuted.md
-    # The dispatchable critic stub for THIS repo (DRE-2056): in
-    # bureau-pipeline qa-review.yml IS the workflow_call-only
-    # reusable and dispatching it 422s, so the stub is pr-review.yml.
-    # Same resolution reconcile.review_workflow() makes.
+    # pr-review.yml in this repo, where qa-review.yml cannot be dispatched (DRE-2056).
     REVIEW_WF=qa-review.yml
     [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
-    # The App token holds NO Actions permission (DRE-1254: "HTTP
-    # 403: Resource not accessible by integration"), so the dispatch
-    # rides the workflow's own GITHUB_TOKEN — which carries
-    # actions:write only if the CALLING STUB grants it (README, "The
-    # agent-fix stub's actions: write"). A stub that has not been
-    # updated 403s here, and a promised re-review nobody runs is the
-    # exact silent stall this card exists to remove: so the failure
-    # is loud, and it degrades to today's behaviour rather than to a
-    # lie.
+    # The workflow's own token: the App token holds no Actions permission (DRE-1254).
     if GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$REVIEW_WF" \
          --repo "$REPO" \
          -f pr_number="$PR"; then
@@ -222,18 +301,7 @@ $REFUTE_KEY"
     park_for_human
   fi
 elif [ "$BLOCKED_RC" -eq 0 ]; then
-  # DRE-2826: composed through the one receipt writer, which returns
-  # this body byte-identically and appends the act trailer. The body
-  # itself is untouched — reconcile's restart sweep reads the 🛑 that
-  # opens it, and fix_budget counts it.
-  #
-  # The body goes into a variable first so the fallback can reuse it
-  # without a second copy of the wording. `|| printf` is the fail-soft
-  # rule this repo keeps everywhere the report is the escalation:
-  # composition can only fail on a broken checkout (the act name and
-  # the registry are both checked in CI), and a lost trailer is a
-  # missing machine-readable line, while a lost comment is a disputed
-  # fix nobody is told about.
+  # One receipt writer, and `|| printf` keeps the comment if it fails (DRE-2826).
   BLOCKED_BODY="🛑 Fix attempt $ATTEMPT blocked: $BLOCKER
 
 $FORMAT"
@@ -243,45 +311,17 @@ $FORMAT"
   printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-blocked.md
   gh pr comment "$PR" --repo $REPO \
     --body-file /tmp/act-fix-blocked.md
-  # Escalate, don't just narrate. The fixer disputed the critic's
-  # findings and (per its instructions) pushed NOTHING — so the branch
-  # holds a stale REQUEST_CHANGES the critic will never lift on its own.
-  # Park the card in Triage so it surfaces in the CEO's queue
-  # instead of stalling invisibly in the review lane.
+  # The fixer pushed nothing, so the card parks rather than stall in review.
   if [ -n "$CARD" ]; then
     python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
       "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
   fi
   park_for_human
 else
-  # The fixer reported success — but only a NEW commit re-triggers CI +
-  # the critic. If the head SHA did not advance (the agent committed
-  # nothing, or its push was a no-op), announcing "review re-running"
-  # is a lie: no run fires, the stale REQUEST_CHANGES stands, and the
-  # card stalls in the review lane (DeltaSolv PR #74, 2026-06-28). Verify real
-  # forward progress; escalate to the human when there is none.
+  # Only a new commit re-runs CI and the critic, so an unmoved head escalates.
   POST_SHA=$(gh pr view "$PR" --repo $REPO --json headRefOid --jq .headRefOid)
   if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then
-    # DRE-2018: distinguish a model DEATH (is_error — API outage,
-    # exhausted subscription; the 2026-07-10 DeltaSolv token outage)
-    # from a fix that RAN and pushed nothing. An outage must not
-    # read as an agent failure in the CEO's queue: fix_dead_run.py
-    # answers retry (post the fix-run-model-death marker the
-    # reconcile sweep re-dispatches on — no park, no needs-human,
-    # no fix-attempt burned), hold (the death after the cap —
-    # medic's cap pattern), or escalate (genuine no-progress:
-    # today's behavior, unchanged). The cap counts CONSECUTIVE
-    # worker-bot deaths since the last successful push, not every
-    # death marker ever posted — a recovered outage episode must not
-    # pre-exhaust the cap for a fresh one (DRE-2018 review). Hand the
-    # full comment list to fix_dead_run.py; it filters to
-    # worker-bot-authored markers (DRE-1995 discipline) and stops the
-    # count at the last push marker.
-    # "Full" means EVERY PAGE (DRE-4139): unpaginated this read saw
-    # GitHub's default 30 — the OLDEST 30 — so on a long PR the cap
-    # counted deaths that were no longer the consecutive run, or
-    # none at all, and a dead loop kept being retried.
-    # fix_dead_run.py flattens the per-page arrays `--slurp` emits.
+    # Death or no progress: fix_dead_run.py decides over every page (DRE-2018, DRE-4139).
     [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
     COMMENTS_JSON=$(mktemp)
     gh api --paginate --slurp \
@@ -300,11 +340,7 @@ $ANSWERS"
           "🤖 The AI service was unavailable during the last fix run — an outage, not a problem with the work. The pipeline retries automatically; no action needed." || true
       fi
     elif [ "$ACTION" = "retry-turns" ]; then
-      # DRE-2312: the run ran out of steps. Say that, and only that
-      # — this used to post the outage line above, which sent the
-      # operator to the credential chain for a run that never had a
-      # service problem. One retry (agent runs vary in how far they
-      # get); no park, no needs-human.
+      # Out of turns, not an outage: one retry (DRE-2312).
       gh pr comment "$PR" --repo $REPO --body "$BODY
 
 $ANSWERS"
@@ -338,10 +374,7 @@ $ANSWERS"
       fi
       park_for_human
     else
-      # DRE-4849: in conflict mode the body quotes the agent's own
-      # reason for not pushing, or says it left none and names this
-      # run's log. fix_budget.no_push_body owns the wording; the
-      # reason goes through a file so none of it meets the shell.
+      # fix_budget.py owns the no-push wording; the reason travels by file (DRE-4849).
       REASON_FILE=$(mktemp)
       printf '%s' "$REASON" > "$REASON_FILE"
       NO_PUSH_FILE=$(mktemp)
@@ -363,24 +396,12 @@ $ANSWERS"
       BODY="🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running."
     else
       BODY="🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running."
-      # DRE-2817 (AC7): the round's classification is recorded HERE
-      # rather than in a comment of its own — this marker already
-      # goes up every round, and an extra worker-bot comment would
-      # consume a standing operator decision (DRE-2813). The budget
-      # counts on "🔧 Fix attempt" and the fix-vs-conflict read-back
-      # keys on "pushed — CI and critic review re-running": both
-      # still open the body, so appending disturbs neither.
-      # $CLASSIFICATION comes from fix_convergence.py through this
-      # step's env — a fixed vocabulary and integers, never thread
-      # text.
+      # The classification rides this marker (DRE-2817, DRE-2813).
       [ -n "$CLASSIFICATION" ] && BODY="$BODY
 
 $CLASSIFICATION"
     fi
-    # DRE-2826: both wordings are the same act — the fixer pushed a
-    # commit, so CI and the critic re-run. The read-back above keys on
-    # "pushed — CI and critic review re-running", which the composed
-    # body still opens with.
+    # Both wordings are one act, fix-attempt-landed (DRE-2826).
     python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
       --body "$BODY" --out /tmp/act-fix-pushed.md \
       || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
