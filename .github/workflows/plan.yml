@@ -4299,7 +4299,8 @@ jobs:
         id: recheck_review
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
