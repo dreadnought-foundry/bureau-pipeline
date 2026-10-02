@@ -6,13 +6,14 @@ rail:
 
   1. ORDER — the first critic runs BEFORE the epic reaches Green Light (it
      protects the CEO's attention, so it cannot run after the CEO has spent
-     it), and the second runs AFTER approval and BEFORE the children promote
-     (an adversarial pass is only worth much against a fixed target, and after
+     it), and the second runs on the review route before Green Light
+     (DRE-5284) and again AFTER approval, BEFORE the children promote (an
+     adversarial pass is only worth much against a fixed target, and after
      promotion the gap is no longer free to fix).
   2. THE BOUND — the plan route carries at most two critic rounds, opens the
-     planning cycle those rounds are counted from, and the epic reaches Green
-     Light on `always`-style conditions rather than only when the critic
-     passed. An unbounded loop is how 17 cards sat in a lane for 27 days; a
+     planning cycle those rounds are counted from, and a plan still held at
+     the bound parks in Triage for an operator (DRE-5284) rather than looping.
+     An unbounded loop is how 17 cards sat in a lane for 27 days; a
      budget counted over the epic's lifetime instead of the current attempt is
      how a re-planned epic loses its revision round.
   3. DIFFERENCE — the two prompts are visibly different: each carries its own

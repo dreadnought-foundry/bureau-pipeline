@@ -13,8 +13,9 @@ The walk, one method per observable the card asks for:
      epic does not reach the CEO on that round.
   2. A revised plan PASSES the first critic and is handed to the second
      critic, in Planning (DRE-5284) — Green Light only after both critics.
-  3. The second critic runs AFTER approval, against the approved text, and
-     nothing promotes until it has.
+  3. On the activate route the second critic runs again AFTER approval,
+     against the approved text, and nothing promotes until it has — the
+     review route of item 2 already ran it before Green Light (DRE-5284).
   4. Two failed rounds and the plan parks for an operator in Triage, with the
      critic's stated reason attached — at both critics (DRE-5276, DRE-5284).
   5. The send-back rate of the second critic is readable out of the thread the

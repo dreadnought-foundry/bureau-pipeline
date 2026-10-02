@@ -3202,7 +3202,8 @@ jobs:
         id: prepark
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.bound == 'true' || steps.pre2.outputs.bound == 'true')
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           FINDING: ${{ steps.pre2.outputs.reason || steps.pre1.outputs.reason }}
           # Through env, never interpolated — it carries text an agent wrote.
           NOTE: ${{ steps.pre2.outputs.note || steps.pre1.outputs.note }}
@@ -4417,7 +4418,8 @@ jobs:
         id: recheck_review
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
@@ -5215,9 +5217,10 @@ jobs:
       # fifteen-minute sweep. Four steps, all `always()` and
       # `continue-on-error: true`, placed directly above the death-cause
       # receipt, which stays the last receipt in the job: below every model
-      # step whatever the route, and below both `review_rerun.py dispatch`
-      # sites — the handover only works because the sender asks for its own
-      # card's next run BEFORE it releases.
+      # step whatever the route, and below every `review_rerun.py dispatch`
+      # site that asks for this card's next run — `Plan → second critic`
+      # (`review`) among them — because the handover only works when the
+      # sender asks for that run BEFORE it releases.
       #
       # THE RELEASE closes only this run's claim and no other (the foundation
       # card's rule, `planner_queue.py`). So when this run has already handed
@@ -5229,11 +5232,12 @@ jobs:
       # slot releases the same way; its claim is the open one.
       #
       # `next` reads the ledger AFTER the release, over the foundation card's
-      # three lanes, so this run's own epic — which the plan route has just
-      # moved to Green Light — is read and seen released. It names the head of
-      # the line only when a slot is free; a card `dispatched` inside the grace
-      # holds a slot and is never named, and a Green Light card counts for its
-      # open claim only. The dispatch carries the waiting card's recorded
+      # three lanes, so this run's own epic — still in Planning after the plan
+      # route hands it to the second critic, or moved to Green Light by the
+      # review route once both critics passed it — is read and seen released.
+      # It names the head of the line only when a slot is free; a card
+      # `dispatched` inside the grace holds a slot and is never named, and a
+      # Green Light card counts for its open claim only. The dispatch carries the waiting card's recorded
       # trigger AND its recorded reason, so an approved epic is re-fired on the
       # activate route and a person's approval or `re-run` that waited still
       # opens the fresh planning attempt it is owed. It never sends

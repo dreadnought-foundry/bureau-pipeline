@@ -100,12 +100,13 @@ THE RULES, in the order the ledger applies them.
     served by place.
 
 THE LANES. The ledger reads `LEDGER_LANES`: a plan-route card sits in
-`Planning`, an activate-route epic sits `In Progress`, and `Green Light` is
-where the plan route moves an epic and where the second critic's send-back and
-the escalation exit put a card BEFORE the run holding its claim reaches its
-release — so a run's slot must still be counted after that move. A Green Light
-card is read for its open claim only: a `waiting` receipt there belongs to a
-card a person moved there, and nothing dispatches a planner at a card in the
+`Planning` (where it stays when the plan route hands it to the second critic),
+an activate-route epic sits `In Progress`, and `Green Light` is where the
+review route moves an epic once both critics have passed it and where the
+second critic's send-back and the escalation exit put a card BEFORE the run
+holding its claim reaches its release — so a run's slot must still be counted
+after that move. A Green Light card is read for its open claim only: a
+`waiting` receipt there belongs to a card a person moved there, and nothing dispatches a planner at a card in the
 CEO's queue. Two lanes are still outside the read, and the window is stated
 rather than hidden: the one-off route moves its card to `Backlog` and the
 classification bounce moves a card to `Triage` a few steps before the
