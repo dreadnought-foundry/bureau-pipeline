@@ -21,8 +21,9 @@ record; a move is a gate."* Planning never got that treatment.
 
 WHAT IS UNDER TEST, one section per acceptance criterion:
 
-  1. A card that has sat in Planning past the window is MOVED to Green Light
-     with an escalation comment, and the pipeline adds no `needs-human`.
+  1. A card that has sat in Planning past the window is MOVED — to Triage,
+     the operator's queue, since DRE-5286 — with its note, and the pipeline
+     adds no `needs-human`.
   2. `planning_escalation.moved_on` reads the card's LANE, and a routing
      verdict older than the current planning attempt is stale — it is not
      proof the card has moved on.
@@ -57,6 +58,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import dedupe_dispatch  # noqa: E402
 import limit_recovery  # noqa: E402
 import planning_escalation  # noqa: E402
 import reconcile  # noqa: E402
@@ -223,23 +225,25 @@ class _Board:
 # 1. The watchdog ESCALATES: a move, not a label
 # ===========================================================================
 class TestTheStalledPlanningCardIsMoved:
-    def test_a_stalled_planning_card_is_moved_to_green_light(self):
+    def test_a_stalled_planning_card_is_moved_to_triage(self):
         """A report is a record; a move is a gate (DRE-2687's principle, one
         lane later). The card that has sat in Planning past the window leaves
-        it for the CEO's queue."""
+        it for the operator's queue (DRE-5286): no planner and no critic has
+        read it, so it is not a decision for the CEO."""
         board = _Board([_card()])
         flagged = board.run(reconcile.flag_stalled_planning)
         assert flagged == {DRE_2415}
-        assert board.lane() == reconcile.ESCALATED_STATE
-        assert board.states == [(DRE_2415, reconcile.ESCALATED_STATE)]
+        assert board.lane() == reconcile.PARKED_STATE
+        assert board.states == [(DRE_2415, reconcile.PARKED_STATE)]
 
-    def test_the_move_carries_the_escalation_comment(self):
-        """Moving the card without the reason is a silent park: the CEO sees
-        something appear in their queue with nothing to read."""
+    def test_the_move_carries_its_note(self):
+        """Moving the card without the reason is a silent park: the operator
+        sees something appear in their queue with nothing to read."""
         board = _Board([_card()])
         board.run(reconcile.flag_stalled_planning)
         note = board.bodies()
-        assert planning_escalation.ESCALATION_TAG in note
+        assert dedupe_dispatch.STALL_PARK_TAG in note
+        assert planning_escalation.ESCALATION_TAG not in note
         assert str(reconcile.PLANNING_MINUTES) in note
         assert "Planning" in note, "the note must name the lane it observed"
 
@@ -407,8 +411,8 @@ class TestTheRepairPass:
         board = _Board([_frozen_card()])
         repaired = board.run(reconcile.repair_frozen_planning_holds)
         assert repaired == {DRE_2415}
-        assert board.lane() == reconcile.ESCALATED_STATE
-        assert planning_escalation.ESCALATION_TAG in board.bodies()
+        assert board.lane() == reconcile.PARKED_STATE
+        assert dedupe_dispatch.STALL_PARK_TAG in board.bodies()
         assert reconcile.HOLD_LABEL not in board.labels()
         assert board.removed == [(DRE_2415, reconcile.HOLD_LABEL)]
 

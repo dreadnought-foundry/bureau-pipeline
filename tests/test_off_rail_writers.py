@@ -99,7 +99,7 @@ EIGHT = (
 #: Every write the card names. A sweep off the rail calls none of them.
 WRITE_SEAMS = (
     "cmd_advance", "cmd_state", "cmd_comment", "add_label", "remove_label",
-    "set_title", "find_open_prefix", "escalate", "post_released", "fire",
+    "set_title", "find_open_prefix", "post_released", "fire",
     "post_refusal",
 )
 
@@ -173,7 +173,8 @@ TRIGGERS = {
     "drain_retiring_lanes": ((_drain_card,), "cmd_advance", "DRE-9999"),
     "recover_limit_deaths": ((_limit_card,), "cmd_state", "DRE-3171"),
     "report_fleet_reviewer_outage": ((_outage_witness,), "set_title", "DRE-9500"),
-    "flag_stranded": ((_stalled_planning_card,), "escalate", "DRE-2736"),
+    # The stall exit parks in Triage through cmd_state itself (DRE-5286).
+    "flag_stranded": ((_stalled_planning_card,), "cmd_state", "DRE-2736"),
     "advance_urgent_intake": ((_urgent_card,), "cmd_advance", "DRE-4150"),
     "repair_frozen_planning_holds": ((_frozen_card,), "remove_label", "DRE-4124"),
     "serve_planner_line": ((_expired_claim_card,), "post_released", "DRE-5178"),
@@ -237,8 +238,6 @@ def _world(cards, slug):
         "remove_label": mock.MagicMock(),
         "set_title": mock.MagicMock(),
         "find_open_prefix": mock.MagicMock(return_value=open_card),
-        "escalate": mock.MagicMock(
-            return_value=SimpleNamespace(parked=True, stood_down="")),
         "post_released": mock.MagicMock(),
         "fire": mock.MagicMock(return_value=(True, "")),
         "post_refusal": mock.MagicMock(return_value=True),
@@ -278,8 +277,6 @@ def _world(cards, slug):
         for name in ("cmd_advance", "cmd_state", "cmd_comment", "add_label",
                      "remove_label", "set_title", "find_open_prefix"):
             enter(mock.patch.object(lops, name, writes[name]))
-        enter(mock.patch.object(reconcile.planning_escalation, "escalate",
-                                writes["escalate"]))
         enter(mock.patch.object(reconcile.planner_queue, "post_released",
                                 writes["post_released"]))
         enter(mock.patch.object(reconcile.plan_run, "fire", writes["fire"]))

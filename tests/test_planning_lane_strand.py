@@ -195,16 +195,18 @@ def test_card_stuck_in_planning_past_its_own_threshold_is_surfaced():
     """A card that has sat in Planning with nothing happening to it is still
     a strand — Planning just owes a classification rather than a receipt.
 
-    Since DRE-4124 surfacing it is a MOVE into the CEO's decision queue, not a
-    label: a card labelled and left here is skipped by everything downstream,
-    which is how thirteen cards came to sit in Planning with nobody asked."""
+    Since DRE-4124 surfacing it is a MOVE, not a label: a card labelled and
+    left here is skipped by everything downstream, which is how thirteen cards
+    came to sit in Planning with nobody asked. Since DRE-5286 the move is to
+    Triage, the operator's queue: a card no planner and no critic has read is
+    not a decision for the CEO."""
     card = _card(labels=(), minutes_stale=reconcile.PLANNING_MINUTES + 5)
     flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-2736"}
     body = comment.call_args.args[1]
     assert str(reconcile.PLANNING_MINUTES) in body
     assert "Planning" in body, "the notice must name the lane it observed"
-    state.assert_called_once_with("DRE-2736", reconcile.ESCALATED_STATE)
+    state.assert_called_once_with("DRE-2736", reconcile.PARKED_STATE)
     add_label.assert_not_called()
 
 
@@ -220,7 +222,7 @@ def test_the_dre_1978_shape_is_still_caught():
     flagged, comment, _, state = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-1978"}
     assert "Planning" in comment.call_args.args[1]
-    assert state.call_args.args == ("DRE-1978", reconcile.ESCALATED_STATE)
+    assert state.call_args.args == ("DRE-1978", reconcile.PARKED_STATE)
 
 
 def test_planning_threshold_is_its_own_and_longer():
