@@ -12,28 +12,6 @@ critic's agent, ladder, brief and result grammar.
 The mechanical form of everything below is `scripts/plan_critic.py`; the rail
 that runs it is `.github/workflows/plan.yml`. This is the human form.
 
-**Landing** — the rail still runs the old order until DRE-5281 is on `main`.
-This page states the rule DRE-5268 builds. Until the epic's workflow cards
-merge, the rail still does what this page supersedes: the first critic's bound
-still hands the plan to the CEO, the second critic still runs on the activate
-route after the CEO's approval and parks its bound and its second death in
-Green Light, a re-plan that changed the card set still returns the epic to
-Green Light, `plan_critic.REAPPROVE_HOW` still asks for an approval until
-DRE-5280 rewrites it, and the promoter still reads a `NO_RESULT` post round as
-a release. Six more things below are not built yet either. The second critic
-does not see Planning epics, and `plan_critic.SIGHT_STATES` does not exist
-until DRE-5276 adds it — today its sight is `IN_FLIGHT_EPIC_STATES`, Green
-Light, Todo and In Progress. The turn-cap retry still dispatches the activate
-route (`trigger_state: in progress`) until DRE-5277, and its second death still
-parks in Green Light until DRE-5280. The re-review watcher does not ask for a
-review nobody started, or park that epic in Triage, until DRE-5278 — today it
-only posts an overdue notice about a SEND_BACK after approval. The Planning
-stall watchdog does not park in Triage until DRE-5286. The plan route does not hand
-a passed plan to the second critic until DRE-5284 — today the first critic's
-PASS or `NO_RESULT` sends it to Green Light. And the second critic's
-`NO_RESULT` re-ask, with its Triage park on a second `NO_RESULT`, comes with
-DRE-5280. DRE-5281, the last of those cards, deletes this paragraph.
-
 ## The first critic reviews a moving document
 
 **Question: is this fit to take the CEO's time?**
@@ -210,6 +188,18 @@ text is fixed once the first critic passes it. And the tripwire this page sets
 had fired. DRE-5129 was approved three times, DRE-5034 twice, and DRE-3778 and
 DRE-4198 five times each, and every one of those approvals was sent back. Each
 Approve was really a "review it again" button.
+
+**Approve means go** (DRE-5281). The activate route runs no review. On the
+CEO's approval it reads the second critic's state on the plan's current attempt
+(`plan_critic.py post-state`, the word the promoter reads too): a newest round
+that PASSED — and only that — activates the epic and promotes its children
+through the dependency gate. Anything else means the plan was approved before
+both critics read it, which only the old rule allowed: no post round, a newest
+round that produced no result, a send-back, the bound, or a review that died.
+That epic is handed to the review it missed. The pipeline asks for the review
+route itself, writes no lane on the way, and the review run moves the epic to
+Planning; it comes back to Green Light passed, for one Approve. Nothing reads a
+plan after its approval, so nothing can send an approved plan back.
 
 **Cross-epic scope: this epic plus every other epic in flight** (Green Light,
 Todo, In Progress), **and every other epic under review in Planning** —
@@ -573,7 +563,9 @@ and moving the epic to Planning is that person saying it is settled. The plan
 route opens the attempt as it does for any card entering Planning, and the
 planner and both critics judge the settled plan on its own rounds. A person's
 `▶️ re-run the review` on an epic already In Progress (the relay dispatches
-`reason: re-run`) opens one the same way, on the ACTIVATE route. Only a
+`reason: re-run`) opens one the same way, on the ACTIVATE route, which then
+hands the epic to the review route because nothing has passed the fresh
+attempt yet. Only a
 person's ask at the bound does this: the pipeline's own `re-review` and
 `review-retry` never open one — a boundary there would refund the budget on
 every round so nothing ever parked, and would cut the tombstone the retry
