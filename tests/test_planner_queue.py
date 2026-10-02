@@ -231,13 +231,15 @@ def config_file(doc, raw: str | None = None):
 #: The claim TTL follows the plan job's clock (`Bounds` below): 115 since
 #: DRE-5288 sized the two re-plan ceilings per plan and the job clock rose with
 #: them.
-COMMITTED = {"max_running": 2, "claim_ttl_minutes": 115,
+COMMITTED = {"max_running": 3, "claim_ttl_minutes": 115,
              "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
 
 #: The ledger's behavior is tested at the four slots it was written against
 #: (DRE-5176). The committed number is `TheCap`'s contract alone: DRE-5326
 #: dropped it to two on 2026-09-30, when four planners out-spent Linear's
-#: refill, and the rules below do not change with the number. The same for the
+#: refill, and DRE-5634 raised it to three on 2026-10-02, once the planners
+#: spent their own OAuth bucket (DRE-5589). The rules below do not change with
+#: the number. The same for the
 #: TTL: the lifetimes below are written either side of 105 minutes, and the
 #: committed TTL moving with the plan job's clock (DRE-5288) does not move them.
 FOUR_SLOTS = dict(COMMITTED, max_running=4, claim_ttl_minutes=105)
@@ -1019,7 +1021,7 @@ class TheCap(_Base):
             self.assertEqual(json.load(f), COMMITTED)
         with mock.patch.dict(os.environ):
             os.environ.pop("PLANNER_QUEUE_CONFIG", None)
-            self.assertEqual(pq.cap(), 2)
+            self.assertEqual(pq.cap(), 3)
             self.assertEqual(pq.waiting_max(), 360)
 
     def test_check_finds_the_file_relative_to_the_script(self):
