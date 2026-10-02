@@ -320,8 +320,9 @@ jobs:
           # interpolated into the shell line (DRE-1996).
           TRIGGER_STATE: ${{ github.event.client_payload.trigger_state }}
           # The planner run that asked for this one, when a planner run did
-          # (a re-review or review-retry, sent by `review_rerun.py dispatch`
-          # before its sender ends). The guard excuses that ONE run, which
+          # (a review, re-review or review-retry, sent by `review_rerun.py
+          # dispatch` before its sender ends — the activate route's hand-back
+          # among them since DRE-5281). The guard excuses that ONE run, which
           # is always still in flight and is not a duplicate (DRE-4573).
           # Empty for every other dispatch, which is judged as before.
           SENT_BY_RUN: ${{ github.event.client_payload.sent_by_run }}
@@ -354,11 +355,13 @@ jobs:
       # run and cancels the rest, which is exactly the "dropped" the epic
       # forbids. The self-plan stub's per-card group is unchanged.
       #
-      # A planner run's own re-dispatch keeps its slot. `Second critic sent
-      # the plan back` (`re-review`) and `Second critic — the review died`
-      # (`review-retry`) ask for a second run on this card through
-      # `review_rerun.py dispatch` before their sender ends, carrying the
-      # sender's run id as `sent_by_run`. The guard above reads it to excuse
+      # A planner run's own re-dispatch keeps its slot. `Review — the revised
+      # plan is reviewed again` (`re-review`), `Review — the review died`
+      # (`review-retry`) and, since DRE-5281, `Activate the approved epic`'s
+      # hand-back of an epic the second critic has not passed (`review`) ask
+      # for a second run on this card through `review_rerun.py dispatch`
+      # before their sender ends, carrying the sender's run id as
+      # `sent_by_run`. The guard above reads it to excuse
       # that one run (DRE-4573); this step hands it on as `--sent-by-run`, and
       # the ledger's handover rule lets the started run inherit its sender's
       # open claim — the card holds one slot throughout. `REASON` goes through
@@ -5024,10 +5027,11 @@ jobs:
       #
       # THE RELEASE closes only this run's claim and no other (the foundation
       # card's rule, `planner_queue.py`). So when this run has already handed
-      # its slot to the run it asked for on its own card — `Second critic sent
-      # the plan back` (`re-review`) or `Second critic — the review died`
-      # (`review-retry`), whose started run posts `claimed … · from run <this
-      # run>` — the release frees nothing: the card still holds one slot, and
+      # its slot to the run it asked for on its own card — `Review — the
+      # revised plan is reviewed again` (`re-review`), `Review — the review
+      # died` (`review-retry`) or the activate route's hand-back (`review`),
+      # whose started run posts `claimed … · from run <this run>` — the
+      # release frees nothing: the card still holds one slot, and
       # `next` does not hand that slot to anyone. A run that inherited its own
       # slot releases the same way; its claim is the open one.
       #
