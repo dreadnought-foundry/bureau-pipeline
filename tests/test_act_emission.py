@@ -631,7 +631,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         this card must still be there, exactly once."""
         act = WORKFLOW_SITES[site_id]
         literal = _frozen()["workflow"][site_id]
-        text = (ROOT / pipeline_act.record(act)["emits"]["file"]).read_text("utf-8")
+        text = pipeline_act._source(pipeline_act.record(act)["emits"]["file"])
         assert text.count(literal) == 1, (
             f"{site_id}: the shell body changed. It is byte-identical or it is "
             "a different receipt."
@@ -639,7 +639,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
     @pytest.mark.parametrize("act", sorted(set(WORKFLOW_SITES.values())))
     def test_the_workflow_composes_it_through_the_writer(self, act):
-        text = (ROOT / pipeline_act.record(act)["emits"]["file"]).read_text("utf-8")
+        text = pipeline_act._source(pipeline_act.record(act)["emits"]["file"])
         assert f"receipt {act}" in text or f"--act={act}" in text or f"--act {act}" in text, (
             f"{act} is posted without composing through pipeline_act.receipt()"
         )
