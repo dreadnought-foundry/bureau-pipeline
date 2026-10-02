@@ -39,15 +39,17 @@ commit (the channel note above). The per-role mapping:
 
 | Role | Standards injected (comms + untrusted-content are added to all) |
 |---|---|
-| engineer | engineering, architecture, card-quality, vendor-boundaries, console-honesty |
-| devops | engineering, architecture, card-quality, vendor-boundaries |
-| frontend | engineering, architecture, card-quality, design, design-system, vendor-boundaries, console-honesty |
+| engineer | engineering, architecture, card-quality, vendor-boundaries, console-honesty, whats-new |
+| devops | engineering, architecture, card-quality, vendor-boundaries, whats-new |
+| database-architect | engineering, architecture, card-quality, vendor-boundaries, whats-new |
+| frontend | engineering, architecture, card-quality, design, design-system, vendor-boundaries, console-honesty, whats-new |
 | planner | card-quality, engineering, vendor-boundaries, design-parity, plan-artifact |
-| critic | engineering, architecture, vendor-boundaries, console-honesty, design-parity, design-system, plan-artifact, verdict-evidence |
+| critic | engineering, architecture, vendor-boundaries, console-honesty, design-parity, design-system, plan-artifact, verdict-evidence, whats-new |
 | verifier | design, design-parity |
 | plan-critic-pre | card-quality, design-parity, plan-artifact, plan-critic |
 | plan-critic-post | card-quality, engineering, architecture, vendor-boundaries, plan-artifact, plan-critic |
-| fix / medic | engineering |
+| fix | engineering, whats-new |
+| medic | engineering |
 
 ## The standards
 
@@ -66,7 +68,7 @@ commit (the channel note above). The per-role mapping:
 | `plan-critic.md` | The two plan critics — the first asks whether a plan is fit to take the CEO's time, the second asks what is missing now the approved text IS the specification; the two-failed-round bound, the send-back rate as the measurement, the stated cross-epic scope, and the collision tripwire. |
 | `verdict-evidence.md` | A verdict's factual claims carry their evidence — a cited command comes with its actual output, a finding about what a NAMED CI job did names the run id, job id and the proving line, a coverage GAP ("no job runs this") cites the search that establishes the absence instead, and the review states the description snapshot it read; judgement findings (scope, design, risk) are untouched. `scripts/verdict_evidence.py` holds a blocking verdict that asserts a run it did not show, and the hold quotes the held review so a person can read it. |
 | `release-train.md` | What a surface owes the release train — migrations first, rollout only where changed, verify before you tag, the annotated tag that IS the receipt, non-zero on any failure, and `deferred: …` for a deployment owed to a person; plus the stub every caller carries, the two cron lines, and where the fleet brake `RELEASE_HOLD` is set. Written for whoever writes a surface script; it is not injected into an agent role. |
-| `whats-new.md` | The What's New contract — the one `What's new:` line every pull request body carries (most say `none`), its wording rules, who writes it and which branches owe none, how a held pull request is answered, the `config/whats-new-cutover.json` switch, and the `whats-new.json` file the train publishes as a GitHub Release asset. `scripts/whats_new.py` is the parser and validator every consumer imports. Written for whoever writes a pull request or builds a panel; it is not injected into an agent role. |
+| `whats-new.md` | The What's New contract — the one `What's new:` line every pull request body carries (most say `none`), its wording rules, who writes it and which branches owe none, how a held pull request is answered, the `config/whats-new-cutover.json` switch, and the `whats-new.json` file the train publishes as a GitHub Release asset. `scripts/whats_new.py` is the parser and validator every consumer imports. Written for whoever writes a pull request or builds a panel; injected into every role that writes or judges a pull request body — engineer, frontend, devops, database-architect, critic and fix (DRE-5510). |
 | `console-honesty.md` | Badges derive from what actually happened — console state fetched from the source of truth, never inferred from adjacent signals; explicit stale/absent rendering; every state element ships a stale-data test; the critic checks all three on console cards. |
 
 ## How to add or update a standard

@@ -50,22 +50,28 @@ import sys
 # in these lists — list only the role-specific additions. Order is the order
 # the agent reads them in.
 ROLE_STANDARDS: dict[str, list[str]] = {
+    # whats-new.md (DRE-5510) is the LAST entry of every role that writes or
+    # judges a pull request body — engineer, frontend, devops,
+    # database-architect, critic and fix — appended so no existing order moves.
+    # The planner, verifier, medic and plan critics never touch a pull request
+    # body, so they do not carry it.
+    #
     # Implementation agents build to the engineering floor + the system shape,
     # against the card contract, and report in the CEO's voice. They also
     # answer the vendor-behavior premortem before touching an external
     # trigger/event/command (DRE-2105 — the 2026-07-12 boundary lessons),
     # and build console state surfaces honestly (DRE-2107 — badges derive
     # from what actually happened, never from adjacent signals).
-    "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
+    "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
     # Frontend is the engineer in web mode + the design-fidelity standard, and
     # the fleet-wide design system it produces design work inside of
     # (design-system.md — DRE-3938: one `design/` folder, tokens and atoms
     # locked in LOCK.json, everything starting from the master template).
-    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md"],
+    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
     # DevOps shares the engineer set (infra is code; same discipline + shape)
     # minus console-honesty — it authors CDK/CI/migrations, not console
     # state surfaces.
-    "devops": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+    "devops": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
     # The database architect mirrors the devops set exactly: same discipline
     # floor and system shape, builds to a card contract, and answers the vendor
     # premortem (warehouse/ELT work ingests from external sources). No
@@ -75,7 +81,7 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # assembles context the moment a route exists — agents.yaml deliberately
     # routes no `agent:*` label to it yet, but the brief has existed since
     # DRE-1335 and standards_for() raised KeyError for it until now.
-    "database-architect": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+    "database-architect": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
     # The planner authors cards (card-quality), sizes them against the
     # engineering floor, writes plan comments the CEO reads (comms), bakes
     # the vendor-boundary answers into boundary-touching cards, must account
@@ -94,7 +100,7 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # design-system.md (DRE-3938) joins the design lenses beside design-parity:
     # the critic is the role that says whether a design is really done, and it
     # cannot hold work to a folder shape and a lock it was never handed.
-    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md"],
+    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md", "whats-new.md"],
     # The two PLAN critics (DRE-2721). Their standards sets differ on purpose,
     # because their questions do:
     #   pre  — "is this fit to take the CEO's time?" It judges the SHAPE of a
@@ -115,8 +121,10 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # UI against the design standard + the design-parity no-fake-states lens.
     "verifier": ["design.md", "design-parity.md"],
     # The fixing agent and the medic work to the engineering floor and report
-    # in the CEO's voice.
-    "fix": ["engineering.md"],
+    # in the CEO's voice. The fixer also reads whats-new.md: it is the agent
+    # that puts a missing `What's new:` line into the body when the critic
+    # sends a pull request back, and it reads no brief (DRE-5510).
+    "fix": ["engineering.md", "whats-new.md"],
     "medic": ["engineering.md"],
 }
 

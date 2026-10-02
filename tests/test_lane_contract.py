@@ -109,10 +109,12 @@ class TestTheFileExists:
         # blocker and a past-the-cap dead run in Backlog since long before the
         # contract existed, and nothing named it until a check that DISCOVERS
         # writers rather than listing them went looking
-        # (tests/test_no_unplanned_ready_lane_writer.py).
+        # (tests/test_no_unplanned_ready_lane_writer.py). `hygiene.py` joined
+        # it on DRE-5368: the hygiene agent returns a Triage card whose
+        # mechanical defect it fixed, never to Todo (tests/test_hygiene.py).
         assert lane_contract.lane_writers("Backlog") == (
             "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
-            "linear_ops.py", "agent-task.yml",
+            "linear_ops.py", "agent-task.yml", "hygiene.py",
         )
         # `reconcile.py` joined Canceled on DRE-3665: it cancels the card it
         # filed for a dependabot pull request when that pull request closes
@@ -122,9 +124,11 @@ class TestTheFileExists:
         # (tests/test_lane_contract_groomer_cancels.py). `plan.yml` joined it
         # on DRE-5242: a returned child of an epic is split into siblings
         # under its parent, and the planner cancels the original once they
-        # are filed (tests/test_returned_child_split.py).
+        # are filed (tests/test_returned_child_split.py). `hygiene.py` joined
+        # it on DRE-5368, for one class only: a childless card under a
+        # Canceled or Duplicate parent (tests/test_hygiene.py).
         assert lane_contract.lane_writers("Canceled") == (
-            "operator", "reconcile.py", "groomer.py", "plan.yml",
+            "operator", "reconcile.py", "groomer.py", "plan.yml", "hygiene.py",
         )
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):

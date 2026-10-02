@@ -718,7 +718,10 @@ def _say_once(lops, identifier: str, tag: str | None, body: str) -> None:
 def _cmd_decide(identifier: str, github_output: str | None) -> int:
     import linear_ops
 
-    bodies = linear_ops.comment_bodies(identifier)
+    # The whole thread (DRE-5644): the shape stamp is written once, on the way
+    # in, and a busy epic pushes it out of the fifty-comment window. Read off the
+    # window, a stamped epic is refused as a card nobody classified.
+    bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
     try:
         route = decide(identifier, bodies)
     except Unroutable as refusal:
@@ -767,6 +770,12 @@ def _cmd_exit(identifier: str) -> int:
     # Read the card WHOLE: the routing check reads the acceptance criteria, and
     # the list API truncates a description without saying so.
     card = critic_score.read_card(linear_ops, identifier)
+    # The window, not the whole thread, on purpose (DRE-5644 left it): this
+    # list also feeds `routing_verdict.verdicts_on` and its `stamp_refusal`,
+    # which read every verdict on the thread rather than from the newest return
+    # receipt the way `planning_shape.shape_on` does. Read whole, a one-off
+    # that came back (DRE-4370) would see its old verdict and refuse the new
+    # one. The exit serves one-off and roll-up cards, whose threads stay short.
     bodies = linear_ops.comment_bodies(identifier)
     plan = exit_plan(card, bodies)
 

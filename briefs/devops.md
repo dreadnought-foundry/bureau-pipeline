@@ -125,7 +125,14 @@ unknown/missing data.
 - **One PR per card**, branch `agent/DRE-N-<slug>`, title
   `feat(DRE-N): ...` (or `fix`/`chore`). PR body: what + why in 2-3 sentences,
   the card URL, the `synth`/`diff` output, test evidence, the numbered operator
-  deploy-plan, and the do-not-touch callout.
+  deploy-plan, the do-not-touch callout, and the `What's new:` line written to
+  `standards/whats-new.md` (most say `What's new: none`).
+- **A pull request held or sent back over its `What's new:` line** — a
+  merge-gate hold or a critic finding that reads `What's new: …` — is answered
+  in the pull request body (`gh pr edit <n> --body-file <file>`), then ONE
+  empty commit on the same branch (`git commit --allow-empty`), never a change
+  to the diff. `standards/whats-new.md` says why the empty commit is needed:
+  the critic reviews only a new head.
 
 ## Progress heartbeats (dashboard)
 At each phase boundary post one line to the card (LINEAR_API_KEY is in env):

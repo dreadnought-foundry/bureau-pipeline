@@ -547,9 +547,30 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # A review the PIPELINE asked for is not a card arriving at Planning
+      # (DRE-5644). Its reason — `review`, `re-review` or `review-retry`, from
+      # any lane — says the plan is written and the second critic is to read
+      # it; the route step below sends it there. The classifier is the front
+      # door, and on 2026-10-02 it ran on DRE-3698's automatic re-review (run
+      # 37054561328, 12:32 PT) instead: the stamp had scrolled past the comment
+      # window, the classifier read the epic afresh, its self-check failed, and
+      # the escalation below parked the epic in Green Light as a CEO decision.
+      # So the classifier is skipped on a review ask, and with it the three
+      # steps gated on its outputs. The words live in `review_rerun.REVIEW_ASKS`
+      # beside the route table's own; the reason comes through env, never
+      # interpolated — it is a payload field.
+      - name: Dispatch reason — a review the pipeline asked for?
+        id: ask
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        env:
+          REASON: ${{ github.event.client_payload.reason }}
+        run: |
+          python3 .bureau-pipeline/scripts/review_rerun.py review-ask \
+            --reason "$REASON" --github-output "$GITHUB_OUTPUT"
+
       - name: Classify the card — one-off, epic or wave
         id: classify
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.slot.outputs.admitted == 'true' && steps.ask.outputs.review != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -3840,10 +3861,18 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "✅ Ready for you in Green Light. ${READ} Approve starts the build; nothing is building until you do."
 
-      # PASS, but the first critic's last reading HELD the plan — reachable only
-      # when a person or the activate hand-back sends a plan the first critic
-      # parked at its bound into review mode. It has not been through both
-      # critics, so it never reaches Green Light: it parks for an operator.
+      # PASS, but the first critic has not passed the plan: its last record is
+      # a send-back (a person or the activate hand-back sent a plan the first
+      # critic parked at its bound into review mode), or there is no
+      # first-critic record at all. It has not been through both critics, so
+      # it never reaches Green Light: it parks for an operator.
+      #
+      # The note is `plan_critic.py held-park`, chosen by the record it reads,
+      # over the whole thread `dump-comments --with-authors` returns
+      # (DRE-5639). Until then this step said "the first critic's last reading
+      # sent it back" on every reach, and on DRE-3698 (11:52 PT, 2026-10-02)
+      # it said so of a plan the first critic had passed: that PASS had
+      # scrolled out of the fifty-comment window the decision read.
       - name: Review — the second critic passed a plan the first critic held
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
         env:
@@ -3851,11 +3880,17 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
-          HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
+          THREAD="${{ runner.temp }}/held-park-thread.json"
+          NOTE="${{ runner.temp }}/held-park-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
+          # An unreadable thread is named as unreadable by the note, never as
+          # "no record", so a failed read still parks with a true sentence.
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD" || : > "$THREAD"
+          python3 .bureau-pipeline/scripts/plan_critic.py held-park < "$THREAD" > "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "🛑 Parked in Triage with needs-human for an operator. The second critic passed this plan, but the first critic's last reading sent it back, so it has not been through both critics and does not go to Green Light. When it is settled, ${HOW}."
+            "$(cat "$NOTE")"
 
       # NO_RESULT: a crash is not a rejection, and it is not a pass. Below
       # `plan_critic.MAX_ROUNDS` no-result rounds on this attempt (read through

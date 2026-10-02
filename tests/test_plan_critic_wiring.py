@@ -1478,9 +1478,13 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
             if review_only(s):
                 with self.subTest(step=s.get("name")):
                     self.assertNotIn(pc.REAPPROVE_HOW, run_of(s))
-        for name in (REVIEW_HELD_PASS, REVIEW_NO_RESULT, REVIEW_BOUND):
+        for name in (REVIEW_NO_RESULT, REVIEW_BOUND):
             with self.subTest(step=name):
                 self.assertIn("plan_critic.REAPPROVE_HOW", run_of(exact_step(name)))
+        # DRE-5639: the held park's whole note is the module's
+        # (`held_park_note`, which ends in `reapprove_how()`), so the sentence
+        # is read through `plan_critic.py held-park` rather than the constant.
+        self.assertIn("plan_critic.py held-park", run_of(exact_step(REVIEW_HELD_PASS)))
 
     def test_the_sight_step_reads_the_sight_states(self):
         run = run_of(exact_step("Second critic — cross-epic sight"))

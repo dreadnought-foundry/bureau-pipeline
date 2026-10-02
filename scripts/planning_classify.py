@@ -1584,7 +1584,10 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     """
     import critic_score
 
-    bodies = lops.comment_bodies(identifier)
+    # The WHOLE thread (DRE-5644): the stamp is written once, on the way in, and
+    # a busy card buries it. Read off the newest fifty, an epic already stamped
+    # was read as unclassified and asked again.
+    bodies = lops.comment_bodies(identifier, whole_thread=True)
     try:
         existing = planning_shape.shape_on(bodies, doc)
     except planning_shape.ConflictingShapes as e:

@@ -128,8 +128,15 @@ def _cli_select(tree: Path, agent: str, available=None) -> str:
 
 
 def _agents_registry(path: Path = AGENTS) -> dict:
+    """The roster's MODEL-RUNNING agents. A scripted entry (DRE-5369) declares
+    `model: null` — key present, value null — because its workflow runs no
+    model, so it has no kind, no ladder and no generated region; an entry that
+    merely lost its `model` key is still here, and still drift.
+    tests/test_agents_registry.py::test_scripted_agents_run_no_model holds the
+    scripted entries to that claim."""
     with open(path) as f:
-        return {a["name"]: a for a in yaml.safe_load(f)["agents"]}
+        return {a["name"]: a for a in yaml.safe_load(f)["agents"]
+                if not ("model" in a and a["model"] is None)}
 
 
 def _canonical(path: Path = CONFIG) -> dict:

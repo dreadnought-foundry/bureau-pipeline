@@ -2309,7 +2309,7 @@ class _Lops:
             }
         }
 
-    def comment_bodies(self, identifier):
+    def comment_bodies(self, identifier, *, whole_thread=False):
         return list(self.bodies)
 
     def comment_timeline(self, identifier):

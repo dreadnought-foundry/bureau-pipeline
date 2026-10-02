@@ -975,6 +975,16 @@ def _epics_in_flight() -> list[dict]:
     return json.loads(buf.getvalue() or "[]")
 
 
+def _whole_thread(epic: str) -> list[dict]:
+    """`linear_ops.comment_records` over the WHOLE thread (DRE-5639).
+
+    Inside a sweep, reconcile's pass already pages the whole thread for the
+    watcher. These CLI commands run outside any pass, where the default is the
+    fifty newest comments, and the attempt boundary or the round this
+    watcher reads can fall outside that window."""
+    return linear_ops.comment_records(epic, whole_thread=True)
+
+
 def _cmd_check(args) -> int:
     """Read one epic and say what is true. Writes nothing, exits 0 either way:
     this is a reader for a person replaying a thread, and an exit code would
@@ -986,7 +996,9 @@ def _cmd_check(args) -> int:
     replay is to ask the LIVE sweep's question about a past moment, so a
     second decision here would be a second answer to disagree with.
     """
-    records = linear_ops.comment_records(args.epic)
+    # The whole thread, as the live sweep reads it inside reconcile's pass
+    # (DRE-5639): a window here would replay a different question.
+    records = _whole_thread(args.epic)
     lane = _lane(args.epic)
     if args.now:
         records = at_or_before(records, args.now)
@@ -1005,7 +1017,9 @@ def _cmd_sweep(args) -> int:
     # for — dropped here rather than carried into `report` as a `None` epic.
     lanes = {r.get("identifier"): r.get("state")
              for r in rows if r.get("identifier")}
-    spoke = report(list(lanes), linear_ops.comment_records, lanes.get, args.now)
+    # Outside a pass, so ask for the whole thread the in-sweep watcher reads
+    # (DRE-5639).
+    spoke = report(list(lanes), _whole_thread, lanes.get, args.now)
     print(f"rereview-missing: {len(lanes)} epic(s) in flight, "
           f"spoke on {len(spoke)}" + (f" ({', '.join(spoke)})" if spoke else ""))
     return 0

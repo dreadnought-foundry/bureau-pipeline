@@ -796,14 +796,22 @@ class TestTheShippedTree:
         other half of stating it: it posts NOTHING. The ⏳ heartbeat already
         exists and is written by the build agent, and the review run and the
         gate's re-check are read by the console off GitHub — so there is no
-        body for this writer to compose."""
+        body for this writer to compose.
+
+        A site that composes a COMPUTED act — `receipt(<a name it was
+        handed>, …)` — composes for the acts its own file is declared to emit,
+        and only those. That is the hygiene core (DRE-5368): it holds the table
+        of its twelve acts and posts every one through one seam, while WHICH
+        act a pass takes is a lane module's decision."""
         composed = {s.composed_as for s in guard.sites() if s.composed_as}
+        computed = {s.path for s in guard.sites() if s.composed_as == "<computed>"}
         flagged = {act for _, _, act in guard.shell_act_flags()}
         pending = guard.pending_acts()
         for name in pipeline_act.acts():
             if pipeline_act.kind(name) == _PROGRESS or name in pending:
                 continue
-            assert name in composed or name in flagged, (
+            emitter = pipeline_act.record(name)["emits"]["file"]
+            assert name in composed or name in flagged or emitter in computed, (
                 f"{name} is declared but nothing the guard can see composes it"
             )
 

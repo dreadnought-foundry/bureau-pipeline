@@ -52,3 +52,51 @@ def test_the_rendered_document_carries_the_new_entrance():
               encoding="utf-8") as fh:
         doc = fh.read()
     assert "required code-owner review" in doc
+
+
+# The console files the week's agent-failure report into Green Light as one
+# `no-code` card (DRE-5018, on the CEO's DRE-4271 decision). The contract has
+# to admit that writer and name the fifth kind of row BEFORE the console
+# writes one, and a keeper walking the lane has to be able to recognize a
+# report row mechanically, so each rule is written once and counted.
+
+REPORT_LEAD = "Weekly agent report — Green Light kind weekly-report"
+
+
+def test_the_console_is_a_permitted_green_light_writer():
+    assert "console" in lane("Green Light")["clauses"]["writers"]["who"]
+
+
+def test_the_console_is_a_glossary_writer_that_lives_in_agent_bureau():
+    with open(CONTRACT, encoding="utf-8") as fh:
+        entry = json.load(fh)["writers"]["console"]
+    assert entry["path"] is None
+    assert "agent-bureau" in entry["note"]
+    assert "console" in lane_contract.writers()
+
+
+def test_green_light_names_five_kinds_and_the_weekly_report_is_one():
+    entrance = lane("Green Light")["clauses"]["entrance"]
+    assert "weekly-report" in entrance["kinds"]
+    assert len(entrance["kinds"]) == 5
+    assert entrance["text"].startswith("Five kinds of row, and no other")
+
+
+def test_the_weekly_report_has_no_arrival_record_in_this_repository():
+    arrivals = lane("Green Light")["clauses"]["entrance"]["arrivals"]
+    assert [a for a in arrivals if a["kind"] == "weekly-report"] == []
+
+
+def test_the_report_rules_are_each_written_once_in_the_entrance():
+    text = lane("Green Light")["clauses"]["entrance"]["text"]
+    for phrase in ("weekly-report", "no sweep or keeper", "only the CEO closes it"):
+        assert text.count(phrase) == 1, phrase
+
+
+def test_the_entrance_and_the_evidence_both_carry_the_recognizer():
+    clauses = lane("Green Light")["clauses"]
+    assert REPORT_LEAD in clauses["entrance"]["text"]
+    assert REPORT_LEAD in clauses["evidence"]["text"]
+    for text in (clauses["entrance"]["text"], clauses["evidence"]["text"]):
+        assert "What broke the agents — week ending <Saturday> (PT)" in text
+        assert "no-code" in text

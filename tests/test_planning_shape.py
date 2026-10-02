@@ -474,7 +474,8 @@ class _Card:
 
     def run(self, fn):
         with patch.object(
-            linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+            linear_ops, "comment_bodies",
+            side_effect=lambda i, **_kw: list(self.comments)
         ), patch.object(
             linear_ops, "cmd_comment",
             side_effect=lambda i, b: self.posted.append((i, b)),
