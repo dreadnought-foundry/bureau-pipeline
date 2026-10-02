@@ -2038,6 +2038,9 @@ class ReviewReplanArtifactWalk(unittest.TestCase):
         self.assertEqual(len(thread), 2, thread)
         self.assertIn("is not the epic's last child", thread[0])
         self.assertIn("proof", thread[-1].lower())
+        # The proof check's own note says Planning — the plan route's lane —
+        # so the park note says which lane is true.
+        self.assertIn("parks in Triage instead", thread[-1])
         self.assertTrue(thread[-1].rstrip().endswith(pc.REAPPROVE_HOW + "."),
                         thread[-1][-200:])
         # The label is on before the move, and the note follows both.

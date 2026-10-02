@@ -4259,14 +4259,19 @@ jobs:
           fi
           echo "ok=false" >> "$GITHUB_OUTPUT"
           echo "::error::the revision did not pass the plan's own gates: $FAILED"
+          BOUNCED=""
           if [ -s "$BOUNCE_FILE" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(cat "$BOUNCE_FILE")"
+            # The proof check's note is written for the plan route, where a
+            # bounce goes back to Planning; on this route it parks, so the
+            # note below says which lane is true.
+            BOUNCED=" The note above lists what the proof card is missing; it says the epic is back in Planning, but a revision the plan's own gates refuse parks in Triage instead."
           fi
           if [ "$REPLAN_OUTCOME" != "success" ]; then
-            WHY="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), and ${FAILED}."
+            WHY="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), and ${FAILED}.${BOUNCED}"
           else
-            WHY="The re-plan finished, but ${FAILED}."
+            WHY="The re-plan finished, but ${FAILED}.${BOUNCED}"
           fi
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
