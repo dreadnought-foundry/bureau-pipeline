@@ -712,12 +712,18 @@ class TestASecondEscalationOutOfAFreshAttempt:
         assert card.events.index("comment") < card.events.index("state")
 
     def test_dre_2428_through_the_sweeps_handed_window(self):
-        """The path the incident actually took: the stall watchdog hands the
-        board read's comment window to the escalation (`window_nodes`, newest
-        first off the API) rather than re-reading the card."""
+        """The path the incident actually took: the stall watchdog reads the
+        board read's comment window (`window_nodes`, newest first off the API)
+        rather than re-reading the card.
+
+        Since DRE-5286 that exit no longer asks this module's question: it
+        parks the card in Triage under its own note, scoped to the attempt the
+        same way, so a note a spent attempt left still does not silence this
+        one. `destination()` is untouched and still answers for the planner."""
+        old_note = reconcile.stall_park_note(DRE_2428, STALL_WHY)
         nodes = [  # newest first, exactly as the API answers `comments(first:)`
             {"body": _boundary(), "createdAt": FRESH_ATTEMPT_AT, "user": {"id": "bot"}},
-            {"body": _receipt(), "createdAt": FIRST_ESCALATION_AT, "user": {"id": "bot"}},
+            {"body": old_note, "createdAt": FIRST_ESCALATION_AT, "user": {"id": "bot"}},
         ]
         card = _dre_2428()
         issue = {
@@ -729,11 +735,15 @@ class TestASecondEscalationOutOfAFreshAttempt:
         moved = card.run(
             lambda: reconcile.escalate_out_of_planning(issue, STALL_WHY))
         assert moved is True
-        assert len(_escalation_notes(card)) == 1, (
+        notes = [b for _, b in card.posted if reconcile.stall_park_note(
+            DRE_2428, STALL_WHY) == b]
+        assert len(notes) == 1, (
             "the sweep moved the card with no note — a silent park"
         )
+        assert _escalation_notes(card) == []
         assert STALL_WHY in card.bodies()
-        assert card.states == [(DRE_2428, planning_escalation.destination())]
+        assert card.states == [(DRE_2428, reconcile.PARKED_STATE)]
+        assert planning_escalation.destination() == "Green Light"
         assert card.events.index("comment") < card.events.index("state")
 
     # --- the other direction: a repeat INSIDE one attempt still converges ---

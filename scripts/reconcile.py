@@ -120,7 +120,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
@@ -182,10 +182,6 @@ import plan_run  # noqa: E402
 # The tags below stay exactly where they are — they are live idempotency keys
 # and per-sha budget counters, not prose.
 import pipeline_act  # noqa: E402
-# DRE-4124: ONE route out of Planning for a card nobody can move — the same
-# seam the planner's own hand-planning escalation takes, so a card the sweep
-# escalates and a card the planner escalates read the same in the CEO's queue.
-import planning_escalation  # noqa: E402
 # DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
 # turn for a planner is not a dead planner, and its wait has its own bound.
 import planner_queue  # noqa: E402
@@ -205,10 +201,12 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # and the whole four-way decision. This file is the wrapper: it supplies the
 # board snapshot and the `gh` reads and makes the two writes.
 import repair_card  # noqa: E402
-# DRE-4492: ONE reading of "the post-approval critic promised a re-review and
-# nothing ran it" — the grace window, the credential it reads a round under and
-# every line it says live there, pure. This file is the wrapper: it supplies
-# the epics, the lanes and the thread reader, and makes the one write.
+# DRE-4492: ONE reading of "the second critic promised a re-review and nothing
+# ran it" — the grace window, the credential it reads a round under and every
+# line it says live there, pure. This file is the wrapper: it supplies the
+# epics, the lanes and the thread reader, and makes the one write. DRE-5278
+# widened it to Planning and gave it `under_review`, the one answer to "is
+# this epic with the critics", which the Planning stall exit reads (DRE-5286).
 import rereview_watch  # noqa: E402
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
@@ -2059,31 +2057,52 @@ def flag_stalled_planning() -> set[str]:
     anything.
 
     The same defect was fixed one lane upstream by DRE-2687, and this is that
-    remedy: `planning_escalation.escalate` posts the plain-English reason and
-    moves the card to the CEO's decision queue. A card nobody can move belongs
-    in the queue for the person who can. No label: `needs-human` goes back to
-    meaning a person put it there.
+    remedy: `escalate_out_of_planning` posts the reason and moves the card. A
+    card nobody can move belongs in the queue for the person who can. No
+    label: `needs-human` goes back to meaning a person put it there.
 
-    The escalation is handed the card and its comments rather than re-reading
-    them — the board read already carries both, and a per-card read here is the
-    cost DRE-2929 removed. Its own move is guarded live all the same.
+    THAT QUEUE IS TRIAGE, NOT GREEN LIGHT (DRE-5286, epic DRE-5268). A card
+    that stalled here has been read by no planner and no critic, so it carries
+    no recommendation and is not a decision for the CEO; it is the operator's
+    to send back through Planning. And an epic the plan route has handed to
+    the second critic is not this rule's at all: it belongs to the re-review
+    watcher (`rereview_watch.under_review`, DRE-5278), which asks for the
+    missing review itself and parks the second silence. Putting such an epic
+    in front of the CEO would be a plan the second critic never read reaching
+    Green Light — the row DRE-5268 exists to forbid. So after the age gate an
+    epic under review is skipped with one line naming its owner.
 
-    Idempotent by construction, the second reason a move beats a report: an
-    escalated card is no longer in Planning, so nothing needs to remember it.
-    Returns the identifiers escalated this sweep.
+    That skip reads the card's thread WITH authorship (`comment_records`):
+    the critic's records are a credential, and the board read's raw window
+    carries the author's id but not the verdict on it. Inside a sweep the
+    thread is served from that same board read, so the skip costs no
+    per-card request. It is asked only of a card the watcher is handed —
+    this repo's label, not an automation card, with children, the one
+    predicate both read (`_watched_planning_epic`) — so a card the watcher is
+    never shown, an unlabelled epic included, is never left to it.
+
+    Everything else is handed over rather than re-read — the board read
+    already carries the card and its comments, and a per-card read here is the
+    cost DRE-2929 removed. The move itself is guarded live all the same.
+
+    Idempotent by construction, the second reason a move beats a report: a
+    parked card is no longer in Planning, so nothing needs to remember it.
+    Returns the identifiers parked this sweep.
 
     A CARD WAITING IN THE PLANNER LINE IS NOT A STRAND (DRE-5177). Under the
     fleet-wide planner cap (DRE-5176) a card can sit here for hours with only
     its `waiting` receipt on it, so the line is read before the clock: a card
     in line inside the line's own bound (`planner_queue.overdue`) is skipped
-    and logged, and one past it is escalated through the same seam with the
-    line's own reason — once,
-    under the same WATCHDOG_TAG rule. The escalation takes it out of the line:
-    the ledger reads a Green Light card for its open claim only, and the
-    `because parked` release posted with it (DRE-5378) ends its place, so a
-    re-send starts a fresh wait rather than an overdue one. A card whose
-    newest receipt is a claim, or that carries none, is measured by the stall
-    clock exactly as before.
+    and logged, and one past it is parked through the same seam with the
+    line's own reason — once, under the same WATCHDOG_TAG rule, and BEFORE the
+    under-review skip, so an epic under review whose re-asked review has
+    waited past the bound is parked by the line's rule and never hidden by
+    the skip. The park takes it out of the line: the `because parked` release
+    (DRE-5378) ends its place, so a re-send starts a fresh wait rather than an
+    overdue one. The release is posted BEFORE the park's note, because the
+    note has to be the card's newest comment when it enters Triage (see
+    `escalate_out_of_planning`). A card whose newest receipt is a claim, or
+    that carries none, is measured by the stall clock exactly as before.
 
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
@@ -2136,13 +2155,17 @@ def flag_stalled_planning() -> set[str]:
                 continue
             if any(WATCHDOG_TAG in b for b in bodies):
                 continue  # flagged once already — idempotent forever
-            if escalate_out_of_planning(card, waiting_too_long_reason(waited)):
+            # The release first (DRE-5378), the note second: the note must be
+            # the newest comment when the card enters Triage, or the plan-gate
+            # lets the relay re-plan it (`escalate_out_of_planning`).
+            _end_line_place(ident, bodies)
+            if escalate_out_of_planning(card, waiting_too_long_reason(waited),
+                                        bodies):
                 flagged.add(ident)
-                _end_line_place(ident, bodies)
                 print(
                     f"watchdog: {ident} has waited {waited:.0f} minutes for a "
-                    "planner slot, past the line's bound — escalated to "
-                    f"{ESCALATED_STATE}"
+                    "planner slot, past the line's bound — parked in "
+                    f"{PARKED_STATE}"
                 )
             continue
         # The stall clock needs `updatedAt` and nothing else, and a young card
@@ -2150,6 +2173,14 @@ def flag_stalled_planning() -> set[str]:
         # question has already made unnecessary.
         if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
             continue  # planning is young — let it produce its classification
+        # An epic with the critics is the re-review watcher's (DRE-5286).
+        reviewing = _with_the_critics(card)
+        if reviewing is None:
+            continue  # its thread could not be read — the next sweep asks again
+        if reviewing:
+            print(f"watchdog: {ident} is with the critics — the re-review "
+                  "watcher owns it")
+            continue
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -2161,29 +2192,78 @@ def flag_stalled_planning() -> set[str]:
             continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
-        if escalate_out_of_planning(card, stalled_planning_reason()):
+        if escalate_out_of_planning(card, stalled_planning_reason(), bodies):
             flagged.add(ident)
             print(
                 f"watchdog: {ident} stalled in Planning (no-classification) — "
-                f"escalated to {ESCALATED_STATE}"
+                f"parked in {PARKED_STATE}"
             )
     return flagged
 
 
-def stalled_planning_reason() -> str:
-    """What the CEO reads on a card that has stood still in Planning.
+def _with_the_critics(card: dict) -> bool | None:
+    """Is this Planning card an epic under review — the re-review watcher's
+    (DRE-5286)? None when its thread could not be read.
 
-    Plain English and nothing else: `planning_escalation.refusal` reads this
-    text before it is posted and will not put a diff, a path or a command in
-    front of him (`standards/comms.md`). It no longer mentions a label, because
-    since DRE-4124 this rule writes none — the card moves instead.
+    `rereview_watch.under_review` is the whole answer and is not restated
+    here. It is handed `comment_records`, the one reader that says who wrote
+    each comment, because a critic's record counts only when the pipeline
+    wrote it; the board read's raw window carries no such verdict, so it
+    would read as "no record" on every card. Inside a sweep the thread comes
+    off that same board read, at no per-card cost.
+
+    A card the watcher is never handed answers False without a read: the
+    watcher is handed exactly the cards `_watched_planning_epic` admits
+    (`rereview_watch_scope`), so a card it never sees must stay this rule's,
+    or nobody would own it. That includes an epic with no `repo:` label or an
+    off-rail one — this sweep's filter keeps it as everybody's, but no
+    repo's watcher is handed it, so it parks in Triage rather than stranding.
+    An unreadable thread abstains for this sweep, the same abstention the
+    watcher makes for the same read.
+    """
+    if not _watched_planning_epic(card):
+        return False
+    ident = card["identifier"]
+    try:
+        records = linear_ops.comment_records(ident)
+    except Exception as e:  # noqa: BLE001 — unknown is not "no record"
+        print(f"watchdog: {ident}'s thread could not be read ({e}) — not "
+              "parked this sweep; the next sweep asks again", file=sys.stderr)
+        return None
+    return rereview_watch.under_review(records, ident)
+
+
+def _watched_planning_epic(card: dict) -> bool:
+    """Is this Planning card one the re-review watcher is handed? (DRE-5286)
+
+    One reading, shared by the stall watchdog's skip (`_with_the_critics`) and
+    the watcher's scope (`rereview_watch_scope`), because the skip is safe only
+    while it covers no card the watcher is not shown. This repo's label, not
+    an automation card, with children. Narrower than `_another_repos_card` on
+    purpose: the watcher re-asks into this sweep's own repo, so an unlabelled
+    epic handed to every repo's watcher would be re-asked into the wrong ones.
+    """
+    return (
+        card_repo(card) == REPO_SLUG
+        and not automation_card(card)
+        and bool((card.get("children") or {}).get("nodes"))
+    )
+
+
+def stalled_planning_reason() -> str:
+    """What the operator reads on a card that has stood still in Planning.
+
+    For the operator, not the CEO (DRE-5286): no planner run and no critic has
+    read this card, so it carries no recommendation and is not a business
+    question. It does not mention a label, because since DRE-4124 this rule
+    writes none — the card moves instead.
     """
     return (
         "planning has produced nothing. This card has sat in Planning for "
         f"{PLANNING_MINUTES}+ minutes with nothing posted or changed on it — a "
         "card in Planning owes a decision about what it is and where it goes, "
-        "and none has been recorded. Why is not known from here, which is why "
-        "it is in front of you rather than being guessed at."
+        "and none has been recorded. No planner run and no critic has read it, "
+        "and why is not known from here."
     )
 
 
@@ -2262,11 +2342,9 @@ _COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
 
 
 def waiting_too_long_reason(waited_minutes: float) -> str:
-    """What the CEO reads on a card the planner line never served (DRE-5177).
-
-    Written for him and nothing else: `planning_escalation.refusal` reads this
-    text before it is posted and will not put a diff, a path or a command in
-    front of him. The cap is read off the queue's config rather than written
+    """What the operator reads on a card the planner line never served
+    (DRE-5177). Since DRE-5286 it is parked in Triage, not put in front of
+    the CEO. The cap is read off the queue's config rather than written
     here, so the sentence stays true if the number moves.
     """
     hours = max(1, round(waited_minutes / 60))
@@ -2277,53 +2355,89 @@ def waiting_too_long_reason(waited_minutes: float) -> str:
         f"{hours} hour{'s' if hours != 1 else ''} and nothing has started it. "
         f"{count[0].upper() + count[1:]} planners run at a time across the "
         "company and the rest wait their turn, and a wait this long means the "
-        "line has stopped moving for this card. Why is not known from here, "
-        "which is why it is in front of you rather than being guessed at. "
+        "line has stopped moving for this card. Why is not known from here. "
         "Sending it back through Planning gives it a fresh place in line."
     )
 
 
-def escalate_out_of_planning(card: dict, reason: str) -> bool:
-    """Post the reason and move the card to the CEO's queue. True when it moved.
+def stall_park_note(identifier: str, reason: str) -> str:
+    """The note the Planning stall exit posts before it parks a card in Triage
+    (DRE-5286). Written for the operator, whose queue Triage is.
 
-    ONE seam for both of Planning's escalations — the stall watchdog's and the
-    repair pass's — so a card that stalled today and a card frozen five weeks
-    ago reach the decision queue by the same route and read the same way there.
+    Opened with its own tag, `dedupe_dispatch.STALL_PARK_TAG`, read from the
+    module whose plan-gate honors it: the relay dispatches a plan run the
+    moment an `agent:planner` card enters Triage, and that gate refuses the
+    run only because the card's newest comment carries this tag (DRE-5277).
+    """
+    return (
+        f"🧹 {dedupe_dispatch.STALL_PARK_TAG}: {identifier} — {reason}\n\n"
+        f"Parked in **{PARKED_STATE}**, the operator's queue, and not in front "
+        "of the CEO: a card no planner and no critic has finished reading "
+        "carries no recommendation, so there is no decision here for him "
+        "(DRE-5268). The way back is to move it to **Planning**, where the "
+        "relay starts a fresh plan run."
+    )
 
-    The card and its comment window are HANDED to the escalation rather than
-    re-read (DRE-2929): the board read already returned both, and a per-card
-    read here is the request that exhausted the workspace quota. Its own state
-    write is still guarded on a live re-read.
 
-    A write that did not happen never reads as done: the failure goes on the
-    fail-loudly rail, which exits the sweep red for the medic, and the card is
-    left exactly as it was found.
+def escalate_out_of_planning(card: dict, reason: str,
+                             bodies: list[str] | None = None) -> bool:
+    """Post the reason and park the card in Triage. True when it moved.
+
+    ONE seam for every way out of Planning the sweep takes — the stall
+    watchdog's, the planner line's bound (DRE-5177) and the repair pass's —
+    so a card that stalled today and a card frozen five weeks ago reach the
+    same queue by the same route and read the same way there.
+
+    THE QUEUE IS THE OPERATOR'S (DRE-5286). It used to be the CEO's, through
+    the planner's own hand-planning escalation, whose one job is a business
+    question the planner recommends an answer to. Nothing this sweep parks
+    carries one: no planner run and no critic has read the card. So the card
+    goes to PARKED_STATE with no label, and the note says what was seen and
+    the way back.
+
+    The note lands BEFORE the move, and the order is load-bearing: the relay
+    dispatches a plan run the moment an `agent:planner` card enters Triage,
+    and the plan-gate refuses it only because the card's NEWEST comment
+    carries `dedupe_dispatch.STALL_PARK_TAG` (DRE-5277). Without that a
+    stalled epic would be re-planned on the spot and could stall again every
+    PLANNING_MINUTES with no bound. A card without `agent:planner` gets no
+    dispatch on entering Triage and simply rests there.
+
+    Posted once per PLANNING ATTEMPT — counted among the comments after the
+    card's newest fresh-attempt boundary (`plan_critic.current_cycle_entries`
+    over the board read's bodies; a forged boundary buys one duplicate note,
+    never a silent move) — and the move is re-asserted every time, because
+    the crash this guards against is the one between the two writes.
+
+    The card and its comment window come off the board read rather than a
+    re-read (DRE-2929); `bodies` is that window's text when the caller has
+    already read it, so it is not read twice. The state write is still
+    guarded on a live re-read (`linear_ops.cmd_state`). A write that did not
+    happen never reads as done: the failure goes on the fail-loudly rail,
+    which exits the sweep red for the medic.
     """
     ident = card["identifier"]
+    if bodies is None:
+        bodies = card_comment_bodies(card)
+    attempt = plan_critic.current_cycle_entries(bodies, ident)
     try:
-        outcome = planning_escalation.escalate(
-            linear_ops,
-            ident,
-            reason,
-            issue=card,
-            comments=linear_ops.window_nodes(card.get("comments")),
-        )
-    except (linear_ops.LinearError, planning_escalation.EscalationError) as e:
-        _write_failures.append(f"{ident} planning escalation: {e}")
+        if any(dedupe_dispatch.STALL_PARK_TAG in body for body in attempt):
+            print(f"planning: {ident} already carries this attempt's park note — "
+                  "re-asserting the move only")
+        else:
+            linear_ops.cmd_comment(ident, stall_park_note(ident, reason))
+        linear_ops.cmd_state(ident, PARKED_STATE)
+    except linear_ops.LinearError as e:
+        _write_failures.append(f"{ident} planning stall park: {e}")
         print(
-            f"ERROR: failed to escalate {ident} out of Planning: {e}",
+            f"ERROR: failed to park {ident} out of Planning: {e}",
             file=sys.stderr,
         )
-        return False
-    if not outcome.parked:
-        # DRE-3654's stand-down: the card had already moved on, so it was left
-        # where it is and told so once.
-        print(f"planning: {ident} was left alone — {outcome.stood_down}")
         return False
     return True
 
 
-#: What the CEO reads on a card the OLD rule froze. Same seam, different
+#: What the operator reads on a card the OLD rule froze. Same seam, different
 #: sentence: nothing has changed on this card for weeks because the pipeline
 #: stopped looking at it, and saying "planning has produced nothing" would be a
 #: confident wrong answer about why (`standards/console-honesty.md`).
@@ -2331,14 +2445,15 @@ FROZEN_PLANNING_REASON = (
     "this card was held for a person weeks ago and then nobody was asked. Our "
     "own watchdog marked it as needing a human and left it sitting in Planning, "
     "where every other part of the pipeline is built to leave a held card "
-    "alone — so it looked like work in flight and no question ever reached you. "
-    "Nothing is wrong with the card. It is in front of you now because that is "
-    "where it should have gone in the first place."
+    "alone — so it looked like work in flight and nobody ever looked at it. "
+    "Nothing is wrong with the card, and no planner has a recommendation on "
+    "it. It is parked here now so that a person decides whether it goes back "
+    "through Planning."
 )
 
 
 def repair_frozen_planning_holds() -> set[str]:
-    """Escalate the cards the OLD Planning rule froze (DRE-4124). Once each.
+    """Park the cards the OLD Planning rule froze (DRE-4124). Once each.
 
     THE BACKLOG THIS DEFECT CREATED. Measured 2026-09-16/17: twenty-three cards
     across the fleet carried HOLD_LABEL, every one applied by the pipeline and
@@ -2359,15 +2474,16 @@ def repair_frozen_planning_holds() -> set[str]:
 
     Hand-built cards are skipped on DRE-2524's rule, the same one every other
     member of this family honours: no agent was ever coming for that card, a
-    person owns it, and moving it into the CEO's queue would take it out of
-    their hands. PARKED cards are skipped on DRE-2724's: a card routed PARKED
-    is deliberately not built and is "never reported as stalled by any sweep",
-    so it is not one a sweep gets to put in front of the CEO either.
+    person owns it, and parking it would take it out of their hands. PARKED
+    cards are skipped on DRE-2724's: a card routed PARKED is deliberately not
+    built and is "never reported as stalled by any sweep", so it is not one a
+    sweep gets to park either.
 
-    Each one is escalated with its reason, the label is removed, and the card
-    is printed. Idempotent by construction: a repaired card is no longer in
-    Planning, so the next pass never sees it — and the label it no longer
-    carries is the second reason.
+    Each one is parked through `escalate_out_of_planning` with its reason —
+    in Triage, the operator's queue, since DRE-5286 — the label is removed,
+    and the card is printed. Idempotent by construction: a repaired card is
+    no longer in Planning, so the next pass never sees it — and the label it
+    no longer carries is the second reason.
 
     An UNREADABLE pull-request listing repairs nothing (DRE-2034): "could not
     read" is not "no open pull requests", so the pass acts on nothing and the
@@ -2424,19 +2540,19 @@ def repair_frozen_planning_holds() -> set[str]:
         try:
             linear_ops.remove_label(ident, HOLD_LABEL)
         except linear_ops.LinearError as e:
-            # The card is in the CEO's queue either way, which is the point of
-            # the repair; a label left on it is recorded rather than retried
-            # here, because the next pass no longer sees this card.
+            # The card is in the operator's queue either way, which is the
+            # point of the repair; a label left on it is recorded rather than
+            # retried here, because the next pass no longer sees this card.
             _write_failures.append(f"{ident} planning-repair label: {e}")
             print(
-                f"ERROR: {ident} was escalated but the '{HOLD_LABEL}' label "
+                f"ERROR: {ident} was parked but the '{HOLD_LABEL}' label "
                 f"could not be removed: {e}",
                 file=sys.stderr,
             )
         repaired.add(ident)
         print(
             f"planning-repair: {ident} was frozen in Planning by our own "
-            f"watchdog — escalated to {ESCALATED_STATE} and the "
+            f"watchdog — parked in {PARKED_STATE} and the "
             f"'{HOLD_LABEL}' label removed"
         )
     return repaired
@@ -2838,10 +2954,47 @@ def _report_groom_stall(records: list[dict], remaining: list[dict]) -> None:
 # doomed fix run this gate exists to stop dispatches again, every sweep,
 # forever (DeltaSolv PR #120 / DRE-2009). So both lanes are declared here, once,
 # and `card_parked_for_human` tests membership rather than equality.
+#
+# Green Light stays declared because this gate still READS it as a human
+# queue. Nothing in this module writes it any more (DRE-5286): the Planning
+# stall exit parks in Triage, and `destinations()` below says so.
 PARKED_STATE = "Triage"
 ESCALATED_STATE = "Green Light"
 PARKED_STATES = (PARKED_STATE, ESCALATED_STATE)
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
+
+
+# The lanes this module's COMPUTED writes can reach (DRE-5286), published as
+# `ready_lane_writers.DESTINATIONS_HOOK`. `ready_lane_writers._published_destinations`
+# reads this set for EVERY call site in this module whose lane it cannot read
+# at the call — today `drain_retiring_lanes`'s `to`, `REVIEW_LANE` at three
+# sites, `_fleet_outage_state`'s `lane`, and the `move` handed to
+# `limit_recovery.recover`. So a new computed write here must either name its
+# lane at the call site or add that lane to this set; one left out is
+# attributed a lane it does not write. Green Light is not in it, and must not
+# be: nothing here writes the CEO's queue.
+def destinations() -> tuple[str, ...]:
+    """Every lane a computed write in this module can put a card in.
+
+    Pure: no Linear call and no environment read. The retiring lanes'
+    replacements come off the lane contract, the same reading
+    `drain_retiring_lanes` makes (none today); the two `_fleet_outage_state`
+    lanes are the literals its two callers pass.
+    """
+    lanes = [
+        REVIEW_LANE,
+        limit_recovery.PLANNING_LANE,
+        limit_recovery.BOUNCE_LANE,
+        limit_recovery.BUILD_LANE,
+        "Canceled",
+        "Done",
+    ]
+    lanes += [
+        lane["replaced_by"]
+        for lane in lane_contract.lanes(status="retiring")
+        if lane.get("replaced_by")
+    ]
+    return tuple(dict.fromkeys(lanes))
 
 
 # --- Intake's depth, reported (DRE-4141) -----------------------------------
@@ -4739,8 +4892,8 @@ def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
         if in_line:
             epic = receipts[-1].card if receipts else "the epic"
             print(
-                f"promotion: epic {epic} is waiting for a planner slot — its "
-                "post-approval review has not started, so the hold on its "
+                f"promotion: epic {epic} is waiting for a planner slot — the "
+                "second critic's review has not started, so the hold on its "
                 "children is logged and not posted"
             )
             return False
@@ -5082,14 +5235,14 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                         issue=epic_records([epic_id]).get(epic_id),
                     )
                 # The second critic's release (DRE-3059), asked FIRST because
-                # it is the epic-level fact: a plan nobody has read since the
-                # CEO approved it releases no child, whatever that child
-                # carries. DRE-2721's design is two critics — one before you
-                # read it, one after you approve it — and *only then are the
-                # children promotable*; the second half of that sentence had
-                # no reader until this call, so the sweep promoted DRE-3026
-                # and DRE-3027 eighty-two seconds after their epic was
-                # approved, with no post-critic verdict on it at all.
+                # it is the epic-level fact: a plan the second critic has not
+                # passed releases no child, whatever that child carries. Under
+                # DRE-5268 the second critic reads a plan before it reaches
+                # Green Light, and the sweep releases children only on its PASS
+                # for the epic's current planning attempt. Before this call
+                # nothing read that rule, so the sweep promoted DRE-3026 and
+                # DRE-3027 eighty-two seconds after their epic was approved,
+                # with no second-critic verdict on it at all.
                 if epic_id not in post_critic:
                     post_critic[epic_id] = epic_thread(epic_id)
                 refusal = plan_critic.promotion_refusal(
@@ -9290,6 +9443,31 @@ def repo_epics(active: list[dict]) -> set[str]:
     return {c["identifier"] for c in mine if card_is_epic(c)}
 
 
+def rereview_watch_scope(epics) -> tuple[set[str], Callable[[str], str | None]]:
+    """The epics the re-review watcher is handed, and the lane reader handed
+    beside them (DRE-5286).
+
+    `epics` is `repo_epics(mine)`, read off `active_cards()` over
+    SWEEP_STATES — which never holds Planning. Under DRE-5268 the second
+    critic reads a plan while its epic sits in Planning, so without this the
+    watcher DRE-5278 built is never handed an epic whose hand-off dropped,
+    and the stall watchdog leaves exactly those epics to it
+    (`_with_the_critics`). So this repo's Planning epics WITH CHILDREN join
+    them — the same set that skip covers, read through the one predicate both
+    share (`_watched_planning_epic`) — off the Planning board read the
+    watchdog already paid for. The lane reader answers for both off the same
+    snapshot, and `rereview_watch.report` does the lane filtering, so this
+    costs no request.
+    """
+    board = active_cards(SWEEP_STATES + PLANNING_LANE)
+    planning = {
+        c["identifier"] for c in board
+        if c["state"]["name"] in PLANNING_LANE and _watched_planning_epic(c)
+    }
+    lanes = {c["identifier"]: c["state"]["name"] for c in board}
+    return set(epics) | planning, lanes.get
+
+
 def wip_base(active: list[dict]) -> list[dict]:
     """The cards the WIP room is counted over — ONE answer for every path that
     asks how much room this sweep has (DRE-4934).
@@ -10315,16 +10493,14 @@ def main(
     # count is a finding about the front door, not about the people using it.
     with _phase("report_break_glass"):
         report_break_glass()
-    # The promise nothing kept (DRE-4492): an epic sent back by the second
-    # critic, a 🔁 receipt saying the pipeline will run the review again, and
-    # then no round 2 and no tombstone. Lanes come off the board read this
-    # sweep already paid for, so narrowing to In Progress costs no request.
+    # The promise nothing kept (DRE-4492, DRE-5278): an epic with the critics
+    # whose review never ran. The watcher is handed this repo's active epics
+    # and its Planning epics with children, with their lanes, off the board
+    # read this sweep already paid for (DRE-5286, `rereview_watch_scope`).
     with _phase("report_rereview_missing"):
         try:
-            rereview_watch.report(
-                epics, epic_thread,
-                {c["identifier"]: c["state"]["name"]
-                 for c in active_cards()}.get)
+            watched, lane_of = rereview_watch_scope(epics)
+            rereview_watch.report(watched, epic_thread, lane_of)
         except Exception as e:  # noqa: BLE001 — a notice we could not post is a write
             _write_failures.append(f"rereview-missing: {e}")
             print(f"ERROR: report_rereview_missing: {e}", file=sys.stderr)

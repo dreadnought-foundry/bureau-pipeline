@@ -15,7 +15,8 @@ THE RULE UNDER TEST — the watchdog reads the line before it reads the clock:
   1. in line (`waiting`, or `dispatched` inside the grace) and inside the
      bound: skipped, with one log line naming the card and the word waiting;
   2. in line and past the line's bound (360 minutes): escalated once, through
-     the same seam, with the line's own reason;
+     the same seam, with the line's own reason — parked in Triage under the
+     stall-park note since DRE-5286, never in Green Light;
   3. `claimed`: measured as today;
   4. no receipt: measured as today;
 
@@ -42,6 +43,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import dedupe_dispatch  # noqa: E402
 import lane_contract  # noqa: E402
 import plan_critic  # noqa: E402
 import planner_queue  # noqa: E402
@@ -141,9 +143,11 @@ def _card(identifier=CARD, state="Planning", labels=(), minutes_stale=180.0,
 
 class _Board:
     """One Linear board the watchdog reads and writes — the shape
-    tests/test_planning_hold_escalation.py's board has. `escalate()` is the
-    real one, wrapped so a test can count its calls: this stands in for
-    Linear, never for the escalation."""
+    tests/test_planning_hold_escalation.py's board has. The stall exit
+    (`reconcile.escalate_out_of_planning`) is the real one, wrapped so a test
+    can count its calls: this stands in for Linear, never for the exit. The
+    planner's question seam (`planning_escalation.escalate`) raises if it is
+    reached at all — since DRE-5286 the sweep never asks it."""
 
     def __init__(self, *cards):
         self.cards = list(cards)
@@ -151,6 +155,7 @@ class _Board:
         self.states: list[tuple[str, str]] = []
         self.added: list[tuple[str, str]] = []
         self.escalations: list[tuple[str, str]] = []
+        self.events: list[tuple[str, str]] = []
 
     def active_cards(self, states=reconcile.SWEEP_STATES):
         return [c for c in self.cards if c["state"]["name"] in states]
@@ -160,11 +165,13 @@ class _Board:
 
     def cmd_comment(self, identifier, body, *rest):
         self.posted.append((identifier, body))
+        self.events.append(("comment", identifier))
         self._find(identifier)["comments"]["nodes"].insert(
             0, {"id": f"new-{len(self.posted)}", "body": body, "createdAt": _iso(0)})
 
     def cmd_state(self, identifier, lane, *rest):
         self.states.append((identifier, lane))
+        self.events.append(("state", identifier))
         self._find(identifier)["state"]["name"] = lane
 
     def add_label(self, identifier, label):
@@ -174,11 +181,15 @@ class _Board:
         return self._find(identifier)["state"]["name"]
 
     def run(self, fn):
-        real = planning_escalation.escalate
+        real = reconcile.escalate_out_of_planning
 
-        def counted(linear_ops, identifier, reason, **kw):
-            self.escalations.append((identifier, reason))
-            return real(linear_ops, identifier, reason, **kw)
+        def counted(card, reason, *rest, **kw):
+            self.escalations.append((card["identifier"], reason))
+            return real(card, reason, *rest, **kw)
+
+        def no_question(*a, **kw):
+            raise AssertionError(
+                "the stall exit called planning_escalation.escalate")
 
         def no_per_card(identifier, *a, **kw):
             raise AssertionError(
@@ -190,7 +201,9 @@ class _Board:
         ), patch.object(
             reconcile, "_open_pr_listing", side_effect=lambda: []
         ), patch.object(
-            reconcile.planning_escalation, "escalate", side_effect=counted
+            reconcile, "escalate_out_of_planning", side_effect=counted
+        ), patch.object(
+            planning_escalation, "escalate", side_effect=no_question
         ), patch.object(
             reconcile.linear_ops, "cmd_comment", side_effect=self.cmd_comment
         ), patch.object(
@@ -273,9 +286,24 @@ class TestAWaitPastTheBoundIsEscalated:
         assert reason.endswith(
             "Sending it back through Planning gives it a fresh place in line.")
         assert "planning has produced nothing" not in reason
-        assert planning_escalation.refusal(reason) is None
-        assert board.states == [(CARD, reconcile.ESCALATED_STATE)]
-        assert reconcile.ESCALATED_STATE == "Green Light"
+        assert "in front of you" not in reason
+        assert board.states == [(CARD, reconcile.PARKED_STATE)]
+        assert reconcile.PARKED_STATE == "Triage"
+        assert all(lane != "Green Light" for _, lane in board.states)
+        assert reconcile._write_failures == [], (
+            "the planner's question seam was reached")
+
+    def test_the_stall_park_note_lands_before_the_triage_move(self):
+        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
+        board.watch()
+        notes = [n for n, (i, b) in enumerate(board.posted)
+                 if i == CARD and dedupe_dispatch.STALL_PARK_TAG in b]
+        assert len(notes) == 1
+        assert board.posted[notes[0]][1].startswith(
+            f"🧹 {dedupe_dispatch.STALL_PARK_TAG}")
+        assert board.events.index(("state", CARD)) > [
+            n for n, e in enumerate(board.events) if e == ("comment", CARD)][-1], (
+            "the note must be the last comment before the move")
 
     def test_the_whole_reason_reaches_the_card(self):
         board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
@@ -305,7 +333,7 @@ class TestAWaitPastTheBoundIsEscalated:
         assert board.watch() == {CARD}
         (reason,) = board.reasons()
         assert "waiting in line for a planner" in reason
-        assert board.states == [(CARD, reconcile.ESCALATED_STATE)]
+        assert board.states == [(CARD, reconcile.PARKED_STATE)]
 
 
 # ===========================================================================

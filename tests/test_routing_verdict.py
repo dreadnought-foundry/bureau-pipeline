@@ -644,7 +644,7 @@ class TestParkedIsNeverStalled:
         assert _StallBoard("Todo", []).run(reconcile.flag_stranded) == {"DRE-2799"}
         planning = _StallBoard("Planning", [])
         assert planning.run(reconcile.flag_stalled_planning) == {"DRE-2799"}
-        assert planning.states == [("DRE-2799", reconcile.ESCALATED_STATE)], (
+        assert planning.states == [("DRE-2799", reconcile.PARKED_STATE)], (
             "an unparked stalled card is escalated, not left in Planning"
         )
 

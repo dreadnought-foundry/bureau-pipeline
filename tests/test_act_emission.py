@@ -144,9 +144,9 @@ def _drive_stranded_no_run(mp):
 
 # `card-stranded/planning` was the second site of this act and is GONE
 # (DRE-4124). A Planning card that stalls is no longer held in place with a
-# receipt — it is escalated into the CEO's decision queue by
-# `planning_escalation`, whose notes are declared `unconverted` and carry no
-# trailer. The act keeps its one remaining site above, in flag_stranded.
+# receipt — since DRE-5286 it is parked in Triage, the operator's queue, under
+# the sweep's own stall-park note, which is declared `unconverted` and carries
+# no trailer. The act keeps its one remaining site above, in flag_stranded.
 
 
 @site("pr-without-checks", "pr-without-checks")
