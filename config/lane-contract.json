@@ -168,6 +168,11 @@
       "what": "the lane guard — returns a card whose occupancy is unjustified",
       "path": null,
       "note": "DRE-2725, built in agent-bureau; reads its scope from lane_scope.py"
+    },
+    "console": {
+      "what": "the console — files the week's agent-failure report as ONE no-code card for the CEO to read (DRE-4271)",
+      "path": null,
+      "note": "lives in agent-bureau (console/backend); no path to check from here"
     }
   },
 
@@ -305,8 +310,8 @@
       "segment": "planning",
       "clauses": {
         "entrance": {
-          "text": "Four kinds of row, and no other (DRE-5268). (a) A plan arrives only after BOTH critics passed it on its current planning attempt — the evidence is a `plan-critic: stage=post … result=PASS` record on the epic. (b) The planner escalated a business question, in plain English with a recommendation, and stated why (DRE-2848): every escalation the plan route makes, the classifier's for a card it cannot place and the planner's for an epic whose reasoning is itself the deliverable, each stated in business terms or refused. On the one-off route that is the critic's QUESTION, or the revising planner's own, and a critic that decided nothing — never a card the critic sent back for a defect, which the planner revises, and never the one-off round bound, which parks in Triage (DRE-5376). (c) The fleet was at its cap of epics in motion when the CEO approved an epic, so the planner labeled it `epic-queued`, recorded the approval on the epic in the ⏸️ receipt of that same name stating the epic's place in line, and returned it here to wait in line for the sweep (DRE-5129) — proposed by the operator and accepted by the CEO's approval of DRE-5268; the row asks nothing of the CEO, it shows where his approved work is in the line. (d) A build in flight stopped on something only a person can settle: the build run's escalate-by-exception question (DRE-1655: ambiguous intent, a risky change, or a business A-vs-B decision the CEO should own, posted as a plain-English question), or the merge gate is holding a green, approved pull request for a required code-owner review and moved the card here to ask the person the repository's rules name (DRE-4341 — only when the calling repo's merge-gate stub wakes the gate on a submitted review, because the sweep dispatches nothing for a card in this lane). Kind (d) predates DRE-5268 and carries no recommendation — the agent stopped precisely where it could not choose, and a review request has nothing to recommend — so it is its own kind and never read as (b). `arrivals` names every way a row is written into this lane, one record per site; `callers` on a record whose site is a Python function names the units permitted to reach it, because a write made through a function is attributed to its caller.",
-          "kinds": ["passed-plan", "question", "agent-escalation", "queued-epic"],
+          "text": "Five kinds of row, and no other (DRE-5268, DRE-4271). (a) A plan arrives only after BOTH critics passed it on its current planning attempt — the evidence is a `plan-critic: stage=post … result=PASS` record on the epic. (b) The planner escalated a business question, in plain English with a recommendation, and stated why (DRE-2848): every escalation the plan route makes, the classifier's for a card it cannot place and the planner's for an epic whose reasoning is itself the deliverable, each stated in business terms or refused. On the one-off route that is the critic's QUESTION, or the revising planner's own, and a critic that decided nothing — never a card the critic sent back for a defect, which the planner revises, and never the one-off round bound, which parks in Triage (DRE-5376). (c) The fleet was at its cap of epics in motion when the CEO approved an epic, so the planner labeled it `epic-queued`, recorded the approval on the epic in the ⏸️ receipt of that same name stating the epic's place in line, and returned it here to wait in line for the sweep (DRE-5129) — proposed by the operator and accepted by the CEO's approval of DRE-5268; the row asks nothing of the CEO, it shows where his approved work is in the line. (d) A build in flight stopped on something only a person can settle: the build run's escalate-by-exception question (DRE-1655: ambiguous intent, a risky change, or a business A-vs-B decision the CEO should own, posted as a plain-English question), or the merge gate is holding a green, approved pull request for a required code-owner review and moved the card here to ask the person the repository's rules name (DRE-4341 — only when the calling repo's merge-gate stub wakes the gate on a submitted review, because the sweep dispatches nothing for a card in this lane). Kind (d) predates DRE-5268 and carries no recommendation — the agent stopped precisely where it could not choose, and a review request has nothing to recommend — so it is its own kind and never read as (b). (e) The console filed the week's agent-failure report as one `no-code` card for the CEO to read (DRE-4271) — proposed by the CEO's own decision of 2026-09-18 and accepted by his approval of DRE-4271; the row asks nothing of him but to read it and close it. It is neither a question nor a plan nor a defect, so no sweep or keeper moves it, re-sends it to Planning or closes it, its lack of acceptance criteria is not a thing to fix, and only the CEO closes it. A row of this kind is recognized by its title `What broke the agents — week ending <Saturday> (PT)`, its `no-code` label and its description's first line, which opens `Weekly agent report — Green Light kind weekly-report`. Its write site lives in agent-bureau (`console/backend/weekly_agent_report_card.py`, DRE-5020), outside this repository, so it has no `arrivals` record. `arrivals` names every way a row is written into this lane from this repository, one record per site; `callers` on a record whose site is a Python function names the units permitted to reach it, because a write made through a function is attributed to its caller.",
+          "kinds": ["passed-plan", "question", "agent-escalation", "queued-epic", "weekly-report"],
           "arrivals": [
             {
               "kind": "passed-plan",
@@ -362,7 +367,7 @@
           ],
           "enforced_from": "5",
           "assertion": null,
-          "pending": "needs the transition history the Phase-5 front door records — the four kinds exist, nothing yet reads a card's arrival against them"
+          "pending": "needs the transition history the Phase-5 front door records — the five kinds exist, nothing yet reads a card's arrival against them"
         },
         "exit": {
           "text": "The CEO answers: an approved plan activates and its children promote through the dependency gate, with no review after the approval — both critics read it before it arrived here (DRE-5268) — an answered escalation returns to Todo, a rejected one goes to Backlog. A queued epic is started by the sweep when the count of epics in motion falls under the cap, the highest Linear Priority first and the oldest approval on a tie, by moving it to In Progress, which fires the same activate route the CEO's own approval does; an epic already in motion that is re-approved after a mid-epic amendment starts past the cap rather than waiting; and an epic that leaves this lane any other way (re-planned after an amendment, handed back to Planning for a review it missed, parked, canceled) has left the line and loses the `epic-queued` label, so a re-planned epic arriving here again waits for a fresh approval (DRE-5129).",
@@ -371,13 +376,13 @@
           "pending": "needs the transition history the Phase-5 front door records"
         },
         "writers": {
-          "text": "The planner, the two agent runs that escalate, the merge gate parking a card whose pull request waits on a required code-owner review (DRE-4341), and a human.",
-          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "operator"],
+          "text": "The planner, the two agent runs that escalate, the merge gate parking a card whose pull request waits on a required code-owner review (DRE-4341), a human, and the console filing the week's agent-failure report (DRE-4271).",
+          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "operator", "console"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
         "evidence": {
-          "text": "A plan artifact with the `plan-critic: stage=post … result=PASS` record both critics' passes end in (DRE-5268), an escalation comment written in business terms — never code, never a diff — or the merge gate's code-owner hold comment naming who must review which folders (DRE-4341).",
+          "text": "A plan artifact with the `plan-critic: stage=post … result=PASS` record both critics' passes end in (DRE-5268), an escalation comment written in business terms — never code, never a diff — the merge gate's code-owner hold comment naming who must review which folders (DRE-4341), or, for a kind-(e) row, the report card itself — titled `What broke the agents — week ending <Saturday> (PT)`, carrying `no-code`, its description opening `Weekly agent report — Green Light kind weekly-report` (DRE-4271).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs routing verdicts (DRE-2724) writing on every card before arrival can be judged against the evidence"
