@@ -43,9 +43,11 @@ set -e
 #     mergeability, the draft flag, the head sha and its check runs, the
 #     three-dot compare of base against head, every page of the comments, the
 #     workflow runs on the head, the author and the commits, the Agent Fix
-#     lane, the open pull requests this branch carries, and the code-owner
-#     rules. A record that cannot be read fails closed: it is written empty or
-#     unreadable, and the decision waits or holds on it.
+#     lane, the open pull requests this branch carries, the code-owner rules,
+#     and the pull request's body and creation time. A record that cannot be
+#     read fails closed: it is written empty or unreadable, and the decision
+#     waits or holds on it. The body and creation time are the exception: they
+#     fail soft, an unread one is empty and holds nothing (DRE-5511).
 #  3. Runs merge_gate.py over them. It prints `decision=` (merge, hold, wait,
 #     conflict or human) and `reason=`, and optional lines: `carried=` and
 #     `carried_content_id=` when a verdict carried across a head change, and
@@ -286,6 +288,12 @@ gh api "repos/$REPO_FULL/commits/$SHA/check-runs" > /tmp/check-runs.json
 BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
 gh api "repos/$REPO_FULL/compare/$BASE...$SHA" > /tmp/compare.json 2>/dev/null \
   || echo '{}' > /tmp/compare.json
+# The body and createdAt for the What's new: condition (DRE-5511). A blip is an
+# empty file and an empty time, never omitted flags: either reads as "nothing was
+# read" and the gate decides as before. DRE-5576 switches the rule on.
+gh pr view "$PR" --json body,createdAt > /tmp/pr-view.json 2>/dev/null || : > /tmp/pr-view.json
+jq -r '.body // ""' /tmp/pr-view.json > /tmp/pr-body.txt 2>/dev/null || : > /tmp/pr-body.txt
+CREATED_AT=$(jq -r '.createdAt // ""' /tmp/pr-view.json 2>/dev/null || true)
 # Every page, slurped; a failed read is "no verdicts yet" (DRE-4139, DRE-2681).
 gh api --paginate --slurp \
   "repos/$REPO_FULL/issues/$PR/comments?per_page=100" \
@@ -327,6 +335,8 @@ python3 .bureau-pipeline/scripts/merge_gate.py \
   --pr-number "$PR" \
   --stack-file /tmp/stack.json \
   --owners-file /tmp/owners.json \
+  --pr-body-file /tmp/pr-body.txt \
+  --pr-created-at "$CREATED_AT" \
   | tee /tmp/gate-decision
 # Fail-closed on shape drift: no `decision=merge` line, no merge.
 DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
