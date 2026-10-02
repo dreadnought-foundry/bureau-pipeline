@@ -25,7 +25,9 @@ lane. Then the floor: the fleet key's remaining requests off
 written. That figure is `None` when no response carried the rate-limit header;
 the floor is then NOT applied, because standing down on an unknown would
 silence the agent for good the day Linear renamed a header, and a stand-down
-naming a number nobody saw would be a false record.
+naming a number nobody saw would be a false record. Exit 0 either way; a board
+that could not be read at all is not an empty board (DRE-2034) — `go=false`
+and exit 1, so the medic sees it.
 
 ## `run` — one owner's leg
 

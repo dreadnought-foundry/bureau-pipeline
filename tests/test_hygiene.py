@@ -324,6 +324,15 @@ class TestRead:
         assert "why=hygiene: floor not applied — no rate-limit header on the board read" in lines
         assert "stood down" not in capsys.readouterr().out
 
+    def test_an_unreadable_board_is_not_an_empty_one(self, tmp_path, monkeypatch, no_gql):
+        def broken(*_a, **_k):
+            raise linear_ops.LinearError("linear error from api.linear.app: 500")
+
+        code, out, output = _read(tmp_path, monkeypatch, broken)
+        assert code == 1
+        assert "go=false" in output.splitlines()
+        assert not out.exists()
+
     def test_without_github_output_it_still_reads_and_exits_zero(self, tmp_path, monkeypatch, no_gql):
         monkeypatch.setattr(linear_ops, "gql_paged", FakePaged([], remaining=10))
         monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
