@@ -88,7 +88,11 @@ is the easiest way to misfile a key.
 CLI:
 
     LINEAR_API_KEY_FLEET=… LINEAR_API_KEY_RELAY=… LINEAR_API_KEY=… \
-        LINEAR_API_KEY_SANDBOX=… python3 scripts/check_linear_identities.py check
+        LINEAR_API_KEY_SANDBOX=… LINEAR_PLANNER_KEY='Bearer …' \
+        python3 scripts/check_linear_identities.py check
+
+`LINEAR_PLANNER_KEY` is sent as-is, so it carries its `Bearer ` prefix — the
+form the console publishes it in (DRE-5589).
 """
 
 from __future__ import annotations

@@ -209,16 +209,29 @@ of it is ever a runtime lookup.
   stub on its own Linear key — the sandbox's — names its own budget rather
   than printing the fleet's while spending its own hour. A run that declares
   nothing prints `undeclared`, never a guess. No workflow reads the file itself — CI holds
-  only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
-  operator-tools key wears on the operator's machine.
+  the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
+  operator-tools key wears on the operator's machine, and — where the console
+  has published it — the planner's OAuth token as `secrets.LINEAR_PLANNER_KEY`
+  (below).
   **An identity may have several HOMES** (DRE-3334): one key is not kept in
   one place, so `homes` declares the extra copies, each with its own `name`,
   `env` and `lives_in`, and the identity's own `env`/`lives_in` are its first
-  home. The fleet declares one — `relay`, read from `LINEAR_API_KEY_RELAY`,
+  home. The fleet declares two. `relay`, read from `LINEAR_API_KEY_RELAY`, is
   the relay Lambda's own key in AWS Secrets Manager
   `bureau/relay/linear-api-key` — because the relay's deploy used to copy the
   operator's key into that secret, which would silently put every parking
-  reason and escalation the relay writes on the operator's budget. Every home
+  reason and escalation the relay writes on the operator's budget.
+  `planner-oauth`, read from `LINEAR_PLANNER_KEY`, is the planner's OAuth
+  token (DRE-5589): the same Agent-Bureau user on its own 5,000-an-hour
+  bucket, kept fresh by the agent-bureau console in Secrets Manager
+  `bureau/linear-oauth-planner/agent-bureau-token` and published as the repo
+  Actions secret `LINEAR_PLANNER_KEY` in the form `Bearer <access token>`
+  (DRE-5587). `plan.yml` reads it ahead of the fleet key, steps back onto the
+  fleet key on a 401 — never on a rate limit — and its `linear-budget:` line
+  names `budget: planner-oauth` while the token is what it spends, which is
+  how `scripts/check_linear_budget.py` keeps that spend out of the fleet
+  key's row. Nothing in this repository refreshes the token; the console is
+  its only refresher (DRE-2532). Every home
   is resolved and judged, and `one_user_per_identity` says every home of an
   identity is the same user as its first. An identity's user IS its first
   home's user, so the two rules that judge the identity — `display_name` and
@@ -227,8 +240,9 @@ of it is ever a runtime lookup.
   prints the fleet's name as the key that collided, which is the one key the
   reader would then wrongly rotate. `must_not_be_admin` is asked of every
   home: it is a fact about the key in front of it. The operator runs, with
-  `LINEAR_API_KEY_FLEET`, `LINEAR_API_KEY_RELAY` and `LINEAR_API_KEY` in the
-  environment: `python3 scripts/check_linear_identities.py check`. A key that
+  `LINEAR_API_KEY_FLEET`, `LINEAR_API_KEY_RELAY`, `LINEAR_PLANNER_KEY`,
+  `LINEAR_API_KEY_SANDBOX` and `LINEAR_API_KEY` in the environment:
+  `python3 scripts/check_linear_identities.py check`. A key that
   is absent is `UNKNOWN` and exits non-zero, never OK.
 
 ---

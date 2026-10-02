@@ -42,6 +42,8 @@ import yaml
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+# The planner's own Linear bucket first, the fleet key otherwise (DRE-5589).
+PLANNER_KEY_EXPR = "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
 WF = os.path.join(WORKFLOWS, "plan.yml")
 WF_REL = ".github/workflows/plan.yml"
 SELF_PLAN = os.path.join(WORKFLOWS, "self-plan.yml")
@@ -367,7 +369,8 @@ class TheSlotStep(unittest.TestCase):
         for key in ENV_KEYS:
             self.assertIn(key, self.env, key)
         self.assertNotIn("${{", self.run_block)
-        self.assertEqual(self.env["LINEAR_API_KEY"], "${{ secrets.LINEAR_API_KEY }}")
+        # The planner's own bucket first, the fleet key otherwise (DRE-5589).
+        self.assertEqual(self.env["LINEAR_API_KEY"], PLANNER_KEY_EXPR)
         self.assertEqual(self.env["CARD"], "${{ github.event.client_payload.identifier }}")
 
     def test_the_trigger_and_sender_are_spelled_as_the_duplicate_guard_spells_them(self):
@@ -683,14 +686,14 @@ class TheEndOfRunSteps(unittest.TestCase):
         self.assertRegex(run, r"--because finished\b")
         env = s.get("env") or {}
         self.assertEqual(env.get("CARD"), "${{ github.event.client_payload.identifier }}")
-        self.assertEqual(env.get("LINEAR_API_KEY"), "${{ secrets.LINEAR_API_KEY }}")
+        self.assertEqual(env.get("LINEAR_API_KEY"), PLANNER_KEY_EXPR)
 
     def test_next_writes_its_answer_to_the_step_outputs(self):
         s = by_id("next")
         self.assertIn("python3 .bureau-pipeline/scripts/planner_queue.py next "
                       '--github-output "$GITHUB_OUTPUT"', str(s["run"]))
         self.assertEqual((s.get("env") or {}).get("LINEAR_API_KEY"),
-                         "${{ secrets.LINEAR_API_KEY }}")
+                         PLANNER_KEY_EXPR)
 
     def test_the_mint_is_for_the_next_cards_owner(self):
         s = by_id("next_token")
