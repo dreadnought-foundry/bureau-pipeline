@@ -37,6 +37,18 @@ this module is where the medic asks them:
      FIRST kill keeps the ordinary retry, because 2 GB can be one turn short
      on one card and ample on the next. The same wall, a fourth time.
 
+Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
+rerun is new agent work on a card a person has said stop to. A Linear Sync or
+Merge Gate rerun starts no agent: it finishes bookkeeping for work that already
+merged. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
+fleet's exhausted Linear quota, the gate refused them over a leftover
+`needs-human` label, and the refusal receipt it posted landed after the
+`🪦 limit-death` marker, which `limit_recovery.waiting()` reads as closing it.
+The medic's own refusal took both cards off the path that brings a limit death
+back. So the gate takes the failed workflow's name, and rule 1 applies to every
+workflow except the ones `BOOKKEEPING_WORKFLOWS` names. An empty or unknown
+name keeps rule 1: an unknown run is not evidence of bookkeeping.
+
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
 those are what the one retry is FOR, and this module must not take it away.
@@ -75,7 +87,7 @@ empty log has always classified as `normal`, which means retry.
 CLI:
 
     python3 medic_retry.py decide --branch <head-ref> --log <file> \
-        [--run-started-at <iso>]
+        [--run-started-at <iso>] [--workflow <failed workflow's name>]
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
 
@@ -150,6 +162,24 @@ REPLAN_RECEIPT_MARK = dead_run.REPLAN_MARK
 
 # The lane that receipt sends the card to.
 REPLAN_STATE = "Planning"
+
+# Stage 2 fix #23. The workflows whose rerun is BOOKKEEPING: no agent runs,
+# and the work it finishes has already merged. The park rule does not apply
+# to them. Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,
+# case-insensitively, because `github.event.workflow_run.name` is the calling
+# stub's name ("Linear Sync") and the reusable is "Linear Sync (reusable)".
+#
+# Named as the EXCEPTION on purpose. The dispatching workflows below are the
+# ones the rule was written for, but every workflow NOT named here keeps the
+# rule too: an empty name (an old stub, a missing input) or one this list has
+# never heard of is not evidence that the rerun starts no work, and dropping
+# the rule on a guess is how DRE-2937's third build would come back.
+BOOKKEEPING_WORKFLOWS = ("linear sync", "merge gate")
+
+# The workflows the park rule exists for: a rerun starts agent work.
+# Documentation as data; `park_rule_applies` keeps the rule for these by
+# not naming them above, and the tests read this to prove it.
+DISPATCHING_WORKFLOWS = ("agent task", "agent fix", "agent plan")
 
 # The DRE-N a head ref carries. Same shape `reconcile.branch_card` reads and the
 # same shape medic.yml's own back-off step greps for; a branch with no card
@@ -385,6 +415,19 @@ def _moment(value: str):
         return _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def park_rule_applies(workflow_name) -> bool:
+    """Does the park rule govern a rerun of this workflow?
+
+    False only for a workflow `BOOKKEEPING_WORKFLOWS` names. True for every
+    other name, including an empty one: see that constant for why the rule
+    fails closed.
+    """
+    name = " ".join(str(workflow_name or "").split()).lower()
+    if not name:
+        return True
+    return not any(name.startswith(prefix) for prefix in BOOKKEEPING_WORKFLOWS)
 
 
 def _newest_after(receipts, needle: str, run_started_at: str) -> dict | None:
@@ -678,12 +721,17 @@ def _decide_cli(args) -> int:
                 file=sys.stderr,
             )
         else:
-            parked = park_reason(
-                state=facts["state"],
-                labels=facts["labels"],
-                receipts=facts["comments"],
-                run_started_at=args.run_started_at,
-            )
+            # Stage 2 fix #23: a bookkeeping rerun is not new work, so the park
+            # is not its business. The card is still read and still named —
+            # the other two rules read its receipts, and medic.yml's limit
+            # step writes its marker to the card printed below.
+            if park_rule_applies(args.workflow):
+                parked = park_reason(
+                    state=facts["state"],
+                    labels=facts["labels"],
+                    receipts=facts["comments"],
+                    run_started_at=args.run_started_at,
+                )
             witness = turn_receipt(
                 facts["comments"], run_started_at=args.run_started_at
             )
@@ -730,6 +778,9 @@ def main(argv=None) -> int:
     # reuses the run id, so the attempt is half of the answer, not a detail.
     gate.add_argument("--run-id", default="")
     gate.add_argument("--run-attempt", default="")
+    # Stage 2 fix #23. The failed workflow's name, which decides whether the
+    # park rule applies (`park_rule_applies`). Absent means the rule applies.
+    gate.add_argument("--workflow", default="")
 
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)

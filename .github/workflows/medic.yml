@@ -212,6 +212,13 @@ jobs:
           # --failed` reuses the run id, so the attempt is half the answer.
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          # Stage 2 fix #23: which workflow failed. The park rule is for runs
+          # that start agent work; a Linear Sync or Merge Gate rerun is
+          # bookkeeping, and refusing one over a leftover `needs-human` label
+          # posted the receipt that closed DRE-5620's and DRE-5622's
+          # limit-death markers. env, not inline (DRE-1996): the run name is
+          # agent-influenced text.
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
         run: |
           # `|| OUT=""`: this gate must never be able to take the whole medic
           # down with it. Every job here `needs: classify`, so a step that
@@ -222,7 +229,8 @@ jobs:
           OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py decide \
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
             --run-started-at "$RUN_STARTED_AT" \
-            --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT") || OUT=""
+            --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --workflow "$WORKFLOW_NAME") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
           fi
