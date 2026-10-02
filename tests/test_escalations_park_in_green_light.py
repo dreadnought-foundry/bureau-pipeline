@@ -88,11 +88,12 @@ def brief_escalation_section() -> str:
 
 
 def plan_epic_gate_comment() -> str:
-    """The comment block sitting directly above `plan.yml`'s `Epic → Green
-    Light` step — the justification the next editor of that routing reads
-    first."""
-    m = re.search(r"((?:^ *#.*\n)+) *- name: Epic → Green Light", read(PLAN), re.M)
-    assert m, "the 'Epic → Green Light' step's comment was not found in plan.yml"
+    """The comment block sitting directly above `plan.yml`'s `Plan → second
+    critic` step — the plan route's last move since DRE-5284, which replaced
+    `Epic → Green Light` — the justification the next editor of that routing
+    reads first."""
+    m = re.search(r"((?:^ *#.*\n)+) *- name: Plan → second critic\n", read(PLAN), re.M)
+    assert m, "the 'Plan → second critic' step's comment was not found in plan.yml"
     return m.group(1)
 
 

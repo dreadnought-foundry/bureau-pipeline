@@ -1176,9 +1176,13 @@ class TestPlanYmlEscalates:
         """It used to send an unanswered epic to Backlog — a process-controlled
         lane that means "ready work", where a question nobody sees waits for
         nobody."""
-        step = _step("Epic → Green Light")
+        # The plan route's last step is the hand-off to the second critic
+        # (DRE-5284), reached only through a children-bearing first critic.
+        step = _step("Plan → second critic")
         assert "Backlog" not in (step.get("run") or "")
-        assert "steps.kids.outputs.count != '0'" in step["if"]
+        assert "steps.pre1.outputs.action == 'proceed'" in step["if"]
+        first_critic = _step("First critic — round 1 decision")
+        assert "steps.kids.outputs.count != '0'" in first_critic["if"]
 
     def test_the_prompt_tells_the_planner_where_its_reason_goes(self):
         text = WF.read_text(encoding="utf-8")

@@ -6,13 +6,14 @@ rail:
 
   1. ORDER — the first critic runs BEFORE the epic reaches Green Light (it
      protects the CEO's attention, so it cannot run after the CEO has spent
-     it), and the second runs AFTER approval and BEFORE the children promote
-     (an adversarial pass is only worth much against a fixed target, and after
+     it), and the second runs on the review route before Green Light
+     (DRE-5284) and again AFTER approval, BEFORE the children promote (an
+     adversarial pass is only worth much against a fixed target, and after
      promotion the gap is no longer free to fix).
   2. THE BOUND — the plan route carries at most two critic rounds, opens the
-     planning cycle those rounds are counted from, and the epic reaches Green
-     Light on `always`-style conditions rather than only when the critic
-     passed. An unbounded loop is how 17 cards sat in a lane for 27 days; a
+     planning cycle those rounds are counted from, and a plan still held at
+     the bound parks in Triage for an operator (DRE-5284) rather than looping.
+     An unbounded loop is how 17 cards sat in a lane for 27 days; a
      budget counted over the epic's lifetime instead of the current attempt is
      how a re-planned epic loses its revision round.
   3. DIFFERENCE — the two prompts are visibly different: each carries its own
@@ -106,7 +107,7 @@ def assert_app_token_minted_after_review(case: unittest.TestCase, fragment: str)
     at = next(i for i, s in enumerate(steps()) if s.get("id") == ids[0])
     case.assertEqual(str(steps()[at].get("uses") or "").split("@")[0],
                      "actions/create-github-app-token")
-    case.assertGreater(at, index_of("Second critic — review (after approval)"))
+    case.assertGreater(at, index_of("Second critic — review (before Green Light)"))
     case.assertLess(at, index_of(fragment))
 
 
@@ -120,17 +121,20 @@ FIRST_R1 = "first critic — round 1"
 FIRST_R2 = "first critic — round 2"
 SECOND = "second critic — review"
 REPLAN = "re-plan after send-back"
-GREEN_LIGHT = "Epic → Green Light"
+# The plan route's last move (DRE-5284): a passed plan is handed to the second
+# critic, never to Green Light, and the first critic's bound parks in Triage.
+HANDOFF = "Plan → second critic"
+PRE_PARK = "First critic — the bound parks in Triage"
 ACTIVATE = "Activate the approved epic"
 SIGHT = "second critic — cross-epic sight"
 ROUTE = "Route — plan or activate"
 
 
 class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
-    def test_it_runs_after_the_plan_and_before_green_light(self):
+    def test_it_runs_after_the_plan_and_before_the_hand_off(self):
         self.assertLess(index_of("Plan epic"), index_of(FIRST_R1))
-        self.assertLess(index_of(FIRST_R1), index_of(GREEN_LIGHT))
-        self.assertLess(index_of(FIRST_R2), index_of(GREEN_LIGHT))
+        self.assertLess(index_of(FIRST_R1), index_of(HANDOFF))
+        self.assertLess(index_of(FIRST_R2), index_of(HANDOFF))
 
     def test_it_only_runs_on_the_plan_route(self):
         self.assertIn("mode == 'plan'", str(step_named(FIRST_R1).get("if")))
@@ -140,12 +144,14 @@ class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
         Backlog rather than to the CEO."""
         self.assertIn("kids.outputs.count", str(step_named(FIRST_R1).get("if")))
 
-    def test_the_epic_still_reaches_green_light_when_the_critic_held_it(self):
-        """AC4 read off the rail: Green Light is not conditioned on the
-        critic's verdict, so no verdict can strand the epic short of the CEO."""
-        gate = str(step_named(GREEN_LIGHT).get("if") or "")
-        self.assertNotIn("critic", gate.lower())
-        self.assertNotIn("action", gate.lower())
+    def test_a_held_plan_is_never_handed_on(self):
+        """DRE-5284, read off the rail: the hand-off is conditioned on the first
+        critic's last decision being a proceed. Until this card the Green Light
+        move carried no verdict at all, so a plan the critic held twice still
+        reached the CEO; under DRE-5268 it parks instead."""
+        gate = str(step_named(HANDOFF).get("if") or "")
+        self.assertIn("steps.pre1.outputs.action == 'proceed' || "
+                      "steps.pre2.outputs.action == 'proceed'", gate)
 
 
 POST_REPLAN = "Re-plan after the second critic sent it back"
@@ -1302,7 +1308,7 @@ SHARED_STEPS = (
     "Second critic — turn ceiling",
     "Second critic — the previous round",
     "Re-mint bot token — second critic",
-    "Second critic — review (after approval)",
+    "Second critic — review (before Green Light)",
     "Second critic — turns receipt",
     "Second critic — verdict or death?",
     "Re-mint bot token — after the second critic",
@@ -1313,7 +1319,7 @@ SHARED_STEPS = (
     "Re-mint bot token — Re-plan after the second critic sent it back on the next rung",
     "Re-plan after the second critic sent it back — on the next rung",
     "Re-plan after the second critic sent it back — finished?",
-    "Mechanical findings — the revised plan (after approval)",
+    "Mechanical findings — the revised plan (review)",
     "Re-mint bot token — send-back",
 )
 
@@ -1391,7 +1397,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
 
     def test_every_step_name_and_id_this_card_found_still_exists(self):
         names = {s.get("name") for s in steps()}
-        for name in SHARED_STEPS + ACTIVATE_ONLY_STEPS + (ROUTE, "Epic → Green Light"):
+        for name in SHARED_STEPS + ACTIVATE_ONLY_STEPS + (ROUTE,):
             self.assertIn(name, names)
         ids = {s.get("id") for s in steps()}
         for ident in CARD_STEP_IDS:
@@ -1449,12 +1455,12 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                       "the first critic's word is read off its own record")
         self.assertIn("Approve", run)
 
-    def test_the_green_light_step_follows_the_plan_routes_own(self):
-        """Tests that locate the plan route's Green Light step by substring take
-        the FIRST match; the plan route's step must stay first until DRE-5284
-        retires it."""
-        self.assertLess(exact_index(GREEN_LIGHT), exact_index(GREEN_LIGHT_BOTH))
-        self.assertEqual(index_of(GREEN_LIGHT), exact_index(GREEN_LIGHT))
+    def test_the_only_green_light_step_is_the_one_both_critics_reach(self):
+        """DRE-5284 retired the plan route's `Epic → Green Light`, so a lookup
+        by that substring now finds exactly one step — this one."""
+        named = [s.get("name") for s in steps()
+                 if "Epic → Green Light" in (s.get("name") or "")]
+        self.assertEqual(named, [GREEN_LIGHT_BOTH])
 
     def test_a_pass_the_first_critic_held_reaches_exactly_one_step(self):
         reached = [s.get("name") for s in steps()
@@ -1482,7 +1488,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         self.assertRegex(run, TRIAGE_WRITE)
         self.assertNotRegex(run, GREEN_LIGHT_WRITE)
         self.assertGreater(token_mint_index(REVIEW_NO_RESULT),
-                           exact_index("Second critic — review (after approval)"))
+                           exact_index("Second critic — review (before Green Light)"))
 
     def test_a_send_back_below_the_bound_re_plans_then_dispatches_a_re_review(self):
         # DRE-5299 put the plan artifact on this path: the portal mint, the
@@ -1535,7 +1541,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         self.assertIn("plan_critic.py died", run)
         self.assertTrue(run.rstrip().endswith("exit 1"))
         self.assertGreater(token_mint_index(REVIEW_DIED),
-                           exact_index("Second critic — review (after approval)"))
+                           exact_index("Second critic — review (before Green Light)"))
 
     def test_no_review_only_step_but_one_writes_green_light(self):
         for s in steps():
@@ -1614,7 +1620,7 @@ REVIEW_UPLOAD = "Plan artifact — upload source (review)"
 RECHECK_OK = "steps.recheck_review.outputs.ok == 'true'"
 POST_REPLAN = "Re-plan after the second critic sent it back"
 POST_REPLAN_DONE = "Re-plan after the second critic sent it back — finished?"
-POST_MECHANICAL = "Mechanical findings — the revised plan (after approval)"
+POST_MECHANICAL = "Mechanical findings — the revised plan (review)"
 ARTIFACT_NAME = "plan-source-${{ github.event.client_payload.identifier }}"
 PLANNING_WRITE = re.compile(r'linear_ops\.py state "\$EPIC" "Planning"')
 
@@ -1806,6 +1812,233 @@ class TheReviewReplanCarriesThePlanArtifact(unittest.TestCase):
                 hits = [d for d in declared if car._matches(d, site)]
                 self.assertEqual(len(hits), 1)
                 self.assertEqual(hits[0].get("step"), REVIEW_RECHECK)
+                self.assertTrue((hits[0].get("why") or "").strip())
+
+
+# --- DRE-5284: the plan route hands a passed plan to the second critic -------
+#
+# Until this card the plan route ended by moving the epic to Green Light the
+# moment the first critic was done, whatever it decided, and the review route
+# DRE-5280 built had no caller. Now a proceed is handed to the second critic
+# (`review_rerun.py dispatch --reason review --trigger-state planning`), the
+# first critic's bound parks in Triage at either round, and nothing on the plan
+# route writes Green Light.
+
+PLAN_MODE = "steps.route.outputs.mode == 'plan'"
+PRE_PROCEED = ("steps.pre1.outputs.action == 'proceed' || "
+               "steps.pre2.outputs.action == 'proceed'")
+PRE_BOUND = ("steps.pre1.outputs.bound == 'true' || "
+             "steps.pre2.outputs.bound == 'true'")
+PRE1_HOLD = "steps.pre1.outputs.action == 'hold'"
+PRE1_NOT_BOUND = "steps.pre1.outputs.bound != 'true'"
+HANDOFF_MINT = "Re-mint bot token — hand-off to the second critic"
+RENAMED_REVIEW = "Second critic — review (before Green Light)"
+RENAMED_MECHANICAL = "Mechanical findings — the revised plan (review)"
+RETIRED_PROMPT_SENTENCES = ("The CEO has already approved", "The CEO has APPROVED",
+                            "The CEO approved epic")
+
+
+def plan_route_walk(known: dict):
+    """The three-valued `if:` reader the planner-slot wiring tests walk plan.yml
+    with (DRE-5179), with the job read as still green and the plan route's
+    facts handed in by name."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_planner_queue_wiring import Walk, truth  # noqa: E402
+
+    class PlanRoute(Walk):
+        def _name(self, text):
+            if text in self.known:
+                return self.known[text]
+            return super()._name(text)
+
+        def _call(self, name, args):
+            if name in ("success", "always"):
+                return True
+            if name in ("cancelled", "failure"):
+                return False
+            return Walk._call(name, args)
+
+    facts = {"steps.route.outputs.mode": "plan", "steps.kids.outputs.count": "3",
+             **known}
+    walk = PlanRoute(facts, set())
+    return lambda gate: truth(walk.evaluate(gate))
+
+
+def touches_the_epic(s: dict) -> bool:
+    run = run_of(s)
+    return ("review_rerun.py dispatch" in run
+            or re.search(r'linear_ops\.py (state|add-label|comment) "\$EPIC"', run)
+            is not None)
+
+
+class ThePlanRouteHandsAPassedPlanToTheSecondCritic(unittest.TestCase):
+    """DRE-5284, read off the rail."""
+
+    def test_no_plan_route_step_writes_green_light(self):
+        writers = [s.get("name") for s in steps()
+                   if (PLAN_MODE in gate_of(s) or "steps.pre1.outputs" in gate_of(s)
+                       or "steps.pre2.outputs" in gate_of(s))
+                   and GREEN_LIGHT_WRITE.search(run_of(s))]
+        self.assertEqual(writers, [])
+
+    def test_the_hand_off_is_gated_on_the_first_critics_proceed(self):
+        s = exact_step(HANDOFF)
+        self.assertIn(PRE_PROCEED, gate_of(s))
+        self.assertEqual(s.get("id"), "handoff")
+        self.assertFalse(s.get("continue-on-error"),
+                         "a hand-off that did not go through must leave the run red")
+
+    def test_the_hand_off_asks_for_the_review_from_planning_and_writes_no_lane(self):
+        run = run_of(exact_step(HANDOFF))
+        self.assertIn("review_rerun.py dispatch", run)
+        self.assertIn(f"--reason {rr.REASON_REVIEW} --trigger-state "
+                      f"{rr.TRIGGER_STATE_REVIEW}", run)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
+        self.assertNotIn("linear_ops.py state", run, "the hand-off writes no lane")
+        self.assertNotIn("add-label", run)
+        self.assertIn("with the second critic", run)
+
+    def test_the_hand_off_note_hangs_off_the_dispatch(self):
+        """DRE-2034: no receipt on an unconfirmed dispatch. A dispatch that did
+        not go through is said, and the step goes red."""
+        run = run_of(exact_step(HANDOFF))
+        head, _, tail = run.partition("review_rerun.py dispatch")
+        self.assertNotIn("linear_ops.py comment", head)
+        self.assertRegex(run, r"if\s+python3\s+\S*review_rerun\.py dispatch")
+        self.assertIn("could NOT", tail)
+        self.assertTrue(run.rstrip().endswith("fi"))
+        self.assertIn("exit 1", tail)
+        self.assertLess(tail.index("with the second critic"), tail.index("could NOT"))
+
+    def test_the_hand_off_tells_a_no_result_from_a_pass(self):
+        """A first critic NO_RESULT takes the same step, and the note says it
+        produced no result rather than that it passed. The word is the LAST
+        decision's — round 2's when round 2 ran."""
+        s = exact_step(HANDOFF)
+        self.assertEqual((s.get("env") or {}).get("PRE_RESULT"),
+                         "${{ steps.pre2.outputs.result || steps.pre1.outputs.result }}")
+        self.assertIn("no result", run_of(s))
+
+    def test_the_hand_off_runs_under_a_token_minted_after_the_first_critic(self):
+        at = token_mint_index(HANDOFF)
+        self.assertEqual(exact_step(HANDOFF_MINT).get("id"),
+                         steps()[at].get("id"))
+        self.assertGreater(at, exact_index("First critic — round 2"))
+        self.assertLess(at, exact_index(HANDOFF))
+        self.assertIn(PRE_PROCEED, gate_of(exact_step(HANDOFF_MINT)))
+
+    def test_the_hand_off_is_the_last_epic_touching_step_of_a_passed_plan_route(self):
+        # A round that never ran has empty outputs, which is how Actions reads
+        # them — round 2 on a first-round proceed.
+        for known in ({"steps.pre1.outputs.action": "proceed",
+                       "steps.pre1.outputs.bound": "false",
+                       "steps.pre2.outputs.action": "",
+                       "steps.pre2.outputs.bound": ""},
+                      {"steps.pre1.outputs.action": "hold",
+                       "steps.pre1.outputs.bound": "false",
+                       "steps.pre2.outputs.action": "proceed",
+                       "steps.pre2.outputs.bound": "false"}):
+            with self.subTest(**known):
+                reads = plan_route_walk(known)
+                plan_route = [s.get("name") for s in steps()
+                              if (PLAN_MODE in gate_of(s)
+                                  or "steps.pre1.outputs" in gate_of(s)
+                                  or "steps.pre2.outputs" in gate_of(s))
+                              and reads(gate_of(s)) is not False
+                              and touches_the_epic(s)]
+                self.assertTrue(plan_route)
+                self.assertEqual(plan_route[-1], HANDOFF)
+                self.assertNotIn(PRE_PARK, plan_route)
+
+    def test_the_hand_off_follows_the_routing_verdicts(self):
+        """The children carry their verdicts before the plan goes anywhere, and
+        nothing runs between the stamp and the hand-off."""
+        at = exact_index("Routing verdicts — the epic's children")
+        self.assertEqual(steps()[at + 1].get("name"), HANDOFF)
+
+    def test_the_bound_reaches_exactly_one_step(self):
+        reached = [s.get("name") for s in steps() if PRE_BOUND in gate_of(s)]
+        self.assertEqual(reached, [PRE_PARK])
+        bound_readers = [s.get("name") for s in steps()
+                         if re.search(r"steps\.pre[12]\.outputs\.bound == 'true'",
+                                      gate_of(s))]
+        self.assertEqual(bound_readers, [PRE_PARK])
+        for known in ({"steps.pre1.outputs.action": "hold",
+                       "steps.pre1.outputs.bound": "true",
+                       "steps.pre2.outputs.action": "",
+                       "steps.pre2.outputs.bound": ""},
+                      {"steps.pre1.outputs.action": "hold",
+                       "steps.pre1.outputs.bound": "false",
+                       "steps.pre2.outputs.action": "hold",
+                       "steps.pre2.outputs.bound": "true"}):
+            with self.subTest(**known):
+                reads = plan_route_walk(known)
+                self.assertIs(reads(gate_of(exact_step(PRE_PARK))), True)
+                self.assertIs(reads(gate_of(exact_step(HANDOFF))), False)
+
+    def test_the_park_labels_then_moves_to_triage_and_dispatches_nothing(self):
+        s = exact_step(PRE_PARK)
+        run = run_of(s)
+        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertRegex(run, TRIAGE_WRITE)
+        self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+        self.assertNotRegex(run, GREEN_LIGHT_WRITE)
+        self.assertNotIn("review_rerun.py", run)
+        self.assertIn("plan_critic.REAPPROVE_HOW", run, "read, never restated")
+        self.assertNotIn(pc.REAPPROVE_HOW, run)
+        self.assertEqual((s.get("env") or {}).get("NOTE"),
+                         "${{ steps.pre2.outputs.note || steps.pre1.outputs.note }}")
+
+    def test_every_first_critic_hold_step_stands_down_at_the_bound(self):
+        """Discovered off the workflow, never listed: a step added later gated
+        on the first critic's hold is caught here, as `Turn ceiling — first
+        critic's re-plan` would have been."""
+        holds = [s for s in steps() if PRE1_HOLD in gate_of(s)]
+        self.assertGreaterEqual(len(holds), 12)
+        self.assertIn("Turn ceiling — first critic's re-plan",
+                      [s.get("name") for s in holds])
+        reads = plan_route_walk({"steps.pre1.outputs.action": "hold",
+                                 "steps.pre1.outputs.bound": "true"})
+        for s in holds:
+            with self.subTest(step=s.get("name")):
+                self.assertIn(PRE1_NOT_BOUND, gate_of(s))
+                self.assertIs(reads(gate_of(s)), False,
+                              "a bound at round 1 buys no third round")
+
+    def test_no_prompt_says_the_ceo_approved_the_plan(self):
+        for s in steps():
+            prompt = str((s.get("with") or {}).get("prompt") or "")
+            for sentence in RETIRED_PROMPT_SENTENCES:
+                with self.subTest(step=s.get("name"), sentence=sentence):
+                    self.assertNotIn(sentence, prompt)
+        self.assertNotIn("The CEO has approved. The text is FROZEN", wf_src())
+
+    def test_the_review_mode_re_plan_says_the_ceo_has_not_seen_the_plan(self):
+        for name in (POST_REPLAN, POST_REPLAN + " — on the next rung"):
+            with self.subTest(step=name):
+                prompt = str((exact_step(name).get("with") or {}).get("prompt") or "")
+                self.assertIn("has not seen this plan", prompt)
+                self.assertIn("in this attempt", prompt)
+
+    def test_the_two_renamed_steps(self):
+        self.assertEqual(exact_step(RENAMED_REVIEW).get("id"), "posta")
+        exact_step(RENAMED_MECHANICAL)
+        names = [s.get("name") or "" for s in steps()]
+        self.assertEqual([n for n in names if "(after approval)" in n], [])
+        self.assertEqual(names.count("Mechanical findings — the revised plan"), 1)
+
+    def test_the_new_comments_are_declared_by_their_steps(self):
+        sites = [site for site in car.sites()
+                 if site.path == ".github/workflows/plan.yml"
+                 and site.step in (HANDOFF, PRE_PARK)]
+        self.assertEqual(sorted({site.step for site in sites}),
+                         sorted((HANDOFF, PRE_PARK)))
+        declared = car.declarations()
+        for site in sites:
+            with self.subTest(site=site.where):
+                hits = [d for d in declared if car._matches(d, site)]
+                self.assertEqual(len(hits), 1)
+                self.assertEqual(hits[0].get("step"), site.step)
                 self.assertTrue((hits[0].get("why") or "").strip())
 
 

@@ -204,12 +204,22 @@ class PlanApprovalKeepsItsJobTest(unittest.TestCase):
     step, same position, new name."""
 
     def test_planned_epic_moves_to_green_light(self):
-        step = step_body("plan.yml", "Epic → Green Light")
+        # Since DRE-5284 a plan reaches the lane only after both critics, from
+        # the review route's one Green Light step.
+        step = step_body("plan.yml", "Epic → Green Light — both critics passed")
         self.assertIn(f'state "$EPIC" "{NEW_LANE}"', step)
 
     def test_the_epic_gate_is_not_the_parked_lane(self):
         # A planned epic waiting on the CEO is not a card that went wrong.
-        step = step_body("plan.yml", "Epic → Green Light")
+        step = step_body("plan.yml", "Epic → Green Light — both critics passed")
+        self.assertNotIn(f'state "$EPIC" "{PARKED_LANE}"', step)
+
+    def test_the_plan_route_hands_off_and_names_no_lane(self):
+        # The plan route's last step dispatches the second critic (DRE-5284):
+        # it writes neither lane, so the epic stays in Planning.
+        step = step_body("plan.yml", "Plan → second critic")
+        self.assertIn("review_rerun.py dispatch", step)
+        self.assertNotIn(f'"{NEW_LANE}"', step)
         self.assertNotIn(f'"{PARKED_LANE}"', step)
 
     def test_green_light_epic_does_not_promote_its_children(self):
