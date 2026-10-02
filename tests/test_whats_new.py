@@ -196,6 +196,15 @@ class TestParseLine:
                 "What's new: new, everyone: Posts can be pinned. (open: documents)"
             )
 
+    @pytest.mark.parametrize("path", [
+        "//evil.example", "/\\evil", "/a b", "/path\x00", "/path\x1b[0m", "/path\x7f",
+    ])
+    def test_an_open_path_off_the_product_raises(self, path):
+        with pytest.raises(WhatsNewError, match="open"):
+            whats_new.parse_line(
+                f"What's new: new, everyone: Posts can be pinned. (open: {path})"
+            )
+
     def test_the_kind_and_audience_must_be_in_order(self):
         with pytest.raises(WhatsNewError):
             whats_new.parse_line("What's new: everyone, new: Posts can be pinned.")
@@ -541,6 +550,11 @@ class TestValidate:
         (lambda d: d["items"][0].pop("body"), "items[0].body"),
         (lambda d: d["items"][0].update(open="documents"), "items[0].open"),
         (lambda d: d["items"][0].update(open=7), "items[0].open"),
+        (lambda d: d["items"][0].update(open="//evil.example"), "items[0].open"),
+        (lambda d: d["items"][0].update(open="/\\evil"), "items[0].open"),
+        (lambda d: d["items"][0].update(open="/a b"), "items[0].open"),
+        (lambda d: d["items"][0].update(open="/path\n"), "items[0].open"),
+        (lambda d: d["items"][0].update(open="/path\x00"), "items[0].open"),
     ])
     def test_each_field_rule(self, mutate, field):
         document = _example()
@@ -561,6 +575,37 @@ class TestValidate:
         before = copy.deepcopy(document)
         whats_new.validate(document)
         assert document == before
+
+
+class TestTheOpenPath:
+    """The line and the file hold `open` to one rule: a page inside the product."""
+
+    @staticmethod
+    def _parses(path: str) -> bool:
+        try:
+            whats_new.parse_line(
+                f"What's new: new, everyone: Posts can be pinned. (open: {path})")
+        except WhatsNewError:
+            return False
+        return True
+
+    @staticmethod
+    def _validates(path: str) -> bool:
+        document = _example()
+        document["items"][0]["open"] = path
+        return whats_new.validate(document) == []
+
+    @pytest.mark.parametrize("path", ["/documents", "/admin/members", "/"])
+    def test_both_accept_a_page(self, path):
+        assert self._parses(path) and self._validates(path)
+
+    @pytest.mark.parametrize("path", [
+        "//evil.example", "/\\evil", "/a b", "/a\tb", "/path\x00", "/path\x7f", "/pa\x9bth",
+        "documents", "https://evil.example",
+    ])
+    def test_both_refuse_anything_else(self, path):
+        assert not self._parses(path)
+        assert not self._validates(path)
 
 
 # --- the command line --------------------------------------------------------
@@ -642,6 +687,10 @@ class TestTheStandard:
         assert "What's new: none" in text
         assert "What's new: <kind>, <audience>: <sentence>" in text
         assert "(open: " in text
+
+    def test_it_says_open_is_a_page_in_the_product(self, text):
+        assert "a page in the product" in text
+        assert "`//`" in text and "`/\\`" in text
 
     def test_it_names_every_kind_audience_and_exempt_prefix(self, text):
         for name in (*whats_new.KINDS, *whats_new.AUDIENCES, *whats_new.EXEMPT_PREFIXES):
