@@ -49,6 +49,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import merge_gate  # noqa: E402
+import step_shell  # noqa: E402
 from test_merge_gate_one_job import (  # noqa: E402
     QA_BOT, comment_event, evaluate_runs, resolve_runs,
 )
@@ -209,7 +210,10 @@ def evaluate_body() -> str:
     steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["evaluate"]["steps"]
     found = [s for s in steps if s.get("name") == "Evaluate and merge"]
     assert len(found) == 1
-    return found[0]["run"]
+    # Read through the delegation line (DRE-5383): this harness copies only
+    # stubs into `.bureau-pipeline/scripts`, so the step's one-line `run:`
+    # would find no script to run.
+    return step_shell.step_shell(found[0])
 
 
 def decision_out(decision: str, reason: str, *extra: str) -> str:
