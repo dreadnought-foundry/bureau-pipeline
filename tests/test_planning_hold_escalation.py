@@ -501,13 +501,16 @@ class TestTheRepairPass:
 #: second-critic PASS on a plan the first critic held, a no-result at the
 #: bound, and the bound), each pairing the label with a move to Triage.
 #: DRE-5299 added the seventh: the review-mode re-check parks a revision that
-#: fails the plan's own gates in Triage, labeled first.
+#: fails the plan's own gates in Triage, labeled first. DRE-5281 removed the
+#: activate route's two (its send-back bound and its second death, both into
+#: Green Light) with the review that route no longer runs.
 _LABEL_WRITERS = (
     ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 4),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
-    # Eight since DRE-5284: the first critic's bound parks in Triage too.
-    (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 8),
+    # Eight since DRE-5284 (the first critic's bound parks in Triage too);
+    # six since DRE-5281 deleted the activate route's two Green Light parks.
+    (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 6),
 )
 
 #: The two dead-run cap sites in `main()`, each of which pairs the label with a

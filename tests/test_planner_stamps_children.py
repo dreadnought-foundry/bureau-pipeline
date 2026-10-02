@@ -709,13 +709,17 @@ class WiredIntoThePlanRunTest(unittest.TestCase):
                         run.index("plan_child_verdicts.py stamp"))
 
     def test_the_activate_route_stamps_before_it_promotes(self):
-        """The backstop, and the one that closes the last gap: the post-approval
-        re-plan (after the second critic sends a plan back) re-runs no proof
-        gate, so a card it changed would reach the promoter unstamped. The
-        stamper runs before the epic is moved to In Progress and before
-        `reconcile.py --promote-only`, so nothing can be promoted ahead of it."""
+        """The backstop. Since DRE-5281 the activate route runs no review and
+        re-plans nothing, but a plan approved under the old rule may carry a
+        card its old send-back re-plan added with no verdict, so the stamper
+        still runs before the epic is moved to In Progress and before
+        `reconcile.py --promote-only` — inside the branch that activates a
+        plan the second critic passed, so nothing can be promoted ahead of it
+        and nothing is stamped for a plan that is handed back to review."""
         run = step_named("Activate the approved epic")["run"]
         self.assertIn("plan_child_verdicts.py stamp", run)
+        released = run.index('if [ "$POST" = "$RELEASED" ]; then')
+        self.assertLess(released, run.index("plan_child_verdicts.py stamp"))
         self.assertLess(run.index("plan_child_verdicts.py stamp"),
                         run.index('state "$EPIC" "In Progress"'))
         self.assertLess(run.index("plan_child_verdicts.py stamp"),
