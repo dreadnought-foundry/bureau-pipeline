@@ -2076,9 +2076,10 @@ def flag_stalled_planning() -> set[str]:
     the critic's records are a credential, and the board read's raw window
     carries the author's id but not the verdict on it. Inside a sweep the
     thread is served from that same board read, so the skip costs no
-    per-card request. It is asked only of a card with children, because the
-    watcher is handed exactly those (`report_rereview_missing`) — a card the
-    watcher is never shown is never left to it.
+    per-card request. It is asked only of a card the watcher is handed —
+    this repo's label, not an automation card, with children, the one
+    predicate both read (`_watched_planning_epic`) — so a card the watcher is
+    never shown, an unlabelled epic included, is never left to it.
 
     Everything else is handed over rather than re-read — the board read
     already carries the card and its comments, and a per-card read here is the
@@ -2211,13 +2212,16 @@ def _with_the_critics(card: dict) -> bool | None:
     would read as "no record" on every card. Inside a sweep the thread comes
     off that same board read, at no per-card cost.
 
-    A card without children answers False without a read: the watcher is
-    handed this repo's Planning epics WITH children and nothing else
-    (`report_rereview_missing`), so a card it never sees must stay this
-    rule's, or nobody would own it. An unreadable thread abstains for this
-    sweep, the same abstention the watcher makes for the same read.
+    A card the watcher is never handed answers False without a read: the
+    watcher is handed exactly the cards `_watched_planning_epic` admits
+    (`rereview_watch_scope`), so a card it never sees must stay this rule's,
+    or nobody would own it. That includes an epic with no `repo:` label or an
+    off-rail one — this sweep's filter keeps it as everybody's, but no
+    repo's watcher is handed it, so it parks in Triage rather than stranding.
+    An unreadable thread abstains for this sweep, the same abstention the
+    watcher makes for the same read.
     """
-    if not ((card.get("children") or {}).get("nodes")):
+    if not _watched_planning_epic(card):
         return False
     ident = card["identifier"]
     try:
@@ -2227,6 +2231,23 @@ def _with_the_critics(card: dict) -> bool | None:
               "parked this sweep; the next sweep asks again", file=sys.stderr)
         return None
     return rereview_watch.under_review(records, ident)
+
+
+def _watched_planning_epic(card: dict) -> bool:
+    """Is this Planning card one the re-review watcher is handed? (DRE-5286)
+
+    One reading, shared by the stall watchdog's skip (`_with_the_critics`) and
+    the watcher's scope (`rereview_watch_scope`), because the skip is safe only
+    while it covers no card the watcher is not shown. This repo's label, not
+    an automation card, with children. Narrower than `_another_repos_card` on
+    purpose: the watcher re-asks into this sweep's own repo, so an unlabelled
+    epic handed to every repo's watcher would be re-asked into the wrong ones.
+    """
+    return (
+        card_repo(card) == REPO_SLUG
+        and not automation_card(card)
+        and bool((card.get("children") or {}).get("nodes"))
+    )
 
 
 def stalled_planning_reason() -> str:
@@ -9432,7 +9453,8 @@ def rereview_watch_scope(epics) -> tuple[set[str], Callable[[str], str | None]]:
     watcher DRE-5278 built is never handed an epic whose hand-off dropped,
     and the stall watchdog leaves exactly those epics to it
     (`_with_the_critics`). So this repo's Planning epics WITH CHILDREN join
-    them — the same set that skip covers — off the Planning board read the
+    them — the same set that skip covers, read through the one predicate both
+    share (`_watched_planning_epic`) — off the Planning board read the
     watchdog already paid for. The lane reader answers for both off the same
     snapshot, and `rereview_watch.report` does the lane filtering, so this
     costs no request.
@@ -9440,10 +9462,7 @@ def rereview_watch_scope(epics) -> tuple[set[str], Callable[[str], str | None]]:
     board = active_cards(SWEEP_STATES + PLANNING_LANE)
     planning = {
         c["identifier"] for c in board
-        if c["state"]["name"] in PLANNING_LANE
-        and card_repo(c) == REPO_SLUG
-        and not automation_card(c)
-        and ((c.get("children") or {}).get("nodes"))
+        if c["state"]["name"] in PLANNING_LANE and _watched_planning_epic(c)
     }
     lanes = {c["identifier"]: c["state"]["name"] for c in board}
     return set(epics) | planning, lanes.get

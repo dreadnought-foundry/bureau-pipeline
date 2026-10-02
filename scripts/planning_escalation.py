@@ -737,8 +737,9 @@ def escalate(linear_ops, identifier: str, reason: str | None,
 
     `issue` and `comments` let a caller that has ALREADY read the card hand
     over what it read instead of paying for it again (DRE-4124). The reconcile
-    sweep is that caller: its board read returns every Planning card's lane and
-    its comment window inline, and a second per-card read here would put back
+    sweep was that caller until DRE-5286 moved its stall exit to Triage
+    through its own seam: its board read returned every Planning card's lane
+    and its comment window inline, and a second per-card read here would put back
     exactly the request DRE-2929 took out — one per card, per sweep, per repo,
     the term that exhausted the workspace quota for seven hours. The state
     write below is guarded on its own live re-read (`linear_ops.cmd_state` →

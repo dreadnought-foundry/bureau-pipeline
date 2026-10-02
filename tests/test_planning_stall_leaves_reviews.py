@@ -27,7 +27,9 @@ THE RULES UNDER TEST:
   4. The planner line's rule runs before the age gate, so an epic under review
      that has waited in line past the bound is parked by THAT rule.
   5. The sweep hands `rereview_watch.report` this repo's Planning epics with
-     children beside the active ones, and a lane reader that answers for them.
+     children beside the active ones, and a lane reader that answers for them
+     — and the skip in rule 2 covers no card outside that set, so an
+     unlabelled or off-rail epic under review is parked, never stranded.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_stall_leaves_reviews.py -v
 """
@@ -163,9 +165,14 @@ def _card(identifier=CARD, state="Planning", labels=(), minutes_stale=STALE,
     }
 
 
-def _epic(*bodies, minutes_stale=STALE, children=2, **kw):
+#: This repo's label: the watcher is handed only this repo's epics, so only
+#: they can be left to it (`reconcile._watched_planning_epic`).
+MINE = ("repo:agent-bureau",)
+
+
+def _epic(*bodies, minutes_stale=STALE, children=2, labels=MINE, **kw):
     return _card(identifier=EPIC, minutes_stale=minutes_stale,
-                 bodies=bodies, children=children, **kw)
+                 bodies=bodies, children=children, labels=labels, **kw)
 
 
 class _Board:
@@ -427,6 +434,20 @@ class TestEverythingElseIsAStall:
         assert board.states == [(CARD, reconcile.PARKED_STATE)]
         assert board.thread_reads == []
 
+    @pytest.mark.parametrize("labels", [(), ("repo:not-on-rail",)],
+                             ids=["unlabelled", "off-rail"])
+    def test_an_epic_under_review_no_watcher_is_handed_is_a_stall(
+            self, labels, capsys):
+        """This sweep keeps an unlabelled or off-rail epic as everybody's, but
+        no repo's watcher is handed it — so leaving it to "the watcher" would
+        strand it in Planning with nobody chasing it. It is parked instead,
+        and its thread is not read."""
+        board = _Board(_epic(_boundary(), _pre(), labels=labels))
+        assert board.watch() == {EPIC}
+        assert board.states == [(EPIC, reconcile.PARKED_STATE)]
+        assert board.thread_reads == []
+        assert OWNER_LINE.format(EPIC) not in capsys.readouterr().out
+
     def test_a_young_epic_costs_no_thread_read(self):
         board = _Board(_epic(_boundary(), _pre(), minutes_stale=10))
         assert board.watch() == set()
@@ -464,7 +485,7 @@ class TestTheLinesRuleRunsBeforeTheReviewSkip:
         the card when it enters Triage, and the plan-gate would let the relay
         re-plan it."""
         board = _Board(_epic(_waiting(BOUND + 1), minutes_stale=BOUND + 1,
-                             labels=("agent:planner",)))
+                             labels=MINE + ("agent:planner",)))
         assert board.watch() == {EPIC}
         (newest,) = board.newest_at_move
         assert dedupe_dispatch.STALL_PARK_TAG in newest
@@ -504,6 +525,24 @@ class TestTheWatcherIsHandedPlanningEpics:
         board = _Board(_epic(labels=("repo:atlas",)))
         handed = self._report(board, set())
         assert EPIC not in handed["epics"]
+
+    @pytest.mark.parametrize("labels", [
+        MINE, (), ("repo:not-on-rail",), ("repo:atlas",),
+        MINE + (reconcile.dependabot_card.LABEL,),
+    ], ids=["mine", "unlabelled", "off-rail", "another-repo", "automation"])
+    @pytest.mark.parametrize("children", [0, 2])
+    def test_every_card_the_skip_leaves_to_the_watcher_is_handed_to_it(
+            self, labels, children):
+        """The invariant the skip rests on: `_with_the_critics` truthy implies
+        the card is in the watcher's scope — or nobody owns it."""
+        board = _Board(_epic(_boundary(), _pre(), labels=labels,
+                             children=children))
+        (card,) = board.cards
+        left = board.run(lambda: reconcile._with_the_critics(card))
+        handed = self._report(board, set())
+        if left:
+            assert EPIC in handed["epics"]
+        assert bool(left) == (labels == MINE and children > 0)
 
     def test_the_sweep_hands_the_scope_to_the_watcher_inside_its_phase(self):
         source = inspect.getsource(reconcile.main)
