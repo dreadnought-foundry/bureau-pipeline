@@ -182,8 +182,16 @@ CHANGED = (
     "scripts/linear_ops.py",
     "scripts/check_linear_budget.py",
     "scripts/check_linear_identities.py",
+    "agents.yaml",
     "tests/test_planner_linear_key.py",
     "tests/test_linear_ops_key_fallback.py",
+    "tests/test_check_linear_budget.py",
+    "tests/test_linear_identities.py",
+    "tests/test_agent_linear_key.py",
+    "tests/test_epic_split_wiring.py",
+    "tests/test_planner_queue_wiring.py",
+    "tests/test_planner_stamps_children.py",
+    "tests/test_spoken_thread_wiring.py",
 )
 
 
