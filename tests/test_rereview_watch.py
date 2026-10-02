@@ -1292,6 +1292,27 @@ class ThePlannerLine(unittest.TestCase):
                 self.assertEqual(sweep.writes(), [])
                 self.assertEqual(sweep.dispatches, [])
 
+    def test_any_receipt_after_the_notice_stops_the_second_firing(self):
+        """The card's rule is literal: no planner-slot receipt after the
+        notice. A claim that has already been released is not an open claim,
+        so this is the rule itself holding, not the running-review rule."""
+        for name, build, _ in PLANNING_SILENCES:
+            with self.subTest(silence=name):
+                records = build(_first_notice(build),
+                                _slot("claimed", "2026-09-15T18:50:00Z",
+                                      run="36700000007"),
+                                _slot("released", "2026-09-15T19:00:00Z",
+                                      run="36700000007"))
+                reading = rw.read(records, EPIC, pc.REVIEW_LANE, PAST_NOTICE, 45)
+                self.assertTrue(reading.found is None or reading.spoken,
+                                reading.why)
+                sweep = _Sweep()
+                spoke, _ = sweep(_Reader({EPIC: records}),
+                                 {EPIC: pc.REVIEW_LANE}, now=PAST_NOTICE)
+                self.assertEqual(spoke, [])
+                self.assertEqual(sweep.writes(), [])
+                self.assertEqual(sweep.dispatches, [])
+
     def test_a_waiting_receipt_someone_else_posted_is_not_read(self):
         records = handed_off_thread(
             _slot("waiting", LINE_ENTRY, place=3, pipeline=False))
