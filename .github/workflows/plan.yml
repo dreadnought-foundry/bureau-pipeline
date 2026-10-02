@@ -3654,7 +3654,8 @@ jobs:
       - name: Review — the review died
         if: steps.route.outputs.mode == 'review' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_post.outputs.token }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
@@ -3779,7 +3780,8 @@ jobs:
       - name: Epic → Green Light — both critics passed
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/green-light-children.json"
@@ -3818,7 +3820,8 @@ jobs:
       - name: Review — the second critic passed a plan the first critic held
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
@@ -3841,7 +3844,8 @@ jobs:
       - name: Review — the second critic produced no result
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'NO_RESULT'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_post.outputs.token }}
           NO_RESULTS: ${{ steps.post1.outputs.no_results }}
         run: |
@@ -4323,7 +4327,8 @@ jobs:
       - name: Review — the revised plan is reviewed again
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
           FINDING: ${{ steps.post1.outputs.reason }}
           ROUND: ${{ steps.post1.outputs.round }}
@@ -4361,7 +4366,8 @@ jobs:
       - name: Review — the bound parks the plan in Triage
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           FINDING: ${{ steps.post1.outputs.reason }}
           # Through env, never interpolated — it carries text an agent wrote.
           NOTE: ${{ steps.post1.outputs.note }}

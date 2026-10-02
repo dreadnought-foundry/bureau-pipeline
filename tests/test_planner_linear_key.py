@@ -93,7 +93,7 @@ def _evaluate(expr: str, secrets: dict) -> str:
 # ── the wiring ──────────────────────────────────────────────────────────────
 def test_every_step_that_holds_a_linear_key_holds_the_planners_first():
     steps = _key_steps(_plan())
-    # Seventy today across `plan` and `publish`. A floor, so a renamed
+    # Seventy-six today across `plan` and `publish`. A floor, so a renamed
     # key cannot make this pass by finding nothing.
     assert len(steps) >= 60, len(steps)
     wrong = [(j, s, e["LINEAR_API_KEY"]) for j, s, e in steps
