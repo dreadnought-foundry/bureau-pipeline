@@ -129,7 +129,8 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIsNotNone(m, "the gate's one pull request read is gone")
         self.assertIn("body", m.group(1).split(","))
         self.assertIn("createdAt", m.group(1).split(","))
-        self.assertEqual(self.run_block.count("gh pr view"), 2,
+        code = step_shell.code_lines(self.run_block)
+        self.assertEqual(sum("gh pr view" in ln for ln in code), 2,
                          "one read, plus DRE-2117's re-read after a refused merge")
         self.assertIn(
             "jq -r '.body // \"\"' /tmp/pr-view.json > /tmp/pr-body.txt",
@@ -141,17 +142,15 @@ class ScriptInvocationTest(unittest.TestCase):
             "2>/dev/null || true)",
             self.run_block,
         )
-        invocation = self.run_block[
-            self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py"):
-        ]
+        # The DECISION's invocation, not `merge_gate.py precheck` (Stage 2 #19).
+        decide = self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py \\\n")
+        self.assertGreater(decide, -1)
+        invocation = self.run_block[decide:]
         invocation = invocation[:invocation.find("| tee /tmp/gate-decision")]
         self.assertIn("--pr-body-file /tmp/pr-body.txt", invocation)
         self.assertIn('--pr-created-at "$CREATED_AT"', invocation)
         # The read sits before the decision it feeds.
-        self.assertLess(
-            m.start(),
-            self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py"),
-        )
+        self.assertLess(m.start(), decide)
         # The script carries no `${` (tests/test_evaluate_and_merge.py).
         self.assertNotIn("${CREATED_AT}", self.run_block)
 

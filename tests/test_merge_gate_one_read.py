@@ -285,35 +285,35 @@ class OneReadOfThePullRequestTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.run = run_gate(green_fixture())
+        cls.gate =run_gate(green_fixture())
 
     def test_it_merges(self):
-        self.assertEqual(self.run.proc.returncode, 0, self.run.explain())
-        self.assertEqual(self.run.decision(), "merge", self.run.explain())
-        self.assertEqual(len(self.run.merges), 1, self.run.explain())
-        self.assertIn(HEAD, self.run.merges[0])
+        self.assertEqual(self.gate.proc.returncode, 0, self.gate.explain())
+        self.assertEqual(self.gate.decision(), "merge", self.gate.explain())
+        self.assertEqual(len(self.gate.merges), 1, self.gate.explain())
+        self.assertIn(HEAD, self.gate.merges[0])
 
     def test_the_pull_request_is_read_once(self):
-        self.assertEqual(len(self.run.views), 1, self.run.explain())
+        self.assertEqual(len(self.gate.views), 1, self.gate.explain())
 
     def test_the_one_read_asks_for_every_field_the_gate_uses(self):
-        asked = self.run.views[0][self.run.views[0].index("--json") + 1]
+        asked = self.gate.views[0][self.gate.views[0].index("--json") + 1]
         self.assertEqual(sorted(asked.split(",")), sorted(VIEW_FIELDS))
 
     def test_the_rest_author_read_is_gone(self):
-        self.assertNotIn(f"repos/{REPO}/pulls/{PR}", self.run.api_paths(),
-                         self.run.explain())
+        self.assertNotIn(f"repos/{REPO}/pulls/{PR}", self.gate.api_paths(),
+                         self.gate.explain())
 
     def test_nine_github_reads_reach_the_merge(self):
         """The view, check runs, runs listing, compare, comments, commits, the
         fix lane, the open pull requests and the base branch's rules — nine
         where sixteen were before (seven views and the REST author read)."""
-        self.assertEqual(len(self.run.before_merge()), 9, self.run.explain())
+        self.assertEqual(len(self.gate.before_merge()), 9, self.gate.explain())
 
     def test_the_card_comment_link_comes_from_the_one_read(self):
         """The url the merge comment carries is in the view; no read after
         the merge (the old script re-read it for the Linear comment)."""
-        after = self.run.calls[self.run.calls.index(self.run.merges[0]) + 1:]
+        after = self.gate.calls[self.gate.calls.index(self.gate.merges[0]) + 1:]
         self.assertEqual([c for c in after if c[:2] == ["pr", "view"]], [])
 
 
@@ -439,26 +439,26 @@ LATE_READS = ("/compare/", "/comments", "/commits?", "pulls?state=open",
 class TheGateStopsEarlyWhileCiRunsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.run = run_gate({"view": view(), "check_runs": SLOW_CI,
+        cls.gate =run_gate({"view": view(), "check_runs": SLOW_CI,
                             "workflow_runs": [CI_RUN_LIVE]})
 
     def test_it_waits_and_says_why(self):
-        self.assertEqual(self.run.proc.returncode, 0, self.run.explain())
-        self.assertEqual(self.run.decision(), "wait", self.run.explain())
-        self.assertIn("not green", self.run.proc.stdout)
+        self.assertEqual(self.gate.proc.returncode, 0, self.gate.explain())
+        self.assertEqual(self.gate.decision(), "wait", self.gate.explain())
+        self.assertIn("not green", self.gate.proc.stdout)
 
     def test_it_reads_only_the_view_the_checks_and_the_runs(self):
-        self.assertEqual(len(self.run.calls), 3, self.run.explain())
-        paths = self.run.api_paths()
+        self.assertEqual(len(self.gate.calls), 3, self.gate.explain())
+        paths = self.gate.api_paths()
         self.assertTrue(any("check-runs" in p for p in paths))
         self.assertTrue(any("actions/runs" in p for p in paths))
         for late in LATE_READS:
             self.assertFalse(any(late in p for p in paths), (late, paths))
-        self.assertNotIn(["run", "list"], [c[:2] for c in self.run.calls])
+        self.assertNotIn(["run", "list"], [c[:2] for c in self.gate.calls])
 
     def test_it_writes_nothing(self):
-        self.assertEqual(self.run.merges, [])
-        self.assertEqual(len(self.run.comments), 1)
+        self.assertEqual(self.gate.merges, [])
+        self.assertEqual(len(self.gate.comments), 1)
 
     def test_an_unreadable_runs_listing_still_waits_early(self):
         """Condition 1 waits on an unreadable listing (DRE-5045) — the same

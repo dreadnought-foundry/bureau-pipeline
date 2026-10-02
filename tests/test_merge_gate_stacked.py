@@ -503,7 +503,8 @@ class WiringTest(unittest.TestCase):
 
     def test_the_record_is_gathered_from_the_compare_the_gate_already_read(self):
         gather = self.run_block.index("stacked_prs.py gather")
-        invoke = self.run_block.index("python3 .bureau-pipeline/scripts/merge_gate.py")
+        # The DECISION's invocation, not `merge_gate.py precheck` (Stage 2 #19).
+        invoke = self.run_block.index("python3 .bureau-pipeline/scripts/merge_gate.py \\\n")
         compare = self.run_block.index("> /tmp/compare.json")
         self.assertLess(compare, gather)
         self.assertLess(gather, invoke)
