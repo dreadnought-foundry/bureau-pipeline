@@ -103,6 +103,15 @@ _HEAD = re.compile(r"^(?P<kind>[^,:\s]+)\s*,\s*(?P<audience>[^,:\s]+)\s*:\s*(?P<
 _OPEN = re.compile(r"\(open:\s*(?P<path>[^)]*)\)\s*$")
 _TITLE_END = re.compile(r"\.(?=\s|$)|[?!]")
 
+#: A page inside the product: one leading `/`, never `//` or `/\` — a browser
+#: reads both as another site — and no whitespace or control characters.
+_OPEN_PATH = re.compile(r"/(?![/\\])[^\s\x00-\x1f\x7f-\x9f]*")
+
+
+def _valid_open(path: object) -> bool:
+    """Is `path` a page inside the product? The line and the file share it."""
+    return isinstance(path, str) and _OPEN_PATH.fullmatch(path) is not None
+
 
 def _first_line(pr_body: str) -> str | None:
     """The text after the first `What's new:` label outside fenced code."""
@@ -151,9 +160,10 @@ def parse_line(pr_body: str) -> Entry | None:
     if opened:
         path = opened["path"].strip()
         sentence = sentence[:opened.start()].strip()
-        if not path.startswith("/") or re.search(r"\s", path):
+        if not _valid_open(path):
             raise WhatsNewError(
-                f"The open path {path!r} must begin with `/` — `(open: /documents)`.")
+                f"The open path {path!r} must be a page in the product: one leading `/`, "
+                "never `//` or `/\\`, no spaces — `(open: /documents)`.")
     if not sentence:
         raise WhatsNewError("The `What's new:` line names a kind and audience but no sentence.")
 
@@ -285,8 +295,10 @@ def _item_problems(index: int, item: object) -> list[str]:
         problems.extend(f"{at}.title: {problem}" for problem in check_wording(title))
     if not isinstance(item.get("body"), str):
         problems.append(f"{at}.body: must be a string (may be empty).")
-    if "open" in item and not (isinstance(item["open"], str) and item["open"].startswith("/")):
-        problems.append(f"{at}.open: {item['open']!r} must be a path beginning with `/`.")
+    if "open" in item and not _valid_open(item["open"]):
+        problems.append(
+            f"{at}.open: {item['open']!r} must be a page in the product: one leading `/`, "
+            "never `//` or `/\\`, no spaces.")
     return problems
 
 

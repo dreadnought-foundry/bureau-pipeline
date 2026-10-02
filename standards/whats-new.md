@@ -17,7 +17,8 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 - `<kind>` is `new`, `improved` or `fixed`. `<audience>` is `everyone`,
   `moderators` or `admins`. Both are required, lowercase, in that order.
 - The first sentence is the title and ends with a period. Anything after it is
-  the body. `(open: /path)` is optional, begins with `/`, and names the page.
+  the body. `(open: /path)` is optional and names a page in the product: one
+  leading `/`, never `//` or `/\`, no spaces or control characters.
 - The label may be bold (`**What's new:**`) and the apostrophe curly. It counts
   only at the start of a line and outside fenced code. The first one wins.
 - For example: `What's new: improved, everyone: Searching a document now finds
@@ -42,11 +43,10 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 - The model adoption workflow's pull requests — `agent/<card>-adopt-<candidate>`,
   `agent/model-adoption-<candidate>` and `agent/claude-code-pin-<version>` —
   carry `What's new: none`, written by their own body renderers (DRE-5573).
-- The two rescue pull requests carry no line: the one `scripts/push_rescue.py`
-  opens on an agent's own `agent/` branch, and the one
-  `scripts/deliver_rescue.py` opens on `agent/<card>-rescued-delivery`. Both
-  bodies are machine-written because the agent's was lost — the fix loop
-  answers them like any sent-back pull request.
+- The two rescue pull requests carry no line: `scripts/push_rescue.py` opens one
+  on an agent's own `agent/` branch, `scripts/deliver_rescue.py` one on
+  `agent/<card>-rescued-delivery`. Both bodies are machine-written because the
+  agent's was lost — the fix loop answers them like any sent-back pull request.
 
 ## Answering a sent-back or held pull request
 
