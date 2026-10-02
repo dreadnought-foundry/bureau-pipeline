@@ -1316,6 +1316,47 @@ class ThePlannerLine(unittest.TestCase):
                 self.assertEqual(sweep.writes(), [])
                 self.assertEqual(sweep.dispatches, [])
 
+    def _promise_lanes(self):
+        """Every (silence, lane) the watcher holds a promise in: the three
+        Planning silences, and the In Progress send-back."""
+        for name, build, _ in PLANNING_SILENCES:
+            yield name, build, pc.REVIEW_LANE
+        yield "sent back", thread, pc.APPROVAL_LANE
+
+    def test_a_claim_newer_than_the_promise_means_the_review_is_running(self):
+        """No notice yet, so nothing but the open claim stands between the
+        promise and a first firing. The claim is still open at LATER (the
+        TTL is 115 minutes)."""
+        claim_run = "36700000005"
+        for name, build, lane in self._promise_lanes():
+            with self.subTest(silence=name, lane=lane):
+                records = build(_slot("claimed", "2026-09-15T18:00:00Z",
+                                      run=claim_run))
+                self.assertIsNone(rw.overdue(records, EPIC, lane, LATER, 45))
+                reading = rw.read(records, EPIC, lane, LATER, 45)
+                self.assertIsNone(reading.found, reading.why)
+                self.assertIn(claim_run, reading.why)
+                self.assertIn("the review is running", reading.why)
+                sweep = _Sweep()
+                spoke, _ = sweep(_Reader({EPIC: records}), {EPIC: lane})
+                self.assertEqual(spoke, [])
+                self.assertEqual(sweep.dispatches, [])
+                self.assertEqual(sweep.writes(), [])
+
+    def test_a_claim_older_than_the_promise_is_not_the_review(self):
+        """A claim still open but made before the promise — the first
+        critic's own run, say — is not the review the promise asked for. It
+        sits in the thread where its stamp puts it: after the attempt's
+        marker, before the promise."""
+        for name, build, lane in self._promise_lanes():
+            with self.subTest(silence=name, lane=lane):
+                records = build()
+                records.insert(2, _slot("claimed", "2026-09-15T17:30:00Z",
+                                        run="36700000006"))
+                found = rw.overdue(records, EPIC, lane, LATER, 45)
+                self.assertIsNotNone(found)
+                self.assertEqual(found["firing"], 1)
+
     def test_a_waiting_receipt_someone_else_posted_is_not_read(self):
         records = handed_off_thread(
             _slot("waiting", LINE_ENTRY, place=3, pipeline=False))
