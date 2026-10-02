@@ -38,6 +38,7 @@ ask.
 """
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -274,7 +275,11 @@ class WorkflowWiringTest(unittest.TestCase):
         cls.run_block = runs[0]
 
     def test_draft_state_comes_from_githubs_own_pr_record(self):
-        self.assertIn("--json isDraft", self.run_block)
+        """Since Stage 2 #19 the flag rides the gate's one `gh pr view`."""
+        m = re.search(r'gh pr view "\$PR" --json (\S+) > /tmp/pr-view\.json',
+                      self.run_block)
+        self.assertIsNotNone(m, "the gate's one pull request read is gone")
+        self.assertIn("isDraft", m.group(1).split(","))
         self.assertIn('IS_DRAFT=', self.run_block)
 
     def test_the_draft_state_is_passed_to_the_decision(self):

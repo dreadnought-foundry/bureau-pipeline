@@ -122,6 +122,11 @@ record = {
     "mergeStateStatus": "CLEAN",
     "baseRefName": "main",
     "isDraft": False,
+    # The merge gate's one read (Stage 2 #19) asks for these too.
+    "body": "",
+    "createdAt": "2026-10-02T17:00:00Z",
+    "author": {"is_bot": True, "login": "app/agent-bureau-bot"},
+    "url": "https://github.com/o/r/pull/1",
 }
 missing = [f for f in fields if f not in record]
 if missing:

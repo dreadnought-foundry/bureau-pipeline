@@ -63,6 +63,9 @@ DECLARATION = {
     "reconcile.yml": "${{ inputs.%s }}" % IDENTITY_INPUT,
     "linear-sync.yml": "fleet",
     "plan.yml": "fleet",
+    # Stage 2 #11 (BP-5): the gate advances and comments on cards with the
+    # fleet key, and printed `undeclared` until it said so.
+    "merge-gate.yml": "fleet",
 }
 
 SPENDERS = tuple(DECLARATION)

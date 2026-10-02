@@ -557,6 +557,15 @@ def opt(name):
     return args[args.index(name) + 1] if name in args else None
 
 
+if args[:2] == ["pr", "view"] and not opt("--jq"):
+    # The gate's one read (Stage 2 #19): the requested fields, the author in
+    # gh's own rendering of a bot (`app/<slug>`).
+    login = fx.get("author", "agent-bureau-bot[bot]")
+    bot = login.endswith("[bot]")
+    record = dict(fx["pr"], url="https://github.com/o/r/pull/1",
+                  author={"is_bot": bot,
+                          "login": "app/" + login[:-5] if bot else login})
+    emit({f: record[f] for f in opt("--json").split(",") if f in record})
 if args[:2] == ["pr", "view"]:
     field = (opt("--jq") or "").lstrip(".")
     value = fx["pr"][field]

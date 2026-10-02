@@ -78,15 +78,17 @@ def _needs(result: str, pr: str = "") -> dict:
 
 
 def workflow_run_event(branch: str, pr: int | None = PR,
-                       run_event: str = "pull_request") -> dict:
+                       run_event: str = "pull_request", name: str = "CI") -> dict:
     """The context the gate sees when a CI workflow completes: the
-    triggering run's own event, head branch, and — for a same-repo
-    pull_request run — the pull request(s) it was created for."""
+    triggering run's own event, head branch, workflow name (the calling
+    stub's `name:`) and — for a same-repo pull_request run — the pull
+    request(s) it was created for."""
     return {
         "github": {
             "event_name": "workflow_run",
             "event": {
                 "workflow_run": {
+                    "name": name,
                     "event": run_event,
                     "head_branch": branch,
                     "pull_requests": [] if pr is None else [
@@ -365,6 +367,53 @@ class CommentPredicateMeasuredTest(unittest.TestCase):
         event = comment_event(APPROVE_BODY)
         self.assertFalse(resolve_runs(event))
         self.assertTrue(evaluate_runs(event))
+
+
+# --------------------------------------------------------------------------
+# 4b. the critic's own completion is not a wake (Stage 2 #20, BP-5)
+# --------------------------------------------------------------------------
+class TheCriticsCompletionIsNotAWakeTest(unittest.TestCase):
+    """The critic's VERDICT COMMENT is the wake for a review (the comment
+    leg above); its run finishing a few seconds later woke the gate a second
+    time for the same answer. Every stub that lists `QA Review` in its
+    workflow_run triggers — the scaffold's, agent-bureau's, this repo's own —
+    names it exactly that, and the gate never waits on the critic's run:
+    its check runs and the run itself sit at a review path, excluded from
+    condition 1 by verified origin (DRE-1994, DRE-5045). A review that
+    crashed without a comment is decided `wait` with or without this wake
+    and is re-dispatched by reconcile.recover_crashed_reviews.
+
+    `Verify` is NOT skipped. verify.yml is no review path, so the gate waits
+    on the Verifier's run as CI; its verdict comment is posted before that
+    run ends (so the comment's wake reads it unfinished and waits), and an
+    out-of-scope Verify posts no comment at all. Its completion is the wake
+    that merges."""
+
+    def test_the_critics_completion_does_not_run_the_gate(self):
+        for branch in ("agent/DRE-1-x", "repair/red-main-1", "dependabot/pip/x-1.2"):
+            with self.subTest(branch=branch):
+                event = workflow_run_event(branch, pr=PR, name="QA Review")
+                self.assertFalse(evaluate_runs(event))
+
+    def test_the_verifiers_completion_still_runs_the_gate(self):
+        self.assertTrue(evaluate_runs(workflow_run_event("agent/DRE-1-x", pr=PR,
+                                                         name="Verify")))
+
+    def test_every_other_ci_completion_still_runs_the_gate(self):
+        for name in ("CI", "Infra CI", "Pipeline Tests", "Integration Harness",
+                     "Smoke · setup-node-cached"):
+            with self.subTest(name=name):
+                self.assertTrue(evaluate_runs(
+                    workflow_run_event("agent/DRE-1-x", pr=PR, name=name)))
+
+    def test_the_critics_verdict_comment_still_runs_the_gate(self):
+        self.assertTrue(evaluate_runs(comment_event(APPROVE_BODY)))
+
+    def test_a_resolved_critic_completion_does_not_run_the_gate_either(self):
+        """The lookup leg (no PR named on the event) reaches `evaluate` the
+        same way, and is declined there too."""
+        event = workflow_run_event("agent/DRE-1-x", pr=None, name="QA Review")
+        self.assertFalse(evaluate_runs(event, _needs("success", str(PR))))
 
 
 # --------------------------------------------------------------------------
