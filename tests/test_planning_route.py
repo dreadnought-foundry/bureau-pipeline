@@ -466,7 +466,8 @@ class _Card:
             }
 
         with patch.object(
-            linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+            linear_ops, "comment_bodies",
+            side_effect=lambda i, **_kw: list(self.comments)
         ), patch.object(
             # The escalation reads the thread WITH its times (DRE-4124) — it
             # has to tell a verdict from this planning attempt from one a spent

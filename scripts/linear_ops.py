@@ -3034,12 +3034,23 @@ def first_comment_at(identifier: str, needle: str) -> str | None:
     return None
 
 
-def comment_bodies(identifier: str) -> list[str]:
+def comment_bodies(identifier: str, *, whole_thread: bool = False) -> list[str]:
     """All comment bodies on the card, oldest→newest — the fifty NEWEST on a
     thread longer than the window (DRE-3250), which is the half every caller
     here wants. Used by the model-fallback selector (DRE-1354) to read which
     model each prior attempt used / died on. Inside a sweep, served from the
-    pass's board read, and a busy card is read whole (DRE-3236)."""
+    pass's board read, and a busy card is read whole (DRE-3236).
+
+    `whole_thread` pages past the window, as `comment_records` does, for a
+    reader a truncated thread makes WRONG (DRE-3370). The shape stamp is one
+    (DRE-5644): it is written once, when a card enters Planning, and a busy
+    epic buries it. On 2026-10-02 DRE-3698's stamp was the 51st newest comment
+    when the planning classifier read the thread at 12:32 PT, so the classifier
+    read the epic as unclassified, and its failed self-check parked it in
+    Green Light as a CEO decision."""
+    if whole_thread:
+        nodes, _ = _thread_and_viewer(identifier, "body", whole=True)
+        return [c.get("body") or "" for c in nodes]
     return [c.get("body") or "" for c in _thread(identifier, "body")]
 
 

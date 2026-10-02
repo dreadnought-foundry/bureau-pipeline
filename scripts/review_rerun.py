@@ -56,6 +56,10 @@ CLI:
   card-set --before FILE --after FILE --github-output OUT
                                       `changed=`, `added=`, `removed=` over
                                       two `linear_ops.py children-json` files.
+  review-ask --reason R --github-output OUT
+                                      `review=true|false`: is this dispatch
+                                      one of `REVIEW_ASKS` (DRE-5644)?
+                                      NEVER exits non-zero.
 """
 
 from __future__ import annotations
@@ -94,6 +98,22 @@ REASON_REVIEW_RETRY = "review-retry"   # the review died; try again with headroo
 REASON_RE_REVIEW = "re-review"         # the plan changed; read it again
 REASON_RERUN_ACT = "re-run"            # a person asked, with the act below
 REASON_ONE_OFF_REVISE = "one-off-revise"  # the planner revised a one-off card
+
+#: The reasons the PIPELINE sends when it asks for the second critic's review of
+#: a plan already written (DRE-5644). A run carrying one, from any lane, is
+#: never a card arriving at Planning, so `plan.yml` skips the planning
+#: classifier for it: the classifier is a front-door step, and on 2026-10-02 it
+#: ran on DRE-3698's automatic re-review (run 37054561328) instead of the second
+#: critic, and its failed self-check parked the epic in Green Light at 12:33 PT
+#: as a CEO decision. A person's `re-run` and the one-off re-read are not here:
+#: both keep the path they had.
+REVIEW_ASKS = (REASON_REVIEW, REASON_RE_REVIEW, REASON_REVIEW_RETRY)
+
+
+def is_review_ask(reason: str | None) -> bool:
+    """True when `reason` is one of the pipeline's own review asks. Exact match:
+    the relay and `dispatch` send these words lower-cased and bare."""
+    return (reason or "") in REVIEW_ASKS
 
 #: The lane a one-off card STAYS in while the planner revises it (DRE-5376),
 #: lower-cased the way the relay sends a lane. The re-read is fired for it, so
@@ -476,9 +496,24 @@ def _cmd_card_set(args) -> int:
     return 0
 
 
+def _cmd_review_ask(args) -> int:
+    review = is_review_ask(args.reason)
+    _write_outputs(args.github_output, [("review", "true" if review else "false")])
+    print(f"reason {args.reason!r}: "
+          + ("a review the pipeline asked for — the classifier is skipped"
+             if review else "not a review ask — the front door runs as before"))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    a = sub.add_parser("review-ask",
+                       help="is this dispatch one of the pipeline's review asks?")
+    a.add_argument("--reason", default="")
+    a.add_argument("--github-output", default=None)
+    a.set_defaults(fn=_cmd_review_ask)
 
     c = sub.add_parser("ceiling", help="the review's turn ceiling this run")
     c.add_argument("--epic", default=None)

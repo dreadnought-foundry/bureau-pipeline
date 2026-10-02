@@ -153,7 +153,7 @@ class _Lops:
             }
         }
 
-    def comment_bodies(self, identifier):
+    def comment_bodies(self, identifier, *, whole_thread=False):
         return list(self.bodies)
 
     def count_comments(self, identifier, needle, **kwargs):
