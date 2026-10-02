@@ -61,7 +61,10 @@ class TestItIsWiredIn:
         text = (ROOT / ".github" / "workflows" / "harness.yml").read_text(
             encoding="utf-8"
         )
-        assert "LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}" in text
+        # The sandbox seat's key (DRE-3651), under the name linear_ops reads —
+        # never the fleet's, which every proving run on main used to spend.
+        assert "LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY_SANDBOX }}" in text
+        assert "${{ secrets.LINEAR_API_KEY }}" not in text
 
 
 class TestItReadsAndNeverWrites:

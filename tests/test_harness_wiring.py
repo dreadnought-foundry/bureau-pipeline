@@ -17,7 +17,9 @@ sweeps all workflow files for stray literals).
 These tests must FAIL before harness.yml exists, and PASS after.
 """
 
+import json
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -223,6 +225,64 @@ class IdentityWiringTest(unittest.TestCase):
         for step in _steps(_doc()):
             env.update(step.get("env") or {})
         self.assertEqual(env.get("HARNESS_QA_TOKEN"), "${{ steps.qa.outputs.token }}")
+
+
+class SandboxLinearSeatTest(unittest.TestCase):
+    """DRE-3651: the driver's one Linear read is made as the sandbox seat.
+
+    The `lane_contract` scenario makes one read-only query per run. On the
+    fleet's key every proving run on main spent the production bucket and
+    printed `budget: undeclared` (run 36890852956). The driver now reads
+    `secrets.LINEAR_API_KEY_SANDBOX` — the bureau-sandbox user's key
+    (DRE-3634) — under the env name `linear_ops` already reads, and the job
+    declares `sandbox` the DRE-3321 way: once, on the job, inherited.
+    """
+
+    SANDBOX_KEY = "${{ secrets.LINEAR_API_KEY_SANDBOX }}"
+
+    def _scenarios(self):
+        steps = [s for s in _steps(_doc()) if s.get("id") == "scenarios"]
+        self.assertEqual(len(steps), 1, "one `Run harness scenarios` step")
+        self.assertEqual(steps[0].get("name"), "Run harness scenarios")
+        return steps[0]
+
+    def test_the_scenarios_step_reads_the_sandbox_key(self):
+        env = self._scenarios().get("env") or {}
+        self.assertEqual(env.get("LINEAR_API_KEY"), self.SANDBOX_KEY)
+
+    def test_no_step_reads_the_fleet_key(self):
+        # As a whole token: `secrets.LINEAR_API_KEY_SANDBOX` must not count.
+        fleet = re.compile(r"\bsecrets\.LINEAR_API_KEY\b")
+        for step in _steps(_doc()):
+            self.assertIsNone(
+                fleet.search(yaml.safe_dump(step)),
+                f"step {step.get('name') or step.get('id')!r} reads the fleet's "
+                f"Linear key — every proving run on main would spend the "
+                f"production bucket",
+            )
+
+    def test_the_job_declares_the_sandbox_identity(self):
+        env = _job(_doc()).get("env") or {}
+        self.assertEqual(env.get("LINEAR_IDENTITY"), "sandbox")
+
+    def test_the_identity_is_a_name_the_declaration_carries(self):
+        identities = WORKFLOW.parents[2] / "config" / "linear-identities.json"
+        names = [
+            row["name"]
+            for row in json.loads(identities.read_text())["identities"]
+        ]
+        self.assertIn(_job(_doc()).get("env", {}).get("LINEAR_IDENTITY"), names)
+
+    def test_no_step_carries_the_identity(self):
+        # Inherited from the job, never restated: a step-level copy is the one
+        # that goes missing when the next step is added (DRE-3321).
+        for step in _steps(_doc()):
+            self.assertNotIn(
+                "LINEAR_IDENTITY",
+                step.get("env") or {},
+                f"step {step.get('name') or step.get('id')!r} declares the "
+                f"identity — it belongs on the job",
+            )
 
 
 class ReleaseRouteTest(unittest.TestCase):
