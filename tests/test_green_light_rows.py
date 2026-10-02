@@ -521,6 +521,42 @@ class TestTheAgentEscalationGate:
         assert _named(found, "agent-task.yml#Report result to Linear",
                       "agent-escalation"), found
 
+    RECEIPT_LINE = (
+        'echo "🙋 The agent paused for a decision before building — it judged '
+        'this needs your call rather than a guess."'
+    )
+
+    def test_a_receipt_left_only_as_a_whole_line_comment_fails(self, tmp_path):
+        import planner_score
+
+        root = _copy_repo(tmp_path)
+        _edit(root / ".github" / "workflows" / "agent-task.yml", self.RECEIPT_LINE,
+              f'# {planner_score.ESCALATION_RECEIPT_PREFIX}\n'
+              '              echo "Status update"')
+        found = grl.problems(str(root))
+        assert _named(found, "agent-task.yml#Report result to Linear",
+                      "agent-escalation"), found
+
+    def test_a_receipt_left_only_as_a_trailing_comment_fails(self, tmp_path):
+        import planner_score
+
+        root = _copy_repo(tmp_path)
+        _edit(root / ".github" / "workflows" / "agent-task.yml", self.RECEIPT_LINE,
+              f'echo "Status update"  # {planner_score.ESCALATION_RECEIPT_PREFIX}')
+        found = grl.problems(str(root))
+        assert _named(found, "agent-task.yml#Report result to Linear",
+                      "agent-escalation"), found
+
+    def test_a_receipt_written_and_never_posted_fails(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / ".github" / "workflows" / "agent-task.yml",
+              'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
+              '              "$(cat /tmp/escalation-comment.md)"',
+              'cat /tmp/escalation-comment.md')
+        found = grl.problems(str(root))
+        assert _named(found, "agent-task.yml#Report result to Linear",
+                      "agent-escalation"), found
+
     def test_an_agent_escalation_anywhere_else_fails_by_word(self, tmp_path):
         root = _copy_repo(tmp_path)
         _workflow(root, "zz-esc.yml", (
