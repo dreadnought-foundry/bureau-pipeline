@@ -56,6 +56,9 @@
 #               ladder is never selected, however available it becomes.
 #               Availability is not permission: that is what put the whole
 #               fleet on Fable on 2026-08-09 with nobody deciding.
+#               EXCEPT a SCRIPTED agent (DRE-5369): its workflow runs a
+#               script and no model, so it carries `kind: scripted` and
+#               `model: null` by hand and no generated region at all.
 #   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
 #   maxTurns  — hard turn budget passed via claude_args
 #   maxBudget — advisory dollars per run (console display; not enforced)
@@ -479,3 +482,22 @@ agents:
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/red-main-repair.yml
+
+  # The first SCRIPTED agent (DRE-5369): its workflow runs scripts/hygiene.py
+  # and never a model, so it has no generated model region — `model: null` is
+  # written out, because an entry with no `model` key is drift and an entry
+  # with a null one is a claim tests/test_agents_registry.py checks against
+  # the workflow (no agent step, credentials = the secrets the file names).
+  - name: hygiene
+    role: Hygiene Agent
+    category: operations
+    kind: scripted
+    model: null
+    trigger: "schedule — hourly at :37, over every repo in config/repo-map.json"
+    maxTurns: null
+    maxBudget: 0
+    tools: []
+    credentials: [BUREAU_APP_ID, BUREAU_APP_PRIVATE_KEY, LINEAR_API_KEY]
+    repoScope: [dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/hygiene.yml
