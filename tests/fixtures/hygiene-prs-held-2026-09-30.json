@@ -1,0 +1,325 @@
+{
+  "lanes": {
+    "Green Light": [],
+    "Todo": [],
+    "Triage": [],
+    "In Progress": [],
+    "In Review": []
+  },
+  "prs": {
+    "dreadnought-foundry/bureau-pipeline": [
+      {
+        "number": 601,
+        "title": "feat(DRE-4101): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4101-gate-wait",
+        "headRefOid": "4f0c2a91d7e3b5a8c6f1e2d3b4a5968778695a4b",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37010000050/job/37010000057"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37010000050/job/37010000057"
+          }
+        ]
+      },
+      {
+        "number": 602,
+        "title": "feat(DRE-4102): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4102-behind-limit",
+        "headRefOid": "c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2",
+        "baseRefName": "main",
+        "mergeStateStatus": "BEHIND",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37030000200/job/37030000207"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37030000200/job/37030000207"
+          }
+        ]
+      },
+      {
+        "number": 603,
+        "title": "feat(DRE-4103): synthetic",
+        "body": "synthetic",
+        "headRefName": "dependabot/pip/requests-2.33.0",
+        "headRefOid": "4f0c2a91d7e3b5a8c6f1e2d3b4a5968778695a4b",
+        "baseRefName": "main",
+        "mergeStateStatus": "BEHIND",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37030000300/job/37030000307"
+          }
+        ]
+      }
+    ],
+    "dreadnought-foundry/agent-bureau": [
+      {
+        "number": 2701,
+        "title": "feat(DRE-4101): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4201-gate-wait",
+        "headRefOid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a291807",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37020000050/job/37020000057"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37020000050/job/37020000057"
+          }
+        ]
+      },
+      {
+        "number": 2702,
+        "title": "feat(DRE-4102): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4202-hold-check-green",
+        "headRefOid": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [
+          {
+            "author": {
+              "login": "agent-bureau-qa-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES @0123456789abcdef0123456789abcdef01234567\n\nsynthetic findings",
+            "createdAt": "2026-09-30T16:00:00Z"
+          },
+          {
+            "author": {
+              "login": "agent-bureau-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🛑 unfixable-check-hold: this pull request has 1 required check(s) the fix loop structurally cannot address, so it is escalating instead of attempting.\n\n**TDD commit discipline** — the commit order on the branch.\n\nAdding a commit cannot clear this check. Why: it reads the order of commits that already exist.\n\nWhat clears it: a person rewrites the branch test-first.\n",
+            "createdAt": "2026-09-30T16:05:00Z"
+          }
+        ],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37040000050/job/37040000057"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37040000050/job/37040000057"
+          }
+        ]
+      },
+      {
+        "number": 2703,
+        "title": "feat(DRE-4103): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4203-hold-answered",
+        "headRefOid": "f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [
+          {
+            "author": {
+              "login": "agent-bureau-qa-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES @f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5\n\nsynthetic findings",
+            "createdAt": "2026-09-30T15:00:00Z"
+          },
+          {
+            "author": {
+              "login": "agent-bureau-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🛑 Fix attempt 2 blocked: the reviewer asks for the retry budget to be a setting, and the card says it is fixed.\n\n**How to answer this** — comment on this PR from your own account with a first line that STARTS with the words Operator decision, then your answer. Copy this line and replace the placeholder:\n\n    **Operator decision** — <your answer here>\n\nBold, plain, or a '## Operator decision' heading all work, in any case, and the rest of your answer can continue on that same line or below it. The comment has to be newer than this one and written by a person, not a bot. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected.",
+            "createdAt": "2026-09-30T15:12:00Z"
+          },
+          {
+            "author": {
+              "login": "operator-one"
+            },
+            "authorAssociation": "NONE",
+            "body": "**Operator decision** — keep it fixed; the card wins.",
+            "createdAt": "2026-09-30T17:30:00Z"
+          }
+        ],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37040000060/job/37040000067"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37040000060/job/37040000067"
+          }
+        ]
+      }
+    ],
+    "dreadnought-foundry/portico": [
+      {
+        "number": 640,
+        "title": "feat(DRE-4140): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4140-behind-green",
+        "headRefOid": "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
+        "baseRefName": "main",
+        "mergeStateStatus": "BEHIND",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37060000050/job/37060000057"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37060000050/job/37060000057"
+          }
+        ]
+      },
+      {
+        "number": 641,
+        "title": "feat(DRE-4141): synthetic",
+        "body": "synthetic",
+        "headRefName": "agent/DRE-4141-hold-person",
+        "headRefOid": "a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "isDraft": false,
+        "updatedAt": "2026-09-30T19:45:00Z",
+        "comments": [
+          {
+            "author": {
+              "login": "agent-bureau-qa-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES @a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6\n\nsynthetic findings",
+            "createdAt": "2026-09-30T14:00:00Z"
+          },
+          {
+            "author": {
+              "login": "agent-bureau-bot"
+            },
+            "authorAssociation": "NONE",
+            "body": "🛑 Fix attempt 1 blocked: criterion 3 asks to watch the new sign-in page on the live portal, which cannot be met before merge.\n\n**How to answer this** — comment on this PR from your own account with a first line that STARTS with the words Operator decision, then your answer. Copy this line and replace the placeholder:\n\n    **Operator decision** — <your answer here>\n\nBold, plain, or a '## Operator decision' heading all work, in any case, and the rest of your answer can continue on that same line or below it. The comment has to be newer than this one and written by a person, not a bot. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected.",
+            "createdAt": "2026-09-30T14:09:00Z"
+          }
+        ],
+        "statusCheckRollup": [
+          {
+            "__typename": "CheckRun",
+            "name": "scripts unit tests",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37060000060/job/37060000067"
+          },
+          {
+            "__typename": "CheckRun",
+            "name": "TDD commit discipline",
+            "workflowName": "Pipeline Tests",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "https://github.com/x/y/actions/runs/37060000060/job/37060000067"
+          }
+        ]
+      }
+    ]
+  },
+  "gh": {
+    "gh api --paginate --slurp repos/dreadnought-foundry/agent-bureau/issues/2702/comments?per_page=100": "[[{\"id\": 5101, \"user\": {\"login\": \"agent-bureau-qa-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\udd0e QA Critic \\u2014 VERDICT: REQUEST_CHANGES @0123456789abcdef0123456789abcdef01234567\\n\\nsynthetic findings\", \"created_at\": \"2026-09-30T16:00:00Z\"}, {\"id\": 5102, \"user\": {\"login\": \"agent-bureau-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\uded1 unfixable-check-hold: this pull request has 1 required check(s) the fix loop structurally cannot address, so it is escalating instead of attempting.\\n\\n**TDD commit discipline** \\u2014 the commit order on the branch.\\n\\nAdding a commit cannot clear this check. Why: it reads the order of commits that already exist.\\n\\nWhat clears it: a person rewrites the branch test-first.\\n\", \"created_at\": \"2026-09-30T16:05:00Z\"}]]",
+    "gh api --paginate --slurp repos/dreadnought-foundry/agent-bureau/issues/2703/comments?per_page=100": "[[{\"id\": 5201, \"user\": {\"login\": \"agent-bureau-qa-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\udd0e QA Critic \\u2014 VERDICT: REQUEST_CHANGES @f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5\\n\\nsynthetic findings\", \"created_at\": \"2026-09-30T15:00:00Z\"}, {\"id\": 5202, \"user\": {\"login\": \"agent-bureau-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\uded1 Fix attempt 2 blocked: the reviewer asks for the retry budget to be a setting, and the card says it is fixed.\\n\\n**How to answer this** \\u2014 comment on this PR from your own account with a first line that STARTS with the words Operator decision, then your answer. Copy this line and replace the placeholder:\\n\\n    **Operator decision** \\u2014 <your answer here>\\n\\nBold, plain, or a '## Operator decision' heading all work, in any case, and the rest of your answer can continue on that same line or below it. The comment has to be newer than this one and written by a person, not a bot. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected.\", \"created_at\": \"2026-09-30T15:12:00Z\"}, {\"id\": 5203, \"user\": {\"login\": \"operator-one\", \"type\": \"User\"}, \"body\": \"**Operator decision** \\u2014 keep it fixed; the card wins.\", \"created_at\": \"2026-09-30T17:30:00Z\"}]]",
+    "gh api --paginate --slurp repos/dreadnought-foundry/portico/issues/641/comments?per_page=100": "[[{\"id\": 5301, \"user\": {\"login\": \"agent-bureau-qa-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\udd0e QA Critic \\u2014 VERDICT: REQUEST_CHANGES @a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6\\n\\nsynthetic findings\", \"created_at\": \"2026-09-30T14:00:00Z\"}, {\"id\": 5302, \"user\": {\"login\": \"agent-bureau-bot[bot]\", \"type\": \"Bot\"}, \"body\": \"\\ud83d\\uded1 Fix attempt 1 blocked: criterion 3 asks to watch the new sign-in page on the live portal, which cannot be met before merge.\\n\\n**How to answer this** \\u2014 comment on this PR from your own account with a first line that STARTS with the words Operator decision, then your answer. Copy this line and replace the placeholder:\\n\\n    **Operator decision** \\u2014 <your answer here>\\n\\nBold, plain, or a '## Operator decision' heading all work, in any case, and the rest of your answer can continue on that same line or below it. The comment has to be newer than this one and written by a person, not a bot. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected.\", \"created_at\": \"2026-09-30T14:09:00Z\"}]]",
+    "gh api repos/dreadnought-foundry/bureau-pipeline/actions/runs/37030000200": "{\"id\": 37030000200, \"name\": \"Pipeline Tests\", \"path\": \".github/workflows/tests.yml\", \"head_sha\": \"c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2\", \"conclusion\": \"failure\"}",
+    "gh api repos/dreadnought-foundry/bureau-pipeline/compare/c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2...main": "{\"status\": \"ahead\", \"ahead_by\": 4, \"behind_by\": 0, \"merge_base_commit\": {\"sha\": \"0123456789abcdef0123456789abcdef01234567\"}, \"files\": [{\"filename\": \".github/workflows/tests.yml\", \"status\": \"modified\", \"patch\": \"@@ -40 +40 @@\\n-    timeout-minutes: 10\\n+    timeout-minutes: 20\"}, {\"filename\": \"scripts/reconcile.py\", \"status\": \"modified\"}]}",
+    "gh pr checks 602 --repo dreadnought-foundry/bureau-pipeline --required --json name,bucket,link,workflow": "[{\"name\": \"scripts unit tests\", \"bucket\": \"fail\", \"workflow\": \"Pipeline Tests\", \"link\": \"https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37030000200/job/111030000201\"}, {\"name\": \"TDD commit discipline\", \"bucket\": \"pass\", \"workflow\": \"Pipeline Tests\", \"link\": \"https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37030000200/job/111030000202\"}]",
+    "gh run list --repo dreadnought-foundry/agent-bureau --workflow agent-fix.yml --json databaseId,displayTitle,createdAt --limit 100": "[{\"databaseId\": 37040000310, \"displayTitle\": \"Agent Fix #2703\", \"createdAt\": \"2026-09-30T15:10:00Z\"}, {\"databaseId\": 37040000300, \"displayTitle\": \"Agent Fix #2702\", \"createdAt\": \"2026-09-30T16:01:00Z\"}, {\"databaseId\": 37040000200, \"displayTitle\": \"Agent Fix #2702\", \"createdAt\": \"2026-09-30T12:01:00Z\"}]",
+    "gh run list --repo dreadnought-foundry/agent-bureau --workflow merge-gate.yml --branch agent/DRE-4201-gate-wait --json databaseId,status,conclusion,createdAt --limit 20": "[{\"databaseId\": 37020000100, \"status\": \"completed\", \"conclusion\": \"success\", \"createdAt\": \"2026-09-30T18:12:00Z\"}]",
+    "gh run list --repo dreadnought-foundry/bureau-pipeline --workflow self-merge-gate.yml --branch agent/DRE-4101-gate-wait --json databaseId,status,conclusion,createdAt --limit 20": "[{\"databaseId\": 37010000100, \"status\": \"completed\", \"conclusion\": \"success\", \"createdAt\": \"2026-09-30T19:02:00Z\"}, {\"databaseId\": 37010000090, \"status\": \"completed\", \"conclusion\": \"success\", \"createdAt\": \"2026-09-30T18:40:00Z\"}]",
+    "gh run list --repo dreadnought-foundry/portico --workflow agent-fix.yml --json databaseId,displayTitle,createdAt --limit 100": "[{\"databaseId\": 37050000400, \"displayTitle\": \"Agent Fix #641\", \"createdAt\": \"2026-09-30T14:02:00Z\"}]",
+    "gh run list --repo dreadnought-foundry/portico --workflow merge-gate.yml --branch agent/DRE-4140-behind-green --json databaseId,status,conclusion,createdAt --limit 20": "[]",
+    "gh run view 37010000001 --repo dreadnought-foundry/bureau-pipeline --json status,conclusion,updatedAt": "{\"status\": \"completed\", \"conclusion\": \"success\", \"updatedAt\": \"2026-09-30T19:41:37Z\"}",
+    "gh run view 37010000100 --repo dreadnought-foundry/bureau-pipeline --log": "gate\tSet up job\t2026-09-30T19:02:11.4810000Z Current runner version: '2.329.0'\ngate\tDecide\t2026-09-30T19:02:11.4810000Z note=checks green on the head\ngate\tDecide\t2026-09-30T19:02:11.4810000Z decision=wait\ngate\tDecide\t2026-09-30T19:02:11.4810000Z reason=Agent Fix run 37010000001 is queued or running FOR #601 — merging now would strand whatever it pushes on the merged branch (DRE-4486); waiting for the fix to land\ngate\tComplete job\t2026-09-30T19:02:11.4810000Z Cleaning up orphan processes\n",
+    "gh run view 37020000001 --repo dreadnought-foundry/agent-bureau --json status,conclusion,updatedAt": "{\"status\": \"completed\", \"conclusion\": \"failure\", \"updatedAt\": \"2026-09-30T18:55:02Z\"}",
+    "gh run view 37020000100 --repo dreadnought-foundry/agent-bureau --log": "gate\tSet up job\t2026-09-30T19:02:11.4810000Z Current runner version: '2.329.0'\ngate\tDecide\t2026-09-30T19:02:11.4810000Z note=checks green on the head\ngate\tDecide\t2026-09-30T19:02:11.4810000Z decision=wait\ngate\tDecide\t2026-09-30T19:02:11.4810000Z reason=Agent Fix run 37020000001 is queued or running FOR #2701 — merging now would strand whatever it pushes on the merged branch (DRE-4486); waiting for the fix to land\ngate\tComplete job\t2026-09-30T19:02:11.4810000Z Cleaning up orphan processes\n"
+  }
+}
