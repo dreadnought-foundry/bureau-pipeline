@@ -757,26 +757,32 @@ def _comment_bodies(nodes) -> list:
     return [(n or {}).get("body") or "" for n in nodes or []]
 
 
-def _receipts_on(board: Board, action: Action) -> list:
-    """Every comment body the action's target carries: the card's comment
-    window, or the pull request's comments."""
-    bodies: list = []
-    for cards in board.lanes.values():
-        for card in cards:
-            if card.get("identifier") == action.target:
-                bodies += _comment_bodies((card.get("comments") or {}).get("nodes"))
-    repo, _, number = action.target.rpartition("#")
-    for pull in board.prs.get(repo, []) if repo else []:
-        if str(pull.get("number")) == number:
-            bodies += _comment_bodies(pull.get("comments"))
-    return bodies
+def _receipts_on(board: Board, target: str) -> list:
+    """Every comment body the target carries: the pull request's comments, or
+    the card's comment window off the board read.
+
+    A card the board does not carry — one a lane read for itself through
+    `ctx.linear` — or one whose window Linear cut short (`hasNextPage`) is
+    read whole instead: a receipt older than the newest fifty is still a
+    receipt, and a key that could not see it would send the act again."""
+    repo, _, number = target.rpartition("#")
+    if repo:
+        return [body for pull in board.prs.get(repo, [])
+                if str(pull.get("number")) == number
+                for body in _comment_bodies(pull.get("comments"))]
+    cards = [c for cards in board.lanes.values() for c in cards
+             if c.get("identifier") == target]
+    if cards and not any(linear_ops.window_is_partial(c.get("comments")) for c in cards):
+        return [body for c in cards
+                for body in _comment_bodies((c.get("comments") or {}).get("nodes"))]
+    return [r.get("body") or "" for r in linear_ops.comment_records(target, whole_thread=True)]
 
 
 def _suppressed(board: Board, action: Action) -> bool:
     """The idempotency key: a receipt on the target with this action's tag
     AND this action's cause line."""
     tag = TAGS[action.act]
-    for body in _receipts_on(board, action):
+    for body in _receipts_on(board, action.target):
         head = read_receipt(body)
         if head and head["tag"] == tag and head["cause"] == action.cause:
             return True
