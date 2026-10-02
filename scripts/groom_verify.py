@@ -173,6 +173,25 @@ def _covers(identifier: str, text: str) -> re.Match | None:
         rf"[^.\n]{{0,60}}?{_ref(identifier)}", text or "", re.I)
 
 
+# A full stop ends a sentence only where whitespace or the text's end follows
+# it: the `.` inside `groom_verify.py` or `v1.2` does not, or a path would be
+# cut short before `_plain` could see it.
+_STOP = re.compile(r"\.(?=\s|\Z)|\n")
+
+
+def _sentence(text: str, match: re.Match) -> str:
+    """The whole sentence `_covers` matched in (DRE-5305): back to the
+    nearest full stop or newline before the match, on to the nearest after
+    it, the full stop kept. The line's own markdown lead is not part of it."""
+    start = 0
+    for stop in _STOP.finditer(text, 0, match.start()):
+        start = stop.end()
+    after = _STOP.search(text, match.end())
+    end = len(text) if after is None else (
+        after.end() if after.group() == "." else after.start())
+    return _LINE_LEAD.sub("", text[start:end]).strip()
+
+
 def _pr_is_for(identifier: str, item: dict) -> bool:
     """Is this merged PR FOR the card — not merely about it?"""
     if re.search(_ref(identifier), item.get("title") or ""):
@@ -403,8 +422,8 @@ def card_evidence(identifier: str, detail: dict, real) -> list[dict]:
         if not other or other in seen:
             continue
         seen.add(other)
-        said = _covers(identifier,
-                       f"{node.get('title') or ''}\n{node.get('description') or ''}")
+        text = f"{node.get('title') or ''}\n{node.get('description') or ''}"
+        said = _covers(identifier, text)
         if not said:
             continue
         # The lane the read already carries — no second request for it.
@@ -412,9 +431,15 @@ def card_evidence(identifier: str, detail: dict, real) -> list[dict]:
         ok, why = lane_says(other, lane) if lane else real(other)
         if not ok:
             continue
-        out.append({"source": "other_cards", "card": other,
-                    "text": f"{why}, and it says it supersedes or covers "
-                            f"this card"})
+        # The reason names the card and quotes what it says, so the CEO can
+        # tell "Supersedes DRE-N" from a looser match without opening it.
+        status = why.removeprefix(f"{other} is ")
+        quote = _quote(_sentence(text, said))
+        out.append({"source": "other_cards", "card": other, "quote": quote,
+                    "text": _plain(f'{other} ({status}) says: "{quote}"',
+                                   f"{other} ({status}) says it supersedes "
+                                   f"or covers this card; its words are in "
+                                   f"the proposal record")})
     return out
 
 
