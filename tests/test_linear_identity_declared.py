@@ -63,6 +63,11 @@ DECLARATION = {
     "reconcile.yml": "${{ inputs.%s }}" % IDENTITY_INPUT,
     "linear-sync.yml": "fleet",
     "plan.yml": "fleet",
+    # Stage 2 fix #23 (BP-6). The medic's two incident runs on 2026-10-02
+    # (37051307731, 37057166857) printed `budget: undeclared` on every
+    # line while the fleet's hour was the one running out. Like linear-sync
+    # and plan, it has no sandbox caller, so the literal.
+    "medic.yml": "fleet",
 }
 
 SPENDERS = tuple(DECLARATION)
@@ -108,10 +113,12 @@ class DeclaredInTheWorkflowsTest(unittest.TestCase):
                     expected,
                     f"{name}:{job_id} spends a Linear budget without saying whose",
                 )
-        # Five jobs today: reconcile's sweep, linear-sync's card-done and
-        # conflict-sweep, plan's plan and publish. Asserted as a floor so a
-        # renamed job cannot make this test pass by finding nothing.
-        self.assertGreaterEqual(seen, 5)
+        # Eleven jobs today: reconcile's sweep, linear-sync's card-done and
+        # conflict-sweep, plan's plan and publish, and the medic's six
+        # (classify, retry_declined, stall_record, backoff,
+        # environment_hold, diagnose). Asserted as a floor so a renamed job
+        # cannot make this test pass by finding nothing.
+        self.assertGreaterEqual(seen, 11)
 
     def test_the_reconcile_sweep_takes_its_identity_from_the_caller(self):
         """DRE-3630: the shared sweep's word is an input, so the sandbox's stub
