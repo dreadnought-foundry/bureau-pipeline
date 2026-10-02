@@ -2138,10 +2138,10 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "🛑 Parked in Triage with needs-human for an operator. The second critic passed this plan",
+      "anchor": "\"$(cat \"$NOTE\")\"",
       "step": "Review — the second critic passed a plan the first critic held",
       "kind": "undeclared-act",
-      "means": "The second critic passed a plan whose first critic's last reading sent it back, so it has not been through both critics: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280).",
+      "means": "The second critic passed a plan the first critic has not passed (its last record is a send-back, or there is none), so it has not been through both critics: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280). Since DRE-5639 the note is `plan_critic.py held-park`, which names the first critic's actual record.",
       "why": "Act-shaped, and the registry has no row for it — it is a review-route park, the same debt as the activate route's `🛑 Parked for you with needs-human`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
     },
     {

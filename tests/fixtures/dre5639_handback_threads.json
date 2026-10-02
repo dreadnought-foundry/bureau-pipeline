@@ -1,0 +1,1207 @@
+{
+ "_about": "DRE-5639: the live comment threads of DRE-3698 (to the second critic's decision at 2026-10-02T18:51:57Z) and DRE-3624 (to the re-approval's activate run at 2026-10-02T18:44:07Z), oldest first, read from Linear on 2026-10-02. Every one-line plan-critic / plan-cycle / plan-critic-died record is verbatim; every other comment is cut to its first line, since only its position and author matter. by=pipeline is the fleet user Agent-Bureau, by=operator anyone else.",
+ "DRE-3698": [
+  {
+   "createdAt": "2026-09-12T22:13:27.673Z",
+   "by": "pipeline",
+   "body": "🌊 wave-commitment: **committed-in-sequence** to DRE-3681 — 6 of 8 after `stop-hurting`, `reconnect-o …"
+  },
+  {
+   "createdAt": "2026-09-12T22:14:44.006Z",
+   "by": "pipeline",
+   "body": "🚨 wave-not-green-lit: DRE-3698 is **committed-in-sequence** to DRE-3681 and has had no green light o …"
+  },
+  {
+   "createdAt": "2026-10-01T21:10:08.275Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36926767836 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-01T21:10:15.094Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 36926767836 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-01T21:49:17.222Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3698 · run 36931090922 · repo dreadnought-foundry/agent-burea …"
+  },
+  {
+   "createdAt": "2026-10-01T22:01:09.802Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3698 · run 36929998860 · repo dreadnought-foundry/agent-burea …"
+  },
+  {
+   "createdAt": "2026-10-01T22:01:45.468Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36932447649 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-01T22:02:06.490Z",
+   "by": "pipeline",
+   "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the C …"
+  },
+  {
+   "createdAt": "2026-10-01T22:02:07.212Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read t …"
+  },
+  {
+   "createdAt": "2026-10-01T22:02:10.538Z",
+   "by": "pipeline",
+   "body": "📋 A fresh planning attempt on DRE-3698 starts here. Both critics count their rounds from this point, …"
+  },
+  {
+   "createdAt": "2026-10-01T22:02:11.139Z",
+   "by": "pipeline",
+   "body": "plan-cycle: start epic=DRE-3698"
+  },
+  {
+   "createdAt": "2026-10-01T22:02:11.604Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen fo …"
+  },
+  {
+   "createdAt": "2026-10-01T22:20:20.627Z",
+   "by": "pipeline",
+   "body": "🧾 epic-owes-proof-and-demo: DRE-3698 is back in **Planning** — it owes a proof card. …"
+  },
+  {
+   "createdAt": "2026-10-01T22:20:21.805Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 36932447649 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T00:41:07.568Z",
+   "by": "pipeline",
+   "body": "🙋 planning-escalation: DRE-3698 needs a decision from you before it can be planned — the reasoning i …"
+  },
+  {
+   "createdAt": "2026-10-02T01:39:20.270Z",
+   "by": "operator",
+   "body": "🔁 Operator re-send to Planning, 2026-10-01 18:41 PT. This is mechanical, not a CEO decision: it was  …"
+  },
+  {
+   "createdAt": "2026-10-02T01:39:58.372Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36951983496 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T01:39:59.437Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 36951983496 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T04:21:16.895Z",
+   "by": "operator",
+   "body": "Held out of Planning tonight (2026-10-01 21:25 PT) on the CEO's order: the planner queue serves DRE- …"
+  },
+  {
+   "createdAt": "2026-10-02T04:35:15.280Z",
+   "by": "operator",
+   "body": "Back in Planning (2026-10-01 21:36 PT): DRE-5577 has its planner slot, so the hold is over. This car …"
+  },
+  {
+   "createdAt": "2026-10-02T04:42:34.014Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36965209388 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T04:42:35.189Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 36965209388 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T04:46:45.465Z",
+   "by": "operator",
+   "body": "Held again (2026-10-01 21:47 PT): DRE-5577's planner run failed to reach its model and retried, and  …"
+  },
+  {
+   "createdAt": "2026-10-02T04:51:02.041Z",
+   "by": "operator",
+   "body": "Back in Planning (2026-10-01 21:52 PT): DRE-5577's planning run is underway (slot claimed 21:49 PT,  …"
+  },
+  {
+   "createdAt": "2026-10-02T04:57:08.834Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36966347288 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T04:57:10.197Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 36966347288 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T05:16:40.281Z",
+   "by": "operator",
+   "body": "Held again (22:16 PT, CEO's order): DRE-5577 (his #3) needs one more planner run after a proof-card  …"
+  },
+  {
+   "createdAt": "2026-10-02T05:42:20.015Z",
+   "by": "operator",
+   "body": "Back in Planning (22:42 PT): DRE-5577's planning run has started (slot claimed and plan cycle begun  …"
+  },
+  {
+   "createdAt": "2026-10-02T05:44:13.912Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36970141118 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T05:44:15.729Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 36970141118 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T06:34:12.547Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3698 · run 36973798554 · repo dreadnought-foundry/agent-burea …"
+  },
+  {
+   "createdAt": "2026-10-02T06:34:40.567Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 36974183970 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T06:34:50.272Z",
+   "by": "pipeline",
+   "body": "📋 A fresh planning attempt on DRE-3698 starts here. Both critics count their rounds from this point, …"
+  },
+  {
+   "createdAt": "2026-10-02T06:34:51.424Z",
+   "by": "pipeline",
+   "body": "plan-cycle: start epic=DRE-3698"
+  },
+  {
+   "createdAt": "2026-10-02T06:34:52.017Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen fo …"
+  },
+  {
+   "createdAt": "2026-10-02T06:42:55.429Z",
+   "by": "pipeline",
+   "body": "Plan for DRE-3698 — the switch goes both ways and every stand-down says what it did (re-plan, 2026-1 …"
+  },
+  {
+   "createdAt": "2026-10-02T06:43:11.442Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 8 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T06:45:03.819Z",
+   "by": "pipeline",
+   "body": "🛑 **First critic — before the CEO reads it** — round 1 of 2: sent back — round 1 of 2 …"
+  },
+  {
+   "createdAt": "2026-10-02T06:45:04.255Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=pre round=1 result=SEND_BACK collisions=0 — the first KPI asks for 10 of 10 stand-down paths writing a line, but DRE-5496 and DRE-5500 deliberately leave some silent, so the CEO would be approving a target the cards cannot reach."
+  },
+  {
+   "createdAt": "2026-10-02T06:51:33.184Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 8 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T06:52:39.205Z",
+   "by": "pipeline",
+   "body": "✅ **First critic — before the CEO reads it** — round 2 of 2: the critic passed this plan …"
+  },
+  {
+   "createdAt": "2026-10-02T06:52:39.797Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=pre round=2 result=PASS collisions=0"
+  },
+  {
+   "createdAt": "2026-10-02T06:52:47.249Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 36974183970 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T06:53:14.325Z",
+   "by": "pipeline",
+   "body": "📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from th …"
+  },
+  {
+   "createdAt": "2026-10-02T14:57:26.051Z",
+   "by": "operator",
+   "body": "Approved (07:57 PT) under the CEO's standing instruction (2026-09-30: a plan that passed its reviews …"
+  },
+  {
+   "createdAt": "2026-10-02T14:58:23.498Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37023534252 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T14:58:24.878Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 37023534252 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T15:45:37.370Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3698 · run 37026945090 · repo dreadnought-foundry/agent-burea …"
+  },
+  {
+   "createdAt": "2026-10-02T15:46:15.118Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37029236477 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T15:53:03.776Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=42 ceiling=72 children=8 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T15:53:05.767Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 1: sent back — round 1 of 2: the planner is re …"
+  },
+  {
+   "createdAt": "2026-10-02T15:53:06.229Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=1 result=SEND_BACK collisions=4 — DRE-5499's gate refuses on an unset BUREAU_FLEET_OWNER in the flow's own env, but ten existing test files build the flow with env={} and the card says they pass unchanged, so an agent either breaks them or edits files other cards own."
+  },
+  {
+   "createdAt": "2026-10-02T16:09:37.746Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 8 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T16:09:42.138Z",
+   "by": "pipeline",
+   "body": "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards y …"
+  },
+  {
+   "createdAt": "2026-10-02T16:09:42.650Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 37029236477 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T16:10:28.912Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37032027275 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T16:10:31.079Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 37032027275 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T16:14:02.667Z",
+   "by": "operator",
+   "body": "Held briefly (09:13 PT) on the CEO's order of epics today: DRE-5577 (his #3) is waiting for its re-r …"
+  },
+  {
+   "createdAt": "2026-10-02T16:18:44.651Z",
+   "by": "operator",
+   "body": "Back in In Progress (09:18 PT): DRE-5577's re-review has its planner slot (claimed 09:16 PT), so the …"
+  },
+  {
+   "createdAt": "2026-10-02T16:24:02.032Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37033077007 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T16:24:03.326Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3698 · run 37033077007 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T16:43:16.840Z",
+   "by": "operator",
+   "body": "Held again (09:43 PT): DRE-5577 (the CEO's #3) needs one more planner run for its final review, and  …"
+  },
+  {
+   "createdAt": "2026-10-02T16:51:43.248Z",
+   "by": "operator",
+   "body": "Update (09:51 PT): DRE-5577 parked at its review bound at 09:50 PT and is being fixed for a fresh re …"
+  },
+  {
+   "createdAt": "2026-10-02T17:23:01.275Z",
+   "by": "operator",
+   "body": "Back in In Progress (10:23 PT): DRE-5577's review passed at 10:22 PT, so the hold is over. Still app …"
+  },
+  {
+   "createdAt": "2026-10-02T17:23:20.490Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3698 · run 37039785365 · repo dreadnought-foundry/agent-burea …"
+  },
+  {
+   "createdAt": "2026-10-02T17:23:44.752Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37040344327 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T17:24:06.424Z",
+   "by": "pipeline",
+   "body": "🔌 planning-classify-transport: DRE-3698 was not classified this run — the step that reads new cards  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:24:07.009Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 37040344327 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:24:33.792Z",
+   "by": "pipeline",
+   "body": "🚨 plan-critic-rereview-missing: DRE-3698's plan was sent back by the second critic at 2026-10-02 15: …"
+  },
+  {
+   "createdAt": "2026-10-02T17:24:42.966Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37040369226 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T17:25:00.472Z",
+   "by": "pipeline",
+   "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the C …"
+  },
+  {
+   "createdAt": "2026-10-02T17:25:01.103Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read t …"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:09.167Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=33 ceiling=72 children=8 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:11.307Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 2: sent back — round 2 on this planning attemp …"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:11.762Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=2 result=SEND_BACK collisions=1 open=0 — DRE-5499 gates `claude_token_budget.check` on the process environment and says `test_auto_switch_silent_returns.py` is \"not touched\", but two tests there drive `check` with no env and assert the label advanced, so an agent either breaks them or edits a file the card forbids."
+  },
+  {
+   "createdAt": "2026-10-02T17:37:58.044Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 8 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:38:00.776Z",
+   "by": "pipeline",
+   "body": "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards y …"
+  },
+  {
+   "createdAt": "2026-10-02T17:38:01.307Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 37040369226 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:38:41.083Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37042034453 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T17:44:11.099Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=43 ceiling=72 children=8 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T17:44:12.698Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 3: three failed rounds at this critic — the bo …"
+  },
+  {
+   "createdAt": "2026-10-02T17:44:29.179Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=3 result=SEND_BACK collisions=0 open=0 — DRE-5497 reads its swap cutoff off the open cap row, but the swap branch resolves that row on the same tick, so the next tick reads \"not swapped\", re-raises the red cap row and resolves the loaner reminder it just raised."
+  },
+  {
+   "createdAt": "2026-10-02T17:45:19.802Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=3 result=SEND_BACK collisions=0 open=0 — DRE-5497 reads its swap cutoff off the open cap row, but the swap branch resolves that row on the same tick, so the next tick reads \"not swapped\", re-raises the red cap row and resolves the loaner reminder it just raised."
+  },
+  {
+   "createdAt": "2026-10-02T17:51:54.880Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 8 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:51:58.516Z",
+   "by": "pipeline",
+   "body": "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it.  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:51:59.081Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 37042034453 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T18:43:40.945Z",
+   "by": "operator",
+   "body": "**Park settled and re-approved (11:43 PT)** under the CEO's standing instruction (2026-09-30 ~08:40  …"
+  },
+  {
+   "createdAt": "2026-10-02T18:44:18.827Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37049407817 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T18:44:28.604Z",
+   "by": "pipeline",
+   "body": "📋 A fresh planning attempt on DRE-3698 starts here. Both critics count their rounds from this point, …"
+  },
+  {
+   "createdAt": "2026-10-02T18:44:29.060Z",
+   "by": "pipeline",
+   "body": "plan-cycle: start epic=DRE-3698"
+  },
+  {
+   "createdAt": "2026-10-02T18:44:42.580Z",
+   "by": "pipeline",
+   "body": "↩️ This plan was approved before both critics read it, so it is getting the review it missed: the se …"
+  },
+  {
+   "createdAt": "2026-10-02T18:44:43.449Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3698 · run 37049407817 · repo dreadnought-foundry/agent-bureau  …"
+  },
+  {
+   "createdAt": "2026-10-02T18:45:22.861Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3698 · run 37049508054 · repo dreadnought-foundry/agent-bureau · …"
+  },
+  {
+   "createdAt": "2026-10-02T18:51:55.916Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=37 ceiling=72 children=8 model=claude-sonnet-5-5"
+  }
+ ],
+ "DRE-3624": [
+  {
+   "createdAt": "2026-09-12T02:01:01.162Z",
+   "by": "pipeline",
+   "body": "🌊 wave-commitment: **committed-in-sequence** to DRE-3530 — 4 of 4 after `fence`, `sweep`. …"
+  },
+  {
+   "createdAt": "2026-10-01T16:10:43.986Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36889974175 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:10:44.998Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36889974175 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:27:56.352Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36891637344 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T16:28:02.462Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36892103095 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T16:28:17.190Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36892193259 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:28:39.330Z",
+   "by": "pipeline",
+   "body": "🔌 planning-classify-transport: DRE-3624 was not classified this run — the step that reads new cards  …"
+  },
+  {
+   "createdAt": "2026-10-01T16:28:40.464Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36892193259 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T16:29:12.348Z",
+   "by": "pipeline",
+   "body": "🤖 Duplicate dispatch skipped: a planner run for DRE-3624 was already in flight when this dispatch ar …"
+  },
+  {
+   "createdAt": "2026-10-01T16:29:35.591Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36892193259 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:29:36.900Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36892193259 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:32:16.136Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36892197957 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T16:33:07.344Z",
+   "by": "pipeline",
+   "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the C …"
+  },
+  {
+   "createdAt": "2026-10-01T16:33:07.908Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read t …"
+  },
+  {
+   "createdAt": "2026-10-01T16:33:30.934Z",
+   "by": "pipeline",
+   "body": "🪦 limit-death: kind=claude stage=plan reset=unknown run=36892741551 …"
+  },
+  {
+   "createdAt": "2026-10-01T16:41:14.791Z",
+   "by": "pipeline",
+   "body": "⚠️ limit-recovery: cannot bring this card back on its own — the marker names no reset time and no ac …"
+  },
+  {
+   "createdAt": "2026-10-01T16:54:10.275Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36894945292 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T16:54:33.448Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36895443916 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T16:55:08.226Z",
+   "by": "pipeline",
+   "body": "🪦 limit-death: kind=linear stage=plan reset=unknown run=36895443916 …"
+  },
+  {
+   "createdAt": "2026-10-01T17:05:43.841Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36896792152 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T17:05:45.270Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36896792152 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T17:25:18.603Z",
+   "by": "pipeline",
+   "body": "🔁 limit-recovery: re-entered plan — Linear's quota answered this sweep's own board read, so it has r …"
+  },
+  {
+   "createdAt": "2026-10-01T17:25:27.007Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36895443916 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T17:25:49.820Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36899264137 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T17:25:53.312Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36899264137 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T17:43:11.378Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36900705521 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T17:43:37.300Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36901450412 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T17:43:53.203Z",
+   "by": "pipeline",
+   "body": "📋 A fresh planning attempt on DRE-3624 starts here. Both critics count their rounds from this point, …"
+  },
+  {
+   "createdAt": "2026-10-01T17:43:53.679Z",
+   "by": "pipeline",
+   "body": "plan-cycle: start epic=DRE-3624"
+  },
+  {
+   "createdAt": "2026-10-01T17:43:54.120Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen fo …"
+  },
+  {
+   "createdAt": "2026-10-01T18:06:19.105Z",
+   "by": "pipeline",
+   "body": "Plan for DRE-3624, the last epic of wave DRE-3530, written 2026-10-01 against what is live today. …"
+  },
+  {
+   "createdAt": "2026-10-01T18:06:39.898Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 5 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-01T18:07:43.412Z",
+   "by": "pipeline",
+   "body": "✅ **First critic — before the CEO reads it** — round 1 of 2: the critic passed this plan …"
+  },
+  {
+   "createdAt": "2026-10-01T18:07:44.060Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=pre round=1 result=PASS collisions=0"
+  },
+  {
+   "createdAt": "2026-10-01T18:08:12.200Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36901450412 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T18:08:32.610Z",
+   "by": "pipeline",
+   "body": "📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from th …"
+  },
+  {
+   "createdAt": "2026-10-01T18:45:44.208Z",
+   "by": "operator",
+   "body": "**Operator pre-review before approval (second-critic questions)**, 2026-10-01 11:52 PT. **READY for  …"
+  },
+  {
+   "createdAt": "2026-10-01T19:33:10.169Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36915079412 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T19:33:12.991Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36915079412 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T19:54:26.564Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36917487485 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T19:54:46.859Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36917720102 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T19:57:22.038Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=23 ceiling=60 children=5 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-01T19:57:39.750Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 1: sent back — round 1 of 2: the planner is re …"
+  },
+  {
+   "createdAt": "2026-10-01T19:57:40.200Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=1 result=SEND_BACK collisions=0 — DRE-3585: `reserve()` probes with `gql`, which on a drained bucket (the 2026-09-09 case) gets a RATELIMITED answer and arms the process-wide stop, so the specified wait-and-re-probe loop cannot run"
+  },
+  {
+   "createdAt": "2026-10-01T19:57:49.850Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 1: sent back — round 1 of 2: the planner is re …"
+  },
+  {
+   "createdAt": "2026-10-01T20:17:20.200Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 5 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-01T20:17:23.359Z",
+   "by": "pipeline",
+   "body": "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: DRE-3 …"
+  },
+  {
+   "createdAt": "2026-10-01T20:17:23.822Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36917720102 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T20:21:35.802Z",
+   "by": "operator",
+   "body": "**Re-approved on the CEO's behalf, 2026-10-01 13:22 PT.** The CEO approved this epic at about 12:30  …"
+  },
+  {
+   "createdAt": "2026-10-01T20:22:01.486Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36921002592 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:22:03.840Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36921002592 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:36:12.223Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36922437230 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T20:36:34.416Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36922782388 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:39:27.695Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=25 ceiling=60 children=5 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-01T20:39:29.542Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 2: sent back — round 2 on this planning attemp …"
+  },
+  {
+   "createdAt": "2026-10-01T20:39:29.958Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=2 result=SEND_BACK collisions=0 open=0 — DRE-3585: the new `linear-budget: reserve <kind> met|waiting|unknown` lines open with `linear-budget:`, so `scripts/check_linear_budget.py` reads every one as an \"unknown/rolled\" budget line, and no card touches that reader"
+  },
+  {
+   "createdAt": "2026-10-01T20:48:46.052Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 5 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-01T20:48:48.795Z",
+   "by": "pipeline",
+   "body": "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards y …"
+  },
+  {
+   "createdAt": "2026-10-01T20:48:51.348Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36922782388 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T20:49:28.104Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36924315292 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:49:28.952Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36924315292 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:50:21.789Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36924334491 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-01T20:50:41.938Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36924501759 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T20:51:06.945Z",
+   "by": "pipeline",
+   "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the C …"
+  },
+  {
+   "createdAt": "2026-10-01T20:51:09.726Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read t …"
+  },
+  {
+   "createdAt": "2026-10-01T20:53:17.207Z",
+   "by": "pipeline",
+   "body": "🪦 limit-death: kind=claude stage=plan reset=unknown run=36924501759 …"
+  },
+  {
+   "createdAt": "2026-10-01T21:04:58.275Z",
+   "by": "pipeline",
+   "body": "⚠️ limit-recovery: cannot bring this card back on its own — the marker names no reset time and no ac …"
+  },
+  {
+   "createdAt": "2026-10-01T21:05:03.263Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36924501759 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-01T21:20:55.748Z",
+   "by": "operator",
+   "body": "**Operator pre-review before the last round (second-critic questions)**, 2026-10-01 14:30 PT. …"
+  },
+  {
+   "createdAt": "2026-10-01T22:05:50.084Z",
+   "by": "pipeline",
+   "body": "🚨 plan-critic-rereview-missing: DRE-3624's plan was sent back by the post-approval critic at 2026-10 …"
+  },
+  {
+   "createdAt": "2026-10-01T22:20:06.542Z",
+   "by": "operator",
+   "body": "▶️ re-run the review"
+  },
+  {
+   "createdAt": "2026-10-01T23:25:37.716Z",
+   "by": "operator",
+   "body": "▶️ re-run the review"
+  },
+  {
+   "createdAt": "2026-10-01T23:26:04.801Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36940751473 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-01T23:26:07.371Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36940751473 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T00:41:57.975Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36947229490 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-02T00:42:17.605Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36947294806 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T00:49:13.786Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=55 ceiling=60 children=5 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T00:49:15.532Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 3: three failed rounds at this critic — the bo …"
+  },
+  {
+   "createdAt": "2026-10-02T00:49:16.058Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=3 result=SEND_BACK collisions=0 open=0 — DRE-3585, DRE-3195, DRE-5457: the reserve step's exit line is `budget_line()`, which prints `window rolled` after any wait (bucket refills, last > first) and `spent 0` after a first-probe pass, so \"spent n = number of checks\" is false and the proof's own \"no unknown/rolled note, first probe reads 1…"
+  },
+  {
+   "createdAt": "2026-10-02T01:06:41.555Z",
+   "by": "pipeline",
+   "body": "🚨 mid-epic-unrecorded: DRE-5528 was added to this epic after it was green-lit, and the epic's plan d …"
+  },
+  {
+   "createdAt": "2026-10-02T01:10:08.565Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 7 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T01:10:12.752Z",
+   "by": "pipeline",
+   "body": "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it.  …"
+  },
+  {
+   "createdAt": "2026-10-02T01:10:14.129Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36947294806 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T01:13:39.496Z",
+   "by": "operator",
+   "body": "✅ Operator re-approval, 2026-10-01 18:15 PT, on the CEO's standing instruction for epics he has appr …"
+  },
+  {
+   "createdAt": "2026-10-02T01:14:05.124Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36949917274 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T01:14:06.041Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36949917274 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T01:41:26.328Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36952080780 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-02T01:41:47.510Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36952136831 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T01:41:57.112Z",
+   "by": "pipeline",
+   "body": "📋 A fresh planning attempt on DRE-3624 starts here. Both critics count their rounds from this point, …"
+  },
+  {
+   "createdAt": "2026-10-02T01:41:57.644Z",
+   "by": "pipeline",
+   "body": "plan-cycle: start epic=DRE-3624"
+  },
+  {
+   "createdAt": "2026-10-02T01:46:06.237Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=44 ceiling=68 children=7 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T01:46:13.227Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 1: sent back — round 1 of 2: the planner is re …"
+  },
+  {
+   "createdAt": "2026-10-02T01:46:16.763Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=1 result=SEND_BACK collisions=0 — DRE-5455 (with DRE-5286): Planning's stall watchdog parks a Claude-dead planner card at 180 minutes, before its assumed five-hour reset, and its park note then erases the limit marker, so the card never re-enters on its own"
+  },
+  {
+   "createdAt": "2026-10-02T01:56:32.957Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 7 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T01:56:35.219Z",
+   "by": "pipeline",
+   "body": "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards y …"
+  },
+  {
+   "createdAt": "2026-10-02T01:56:35.748Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36952136831 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T01:57:11.149Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36953303466 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T01:57:13.417Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36953303466 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T02:08:36.770Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 36953093853 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-02T02:08:57.551Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36954247320 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T02:10:19.242Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=19 ceiling=68 children=7 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T02:10:21.243Z",
+   "by": "pipeline",
+   "body": "🪦 **The second critic's review of DRE-3624 did not finish** — it died after 19 turns of its 68-turn  …"
+  },
+  {
+   "createdAt": "2026-10-02T02:10:21.752Z",
+   "by": "pipeline",
+   "body": "🪦 plan-critic-died: stage=post run=36954247320 attempt=1 step=posta subtype=success turns=19 ceiling …"
+  },
+  {
+   "createdAt": "2026-10-02T02:10:23.203Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36954247320 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T03:50:20.008Z",
+   "by": "operator",
+   "body": "▶️ re-run the review"
+  },
+  {
+   "createdAt": "2026-10-02T03:50:20.978Z",
+   "by": "operator",
+   "body": "🔁 Operator, 2026-10-01 20:51 PT. The last-round review (run 36954247320) died at 19:10 PT after 19 o …"
+  },
+  {
+   "createdAt": "2026-10-02T03:50:44.385Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36961917228 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T03:50:46.750Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 36961917228 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T04:28:57.568Z",
+   "by": "operator",
+   "body": "Held out of In Progress briefly (2026-10-01 21:29 PT) on the CEO's order, so DRE-5490 (Aliases) take …"
+  },
+  {
+   "createdAt": "2026-10-02T04:36:46.615Z",
+   "by": "operator",
+   "body": "Update 2026-10-01 21:40 PT: still held. DRE-5490 has its slot, but DRE-5577 (the CEO's #3) is retryi …"
+  },
+  {
+   "createdAt": "2026-10-02T04:51:36.412Z",
+   "by": "operator",
+   "body": "Update 2026-10-01 21:52 PT: still held, still approved. DRE-5577 is planning, but DRE-5490 (the CEO' …"
+  },
+  {
+   "createdAt": "2026-10-02T05:12:56.010Z",
+   "by": "operator",
+   "body": "Back in In Progress (2026-10-01 22:14 PT): the hold is over. DRE-5490 will need a fresh planner slot …"
+  },
+  {
+   "createdAt": "2026-10-02T05:13:23.799Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 36967942387 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T05:13:56.369Z",
+   "by": "pipeline",
+   "body": "🪦 limit-death: kind=claude stage=plan reset=unknown run=36967942387 …"
+  },
+  {
+   "createdAt": "2026-10-02T05:26:55.393Z",
+   "by": "pipeline",
+   "body": "⚠️ limit-recovery: cannot bring this card back on its own — the marker names no reset time and no ac …"
+  },
+  {
+   "createdAt": "2026-10-02T05:26:59.233Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 36967942387 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T14:57:41.203Z",
+   "by": "operator",
+   "body": "▶️ re-run the review"
+  },
+  {
+   "createdAt": "2026-10-02T14:58:06.212Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 37023561267 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T14:58:07.043Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 37023561267 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T15:37:48.039Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: dispatched · card DRE-3624 · run 37028222853 · repo dreadnought-foundry/bureau-pipe …"
+  },
+  {
+   "createdAt": "2026-10-02T15:38:15.821Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 37028335319 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T15:38:35.446Z",
+   "by": "pipeline",
+   "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the C …"
+  },
+  {
+   "createdAt": "2026-10-02T15:38:36.074Z",
+   "by": "pipeline",
+   "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read t …"
+  },
+  {
+   "createdAt": "2026-10-02T15:45:16.243Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=47 ceiling=102 children=7 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T15:45:18.216Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 2: sent back — round 2 on this planning attemp …"
+  },
+  {
+   "createdAt": "2026-10-02T15:45:18.768Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=2 result=SEND_BACK collisions=0 open=0 — DRE-5455 (with DRE-5528's proof, epic text): the five-hour assumed reset is applied to every Claude death that names no reset, including the monthly spend limit, which does not reopen in five hours, so such a card is re-entered every five hours for weeks"
+  },
+  {
+   "createdAt": "2026-10-02T16:10:32.696Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 7 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T16:10:35.055Z",
+   "by": "pipeline",
+   "body": "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards y …"
+  },
+  {
+   "createdAt": "2026-10-02T16:10:36.046Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 37028335319 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T16:11:16.394Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 37032130298 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T16:11:21.136Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 37032130298 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T16:14:06.995Z",
+   "by": "operator",
+   "body": "Held briefly (09:13 PT) on the CEO's order of epics today: DRE-5577 (his #3) is waiting for its re-r …"
+  },
+  {
+   "createdAt": "2026-10-02T16:18:49.016Z",
+   "by": "operator",
+   "body": "Back in In Progress (09:18 PT): DRE-5577's re-review has its planner slot (claimed 09:16 PT), so the …"
+  },
+  {
+   "createdAt": "2026-10-02T16:19:19.370Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 37033084671 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T16:19:20.907Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: waiting · card DRE-3624 · run 37033084671 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T16:43:21.232Z",
+   "by": "operator",
+   "body": "Held again (09:43 PT): DRE-5577 (the CEO's #3) needs one more planner run for its final review, and  …"
+  },
+  {
+   "createdAt": "2026-10-02T16:51:44.118Z",
+   "by": "operator",
+   "body": "Update (09:51 PT): DRE-5577 parked at its review bound at 09:50 PT and is being fixed for a fresh re …"
+  },
+  {
+   "createdAt": "2026-10-02T17:23:06.897Z",
+   "by": "operator",
+   "body": "Back in In Progress (10:23 PT): DRE-5577's review passed at 10:22 PT, so the hold is over. Still app …"
+  },
+  {
+   "createdAt": "2026-10-02T17:23:34.081Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: claimed · card DRE-3624 · run 37040353211 · repo dreadnought-foundry/bureau-pipelin …"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:46.309Z",
+   "by": "pipeline",
+   "body": "🧮 review-turns: spent=67 ceiling=68 children=7 model=claude-sonnet-5-5"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:47.879Z",
+   "by": "pipeline",
+   "body": "🛑 **Second critic — before the CEO reads it** — round 3: three failed rounds at this critic — the bo …"
+  },
+  {
+   "createdAt": "2026-10-02T17:30:48.339Z",
+   "by": "pipeline",
+   "body": "plan-critic: stage=post round=3 result=SEND_BACK collisions=0 open=0 — DRE-3195 (with DRE-3585, DRE-5529): the plan never says which Linear key and bucket a reserve probes, and since DRE-5589 (on `main`) the planner spends its own 5,000-an-hour OAuth bucket, not the 2,500-an-hour fleet key the whole plan assumes"
+  },
+  {
+   "createdAt": "2026-10-02T17:49:55.951Z",
+   "by": "pipeline",
+   "body": "🔎 **Mechanical plan checks** — 7 card(s), run before the critic reads the plan. These are the INPUT  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:50:00.867Z",
+   "by": "pipeline",
+   "body": "🛑 Parked for you with needs-human — nothing is building and nothing will until a person settles it.  …"
+  },
+  {
+   "createdAt": "2026-10-02T17:50:02.051Z",
+   "by": "pipeline",
+   "body": "🎟️ planner-slot: released · card DRE-3624 · run 37040353211 · repo dreadnought-foundry/bureau-pipeli …"
+  },
+  {
+   "createdAt": "2026-10-02T18:43:40.374Z",
+   "by": "operator",
+   "body": "**Park settled and re-approved (11:43 PT)** under the CEO's standing instruction (2026-09-30 ~08:40  …"
+  }
+ ]
+}

@@ -3112,9 +3112,23 @@ def cmd_dump_comments(identifier: str, *flags: str) -> None:
 
     `--with-authors`: the same thread as `comment_records` rows instead, for
     callers that read a machine record out of it and must know who wrote it.
+
+    That read is the WHOLE thread, never the fifty-comment window (DRE-5639).
+    Every caller is a plan-critic gate in plan.yml, and each one reads a
+    record that a truncated thread makes WRONG rather than stale, which is
+    exactly the case `whole_thread` exists for (DRE-3370). `pre_passed` reads
+    the first critic's word across attempts, and the bound and
+    `activate-cycle` read back to the attempt's boundary. On 2026-10-02 the
+    window cost two approved epics. DRE-3698 parked at 11:52 PT after the
+    second critic passed it, because its first-critic PASS (23:52 PT the
+    night before) had scrolled out. DRE-3624's 11:43 PT re-approval at the
+    bound opened no fresh attempt, because the round that spent the bound had
+    scrolled out too. This departs from the window every other reader here
+    takes, on purpose. The cost is one more request per hundred comments
+    beyond the first fifty, on a handful of dumps per plan run.
     """
     if "--with-authors" in flags:
-        print(json.dumps(comment_records(identifier)))
+        print(json.dumps(comment_records(identifier, whole_thread=True)))
         return
     print(json.dumps(comment_bodies(identifier)))
 

@@ -115,7 +115,7 @@ def _workflow(root: Path, name: str, steps: str) -> None:
 
 #: The comment that opens the step after the passed-plan step in plan.yml: a
 #: step inserted before it sits straight after a declared arrival.
-AFTER_PASSED_STEP = "      # PASS, but the first critic's last reading HELD the plan"
+AFTER_PASSED_STEP = "      # PASS, but the first critic has not passed the plan: its last record is"
 
 #: A shell line a sneaked-in step carries, so the test can find its step.
 SNEAK = "echo ZZ-SNEAK"
