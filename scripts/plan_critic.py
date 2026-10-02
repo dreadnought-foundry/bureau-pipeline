@@ -113,6 +113,11 @@ CLI:
                                      else `keep`; thread on stdin. Never exits
                                      non-zero: an unreadable thread keeps the
                                      attempt, the direction that parks
+  held-park                          the review route's park note when the
+                                     second critic passed a plan the first
+                                     critic has not passed, naming the first
+                                     critic's actual record (DRE-5639); thread
+                                     on stdin. Never exits non-zero
   mechanical [--plan-comment-file F] [--surfaces-dir D] [--note-file F]
                                      cards on stdin (`children-json`); the note
                                      is the list posted to the epic BEFORE the
@@ -2398,8 +2403,63 @@ def pre_passed(bodies: list) -> bool:
     activate hand-back, a plan parked at the first critic's bound — can carry
     a plan the first critic last held into Green Light.
     """
+    word = pre_word(bodies)
+    return word in (PASS, NO_RESULT)
+
+
+def pre_word(bodies: list) -> str | None:
+    """The result word on the newest `stage=pre` round record the pipeline
+    wrote on the epic, on any attempt, or None when there is none. This is
+    the reading `pre_passed` judges and `held_park_note` names (DRE-5639).
+
+    The thread must be the WHOLE thread (`dump-comments --with-authors` reads
+    it whole since DRE-5639). Over the fifty-comment window, a first-critic
+    PASS from the approved attempt scrolls out on a busy epic and reads as no
+    record at all. That is how DRE-3698 parked at 11:52 PT on 2026-10-02
+    after both critics had passed it."""
     rows = [r for r in parse_markers(bodies) if r["stage"] == STAGE_PRE]
-    return bool(rows) and rows[-1]["result"] in (PASS, NO_RESULT)
+    return rows[-1]["result"] if rows else None
+
+
+def held_park_note(bodies: list | None) -> str:
+    """The comment for the review route's park when the second critic PASSED
+    a plan the first critic has not passed (`pre_passed` false). The epic
+    goes to `BOUND_PARK_LANE` with `needs-human` and never to Green Light
+    (DRE-5280).
+
+    The sentence names the first critic's actual record (DRE-5639). Until
+    then plan.yml said "the first critic's last reading sent it back" on
+    every reach of this step, including an epic with no first-critic record
+    at all, and on DRE-3698 it said so of a plan the first critic had passed.
+
+    `bodies=None` is a thread that could not be read. That is unknown, not
+    "no record" (console-honesty rule 2), so the sentence says so.
+    """
+    word = None if bodies is None else pre_word(bodies)
+    if bodies is None:
+        why = ("the first critic's record could not be read when this review "
+               "decided, so it has not been confirmed through both critics")
+    elif word == SEND_BACK:
+        why = ("the first critic's last reading sent it back, so it has not "
+               "been through both critics")
+    elif word is None:
+        why = ("nothing on this epic records a reading by the first critic, "
+               "so it has not been through both critics")
+    elif word in (PASS, NO_RESULT):
+        # Not reachable through plan.yml: the decision read the same record
+        # and published `pre_passed=true`. A thread that changed between the
+        # two reads still gets a sentence that claims nothing it cannot back.
+        why = (f"the first critic's record (result={word}) could not be "
+               "confirmed when this review decided, so it has not been "
+               "confirmed through both critics")
+    else:
+        why = (f"the first critic's last record says {word}, which is not a "
+               "pass, so it has not been through both critics")
+    return (
+        f"🛑 Parked in {BOUND_PARK_LANE} with needs-human for an operator. "
+        f"The second critic passed this plan, but {why} and does not go to "
+        f"Green Light. When it is settled, {reapprove_how()}."
+    )
 
 
 def at_bound(action: str, prior_send_backs: int, result: str,
@@ -3363,6 +3423,19 @@ def _cmd_prior_round(args) -> int:
     return 0
 
 
+def _cmd_held_park(args) -> int:
+    """`held_park_note` over the thread on stdin (DRE-5639). Always 0: the
+    epic parks whatever this prints, and an empty or unreadable thread is
+    named as unreadable rather than read as having no record."""
+    raw = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+    try:
+        thread = json.loads(raw) if raw else None
+    except ValueError:
+        thread = None
+    print(held_park_note(thread if isinstance(thread, list) else None))
+    return 0
+
+
 def _cmd_activate_cycle(args) -> int:
     """`open` or `keep`, for the route step's ACTIVATE branch (DRE-4115).
     Always 0, and an unreadable thread is `keep`: the direction that keeps a
@@ -3842,6 +3915,11 @@ def main(argv: list[str]) -> int:
     # own approval move.
     a.add_argument("--reason", default="")
     a.set_defaults(fn=_cmd_activate_cycle)
+
+    h = sub.add_parser("held-park",
+                       help="the review route's park note when the second critic "
+                            "passed a plan the first critic has not; thread on stdin")
+    h.set_defaults(fn=_cmd_held_park)
 
     m = sub.add_parser("mechanical", help="structural findings; cards on stdin")
     m.add_argument("--plan-comment-file", default=None)
