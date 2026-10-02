@@ -55,6 +55,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import deliver_rescue  # noqa: E402
 import push_rescue  # noqa: E402
+import step_shell  # noqa: E402
 
 import test_platform_fault_scenario as report_harness  # noqa: E402
 
@@ -90,7 +91,7 @@ def _on(doc: dict) -> dict:
 
 
 def _step(workflow: Path, name: str, job: str) -> dict:
-    doc = yaml.safe_load(workflow.read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(workflow))
     for step in doc["jobs"][job]["steps"]:
         if step.get("name") == name:
             return step
@@ -98,7 +99,7 @@ def _step(workflow: Path, name: str, job: str) -> dict:
 
 
 def report_step_source() -> str:
-    src = AGENT_TASK.read_text()
+    src = step_shell.workflow_source(AGENT_TASK)
     m = re.search(
         r"name:\s*Report result to Linear(.*?)(?:\n      - name:|\Z)", src, re.S
     )
@@ -540,22 +541,22 @@ class TheReportStepWiring(unittest.TestCase):
 
 class TheDeliveryWorkflow(unittest.TestCase):
     def test_the_reusable_workflow_exists_and_is_dispatchable(self):
-        doc = yaml.safe_load(DELIVER.read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(DELIVER))
         self.assertIn("workflow_call", _on(doc))
-        stub = yaml.safe_load(DELIVER_STUB.read_text())
+        stub = yaml.safe_load(step_shell.workflow_source(DELIVER_STUB))
         self.assertIn("workflow_dispatch", _on(stub))
 
     def test_it_takes_the_run_the_artifact_and_the_card(self):
         for doc, trigger in (
-            (yaml.safe_load(DELIVER.read_text()), "workflow_call"),
-            (yaml.safe_load(DELIVER_STUB.read_text()), "workflow_dispatch"),
+            (yaml.safe_load(step_shell.workflow_source(DELIVER)), "workflow_call"),
+            (yaml.safe_load(step_shell.workflow_source(DELIVER_STUB)), "workflow_dispatch"),
         ):
             inputs = (_on(doc)[trigger] or {}).get("inputs") or {}
             for name in ("run_id", "card", "artifact"):
                 self.assertIn(name, inputs, f"{trigger} must take {name}")
 
     def test_it_downloads_the_artifact_with_its_own_freshly_minted_token(self):
-        src = DELIVER.read_text()
+        src = step_shell.workflow_source(DELIVER)
         self.assertIn("gh run download", src)
         self.assertIn("create-github-app-token", src)
         self.assertIn("deliver_rescue.py", src)
@@ -563,10 +564,10 @@ class TheDeliveryWorkflow(unittest.TestCase):
     def test_the_download_never_spends_the_dead_runs_credential(self):
         """The whole point of the follow-up: a NEW job's own token. Nothing in
         it may read a credential minted by the run that failed."""
-        self.assertNotIn("steps.worker.outputs.token", DELIVER.read_text())
+        self.assertNotIn("steps.worker.outputs.token", step_shell.workflow_source(DELIVER))
 
     def test_the_stub_calls_the_reusable_at_the_qualified_main_ref(self):
-        job = next(iter(yaml.safe_load(DELIVER_STUB.read_text())["jobs"].values()))
+        job = next(iter(yaml.safe_load(step_shell.workflow_source(DELIVER_STUB))["jobs"].values()))
         self.assertEqual(
             job.get("uses"),
             "dreadnought-foundry/bureau-pipeline/.github/workflows/"
@@ -581,7 +582,7 @@ class TheDeliveryWorkflow(unittest.TestCase):
         step = _step(DELIVER, "Download the rescued patch", "deliver")
         self.assertEqual(step["env"]["GH_TOKEN"], "${{ github.token }}")
         self.assertEqual(
-            (yaml.safe_load(DELIVER_STUB.read_text()).get("permissions") or {})
+            (yaml.safe_load(step_shell.workflow_source(DELIVER_STUB)).get("permissions") or {})
             .get("actions"), "read",
         )
 
@@ -598,7 +599,7 @@ class TheDeliveryWorkflow(unittest.TestCase):
         calling stub does grant."""
         env = _step(AGENT_TASK, "Report result to Linear", "execute")["env"]
         self.assertEqual(env["GH_DISPATCH_TOKEN"], "${{ github.token }}")
-        stub = yaml.safe_load((WORKFLOWS / "self-agent-task.yml").read_text())
+        stub = yaml.safe_load(step_shell.workflow_source(WORKFLOWS / "self-agent-task.yml"))
         self.assertEqual((stub.get("permissions") or {}).get("actions"), "write")
 
     def test_the_module_swaps_that_token_in_for_the_dispatch(self):
@@ -615,8 +616,8 @@ class TheDeliveryWorkflow(unittest.TestCase):
 
     def test_the_medic_watches_it(self):
         """DRE-2036: a runnable workflow nobody watches fails silently."""
-        name = yaml.safe_load(DELIVER_STUB.read_text())["name"]
-        watched = (_on(yaml.safe_load(MEDIC_STUB.read_text()))
+        name = yaml.safe_load(step_shell.workflow_source(DELIVER_STUB))["name"]
+        watched = (_on(yaml.safe_load(step_shell.workflow_source(MEDIC_STUB)))
                    ["workflow_run"]["workflows"])
         self.assertIn(name, watched)
 
@@ -667,7 +668,7 @@ class TheFleetFacingInstructions(unittest.TestCase):
             # understate this repo's own by a key.
             (FIX_STUB, "agent-fix.yml"),
         ):
-            mine = self.permissions(yaml.safe_load(stub.read_text()))
+            mine = self.permissions(yaml.safe_load(step_shell.workflow_source(stub)))
             theirs = self.permissions(readme_stub(marker))
             self.assertEqual(
                 mine, theirs,

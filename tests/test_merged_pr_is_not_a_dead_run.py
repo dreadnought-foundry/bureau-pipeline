@@ -58,6 +58,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import card_pr  # noqa: E402
 import dead_run  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 CARD = "DRE-2316"
 BRANCH = f"agent/{CARD}-dead-run-terminal-race"
@@ -222,7 +223,7 @@ AGENT_TASK = WORKFLOWS / "agent-task.yml"
 
 
 def report_step() -> str:
-    src = AGENT_TASK.read_text()
+    src = step_shell.workflow_source(AGENT_TASK)
     m = re.search(r"name:\s*Report result to Linear(.*?)(?:\n      - name:|\Z)", src, re.S)
     assert m, "'Report result to Linear' step not found"
     return m.group(1)
@@ -276,7 +277,7 @@ def test_report_step_defers_when_the_pr_state_is_unreadable():
 def test_the_gate_step_treats_an_unreadable_lookup_as_evidence():
     """check_agent_result fails the job on "no branch, no PR, no note" — an
     unreadable lookup must not be allowed to produce that verdict."""
-    src = AGENT_TASK.read_text()
+    src = step_shell.workflow_source(AGENT_TASK)
     gate = re.search(r"name: Gate on agent result(.*?)\n      - name:", src, re.S)
     assert gate, "gate step not found"
     assert "card_pr.py" in gate.group(1)
@@ -289,7 +290,7 @@ def test_the_gate_step_treats_an_unreadable_lookup_as_evidence():
 def test_no_workflow_runs_gh_pr_list_without_naming_its_state():
     offenders = []
     for wf in sorted(WORKFLOWS.glob("*.yml")):
-        for line in wf.read_text().splitlines():
+        for line in step_shell.workflow_source(wf).splitlines():
             if "gh pr list" not in line or line.lstrip().startswith("#"):
                 continue
             if "--state" not in line:

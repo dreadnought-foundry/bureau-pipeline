@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
+import step_shell  # noqa: E402
 
 RUN_URL = "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/29209527599"
 NO_EVIDENCE = "no agent branch, no PR, no blocker note, and no escalation note"
@@ -173,7 +174,8 @@ def test_gate_cli_without_cancelled_outcome_still_exits_one(tmp_path):
 # wiring over agent-task.yml
 # --------------------------------------------------------------------------
 def _agent_task():
-    return yaml.safe_load((ROOT / ".github" / "workflows" / "agent-task.yml").read_text())
+    return yaml.safe_load(
+        step_shell.workflow_source(ROOT / ".github" / "workflows" / "agent-task.yml"))
 
 
 def _step(name):
@@ -218,7 +220,7 @@ def test_report_step_threads_the_claude_outcome():
         "the Report step must know whether the agent step was cancelled "
         "(job timeout / external cancel) — that is not a dead agent"
     )
-    assert "--cancelled" in step["run"], (
+    assert "--cancelled" in step_shell.step_shell(step), (
         "the dead branch must route a cancelled outcome into "
         "dead_run.py decide --cancelled"
     )
@@ -227,7 +229,7 @@ def test_report_step_threads_the_claude_outcome():
 def test_report_step_defer_action_moves_no_state():
     """The defer action posts the receipt and stops — the Todo requeue must
     be reachable only for action=requeue, and hold only for action=hold."""
-    run = _step("Report result to Linear")["run"]
+    run = step_shell.step_shell(_step("Report result to Linear"))
     assert '"$ACTION" = "requeue"' in run, (
         "the Todo requeue must be gated on the explicit requeue action so "
         "a defer decision falls through to no state change"
@@ -237,7 +239,7 @@ def test_report_step_defer_action_moves_no_state():
 def test_gate_step_threads_the_claude_outcome():
     step = _step("Gate on agent result")
     assert step["env"].get("CLAUDE_OUTCOME") == _RESOLVED_OUTCOME
-    assert "--claude-outcome" in step["run"], (
+    assert "--claude-outcome" in step_shell.step_shell(step), (
         "a cancelled step must not read as a silent death, or the red gate "
         "summons the medic to re-run a healthy-but-slow card"
     )

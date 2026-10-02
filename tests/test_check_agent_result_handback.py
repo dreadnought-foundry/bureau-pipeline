@@ -34,6 +34,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import check_agent_result  # noqa: E402
+import step_shell  # noqa: E402
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -232,8 +233,7 @@ class WorkflowWiringTest(unittest.TestCase):
     """
 
     def setUp(self):
-        with open(WORKFLOW, encoding="utf-8") as fh:
-            self.wf = fh.read()
+        self.wf = step_shell.workflow_source(WORKFLOW)
 
     def test_the_gate_step_passes_a_hand_back_file(self):
         gate = _step_block(self.wf, "Gate on agent result")

@@ -72,6 +72,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/test")
 os.environ.setdefault("GH_TOKEN", "test")
 
 import dead_run  # noqa: E402
+import step_shell  # noqa: E402
 import turn_budget  # noqa: E402
 
 
@@ -471,7 +472,7 @@ def _step(workflow: str, job: str, ref: str) -> dict:
     the workflow itself reads outputs from carry ids; the Report step does
     not, and giving it one purely to be findable from a test is a change to
     the workflow for the test's convenience."""
-    doc = yaml.safe_load((WORKFLOWS / workflow).read_text())
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOWS / workflow))
     steps = doc["jobs"][job]["steps"]
     for step in steps:
         if step.get("id") == ref:
@@ -521,7 +522,7 @@ class WiringTest(unittest.TestCase):
         card degrades to the default INSIDE the module rather than out here —
         is `CliTest` above.
         """
-        doc = yaml.safe_load((WORKFLOWS / "agent-task.yml").read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOWS / "agent-task.yml"))
         steps = doc["jobs"]["execute"]["steps"]
         ids = [s.get("id") for s in steps]
         selector = _step("agent-task.yml", "execute", "model")["if"]
@@ -548,15 +549,15 @@ class WiringTest(unittest.TestCase):
         """One step reads the card's labels, so a run cannot select a model
         under one reading of the card and a budget under another."""
         step = _step("agent-task.yml", "execute", "model")
-        self.assertIn("turn_budget.py", step["run"])
-        self.assertIn("turns=", step["run"])
+        self.assertIn("turn_budget.py", step_shell.step_shell(step))
+        self.assertIn("turns=", step_shell.step_shell(step))
         self.assertIn("LINEAR_API_KEY", yaml.dump(step.get("env") or {}))
 
     def test_the_model_attempt_receipt_prints_the_budget(self):
         """The acceptance criterion: `turns=250` visible on the card."""
         step = _step("agent-task.yml", "execute", "inprogress")
-        self.assertIn("🧠 model-attempt:", step["run"])
-        self.assertIn("turns=${{ steps.model.outputs.turns }}", step["run"])
+        self.assertIn("🧠 model-attempt:", step_shell.step_shell(step))
+        self.assertIn("turns=${{ steps.model.outputs.turns }}", step_shell.step_shell(step))
 
     def test_the_receipt_the_dedupe_guard_reads_is_still_parseable(self):
         """dedupe_dispatch pulls the run id out of this exact string. Adding
@@ -571,7 +572,8 @@ class WiringTest(unittest.TestCase):
     def test_the_report_step_hands_the_thread_to_the_dead_run_decision(self):
         """Without the thread there is no diagnosis — the receipt would fall
         back to "split" on every card, including the ones it is wrong for."""
-        run = _step("agent-task.yml", "execute", "Report result to Linear")["run"]
+        run = step_shell.step_shell(
+            _step("agent-task.yml", "execute", "Report result to Linear"))
         self.assertIn("dump-comments", run)
         self.assertIn("--comments-file", run)
 
@@ -579,7 +581,7 @@ class WiringTest(unittest.TestCase):
         """"Cost cap stays: a larger budget never exceeds the run's cap." The
         guard on spend is the job's wall clock, and this card does not move
         it — the turn count is the knob, the clock is the guard."""
-        doc = yaml.safe_load((WORKFLOWS / "agent-task.yml").read_text())
+        doc = yaml.safe_load(step_shell.workflow_source(WORKFLOWS / "agent-task.yml"))
         self.assertEqual(120, doc["jobs"]["execute"]["timeout-minutes"])
 
     def test_the_config_is_a_file_in_this_checkout(self):

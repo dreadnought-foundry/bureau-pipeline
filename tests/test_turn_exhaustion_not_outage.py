@@ -57,13 +57,14 @@ import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
 import fix_dead_run  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
 WORKFLOWS = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
 
 
 def workflow(name: str) -> str:
-    return open(os.path.join(WORKFLOWS, name)).read()
+    return step_shell.workflow_source(os.path.join(WORKFLOWS, name))
 
 
 # The PR #170 / DRE-2695 shape: claude-code-action's own record of hitting the

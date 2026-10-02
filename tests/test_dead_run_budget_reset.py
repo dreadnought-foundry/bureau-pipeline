@@ -54,6 +54,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+import step_shell  # noqa: E402
 
 
 def _comments_payload(bodies):
@@ -367,11 +368,12 @@ def test_reconcile_counts_deaths_since_the_reset(state, extra):
 
 
 def test_agent_task_report_step_counts_deaths_since_the_reset():
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "agent-task.yml").read_text())
+    doc = yaml.safe_load(
+        step_shell.workflow_source(ROOT / ".github" / "workflows" / "agent-task.yml"))
     steps = doc["jobs"]["execute"]["steps"]
     matches = [s for s in steps if s.get("name") == "Report result to Linear"]
     assert len(matches) == 1
-    run = matches[0]["run"]
+    run = step_shell.step_shell(matches[0])
     assert "count-comments" in run
     assert f"--since \"{dead_run.RESET_TAG}\"" in run or (
         f"--since '{dead_run.RESET_TAG}'" in run

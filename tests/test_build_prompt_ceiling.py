@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import planner_score  # noqa: E402
+import step_shell  # noqa: E402
 
 WF = ROOT / ".github" / "workflows" / "agent-task.yml"
 
@@ -43,7 +44,7 @@ HEADER_SUFFIX = "(the agent's split proposal, written at its decide-by turn)"
 
 
 def _doc() -> dict:
-    return yaml.safe_load(WF.read_text(encoding="utf-8"))
+    return yaml.safe_load(step_shell.workflow_source(WF))
 
 
 def _steps() -> list:
@@ -87,7 +88,7 @@ def _exit_8(prompt: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def test_the_select_model_step_asks_turn_budget_for_the_decide_by_turn():
-    run = _select_model()["run"]
+    run = step_shell.step_shell(_select_model())
     assert re.search(
         r"DECIDE_BY=\$\(python3 \.bureau-pipeline/scripts/turn_budget\.py "
         r"decide-by \"\$TURNS\"\)",
@@ -96,7 +97,7 @@ def test_the_select_model_step_asks_turn_budget_for_the_decide_by_turn():
 
 
 def test_the_select_model_step_writes_decide_by_as_an_output():
-    run = _select_model()["run"]
+    run = step_shell.step_shell(_select_model())
     assert re.search(r'echo "decide_by=\$DECIDE_BY" >> "\$GITHUB_OUTPUT"', run)
     assert run.index("decide-by") > run.index("turn_budget.py select"), (
         "decide-by reads TURNS, so it runs after TURNS is selected"
@@ -158,7 +159,7 @@ def test_the_prompt_copies_are_still_identical():
 def test_the_hand_back_comment_header_names_the_split_proposal():
     report = next(s for s in _steps() if s.get("name") == "Report result to Linear")
     headers = [
-        line for line in report["run"].splitlines()
+        line for line in step_shell.step_shell(report).splitlines()
         if planner_score.HANDBACK_RECEIPT_PREFIX in line
     ]
     assert len(headers) == 1, "one hand-back header in the Report step"

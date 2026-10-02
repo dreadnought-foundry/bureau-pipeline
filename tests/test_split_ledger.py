@@ -62,6 +62,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
 import split_ledger  # noqa: E402
+import step_shell  # noqa: E402
 
 LEDGER = ROOT / "config" / "split-ledger.json"
 DOC = ROOT / "docs" / "split-ledger.md"
@@ -296,8 +297,8 @@ def test_dollars_are_the_sum_of_the_dead_runs():
 
 def test_the_handback_receipt_is_the_string_agent_task_posts():
     """Read out of the workflow that writes it, so a reword fails here."""
-    workflow = (ROOT / ".github" / "workflows" / "agent-task.yml").read_text(
-        encoding="utf-8")
+    workflow = step_shell.workflow_source(
+        ROOT / ".github" / "workflows" / "agent-task.yml")
     assert split_ledger.HANDBACK_RECEIPT_PREFIX in workflow
 
 

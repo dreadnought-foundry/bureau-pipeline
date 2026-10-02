@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import dead_run  # noqa: E402
 import push_rescue  # noqa: E402
+import step_shell  # noqa: E402
 
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
 
@@ -180,7 +181,7 @@ def _rescue(fake, logged=None, **kw):
 
 # ── the workflow ─────────────────────────────────────────────────────────────
 def _steps() -> list[dict]:
-    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
     return doc["jobs"]["execute"]["steps"]
 
 
@@ -293,7 +294,7 @@ class TheRunnerIsNeverTheLastCopy(unittest.TestCase):
         # The Linear note a refused rescue produces must name what GitHub
         # said and where the work went — "work still on the runner" with no
         # HTTP status sent three runs' readers to the model and the card.
-        run = _step("Report result to Linear")["run"]
+        run = step_shell.step_shell(_step("Report result to Linear"))
         self.assertIn("--push-status", run)
         self.assertIn("--artifact", run)
         env = _step("Report result to Linear")["env"]
