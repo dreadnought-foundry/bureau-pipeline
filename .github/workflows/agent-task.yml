@@ -21,6 +21,19 @@ on:
           and not actually pinned (DRE-2026).
         type: string
         required: true
+      linear_identity:
+        description: >-
+          WHOSE Linear hour this build spends (DRE-3321). Must be a `name`
+          from `config/linear-identities.json` — `linear_ops` prints
+          `undeclared` for any other word rather than guessing, because a
+          confident wrong name sends the reader to the wrong bucket. The
+          default is `fleet`, the user every product repo's build runs as, so
+          a production stub passes nothing and is unchanged. A caller on its
+          own Linear key passes its own name (bureau-harness's stub runs this
+          workflow on the sandbox key and should pass `sandbox`).
+        type: string
+        required: false
+        default: "fleet"
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -28,6 +41,16 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's own Linear bucket (DRE-5589), spent by the build agent
+      # too since Stage 2 (fix #12): an OAuth token authorized as the fleet
+      # user, which writes as Agent-Bureau but is metered apart from the fleet
+      # key — 5,000 an hour against 2,500. The agent-bureau console keeps it
+      # fresh and publishes it as `Bearer <access token>` (DRE-5587); nothing
+      # in this repository ever refreshes it (DRE-2532). OPTIONAL: a repo
+      # without it builds on the fleet key exactly as before, because every
+      # step below reads `LINEAR_PLANNER_KEY || LINEAR_API_KEY`.
+      LINEAR_PLANNER_KEY:
+        required: false
       BUREAU_APP_ID:
         required: true
       BUREAU_APP_PRIVATE_KEY:
@@ -90,7 +113,27 @@ jobs:
     # Report step defers (dead_run.py --cancelled) and the reconcile sweep
     # requeues off the run's real conclusion.
     timeout-minutes: 120
+    # Whose Linear hour the build spends (DRE-3321), and WHICH BUCKET of that
+    # user's (DRE-5589) — plan.yml's pattern, Stage 2 fixes #11 and #12. Job
+    # level, so no step has to carry it, including the next one added.
+    #
+    # Every step that holds a Linear key — the agent's own included — holds
+    # `secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY` as LINEAR_API_KEY
+    # and the fleet key again as LINEAR_API_KEY_FALLBACK. `||` falls back only
+    # on an EMPTY secret, and a token that later dies keeps its value, so
+    # linear_ops.gql steps onto the fallback on a 401 and nothing else (never
+    # a 400 or a rate limit), and says so in one `linear-key:` line.
+    #
+    # The identity is `fleet` because the planner's token is a HOME of the
+    # fleet user in config/linear-identities.json, not a user of its own;
+    # LINEAR_KEY_HOME names that home, and the `linear-budget:` line prints it
+    # only while the token is what is being spent. The word comes from the
+    # CALLER (reconcile.yml's DRE-3630 shape): bureau-harness runs this
+    # workflow on the sandbox key, and a literal here would print
+    # `budget: fleet` while it spends the sandbox's hour.
     env:
+      LINEAR_IDENTITY: ${{ inputs.linear_identity }}
+      LINEAR_KEY_HOME: planner-oauth
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — never keys). Empty ⇒ the probe is skipped
@@ -235,7 +278,8 @@ jobs:
       - name: Card-validation gate
         id: gate
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
@@ -259,7 +303,8 @@ jobs:
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
@@ -358,7 +403,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # The budget is a property of the CARD, so this step reads Linear.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -416,7 +462,8 @@ jobs:
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           CARD: ${{ github.event.client_payload.identifier }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
@@ -455,7 +502,8 @@ jobs:
         id: inprogress
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
           # DRE-4368: the card's thread says whether this run resumed the dead
           # run's branch or started clean, and why.
@@ -490,7 +538,8 @@ jobs:
         id: clock
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ github.event.client_payload.identifier }}
           MINTED_AT: ${{ steps.minted.outputs.at }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -566,7 +615,8 @@ jobs:
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -772,7 +822,8 @@ jobs:
           # config/pipeline-acts.json anchors the `build-heartbeat` act on
           # attempt 1's comment, and an anchor matching three places pins none
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -975,7 +1026,8 @@ jobs:
           # config/pipeline-acts.json anchors the `build-heartbeat` act on
           # attempt 1's comment, and an anchor matching three places pins none
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1462,7 +1514,8 @@ jobs:
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
           # DRE-4368: the tips the card's branches had before this run, so the

@@ -47,6 +47,16 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's own Linear bucket (DRE-5589), spent by the verifier too
+      # since Stage 2 (fix #12): an OAuth token authorized as the fleet user,
+      # which writes as Agent-Bureau but is metered apart from the fleet key —
+      # 5,000 an hour against 2,500. The agent-bureau console keeps it fresh
+      # and publishes it as `Bearer <access token>` (DRE-5587); nothing in
+      # this repository ever refreshes it (DRE-2532). OPTIONAL: a repo without
+      # it verifies on the fleet key exactly as before, because every step
+      # below reads `LINEAR_PLANNER_KEY || LINEAR_API_KEY`.
+      LINEAR_PLANNER_KEY:
+        required: false
       BUREAU_APP_ID:
         required: true
       BUREAU_APP_PRIVATE_KEY:
@@ -108,7 +118,26 @@ jobs:
     # wall); here the test caught it before the change landed.
     # Pinned by tests/test_verify_turn_budget.py.
     timeout-minutes: 60
+    # Whose Linear hour the verifier spends (DRE-3321), and WHICH BUCKET of
+    # that user's (DRE-5589) — plan.yml's pattern, Stage 2 fixes #11 and #12.
+    # Job level, so no step has to carry it, including the next one added.
+    #
+    # Every step that holds a Linear key — the agent's own included — holds
+    # `secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY` as LINEAR_API_KEY
+    # and the fleet key again as LINEAR_API_KEY_FALLBACK. `||` falls back only
+    # on an EMPTY secret, and a token that later dies keeps its value, so
+    # linear_ops.gql steps onto the fallback on a 401 and nothing else (never
+    # a 400 or a rate limit), and says so in one `linear-key:` line.
+    #
+    # The identity is `fleet` because the planner's token is a HOME of the
+    # fleet user in config/linear-identities.json, not a user of its own;
+    # LINEAR_KEY_HOME names that home, and the `linear-budget:` line prints it
+    # only while the token is what is being spent. A literal, like plan.yml's:
+    # no sandbox stub calls this workflow, and an input nobody passes is a
+    # knob with nobody's hand on it.
     env:
+      LINEAR_IDENTITY: fleet
+      LINEAR_KEY_HOME: planner-oauth
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -203,7 +232,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
@@ -362,7 +392,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # Reads the card's own attempt heartbeat (DRE-3880) — see the run block.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -427,7 +458,8 @@ jobs:
         # detects it and we retry; on a double-crash we post a NEUTRAL status.
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -614,7 +646,8 @@ jobs:
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         continue-on-error: true
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -749,7 +782,8 @@ jobs:
         if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
         env:
           GH_TOKEN: ${{ steps.qa.outputs.token }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
           # DRE-1990: the commit this verify actually ran, captured at run
