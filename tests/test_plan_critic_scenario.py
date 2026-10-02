@@ -62,9 +62,15 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(ROOT, "scripts")
 WF = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 sys.path.insert(0, SCRIPTS)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import plan_critic as pc  # noqa: E402
 import plan_seam  # noqa: E402  — DRE-3395's reader, for the seam walk's input
+import review_rerun as rr  # noqa: E402
+# The three-valued reading of an Actions `if:` the planner-slot wiring tests
+# already walk plan.yml with (DRE-5179) — reused, so the review walks below ask
+# which outcome a decision REACHES of the same reader, not of a second one.
+from test_planner_queue_wiring import Walk, truth  # noqa: E402
 
 SEAM_FIXTURE = os.path.join(ROOT, "tests", "fixtures",
                             "dre-3164-children-2026-09-05.json")
@@ -169,6 +175,9 @@ def main():
         print(json.dumps([{"identifier": c, "title": c, "body": "",
                            "labels": [], "blocked_by": []} for c in cards if c]))
     elif cmd == "epics-in-flight":
+        # Logged with its flags, so a walk can see WHICH lanes the run asked
+        # for: `--sight` reads Planning too (DRE-5278, run by DRE-5280).
+        log(" ".join(["epics-in-flight"] + args))
         print(os.environ.get("STUB_EPICS", "[]"))
     else:
         sys.exit("stub linear_ops: unhandled command " + cmd)
@@ -773,8 +782,10 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("no card manufactures the operator step", receipt)
         self.assertIn("still open", receipt.lower())
         self.assertIn(pc.REAPPROVE_HOW, receipt)
-        # The act the note names buys a real budget, and the note says so.
-        self.assertIn("fresh planning attempt", receipt)
+        # The move the note names buys a real budget, and the note says so —
+        # since DRE-5280 the move to Planning, which opens a fresh attempt.
+        self.assertIn("fresh attempt", receipt)
+        self.assertIn(pc.REVIEW_LANE, receipt)
         self.assertNotIn("Todo", receipt)
         state, detail = pc.post_release(self._thread(), EPIC)
         self.assertEqual(state, pc.POST_HELD)
@@ -1051,6 +1062,7 @@ class CriticWalk(unittest.TestCase):
 
     def _died_at(self, ceiling: str, run: str,
                  subtype: str = "error_max_turns", turns: int | None = None,
+                 step_name: str = "second critic — the review died",
                  **env_extra):
         """The dead-review step, walked for a death at `ceiling` in run `run`.
 
@@ -1071,7 +1083,7 @@ class CriticWalk(unittest.TestCase):
                  "num_turns": int(ceiling) + 1 if turns is None else turns,
                  "total_cost_usd": 2.10, "duration_ms": 900000},
             ], f)
-        return self._shell("second critic — the review died", {
+        return self._shell(step_name, {
             "${{ steps.posta.outputs.execution_file }}": exec_path,
             "${{ steps.postturns.outputs.max_turns }}": ceiling,
             "${{ github.run_id }}": run,
@@ -1133,6 +1145,9 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("111", park)
         self.assertIn("222", park)
         self.assertIn("150", park, "the ceiling the second one still could not finish under")
+        # ...ending on the module's way back (DRE-5280), never the act.
+        self.assertTrue(park.rstrip().endswith(pc.REAPPROVE_HOW + "."), park[-200:])
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, park)
 
     def test_a_non_turn_death_dispatches_nothing_and_writes_no_lane(self):
         """The medic owns every other death and retries it once already
@@ -1223,6 +1238,11 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("Parked for you", receipt)
         self.assertIn("no card manufactures the operator step", receipt)
         self.assertNotIn("Todo", receipt)
+        # The way back is the module's sentence, rewritten by DRE-5280: the
+        # move to Planning, never the re-run act.
+        self.assertIn(pc.REAPPROVE_HOW, receipt)
+        self.assertIn(pc.REVIEW_LANE, receipt)
+        self.assertNotIn(rr.RERUN_REVIEW_ACT, receipt)
         # ...and the sweep's gate reads the same thread the same way.
         state, _ = pc.post_release(self._thread(), EPIC)
         self.assertEqual(state, pc.POST_HELD)
@@ -1288,6 +1308,11 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("state Planning", log, "a re-plan opens a fresh planning attempt")
         self.assertNotIn("state In Progress", log)
         self.assertNotIn("promote", log)
+        # DRE-5280: a Planning entry the pipeline asked for to have the plan
+        # REVIEWED is the review route, not a re-plan — for every reason a
+        # review is asked with.
+        for reason in self.REVIEW_REASONS:
+            self.assertEqual(self._route("planning", reason, kids="9"), "review", reason)
 
     def test_a_todo_entry_with_children_does_not_activate_either(self):
         """An epic in Todo dispatches nothing at the relay (DRE-2725); if one
@@ -1298,6 +1323,8 @@ class CriticWalk(unittest.TestCase):
             STUB_KIDS="3",
         )
         self.assertEqual(self._outputs()["mode"], "plan")
+        for reason in self.REVIEW_REASONS:
+            self.assertEqual(self._route("todo", reason, kids="3"), "review", reason)
 
     def test_only_the_in_progress_entry_activates(self):
         self._shell(
@@ -1307,6 +1334,281 @@ class CriticWalk(unittest.TestCase):
         )
         self.assertEqual(self._outputs()["mode"], "activate")
         self.assertNotIn("state Planning", self._log())
+        # The pipeline's own re-asks on an approved epic, and the re-review
+        # watcher's In Progress re-ask (DRE-5278), still arrive here until
+        # DRE-5281 — and so does a person's act. Only `review` is the hand-back.
+        for reason in ("", rr.REASON_RERUN_ACT, rr.REASON_RE_REVIEW,
+                       rr.REASON_REVIEW_RETRY):
+            self.assertEqual(self._route("in progress", reason, kids="9"),
+                             "activate", reason)
+            self.assertNotIn("state Planning", self._log(), reason)
+        self.assertEqual(self._route("in progress", rr.REASON_REVIEW, kids="9"),
+                         "review")
+
+    # --- DRE-5280: the review route ----------------------------------------
+
+    #: Every reason a review is asked with — review_rerun's words, never
+    #: restated: the plan route's hand-off, the pipeline's two re-asks and a
+    #: person's act.
+    REVIEW_REASONS = (rr.REASON_REVIEW, rr.REASON_RE_REVIEW,
+                      rr.REASON_REVIEW_RETRY, rr.REASON_RERUN_ACT)
+
+    def _route(self, lane: str, reason: str, kids: str = "4") -> str:
+        """The route step's answer for one row of the card's table, from a clean
+        log and output file, so a row is read on its own."""
+        for path in (self.log_path, self.gho):
+            with open(path, "w") as f:
+                f.write("")
+        self._shell("Route — plan or activate",
+                    subs={"${{ github.event.client_payload.trigger_state }}": lane},
+                    REASON=reason, STUB_KIDS=kids)
+        return self._outputs()["mode"]
+
+    def test_the_route_table(self):
+        """The card's table, row by row: `review` for every review reason from
+        any lane but In Progress, and for the activate route's hand-back
+        (`in progress` + `review`); `activate` and `plan` for the unchanged
+        rows. A review run writes Planning itself."""
+        rows = [("in progress", reason, "activate")
+                for reason in ("", rr.REASON_RERUN_ACT, rr.REASON_RE_REVIEW,
+                               rr.REASON_REVIEW_RETRY)]
+        rows.append(("in progress", rr.REASON_REVIEW, "review"))
+        for lane in ("planning", "triage", "green light", "todo", "backlog"):
+            rows.append((lane, "", "plan"))
+            rows += [(lane, reason, "review") for reason in self.REVIEW_REASONS]
+        for lane, reason, mode in rows:
+            with self.subTest(lane=lane, reason=reason):
+                self.assertEqual(self._route(lane, reason), mode)
+                log = self._log()
+                if mode == "activate":
+                    self.assertNotIn("state ", log)
+                else:
+                    self.assertEqual(log.count("state "), 1, log)
+                    self.assertIn("state Planning", log)
+
+    def test_a_review_opens_an_attempt_only_for_a_persons_re_run_at_a_park(self):
+        """`activate-cycle` decides, as on the activate route: the pipeline's
+        own reasons never refund a budget, and a person's re-run at the bound
+        opens a fresh attempt."""
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        before = self._thread()
+        for reason in (rr.REASON_REVIEW, rr.REASON_RE_REVIEW, rr.REASON_REVIEW_RETRY,
+                       rr.REASON_RERUN_ACT):
+            self.assertEqual(self._route("planning", reason), "review")
+            self.assertEqual(self._thread(), before, f"{reason} opened an attempt below the bound")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["bound"], "true")
+        for reason in (rr.REASON_REVIEW, rr.REASON_RE_REVIEW, rr.REASON_REVIEW_RETRY):
+            at_bound = self._thread()
+            self.assertEqual(self._route("triage", reason), "review")
+            self.assertEqual(self._thread(), at_bound, f"{reason} refunded the budget")
+        self.assertEqual(self._route("triage", rr.REASON_RERUN_ACT), "review")
+        self.assertEqual(self._record(), pc.cycle_marker(EPIC))
+
+    def _reached(self, known: dict) -> list[str]:
+        """Which REVIEW-MODE outcome steps a decision reaches: every step gated
+        on review mode and not on activate mode, whose `if:` the decision's own
+        outputs make KNOWN true — read by the same three-valued walker the
+        planner-slot wiring tests use."""
+        class Gates(Walk):
+            def _name(self, text):
+                # A step's outcome is a fact the walk is handed, like its outputs.
+                if text in self.known:
+                    return self.known[text]
+                return super()._name(text)
+        walk = Gates(dict(known, **{"steps.route.outputs.mode": "review"}), set())
+        doc = yaml.safe_load(open(WF).read())
+        out = []
+        for s in doc["jobs"]["plan"]["steps"]:
+            gate = str(s.get("if") or "")
+            if (self.REVIEW_MODE not in gate) or (self.ACTIVATE_MODE in gate):
+                continue
+            if truth(walk.evaluate(gate)) is True:
+                out.append(s["name"])
+        return out
+
+    REVIEW_MODE = "steps.route.outputs.mode == 'review'"
+    ACTIVATE_MODE = "steps.route.outputs.mode == 'activate'"
+    GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
+
+    def _decided(self) -> dict:
+        """The decision step's outputs, keyed the way the gates read them."""
+        return {f"steps.post1.outputs.{k}": v for k, v in self._outputs().items()}
+
+    def _first_critic_said(self, result: str, reason: str = ""):
+        """The plan route's records: the attempt's boundary and the first
+        critic's round, both as the pipeline posts them."""
+        self._pipeline_comment(pc.cycle_marker(EPIC))
+        self._pipeline_comment(pc.marker(pc.STAGE_PRE, 1, result, reason))
+
+    def _lane_writes(self) -> list[str]:
+        return [line for line in self._log().splitlines()
+                if line.startswith(("state ", "add-label "))]
+
+    def test_review_pass_with_the_first_critics_pass_reaches_green_light(self):
+        self._first_critic_said(pc.PASS)
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual(decided["steps.post1.outputs.pre_passed"], "true")
+        self.assertEqual(self._reached(decided), [self.GREEN_LIGHT_BOTH])
+        self._shell(self.GREEN_LIGHT_BOTH)
+        self.assertEqual(self._lane_writes(), ["state Green Light"])
+        log = self._log()
+        self.assertLess(log.index("stamp-verdicts"), log.index("state Green Light"),
+                        "the verdicts are stamped before the epic reaches the CEO")
+        note = self._thread()[-1]
+        self.assertIn("both critics passed", note.lower())
+        self.assertIn(pc.PASS, note)
+        self.assertIn("Approve", note)
+
+    def test_review_pass_after_a_first_critic_no_result_never_calls_it_a_pass(self):
+        self._first_critic_said(pc.NO_RESULT)
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual(self._reached(decided), [self.GREEN_LIGHT_BOTH])
+        self._shell(self.GREEN_LIGHT_BOTH)
+        self.assertEqual(self._lane_writes(), ["state Green Light"])
+        note = self._thread()[-1]
+        self.assertIn(pc.NO_RESULT, note)
+        self.assertIn("no result", note.lower())
+        self.assertNotIn("both critics passed", note.lower())
+
+    def test_review_pass_on_a_plan_the_first_critic_held_parks_in_triage(self):
+        self._first_critic_said(pc.SEND_BACK, "the cards do not sum to the epic")
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual(decided["steps.post1.outputs.pre_passed"], "false")
+        self.assertEqual(self._reached(decided),
+                         ["Review — the second critic passed a plan the first critic held"])
+        self._shell("Review — the second critic passed a plan the first critic held")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        note = self._thread()[-1]
+        self.assertIn("first critic", note)
+        self.assertTrue(note.rstrip().endswith(pc.REAPPROVE_HOW + "."), note[-200:])
+
+    def test_review_no_result_asks_once_then_parks_at_the_bound(self):
+        name = "Review — the second critic produced no result"
+        self._first_critic_said(pc.PASS)
+        self._shell("second critic — decision")  # no result file at all
+        decided = self._decided()
+        self.assertEqual(decided["steps.post1.outputs.result"], pc.NO_RESULT)
+        self.assertEqual(decided["steps.post1.outputs.no_results"], "1")
+        self.assertEqual(self._reached(decided), [name])
+        self._shell(name, NO_RESULTS="1", GH_TOKEN="t")
+        sent = self._dispatches()
+        self.assertEqual([(p["client_payload"]["reason"], p["client_payload"]["trigger_state"])
+                          for p in sent],
+                         [(rr.REASON_REVIEW, rr.TRIGGER_STATE_REVIEW)])
+        self.assertEqual(self._lane_writes(), [])
+        self.assertIn("⚠️", self._thread()[-1])
+        order = [line.split(" ")[0] for line in self._log().splitlines()
+                 if line.startswith("dispatch ") or line.startswith("comment ⚠️")]
+        self.assertEqual(order[-2:], ["dispatch", "comment"],
+                         "the receipt is written from the dispatch, never ahead of it")
+
+        # The re-asked review produces no result again: the attempt's
+        # MAX_ROUNDS-th, and the epic parks for an operator.
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual(decided["steps.post1.outputs.no_results"], str(pc.MAX_ROUNDS))
+        self.assertEqual(self._reached(decided), [name])
+        self._shell(name, NO_RESULTS=str(pc.MAX_ROUNDS), GH_TOKEN="t")
+        self.assertEqual(len(self._dispatches()), 1, "no second re-ask")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertTrue(self._thread()[-1].rstrip().endswith(pc.REAPPROVE_HOW + "."))
+
+    def test_review_send_back_re_plans_and_dispatches_a_re_review(self):
+        name = "Review — the revised plan is reviewed again"
+        self._first_critic_said(pc.PASS)
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual((decided["steps.post1.outputs.action"],
+                          decided["steps.post1.outputs.bound"]), ("hold", "false"))
+        self.assertEqual(self._reached(decided), [name])
+        # Nothing here is the CEO's to decide, so the card-set question is not
+        # asked in review mode.
+        cardset = step("Re-plan — did the card set change?")
+        walk = Walk(dict(decided, **{"steps.route.outputs.mode": "review"}), set())
+        self.assertIs(truth(walk.evaluate(str(cardset["if"]))), False)
+        self._summary("Rewrote DRE-9002 to name the operator who runs it.")
+        self._shell(name, GH_TOKEN="t", FINDING=decided["steps.post1.outputs.reason"],
+                    ROUND=decided["steps.post1.outputs.round"], REPLAN_OUTCOME="success")
+        sent = self._dispatches()
+        self.assertEqual([(p["client_payload"]["reason"], p["client_payload"]["trigger_state"])
+                          for p in sent],
+                         [(rr.REASON_RE_REVIEW, rr.TRIGGER_STATE_REVIEW)])
+        self.assertEqual(self._lane_writes(), [])
+        receipt = self._thread()[-1]
+        self.assertIn("🔁", receipt)
+        self.assertIn("round 2", receipt)
+        self.assertIn("operator step", receipt)
+
+    def test_review_bound_parks_in_triage(self):
+        name = "Review — the bound parks the plan in Triage"
+        self._first_critic_said(pc.PASS)
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._critic_writes("post", pc.SEND_BACK,
+                            "still no card manufactures the operator step",
+                            extra="still-open: 1\n")
+        self._shell("second critic — decision")
+        decided = self._decided()
+        self.assertEqual(decided["steps.post1.outputs.bound"], "true")
+        self.assertEqual(self._reached(decided), [name])
+        self._shell(name, NOTE=decided["steps.post1.outputs.note"],
+                    FINDING=decided["steps.post1.outputs.reason"],
+                    REPLAN_OUTCOME="success")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertEqual(self._dispatches(), [])
+        note = self._thread()[-1]
+        self.assertIn("🛑", note)
+        self.assertIn(decided["steps.post1.outputs.note"][:60], note)
+        self.assertIn(pc.BOUND_PARK_LANE, note)
+        self.assertTrue(note.rstrip().endswith(pc.REAPPROVE_HOW + "."), note[-200:])
+
+    def test_review_death_retries_once_and_the_second_parks_in_triage(self):
+        name = "Review — the review died"
+        died = {"steps.posta.outcome": "failure",
+                "steps.postverdict.outputs.verdict": pc.NO_RESULT}
+        self.assertEqual(self._reached(died), [name])
+        self._died_at("100", "111", step_name=name)
+        sent = self._dispatches()
+        self.assertEqual([(p["client_payload"]["reason"], p["client_payload"]["trigger_state"])
+                          for p in sent],
+                         [(rr.REASON_REVIEW_RETRY, rr.TRIGGER_STATE_REVIEW)])
+        self.assertEqual(self._lane_writes(), [])
+        self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
+
+        self._died_at("150", "222", step_name=name)
+        self.assertEqual(len(self._dispatches()), 1, "a second death buys no third attempt")
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        park = self._thread()[-1]
+        self.assertIn("111", park)
+        self.assertIn("222", park)
+        self.assertTrue(park.rstrip().endswith(pc.REAPPROVE_HOW + "."), park[-200:])
+
+    def test_review_sight_reads_planning_too(self):
+        """Under DRE-5268 two plans can be read at the same moment, both in
+        Planning; the sight step asks for the sight states so each sees the
+        other."""
+        epics = [
+            {"identifier": OTHER_EPIC, "title": "The intake gate", "state": "Planning"},
+            {"identifier": EPIC, "title": "Two critics", "state": "Planning"},
+        ]
+        self._shell("second critic — cross-epic sight", STUB_EPICS=json.dumps(epics))
+        self.assertIn("epics-in-flight --sight", self._log())
+        sight = open(os.path.join(self.tmp, "plan-critic-sight.md")).read()
+        self.assertIn(f"{OTHER_EPIC} — The intake gate [Planning]", sight)
+        self.assertNotIn(f"{EPIC} — Two critics", sight, "this epic drops itself")
+        self.assertIn(pc.REVIEW_LANE, sight)
 
     def test_an_approved_epic_that_was_never_planned_is_planned_first(self):
         """The forgiving fallback, unchanged: In Progress with no children."""
