@@ -25,9 +25,11 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
 ## The rules
 
 1. **Every discovered write into the lane is an arrival.** A write is located
-   at its UNIT — `<file>#<enclosing def>` for a script, `<file>#<step name>`
-   for a workflow, the grammar `where` and `callers` use — and a unit no record
-   names fails BY LOCATION.
+   at its UNIT — `<file>#<enclosing def>` for a script, `<file>#<step>` for a
+   workflow, the grammar `where` and `callers` use — and a unit no record
+   names fails BY LOCATION. A workflow write's step is the parsed step whose
+   lines hold it, whatever key the step opens with, named as
+   `lane_callers` names it: its `name`, else its `id`, else `<job>[<index>]`.
 2. **Every arrival is a discovered write.** A record whose `where` holds no
    write into the lane fails BY NAME: the step or function is gone, or no
    longer writes there, and this cannot tell which.
@@ -41,13 +43,16 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
    nothing could say. Each one names its site and the hook that resolves it,
    `ready_lane_writers.DESTINATIONS_HOOK`.
 5. **Each site's own gate is read, never the record's word for it.**
-   * `passed-plan` in a workflow: the step's `if:` carries BOTH
-     `steps.post1.outputs.result == 'PASS'` (the second critic's decision word)
-     and `steps.post1.outputs.pre_passed == 'true'` (the first critic's last
-     word was a proceed). `action == 'proceed'` is not that gate — it covers a
-     critic that never decided.
+   * `passed-plan` in a workflow: the `if:` of the step each write sits in
+     carries BOTH `steps.post1.outputs.result == 'PASS'` (the second critic's
+     decision word) and `steps.post1.outputs.pre_passed == 'true'` (the first
+     critic's last word was a proceed), each a condition of its own joined by
+     `&&` at the top level — an `||` there, or a gate negated or inside an
+     `||`, lets a plan through on one critic. `action == 'proceed'` is not
+     that gate — it covers a critic that never decided.
    * `queued-epic`: the step's shell adds the `epic-queued` label BEFORE it
-     writes the lane.
+     writes the lane, read as the shell reads it — a continued line joined, a
+     comment dropped.
    * `question`: the unit is `planning_escalation.py#escalate` and no other.
    * `agent-escalation`: `agent-task.yml#Report result to Linear`, whose shell
      posts the 🙋 escalation comment before the write, or
@@ -88,8 +93,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import os
-import re
 import sys
 
 import yaml
@@ -126,9 +131,6 @@ QUEUED_LABEL = "epic-queued"
 #: what its shell must post before the write: DRE-1655's escalate-by-exception
 #: park. The step name is the unit `where` declares.
 AGENT_ESCALATION_STEP = "agent-task.yml#Report result to Linear"
-
-_STEP_NAME = re.compile(r"^\s*-\s+name:\s*(?P<name>.+?)\s*$")
-
 
 def _unit_of_function(fn) -> str:
     """`<file>#<function>` for a module-level function, named off the module."""
@@ -229,17 +231,54 @@ def _python_unit(path: str, line: int) -> str:
     return best.name if best is not None else lane_callers.MODULE_UNIT
 
 
-def _step_start(lines: list, line: int) -> tuple:
-    """(index of the nearest `- name:` at or above 1-based `line`, its name)."""
-    for index in range(min(line, len(lines)) - 1, -1, -1):
-        match = _STEP_NAME.match(lines[index])
-        if match:
-            try:
-                name = yaml.safe_load(match.group("name"))
-            except yaml.YAMLError:
-                name = match.group("name")
-            return index, str(name)
-    return None, None
+@functools.lru_cache(maxsize=16)
+def _step_spans(text: str) -> tuple:
+    """(first line, last line, name, step) for every step of every job, lines
+    1-based in `text`. Read off the parsed nodes, so a step is found by where
+    it sits, never by the key it happens to open with. The name is
+    `lane_callers._steps`'s: `name`, else `id`, else `<job>[<index>]`."""
+    try:
+        node = yaml.compose(text, Loader=yaml.SafeLoader)
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return ()
+    if not isinstance(node, yaml.MappingNode) or not isinstance(doc, dict):
+        return ()
+    jobs_node = next((v for k, v in node.value if k.value == "jobs"), None)
+    jobs = doc.get("jobs")
+    if not isinstance(jobs_node, yaml.MappingNode) or not isinstance(jobs, dict):
+        return ()
+    out = []
+    for (_, job_node), (job_name, job) in zip(jobs_node.value, jobs.items()):
+        if not isinstance(job_node, yaml.MappingNode) or not isinstance(job, dict):
+            continue
+        steps_node = next((v for k, v in job_node.value if k.value == "steps"), None)
+        steps = job.get("steps")
+        if not isinstance(steps_node, yaml.SequenceNode) or not isinstance(steps, list):
+            continue
+        for index, (step_node, step) in enumerate(zip(steps_node.value, steps)):
+            if not isinstance(step, dict):
+                continue
+            name = step.get("name") or step.get("id") or f"{job_name}[{index}]"
+            out.append((step_node.start_mark.line + 1, step_node.end_mark.line + 1,
+                        str(name), step))
+    return tuple(out)
+
+
+def _step_at(path: str, root: str, line: int) -> tuple:
+    """(first line, name, step) of the step whose lines hold 1-based `line` in
+    the workflow as `writes()` read it, or (None, None, None)."""
+    try:
+        spans = _step_spans(step_shell.workflow_source(os.path.abspath(path), root))
+    except OSError:
+        return None, None, None
+    # A block step's end mark is where the next one starts: the latest start
+    # at or above the line is the step that holds it.
+    held = [s for s in spans if s[0] <= line <= s[1]]
+    if not held:
+        return None, None, None
+    first, _, name, step = max(held, key=lambda s: s[0])
+    return first, name, step
 
 
 def unit_of(write, root: str = ROOT) -> str:
@@ -249,8 +288,8 @@ def unit_of(write, root: str = ROOT) -> str:
     base = os.path.basename(file)
     if write.how == "workflow":
         try:
-            _, name = _step_start(_workflow_lines(path, root), int(line))
-        except (OSError, ValueError):
+            _, name, _ = _step_at(path, root, int(line))
+        except ValueError:
             name = None
         return f"{base}#{name if name is not None else '<no step>'}"
     return f"{base}#{_python_unit(path, int(line))}"
@@ -271,29 +310,85 @@ def green_light_writes(root: str = ROOT, contract: dict | None = None) -> list:
     return [(w, unit_of(w, root)) for w in _writes(root, contract) if w.lane == lane]
 
 
-def _step(root: str, file: str, name: str):
-    """The parsed step called `name` in workflow `file`, or None."""
-    path = os.path.join(root, ".github", "workflows", file)
-    try:
-        doc = yaml.safe_load(step_shell.workflow_source(os.path.abspath(path), root))
-    except (OSError, yaml.YAMLError):
-        return None
-    for job in ((doc or {}).get("jobs") or {}).values():
-        for step in (job or {}).get("steps") or []:
-            if isinstance(step, dict) and str(step.get("name")) == name:
-                return step
-    return None
+def _step_of(root: str, write):
+    """The parsed step a workflow write sits in, or None."""
+    file, _, line = write.where.rpartition(":")
+    return _step_at(os.path.join(root, file), root, int(line))[2]
 
 
 def _before_write(root: str, write) -> str:
-    """The step's text from its `- name:` line up to the write line, as
-    `writes()` read it — what the shell has done before the lane moves."""
+    """The text of the write's own step from its first line up to the write
+    line, as `writes()` read it — what the shell has done before the lane
+    moves."""
     file, _, line = write.where.rpartition(":")
-    lines = _workflow_lines(os.path.join(root, file), root)
-    start, _ = _step_start(lines, int(line))
-    if start is None:
+    path = os.path.join(root, file)
+    first, _, _ = _step_at(path, root, int(line))
+    if first is None:
         return ""
-    return "\n".join(lines[start:int(line) - 1])
+    return "\n".join(_workflow_lines(path, root)[first - 1:int(line) - 1])
+
+
+def _wrapped(expr: str) -> bool:
+    """Whether the whole of `expr` is one parenthesized group."""
+    if not expr.startswith("("):
+        return False
+    depth, quote = 0, False
+    for i, c in enumerate(expr):
+        if quote:
+            quote = c != "'"
+        elif c == "'":
+            quote = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i == len(expr) - 1
+    return False
+
+
+def _conjuncts(expr: str):
+    """The terms `expr` joins with `&&` at its top level, whitespace collapsed
+    and a redundantly parenthesized `&&` group opened; None when an `||` sits
+    at the top level, since then no term is required. A negated term, or a
+    group holding an `||`, is kept whole, so it never equals a bare gate."""
+    expr = expr.strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2].strip()
+    parts, depth, quote, start, i = [], 0, False, 0, 0
+    while i < len(expr):
+        c = expr[i]
+        if quote:
+            quote = c != "'"  # `''` closes and reopens: the same string
+        elif c == "'":
+            quote = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif depth == 0 and expr.startswith("||", i):
+            return None
+        elif depth == 0 and expr.startswith("&&", i):
+            parts.append(expr[start:i])
+            start = i + 2
+            i += 1
+        i += 1
+    parts.append(expr[start:])
+    out = []
+    for part in (p.strip() for p in parts):
+        inner = _conjuncts(part[1:-1]) if _wrapped(part) else None
+        out += inner if inner is not None else [" ".join(part.split())]
+    return out
+
+
+def _labels_queued(text: str) -> bool:
+    """Whether `text`, read as the shell reads it, adds the queued label."""
+    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    for line in lane_callers._CONTINUATION.sub(" ", "\n".join(lines)).splitlines():
+        args = lane_callers._shell_args(line)
+        if "add-label" in args and QUEUED_LABEL in args[args.index("add-label") + 1:]:
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -303,25 +398,26 @@ def _before_write(root: str, write) -> str:
 
 def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> list:
     kind, where = record.get("kind"), record.get("where", "")
-    file, unit = _split_where(where)
     out: list[str] = []
     if kind == "passed-plan" and not _is_function(where):
-        if not writes_here:
-            return out  # no write there: rule 2 names the site, once
-        step = _step(root, file, unit)
-        gate = " ".join(str((step or {}).get("if") or "").split())
-        missing = [g for g in PASSED_PLAN_GATES if g not in gate]
-        if missing:
-            out.append(
-                f"{where} is a passed-plan arrival, and its step's `if:` lacks "
-                f"{' and '.join(f'`{g}`' for g in missing)} — a plan reaches "
-                f"{lane} only on BOTH critics' pass; `action == 'proceed'` covers "
-                "a critic that never decided"
-            )
-    elif kind == "queued-epic":
-        label = re.compile(rf"\badd-label\b[^\n]*\b{re.escape(QUEUED_LABEL)}\b")
+        # Each write's own step is read. No write there: rule 2 names the
+        # site, once.
         for write in writes_here:
-            if write.how != "workflow" or not label.search(_before_write(root, write)):
+            terms = _conjuncts(str((_step_of(root, write) or {}).get("if") or ""))
+            missing = [g for g in PASSED_PLAN_GATES if g not in (terms or ())]
+            if missing:
+                out.append(
+                    f"{where} ({write.where}) is a passed-plan arrival, and its "
+                    f"step's `if:` does not require "
+                    f"{' and '.join(f'`{g}`' for g in missing)} as a condition of "
+                    f"its own joined by `&&` — a plan reaches {lane} only on BOTH "
+                    "critics' pass; an `||` or a negation lets one through on "
+                    "either, and `action == 'proceed'` covers a critic that never "
+                    "decided"
+                )
+    elif kind == "queued-epic":
+        for write in writes_here:
+            if write.how != "workflow" or not _labels_queued(_before_write(root, write)):
                 out.append(
                     f"{where} ({write.where}) is a queued-epic arrival, and its "
                     f"step does not add `{QUEUED_LABEL}` before it writes {lane} — "
