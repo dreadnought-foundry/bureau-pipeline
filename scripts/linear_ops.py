@@ -3302,10 +3302,10 @@ def cmd_children_detail(identifier: str) -> None:
     print(json.dumps(child_detail_records(nodes)))
 
 
-def cmd_epics_in_flight() -> None:
+def cmd_epics_in_flight(*flags: str, states=None) -> None:
     """Every epic in flight, as `{"identifier", "title", "state"}` records.
 
-    The post-approval critic's cross-epic sight (DRE-2721 D3). An epic is a
+    The second critic's cross-epic sight (DRE-2721 D3). An epic is a
     card WITH CHILDREN — Linear-native parent/child, never a label
     (standards/card-quality.md) — so the child count is fetched and filtered
     here rather than guessed from a title convention.
@@ -3314,9 +3314,20 @@ def cmd_epics_in_flight() -> None:
     restated: the critic's charter tells the CEO exactly which lanes it looked
     in, and a second copy of that tuple here would let the sentence and the
     query drift apart.
+
+    `--sight` (the CLI flag) reads `plan_critic.SIGHT_STATES` instead — the
+    in-flight lanes plus Planning, where a plan under review sits (DRE-5276,
+    DRE-5278). `states` is the same choice for a Python caller; given, it wins.
+    Neither given is exactly today's query.
     """
     import plan_critic
 
+    unknown = [f for f in flags if f != "--sight"]
+    if unknown:
+        raise LinearError(f"epics-in-flight: unknown flag(s) {unknown}")
+    if states is None:
+        states = (plan_critic.SIGHT_STATES if "--sight" in flags
+                  else plan_critic.IN_FLIGHT_EPIC_STATES)
     nodes = gql_paged(
         """query($states: [String!]!, $after: String) {
              issues(first: 100, after: $after, filter: {
@@ -3325,7 +3336,7 @@ def cmd_epics_in_flight() -> None:
              }) { nodes {
                identifier title state { name } children { nodes { id } }
              } pageInfo { hasNextPage endCursor } } }""",
-        {"states": list(plan_critic.IN_FLIGHT_EPIC_STATES)},
+        {"states": list(states)},
     )
     print(json.dumps([
         {
