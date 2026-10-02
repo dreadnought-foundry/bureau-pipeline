@@ -202,6 +202,11 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # Whose Linear hour the driver's one read spends (DRE-3651): the
+      # bureau-sandbox seat, a `name` in config/linear-identities.json. On the
+      # job, inherited by every step, never on a step (the DRE-3321 shape) —
+      # linear_ops prints it as `budget: sandbox` on the run's budget line.
+      LINEAR_IDENTITY: sandbox
     steps:
       # The ref under test: pipeline_ref on a by-hand dispatch (defaulted to
       # main). On a push the inputs context is EMPTY and the tail runs.
@@ -514,7 +519,12 @@ jobs:
           # query for the board's workflow states and their occupancy. The
           # harness writes nothing to Linear and addresses no card (see
           # scripts/harness/README.md) — this does not change that.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          #
+          # Made as the bureau-sandbox seat, on the sandbox's own hour
+          # (DRE-3651): before, every proving run on main spent the fleet's
+          # bucket. The secret is the sandbox key (DRE-3634); the env name
+          # stays LINEAR_API_KEY because that is the name linear_ops reads.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY_SANDBOX }}
           HARNESS_CONSOLE_TOKEN: ${{ steps.console.outputs.token }}
           # The agent scenarios run the SHIPPED agent-task.yml prompt through
           # the Claude Code CLI against a sandbox clone (scripts/harness/
