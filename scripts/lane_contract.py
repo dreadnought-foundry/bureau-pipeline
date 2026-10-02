@@ -60,6 +60,12 @@ CONTRACT_PATH = os.path.join(ROOT, "config", "lane-contract.json")
 # lane whose occupancy is only partly justifiable.
 CLAUSE_KINDS = ("entrance", "exit", "writers", "evidence")
 
+# A lane's status. `live` is the board the pipeline routes on; `retiring` is a
+# lane leaving it, still named until Linear archives the state; `arriving` is
+# the mirror (DRE-5315) — a lane named before Linear has the state, invisible to
+# every reader that defaults to `live` until a later card flips the one word.
+LANE_STATUSES = ("live", "retiring", "arriving")
+
 # Directories the vocabulary scan walks by default: the pipeline's own code and
 # its workflows. Derived, never enumerated per lane.
 VOCABULARY_PATHS = (
@@ -124,10 +130,10 @@ def _validate(doc: dict, path: str) -> None:
             raise ContractError(f"{path}: lane {name!r} is declared twice")
         names.add(name)
         status = lane.get("status")
-        if status not in ("live", "retiring"):
+        if status not in LANE_STATUSES:
             raise ContractError(
-                f"{path}: lane {name!r} has status {status!r}; expected "
-                "'live' or 'retiring'"
+                f"{path}: lane {name!r} has status {status!r}; expected one "
+                f"of {LANE_STATUSES}"
             )
         if status == "retiring":
             for key in ("retired_by", "reason", "board_action"):
@@ -137,6 +143,15 @@ def _validate(doc: dict, path: str) -> None:
                         "retirement with no recorded step never finishes"
                     )
             continue
+        if status == "arriving":
+            # The mirror of retiring, plus everything a live lane owes below:
+            # flipping the status to live must need no further edit (DRE-5315).
+            for key in ("arriving_by", "reason", "board_action"):
+                if not (lane.get(key) or "").strip():
+                    raise ContractError(
+                        f"{path}: arriving lane {name!r} must say {key!r} — an "
+                        "arrival with no recorded step never lands"
+                    )
         if lane.get("segment") not in ("planning", "work", "off-flow"):
             raise ContractError(
                 f"{path}: lane {name!r} has segment {lane.get('segment')!r}"
@@ -399,11 +414,14 @@ def assertion(name: str, requires: str | None = None) -> Callable:
     return register
 
 
+def _named(contract: dict) -> set:
+    """Every lane name the contract carries, whatever its status."""
+    return {name for status in LANE_STATUSES for name in lane_names(status, contract)}
+
+
 @assertion("board.every_state_is_named", requires="board")
 def _every_state_is_named(inp: _Inputs) -> list:
-    named = set(lane_names("live", inp.contract)) | set(
-        lane_names("retiring", inp.contract)
-    )
+    named = _named(inp.contract)
     return [
         f"Linear carries the state {state!r}, which the lane contract does not "
         "name — add it to config/lane-contract.json or archive it on the board"
@@ -446,6 +464,8 @@ def _retired_entry_is_deleted(inp: _Inputs) -> list:
 
 @assertion("console.state_lists_carry_every_lane", requires="console")
 def _console_state_lists(inp: _Inputs) -> list:
+    # Every live lane is required; an arriving or retiring one is permitted,
+    # because the console may list a lane a step before or after the board.
     live = set(lane_names("live", inp.contract))
     seen = set(inp.console)
     out = [
@@ -456,18 +476,22 @@ def _console_state_lists(inp: _Inputs) -> list:
     out += [
         f"the console's state lists carry {name!r}, which is not a lane — a "
         "column that can never fill, or a word nothing writes"
-        for name in sorted(seen - live)
+        for name in sorted(seen - _named(inp.contract))
     ]
     return out
 
 
 @assertion("pipeline.vocabulary_is_contract_lanes", requires="vocabulary")
 def _pipeline_vocabulary(inp: _Inputs) -> list:
-    live = set(lane_names("live", inp.contract))
+    # An arriving lane may be named ahead of its flip, so the script that will
+    # write it can land first; a retiring one may not — nothing writes it now.
+    allowed = set(lane_names("live", inp.contract)) | set(
+        lane_names("arriving", inp.contract)
+    )
     return [
         f"the pipeline's own source still names the state {name!r}, which is "
         "not a live lane — a write into it fails at the Linear call"
-        for name in sorted(set(inp.vocabulary) - live)
+        for name in sorted(set(inp.vocabulary) - allowed)
     ]
 
 
@@ -638,8 +662,7 @@ def _scan_yaml(path: str, wanted: list) -> set:
 def pipeline_vocabulary(contract: dict | None = None) -> set:
     """The lane names this checkout's own scripts and workflows name."""
     doc = contract or load()
-    known = set(lane_names("live", doc)) | set(lane_names("retiring", doc))
-    return scan_vocabulary(VOCABULARY_PATHS, known)
+    return scan_vocabulary(VOCABULARY_PATHS, _named(doc))
 
 
 # --------------------------------------------------------------------------- #
@@ -737,6 +760,31 @@ def render_markdown(contract: dict | None = None) -> str:
         for kind, text, phase in _clause_rows(lane_doc, doc):
             w(f"| **{kind}** | {text} | {phase} |")
         w("")
+
+    arriving = lanes("arriving", doc)
+    if arriving:
+        w("## Arriving")
+        w("")
+        w(
+            "Lanes the contract names before the board has them. Nothing routes "
+            "to one yet: no live reader sees it, the harness does not require "
+            "the state in Linear or in the console, and it permits both. Its "
+            "clauses are written complete, so the board step below and a "
+            "one-word flip of its status to live are all that remain."
+        )
+        w("")
+        for lane_doc in arriving:
+            w(f"### {lane_doc['name']} — arriving by {lane_doc['arriving_by']}")
+            w("")
+            w(lane_doc["reason"])
+            w("")
+            w(f"**Board step:** {lane_doc['board_action']}")
+            w("")
+            w("| Clause | What it will require | Enforcement once live |")
+            w("| --- | --- | --- |")
+            for kind, text, phase in _clause_rows(lane_doc, doc):
+                w(f"| **{kind}** | {text} | {phase} |")
+            w("")
 
     retiring = lanes("retiring", doc)
     if retiring:
