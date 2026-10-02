@@ -1886,3 +1886,88 @@ def test_apply_cli_over_an_answered_morning_prints_the_summary_as_today(tmp_path
     assert "not posted" not in line
     assert line.startswith("groom-verify: 3 card(s) — ")
     assert line.endswith(f"id {proposal()['id']} → {after['id']}")
+
+
+# --------------------------------------------------------------------------
+# DRE-5309 — the second lock: `apply` never cancels an epic with an open child
+# --------------------------------------------------------------------------
+def _with_children(cards, identifier, states):
+    for c in cards:
+        if c["identifier"] == identifier:
+            c["children"] = {"nodes": [
+                {"identifier": f"DRE-9{n}", "state": {"name": s}}
+                for n, s in enumerate(states)]}
+    return cards
+
+
+def _epic_proposal(identifier, states):
+    """`proposal()`, with `identifier` an epic whose children are `states`.
+    The targets read below sees no children (DRE-5306's exclusion is the
+    first lock), so a verdict reaches `apply` for the row anyway."""
+    return groomer.verify_proposal(
+        _with_children(lane(), identifier, states),
+        dict(cycles=CYCLES, capacity=3, now=NOW),
+        lops=FakeLinear(), run=FakeGh(), owners=OWNERS)
+
+
+def test_apply_refuses_an_obsolete_answer_on_an_epic_with_two_open_children(tmp_path):
+    prop = _epic_proposal("DRE-102", ("In Progress", "Todo", "Done"))
+    assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
+    assert row_of(prop, "DRE-102")["open_children"] == 2
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    exe = execution(tmp_path)
+    run_verdict(tmp_path, "DRE-102", targets, exe=exe, raw=raw_answer(
+        tmp_path, "DRE-102", "obsolete", [PROOF_LINE],
+        summary="The roster migration already reads the portal directly."))
+    for other in ("DRE-101", "DRE-103", "DRE-104"):
+        run_verdict(tmp_path, other, targets, exe=exe, raw=raw_answer(
+            tmp_path, other, "still-needed", [{**PROOF_LINE, "line": 12}]))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    refusal = "DRE-102 is an epic with 2 open children"
+    assert "DRE-102" not in [r["identifier"] for r in cancel(after)]
+    assert planning(after) == ["DRE-101", "DRE-102", "DRE-103"]
+    assert row_of(after, "DRE-102")["position"] == 2
+    assert {"identifier": "DRE-102", "refusal": refusal,
+            "source": gva.CANCEL_SOURCE} in after["cancels_refused"]
+    assert gva.CANCEL_SOURCE == "verify-agent"
+    seq = {r["identifier"]: r for r in after["sequence"]}
+    assert seq["DRE-102"]["outcome"] == "now"
+    text = groomer.render_proposal(after)
+    assert (f"Verified against main: **obsolete** — Cancel refused: {refusal}"
+            in text)
+    section = text.split("## Cancels refused", 1)[1].split("\n## ", 1)[0]
+    assert refusal in section and "verify agent" in section
+    assert after["id"] == groomer.proposal_id(after)
+
+
+def test_apply_refuses_a_done_spare_with_an_open_child_and_leaves_it_waiting(tmp_path):
+    prop = _epic_proposal("DRE-104", ("In Review",))
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    exe = execution(tmp_path)
+    for other in ("DRE-101", "DRE-102", "DRE-103"):
+        run_verdict(tmp_path, other, targets, exe=exe, raw=raw_answer(
+            tmp_path, other, "still-needed", [{**PROOF_LINE, "line": 12}]))
+    run_verdict(tmp_path, "DRE-104", targets, exe=exe, raw=raw_answer(
+        tmp_path, "DRE-104", "done-elsewhere", [PROOF_LINE]))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert "DRE-104" not in [r["identifier"] for r in cancel(after)]
+    assert "DRE-104" in [r["identifier"] for r in after["outcomes"]["not-now"]]
+    assert {"identifier": "DRE-104",
+            "refusal": "DRE-104 is an epic with 1 open child",
+            "source": gva.CANCEL_SOURCE} in after["cancels_refused"]
+
+
+def test_apply_still_cancels_an_epic_whose_children_are_all_closed(tmp_path):
+    prop = _epic_proposal("DRE-102", ("Done", "Canceled"))
+    assert row_of(prop, "DRE-102")["open_children"] == 0
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    exe = execution(tmp_path)
+    run_verdict(tmp_path, "DRE-102", targets, exe=exe, raw=raw_answer(
+        tmp_path, "DRE-102", "obsolete", [PROOF_LINE]))
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+    assert "DRE-102" in [r["identifier"] for r in cancel(after)]
+    assert after["cancels_refused"] == []
