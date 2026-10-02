@@ -511,11 +511,16 @@ class TestTheQueuedEpicGate:
 
 @pytest.mark.usefixtures("declared_callers")
 class TestTheAgentEscalationGate:
+    #: Where `agent-task.yml#Report result to Linear`'s shell lives since
+    #: DRE-5223: the step is one delegation line, and the check reads the
+    #: script through it, so a weakened gate is planted here.
+    REPORT_SCRIPT = Path("scripts") / "report_agent_result.sh"
+
     def test_the_build_run_s_escalation_must_post_the_question_first(self, tmp_path):
         import planner_score
 
         root = _copy_repo(tmp_path)
-        _edit(root / ".github" / "workflows" / "agent-task.yml",
+        _edit(root / self.REPORT_SCRIPT,
               planner_score.ESCALATION_RECEIPT_PREFIX, "The agent stopped")
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
@@ -530,9 +535,9 @@ class TestTheAgentEscalationGate:
         import planner_score
 
         root = _copy_repo(tmp_path)
-        _edit(root / ".github" / "workflows" / "agent-task.yml", self.RECEIPT_LINE,
+        _edit(root / self.REPORT_SCRIPT, self.RECEIPT_LINE,
               f'# {planner_score.ESCALATION_RECEIPT_PREFIX}\n'
-              '              echo "Status update"')
+              '    echo "Status update"')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
                       "agent-escalation"), found
@@ -541,7 +546,7 @@ class TestTheAgentEscalationGate:
         import planner_score
 
         root = _copy_repo(tmp_path)
-        _edit(root / ".github" / "workflows" / "agent-task.yml", self.RECEIPT_LINE,
+        _edit(root / self.REPORT_SCRIPT, self.RECEIPT_LINE,
               f'echo "Status update"  # {planner_score.ESCALATION_RECEIPT_PREFIX}')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
@@ -549,9 +554,9 @@ class TestTheAgentEscalationGate:
 
     def test_a_receipt_written_and_never_posted_fails(self, tmp_path):
         root = _copy_repo(tmp_path)
-        _edit(root / ".github" / "workflows" / "agent-task.yml",
+        _edit(root / self.REPORT_SCRIPT,
               'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
-              '              "$(cat /tmp/escalation-comment.md)"',
+              '    "$(cat /tmp/escalation-comment.md)"',
               'cat /tmp/escalation-comment.md')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
