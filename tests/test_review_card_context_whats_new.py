@@ -186,6 +186,18 @@ def test_an_unparsable_line_is_blocking_whatever_the_cutover(either_rule):
     assert "sideways" not in _outside_fence(block)
 
 
+def test_a_malformed_line_quoting_the_no_line_message_still_does_not_parse(either_rule):
+    # The parser's messages quote the author's text, so the author can write
+    # the very words the no-line message uses. Missing is decided by type.
+    body = "What's new: broken has no `What's new:` line\n"
+    block = _block(_context(body))
+    assert "the line does not parse" in block
+    assert "blocking under check 1" in block
+    assert "the body carries no What's new: line" not in block
+    assert "broken has no" in _fenced(block)
+    assert "broken has no" not in _outside_fence(block)
+
+
 # ── a parsed sentence ────────────────────────────────────────────────────────
 
 

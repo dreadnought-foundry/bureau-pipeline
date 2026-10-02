@@ -162,6 +162,13 @@ class TestParseLine:
         with pytest.raises(WhatsNewError, match="no .What's new:. line"):
             whats_new.parse_line("Adds table search.\n\nCloses DRE-1.")
 
+    def test_no_line_is_its_own_error_type(self):
+        with pytest.raises(whats_new.NoLineError):
+            whats_new.parse_line("Adds table search.\n")
+        with pytest.raises(WhatsNewError) as caught:
+            whats_new.parse_line("What's new: broken has no `What's new:` line\n")
+        assert not isinstance(caught.value, whats_new.NoLineError)
+
     def test_an_empty_body_raises(self):
         with pytest.raises(WhatsNewError):
             whats_new.parse_line("")

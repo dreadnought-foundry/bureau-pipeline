@@ -79,6 +79,12 @@ class WhatsNewError(ValueError):
         super().__init__(f"{problem}\nAccepted:\n{accepted}")
 
 
+class NoLineError(WhatsNewError):
+    """The body carries no `What's new:` line at all — as opposed to a line
+    that is there and does not fit. Told apart by type, never by message: the
+    other messages quote the author's text, which can say anything."""
+
+
 @dataclass(frozen=True)
 class Entry:
     kind: str
@@ -135,10 +141,11 @@ def _first_line(pr_body: str) -> str | None:
 def parse_line(pr_body: str) -> Entry | None:
     """The body's `What's new:` line: None for `none`, an Entry for a sentence.
 
-    Raises WhatsNewError when there is no line or the line does not fit."""
+    Raises NoLineError when there is no line, WhatsNewError when the line
+    does not fit."""
     rest = _first_line(pr_body or "")
     if rest is None:
-        raise WhatsNewError(
+        raise NoLineError(
             "The pull request body has no `What's new:` line outside fenced code "
             "— put one in the first lines of the body.")
     if rest.lower() == "none":
