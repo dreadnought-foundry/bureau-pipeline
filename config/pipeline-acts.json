@@ -1897,6 +1897,118 @@
       "why": "Act-shaped, and the registry has no row for it: it is the post-approval send-back's new outcome (the review re-run by the pipeline itself, where the DRE-3088 rail asked the CEO for another approval). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the re-review ships first as an undeclared act and the row follows with its console half. The machine-readable half of this round is the round record posted alone by the decision step above it, which the sweep reads in its own grammar; a trailer here would be a second key for one round."
     },
     {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
+      "step": "Review — the review died",
+      "kind": "undeclared-act",
+      "means": "The second critic's review died before it decided, on the review route (DRE-5280) — a turn-ceiling death or a crash — so the epic stays in Planning; the review is re-run by the pipeline itself, once, at a higher ceiling, and only a second death parks it in Triage.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the activate route's dead-review note, which this mirrors on the review route: giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. Its body belongs to scripts/plan_critic.py (`died`), never to YAML."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$RECORD\")\"",
+      "step": "Review — the review died",
+      "kind": "not-an-act",
+      "means": "The tombstone for a review-route review that died (DRE-5280), posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A RECORD in its own grammar, the same shape and the same 'alone' rule as the activate route's tombstone: `plan_critic.parse_deaths` reads it only when the pipeline wrote it and the comment says nothing else. A second grammar in the same comment is exactly what that rule forbids, and the act-shaped half of this death is the note posted just before it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The second critic's review is being run again by the pipeline",
+      "step": "Review — the review died",
+      "kind": "undeclared-act",
+      "means": "The dead review-route review is being re-run by the pipeline itself, once, at a higher turn ceiling — the epic stays in Planning and nobody has anything to decide (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — the review route's dead-review retry, the same debt as the activate route's `🔁 The review is being run again by the pipeline`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. The machine-readable half of this death is the tombstone posted alone before it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The second critic's review could NOT be started again",
+      "step": "Review — the review died",
+      "kind": "undeclared-act",
+      "means": "The re-run of a dead review-route review could not be dispatched, so nothing is reading the plan — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034).",
+      "why": "Act-shaped, and the registry has no row for it — the review route's failed retry, the same debt as the activate route's `🚨 The review could NOT be started again`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "step": "Review — the review died",
+      "kind": "undeclared-act",
+      "means": "The review-route review died a SECOND time, so the epic parks in Triage with needs-human and a note naming both dead runs, for an operator to read why it cannot finish at either ceiling (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the activate route's dead-review park. Its body belongs to scripts/review_rerun.py (`park_note`), which quotes `plan_critic.post_release` and ends with `plan_critic.REAPPROVE_HOW`, so the park and the sweep never describe one dead run differently; a trailer composed here would be a second key for one park."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$HELD\")\"",
+      "step": "Epic → Green Light — both critics passed",
+      "kind": "not-an-act",
+      "means": "The routing-verdict note from the Green Light backstop — the one site on the review route that sees a card the second critic's send-back added (DRE-4593, DRE-5280).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK — these cards state no exit condition, so nothing can say who builds them — where an act is something the pipeline did about the work on its own. It has its own writer (scripts/plan_child_verdicts.py), its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "✅ Ready for you in Green Light.",
+      "step": "Epic → Green Light — both critics passed",
+      "kind": "undeclared-act",
+      "means": "Both critics read the plan on its current attempt — the second passed it and the first critic's last record was a proceed, quoted by its own word — so the epic is in Green Light and Approve starts the build (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — it is the one arrival of a passed plan in Green Light (config/lane-contract.json, `plan.yml#Epic → Green Light — both critics passed`). Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. The machine-readable half is the second critic's round record, posted alone by the decision step above it, which the promoter reads in its own grammar; a trailer here would be a second key for one decision."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 Parked in Triage with needs-human for an operator. The second critic passed this plan",
+      "step": "Review — the second critic passed a plan the first critic held",
+      "kind": "undeclared-act",
+      "means": "The second critic passed a plan whose first critic's last reading sent it back, so it has not been through both critics: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — it is a review-route park, the same debt as the activate route's `🛑 Parked for you with needs-human`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "⚠️ The second critic produced no result",
+      "step": "Review — the second critic produced no result",
+      "kind": "undeclared-act",
+      "means": "The second critic produced no result on the review route, which is neither a rejection nor a pass, so the pipeline asked for the review again itself — the epic stays in Planning (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — the review route's no-result re-ask. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. The machine-readable half of this round is the NO_RESULT round record posted alone by the decision step above it, which `plan_critic.no_result_rounds` counts; a trailer here would be a second key for one round."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The second critic produced no result, and its review could NOT be asked for again",
+      "step": "Review — the second critic produced no result",
+      "kind": "undeclared-act",
+      "means": "The re-ask after a no-result round could not be dispatched, so nothing is reading the plan — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step is left red for the medic.",
+      "why": "Act-shaped, and the registry has no row for it — the review route's failed no-result re-ask. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 Parked in Triage with needs-human for an operator. The second critic could not decide",
+      "step": "Review — the second critic produced no result",
+      "kind": "undeclared-act",
+      "means": "The second critic produced no result MAX_ROUNDS times on this planning attempt, so nobody has finished reading the plan: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — it is a review-route park. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The second critic sent the plan back and the planner has revised it.",
+      "step": "Review — the revised plan is reviewed again",
+      "kind": "undeclared-act",
+      "means": "A review-route send-back below the bound: the planner revised the plan and the pipeline is running the review again itself as the next round — the epic stays in Planning and nobody has anything to decide (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — the review route's re-review, the same debt as the activate route's `🔁 The post-approval review found a gap and the plan has been revised`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. The machine-readable half of this round is the round record posted alone by the decision step, which the sweep reads in its own grammar; a trailer here would be a second key for one round."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The revised plan's review could NOT be asked for",
+      "step": "Review — the revised plan is reviewed again",
+      "kind": "undeclared-act",
+      "means": "The re-review of a plan revised on the review route could not be dispatched, so nothing is reading it — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step is left red for the medic.",
+      "why": "Act-shaped, and the registry has no row for it — the review route's failed re-review. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light",
+      "step": "Review — the bound parks the plan in Triage",
+      "kind": "undeclared-act",
+      "means": "The second critic's bound on the review route: two failed rounds whose findings still stand, or a plan that keeps growing new ones, so the epic parks in Triage with needs-human and decide's note naming the findings still open (DRE-5280).",
+      "why": "Act-shaped, and the registry has no row for it — it is the review route's bound, the same debt as the activate route's `🛑 Parked for you with needs-human`. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So it ships first as an undeclared act, exactly as the activate route's matching receipt did, and the row follows with its console half. Named here so the debt is countable rather than invisible. It carries its own idempotency in the needs-human label the sweep already honors, and its way back is `plan_critic.REAPPROVE_HOW`, read through the module."
+    },
+    {
       "file": "scripts/limit_recovery.py",
       "anchor": "recovery_receipt(marker, why, what)",
       "kind": "undeclared-act",
