@@ -129,6 +129,13 @@ jobs:
     # in (`tests/test_short_runs_on_lane.py`).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
+    # Whose Linear hour this job spends (DRE-3321; Stage 2 fix #23).
+    # Job level, beside every job here that reads secrets.LINEAR_API_KEY,
+    # so each step inherits it and none of them carries it. Until this
+    # line the medic's budget lines said `budget: undeclared` — on
+    # 2026-10-02 that was the fleet's hour, the one that ran out.
+    env:
+      LINEAR_IDENTITY: fleet
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
       # DRE-2488/DRE-2923: the failure's class — environment_crash |
@@ -393,6 +400,9 @@ jobs:
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
+    # Whose Linear hour this job spends: see `classify`.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -443,6 +453,9 @@ jobs:
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
+    # Whose Linear hour this job spends: see `classify`.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -516,6 +529,9 @@ jobs:
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
+    # Whose Linear hour this job spends: see `classify`.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -652,6 +668,9 @@ jobs:
     # The short lane, same as `classify` above (DRE-4276).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
+    # Whose Linear hour this job spends: see `classify`.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -708,6 +727,9 @@ jobs:
     # pins it here by name.
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
+    # Whose Linear hour this job spends: see `classify`.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - name: Mint bot token
         id: app
