@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -47,6 +48,7 @@ import green_light_rows as grl  # noqa: E402
 import lane_callers  # noqa: E402
 import lane_contract  # noqa: E402
 import ready_lane_writers as rlw  # noqa: E402
+import step_shell  # noqa: E402
 
 #: The six `reconcile.py` sites whose destination `writes()` could not read at
 #: 9edf221, before DRE-5286 published `reconcile.destinations()`. Named so a
@@ -109,6 +111,36 @@ def _workflow(root: Path, name: str, steps: str) -> None:
         "    steps:\n" + steps,
         encoding="utf-8",
     )
+
+
+#: The comment that opens the step after the passed-plan step in plan.yml: a
+#: step inserted before it sits straight after a declared arrival.
+AFTER_PASSED_STEP = "      # PASS, but the first critic's last reading HELD the plan"
+
+#: A shell line a sneaked-in step carries, so the test can find its step.
+SNEAK = "echo ZZ-SNEAK"
+
+
+def _sneak(opening: str) -> str:
+    """An ungated step that writes Green Light, opening with `opening`."""
+    return (
+        f"      {opening}\n"
+        "        run: |\n"
+        f"          {SNEAK}\n"
+        "          python3 .bureau-pipeline/scripts/linear_ops.py state \"$EPIC\" "
+        "\"Green Light\"\n\n"
+    )
+
+
+def _job_index_of_sneak(root: Path, name: str) -> str:
+    """`<job>[<index>]` of the step carrying SNEAK, read off the parsed workflow."""
+    path = root / ".github" / "workflows" / name
+    doc = yaml.safe_load(step_shell.workflow_source(path.resolve(), root))
+    for job, body in doc["jobs"].items():
+        for index, step in enumerate(body.get("steps") or []):
+            if SNEAK in str(step.get("run") or ""):
+                return f"{job}[{index}]"
+    raise AssertionError(f"no step carries {SNEAK} in {name}")
 
 
 def _named(problems, *needles) -> list:
@@ -286,6 +318,39 @@ class TestANewWriterIsNamed:
         assert _named(found, "zz-new.yml#Ask the CEO to look again", "no arrival"), found
         assert grl.run_check(str(root), out=lambda _l: None) == 1
 
+    @pytest.mark.parametrize("opening, unit", [
+        ("- id: sneak\n        name: Look again — straight to the CEO",
+         "Look again — straight to the CEO"),
+        ("- if: always()\n        name: Look again", "Look again"),
+        ("- env:\n          X: y\n        name: Look again", "Look again"),
+        ("- id: sneak", "sneak"),
+    ], ids=["id-first", "if-first", "env-first", "id-only"])
+    def test_a_step_not_opened_by_its_name_is_its_own_unit_not_the_step_above(
+            self, tmp_path, opening, unit):
+        # Straight after the passed-plan step: read upward to the nearest
+        # `- name:`, this write was that declared, gated step's.
+        root = _copy_repo(tmp_path)
+        _edit(root / ".github" / "workflows" / "plan.yml", AFTER_PASSED_STEP,
+              _sneak(opening) + AFTER_PASSED_STEP)
+        found = grl.problems(str(root))
+        assert _named(found, f"plan.yml#{unit} (", "no arrival"), found
+        units = {u for _, u in grl.green_light_writes(str(root))}
+        assert f"plan.yml#{unit}" in units, units
+
+    def test_an_unnamed_step_is_named_as_lane_callers_names_it(self, tmp_path):
+        # `name or id or <job>[<index>]` — the grammar the contract's callers use.
+        root = _copy_repo(tmp_path)
+        path = root / ".github" / "workflows" / "agent-task.yml"
+        text = path.read_text(encoding="utf-8")
+        start = text.index("      - name: Report result to Linear\n")
+        after = text.index("\n      - ", start + 1) + 1
+        path.write_text(text[:after] + _sneak("- if: always()") + text[after:],
+                        encoding="utf-8")
+        unit = f"agent-task.yml#{_job_index_of_sneak(root, 'agent-task.yml')}"
+        found = grl.problems(str(root))
+        assert _named(found, f"{unit} (", "no arrival"), found
+        assert not _named(found, "agent-task.yml#Report result to Linear"), found
+
     def test_a_reconcile_write_into_green_light_is_named_by_location(self, tmp_path):
         root = _copy_repo(tmp_path)
         path = root / "scripts" / "reconcile.py"
@@ -310,7 +375,19 @@ class TestThePassedPlanGate:
         "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'proceed'",
         "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS'",
         "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.pre_passed == 'true'",
-    ], ids=["proceed-alone", "no-pre-passed", "no-result-pass"])
+        "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' "
+        "|| steps.post1.outputs.pre_passed == 'true'",
+        "if: steps.route.outputs.mode == 'review' && "
+        "(steps.post1.outputs.result == 'PASS' || steps.post1.outputs.pre_passed == 'true')",
+        "if: steps.route.outputs.mode == 'review' && !(steps.post1.outputs.result == 'PASS') "
+        "&& steps.post1.outputs.pre_passed == 'true'",
+        "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' "
+        "&& !(steps.post1.outputs.pre_passed == 'true')",
+        "if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' "
+        "&& steps.post1.outputs.pre_passed == 'true' || always()",
+    ], ids=["proceed-alone", "no-pre-passed", "no-result-pass", "either-pass",
+            "either-pass-in-parens", "result-negated", "pre-passed-negated",
+            "or-always"])
     def test_a_step_missing_either_critic_s_pass_fails_naming_the_step(self, tmp_path, weakened):
         root = _copy_repo(tmp_path)
         _edit(root / ".github" / "workflows" / "plan.yml", PASSED_IF, weakened)
@@ -319,6 +396,17 @@ class TestThePassedPlanGate:
 
     def test_the_step_as_it_stands_carries_both(self, tmp_path):
         root = _copy_repo(tmp_path)
+        assert not _named(grl.problems(str(root)), "passed-plan")
+
+    @pytest.mark.parametrize("same", [
+        "if: ${{ steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' "
+        "&& steps.post1.outputs.pre_passed == 'true' }}",
+        "if: steps.route.outputs.mode == 'review' && (steps.post1.outputs.result == 'PASS' "
+        "&& steps.post1.outputs.pre_passed == 'true')",
+    ], ids=["expression-syntax", "redundant-parens"])
+    def test_the_same_gate_written_another_way_still_carries_both(self, tmp_path, same):
+        root = _copy_repo(tmp_path)
+        _edit(root / ".github" / "workflows" / "plan.yml", PASSED_IF, same)
         assert not _named(grl.problems(str(root)), "passed-plan")
 
 
@@ -365,6 +453,44 @@ class TestTheQueuedEpicGate:
         _workflow(root, "zz-queue.yml", self._steps(
             f"python3 .bureau-pipeline/scripts/linear_ops.py state \"$EPIC\" \"{grl.lane_name()}\"",
             "python3 .bureau-pipeline/scripts/linear_ops.py add-label \"$EPIC\" epic-queued",
+        ))
+        found = grl.problems(str(root), _queued_contract(self.WHERE))
+        assert _named(found, self.WHERE, "epic-queued"), found
+
+    def test_a_label_wrapped_onto_a_continuation_line_passes(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _workflow(root, "zz-queue.yml", self._steps(
+            "python3 .bureau-pipeline/scripts/linear_ops.py add-label \"$EPIC\" \\",
+            "  epic-queued",
+            f"python3 .bureau-pipeline/scripts/linear_ops.py state \"$EPIC\" \"{grl.lane_name()}\"",
+        ))
+        assert grl.problems(str(root), _queued_contract(self.WHERE)) == []
+
+    @pytest.mark.parametrize("comment", [
+        "# python3 .bureau-pipeline/scripts/linear_ops.py add-label \"$EPIC\" epic-queued",
+        "true  # python3 .bureau-pipeline/scripts/linear_ops.py add-label \"$EPIC\" epic-queued",
+    ], ids=["whole-line", "trailing"])
+    def test_a_commented_out_label_fails(self, tmp_path, comment):
+        root = _copy_repo(tmp_path)
+        _workflow(root, "zz-queue.yml", self._steps(
+            comment,
+            f"python3 .bureau-pipeline/scripts/linear_ops.py state \"$EPIC\" \"{grl.lane_name()}\"",
+        ))
+        found = grl.problems(str(root), _queued_contract(self.WHERE))
+        assert _named(found, self.WHERE, "epic-queued"), found
+
+    def test_a_label_added_in_the_step_above_is_not_this_step_s(self, tmp_path):
+        # The write's step opens with `- if:`; its text starts there, not at
+        # the `- name:` of the step above that labels.
+        root = _copy_repo(tmp_path)
+        _workflow(root, "zz-queue.yml", (
+            "      - name: Label it\n"
+            "        run: |\n"
+            "          python3 .bureau-pipeline/scripts/linear_ops.py add-label \"$EPIC\" epic-queued\n"
+            "      - if: always()\n"
+            "        name: Approved at the cap — wait in line\n"
+            "        run: |\n"
+            f"          python3 .bureau-pipeline/scripts/linear_ops.py state \"$EPIC\" \"{grl.lane_name()}\"\n"
         ))
         found = grl.problems(str(root), _queued_contract(self.WHERE))
         assert _named(found, self.WHERE, "epic-queued"), found
