@@ -78,10 +78,21 @@ class TeamBoard:
         self.queries.append(query)
         v = variables or {}
         if query == reconcile.IDLE_QUERY:
+            # Filtered the way Linear filters: `eq` is an exact match, and
+            # `containsIgnoreCase` matches any label whose name contains the
+            # needle in any case. The page is `first:` long, and says whether
+            # there is more.
+            def match(name):
+                if "label" in v:
+                    return name == v["label"]
+                return v["needle"].lower() in name.lower()
             hits = [c for c in self.cards
                     if c["state"]["name"] in v["states"]
-                    and v["label"] in {n["name"] for n in c["labels"]["nodes"]}]
-            return {"issues": {"nodes": [{"id": c["id"]} for c in hits[:1]]}}
+                    and any(match(n["name"]) for n in c["labels"]["nodes"])]
+            first = getattr(reconcile, "IDLE_PAGE", 1)
+            return {"issues": {
+                "nodes": [{"id": c["id"], "labels": c["labels"]} for c in hits[:first]],
+                "pageInfo": {"hasNextPage": len(hits) > first}}}
         q = " ".join(query.split())
         if "state: {name: {in: $states}}" in q:
             nodes = [c for c in self.cards if c["state"]["name"] in v["states"]]
@@ -162,10 +173,12 @@ def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
 
 def test_an_idle_pass_runs_the_fleet_phases_and_skips_the_repo_ones():
     board = TeamBoard(*_busy_elsewhere())
+    # The re-review watcher runs on an idle pass too (the PR #687 critic's
+    # item 3): the stall watchdog, which is fleet-wide and runs, leaves this
+    # repo's Planning epics with children to it (`_with_the_critics`).
     fleet = ("flag_stranded", "advance_urgent_intake", "repair_frozen_planning_holds",
-             "serve_planner_line")
-    repo_scoped = ("promote_ready", "move_hand_built_to_review", "report_break_glass",
-                   "rereview_watch_scope")
+             "serve_planner_line", "rereview_watch_scope")
+    repo_scoped = ("promote_ready", "move_hand_built_to_review", "report_break_glass")
     with contextlib.ExitStack() as stack:
         spies = {name: stack.enter_context(mock.patch.object(
             reconcile, name, wraps=getattr(reconcile, name))) for name in fleet}
@@ -288,9 +301,69 @@ def test_an_idle_pass_still_files_the_card_a_new_dependabot_pr_needs(monkeypatch
     assert board.queries == []  # no board read
 
 
-def test_the_idle_check_is_the_smallest_question():
+def test_the_idle_check_is_one_small_page_that_fails_open():
+    """One request, a bounded page, ids and label names only. The label match
+    is case-insensitive and owner-blind, as routing's is (`card_repo`): the
+    query asks for any label CONTAINING the slug, and the sweep keeps the
+    cards whose repo is exactly this one."""
     q = " ".join(reconcile.IDLE_QUERY.split())
-    assert "issues(first: 1," in q
-    assert "nodes { id }" in q
-    assert "labels: {name: {eq: $label}}" in q
+    assert "issues(first: $first," in q
+    assert "labels: {name: {containsIgnoreCase: $needle}}" in q
+    assert "nodes { id labels { nodes { name } } }" in q
+    assert "pageInfo { hasNextPage }" in q
+    assert 1 < reconcile.IDLE_PAGE <= 100
     assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Backlog")
+
+
+# ── The label match is routing's, not an exact string (PR #687 critic, item 1) ──
+# Routing (`card_repo`, `validate_card._repo_label_slugs`) lowercases the label
+# and drops an owner, so `repo:dreadnought-foundry/agent-bureau-demo` and
+# `repo:Agent-Bureau-Demo` both route here. An exact `eq` on `repo:<slug>` read
+# such a repo as idle and skipped its promotion — the confident empty.
+
+
+def test_an_owner_qualified_repo_label_is_not_idle():
+    board = TeamBoard(*_busy_elsewhere(),
+                      card("DRE-94", "Todo",
+                           labels=(f"repo:dreadnought-foundry/{DEMO}",)))
+    assert _busy(board)
+
+
+def test_a_capitalized_repo_label_waiting_in_backlog_is_not_idle():
+    board = TeamBoard(*_busy_elsewhere(),
+                      card("DRE-95", "Backlog", labels=("repo:Agent-Bureau-Demo",)))
+    assert _busy(board)
+
+
+def test_a_longer_slug_that_contains_this_one_is_another_repos_work(monkeypatch):
+    """`agent-bureau` is a substring of `agent-bureau-demo`: the needle finds
+    the demo's card, and the sweep's own repo test turns it away."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    board = TeamBoard(*_busy_elsewhere(),
+                      card("DRE-96", "Todo", labels=(f"repo:{DEMO}",)))
+    assert not _busy(board)
+
+
+def test_a_full_page_of_near_misses_is_not_proof_of_idle(monkeypatch):
+    """Every card on the page is another repo's, and Linear says there is
+    more: this repo's card could be on the next page. Unknown is not idle."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    page = getattr(reconcile, "IDLE_PAGE", 1)
+    board = TeamBoard(*[card(f"DRE-{200 + n}", "Todo", labels=(f"repo:{DEMO}",))
+                        for n in range(page + 1)])
+    assert _busy(board)
+    assert len(board.queries) == 1  # still one request: it fails open, it does not page
+
+
+def test_an_idle_pass_still_hands_the_watcher_this_repos_planning_epic():
+    """The PR #687 critic's item 3. A Planning epic with children is the stall
+    watchdog's to SKIP (`_with_the_critics`) and the re-review watcher's to
+    watch. The watchdog is fleet-wide and runs on an idle pass, so the watcher
+    must run too, or that epic is watched by nobody."""
+    epic = card("DRE-97", "Planning", labels=(f"repo:{DEMO}",), children=True)
+    board = TeamBoard(*_busy_elsewhere(), epic)
+    with mock.patch.object(reconcile.rereview_watch, "report") as report:
+        _pass(board)
+    assert report.call_count == 1
+    watched = report.call_args[0][0]
+    assert "DRE-97" in watched

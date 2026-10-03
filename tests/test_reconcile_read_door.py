@@ -641,3 +641,50 @@ def test_off_never_asks_the_door_and_spends_what_it_always_spent(monkeypatch):
     assert door.requests == []
     assert len(linear.queries) == 1  # the Backlog read; no re-check
     assert "updatedAt" not in linear.queries[0]
+
+
+# ── The NO-ROUTE watchdog keeps its input with the door on (PR #687, item 2) ──
+# `flag_stranded` is fleet-wide: every repo's sweep looks for a card in Todo or
+# In Progress that NO repo can pick up — no `repo:` label, or a slug off the
+# routing map. The door serves only this repo's tenant and stores no card
+# without a `repo:` label (design D1), so with every repo `on` such a card would
+# be flagged by no sweep, and the shadow comparison (this repo's cards only)
+# could never show it. The off-map class reads Todo and In Progress from Linear.
+
+_OLD = "2026-09-01T00:00:00.000Z"
+
+
+def test_with_the_door_on_an_unlabeled_card_in_todo_is_still_flagged(monkeypatch):
+    ours = _c("DRE-310", "In Progress", updated=_OLD)
+    orphan = card("DRE-311", "Todo", labels=(), comments=(FLEET,), updated=_OLD)
+    linear = Linear(ours, orphan)
+    with door_at(monkeypatch, ours), wired(linear):
+        flagged = reconcile.flag_stranded()
+    assert "DRE-311" in flagged
+    assert ("DRE-311", reconcile.HOLD_LABEL) in linear.labels
+
+
+def test_with_the_door_on_an_off_map_slug_in_progress_is_still_flagged(monkeypatch):
+    """A label naming a repo the routing map does not carry is unroutable too;
+    the door, scoped to this repo's tenant, never serves it."""
+    ours = _c("DRE-312", "In Progress", updated=_OLD)
+    stray = card("DRE-313", "In Progress", labels=("repo:nowhere",), comments=(FLEET,),
+                 updated=_OLD)
+    linear = Linear(ours, stray)
+    with door_at(monkeypatch, ours), wired(linear), \
+            mock.patch.object(reconcile, "live_rail_slugs",
+                              return_value=frozenset({"portico"})):
+        flagged = reconcile.flag_stranded()
+    assert "DRE-313" in flagged
+
+
+def test_with_the_door_on_another_routable_repos_card_is_not_this_sweeps(monkeypatch):
+    """The Linear read is for the off-map class only: a card another repo can
+    pick up is that repo's sweep's to check."""
+    ours = _c("DRE-314", "In Progress", updated=_OLD)
+    theirs = card("DRE-315", "Todo", labels=("repo:atlas",), comments=(), updated=_OLD)
+    linear = Linear(ours, theirs)
+    monkeypatch.setattr(reconcile.validate_card, "VALID_SLUGS", {"portico", "atlas"})
+    with door_at(monkeypatch, ours), wired(linear):
+        flagged = reconcile.flag_stranded()
+    assert "DRE-315" not in flagged
