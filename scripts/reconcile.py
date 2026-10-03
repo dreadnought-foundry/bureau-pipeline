@@ -2032,6 +2032,34 @@ def live_rail_slugs() -> frozenset[str] | None:
     return frozenset(str(slug).lower() for slug in parsed)
 
 
+def _watchdog_cards() -> list[dict]:
+    """The cards `flag_stranded` walks: Todo and In Progress, EVERY repo's.
+
+    Off and shadow read those lanes from Linear, the whole team's, so this is
+    `active_cards(WATCHDOG_LANES)` unchanged. With the door ON and serving, the
+    work lanes hold only this repo's tenant, and the door stores no card
+    without a `repo:` label (design D1) — so the NO-ROUTE class, which exists
+    for exactly the cards no repo can pick up, would be fed by no sweep (the
+    PR #687 critic's item 2). Then one paged Linear read of the two lanes adds
+    the cards no repo can route: no label, or a slug off this sweep's map.
+    Every decision about one of them is made on Linear's card alone; the door's
+    cards and Linear's are never mixed in one decision. Cost: that one read per
+    `on` pass, and only when the door served (a door that fell back already
+    read the whole board from Linear).
+    """
+    cards = active_cards(WATCHDOG_LANES)
+    if bureau_read.mode() != "on" or not _door_wip[0]:
+        return cards
+    seen = {c["identifier"] for c in cards}
+    off_map = []
+    for c in _fetch_active_cards(WATCHDOG_LANES):
+        slug = card_repo(c)
+        if c["identifier"] in seen or (slug is not None and slug in validate_card.VALID_SLUGS):
+            continue
+        off_map.append(c)
+    return cards + off_map
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -2093,7 +2121,7 @@ def flag_stranded() -> set[str]:
     flagged: set[str] = set()
     live: frozenset[str] | None = None
     live_fetched = False  # one canonical-snapshot read per sweep, and only if needed
-    for card in active_cards(WATCHDOG_LANES):
+    for card in _watchdog_cards():
         ident, state = card["identifier"], card["state"]["name"]
         if state == "Planning":
             continue  # Planning has its own rule (DRE-2736) — never these two
@@ -10376,16 +10404,26 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 # the board says.
 IDLE_LANES = tuple(SWEEP_STATES) + (BACKLOG_LANE,)
 
-#: The smallest Linear question that answers it: does ONE card carrying this
-#: repo's label sit in any of those lanes? `first: 1`, ids only — Linear has
-#: no count field, and existence is all the decision needs. The filter shapes
-#: are the ones `epic_cap` already sends (`labels: {name: {eq: …}}`).
-IDLE_QUERY = """query($label: String!, $states: [String!]!) {
-           issues(first: 1, filter: {
+#: The smallest Linear question that answers it: does a card of THIS repo sit
+#: in any of those lanes? One request, one bounded page, ids and label names.
+#:
+#: The label is matched the way ROUTING matches it, never as one exact string
+#: (the PR #687 critic). `card_repo` lowercases the label and drops an owner,
+#: so `repo:dreadnought-foundry/<slug>` and `repo:<Slug>` route here too; an
+#: exact `eq` read such a repo as idle and skipped its promotion. Linear's
+#: StringComparator has no case-blind `endsWith` (introspected 2026-10-02), so
+#: the query asks for any label CONTAINING the slug, case-blind — a superset of
+#: every routable spelling — and `sweep_idle` keeps the cards whose
+#: `card_repo` is exactly this repo (`agent-bureau` is a substring of
+#: `agent-bureau-demo`). A full page with more behind it and no card of ours on
+#: it is not proof of idle: it fails open to the full pass, never pages.
+IDLE_PAGE = 50
+IDLE_QUERY = """query($needle: String!, $states: [String!]!, $first: Int!) {
+           issues(first: $first, filter: {
              team: {key: {eq: "DRE"}},
-             labels: {name: {eq: $label}},
+             labels: {name: {containsIgnoreCase: $needle}},
              state: {name: {in: $states}}
-           }) { nodes { id } } }"""
+           }) { nodes { id labels { nodes { name } } } pageInfo { hasNextPage } } }"""
 
 
 def sweep_idle() -> str | None:
@@ -10424,18 +10462,26 @@ def sweep_idle() -> str | None:
             return ("no card of this repo is in motion or waiting to be promoted "
                     "(read from the door)")
     try:
-        data = linear_ops.gql(IDLE_QUERY, {"label": f"repo:{REPO_SLUG}",
-                                           "states": list(IDLE_LANES)})
+        data = linear_ops.gql(IDLE_QUERY, {"needle": REPO_SLUG,
+                                           "states": list(IDLE_LANES),
+                                           "first": IDLE_PAGE})
     except linear_ops.LinearError as e:
         # Unknown is not idle. A rate limit included: the stop is armed now,
         # so the full pass sends nothing more and exits 75 exactly as it did
         # before this check existed (DRE-2923).
         print(f"idle: the check could not be read ({e}) — running the full pass")
         return None
-    nodes = (((data or {}).get("issues") or {}).get("nodes")) or []
-    if nodes:
+    issues = (data or {}).get("issues") or {}
+    nodes = issues.get("nodes") or []
+    if any(card_repo(node) == REPO_SLUG for node in nodes):
         return None
-    return (f"no card labeled repo:{REPO_SLUG} is in "
+    if (issues.get("pageInfo") or {}).get("hasNextPage", True):
+        # Every card on the page is another repo's, and there are more: ours
+        # could be on the next page. Unknown is not idle.
+        print(f"idle: the check's page held {len(nodes)} other repos' cards and "
+              "there are more — running the full pass")
+        return None
+    return (f"no card of repo:{REPO_SLUG} (any spelling routing accepts) is in "
             f"{', '.join(IDLE_LANES)}")
 
 
@@ -11133,9 +11179,12 @@ def main(
     # whose review never ran. The watcher is handed this repo's active epics
     # and its Planning epics with children, with their lanes, off the board
     # read this sweep already paid for (DRE-5286, `rereview_watch_scope`).
+    # NOT skipped on an idle pass (the PR #687 critic's item 3): the stall
+    # watchdog is fleet-wide and runs, and it leaves this repo's Planning epics
+    # with children to this watcher (`_with_the_critics`). Idle means nothing
+    # in motion or Backlog; a Planning epic is neither. The scope reads the
+    # lanes the fleet phases' board read already paid for, so it costs nothing.
     with _phase("report_rereview_missing"):
-        if _idle_pass:
-            raise BoardIdle(_idle_pass[0])  # this repo's epics: none in motion
         try:
             watched, lane_of = rereview_watch_scope(epics)
             rereview_watch.report(watched, epic_thread, lane_of)

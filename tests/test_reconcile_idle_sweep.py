@@ -261,10 +261,12 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
         lanes = door.asked("/board")[0]["query"]["lanes"]
     assert lanes == "Todo,In Progress,In Review,Backlog"
     # The check asked the door, not Linear. Linear answered only the fleet
-    # phases' reads of the lanes the door does not serve: Planning and Intake
-    # (6a) and the planner line's Green Light.
+    # phases' reads: the lanes the door does not serve (Planning and Intake,
+    # 6a), the planner line's Green Light, and the NO-ROUTE watchdog's Todo and
+    # In Progress, which the door cannot serve for cards no repo owns (the PR
+    # #687 critic's item 2).
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 2
+    assert board.requests == 3
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 
