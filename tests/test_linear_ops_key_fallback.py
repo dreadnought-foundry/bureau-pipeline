@@ -268,6 +268,32 @@ def test_the_refusal_line_names_the_bucket_too(planner):
     assert str(refused.value).endswith("budget: planner-oauth")
 
 
+def test_calls_split_by_bucket_across_fallback(planner):
+    """Stage 2 item 28 (H8, K5). 40 requests on the planner's token — the
+    last of them refused — then the retry and ten more on the fleet key. Each
+    bucket is charged the requests sent on it: `planner-oauth 40`, `fleet 11`.
+    One line naming the bucket at EXIT charged all 51 to the fleet."""
+    t = planner(*([_Resp()] * 39), _http(401, AUTH_BODY), *([_Resp()] * 11))
+    for _ in range(50):
+        linear_ops.gql(QUERY)
+    assert t.keys == [PLANNER] * 40 + [FLEET] * 11
+    token = linear_ops.process_token()
+    assert linear_ops.calls_lines() == [
+        f"linear-calls: 40 request(s) this run (process: {token}; budget: planner-oauth)",
+        f"linear-calls: 11 request(s) this run (process: {token}; budget: fleet)",
+    ]
+    assert linear_ops.requests_made() == 51
+
+
+def test_a_run_that_never_fell_back_prints_one_calls_line(planner):
+    planner(_Resp(), _Resp())
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    (line,) = linear_ops.calls_lines()
+    assert line.startswith("linear-calls: 2 request(s) this run (process: ")
+    assert line.endswith("; budget: planner-oauth)")
+
+
 def test_a_fallback_is_process_state_the_test_reset_clears(planner):
     planner(_http(401, AUTH_BODY), _Resp())
     linear_ops.gql(QUERY)
