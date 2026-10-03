@@ -620,6 +620,11 @@ class GateScenarioTest(unittest.TestCase):
         (td / ".bureau-pipeline" / "scripts" / "gh_read_retry.py").write_text(
             (SCRIPTS / "gh_read_retry.py").read_text()
         )
+        # Stage 2 fix #21: the check-runs read goes through the read-once seam
+        # (the inherited-failure step reuses it), so the checkout carries it.
+        (td / ".bureau-pipeline" / "scripts" / "read_once.py").write_text(
+            (SCRIPTS / "read_once.py").read_text()
+        )
         linear_log = td / "linear.jsonl"
         (td / ".bureau-pipeline" / "scripts" / "linear_ops.py").write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\n"

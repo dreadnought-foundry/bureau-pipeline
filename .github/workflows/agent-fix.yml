@@ -659,7 +659,9 @@ jobs:
           # early, or being skipped entirely in conflict mode — means "carry
           # on", and no second write can race the first.
           set -u
-          gh api --paginate --slurp \
+          # Read once for the job (Stage 2 fix #21): the inherited-failure
+          # step below reads the same head's check runs seconds later.
+          python3 .bureau-pipeline/scripts/read_once.py once "check-runs-$HEAD_SHA" -- gh api --paginate --slurp \
             "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" \
             > /tmp/check-runs.json 2>/dev/null || echo '[]' > /tmp/check-runs.json
           DECISION=$(python3 .bureau-pipeline/scripts/unfixable_checks.py decide \
@@ -757,9 +759,11 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
         run: |
           set -u
-          BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq .base.ref 2>/dev/null || true)
+          # Resolve's read gave the base (fix #21); read it only if it did not.
+          [ -n "$BASE_REF" ] || BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq .base.ref 2>/dev/null || true)
           if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
             echo "could not read the PR's base branch — no inherited-failure check"
             exit 0
@@ -772,7 +776,7 @@ jobs:
             echo "could not resolve the merge base — no inherited-failure check"
             exit 0
           fi
-          gh api --paginate --slurp \
+          python3 .bureau-pipeline/scripts/read_once.py once "check-runs-$HEAD_SHA" -- gh api --paginate --slurp \
             "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
             > /tmp/inherited-head-checks.json 2>/dev/null \
             || echo '[]' > /tmp/inherited-head-checks.json
@@ -1130,8 +1134,12 @@ jobs:
           # empty, which starts the agent with NO spec, as if this were a
           # conflict round. There is no honest substitute for the spec, so a
           # refusal that persists stops the job here, with the reason logged.
-          python3 .bureau-pipeline/scripts/gh_read_retry.py --out "$RUNNER_TEMP/verdict-thread.json" \
-            gh api --paginate --slurp \
+          #
+          # Read once with the fix-loop thread below (Stage 2 fix #21): the two
+          # steps are adjacent, nothing posts between them, and they read the
+          # same thread.
+          python3 .bureau-pipeline/scripts/read_once.py once "fix-thread-${{ steps.pr.outputs.number }}" --out "$RUNNER_TEMP/verdict-thread.json" -- \
+            python3 .bureau-pipeline/scripts/gh_read_retry.py gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments?per_page=100"
           # The Verifier half mirrors merge_gate._ANCHOR / _verdict_re / _SHA_RE;
           # tests/test_agent_fix_verifier_fail.py holds the two to one answer.
@@ -1193,7 +1201,8 @@ jobs:
           GH_TOKEN: ${{ steps.reader.outputs.token }}
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
         run: |
-          gh api --paginate --slurp \
+          # The verdict step's read of this thread, a moment ago (fix #21).
+          python3 .bureau-pipeline/scripts/read_once.py once "fix-thread-${{ steps.pr.outputs.number }}" -- gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/${{ steps.pr.outputs.number }}/comments?per_page=100" \
             > /tmp/fix-thread-comments.json 2>/dev/null \
             || echo '[]' > /tmp/fix-thread-comments.json

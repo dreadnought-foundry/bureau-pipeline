@@ -124,6 +124,10 @@ record = {
     "isDraft": False,
     # The merge gate's one read (Stage 2 #19) asks for these too.
     "body": "",
+    # The critic's one read of the record (Stage 2 #21) asks for these too.
+    "changedFiles": 1,
+    "additions": 1,
+    "deletions": 0,
     "createdAt": "2026-10-02T17:00:00Z",
     "author": {"is_bot": True, "login": "app/agent-bureau-bot"},
     "url": "https://github.com/o/r/pull/1",
@@ -197,6 +201,10 @@ def run_card_fragment(name: str, head_ref: str) -> str:
     cut = next(i for i, line in enumerate(lines) if "bureau-card:" in line)
     script = _render("\n".join(lines[: cut + 1]))
     env = {k: _render(str(v)) for k, v in (step.get("env") or {}).items()}
+    # The critic names its record's fields once, in its job env (Stage 2 #21).
+    job_env = ((_doc(name).get("jobs") or {})[job_id].get("env") or {})
+    if "PR_RECORD_FIELDS" in job_env:
+        env["PR_RECORD_FIELDS"] = str(job_env["PR_RECORD_FIELDS"])
     with tempfile.TemporaryDirectory() as raw:
         td = Path(raw)
         (td / "gh").write_text(GH_SHIM)
@@ -212,6 +220,8 @@ def run_card_fragment(name: str, head_ref: str) -> str:
                 "GITHUB_OUTPUT": str(out),
                 "GITHUB_REPOSITORY": PAYLOAD["github.repository"],
                 "FAKE_BRANCH": head_ref,
+                # The pipeline's scripts, where the job's checkout puts them.
+                "PIPELINE_DIR": str(ROOT),
             },
         )
         assert proc.returncode == 0, f"{name}: {proc.stdout}{proc.stderr}"

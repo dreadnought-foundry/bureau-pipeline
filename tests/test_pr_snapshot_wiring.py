@@ -6,6 +6,10 @@ counts its calls, read the PR record, the compare record, the comment thread
 and the changed-file list ONCE each where they used to read them five, two,
 two and two times; and the fix agent shares its base branch, its head's check
 runs and its verdict thread across the steps that read the same thing.
+
+The BODY is the exception, on purpose: the critic is handed the CURRENT body,
+read live where it is used (tests/test_fix_body_before_push.py), so its two
+reads stay.
 """
 from __future__ import annotations
 
@@ -97,9 +101,14 @@ class TheReviewReadsEachRecordOnceTest(unittest.TestCase):
             calls = td / "calls"
             return calls.read_text().splitlines() if calls.exists() else []
 
+    @staticmethod
+    def _record_reads(calls):
+        return sum(c.startswith("pr view") and "--json body" not in c for c in calls)
+
     def test_a_pull_request_review_reads_each_record_once(self):
         calls = self._run_review("pull_request")
-        self.assertEqual(sum(c.startswith("pr view") for c in calls), 1, calls)
+        self.assertEqual(self._record_reads(calls), 1, calls)
+        self.assertEqual(sum("--json body" in c for c in calls), 2, calls)
         self.assertEqual(sum("/compare/" in c for c in calls), 1, calls)
         self.assertEqual(sum("/comments" in c for c in calls), 1, calls)
         self.assertEqual(sum(c.startswith("pr diff") for c in calls), 1, calls)
@@ -107,7 +116,7 @@ class TheReviewReadsEachRecordOnceTest(unittest.TestCase):
 
     def test_a_dispatched_re_review_reads_each_record_once(self):
         calls = self._run_review("workflow_dispatch")
-        self.assertEqual(sum(c.startswith("pr view") for c in calls), 1, calls)
+        self.assertEqual(self._record_reads(calls), 1, calls)
         self.assertEqual(sum("/compare/" in c for c in calls), 1, calls)
         # Decide reads no thread on a dispatch: the card context's read is the
         # first and only one, so a refutation posted before the dispatch is seen.
@@ -119,12 +128,14 @@ class TheReviewWiringTest(unittest.TestCase):
         for step in _steps("qa-review.yml", "review"):
             for line in _shell_lines(step.get("run") or ""):
                 if "gh pr view" in line:
-                    # The one different read: the files listing (DRE-3091).
-                    self.assertIn("--json files", line, f"{step.get('name')}: {line}")
+                    # The two different reads: the files listing (DRE-3091)
+                    # and the live body the critic is handed.
+                    self.assertTrue("--json files" in line or "--json body" in line,
+                                    f"{step.get('name')}: {line}")
 
     def test_the_job_names_the_record_s_fields_once(self):
         fields = set(_job_env("qa-review.yml", "review")["PR_RECORD_FIELDS"].split(","))
-        self.assertEqual(fields, {"headRefName", "headRefOid", "baseRefName", "body",
+        self.assertEqual(fields, {"headRefName", "headRefOid", "baseRefName",
                                   "changedFiles", "additions", "deletions"})
 
     def test_the_content_id_binds_the_sha_the_verdict_binds(self):
@@ -134,9 +145,13 @@ class TheReviewWiringTest(unittest.TestCase):
             run = _step("qa-review.yml", "review", step_id)["run"]
             self.assertIn('read_once.py once "compare-$BASE...$SHA"', run, step_id)
 
-    def test_the_body_snapshot_is_stamped_when_the_record_was_read(self):
-        run = _step("qa-review.yml", "review", "pr")["run"]
-        self.assertRegex(run, r"body_read_at=\$\(python3 [^\n]*read_once\.py pr [^\n]*--read-at")
+    def test_the_body_is_never_taken_from_the_record(self):
+        """A copy read earlier in the job is strictly worse than the live read
+        (DRE-3005): the body stays out of the shared record."""
+        self.assertNotIn("body", _job_env("qa-review.yml", "review")["PR_RECORD_FIELDS"].split(","))
+        for step_id in ("vqplan", "cardctx"):
+            run = _step("qa-review.yml", "review", step_id)["run"]
+            self.assertIn('gh pr view "$PR" --json body', run, step_id)
 
 
 class TheFixAgentSharesWhatItReadsTwiceTest(unittest.TestCase):
