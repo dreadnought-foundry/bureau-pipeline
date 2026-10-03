@@ -320,16 +320,26 @@ def is_promotable(name: str, doc: dict | None = None) -> bool:
     return bool(record(name, doc)["promotable"])
 
 
+#: The lane a build run reports into — the first lane past the waiting lanes.
+#: The sweep never promotes a Backlog card to it or past it: a card reaches In
+#: Progress because work started, In Review because a pull request opened, and
+#: Done because it merged. Bounding the carried lanes here is what stops a
+#: one-word vocabulary edit (WORKBENCH → `Done`) from having the sweep close a
+#: card nobody built (the critic on #703).
+BUILD_LANE = "In Progress"
+
+
 def _carried_lanes() -> tuple:
     """The lanes the sweep may carry a Backlog card INTO, off the lane contract:
-    every live work-segment lane except the one the planning exit lands in.
-    Backlog is where a card waits for its turn; it is the lane the sweep
-    promotes OUT of, never into."""
+    the live work-segment lanes strictly between the one the planning exit lands
+    in (Backlog — where a card waits for its turn, the lane the sweep promotes
+    OUT of) and `BUILD_LANE`. In the contract's flow order that is Todo and
+    Hand-work: the two lanes a card waits in for whoever builds it."""
     landing = lane_contract.planning_exit()[1]
-    return tuple(
-        lane["name"] for lane in lane_contract.lanes("live")
-        if lane["segment"] == "work" and lane["name"] != landing
-    )
+    work = [lane["name"] for lane in lane_contract.lanes("live") if lane["segment"] == "work"]
+    if landing not in work or BUILD_LANE not in work:
+        return ()
+    return tuple(work[work.index(landing) + 1:work.index(BUILD_LANE)])
 
 
 def sweep_promotes(name: str, doc: dict | None = None) -> bool:
@@ -940,17 +950,20 @@ def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     whoever's turn it actually is has no way to tell.
 
     The marks are named because they are applied in the same breath: the reader
-    can see that the labels which keep the fleet off this card are on it. So is
-    the lane it lands in, read off the vocabulary (DRE-5321) — `Hand-work`
-    today, never the word Todo restated here.
+    can see that the labels which keep the fleet off this card are on it.
+
+    The note names NO lane: the receipt it is wrapped in names the lane the
+    promoter actually wrote (`🧹 Auto-promoted Backlog → <lane>:`), and a note
+    naming the verdict's destination beside it would contradict that header
+    for as long as the two differ (the critic on #703).
     """
     if is_promotable(name, doc):
         return None
     entry = record(name, doc)
     marked = ", ".join(f"`{m}`" for m in marks(name, doc))
     return (
-        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn in "
-        f"{destination(name, doc)} — a person builds this; nothing was dispatched."
+        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn — "
+        "a person builds this; nothing was dispatched."
         + (f" Marked {marked}." if marked else "")
     )
 
