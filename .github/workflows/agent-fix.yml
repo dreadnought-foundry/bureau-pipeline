@@ -1435,11 +1435,26 @@ jobs:
                push: write why to ${{ steps.handoff.outputs.blocker }} and stop (step 6). A
                byte-identical resubmission burns a whole review round and is
                itself grounds for REQUEST_CHANGES.
+               ONE exception (DRE-5632): when every blocking finding is about
+               the pull request's `What's new:` line — missing, not parsing,
+               wording, audience, or not matching the diff — the fix IS the
+               body. Put the line in the body's first lines with
+               gh pr edit ${{ steps.pr.outputs.number }} --body-file <file>
+               (the grammar is .bureau-pipeline/standards/whats-new.md), then
+               push exactly one empty commit (step 5). That is not a
+               byte-identical resubmission: the body is what the finding was
+               about, and the body moved. When other findings block too, fix
+               them as usual; the line still goes in the body here, and the
+               ordinary commit carries the push.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
                SAME branch. Do NOT open a new PR. Do NOT force-push. The PR
                description is already final at this point (step 4b) — this
                push is what the next reviewer reads it off.
+               For the What's new exception in step 4b the commit is empty,
+               in exactly this form, pushed to the SAME branch:
+               git commit --allow-empty -m "fix(${{ steps.pr.outputs.card }}): What's new line (attempt ${{ steps.pr.outputs.attempt }})"
+               One such commit, never a second one.
             6. If a finding is unfixable in scope, or settling it needs a
                judgement only a person can make, do NOT push anything: write
                your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
