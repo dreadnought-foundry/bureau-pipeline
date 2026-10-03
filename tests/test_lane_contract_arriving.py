@@ -138,9 +138,11 @@ class TestTheHandWorkEntry:
                 if k not in ARRIVING_KEYS and k != "status"} == {
             k: v for k, v in live.items() if k != "status"}
 
-    def test_its_writers_are_the_sweep_the_write_layer_and_a_person(self):
+    def test_its_writers_are_the_sweep_the_write_layer_the_migration_and_a_person(self):
+        # DRE-5323 added the one-time migration that moved the person cards
+        # already in Todo when the sweep started carrying them here.
         who = raw_lane(shipped(), HAND_WORK)["clauses"]["writers"]["who"]
-        assert who == ["reconcile.py", "linear_ops.py", "operator"]
+        assert who == ["reconcile.py", "linear_ops.py", "hand_work_migration.py", "operator"]
 
     def test_its_entrance_and_evidence_ask_for_the_verdict(self):
         # planning_escalation.bypass_problems asks this of every work lane a
