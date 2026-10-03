@@ -1,4 +1,4 @@
-"""RED-first guard: a `run:` block carrying `${{ }}` stays under GitHub's expression ceiling (DRE-3484).
+"""Two guards on workflow `run:` blocks: an interpolated block stays under GitHub's expression ceiling (DRE-3484), and no block exceeds 8,000 characters (DRE-3488).
 
 THE OUTAGE (live, 2026-09-09 06:15 PT — 09:35 PT). Every `agent-execute`
 dispatch in the fleet was refused by GitHub before a job started:
@@ -36,12 +36,14 @@ all: zero references in that repo under any spelling. The one workflow that
 builds every card is the one workflow the pre-production gate never parses. That
 second gap is its own card; this file closes the first.
 
-WHAT THIS GUARD IS NOT. It is not a style rule about long scripts. A `run:`
-block with NO `${{ }}` in it is never compiled as an expression and has no
-ceiling at any length — which is why the fix for `Report result to Linear` moved
-its five substitutions to `env:` and did not touch the script. So the guard
-measures only the blocks the ceiling can actually reach, and the remedy it names
-is `env:`, never deletion.
+WHAT THE EXPRESSION BUDGET IS NOT. The DRE-3484 budget is not a style rule
+about long scripts. A `run:` block with NO `${{ }}` in it is never compiled as
+an expression, so GitHub's 21,000 ceiling never reaches it — which is why the
+fix for `Report result to Linear` moved its five substitutions to `env:` and did
+not touch the script. So the budget test measures only the blocks GitHub's
+ceiling can actually reach, and the remedy it names is `env:`, never deletion.
+The length of every block, interpolated or not, is a separate rule: the
+DRE-3488 run-block ceiling below.
 
 THE BUDGET is 18,000, three thousand below GitHub's 21,000. When this guard
 landed, `agent-fix.yml` carried blocks at 17,550 and 16,694. Both were under the
@@ -81,9 +83,13 @@ counts and does not depend on this number staying where it is.
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+import step_shell  # noqa: E402
 
 # GitHub's hard ceiling on a single compiled expression.
 GITHUB_MAX_EXPRESSION = 21_000
@@ -141,6 +147,39 @@ def run_blocks_over_ceiling(
     ]
 
 
+def move_via(workflow: str) -> str | None:
+    """The ``--via`` a ``step_shell.py move`` in ``workflow`` needs, or None.
+
+    Read from step_shell's own move table, never restated here: a workflow
+    whose moves there carry ``via="pipeline-dir"`` (``qa-review.yml``, whose
+    pipeline checkout moves out of the working tree) needs that flag, because
+    without it ``move`` writes the ``.bureau-pipeline`` line, and that path
+    does not exist when the step runs.
+    """
+    vias = {m.via for m in step_shell.REHEARSAL if m.workflow == workflow and m.via}
+    assert len(vias) <= 1, f"{workflow}: step_shell's move table disagrees with itself: {vias}"
+    return vias.pop() if vias else None
+
+
+def ceiling_failure_message(path: str, job: str, step: str, size: int) -> str:
+    """What the ceiling test prints for one block over the line, remedy included."""
+    via = move_via(path)
+    via_flag = f" --via {via}" if via else ""
+    line = step_shell._LINE[via].format(name="<name>")
+    return (
+        f"{path} job '{job}' step '{step}': this run block is {size:,} "
+        f"characters, over the {RUN_BLOCK_CEILING:,}-character ceiling for a run "
+        f"block (DRE-3488).\n"
+        f"FIX: move the shell into scripts/<name>.sh with\n"
+        f"    python3 scripts/step_shell.py move --root . --workflow {path} "
+        f"--step '{step}' --script <name>{via_flag} [--env NAME=EXPR ...]\n"
+        f"which leaves the delegation line `{line}` in its place, and pass any "
+        f"${{{{ }}}} inputs through the step's `env:`. Do not delete history "
+        f"comments to get under the number: they are the record of why the shell "
+        f"looks the way it does, and they move with it."
+    )
+
+
 def test_there_are_run_blocks_to_measure() -> None:
     """A guard that silently measures nothing prints OK forever."""
     blocks = run_blocks()
@@ -172,25 +211,36 @@ def test_an_interpolated_run_block_stays_within_budget(
 
 @pytest.mark.parametrize(
     "path,job,step,script",
-    [pytest.param(*b, id=f"{b[0]}::{b[2]}") for b in run_blocks()],
+    [pytest.param(*b, id=f"{b[0]}::{b[1]}::{b[2]}") for b in run_blocks()],
 )
 def test_no_run_block_exceeds_the_ceiling(
     path: str, job: str, step: str, script: str
 ) -> None:
     over = run_blocks_over_ceiling([(path, job, step, script)])
-    assert not over, (
-        f"{path} job '{job}' step '{step}': this run block is {len(script):,} "
-        f"characters, over the {RUN_BLOCK_CEILING:,}-character ceiling for a run "
-        f"block (DRE-3488).\n"
-        f"FIX: move the shell into scripts/<name>.sh with\n"
-        f"    python3 scripts/step_shell.py move --root . --workflow {path} "
-        f"--step '{step}' --script <name> [--env NAME=EXPR ...]\n"
-        f"which leaves the delegation line `bash .bureau-pipeline/scripts/<name>.sh` "
-        f"(or `bash \"$PIPELINE_DIR/scripts/<name>.sh\"` in qa-review.yml) in its "
-        f"place, and pass any ${{{{ }}}} inputs through the step's `env:`. Do not "
-        f"delete history comments to get under the number: they are the record of "
-        f"why the shell looks the way it does, and they move with it."
-    )
+    assert not over, ceiling_failure_message(path, job, step, len(script))
+
+
+def test_the_printed_remedy_carries_via_pipeline_dir_only_for_qa_review() -> None:
+    """The command the ceiling prints must produce a delegation line that runs.
+
+    `qa-review.yml` moves its pipeline checkout out of the working tree, so a
+    move there without `--via pipeline-dir` writes a `.bureau-pipeline` path
+    that does not exist when the step runs, and the review breaks fleet-wide.
+    """
+    qa = ceiling_failure_message("qa-review.yml", "review", "Some step", 8_001)
+    assert "--script <name> --via pipeline-dir " in qa
+    assert 'bash "$PIPELINE_DIR/scripts/<name>.sh"' in qa
+    assert ".bureau-pipeline" not in qa
+
+    other = ceiling_failure_message("linear-sync.yml", "card-done", "Card → Done", 8_001)
+    assert "--via" not in other
+    assert "bash .bureau-pipeline/scripts/<name>.sh" in other
+    assert "$PIPELINE_DIR" not in other
+
+    for message in (qa, other):
+        assert "8,001 characters" in message
+        assert "python3 scripts/step_shell.py move" in message
+        assert "Do not delete history comments" in message
 
 
 def test_the_ceiling_reports_one_character_over_and_measures_real_blocks() -> None:
