@@ -428,8 +428,15 @@ def declared_identity() -> str:
 # A user is not always one bucket. An OAuth app authorized as the fleet user
 # writes as Agent-Bureau but is metered on its own 5,000 an hour, measured on
 # 2026-10-01 at 21:41 PT: the key read 351/2500 and the token 4998/5000, and 61
-# requests on the token moved the key by 6. plan.yml hands its steps that token
-# as `LINEAR_API_KEY` when the console has published one, the fleet key in
+# requests on the token moved the key by 6. The same bucket allows only
+# 2,000,000 complexity points an hour against the API key's 3,000,000
+# (linear.app/developers/rate-limiting, read 2026-10-02), so more requests is
+# not more of everything: a comment-heavy reader can run it dry on complexity
+# first (Stage 2 review item 50 — measure `X-Complexity` before a repo opts its
+# agents in). plan.yml hands its steps that token
+# as `LINEAR_API_KEY` when the console has published one — and agent-task,
+# agent-fix, qa-review and verify do the same in a repo whose variable
+# `LINEAR_AGENT_BUCKET` is `planner` — the fleet key in
 # `LINEAR_API_KEY_FALLBACK` beside it, and the token's home in
 # `LINEAR_KEY_HOME`. The line names the home only while the process is really
 # spending it: the two keys differ (a token was published) and no 401 has
@@ -441,6 +448,21 @@ def declared_identity() -> str:
 # only stepped around, for the rest of this one process.
 FALLBACK_ENV = "LINEAR_API_KEY_FALLBACK"
 HOME_ENV = "LINEAR_KEY_HOME"
+
+# ── A token KNOWN to be dead is never sent (Stage 2 review item 30) ─────────
+# Stepping around a dead token is per process, and an agent's Linear calls are
+# each their own `python3 linear_ops.py …` process, so a token that died while
+# the console was down cost a 401 on EVERY call until it came back. The console
+# knows the expiry of the token it published; when it also publishes that as
+# the repository variable LINEAR_PLANNER_KEY_EXPIRES_AT — epoch seconds, the
+# number its token record already stores — the workflows hand it to every job
+# that can hold the token, and a process whose token is past it (or within the
+# margin, so it cannot die mid-process) goes straight to the fleet key without
+# ever sending it. Absent or empty: nothing changes. Anything that is not epoch
+# seconds is said once and ignored — a published variable with the wrong shape
+# is a defect to fix, never a reason to fail a healthy call.
+EXPIRES_ENV = "LINEAR_PLANNER_KEY_EXPIRES_AT"
+EXPIRY_MARGIN_SECONDS = 60
 
 #: Linear's code for a key it will not accept. Read off the BODY, like the
 #: rate limit: the refusal can arrive as a 401, as a 400, or as a 200 carrying
@@ -502,8 +524,11 @@ class _KeyRefused(Exception):
         self.why = why
 
 
-def _fall_back(why: str) -> None:
+def _fall_back(why: str, verb: str = "refused") -> None:
     """Switch this process onto the fleet key, and say so ONCE.
+
+    `verb` says what happened to the primary: `refused` by Linear, or
+    `not sent` because its published expiry had passed (review item 30).
 
     The readings start over: what the token's bucket had left says nothing
     about the fleet key's, and a line spanning both would report a spend that
@@ -516,8 +541,37 @@ def _fall_back(why: str) -> None:
     for field in ("first", "last", "reset_ms", "limit"):
         _budget[field] = None
     _budget["refilled"] = False
-    print(f"linear-key: {refused} refused ({why}) — fell back to {identity}",
+    print(f"linear-key: {refused} {verb} ({why}) — fell back to {identity}",
           file=sys.stderr, flush=True)
+
+
+def _published_expiry() -> int | None:
+    """LINEAR_PLANNER_KEY_EXPIRES_AT as epoch seconds, or None when it is
+    absent, empty or unreadable — the last said once per process."""
+    raw = (os.environ.get(EXPIRES_ENV) or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    if not _budget["expiry_unreadable_said"]:
+        _budget["expiry_unreadable_said"] = True
+        print(f"linear-key: {EXPIRES_ENV} is not epoch seconds ({raw[:40]!r}) — "
+              f"ignored; the token is sent and a 401 still falls back",
+              file=sys.stderr, flush=True)
+    return None
+
+
+def _skip_a_known_dead_token() -> None:
+    """Before the first request: when the token in hand has a fleet key to
+    fall back to and its published expiry has passed (or is within
+    EXPIRY_MARGIN_SECONDS), move onto the fleet key without sending it."""
+    if _fallback_key() is None:
+        return
+    expires = _published_expiry()
+    if expires is None or expires - time.time() > EXPIRY_MARGIN_SECONDS:
+        return
+    when = datetime.fromtimestamp(expires, _PT).strftime("%Y-%m-%d %H:%M PT")
+    _fall_back(f"published expiry {when} is past", verb="not sent")
 
 
 def _budget_part() -> str:
@@ -584,6 +638,7 @@ def _reset_budget_state() -> None:
         reported=False,  # the exit line was printed
         limit=None,  # last bucket size seen (DRE-5589)
         fell_back=False,  # a refused key moved this process onto the fleet key
+        expiry_unreadable_said=False,  # an unreadable published expiry was named
     )
 
 
@@ -848,6 +903,10 @@ def gql(query: str, variables: dict | None = None) -> dict:
     # there is none left, against a window that is the whole fleet's.
     if _budget["refused_after"] is not None:
         raise _refusal()
+    # A token the console has already said is dead is never sent (review item
+    # 30): every agent call is its own process, so without this each one would
+    # spend a 401 first for as long as the console stays down.
+    _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     try:
         out = _send(payload)

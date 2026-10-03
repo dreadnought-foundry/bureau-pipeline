@@ -192,19 +192,51 @@ permission than the stub that calls it. It degrades rather than breaks — a stu
 without it mints no token, the upload records a gap, and the run itself is
 unaffected — so an un-updated fleet stub loses its logs and nothing else.
 
-**portico is the deliberate exception, on both stubs.** Its
-`.github/scripts/assert-credential-free.sh` forbids `id-token: write` outright
-("OIDC token minting; only needed to authenticate to a cloud"), which is that
-repo's standing position that its CI holds no cloud credentials at all. That is
-an open question with the CEO — raised when DRE-4353 rolled this grant across
-the fleet, settled separately — and until it is settled portico keeps both maps
-minus `id-token: write` and takes the recorded gap.
+**portico grants it too.** It used to be the exception: its
+`.github/scripts/assert-credential-free.sh` refused `id-token: write` in any
+workflow, as that repo's position that its CI holds no cloud credentials. The
+question was settled after DRE-4353 rolled the grant across the fleet — the
+check now exempts exactly that line for portico's thin agent stubs, and those
+stubs carry it — so portico's agent runs keep their logs like every other
+repo's (Stage 2 fix #25 removed the last comments that still said otherwise).
 
 Inside a called workflow, `github.event`, `github.event_name`, and
 `github.repository` are the CALLER's, so all payload references and job-level
 `if:` filters live here and keep working. `vars.CLAUDE_AUTH_MODE` also
 resolves from the caller repo (set to `subscription` for OAuth-token auth;
 unset/anything else means API-key auth).
+
+### Which Linear bucket the agents spend: an opt-in per repo (Stage 2 #12, #29)
+
+The planner has read Linear on its own OAuth token since DRE-5589: the same
+Agent-Bureau user, metered apart from the fleet key. The build, fix, review and
+verify workflows can spend that token too, but **only in a repo that sets the
+repository (or organization) variable `LINEAR_AGENT_BUCKET` to `planner`**.
+Anywhere else they read the fleet key exactly as before, even when the console
+has published `LINEAR_PLANNER_KEY` to the repo. That matters for a stub that
+passes `secrets: inherit`: it already holds the token, so without the variable
+it would change buckets the moment `stable` advanced, with nobody deciding.
+`==` in a GitHub expression ignores case, so `PLANNER` opts in too.
+
+**Before setting it on any repo, measure what that repo's agents would spend.**
+The OAuth bucket allows 5,000 requests an hour against the API key's 2,500, but
+only 2,000,000 complexity points an hour against the API key's 3,000,000, and
+the planners already spend it. Record `X-Complexity` per agent-task run for a
+working day first (Stage 2 review item 50). The bar to keep: the planner bucket
+never below 1,500 of 5,000 requests, and at least 30% of complexity left on
+both buckets.
+
+**A token already known to be dead is never sent (Stage 2 #30).** The repository
+variable `LINEAR_PLANNER_KEY_EXPIRES_AT` holds the published token's expiry in
+epoch seconds. Every job that can hold the token (the four above, plus
+plan.yml's `plan` and `publish`) passes it to `scripts/linear_ops.py`. When the
+expiry has passed, or is less than a minute away, each process goes straight to
+the fleet key and prints one `linear-key: planner-oauth not sent (...)` line,
+rather than spending a 401 first. When the variable is absent, nothing changes.
+The console is the one that should publish it, after the secret and never ahead
+of it: an expiry published ahead of a fresh secret would push every run onto
+the fleet key until the secret caught up. Today the console publishes only the
+secret, so this check does nothing until it also publishes the variable.
 
 Division of labor:
 

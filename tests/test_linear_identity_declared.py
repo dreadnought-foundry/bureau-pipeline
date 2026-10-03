@@ -57,18 +57,38 @@ IDENTITIES = os.path.join(ROOT, "config", "linear-identities.json")
 # written once, as the input's default, so every production stub is unchanged.
 # `linear-sync.yml` and `plan.yml` have no sandbox caller and keep the literal:
 # an input nobody passes is a knob with nobody's hand on it.
+#
+# The four agent workflows joined in Stage 2 (fix #11's identity half, with
+# fix #12): they read the planner's OAuth token, which is a HOME of the fleet
+# identity, not an identity of its own, so the word is `fleet` and the job's
+# `LINEAR_KEY_HOME: planner-oauth` names the bucket. `agent-task.yml` and
+# `qa-review.yml` have a sandbox caller — bureau-harness's stubs call both on
+# the sandbox key — so they take the word from the caller exactly as
+# reconcile does; `agent-fix.yml` and `verify.yml` have none and keep the
+# literal.
 IDENTITY_INPUT = "linear_identity"
 
+FROM_THE_CALLER = "${{ inputs.%s }}" % IDENTITY_INPUT
+
 DECLARATION = {
-    "reconcile.yml": "${{ inputs.%s }}" % IDENTITY_INPUT,
+    "reconcile.yml": FROM_THE_CALLER,
     "linear-sync.yml": "fleet",
     "plan.yml": "fleet",
     # Stage 2 #11 (BP-5): the gate advances and comments on cards with the
     # fleet key, and printed `undeclared` until it said so.
     "merge-gate.yml": "fleet",
+    "agent-task.yml": FROM_THE_CALLER,
+    "qa-review.yml": FROM_THE_CALLER,
+    "agent-fix.yml": "fleet",
+    "verify.yml": "fleet",
 }
 
 SPENDERS = tuple(DECLARATION)
+
+# The workflows whose word is an input, each declared in reconcile's shape.
+TAKES_THE_WORD_FROM_THE_CALLER = tuple(
+    name for name, word in DECLARATION.items() if word == FROM_THE_CALLER
+)
 
 KEY = "secrets.LINEAR_API_KEY"
 
@@ -111,10 +131,32 @@ class DeclaredInTheWorkflowsTest(unittest.TestCase):
                     expected,
                     f"{name}:{job_id} spends a Linear budget without saying whose",
                 )
-        # Five jobs today: reconcile's sweep, linear-sync's card-done and
-        # conflict-sweep, plan's plan and publish. Asserted as a floor so a
-        # renamed job cannot make this test pass by finding nothing.
-        self.assertGreaterEqual(seen, 5)
+        # Nine jobs today: reconcile's sweep, linear-sync's card-done and
+        # conflict-sweep, plan's plan and publish, agent-task's execute,
+        # agent-fix's fix, qa-review's review and verify's verify. Asserted as
+        # a floor so a renamed job cannot make this test pass by finding
+        # nothing.
+        self.assertGreaterEqual(seen, 9)
+
+    def test_every_agent_workflow_with_a_sandbox_caller_takes_the_word_as_reconcile_does(self):
+        """bureau-harness calls agent-task.yml and qa-review.yml on the sandbox
+        key, so a literal `fleet` there would be the DRE-3630 wrong name. Same
+        shape as reconcile's input: string, optional, `fleet` the default, and
+        a description that names the declaration file and `undeclared`."""
+        self.assertEqual(
+            sorted(TAKES_THE_WORD_FROM_THE_CALLER),
+            ["agent-task.yml", "qa-review.yml", "reconcile.yml"],
+        )
+        for name in TAKES_THE_WORD_FROM_THE_CALLER:
+            with self.subTest(workflow=name):
+                spec = _call_inputs(_workflow(name)).get(IDENTITY_INPUT)
+                self.assertIsInstance(spec, dict, f"{name}: no {IDENTITY_INPUT} input")
+                self.assertEqual(spec.get("type"), "string")
+                self.assertIs(spec.get("required"), False)
+                self.assertEqual(spec.get("default"), "fleet")
+                description = spec.get("description", "")
+                self.assertIn("config/linear-identities.json", description)
+                self.assertIn(linear_ops.UNDECLARED, description)
 
     def test_the_reconcile_sweep_takes_its_identity_from_the_caller(self):
         """DRE-3630: the shared sweep's word is an input, so the sandbox's stub

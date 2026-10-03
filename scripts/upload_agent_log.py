@@ -20,11 +20,9 @@ WHAT HAPPENS, in order, cheapest refusal first:
   2. `$GITHUB_REPOSITORY` is a repo the platform serves — `config/repo-map.json`,
      the same routing snapshot `validate_card.VALID_SLUGS` derives from — because
      the slug is both the upload role's name and the key prefix it may write;
-  3. the runner will mint an OIDC token. NO TOKEN IS AN ORDINARY GAP: portico
-     forbids `id-token: write` outright (its own
-     `.github/scripts/assert-credential-free.sh`), and whether that changes is
-     the CEO's decision, not this step's. A repo whose stub has not been given
-     the grant yet (DRE-4348..4353) reads the same way;
+  3. the runner will mint an OIDC token. NO TOKEN IS AN ORDINARY GAP: the
+     grant is the CALLING STUB's to make, and a repo whose stub has not been
+     given `id-token: write` (DRE-4348..4353) reads this way;
   4. the AWS CLI is on PATH. The self-hosted Mac minis may not have it — also a
      gap, never a failure;
   5. **THE SCRUB RUNS, AND NOTHING IS UPLOADED UNLESS IT EXITS 0.** Several of
@@ -405,8 +403,7 @@ def upload(args, secrets: str) -> None:
     if not token_url or not token_request:
         raise Gap("this job was given no OIDC token, so it cannot assume the "
                   "upload role. The CALLING STUB grants `id-token: write` "
-                  "(DRE-4348); portico forbids it by policy and is expected "
-                  "here")
+                  "(DRE-4348); a stub that does not grant it reads this way")
 
     aws = shutil.which("aws")
     if not aws:

@@ -210,12 +210,13 @@ of it is ever a runtime lookup.
   one thing it needs from it: the set of names a run may DECLARE in
   `LINEAR_IDENTITY` (DRE-3321), which the seam prints as the last part of its
   rate-limit refusal and its `linear-budget:` line so a dry bucket names its
-  owner. `linear-sync.yml` and `plan.yml` declare `LINEAR_IDENTITY: fleet` at
-  job level and `split-ledger.yml` declares it on the one step that reads the
-  board; `reconcile.yml` takes the word from its CALLER instead, as the
-  `linear_identity` workflow_call input defaulting to `fleet` (DRE-3630), so a
-  stub on its own Linear key — the sandbox's — names its own budget rather
-  than printing the fleet's while spending its own hour. A run that declares
+  owner. `linear-sync.yml`, `plan.yml`, `agent-fix.yml` and `verify.yml`
+  declare `LINEAR_IDENTITY: fleet` at job level and `split-ledger.yml`
+  declares it on the one step that reads the board; `reconcile.yml`,
+  `agent-task.yml` and `qa-review.yml` take the word from their CALLER
+  instead, as the `linear_identity` workflow_call input defaulting to `fleet`
+  (DRE-3630), so a stub on its own Linear key — the sandbox's — names its own
+  budget rather than printing the fleet's while spending its own hour. A run that declares
   nothing prints `undeclared`, never a guess. No workflow reads the file itself — CI holds
   the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
   operator-tools key wears on the operator's machine, and — where the console
@@ -234,9 +235,14 @@ of it is ever a runtime lookup.
   bucket, kept fresh by the agent-bureau console in Secrets Manager
   `bureau/linear-oauth-planner/agent-bureau-token` and published as the repo
   Actions secret `LINEAR_PLANNER_KEY` in the form `Bearer <access token>`
-  (DRE-5587). `plan.yml` reads it ahead of the fleet key, steps back onto the
-  fleet key on a 401 — never on a rate limit — and its `linear-budget:` line
-  names `budget: planner-oauth` while the token is what it spends, which is
+  (DRE-5587). Linear meters it at 5,000 requests an hour against the API
+  key's 2,500, but at only 2,000,000 complexity points against the API key's
+  3,000,000. `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
+  `agent-fix.yml`, `qa-review.yml` and `verify.yml` in a repo that sets the
+  variable `LINEAR_AGENT_BUCKET=planner` (review item 29), and no other
+  workflow — reads it ahead of the fleet key, steps back onto the fleet key on
+  a 401 — never on a rate limit — and its `linear-budget:` line names
+  `budget: planner-oauth` while the token is what it spends, which is
   how `scripts/check_linear_budget.py` keeps that spend out of the fleet
   key's row. Nothing in this repository refreshes the token; the console is
   its only refresher (DRE-2532). Every home
