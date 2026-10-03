@@ -861,9 +861,11 @@ jobs:
         # for the step, are what the receipt reads.
         id: claude
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
-        # No LINEAR_API_KEY (Stage 2 fix #23): the card comes in as a snapshot
-        # (step `target`) and the report goes out through step `deliver`. The
-        # diagnosis itself reads the failed run's logs, never Linear.
+        # No LINEAR_API_KEY, deliberately (Stage 2 fix #23; a documented
+        # DRE-2696 exception in tests/test_agent_linear_key.py): the card
+        # comes in as a snapshot (step `target`) and the report goes out
+        # through step `deliver`. The diagnosis itself reads the failed run's
+        # logs, never Linear.
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
