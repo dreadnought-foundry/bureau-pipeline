@@ -11,7 +11,7 @@
 
 They were planned by the sandbox's own `plan.yml`, which rides `stable` = bureau-pipeline `518ac24`. That commit carries every sibling: DRE-5281 was Done 2026-10-02 10:45 PT, and DRE-5284 10:14 PT.
 
-**How this was recorded.** A proof-runner session on the operator's instruction recorded this on 2026-10-03, 13:22–14:20 PT. The comment threads were read from the console database (`make db-read`). The runs were read from the Actions pages. The two lane moves a person makes were made by a coordinating session with the operator key, at the times given:
+**How this was recorded.** A proof-runner session on the operator's instruction recorded this on 2026-10-03, 13:22–14:10 PT. The comment threads were read from the console database (`make db-read`). The runs were read from the Actions pages. The two lane moves a person makes were made by a coordinating session with the operator key, at the times given:
 - each epic into Planning;
 - each Approve, a scripted move Green Light → In Progress that stands in for the CEO's click.
 
@@ -20,7 +20,7 @@ Every time is Pacific (PDT).
 | Criterion | Result |
 |---|---|
 | An epic sent back by the second critic before Green Light, revised, re-reviewed with nobody posting the act, reaching Green Light passed, with the run's announce naming the rewritten artifact; epic id, round records verbatim, run ids, PT times | **Met** on DRE-5740 (§1). The announce names the run that holds the rewritten artifact; there is no portal on this repo |
-| The single Approve moved it to In Progress and a child promoted; no later comment or lane move returned it to Green Light | **Half met.** One Approve each, both moved to In Progress and activated, and neither returned to Green Light (read through 14:08 PT). **No child promoted**: the sandbox's WIP cap is 0 (§2) |
+| The single Approve moved it to In Progress and a child promoted; no later comment or lane move returned it to Green Light | **Half met.** One Approve each, both moved to In Progress and activated, and neither returned to Green Light (read through 14:05 PT). **No child promoted**: the sandbox's WIP cap is 0 (§2) |
 | Each old-rule epic in Green Light moved to Planning by the operator and through both critics; each old-rule In Progress epic recorded under one of three readings; DRE-2702 took the new order | **Not observed.** It needs a hand move of production epics, which this sandbox proof does not make. The rows still standing are listed in §3 |
 | Every Green Light row that day by kind; `green_light_rows.py check` exits 0 on `main` at a named sha | **Met** (§3) |
 | The CEO closes this card after reading the record | Open. Under the CEO's rule of 2026-10-02 a proof closes on evidence, and this one is partial |
@@ -55,7 +55,7 @@ Nobody posted `▶️ re-run the review`, and nobody dispatched a run by hand be
 | DRE-5741 | 13:37:27 PT | 13:38:21 `▶️ Epic activated (2 children)`, run 37152213333 | `promotion: WIP at cap (0/0) — no card is dispatched this sweep` · `0 card(s) promoted` | **No.** Lane history: Intake → Planning → Green Light → In Progress, nothing after |
 | DRE-5740 | 14:02:10 PT | 14:03:06 `▶️ Epic activated (9 children)`, run 37153686962 | the same `WIP at cap (0/0)` lines, `0 card(s) promoted` | **No.** Lane history: Intake → Planning → Green Light → In Progress, nothing after |
 
-Lane histories were read from the console database at about 14:08 PT. **No child promoted, and that is the sandbox's own setting, not the mechanism.** The sandbox's plan and reconcile stubs pass `max_wip: "0"`, the hold the CEO put on this repo on 2026-09-08 (sandbox PR #11, "hold builds here (max_wip 0) until Bureau is solid"). The activate route read it (`promotion: WIP cap 0, read from the caller's reconcile stub`) and dispatched nothing. One small wording finding: both activation receipts say "the dependency gate will flow them to build in order. Nothing else to do", while at a cap of 0 nothing will flow.
+Lane histories were read from the console database at 14:05 PT. **No child promoted, and that is the sandbox's own setting, not the mechanism.** The sandbox's plan and reconcile stubs pass `max_wip: "0"`, the hold the CEO put on this repo on 2026-09-08 (sandbox PR #11, "hold builds here (max_wip 0) until Bureau is solid"). The activate route read it (`promotion: WIP cap 0, read from the caller's reconcile stub`) and dispatched nothing. One small wording finding: both activation receipts say "the dependency gate will flow them to build in order. Nothing else to do", while at a cap of 0 nothing will flow.
 
 **Approvals since DRE-5281 merged that did not start a build.** Every epic that moved Green Light → In Progress after 2026-10-02 10:45 PT, read from the console database's lane history, with any child moving to Todo or later afterwards:
 
@@ -69,7 +69,7 @@ Two approvals did not start a build. Both are this proof's scripted sandbox appr
 
 ## 3. Every Green Light row on 2026-10-03
 
-Every card that sat in or entered Green Light on 2026-10-03 (from 00:00 PT), read from the console database at about 14:05 PT:
+Every card that sat in or entered Green Light on 2026-10-03 (from 00:00 PT), read from the console database at 14:07 PT:
 
 | card | repo | kind | why it is there |
 |---|---|---|---|
