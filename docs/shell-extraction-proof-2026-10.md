@@ -3,10 +3,10 @@
 **Status: PROVEN on observations 1 to 6. Observation 7 is met on its counts, with two differences the card did not expect, both explained below.** Each of the five extracted scripts was seen running in a real fleet run after `stable` advanced onto the ceiling card's merge, and each run posted the receipt, note or verdict its outcome calls for. Every pipeline `run:` block on the promoted commit is under 8,000 characters. The largest is 7,083.
 
 - **The promoted commit** is `13d82ca` (DRE-5385's merge, PR #678). `stable` moved onto it at **2026-10-02 18:20 PT** (Promote Channel run [37085678909](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37085678909)). Harness run [37085142299](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37085142299) proved it first, and its `agent_task_parses` scenario passed.
-- **The runs** are in portico, the one product repo that ran builds and fixes after the advance. agent-bureau, agent-bureau-demo and bureau-pipeline had their build and fix workflows paused, and atlas and deltasolv ran none. The build and fix runs rode `863ed6a`, which is `stable` three commits past `13d82ca`. The merge and review runs rode `f7d662f`, today's `stable`.
+- **The runs** are in portico, the one product repo that ran builds and fixes after the advance. agent-bureau, agent-bureau-demo and bureau-pipeline had their build and fix workflows paused from 2026-10-02 15:17 PT. agent-bureau and agent-bureau-demo came back at 13:01 PT on 2026-10-03, with no build or fix run there by the time this was read. atlas and deltasolv ran none. The build and fix runs rode `863ed6a`, which is `stable` three commits past `13d82ca`. The merge and review runs rode `f7d662f`, today's `stable`.
 - **Not changed from the card:** the record is read-only. No run was dispatched, and no card or PR was touched to produce it.
 
-**How this was recorded:** it is read from the live records after the fact, between 12:55 and 14:30 PT on 2026-10-03, by a proof-runner session on the operator's instruction. The sources were the Actions run pages and logs (`gh run view <id> --log`), the PR threads (`gh api`), and card receipts and lane changes read from the console database (`make db-read`, the `event` table). Measurements in §6 and §7 were run on source tarballs of `13d82ca`, `f7d662f` and `db6adf6` fetched from the GitHub API, with `GITHUB_ACTIONS=true`, empty `AWS_*` and `LINEAR_API_KEY=test`.
+**How this was recorded:** it is read from the live records after the fact, between 12:57 and 13:07 PT on 2026-10-03, by a proof-runner session on the operator's instruction. The sources were the Actions run pages and logs (`gh run view <id> --log`), the PR threads (`gh api`), and card receipts and lane changes read from the console database (`make db-read`, the `event` table). Measurements in §6 and §7 were run on source tarballs of `13d82ca`, `f7d662f` and `db6adf6` fetched from the GitHub API, with `GITHUB_ACTIONS=true`, empty `AWS_*` and `LINEAR_API_KEY=test`.
 
 | Criterion | Result |
 |---|---|
@@ -182,7 +182,7 @@ The park probe still names `merge-gate.yml#Evaluate and merge`. The lane write m
 ## What is not proven, and why
 
 - **Nothing else in the seven observations.** Observations 2 to 5 rest on one run each, as the card asks. The fix run ended in a blocked attempt, not a pushed fix, so the push path of `report_fix_result.sh` is not what was observed here. Its receipt path, labeling and lane move were observed.
-- **The runs are portico's.** In agent-bureau, bureau-pipeline and agent-bureau-demo, builds and fixes were paused from 2026-10-02 15:17 PT. That is why the build and fix are portico runs, and why no run from those three repos is quoted for §2 or §3.
+- **The runs are portico's.** In agent-bureau, bureau-pipeline and agent-bureau-demo, builds and fixes were paused from 2026-10-02 15:17 PT (agent-bureau and the sandbox resumed at 13:01 PT on 10-03). That is why the build and fix are portico runs, and why no run from those three repos is quoted for §2 or §3.
 
 ## Where each source disagreed, and which was taken
 
