@@ -233,28 +233,6 @@ jobs:
           CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/verify-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
 
-      # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
-      # The Verifier is expensive (it boots the app and drives a real E2E/
-      # scenario path), and on single-system non-UI cards there is no
-      # composition to exercise — running there would be noise that could
-      # wrongly gate a merge. So we decide up front whether this card is in
-      # scope, and if not we SKIP the whole job (no verdict posted, no block).
-      #
-      # In scope when ANY of:
-      #   • the card description carries a **Design:** line (a UI card with a
-      #     screen to build to), OR
-      #   • the card wears a UI role label (agent:frontend / ux / ui) AND the
-      #     diff touches the frontend bucket — UI work with no new screen,
-      #     which card-quality.md forbids a Design line on (DRE-4389), OR
-      #   • the diff touches ≥2 systems (touch-count: backend/GraphQL/REST,
-      #     frontend/UI, auth proxy, migration/schema, infra/config).
-      # The live card is the AUTHORITATIVE source for the first two (the PR
-      # body is agent-authored and may not quote it verbatim); the changed-file
-      # set is the authoritative multi-system signal. The decision and the
-      # bucket globs live in scripts/verify_scope.py, pinned by
-      # tests/test_verify_scope.py. When in doubt → SKIP (degrade, never
-      # block): an unreadable card gives no card signal, and a gate that
-      # crashes decides out of scope, mirroring the visual-QA stage.
       # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
       # The scope gate below reads the card's description and labels, and the
       # Select model step reads its thread (the build's `model-attempt:`
@@ -292,6 +270,28 @@ jobs:
           python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" "$SNAP" \
             || echo "no snapshot of $CARD — the steps that read it degrade as on an unreadable card"
 
+      # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
+      # The Verifier is expensive (it boots the app and drives a real E2E/
+      # scenario path), and on single-system non-UI cards there is no
+      # composition to exercise — running there would be noise that could
+      # wrongly gate a merge. So we decide up front whether this card is in
+      # scope, and if not we SKIP the whole job (no verdict posted, no block).
+      #
+      # In scope when ANY of:
+      #   • the card description carries a **Design:** line (a UI card with a
+      #     screen to build to), OR
+      #   • the card wears a UI role label (agent:frontend / ux / ui) AND the
+      #     diff touches the frontend bucket — UI work with no new screen,
+      #     which card-quality.md forbids a Design line on (DRE-4389), OR
+      #   • the diff touches ≥2 systems (touch-count: backend/GraphQL/REST,
+      #     frontend/UI, auth proxy, migration/schema, infra/config).
+      # The live card is the AUTHORITATIVE source for the first two (the PR
+      # body is agent-authored and may not quote it verbatim); the changed-file
+      # set is the authoritative multi-system signal. The decision and the
+      # bucket globs live in scripts/verify_scope.py, pinned by
+      # tests/test_verify_scope.py. When in doubt → SKIP (degrade, never
+      # block): an unreadable card gives no card signal, and a gate that
+      # crashes decides out of scope, mirroring the visual-QA stage.
       - name: Decide scope (multi-system / UI?)
         id: scope
         continue-on-error: true
