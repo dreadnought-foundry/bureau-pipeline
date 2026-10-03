@@ -53,7 +53,7 @@ the fix agent, receipted on the PR, and its card released from the human queue
 on top of the answer. A human comment that mentions an operator decision but
 does not parse as one is reported on the PR instead of held in silence.
 
-Stranded-card watchdog (DRE-1993): every card/epic in Todo / In Progress whose
+Stranded-card watchdog (DRE-1993): every card/epic in Todo / Hand-work / In Progress whose
 repo has no route in the routing snapshot, or (this repo's cards) with no run
 receipt, gets — after 30 minutes either way — ONE plain-English comment naming
 the reason plus the needs-human label, so the board never says work is
@@ -496,7 +496,16 @@ _LIFE_PREFIXES = ("⏳", "🧠")
 # own rule in flag_stalled_planning(). The nudge loop / WIP cap still never
 # see Planning (it is not in SWEEP_STATES, and there is no defined nudge) — the
 # contract's stall window for it feeds flag_stalled_planning() alone.
-WATCHDOG_LANES = ("Todo", "In Progress")
+#
+# `Hand-work` (DRE-5322) is where a WORKBENCH or OPERATOR card now waits for
+# its person. It is watched for the one alarm a hand-built card owes —
+# `_flag_hand_built_idle`, idle with neither branch nor pull request — and read
+# by `move_hand_built_to_review`, which carries it to In Review once its pull
+# request opens (HAND_BUILT_REVIEW_LANES derives from SWEPT_LANES, which this
+# feeds). It carries no stall window in the contract, so it is NOT in
+# SWEEP_STATES: the nudge loop never dispatches at it, and `flag_stranded`
+# skips a hand-built card outright.
+WATCHDOG_LANES = ("Todo", "Hand-work", "In Progress")
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
 
@@ -2033,7 +2042,7 @@ def live_rail_slugs() -> frozenset[str] | None:
 
 
 def _watchdog_cards() -> list[dict]:
-    """The cards `flag_stranded` walks: Todo and In Progress, EVERY repo's.
+    """The cards `flag_stranded` walks: Todo, Hand-work and In Progress, EVERY repo's.
 
     Off and shadow read those lanes from Linear, the whole team's, so this is
     `active_cards(WATCHDOG_LANES)` unchanged. With the door ON and serving, the
@@ -3221,6 +3230,10 @@ def destinations() -> tuple[str, ...]:
         for lane in lane_contract.lanes(status="retiring")
         if lane.get("replaced_by")
     ]
+    # `promote_ready` advances to the verdict's own destination (DRE-5322):
+    # every lane the sweep carries a Backlog card into, read off the routing
+    # vocabulary — Todo for FLEET, Hand-work for WORKBENCH and OPERATOR.
+    lanes += list(routing_verdict.sweep_lanes())
     return tuple(dict.fromkeys(lanes))
 
 
@@ -5737,10 +5750,15 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # marks go on, and what the receipt says.
         verdict = routing_verdict.verdict_on(bodies)
         by_hand_note = routing_verdict.hand_built_promotion(verdict)
+        # WHERE the card goes is the verdict's own destination (DRE-5322), read
+        # off the vocabulary: Todo for FLEET, Hand-work for WORKBENCH and
+        # OPERATOR. The lane is never spelled here — a person's card landing in
+        # Todo is what made Todo read as a stuck build queue (DRE-5240).
+        destination = routing_verdict.destination(verdict)
         try:
             # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
             # hand-built card alone BECAUSE of the label, so a card that lands
-            # in Todo unmarked is a card the next sweep — fifteen minutes later
+            # in a work lane unmarked is a card the next sweep — fifteen minutes later
             # — dispatches an agent at. The labels the card already carries came
             # free with the candidates query; `add_label` is idempotent but
             # costs a Linear read to find that out.
@@ -5748,7 +5766,7 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 for label in routing_verdict.marks(verdict):
                     if label.lower() not in labels:
                         linear_ops.add_label(card["identifier"], label)
-            linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
+            linear_ops.cmd_advance(card["identifier"], destination, "Backlog")
             # The receipt names what actually approved this card, and — for the
             # two verdicts nothing is dispatched for — whose turn it now is.
             # "parent epic active" on a card with no parent would be a confident
@@ -5760,7 +5778,7 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             )
             linear_ops.cmd_comment(
                 card["identifier"],
-                f"🧹 Auto-promoted Backlog → Todo: {reason}",
+                f"🧹 Auto-promoted Backlog → {destination}: {reason}",
             )
         except linear_ops.LinearError as e:
             _write_failures.append(f"{card['identifier']} advance/comment: {e}")
@@ -7037,7 +7055,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
 def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
     """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
 
-    A hand-built card in Todo / In Progress with NO card branch and NO pull
+    A hand-built card in Todo / Hand-work / In Progress with NO card branch and NO pull
     request has nothing to point at: the board says work is happening and
     there is no artifact anywhere that agrees. flag_stranded cannot say so —
     it is silenced on this label by design and correctly, because the thing it
@@ -10353,7 +10371,15 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 # costs the check plus those reads (about three requests), not one. The
 # GitHub-side backstops still run too: an open pull request is work whatever
 # the board says.
-IDLE_LANES = tuple(SWEEP_STATES) + (BACKLOG_LANE,)
+#
+# "In motion" includes `Hand-work` (DRE-5322). A person's card used to wait in
+# Todo, which is in SWEEP_STATES, so it kept its repo's sweep awake; in
+# Hand-work, which carries no stall window, it would not — and an idle pass
+# skips `hand_built_to_review` and the hand-built idle alarm, the two phases
+# that card is owed. So the in-motion lanes are the nudge loop's plus the
+# watchdog's, every lane this repo's own work can sit in on the way to review.
+IN_MOTION_LANES = tuple(dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES))
+IDLE_LANES = IN_MOTION_LANES + (BACKLOG_LANE,)
 
 #: The smallest Linear question that answers it: does a card of THIS repo sit
 #: in any of those lanes? One request, one bounded page, ids and label names.
@@ -10405,7 +10431,7 @@ def sweep_idle() -> str | None:
             print(f"read-door: idle check unknown ({e}) — asking Linear")
         else:
             mine = [c for c in read.nodes if card_repo(c) == REPO_SLUG]
-            moving = [c for c in mine if c["state"]["name"] in SWEEP_STATES]
+            moving = [c for c in mine if c["state"]["name"] in IN_MOTION_LANES]
             waiting = [c for c in mine if c["state"]["name"] == BACKLOG_LANE
                        and not held(c)]
             if moving or waiting:

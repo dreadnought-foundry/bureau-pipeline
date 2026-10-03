@@ -952,18 +952,20 @@ def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     The marks are named because they are applied in the same breath: the reader
     can see that the labels which keep the fleet off this card are on it.
 
-    The note names NO lane: the receipt it is wrapped in names the lane the
-    promoter actually wrote (`🧹 Auto-promoted Backlog → <lane>:`), and a note
-    naming the verdict's destination beside it would contradict that header
-    for as long as the two differ (the critic on #703).
+    So is the lane it lands in, read off the vocabulary — `Hand-work` today,
+    never a lane restated here. Since DRE-5322 the promoter writes that same
+    destination into the move and into the receipt's header
+    (`🧹 Auto-promoted Backlog → <destination>:`), so the two always agree; a
+    note naming a lane the card was not moved to is what the critic on #703
+    refused.
     """
     if is_promotable(name, doc):
         return None
     entry = record(name, doc)
     marked = ", ".join(f"`{m}`" for m in marks(name, doc))
     return (
-        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn — "
-        "a person builds this; nothing was dispatched."
+        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn in "
+        f"{destination(name, doc)} — a person builds this; nothing was dispatched."
         + (f" Marked {marked}." if marked else "")
     )
 

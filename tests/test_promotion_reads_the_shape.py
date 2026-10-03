@@ -233,7 +233,7 @@ class TestTheParentlessGateStillDecides:
         the sweep goes to — marked, and with nothing dispatched."""
         board = _Board(_card(comments=[ONE_OFF_STAMP, WORKBENCH]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-3018") == "Todo"
+        assert board.lane_of("DRE-3018") == routing_verdict.destination("WORKBENCH")
         assert [l for _, l in board.labelled] == list(
             routing_verdict.marks("WORKBENCH"))
 

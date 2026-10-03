@@ -669,7 +669,7 @@ class TestParkedIsNeverStalled:
 #
 # DRE-3385 separated the two questions this class used to run together. The
 # sweep carries a card to the lane its verdict names, and WORKBENCH/OPERATOR
-# name `Todo` — so they are promoted, marked `hand-built`, and no run is sent
+# name `Hand-work` (DRE-5322; `Todo` before) — so they are promoted, marked `hand-built`, and no run is sent
 # at them. What "must not be dispatched" protects is the RUN, and that is now
 # the marks plus the relay's own guard (DRE-3341), not the card being left in a
 # lane nothing ever moves it out of.
@@ -685,7 +685,9 @@ class TestThePromoterRoutesOnTheVerdict:
     def test_a_person_s_card_is_promoted_and_marked_but_never_dispatched(self, verdict):
         board = _PromotionBoard([routing_verdict.verdict_comment(verdict, "because")])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        # To the verdict's own lane, Hand-work, since DRE-5322.
+        assert board.advanced == [("DRE-2799", routing_verdict.destination(verdict), "Backlog")]
+        assert board.advanced[0][1] == "Hand-work"
         assert [l for _, l in board.labelled] == list(routing_verdict.marks(verdict))
         receipt = "\n".join(b for _, b in board.posted)
         assert "nothing was dispatched" in receipt
@@ -985,10 +987,14 @@ class TestTheRouteIsWrittenDown:
         backlog = lane_contract.lane("Backlog", contract=contract)
         todo = lane_contract.lane("Todo", contract=contract)
         assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
-        # Todo now holds work for BOTH actors: a dispatched run and a person.
+        # Todo names all three routes the sweep carries, and says where each
+        # goes: FLEET here, WORKBENCH and OPERATOR to Hand-work (DRE-5322),
+        # whose entrance is the clause that asks for the person's mark.
         for name in ("FLEET", "WORKBENCH", "OPERATOR"):
             assert name in todo["clauses"]["entrance"]["text"]
-        assert reconcile.HAND_BUILT_LABEL in todo["clauses"]["entrance"]["text"]
+        assert "Hand-work" in todo["clauses"]["entrance"]["text"]
+        hand_work = lane_contract.lane("Hand-work", contract=contract)
+        assert reconcile.HAND_BUILT_LABEL in hand_work["clauses"]["entrance"]["text"]
 
     def test_no_claim_is_made_that_a_specific_card_proved_the_need(self):
         """DRE-2695 was cited as a card that "could not have closed". It closed:
