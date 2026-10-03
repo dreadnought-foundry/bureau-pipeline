@@ -58,9 +58,12 @@
     "Agent-Bureau, so it owes `one_user_per_identity` like the relay does, but",
     "Linear meters it apart from the user's API key — 5,000 an hour against",
     "2,500, measured on 2026-10-01. plan.yml spends it when the console has",
-    "published it and names it on the run's `linear-budget:` line as",
-    "`budget: planner-oauth`; scripts/linear_ops.py prints a home's name only",
-    "when this file declares it under the run's identity.",
+    "published it, and since Stage 2 (fix #12) so do agent-task.yml,",
+    "agent-fix.yml, qa-review.yml and verify.yml in a repo that has opted in",
+    "with the variable `LINEAR_AGENT_BUCKET=planner` (review item 29); each",
+    "names it on the run's `linear-budget:` line as `budget: planner-oauth`;",
+    "scripts/linear_ops.py prints a home's name only when this file declares",
+    "it under the run's identity.",
     "",
     "No user ids here on purpose: an id pinned in a file is the thing that",
     "goes stale on the next rotation. The display name is the declared fact;",
@@ -90,7 +93,7 @@
         {
           "name": "planner-oauth",
           "env": "LINEAR_PLANNER_KEY",
-          "lives_in": "AWS Secrets Manager bureau/linear-oauth-planner/agent-bureau-token — the OAuth token the agent-bureau console keeps fresh (DRE-5587), the console being its only refresher — published by the console as the GitHub Actions secret LINEAR_PLANNER_KEY in every repo in config/repo-map.json, already in the form `Bearer <access token>`, and read by plan.yml as secrets.LINEAR_PLANNER_KEY. The same Agent-Bureau user on its own 5,000-an-hour bucket (DRE-5589). Exported by the operator into LINEAR_PLANNER_KEY, in that same `Bearer` form, before this check runs"
+          "lives_in": "AWS Secrets Manager bureau/linear-oauth-planner/agent-bureau-token — the OAuth token the agent-bureau console keeps fresh (DRE-5587), the console being its only refresher — published by the console as the GitHub Actions secret LINEAR_PLANNER_KEY in every repo in config/repo-map.json, already in the form `Bearer <access token>`, and read as secrets.LINEAR_PLANNER_KEY by plan.yml, and by agent-task.yml, agent-fix.yml, qa-review.yml and verify.yml in a repo whose variable LINEAR_AGENT_BUCKET is `planner`. The same Agent-Bureau user on its own 5,000-an-hour bucket (DRE-5589). Exported by the operator into LINEAR_PLANNER_KEY, in that same `Bearer` form, before this check runs"
         }
       ]
     },

@@ -94,9 +94,14 @@ def test_each_context_step_hands_the_script_its_card_and_key_through_env():
         env = step.get("env") or {}
         assert env.get("CARD") == "${{ github.event.client_payload.identifier }}", (
             f"{workflow}: {name} must name the card in env")
-        # plan.yml hands the planner's own bucket first (DRE-5589).
-        expected = ("${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
-                    if workflow == "plan.yml" else "${{ secrets.LINEAR_API_KEY }}")
+        # plan.yml hands the planner's own bucket first (DRE-5589); agent-task
+        # hands it only where the repo opted in (Stage 2 fix #12, review item
+        # 29). The fleet key when none is published, either way.
+        expected = (
+            "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
+            if workflow == "plan.yml" else
+            "${{ vars.LINEAR_AGENT_BUCKET == 'planner' && "
+            "secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}")
         assert env.get("LINEAR_API_KEY") == expected, (
             f"{workflow}: {name} must carry the fleet's Linear key in env")
         assert "${{" not in _people_line(step["run"]), (
