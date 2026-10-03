@@ -158,10 +158,10 @@ class TestTheCapIsReadFromTheRepo:
         assert "vars.MAX_WIP" in source
 
     def test_this_repo_resolves_through_its_own_self_stub(self):
-        """bureau-pipeline self-hosts through self-reconcile.yml, which passes
-        no cap — so it stays at the one default, exactly as today."""
+        """bureau-pipeline self-hosts through self-reconcile.yml, and an empty
+        input resolves to the cap that stub writes (DRE-5733's restart cap)."""
         cap, source = reconcile.cap_and_source("", str(ROOT))
-        assert cap == reconcile.DEFAULT_MAX_WIP
+        assert cap == 3
         assert "self-reconcile.yml" in source
 
     def test_the_module_names_where_its_cap_came_from(self):

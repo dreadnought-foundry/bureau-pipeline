@@ -187,7 +187,13 @@ class SelfHostStubsTest(unittest.TestCase):
             yaml.safe_dump(self.docs["self-plan.yml"])
         )
         job = next(iter(docs["self-plan.yml"]["jobs"].values()))
-        job["with"] = {"max_wip": "12"}
+        # Whatever the live stubs pass, this one now differs from its siblings:
+        # dropped when they pass a cap, "12" when they pass none.
+        with_block = job.setdefault("with", {})
+        if with_block.get("max_wip") is None:
+            with_block["max_wip"] = "12"
+        else:
+            del with_block["max_wip"]
         violations = cwc.check_stubs(docs, self.promoters)
         self.assertTrue(any("do not" in v for v in violations), violations)
 
