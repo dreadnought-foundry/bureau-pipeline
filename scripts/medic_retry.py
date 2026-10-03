@@ -38,16 +38,18 @@ this module is where the medic asks them:
      on one card and ample on the next. The same wall, a fourth time.
 
 Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
-rerun is new agent work on a card a person has said stop to. A Linear Sync or
-Merge Gate rerun starts no agent: it finishes bookkeeping for work that already
-merged. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
+rerun is new agent work on a card a person has said stop to. A Linear Sync
+rerun starts no agent: it finishes bookkeeping for work that already merged.
+On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
 fleet's exhausted Linear quota, the gate refused them over a leftover
 `needs-human` label, and the refusal receipt it posted landed after the
 `🪦 limit-death` marker, which `limit_recovery.waiting()` reads as closing it.
 The medic's own refusal took both cards off the path that brings a limit death
 back. So the gate takes the failed workflow's name, and rule 1 applies to every
 workflow except the ones `BOOKKEEPING_WORKFLOWS` names. An empty or unknown
-name keeps rule 1: an unknown run is not evidence of bookkeeping.
+name keeps rule 1: an unknown run is not evidence of bookkeeping. Merge Gate
+keeps it too: the gate MERGES, and whether a hold should block a merge is an
+open question to the CEO (Stage 2 review item 44, M12).
 
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
@@ -182,7 +184,13 @@ REPLAN_STATE = "Planning"
 # rule too: an empty name (an old stub, a missing input) or one this list has
 # never heard of is not evidence that the rerun starts no work, and dropping
 # the rule on a guess is how DRE-2937's third build would come back.
-BOOKKEEPING_WORKFLOWS = ("linear sync", "merge gate")
+#
+# Merge Gate is deliberately NOT here (Stage 2 review item 44, M12). It is
+# not bookkeeping: a rerun re-evaluates the PR and the gate may MERGE it.
+# Whether "needs a human" should block merging is a question put to the
+# CEO; until he answers, the rule fails closed for it. Adding it back is
+# his decision, not a tidy-up.
+BOOKKEEPING_WORKFLOWS = ("linear sync",)
 
 # The workflows the park rule exists for: a rerun starts agent work.
 # Documentation as data; `park_rule_applies` keeps the rule for these by
