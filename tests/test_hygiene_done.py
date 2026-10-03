@@ -466,11 +466,37 @@ def records_doc():
     return doc
 
 
+#: Each record's git blob id at 2e5aefaf (`git rev-parse 2e5aefaf:docs/<name>`).
+BLOBS = {
+    "groomer-two-lists-proof.md": "f7b30591f566e2ed4b2655c75811baede4c56e41",
+    "linear-identities-proof-2026-09.md": "a9fdc9a93bdba4e65b7f298a5c9df19ccfb00a53",
+    "model-adoption-proof-2026-09.md": "0777461e406525588d7f32a8cc3ae0dabc4ee4aa",
+    "planner-queue-proof-2026-10.md": "461c09e8d2e173a444fa7a7c801ae5ea2d0c228a",
+    "release-decision-proof-2026-09.md": "0ee748d97c6ca56eed831cd2e0c874025b3a471f",
+    "rereview-continuation-proof-2026-09.md": "5a84c64d2df337cc8cd2b8a64677b40b1bfb843d",
+    "review-rerun-proof-2026-09.md": "fa636f2d21cda553e2c0f01e869a14cadf4f5263",
+    "review-turns-proof-2026-09.md": "dd4fb114327b53a855f49e2546758fde1664c140",
+    "reviewer-environment-hold-proof.md": "47d8288d1ed97e51daac903d760233453eb0fda0",
+    "seam-proof-dre3244.md": "ad92fa4e342a8b2bd862182f195f3c83675f3c67",
+    "stale-merge-ref-proof.md": "859257104c76c1b9deb07a038f2da959065346fe",
+    "sweep-spend-proof-2026-09.md": "82ebacfd632f7798e98873a998681ae926f3ca59",
+    "turn-cap-proof-2026-09.md": "16ebaaa8991d810c68c4166cbda702655a1a3041",
+}
+
+
+def _blob_id(data: bytes) -> str:
+    return __import__("hashlib").sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 class TestTheThirteenRecordsOnMain:
     def test_the_copies_are_the_thirteen(self):
         assert sorted(p.name for p in RECORDS.iterdir()) == sorted(
             [*CLOSES, *NOT_MET, *NO_TABLE])
         assert len(CLOSES) + len(NOT_MET) + len(NO_TABLE) == 13
+
+    @pytest.mark.parametrize("name", sorted(BLOBS))
+    def test_each_copy_is_byte_for_byte_the_record_at_2e5aefaf(self, name):
+        assert _blob_id((RECORDS / name).read_bytes()) == BLOBS[name]
 
     @pytest.mark.parametrize("name", sorted(CLOSES))
     def test_exactly_two_close(self, name):
