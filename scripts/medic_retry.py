@@ -37,6 +37,26 @@ this module is where the medic asks them:
      FIRST kill keeps the ordinary retry, because 2 GB can be one turn short
      on one card and ample on the next. The same wall, a fourth time.
 
+Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
+rerun is new agent work on a card a person has said stop to. A Linear Sync
+rerun starts no agent: it finishes bookkeeping for work that already merged.
+A Merge Gate rerun re-evaluates and merges only on critic APPROVE and green
+CI, with one exception that IS agent work: on a conflicted PR its conflict arm
+dispatches Agent Fix in conflict mode, and Agent Fix clears `needs-human` when
+it starts. The gate's own wakes (CI completion, the critic's comment) already
+do that on a held card, so exempting the rerun adds no path that did not exist;
+it replays what the dead run would have done. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
+fleet's exhausted Linear quota, the gate refused them over a leftover
+`needs-human` label, and the refusal receipt it posted landed after the
+`🪦 limit-death` marker, which `limit_recovery.waiting()` reads as closing it.
+The medic's own refusal took both cards off the path that brings a limit death
+back. So the gate takes the failed workflow's name, and rule 1 applies to every
+workflow except the ones `BOOKKEEPING_WORKFLOWS` names. An empty or unknown
+name keeps rule 1: an unknown run is not evidence that the rerun starts no
+agent work. Merge Gate is exempt by the CEO's decision of 2026-10-02 (about
+17:37 PT, Stage 2 review item 44, M12): a `needs-human` hold does not block
+merging.
+
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
 those are what the one retry is FOR, and this module must not take it away.
@@ -75,9 +95,16 @@ empty log has always classified as `normal`, which means retry.
 CLI:
 
     python3 medic_retry.py decide --branch <head-ref> --log <file> \
-        [--run-started-at <iso>]
+        [--run-started-at <iso>] [--workflow <failed workflow's name>] \
+        [--snapshot <file to leave the card read in>]
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
+    python3 medic_retry.py diagnosis-target --branch <head-ref> \
+        --workflow <failed workflow's name> --snapshot <file>
+
+`diagnosis-target` prints `kind`, `target` and `title` for the diagnosis job
+and leaves the target card's facts in the snapshot file the agent reads (see
+`diagnosis_target`).
 
 `decide` prints four `key=value` lines for `$GITHUB_OUTPUT` — `retry`, `rule`,
 `card`, `detail` — one line each, and exits 0 whatever it decides. `post`
@@ -90,6 +117,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import re
 import sys
@@ -150,6 +178,40 @@ REPLAN_RECEIPT_MARK = dead_run.REPLAN_MARK
 
 # The lane that receipt sends the card to.
 REPLAN_STATE = "Planning"
+
+# Stage 2 fix #23. The workflows whose rerun starts NO AGENT WORK, so the
+# park rule does not apply to them:
+#
+#   * Linear Sync — bookkeeping for a PR that already merged (card-done).
+#   * Merge Gate — re-running it starts no agent work; the gate re-evaluates
+#     and merges only on critic APPROVE and green CI. It is not exempt
+#     because it "does not merge" — it does. It is exempt because the gate's
+#     safety is the critic and CI, not the hold label, which is mostly
+#     applied mechanically when a robot loop gives up and often lingers
+#     stale (Stage 2 review item 44, M12). The CEO DECIDED this on
+#     2026-10-02 at about 17:37 PT: "needs a human" does NOT block merging.
+#     Making the hold itself smarter (reasons, self-clearing, trying without
+#     a person first) is a dated entry on roll-up DRE-4915, not this list.
+#
+# The constant keeps its name, but "bookkeeping" is not quite "no agent work":
+# a Merge Gate rerun on a conflicted PR dispatches Agent Fix (conflict mode),
+# which clears `needs-human`, exactly as the gate's own wakes already do on a
+# held card. Exempting the rerun replays that; it opens no new path.
+# Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,
+# case-insensitively, because `github.event.workflow_run.name` is the calling
+# stub's name ("Linear Sync") and the reusable is "Linear Sync (reusable)".
+#
+# Named as the EXCEPTION on purpose. The dispatching workflows below are the
+# ones the rule was written for, but every workflow NOT named here keeps the
+# rule too: an empty name (an old stub, a missing input) or one this list has
+# never heard of is not evidence that the rerun starts no work, and dropping
+# the rule on a guess is how DRE-2937's third build would come back.
+BOOKKEEPING_WORKFLOWS = ("linear sync", "merge gate")
+
+# The workflows the park rule exists for: a rerun starts agent work.
+# Documentation as data; `park_rule_applies` keeps the rule for these by
+# not naming them above, and the tests read this to prove it.
+DISPATCHING_WORKFLOWS = ("agent task", "agent fix", "agent plan")
 
 # The DRE-N a head ref carries. Same shape `reconcile.branch_card` reads and the
 # same shape medic.yml's own back-off step greps for; a branch with no card
@@ -387,6 +449,19 @@ def _moment(value: str):
         return None
 
 
+def park_rule_applies(workflow_name) -> bool:
+    """Does the park rule govern a rerun of this workflow?
+
+    False only for a workflow `BOOKKEEPING_WORKFLOWS` names. True for every
+    other name, including an empty one: see that constant for why the rule
+    fails closed.
+    """
+    name = " ".join(str(workflow_name or "").split()).lower()
+    if not name:
+        return True
+    return not any(name.startswith(prefix) for prefix in BOOKKEEPING_WORKFLOWS)
+
+
 def _newest_after(receipts, needle: str, run_started_at: str) -> dict | None:
     """The newest receipt carrying `needle` that was posted after the run began.
 
@@ -591,8 +666,12 @@ def card_for_run(branch: str, log_text: str = "") -> str | None:
     return card_from_branch(branch) or card_from_log(log_text)
 
 
-def card_facts(identifier: str) -> dict:
+def card_facts(identifier: str, *, detail: bool = False) -> dict:
     """`{"state", "labels", "comments"}` for a card — one read, both rules.
+
+    `detail` adds the card's `title` and `description`, in the SAME request:
+    the diagnosis agent's snapshot wants them (`diagnosis_target`), the retry
+    gate does not, and neither is worth a second read.
 
     The comment window is `linear_ops.COMMENT_WINDOW_GQL` and the order is
     `linear_ops.window_nodes`'s: the card's fifty NEWEST comments, oldest→
@@ -609,11 +688,12 @@ def card_facts(identifier: str) -> dict:
 
     data = linear_ops.gql(
         """query($id: String!) { issue(id: $id) {
-             state { name } labels { nodes { name } }
-             %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
+             %sstate { name } labels { nodes { name } }
+             %s } }""" % ("title description " if detail else "",
+                          linear_ops.COMMENT_WINDOW_GQL),
         {"id": identifier},
     )["issue"] or {}
-    return {
+    facts = {
         "state": (data.get("state") or {}).get("name") or "",
         "labels": [
             (label.get("name") or "")
@@ -624,6 +704,77 @@ def card_facts(identifier: str) -> dict:
             for node in linear_ops.window_nodes(data.get("comments"))
         ],
     }
+    if detail:
+        facts["title"] = data.get("title") or ""
+        facts["description"] = data.get("description") or ""
+    return facts
+
+
+# --------------------------------------------------------------------------- #
+# the diagnosis agent's card, read before it starts (Stage 2 fix #23)          #
+# --------------------------------------------------------------------------- #
+
+# Where a diagnosis lands, as `diagnosis_target` answers it:
+TARGET_CARD = "card"  # the head branch names a card: comment on it
+TARGET_FAILURE_CARD = "failure-card"  # an open "Pipeline failure: <wf>" card exists
+TARGET_NEW = "new"  # the search answered: none yet, so create one
+TARGET_UNKNOWN = "unknown"  # the search did not answer: ask again before creating
+
+
+def failure_card_title(workflow) -> str:
+    """The title a workflow's pipeline-failure card carries — ONE line, because
+    it crosses a `$GITHUB_OUTPUT` boundary and the run name is agent-influenced
+    text."""
+    return "Pipeline failure: " + " ".join(str(workflow or "").split())
+
+
+def diagnosis_target(branch: str, workflow: str, snapshot_path: str = "") -> dict:
+    """Which card the diagnosis goes to, and that card as the agent will see it.
+
+    Before Stage 2 fix #23 the diagnosis agent held the fleet's Linear key and
+    found its card itself, with whatever queries it chose. Everything it needed
+    is knowable before it starts: the head branch's card, or the open failure
+    card for this workflow (`linear_ops.find_open`, by title and open-ness, so
+    every lane), or none yet. One read for a branch card, two for a failure
+    card found by title, one when there is none.
+
+    A search that FAILED is `unknown`, never `new`: `new` creates a card, and
+    a search that did not answer is not a search that found nothing. A card
+    that could not be read still names its target; the snapshot says why it
+    carries no history. Never raises — no answer here must not cost the
+    diagnosis, and the delivery step resolves the target itself when this one
+    could not.
+    """
+    title = failure_card_title(workflow)
+    card = card_from_branch(branch)
+    snapshot: dict = {"failure_title": title}
+    if card:
+        kind, target = TARGET_CARD, card
+    else:
+        try:
+            import linear_ops  # local: only the Linear seam needs it
+
+            found = linear_ops.find_open(title)
+        except Exception as e:  # noqa: BLE001 — any Linear/transport failure
+            print(f"::warning::medic diagnosis: could not search for '{title}' "
+                  f"({e}) — the delivery step will search again.", file=sys.stderr)
+            kind, target = TARGET_UNKNOWN, ""
+        else:
+            kind, target = (TARGET_FAILURE_CARD, found) if found else (TARGET_NEW, "")
+    snapshot.update(kind=kind, target=target)
+    if target:
+        try:
+            snapshot.update(card_facts(target, detail=True))
+        except Exception as e:  # noqa: BLE001
+            snapshot["unreadable"] = f"the card could not be read from Linear ({e})"
+    if snapshot_path:
+        try:
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=1, ensure_ascii=False)
+        except OSError as e:
+            print(f"::warning::medic diagnosis: snapshot not written ({e})",
+                  file=sys.stderr)
+    return snapshot
 
 
 def post_declined(identifier: str, decision: Decision, run_url: str = "") -> None:
@@ -661,11 +812,44 @@ def _read(path: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def write_snapshot(path: str, card: str, facts: dict | None) -> None:
+    """Leave the gate's card read behind for the steps after it, or clear it.
+
+    Stage 2 fix #23. The limit step de-duplicates its marker against the
+    card's comments, and used to ask Linear for the same window this gate had
+    just read. The file is `json.dumps` of the bodies' window, so the step's
+    grep reads it the way it read `dump-comments`, over a narrower window: the
+    gate's snapshot holds the 50 newest comments (`card_facts`), where
+    `dump-comments` read the whole thread (DRE-5639). A marker for the same
+    run that fell out of the newest 50 between attempts would be written a
+    second time; that is unlikely, and a duplicate marker is harmless.
+
+    `facts` None (no card, or a read that failed open) REMOVES the file: a
+    stale snapshot from an earlier job on the same machine must never stand in
+    for this card's read, and a missing file is what sends the step back to
+    Linear. Never raises: telemetry for a later step must not take the gate
+    down (every medic job `needs: classify`).
+    """
+    if not path:
+        return
+    try:
+        if facts is None:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(dict(facts, card=card), f)
+    except OSError as e:
+        print(f"::warning::medic retry gate: card snapshot not written ({e})",
+              file=sys.stderr)
+
+
 def _decide_cli(args) -> int:
     log_text = _read(args.log)
     card = card_for_run(args.branch, log_text)
     stall = stream_watchdog.stall_from_log(log_text)
     parked, witness, repeat = "", "", ""
+    write_snapshot(args.snapshot, card or "", None)
     if card:
         try:
             facts = card_facts(card)
@@ -678,12 +862,18 @@ def _decide_cli(args) -> int:
                 file=sys.stderr,
             )
         else:
-            parked = park_reason(
-                state=facts["state"],
-                labels=facts["labels"],
-                receipts=facts["comments"],
-                run_started_at=args.run_started_at,
-            )
+            write_snapshot(args.snapshot, card, facts)
+            # Stage 2 fix #23: a bookkeeping rerun is not new work, so the park
+            # is not its business. The card is still read and still named —
+            # the other two rules read its receipts, and medic.yml's limit
+            # step writes its marker to the card printed below.
+            if park_rule_applies(args.workflow):
+                parked = park_reason(
+                    state=facts["state"],
+                    labels=facts["labels"],
+                    receipts=facts["comments"],
+                    run_started_at=args.run_started_at,
+                )
             witness = turn_receipt(
                 facts["comments"], run_started_at=args.run_started_at
             )
@@ -730,6 +920,18 @@ def main(argv=None) -> int:
     # reuses the run id, so the attempt is half of the answer, not a detail.
     gate.add_argument("--run-id", default="")
     gate.add_argument("--run-attempt", default="")
+    # Stage 2 fix #23. The failed workflow's name, which decides whether the
+    # park rule applies (`park_rule_applies`). Absent means the rule applies.
+    gate.add_argument("--workflow", default="")
+    # Stage 2 fix #23. Where to leave the card read for the limit step, so it
+    # does not ask Linear for the same comments again (`write_snapshot`).
+    gate.add_argument("--snapshot", default="")
+
+    # Stage 2 fix #23: the diagnosis agent's card, read before it starts.
+    target = sub.add_parser("diagnosis-target")
+    target.add_argument("--branch", default="")
+    target.add_argument("--workflow", default="")
+    target.add_argument("--snapshot", default="")
 
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)
@@ -740,6 +942,13 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "decide":
         return _decide_cli(args)
+    if args.command == "diagnosis-target":
+        found = diagnosis_target(args.branch, args.workflow, args.snapshot)
+        # Three `key=value` lines for $GITHUB_OUTPUT, each one line.
+        print(f"kind={found['kind']}")
+        print(f"target={found['target']}")
+        print(f"title={found['failure_title']}")
+        return 0
     if args.command == "post":
         decision = Decision(DECLINE, args.rule, args.detail)
         print(declined_comment(decision, run_url=args.run_url))

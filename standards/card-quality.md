@@ -468,8 +468,19 @@ death that also took the agent's escalation or blocker exit — so the count and
 the split ledger see every death, which they did not before. The reconcile sweep
 skips a held card entirely — no requeue, no nudge, no dispatch — and since
 DRE-2954 the medic asks the same question before its one automatic retry, of a
-card just sent to `Planning` as much as of a parked one, so nothing re-runs
-either until a person or the planner acts.
+card just sent to `Planning` as much as of a parked one, so the medic and the
+sweep never re-run a held card's build, fix, plan or review run on their own.
+Bookkeeping is the exception (Stage 2 #23, DRE-5620/5622): a held card's
+Linear Sync run, and its Merge Gate run, are retried by the medic, and limit
+recovery re-runs a held card's `sync` stage. Linear Sync starts no agent. The
+gate merges only on critic APPROVE and green CI, and the CEO decided on
+2026-10-02 that `needs-human` does not block merging (the gate never read
+that label). **One path does start agent work on a held card:** on a
+conflicted pull request the gate's conflict arm dispatches Agent Fix in
+conflict mode, and Agent Fix clears `needs-human` when it starts. The gate's
+own wakes (CI completion, the critic's comment) already did that before this
+exception, so a retried gate run only replays what the dead run would have
+done. Holding the bookkeeping back is what left merged cards open.
 
 "Nothing retries it" was an aspiration for one day: on 2026-09-01 the medic
 re-ran DRE-2937's first dead run sixty seconds after the turn cap parked the

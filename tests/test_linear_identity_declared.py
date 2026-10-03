@@ -74,6 +74,11 @@ DECLARATION = {
     "reconcile.yml": FROM_THE_CALLER,
     "linear-sync.yml": "fleet",
     "plan.yml": "fleet",
+    # Stage 2 fix #23 (BP-6). The medic's two incident runs on 2026-10-02
+    # (37051307731, 37057166857) printed `budget: undeclared` on every
+    # line while the fleet's hour was the one running out. Like linear-sync
+    # and plan, it has no sandbox caller, so the literal.
+    "medic.yml": "fleet",
     # Stage 2 #11 (BP-5): the gate advances and comments on cards with the
     # fleet key, and printed `undeclared` until it said so.
     "merge-gate.yml": "fleet",
@@ -131,12 +136,13 @@ class DeclaredInTheWorkflowsTest(unittest.TestCase):
                     expected,
                     f"{name}:{job_id} spends a Linear budget without saying whose",
                 )
-        # Nine jobs today: reconcile's sweep, linear-sync's card-done and
+        # Fifteen jobs today: reconcile's sweep, linear-sync's card-done and
         # conflict-sweep, plan's plan and publish, agent-task's execute,
-        # agent-fix's fix, qa-review's review and verify's verify. Asserted as
-        # a floor so a renamed job cannot make this test pass by finding
-        # nothing.
-        self.assertGreaterEqual(seen, 9)
+        # agent-fix's fix, qa-review's review, verify's verify, and the
+        # medic's six (classify, retry_declined, stall_record, backoff,
+        # environment_hold, diagnose), plus the merge gate's. Asserted as a
+        # floor so a renamed job cannot make this test pass by finding nothing.
+        self.assertGreaterEqual(seen, 15)
 
     def test_every_agent_workflow_with_a_sandbox_caller_takes_the_word_as_reconcile_does(self):
         """bureau-harness calls agent-task.yml and qa-review.yml on the sandbox

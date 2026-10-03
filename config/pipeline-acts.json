@@ -498,8 +498,8 @@
       "why": "Not a transient flake by the time it gets here: the retry already happened, and on a critic infra-crash or an upstream 5xx the medic deliberately neither retries nor diagnoses, because re-running against an exhausted limit cannot succeed and only deepens it (DRE-1921). The body is written by the diagnosis agent, so the anchor pins the WRITE CALL rather than any wording.",
       "emits": {
         "file": ".github/workflows/medic.yml",
-        "anchor": "linear_ops.py comment DRE-N \"<report>\"",
-        "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the medic's own prompt — the point at which the receipt is emitted."
+        "anchor": "linear_ops.py comment \"$TARGET\" \"$(cat \"$REPORT\")\" --act=run-failure-diagnosed",
+        "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the diagnose job's delivery step — the point at which the receipt is emitted. It sat in the agent's prompt until Stage 2 fix #23 took the Linear key away from the agent."
       }
     },
     {

@@ -16,7 +16,7 @@ found five threaded and three not:
 
     HAS      agent-task.yml       "Implement card"
     HAS      plan.yml             "Plan epic"
-    HAS      medic.yml            "Diagnose"
+    HAS      medic.yml            "Diagnose"            (denied since Stage 2 #23, below)
     HAS      verify.yml           (two agent steps)
     MISSING  agent-fix.yml        "Fix"                 ← the live blocker
     MISSING  red-main-repair.yml  "Repair agent"
@@ -135,6 +135,23 @@ DOCUMENTED_EXCEPTIONS = {
         "running a model over that untrusted text holds no Linear write "
         "token and no code write token, and the whole verify job carries "
         "neither — pinned by tests/test_groomer_wiring.py."
+    ),
+    (
+        "medic.yml",
+        "Diagnosis agent",
+    ): (
+        "The diagnosis agent is denied Linear ON PURPOSE since Stage 2 fix "
+        "#23 (BP-6). It held the fleet key until then, and the prompt told it "
+        "to find an existing failure card with 'GraphQL via curl': an "
+        "open-ended reader on the hour that ran out on 2026-10-02, uncounted. "
+        "Everything it needed is resolved before it starts by the 'Resolve "
+        "the card the diagnosis goes to' step (medic_retry.py "
+        "diagnosis-target), which holds the key and writes the card to a "
+        "snapshot the agent reads; the 'Deliver the diagnosis' step, which "
+        "also holds the key, posts the report file the agent writes. Nothing "
+        "the agent is handed claims the key is in its env: the medic has no "
+        "brief (briefPath: null) and its prompt names no tracker command, "
+        "pinned by tests/test_medic_diagnosis_snapshot.py."
     ),
 }
 

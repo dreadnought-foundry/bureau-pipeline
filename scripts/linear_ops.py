@@ -2685,9 +2685,10 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
 
 #: The lane `create` lands a card in unless the caller names another one.
 #: Planning, not Backlog or Triage — see `cmd_create` for why (DRE-2858). A
-#: NAMED value because readers depend on it: the medic's prompt must search
-#: the lane this seam writes, and `tests/test_workflow_prompt_lanes.py` binds
-#: the two together by reading this constant.
+#: NAMED value because readers depend on it: the medic's duplicate search
+#: (`find_open`, by title and open-ness since Stage 2 fix #23) must see the
+#: lane this seam writes, and `tests/test_workflow_prompt_lanes.py` binds the
+#: two together by reading this constant.
 CREATE_LANE = "Planning"
 
 

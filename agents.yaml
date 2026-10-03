@@ -455,7 +455,9 @@ agents:
     maxTurns: 60
     maxBudget: 3
     tools: [Bash, Read, Glob, Grep, Write, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    # No LINEAR_API_KEY since Stage 2 fix #23: the card arrives as a snapshot
+    # and the report leaves through a step that holds the key (medic.yml).
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/medic.yml

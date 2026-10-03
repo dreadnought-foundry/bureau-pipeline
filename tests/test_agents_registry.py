@@ -436,8 +436,9 @@ class AgentsRegistryTest(unittest.TestCase):
 
     def test_live_credential_surface_is_the_one_dre_2729_recorded(self):
         """The surface read on 2026-08-26, pinned so the next change to it is
-        visible: LINEAR_API_KEY reaches the agent step in six of the seven
-        agent workflows (qa-review withholds it deliberately), and the
+        visible: LINEAR_API_KEY reaches the agent step in five of the seven
+        agent workflows (qa-review withholds it deliberately, and so does
+        medic since Stage 2 fix #23), and the
         dispatch pool reaches agent-task, red-main-repair and verify — and,
         since DRE-4282, the three heavy readers that run a model: qa-review
         (the critic), agent-fix (the fixer) and plan (the planner and its two
@@ -467,13 +468,16 @@ class AgentsRegistryTest(unittest.TestCase):
                     with_linear.add(wf.split("/")[-1])
                 if pool <= creds:
                     with_pool.add(wf.split("/")[-1])
-        # All seven DECLARE the key. Six hand it to the agent step. Both
-        # halves are pinned, because the gap between them is exactly the
-        # thing a file-level check cannot see.
+        # All seven DECLARE the key. Five hand it to the agent step: the
+        # critic is denied it (DRE-2052), and since Stage 2 fix #23 so is the
+        # medic's diagnosis agent, whose card arrives as a snapshot and whose
+        # report leaves through a step that holds the key. Both halves are
+        # pinned, because the gap between them is exactly the thing a
+        # file-level check cannot see.
         self.assertEqual({wf.split("/")[-1] for wf in workflows},
                          declares_linear)
         self.assertEqual(
-            {"agent-task.yml", "agent-fix.yml", "plan.yml", "medic.yml",
+            {"agent-task.yml", "agent-fix.yml", "plan.yml",
              "verify.yml", "red-main-repair.yml"}, with_linear)
         self.assertEqual(
             {"agent-task.yml", "red-main-repair.yml", "verify.yml",

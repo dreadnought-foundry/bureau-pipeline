@@ -429,6 +429,22 @@ def limit_reset(text: str, kind: str, now: datetime) -> datetime | None:
     return when
 
 
+def workflow_for_stage(stage: str) -> str:
+    """The workflow a marker's stage was read from — `limit_stage` run
+    backwards, off the same table — as its lower-case name prefix, or "" for a
+    stage the table does not know. `classify` is a step of Agent Plan.
+
+    Stage 2 fix #23: `limit_recovery` asks whether a `needs-human` hold blocks
+    re-entering a stage, and the answer is the medic gate's rule for the
+    WORKFLOW (`medic_retry.park_rule_applies`), so the stage has to name one.
+    """
+    wanted = "plan" if stage == "classify" else stage
+    for prefix, known in _STAGE_BY_WORKFLOW:
+        if known == wanted:
+            return prefix
+    return ""
+
+
 def limit_stage(workflow_name: str, failed_step: str = "") -> str | None:
     """The stage a death in `workflow_name` has to re-enter, or None when the
     workflow is not one a card's run lives in (a Reconcile sweep dying on the

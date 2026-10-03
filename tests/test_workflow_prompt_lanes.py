@@ -115,32 +115,58 @@ class TestNoPromptNamesALaneThatDoesNotExist:
 
 class TestMedicDuplicateSuppression:
     """A repeated failure must comment on the card that exists, not mint a
-    second one. The search has to look wherever a failure card can be."""
+    second one. The search has to look wherever a failure card can be.
+
+    Since Stage 2 fix #23 the search is not the agent's to run. It used to be
+    prose in the diagnosis prompt, which named the lanes to search, and these
+    tests bound that list to the lane `cmd_create` writes. The agent no longer
+    holds a Linear key: `medic_retry.py diagnosis-target` runs
+    `linear_ops.find_open` before the agent, and the delivery step creates a
+    card only when that search answered "none". `find_open` asks by title and
+    by the state's TYPE (not completed, not canceled), never by a lane name,
+    so it covers every lane a failure card can sit in, including whichever one
+    `cmd_create` writes, by construction."""
 
     def _medic_prompt(self) -> str:
         return next(p.body for p in cwp.prompts(WORKFLOWS) if p.workflow == "medic.yml")
 
-    def test_the_search_covers_intake(self):
-        assert "Intake" in self._medic_prompt()
+    def _medic_text(self) -> str:
+        return (WORKFLOWS / "medic.yml").read_text(encoding="utf-8")
 
-    def test_the_search_covers_the_lane_the_create_seam_actually_writes(self):
-        # Whatever lane linear_ops.cmd_create lands a new card in MUST be in
-        # the medic's search, or the very card the medic just created is
-        # invisible to the next failure.
-        #
-        # Read as a VALUE, not as a regex over the source (DRE-3533). The seam
-        # now takes an explicit `--lane` for the one caller that needs another
-        # one — the red-main repair card — so the default moved into a named
-        # constant, and a source-shape match would have gone on passing against
-        # a literal that was no longer the default.
+    def test_the_search_asks_by_title_and_openness_never_by_lane(self):
+        import inspect
+
         import linear_ops
 
-        lane = linear_ops.CREATE_LANE
-        assert lane in self._medic_prompt(), (
-            f"cmd_create lands cards in {lane!r} and the medic never looks there"
+        source = inspect.getsource(linear_ops.find_open)
+        assert "title: {eq: $t}" in source
+        assert 'state: {type: {nin: ["completed", "canceled"]}}' in source
+        named = [lane for lane in cwp.live_lanes() if f'"{lane}"' in source]
+        assert not named, f"find_open filters by lane names {named}"
+
+    def test_the_create_seams_lane_is_open_so_the_search_sees_it(self):
+        # Read as a VALUE (DRE-3533): the lane `cmd_create` writes must be one
+        # the search's state-type filter keeps, i.e. not a terminal lane.
+        import linear_ops
+
+        assert linear_ops.CREATE_LANE in cwp.live_lanes()
+        assert linear_ops.CREATE_LANE not in ("Done", "Canceled", "Duplicate")
+
+    def test_the_search_runs_before_any_card_is_created(self):
+        import medic_retry
+
+        assert "find_open(" in Path(medic_retry.__file__).read_text(encoding="utf-8")
+        text = self._medic_text()
+        assert "medic_retry.py diagnosis-target" in text
+        assert text.index("medic_retry.py diagnosis-target") < text.index(
+            "linear_ops.py create"
         )
 
-    def test_the_searched_lanes_are_all_live(self):
+    def test_the_prompt_no_longer_sends_the_agent_searching(self):
+        assert "find-open" not in self._medic_prompt()
+        assert "linear_ops.py" not in self._medic_prompt()
+
+    def test_the_lanes_the_prompt_names_are_all_live(self):
         assert cwp.lanes_that_do_not_exist(self._medic_prompt()) == []
 
 

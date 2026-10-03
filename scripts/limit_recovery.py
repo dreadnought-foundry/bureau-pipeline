@@ -88,7 +88,9 @@ the marker — the safe direction, because the recovery's own receipt always doe
 
 Bounded by `wip_room` per pass; skips terminal cards (Done / Canceled /
 Duplicate) and cards held for a human (`needs-human`), which the sweep leaves
-alone everywhere else too. A write that does not land is reported on an
+alone everywhere else too — EXCEPT a held card's `sync` stage (Stage 2 fix
+#23, `hold_blocks_stage`): re-running Linear Sync's card-done is bookkeeping
+for a PR that already merged, not agent work the hold was put there to stop. A write that does not land is reported on an
 `ERROR:` line — the sweep adds it to its write ledger and goes red, like every
 other write — and no receipt is posted for it, so the next pass retries.
 """
@@ -102,6 +104,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
+import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
 import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
 
 RECOVERY_TAG = "limit-recovery"
@@ -197,6 +200,25 @@ def _held(card: dict) -> bool:
         (lbl.get("name") or "").lower() == dead_run.HOLD_LABEL
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
+
+
+def hold_blocks_stage(stage: str) -> bool:
+    """Does a `needs-human` hold stop this pass from re-entering `stage`?
+
+    Stage 2 fix #23. The hold is a person saying "no more agent work here",
+    and re-entering a build, fix, review or plan stage IS agent work. Re-running
+    a `sync` stage is not: it is Linear Sync's card-done finishing bookkeeping
+    for a PR that already merged. On 2026-10-02 DRE-5620 and DRE-5622 sat In
+    Review behind a leftover hold label because this pass skipped every held
+    card, sync deaths included.
+
+    The rule is the medic retry gate's, not a copy: the stage is mapped back
+    to the workflow it was read from (`dead_run.workflow_for_stage`, the same
+    table the marker was written from) and asked of
+    `medic_retry.park_rule_applies`. An unknown stage maps to no workflow,
+    and no workflow keeps the hold — fail closed, as the gate does.
+    """
+    return medic_retry.park_rule_applies(dead_run.workflow_for_stage(stage or ""))
 
 
 def _lane(card: dict) -> str:
@@ -301,10 +323,14 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
     room = wip_room
     for card in cards or []:
         ident = card["identifier"]
-        if _lane(card) in TERMINAL_LANES or _held(card):
+        if _lane(card) in TERMINAL_LANES:
             continue
         marker = waiting(_bodies(card))
         if marker is None:
+            continue
+        # Stage 2 fix #23: a hold stops agent work, not bookkeeping. Asked
+        # after the marker is read because the answer depends on its stage.
+        if _held(card) and hold_blocks_stage(marker.get("stage") or ""):
             continue
         reason = handoff_reason(card, marker)
         if reason is not None:

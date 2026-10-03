@@ -323,6 +323,79 @@ def test_a_card_held_for_a_human_is_skipped():
     assert s.moves == [] and s.comments == []
 
 
+# --------------------------------------------------------------------------
+# the hold blocks agent work, not bookkeeping (Stage 2 fix #23, BP-6)
+# --------------------------------------------------------------------------
+# DRE-5620, 2026-10-02: the PR merged, `card-done` in Linear Sync died on the
+# fleet's exhausted Linear quota (run 37051027773, 11:58 PT), and the medic
+# left `🪦 limit-death: kind=linear stage=sync reset=unknown run=37051027773`.
+# The card was In Review with a leftover `needs-human` label, so this pass
+# skipped it every time and the card never closed. A sync rerun starts no
+# agent; it finishes bookkeeping for work that already merged. The rule is
+# the medic retry gate's (`medic_retry.park_rule_applies`), applied to the
+# workflow each marker stage belongs to.
+DRE5620_RUN = "37051027773"
+HELD = ("repo:agent-bureau", dead_run.HOLD_LABEL)
+
+
+def _dre5620_marker() -> str:
+    return marker(kind="linear", stage="sync", reset=None, run=DRE5620_RUN)
+
+
+def test_dre5620_a_held_card_s_sync_death_is_re_run_once_the_quota_answers():
+    s = Seams()
+    lines = s.recover([card(ident="DRE-5620", lane="In Review",
+                            bodies=[_dre5620_marker()], labels=HELD)])
+    assert s.reruns == [DRE5620_RUN]
+    assert s.moves == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-5620"
+    assert body.startswith(limit_recovery.RECOVERY_MARK)
+    assert any("DRE-5620 sync re-entered" in line for line in lines)
+
+
+def test_a_held_card_s_agent_task_death_is_still_skipped():
+    """The build stage is Agent Task: new agent work a person said stop to."""
+    s = Seams()
+    s.recover([card(bodies=[marker(kind="linear", stage="build", reset=None)],
+                    labels=HELD)])
+    assert s.moves == [] and s.dispatched == [] and s.reruns == []
+    assert s.comments == []
+
+
+@pytest.mark.parametrize("stage", ["classify", "plan", "build", "fix", "review"])
+def test_every_stage_but_sync_still_honors_the_hold(stage):
+    """Fail closed, as the medic gate does: review (QA Review) is not named as
+    bookkeeping, so it keeps the hold too."""
+    s = Seams()
+    s.recover([card(lane="In Review", bodies=[marker(kind="linear", stage=stage, reset=None)],
+                    labels=HELD)])
+    assert s.moves == [] and s.dispatched == [] and s.reruns == [] and s.comments == []
+
+
+def test_a_held_card_with_an_unknown_stage_is_skipped_not_handed_off():
+    s = Seams()
+    s.recover([card(bodies=[f"🪦 limit-death: kind=linear stage=mystery reset=unknown run={RUN}"],
+                    labels=HELD)])
+    assert s.moves == [] and s.reruns == [] and s.comments == []
+
+
+def test_the_rule_is_the_medic_gate_s_own_not_a_copy():
+    import medic_retry
+
+    assert limit_recovery.medic_retry is medic_retry
+    source = inspect.getsource(limit_recovery)
+    for name in medic_retry.BOOKKEEPING_WORKFLOWS:
+        assert f'"{name}"' not in source, f"limit_recovery spells {name!r} itself"
+    # Every stage the marker can carry maps onto the workflow dead_run says
+    # it came from, and only sync is bookkeeping.
+    assert [s for s in dead_run.LIMIT_STAGES
+            if not limit_recovery.hold_blocks_stage(s)] == ["sync"]
+    assert limit_recovery.hold_blocks_stage("mystery")
+    assert limit_recovery.hold_blocks_stage("")
+
+
 def test_a_newer_pipeline_receipt_means_the_card_already_moved_on():
     s = Seams()
     s.recover([card(bodies=[marker(), "🧹 Reconcile: card sat in Todo with no run — re-dispatched."])])
