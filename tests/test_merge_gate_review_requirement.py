@@ -24,13 +24,23 @@ Two settings could require one:
     a count of 0, and the agent bot's PR #879 merged under it on
     2026-10-02 with no review.
 
-`required_review_reasons` is the rule, proved offline below. The live test
-reads every repo in config/repo-map.json with GET-only `gh api` calls, and
-skips a repo it cannot read: CI's `GH_TOKEN` is a placeholder, so there it
-skips cleanly. A repo whose plan cannot have protection (GitHub answers 403
-"Upgrade to GitHub Pro") requires nothing.
+`required_review_reasons` is the rule, proved offline below on every run.
 
-Run: python3 -m pytest tests/test_merge_gate_review_requirement.py -v
+The LIVE check is opt-in, and skips unless `BUREAU_LIVE_CHECKS=1`: a guard
+that makes network calls in every local and CI run is the very class of
+problem it would be guarding against. Run it deliberately, as the operator,
+with gh logged in:
+
+    BUREAU_LIVE_CHECKS=1 python3 -m pytest \
+      tests/test_merge_gate_review_requirement.py -v -rs
+
+It reads every repo in config/repo-map.json with GET-only `gh api` calls
+(classic protection and the default branch's active rules), never Linear or
+AWS. A repo it cannot read is skipped and named; a repo whose plan cannot
+have protection (GitHub answers 403 "Upgrade to GitHub Pro") requires
+nothing.
+
+Offline only: python3 -m pytest tests/test_merge_gate_review_requirement.py -v
 """
 
 from __future__ import annotations
@@ -135,6 +145,13 @@ def _gh_get(path: str):
     return None, err
 
 
+LIVE_OPT_IN = "BUREAU_LIVE_CHECKS"
+
+
+@unittest.skipUnless(
+    os.environ.get(LIVE_OPT_IN) == "1",
+    f"live GitHub read — opt in with {LIVE_OPT_IN}=1 (see the module docstring)",
+)
 class NoMappedRepoRequiresAnApprovingReviewTest(unittest.TestCase):
     def test_no_mapped_repo_requires_approving_review(self):
         if shutil.which("gh") is None:
