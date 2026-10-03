@@ -129,9 +129,15 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: the pass's single `viewer` read, which nothing else on this board had paid
 #: for, charged to `flag_stranded`. 41 + 1 = 42.
 #:
+#: It was 42 until the idle check (the CEO, 2026-10-02; Stage 2 BP-2): one
+#: `first: 1` existence query before the board read, charged to `sweep_idle`,
+#: which on an idle repo skips promotion and the repo's work-lane phases (the
+#: fleet-wide ones still run) and on this busy board is one request more.
+#: 42 + 1 = 43.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 42
+REAL_BOARD_SWEEP_BUDGET = 43
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing

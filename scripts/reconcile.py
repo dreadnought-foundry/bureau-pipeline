@@ -126,6 +126,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
+import bureau_read  # noqa: E402 — the read door: the board from our database (Stage 2 #5/#6a)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import console_receipt  # noqa: E402 — an unchecked receipt is not a refused one (DRE-4153)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
@@ -1478,6 +1479,17 @@ SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
 )
 
+# Which of those lanes the read door serves (Stage 2 #6a, design D1). The
+# console does not store a card with no `repo:` label, and Intake and Planning
+# are where those cards live — the Urgent fast path, the Planning watchdog and
+# the planner line read them on purpose — so those two lanes stay on Linear
+# (one paged read, about two requests a sweep). The work lanes, where this
+# repo's own cards are, come from the door. Phase 2 (#6b) stores unlabeled
+# cards and moves the rest. Backlog is the promotion read's own lane.
+DOOR_LINEAR_LANES = tuple(lane for lane in SWEPT_LANES if lane in INTAKE_LANE + PLANNING_LANE)
+DOOR_WORK_LANES = tuple(lane for lane in SWEPT_LANES if lane not in DOOR_LINEAR_LANES)
+BACKLOG_LANE = "Backlog"
+
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
 # (DRE-4356): every flow lane strictly upstream of the review lane that the
 # sweep already reads. Derived from the contract's own order — the file lists
@@ -1547,6 +1559,8 @@ def drain_retiring_lanes() -> None:
         return
     try:
         stranded = active_cards(tuple(draining))
+    except BoardNotRead:
+        raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # a read failure here must not kill the sweep
         raise ReconcileWriteError(f"drain: could not list retiring lanes: {e}") from e
     for card in stranded:
@@ -1609,6 +1623,54 @@ _epic_records: dict[str, dict] = {}
 # unreadable epic costs one read per pass rather than one per consumer.
 _epic_record_gaps: dict[str, str] = {}
 
+# ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
+# Which cards this pass decided on the DOOR's facts rather than Linear's. Every
+# state write about one of them is from-lane-conditional (item 33), and every
+# promotion that read one of them re-reads its whole predicate live first
+# (items 32, 37). Empty in `off` and `shadow`: those modes decide on Linear's
+# read, so nothing below changes for them — the rollback is byte-identical.
+_door_sourced: set[str] = set()
+# The WIP base came from the door: a promotion budgeted on it is a decision
+# with a door input even when its candidates came from Linear (item 37).
+_door_wip: list[bool] = [False]
+# Set when the door said Linear is held (`linear-hold`): every read of the work
+# lanes this pass raises BoardHeld, and its phase is skipped (item 34).
+_door_hold: list[str] = []
+# Linear's read of the lanes the door does not serve (Intake, Planning), when
+# the door served the rest.
+_linear_lane_cards: list[dict] | None = None
+# Set when this pass found the repo IDLE (`sweep_idle`): the repo-scoped phases
+# — this repo's slice of the board, promotion, the hand-built move, the
+# re-review watcher, the break-glass count — are skipped without a word (the
+# one `idle:` line already said why). The FLEET-WIDE phases still run: the
+# Urgent fast path, the Planning stall watchdog, the frozen-holds repair and
+# the planner line act on every repo's cards, and an idle sweep must not
+# leave them to nobody (coordinator's decision, 2026-10-02 ~19:10 PT).
+_idle_pass: list[str] = []
+
+
+class BoardNotRead(Exception):
+    """The board is not read this pass, and the phase that wanted it is
+    skipped by `SweepSpend.phase`. Never an empty board: a phase that catches
+    this must not carry on as if the lanes were empty."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+class BoardHeld(BoardNotRead):
+    """The door says Linear is held, and the work-lane board is not read this
+    pass — not from the door (it could not say) and not from Linear (the same
+    exhausted bucket). The phase it interrupts is skipped and says so in one
+    line (`bureau_read.note_skip`)."""
+
+
+class BoardIdle(BoardNotRead):
+    """This repo has nothing in motion and nothing to promote (`sweep_idle`),
+    so a repo-scoped phase is skipped. Silent: the pass's one `idle:` line
+    said it."""
+
 
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
@@ -1616,8 +1678,14 @@ def reset_sweep_cards() -> None:
     records (DRE-3642), its workflows listing (DRE-4378) and its in-flight build
     runs (DRE-4830). Called once at the top of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
-    global _build_runs, _build_runs_unreadable
+    global _build_runs, _build_runs_unreadable, _linear_lane_cards
     _swept_cards = None
+    _linear_lane_cards = None
+    _door_sourced.clear()
+    _door_wip[0] = False
+    _door_hold.clear()
+    _shadow_door.clear()
+    _idle_pass.clear()
     _pr_listing = None
     _workflows_listing = None
     _build_runs = None
@@ -1719,15 +1787,23 @@ def carry_epics_out_of_todo() -> None:
             continue
         before = epic_todo_gate.lane_before_todo(linear_ops, ident)
         try:
+            # From-lane-conditional when the board came from the read door
+            # (Stage 2 item 33): "found in Todo" was the door's reading, so the
+            # move lands only on an epic still in Todo — never on one a person
+            # carried out of it since. `{}` (unconditional) on Linear's read.
             if epic_todo_gate.approved(before):
-                linear_ops.cmd_state(ident, "In Progress")
+                moved = linear_ops.cmd_state(ident, "In Progress", **_door_guard(card))
                 carried = "In Progress"
             else:
-                linear_ops.cmd_state(ident, "Planning")
+                moved = linear_ops.cmd_state(ident, "Planning", **_door_guard(card))
                 carried = "Planning"
         except Exception as e:  # noqa: BLE001 — one epic must not stop the rest
             _write_failures.append(f"epic-not-todo: carrying {ident} out of Todo: {e}")
             print(f"ERROR: carry_epics_out_of_todo: {ident}: {e}", file=sys.stderr)
+            continue
+        if moved is False and _door_guard(card):
+            print(f"epic-not-todo: {ident} is no longer in Todo as the door read it — "
+                  "not carried, no refusal posted")
             continue
         print(f"epic-not-todo: {ident} found in Todo (before: {before}) — carried to {carried}")
         body = epic_todo_gate.refusal(
@@ -1786,14 +1862,137 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     of the cards in them. A caller asking for a lane OUTSIDE that union gets a
     real query: the union is what was read, and answering from it would be a
     confident empty (drain_retiring_lanes is that caller by construction).
+
+    THE READ DOOR (Stage 2 #6a). In `BUREAU_READ=on` the work lanes come from
+    the console's door and Intake/Planning from Linear (`DOOR_LINEAR_LANES`);
+    a door that cannot give the whole answer falls back to exactly the one
+    Linear read above. In `shadow` the door is read FIRST and compared, and
+    Linear's answer is the one used. In `off` (the default) nothing changes.
     """
     global _swept_cards
     wanted = set(states)
     if not wanted <= set(SWEPT_LANES):
         return _fetch_active_cards(states)
-    if _swept_cards is None:
+    if bureau_read.mode() != "on":
+        if _swept_cards is None:
+            if bureau_read.mode() == "shadow":
+                _shadow_board()
+            _swept_cards = _fetch_active_cards(SWEPT_LANES)
+            if bureau_read.mode() == "shadow":
+                _shadow_compare_board(_swept_cards)
+        return [card for card in _swept_cards if card["state"]["name"] in wanted]
+    out: list[dict] = []
+    work = wanted & set(DOOR_WORK_LANES)
+    if work:
+        out += [c for c in _door_work_cards() if c["state"]["name"] in work]
+    lin = wanted & set(DOOR_LINEAR_LANES)
+    if lin:
+        out += [c for c in _linear_lanes() if c["state"]["name"] in lin]
+    return out
+
+
+def _door_work_cards() -> list[dict]:
+    """The work lanes, from the door — or, when it cannot answer, from the one
+    Linear read of SWEPT_LANES the sweep has always made. Raises BoardHeld
+    when the door says Linear is held (no Linear fallback, item 34)."""
+    global _swept_cards, _linear_lane_cards
+    if _door_hold:
+        raise BoardHeld(_door_hold[0])
+    if _swept_cards is not None:
+        return _swept_cards
+    try:
+        read = bureau_read.board(DOOR_WORK_LANES, scope="repo",
+                                 max_age=bureau_read.BOARD_MAX_AGE)
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            _door_hold.append(e.reason)
+            raise BoardHeld(e.reason) from e
+        print(f"read-door: board unknown ({e}) — read from Linear this pass")
         _swept_cards = _fetch_active_cards(SWEPT_LANES)
-    return [card for card in _swept_cards if card["state"]["name"] in wanted]
+        if _linear_lane_cards is None:
+            _linear_lane_cards = [c for c in _swept_cards
+                                  if c["state"]["name"] in DOOR_LINEAR_LANES]
+        return _swept_cards
+    _swept_cards = list(read.nodes)
+    for card in _swept_cards:
+        _door_sourced.add(card["identifier"])
+        linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    _door_wip[0] = True
+    return _swept_cards
+
+
+def _linear_lanes() -> list[dict]:
+    """Intake and Planning, from Linear (6a): the lanes the door does not serve."""
+    global _linear_lane_cards
+    if _linear_lane_cards is None:
+        _linear_lane_cards = _fetch_active_cards(DOOR_LINEAR_LANES)
+    return _linear_lane_cards
+
+
+# ── The shadow comparison (Stage 2 item 36) ─────────────────────────────────
+# In `shadow` the door is read FIRST and Linear second, so the door is never
+# the newer of the two and a lane move between the reads classes as
+# `door-older` (explained). Only THIS repo's cards are compared: the door
+# answers for this repo's tenant, Linear's board read is the whole team's, and
+# a card with no `repo:` label is not stored at all in phase 1 (design D1).
+_shadow_door: dict[str, object] = {}
+
+
+def _shadow_board() -> None:
+    try:
+        _shadow_door["board"] = bureau_read.board(
+            DOOR_WORK_LANES, scope="repo", max_age=bureau_read.BOARD_MAX_AGE)
+    except bureau_read.ReadUnknown as e:
+        _shadow_door["board"] = None
+        print(f"read-door-diff: board door-unknown ({e.reason}) — nothing compared")
+
+
+def _shadow_compare_board(linear_cards: list[dict]) -> None:
+    read = _shadow_door.pop("board", None)
+    if read is None:
+        return
+    mine = [c for c in linear_cards
+            if c["state"]["name"] in DOOR_WORK_LANES and card_repo(c) == REPO_SLUG]
+    door = [c for c in read.nodes if card_repo(c) == REPO_SLUG]
+    bureau_read.report_diffs(
+        "board", bureau_read.compare(door, mine, door_as_of=read.as_of),
+        len({c["identifier"] for c in door} | {c["identifier"] for c in mine}))
+
+
+def _door_guard(card: dict | None, *, labels_absent: tuple = ()) -> dict:
+    """The keywords that make a state write from-lane-conditional (item 33).
+
+    `{}` for a card this pass decided on Linear's read — the call is then
+    exactly the unconditional `cmd_state(ident, lane)` it always was, which is
+    what keeps `off` and `shadow` byte-identical. For a card decided on the
+    door's facts: the lane it was read in, and the labels the decision read as
+    absent."""
+    ident = (card or {}).get("identifier")
+    if not ident or ident not in _door_sourced:
+        return {}
+    lane = ((card or {}).get("state") or {}).get("name")
+    return {"expect": (lane,), "labels_absent": tuple(labels_absent)}
+
+
+def _door_lane_still(card: dict, *, labels_absent: tuple = ()) -> bool:
+    """For a door-decided card, ONE live read before a write that comes in two
+    halves (a label, then a lane): is it still in the lane, without the labels,
+    the decision read? Always True for a card decided on Linear's read, with
+    no request — a park's label must never land on a card the park will then
+    refuse to move (it would leave `needs-human` on a card in review)."""
+    guard = _door_guard(card, labels_absent=labels_absent)
+    if not guard:
+        return True
+    ident = card["identifier"]
+    live = linear_ops.get_issue(ident, fresh=True)
+    lane = ((live.get("state") or {}).get("name")) or ""
+    names = {(lbl.get("name") or "").lower()
+             for lbl in ((live.get("labels") or {}).get("nodes") or [])}
+    if lane != guard["expect"][0] or names & {lbl.lower() for lbl in labels_absent}:
+        print(f"read-door: {ident} is in {lane!r} now, not {guard['expect'][0]!r} as "
+              "the door's board read it — nothing written; the next sweep decides")
+        return False
+    return True
 
 
 # Live-snapshot re-check for NO-ROUTE claims (DRE-2260). Fleet repos pin the
@@ -1831,6 +2030,34 @@ def live_rail_slugs() -> frozenset[str] | None:
     if not isinstance(parsed, dict) or not parsed:
         return None
     return frozenset(str(slug).lower() for slug in parsed)
+
+
+def _watchdog_cards() -> list[dict]:
+    """The cards `flag_stranded` walks: Todo and In Progress, EVERY repo's.
+
+    Off and shadow read those lanes from Linear, the whole team's, so this is
+    `active_cards(WATCHDOG_LANES)` unchanged. With the door ON and serving, the
+    work lanes hold only this repo's tenant, and the door stores no card
+    without a `repo:` label (design D1) — so the NO-ROUTE class, which exists
+    for exactly the cards no repo can pick up, would be fed by no sweep (the
+    PR #687 critic's item 2). Then one paged Linear read of the two lanes adds
+    the cards no repo can route: no label, or a slug off this sweep's map.
+    Every decision about one of them is made on Linear's card alone; the door's
+    cards and Linear's are never mixed in one decision. Cost: that one read per
+    `on` pass, and only when the door served (a door that fell back already
+    read the whole board from Linear).
+    """
+    cards = active_cards(WATCHDOG_LANES)
+    if bureau_read.mode() != "on" or not _door_wip[0]:
+        return cards
+    seen = {c["identifier"] for c in cards}
+    off_map = []
+    for c in _fetch_active_cards(WATCHDOG_LANES):
+        slug = card_repo(c)
+        if c["identifier"] in seen or (slug is not None and slug in validate_card.VALID_SLUGS):
+            continue
+        off_map.append(c)
+    return cards + off_map
 
 
 def flag_stranded() -> set[str]:
@@ -1894,7 +2121,7 @@ def flag_stranded() -> set[str]:
     flagged: set[str] = set()
     live: frozenset[str] | None = None
     live_fetched = False  # one canonical-snapshot read per sweep, and only if needed
-    for card in active_cards(WATCHDOG_LANES):
+    for card in _watchdog_cards():
         ident, state = card["identifier"], card["state"]["name"]
         if state == "Planning":
             continue  # Planning has its own rule (DRE-2736) — never these two
@@ -4316,7 +4543,9 @@ def complete_inverse_relations(cards: list[dict]) -> None:
             )
 
 
-def backlog_children(only: list[str] | None = None) -> list[dict]:
+def backlog_children(
+    only: list[str] | None = None, *, from_linear: bool = False, stamped: bool = False,
+) -> list[dict]:
     """EVERY Backlog card, not the first page of them (DRE-2681).
 
     promote_ready() picks its candidates from this list, so an unpaginated page
@@ -4336,9 +4565,36 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
 
     The comment window is handed to the pass's read cache, as the active read's
     is (DRE-3236).
+
+    THE READ DOOR (Stage 2 #6a): in `on` the cards come from the door — the
+    whole Backlog as `/board?lanes=Backlog&relations=1`, a named set as
+    `/cards?ids=` kept to the ones still in Backlog — in the same node shape,
+    and a door that cannot answer whole falls back to the Linear read below.
+    Every card served this way is door-decided: its promotion re-reads its
+    predicate live before it writes (`live_promotion_refusal`). A relation page
+    the door marks unknown (`hasNextPage`) is read to its end LIVE, as Linear's
+    own full page is. In `shadow` the door is read first and compared.
+
+    `from_linear` is the Linear read itself, whatever the mode — the fallback,
+    the shadow's comparand and the live re-check all ask for it. `stamped`
+    adds `updatedAt` and the lane, which only the shadow comparison reads (they
+    are what tell `door-older` from `same-stamp-different-value`): the same
+    request, two more scalars, and `off` never asks for them.
     """
     if only is not None and not only:
         return []
+    if not from_linear:
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])
+        mode = bureau_read.mode()
+        if mode == "on":
+            return _door_backlog_children(only)
+        if mode == "shadow":
+            door = _shadow_backlog(only)
+            cards = backlog_children(only, from_linear=True, stamped=True)
+            if door is not None:
+                _shadow_compare_backlog(door, cards)
+            return cards
     numbers = [int(ident.split("-")[1]) for ident in (only or ())]
     scope = "number: {in: $numbers}," if only is not None else ""
     declared = ", $numbers: [Float!]" if only is not None else ""
@@ -4349,14 +4605,15 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
              %s
              state: {name: {eq: "Backlog"}}
            }) { nodes {
-             id identifier title description createdAt
+             id identifier title description createdAt%s
              parent { identifier state { name } }
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
              %s
              %s
            } pageInfo { hasNextPage endCursor } } }""" % (
-            declared, scope, linear_ops.COMMENT_WINDOW_GQL, INVERSE_RELATIONS_GQL,
+            declared, scope, " updatedAt state { name }" if stamped else "",
+            linear_ops.COMMENT_WINDOW_GQL, INVERSE_RELATIONS_GQL,
         ),
         {"numbers": numbers} if only is not None else None,
     )
@@ -4364,6 +4621,120 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
         linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
     complete_inverse_relations(cards)
     return cards
+
+
+def _fetch_backlog_linear(only: list[str] | None, *, stamped: bool = False) -> list[dict]:
+    """`backlog_children`'s Linear read, whatever the mode."""
+    return backlog_children(only, from_linear=True, stamped=stamped)
+
+
+def _door_backlog_children(only: list[str] | None) -> list[dict]:
+    """`backlog_children` in `on`: the door's answer, or Linear's on fallback."""
+    if _door_hold:
+        raise BoardHeld(_door_hold[0])
+    try:
+        read = _door_backlog_read(only)
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            _door_hold.append(e.reason)
+            raise BoardHeld(e.reason) from e
+        print(f"read-door: backlog unknown ({e}) — read from Linear this pass")
+        return _fetch_backlog_linear(only)
+    cards = [c for c in read.nodes if (c.get("state") or {}).get("name") == BACKLOG_LANE]
+    for card in cards:
+        _door_sourced.add(card["identifier"])
+        linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    complete_inverse_relations(cards)
+    return cards
+
+
+def _door_backlog_read(only: list[str] | None):
+    if only is not None:
+        return bureau_read.cards(only, max_age=bureau_read.BOARD_MAX_AGE, relations=True)
+    return bureau_read.board([BACKLOG_LANE], scope="repo",
+                             max_age=bureau_read.BOARD_MAX_AGE, relations=True)
+
+
+def _shadow_backlog(only: list[str] | None):
+    try:
+        return _door_backlog_read(only)
+    except bureau_read.ReadUnknown as e:
+        print(f"read-door-diff: backlog door-unknown ({e.reason}) — nothing compared")
+        return None
+
+
+def _shadow_compare_backlog(read, linear_cards: list[dict]) -> None:
+    mine = [c for c in linear_cards if card_repo(c) == REPO_SLUG]
+    door = [c for c in read.nodes
+            if (c.get("state") or {}).get("name") == BACKLOG_LANE
+            and card_repo(c) == REPO_SLUG]
+    bureau_read.report_diffs(
+        "backlog", bureau_read.compare(door, mine, door_as_of=read.as_of),
+        len({c["identifier"] for c in door} | {c["identifier"] for c in mine}))
+
+
+def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, str | None]:
+    """Read `card`'s promotion predicate LIVE and say why it no longer passes.
+
+    `(live, None)` when it still does; `(live-or-None, reason)` when it does
+    not. ONE request — `_fetch_backlog_linear`'s own query for this one card,
+    so the shape is the gate's shape — plus a relation top-up only for a card
+    past twenty relations. Everything the card-level gate decided on is asked
+    again of the live card: the lane (the query filters to Backlog), epic-ness,
+    the hold label, the label set, the parent and its lane, the prose claims,
+    the blockers with their CURRENT lanes, an agent-blocker, and the verdict.
+
+    What this does NOT re-read, said so nobody assumes it: the epic-level gate
+    and the epic's green light (read from Linear already, `epic_records`),
+    the stale-verdict lane history (a Linear read already), and the WIP count
+    (the door's board, up to BOARD_MAX_AGE old).
+    """
+    ident = card["identifier"]
+    try:
+        found = _fetch_backlog_linear([ident])
+    except linear_ops.LinearRateLimited:
+        raise  # the run's own exit code (DRE-2923), never one card's problem
+    except linear_ops.LinearError as e:
+        return None, f"it could not be read live ({e})"
+    if not found:
+        return None, "it is no longer in Backlog"
+    live = found[0]
+    live_bodies = card_comment_bodies(live)
+    if card_is_epic(live, live_bodies):
+        return live, "it is an epic now"
+    labels = {(lbl.get("name") or "").lower() for lbl in live["labels"]["nodes"]}
+    if HOLD_LABEL in labels:
+        return live, f"it carries '{HOLD_LABEL}' now"
+    before = {(lbl.get("name") or "").lower()
+              for lbl in ((card.get("labels") or {}).get("nodes") or [])}
+    if labels != before:
+        return live, (f"its labels changed since the board was read "
+                      f"({sorted(before)} → {sorted(labels)})")
+    was, now = card.get("parent") or {}, live.get("parent") or {}
+    if was.get("identifier") != now.get("identifier"):
+        return live, (f"its epic changed since the board was read "
+                      f"({was.get('identifier')} → {now.get('identifier')})")
+    if now and ((now.get("state") or {}).get("name")) not in EPIC_ACTIVE_STATES:
+        return live, (f"its epic {now.get('identifier')} is "
+                      f"{(now.get('state') or {}).get('name')} now, not active")
+    if prose_blockers.relations_unknown(live):
+        return live, "its relations could not be read to the end"
+    if prose_blockers.undeclared_claims(live):
+        return live, "its description now claims a blocker the board does not hold"
+    unmet = sorted(prose_blockers.relation_blockers(live))
+    if unmet:
+        states = prose_blockers.blocker_states(live)
+        return live, "it is blocked by " + ", ".join(
+            f"{b} ({states.get(b)})" for b in unmet)
+    if has_unresolved_blocker(live):
+        return live, "it carries an unresolved agent-blocker now"
+    try:
+        changed = routing_verdict.verdict_on(live_bodies) != routing_verdict.verdict_on(bodies)
+    except Exception as e:  # noqa: BLE001 — two verdicts: not one to promote on
+        return live, f"its routing verdict could not be read live ({e})"
+    if changed:
+        return live, "its routing verdict changed since the board was read"
+    return live, None
 
 
 def card_state(identifier: str) -> str:
@@ -5338,6 +5709,25 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 )
                 _surface_once(card["identifier"], routing_verdict.STALE_VERDICT_NEEDLE, stale)
                 continue
+        # THE LIVE RE-CHECK (Stage 2 items 32 and 37, review C2/C3). When any
+        # input to this promotion came from the read door — the candidate, or
+        # the board the WIP budget was counted on — the card's whole predicate
+        # is read again from Linear, ONE request, and the card is promoted only
+        # if it still passes: still in Backlog, not an epic, no hold label, the
+        # same labels, the same parent still active, every blocker read live
+        # and Done, the same verdict. A relation added since the console's
+        # poll, a blocker reopened, a `needs-human` added a minute ago, an epic
+        # sent back to Green Light — each is caught here, and none of them can
+        # be mixed with a door fact in the decision that writes. On Linear's
+        # own read (`off`, `shadow`) this costs nothing and does not run.
+        if card["identifier"] in _door_sourced or _door_wip[0]:
+            live, why = live_promotion_refusal(card, bodies)
+            if why is not None:
+                print(f"promotion: {card['identifier']} is not being promoted — "
+                      f"the live re-check refused it: {why}")
+                continue
+            labels = [lbl["name"].lower() for lbl in live["labels"]["nodes"]]
+            bodies = card_comment_bodies(live)
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
         # the run red for medic) instead of the bad-reference diagnostic.
@@ -6942,6 +7332,8 @@ def move_hand_built_to_review() -> None:
             card["identifier"]: card
             for card in active_cards(HAND_BUILT_REVIEW_LANES)
         }
+    except BoardNotRead:
+        raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # noqa: BLE001 — a board we cannot read is UNKNOWN
         _read_failures.append(f"hand-built → review: board read failed: {e}")
         print(
@@ -7856,7 +8248,16 @@ def card_dependabot_prs() -> None:
     )
     if not prs:
         return
-    live = {c["identifier"] for c in active_cards()}
+    # The board is read only when a CLOSED pull request's card needs it — never
+    # to file a card for an open one. So an idle pass (`sweep_idle`), which
+    # reads no board, still files the card a new dependabot pull request needs.
+    live_cards: dict[str, dict] = {}
+
+    def live() -> dict[str, dict]:
+        if not live_cards:
+            live_cards.update({c["identifier"]: c for c in active_cards()})
+            live_cards.setdefault("", {})  # read once, even when empty
+        return live_cards
     filed = 0
     deferred = 0
     for pr in prs:
@@ -7894,7 +8295,7 @@ def card_dependabot_prs() -> None:
                 continue
             _stamp_dependabot_pr(pr, card)
             continue
-        if state == "OPEN" or card not in live:
+        if state == "OPEN" or card not in live():
             continue
         try:
             if state == "MERGED":
@@ -7902,7 +8303,11 @@ def card_dependabot_prs() -> None:
                 linear_ops.cmd_card_done(card, url)
             elif state == "CLOSED":
                 print(f"dependabot card: PR #{number} closed unmerged — canceling {card}")
-                linear_ops.cmd_state(card, "Canceled")
+                # "Still open" was the board's reading; on the door's, the
+                # cancel lands only from the lane it was read in (item 33).
+                guard = _door_guard(live().get(card))
+                if linear_ops.cmd_state(card, "Canceled", **guard) is False and guard:
+                    continue
                 linear_ops.cmd_comment(card, dependabot_card.cancel_note(url))
         except linear_ops.LinearRateLimited:
             raise
@@ -9515,19 +9920,41 @@ def recover_limit_deaths() -> None:
     """
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
+        # The lane each card is in NOW, as this pass knows it: the board's
+        # reading, then each move this pass makes. A move decided on the read
+        # door's facts is from-lane-conditional on it (item 33), and a refused
+        # one raises, so the receipt never claims a re-entry that did not land.
+        lanes_now = {c["identifier"]: c for c in cards}
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
             MAX_WIP - wip_count(wip_base(active_cards())),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
-            move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
+            move=lambda ident, lane: _moved_or_raise(
+                ident, lane, lanes_now,
+                linear_ops.cmd_state(ident, lane, **_door_guard(lanes_now.get(ident)))),
             dispatch=redispatch, cards=cards,
         ):
             print(line)
             if line.startswith("ERROR:"):
                 _write_failures.append(line)
+    except BoardNotRead:
+        raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
+def _moved_or_raise(ident: str, lane: str, lanes_now: dict, moved) -> None:
+    """After a limit-recovery move: a door-decided move a guard refused
+    raises (the recovery records it as not landed); a move that landed
+    updates the lane this pass knows the card to be in."""
+    card = lanes_now.get(ident)
+    if moved is False and _door_guard(card):
+        raise ReconcileWriteError(
+            f"{ident} was not moved to {lane}: it left "
+            f"{((card or {}).get('state') or {}).get('name')!r} since the board was read")
+    if card is not None:
+        lanes_now[ident] = {**card, "state": {"name": lane}}
 
 
 #: What this step does about a read it could not make, in its own words — the
@@ -9566,10 +9993,14 @@ class _RepairSettleOps:
         self._refs: list | None = None
         self._refs_read = False
         self._runs: dict = {}
+        self._cards: dict = {}
 
     def repair_cards(self) -> list:
         """This sweep's repair cards, normalised — discovered by the title
         anchor `repair_card` itself defines, never by a list kept here."""
+        found = [card for card in active_cards(SWEPT_LANES)
+                 if repair_card.is_repair_card(card.get("title") or "")]
+        self._cards = {card["identifier"]: card for card in found}
         return [
             {
                 "identifier": card["identifier"],
@@ -9579,8 +10010,7 @@ class _RepairSettleOps:
                 "repo": card_repo(card),
                 "comments": card_comment_bodies(card),
             }
-            for card in active_cards(SWEPT_LANES)
-            if repair_card.is_repair_card(card.get("title") or "")
+            for card in found
         ]
 
     def open_pull_head_refs(self):
@@ -9647,7 +10077,14 @@ class _RepairSettleOps:
         return runs
 
     def cancel(self, identifier: str) -> None:
-        linear_ops.cmd_state(identifier, "Canceled")
+        # From-lane-conditional on the door's reading (item 33). Refused, it
+        # raises: `settle` then records it rather than posting a cancel note
+        # for a cancellation that did not happen.
+        guard = _door_guard(self._cards.get(identifier))
+        if linear_ops.cmd_state(identifier, "Canceled", **guard) is False and guard:
+            raise linear_ops.LinearError(
+                f"{identifier} was not canceled: it left {guard['expect'][0]!r} "
+                "since the board was read — re-read next sweep")
 
     # Named for the seam it IS (see repair_card._SettleOps.cmd_comment): the
     # completeness guard reads a `cmd_comment` as a pass-through and judges its
@@ -9667,7 +10104,7 @@ def settle_repair_cards() -> None:
     """
     report = repair_card.settle(
         repo_slug=REPO_SLUG, ops=_RepairSettleOps(),
-        fatal=(linear_ops.LinearRateLimited,),
+        fatal=(linear_ops.LinearRateLimited, BoardNotRead),
     )
     for failure in report.failures:
         _write_failures.append(failure)
@@ -9681,6 +10118,72 @@ class MergeScope(NamedTuple):
     dependents: list[str]  # the cards the merged card `blocks`
     parent: str | None  # its epic, if any
     parent_state: str | None
+
+
+def _door_dependents(merged: str) -> dict | None:
+    """The merged card, rebuilt from the read door in `merge_sweep_gate.QUERY`'s
+    shape — or None (mode off, door unavailable, or unknown: Linear answers).
+    Raises BoardHeld on `linear-hold` in `on`: no Linear fallback (item 34).
+
+    Two door reads, no Linear request: `/cards?ids=<merged>` for its lane and
+    its parent, and `/cards/<merged>/dependents?lanes=Backlog` for the cards it
+    blocks. Only Backlog's: this scope feeds the promotion alone, and a card is
+    promoted only out of Backlog (`backlog_children(only=…)` keeps exactly
+    those). The parent's children are not read, and say so (`hasNextPage`):
+    nothing on this path counts them.
+    """
+    if bureau_read.mode() == "off" or not bureau_read.enabled():
+        return None
+    try:
+        card = bureau_read.cards([merged], max_age=bureau_read.BOARD_MAX_AGE,
+                                 relations=False).nodes[0]
+        deps = bureau_read.dependents(merged, max_age=bureau_read.BOARD_MAX_AGE,
+                                      lanes=[BACKLOG_LANE]).nodes
+    except bureau_read.ReadUnknown as e:
+        if e.skip and bureau_read.mode() == "on":
+            _door_hold.append(e.reason)
+            raise BoardHeld(e.reason) from e
+        print(f"read-door: {merged}'s dependents unknown ({e}) — read from Linear")
+        return None
+    parent = card.get("parent")
+    return {
+        "identifier": card["identifier"],
+        "state": {"name": (card.get("state") or {}).get("name")},
+        "relations": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {"type": "blocks", "issue": {"identifier": card["identifier"]},
+                 "relatedIssue": {"identifier": dep["identifier"],
+                                  "state": {"name": (dep.get("state") or {}).get("name")}}}
+                for dep in deps
+            ],
+        },
+        "parent": None if not parent else {
+            "identifier": parent.get("identifier"),
+            "state": {"name": (parent.get("state") or {}).get("name")},
+            "children": {"pageInfo": {"hasNextPage": True}, "nodes": []},
+        },
+    }
+
+
+def _shadow_compare_dependents(merged: str, door: dict, linear: dict) -> None:
+    """Backlog dependents and the parent's lane, door vs Linear. The door is
+    asked for Backlog's dependents only, so Linear's are cut to Backlog too.
+    Relations ride the console's poll, so a difference here is `door-older` by
+    construction: the shadow cannot prove relation freshness (review R10) — the
+    live re-check before every promotion is what guards it."""
+    def facts(card: dict) -> dict:
+        parent = card.get("parent") or {}
+        return {
+            "dependents": sorted(
+                d.get("identifier") for d in merge_sweep_gate.dependents(card)
+                if ((d.get("state") or {}).get("name")) == BACKLOG_LANE),
+            "parent": (parent.get("identifier"), (parent.get("state") or {}).get("name")),
+        }
+    d, l_ = facts(door), facts(linear)
+    diffs = [bureau_read.Diff(bureau_read.DOOR_OLDER, merged, key, d[key], l_[key])
+             for key in d if d[key] != l_[key]]
+    bureau_read.report_diffs("dependents", diffs, 1)
 
 
 def merged_card_scope() -> MergeScope | None:
@@ -9703,8 +10206,21 @@ def merged_card_scope() -> MergeScope | None:
     merged = (os.environ.get("MERGED_CARD") or "").strip().upper()
     if not merged:
         return None
+    # The read door's `/cards/<id>/dependents` (Stage 2 #15, the reconcile
+    # side) answers the same card in the same shape. In `on` its answer is
+    # used; the dependents it names are then read through the door too, and
+    # each is promoted only after its own live re-check (item 45 — the merge
+    # path has no gate of its own). In `shadow` the two are compared.
+    door_card = _door_dependents(merged)
+    if bureau_read.mode() == "on" and door_card is not None:
+        card = door_card
+    else:
+        card = None
     try:
-        card = (linear_ops.gql(merge_sweep_gate.QUERY, {"id": merged}) or {}).get("issue")
+        if card is None:
+            card = (linear_ops.gql(merge_sweep_gate.QUERY, {"id": merged}) or {}).get("issue")
+            if door_card is not None and card:
+                _shadow_compare_dependents(merged, door_card, card)
     except linear_ops.LinearRateLimited:
         raise
     except Exception as e:  # noqa: BLE001 — an unreadable scope falls OPEN
@@ -9794,6 +10310,13 @@ class SweepSpend:
         before = linear_ops.requests_made()
         try:
             yield
+        except BoardHeld as held:
+            # The read door says Linear is held (Stage 2 item 34): this phase
+            # needed the work-lane board, and neither the door nor Linear can
+            # give it without spending the held bucket. Skipped, one line.
+            bureau_read.note_skip(name, held.reason)
+        except BoardIdle:
+            pass  # an idle pass reads no board; its one line is already said
         finally:
             spent = linear_ops.requests_made() - before
             if enabled and spent > 0:
@@ -9861,6 +10384,105 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
     "carry_epics_out_of_todo":
         "carried unlabeled epics out of Todo",
 }
+
+
+# ── An idle sweep costs almost nothing (CEO, 2026-10-02 ~18:00 PT) ──────────
+# The demo repo is the fleet's sandbox and its sweep always runs, so a sweep
+# with nothing to do must cost next to nothing. ONE cheap check decides, before
+# the board is read: the WIP cap (0 = this repo builds nothing — no request at
+# all), then whether any card of this repo is IN MOTION (Todo, In Progress,
+# In Review) or waiting in Backlog to be promoted. Neither → promotion and the
+# repo-scoped phases are skipped, and the pass says so in one line.
+#
+# The FLEET-WIDE phases still run on an idle pass (the coordinator's decision,
+# 2026-10-02 ~19:10 PT, the CEO may overrule): the Urgent fast path, the
+# Planning stall watchdog, the frozen-holds repair and the planner line act on
+# every repo's cards, and with most sweeps paused an idle repo may be the only
+# one running them. They read the board as they always have, so an idle pass
+# costs the check plus those reads (about three requests), not one. The
+# GitHub-side backstops still run too: an open pull request is work whatever
+# the board says.
+IDLE_LANES = tuple(SWEEP_STATES) + (BACKLOG_LANE,)
+
+#: The smallest Linear question that answers it: does a card of THIS repo sit
+#: in any of those lanes? One request, one bounded page, ids and label names.
+#:
+#: The label is matched the way ROUTING matches it, never as one exact string
+#: (the PR #687 critic). `card_repo` lowercases the label and drops an owner,
+#: so `repo:dreadnought-foundry/<slug>` and `repo:<Slug>` route here too; an
+#: exact `eq` read such a repo as idle and skipped its promotion. Linear's
+#: StringComparator has no case-blind `endsWith` (introspected 2026-10-02), so
+#: the query asks for any label CONTAINING the slug, case-blind — a superset of
+#: every routable spelling — and `sweep_idle` keeps the cards whose
+#: `card_repo` is exactly this repo (`agent-bureau` is a substring of
+#: `agent-bureau-demo`). A full page with more behind it and no card of ours on
+#: it is not proof of idle: it fails open to the full pass, never pages.
+IDLE_PAGE = 50
+IDLE_QUERY = """query($needle: String!, $states: [String!]!, $first: Int!) {
+           issues(first: $first, filter: {
+             team: {key: {eq: "DRE"}},
+             labels: {name: {containsIgnoreCase: $needle}},
+             state: {name: {in: $states}}
+           }) { nodes { id labels { nodes { name } } } pageInfo { hasNextPage } } }"""
+
+
+def sweep_idle() -> str | None:
+    """Why this pass is idle, or None when it has work (or cannot tell).
+
+    From the read door when it is `on` (no Linear request): this repo's cards
+    in the work lanes, and its Backlog cards not held for a human — a held
+    card is never promoted. Otherwise from Linear with `IDLE_QUERY`, one
+    request, where any of this repo's Backlog cards counts as promotable (the
+    query cannot ask "not held" safely).
+
+    An answer nobody could get is NOT idle: the pass runs in full, exactly as
+    it did before this check existed. A card known only by the retired
+    `**Repo:**` description stamp, with no `repo:` label, is invisible to the
+    Linear check — the relay routes on the label, so such a card is not
+    dispatched to this repo either.
+    """
+    if MAX_WIP <= 0:
+        return f"the WIP cap is {MAX_WIP}, so nothing here is built or promoted"
+    if bureau_read.mode() == "on" and bureau_read.enabled():
+        try:
+            read = bureau_read.board(DOOR_WORK_LANES + (BACKLOG_LANE,), scope="repo",
+                                     max_age=bureau_read.BOARD_MAX_AGE)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                _door_hold.append(e.reason)
+                raise BoardHeld(e.reason) from e
+            print(f"read-door: idle check unknown ({e}) — asking Linear")
+        else:
+            mine = [c for c in read.nodes if card_repo(c) == REPO_SLUG]
+            moving = [c for c in mine if c["state"]["name"] in SWEEP_STATES]
+            waiting = [c for c in mine if c["state"]["name"] == BACKLOG_LANE
+                       and not held(c)]
+            if moving or waiting:
+                return None
+            return ("no card of this repo is in motion or waiting to be promoted "
+                    "(read from the door)")
+    try:
+        data = linear_ops.gql(IDLE_QUERY, {"needle": REPO_SLUG,
+                                           "states": list(IDLE_LANES),
+                                           "first": IDLE_PAGE})
+    except linear_ops.LinearError as e:
+        # Unknown is not idle. A rate limit included: the stop is armed now,
+        # so the full pass sends nothing more and exits 75 exactly as it did
+        # before this check existed (DRE-2923).
+        print(f"idle: the check could not be read ({e}) — running the full pass")
+        return None
+    issues = (data or {}).get("issues") or {}
+    nodes = issues.get("nodes") or []
+    if any(card_repo(node) == REPO_SLUG for node in nodes):
+        return None
+    if (issues.get("pageInfo") or {}).get("hasNextPage", True):
+        # Every card on the page is another repo's, and there are more: ours
+        # could be on the next page. Unknown is not idle.
+        print(f"idle: the check's page held {len(nodes)} other repos' cards and "
+              "there are more — running the full pass")
+        return None
+    return (f"no card of repo:{REPO_SLUG} (any spelling routing accepts) is in "
+            f"{', '.join(IDLE_LANES)}")
 
 
 def off_rail_notice(phase: str, would: str) -> str:
@@ -9952,6 +10574,9 @@ def main(
     # must not inherit it — every invocation starts from a fresh snapshot,
     # including the two event-driven ones above.
     reset_sweep_cards()
+    # The read door's mode, read ONCE per process and said (Stage 2 item 35):
+    # a pass keeps the mode it started in, whatever the variable does next.
+    bureau_read.mode()
     # The pass's comment cache (DRE-3236) is opened HERE and nowhere else: the
     # board reads below fill it, every identifier-taking reader is served from
     # it, and a CLI caller outside a sweep never sees it.
@@ -9991,6 +10616,19 @@ def main(
             return
     nudges = 0
     flagged: set[str] = set()
+    if not promote_only:
+        # The idle check (CEO, 2026-10-02): one cheap question before the
+        # board is read. Idle → promotion and the repo-scoped phases are
+        # skipped (they raise BoardIdle, silently) while the fleet-wide ones
+        # run, and this is the pass's one line about it. Full passes only:
+        # the merge path's scoped passes are about a card that just moved.
+        with _phase("sweep_idle"):
+            why = sweep_idle()
+            if why is not None:
+                _idle_pass.append(why)
+                print(f"idle: {REPO_SLUG} — {why}; skipped promotion and this repo's "
+                      "work-lane phases this pass (the fleet-wide Planning and "
+                      "Intake phases still run)")
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
@@ -10170,12 +10808,22 @@ def main(
     # the total. On a full sweep the snapshot is usually already warm — the
     # backstops and the watchdog above read the same one board (DRE-2929) — so
     # this line appears only when this is the phase that paid for it.
+    mine = None
     with _phase("board_read", enabled=not promote_only):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # this repo has nothing on the board
         mine = [
             c for c in active_cards()
             if card_repo(c) == REPO_SLUG and not automation_card(c)
         ]
         epics = repo_epics(mine)
+    if mine is None:
+        # The read door said Linear is held, and the board was not read
+        # (Stage 2 item 34; the phase said so). NOTHING below may decide on an
+        # empty board — an empty WIP base would let promotion fill every slot
+        # at once — so the board-dependent phases each skip on their own read
+        # (BoardHeld) and the promotion is not entered at all.
+        mine, epics = [], set()
     if not promote_only:
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
@@ -10198,6 +10846,10 @@ def main(
     # A card promotable for any other reason waits for the cron, which
     # merge_sweep_gate already made the backstop for what the gate declines.
     with _phase("promote_ready"):
+        if _door_hold:
+            raise BoardHeld(_door_hold[0])  # skipped, one line — never on an empty board
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # nothing to promote: the idle line said so
         scope = merged_card_scope() if promote_only else None
         if scope is not None:
             print(
@@ -10233,6 +10885,8 @@ def main(
     # have all returned above, which is what keeps a board-wide pass off the
     # merge path that runs on every merge in the fleet.
     with _phase("hand_built_to_review"):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # this repo's own pull requests' cards
         move_hand_built_to_review()
     # The nudge loop (DRE-3639): one phase, because a sweep's per-card
     # work is one question — what is stuck and what does it need — and a
@@ -10326,8 +10980,12 @@ def main(
                                 f"https://github.com/{REPO}/pull/{pr['number']}"
                             ),
                         )
-                    linear_ops.cmd_state(ident, break_glass.REVIEW_STATE)
+                    # From-lane-conditional on the door's reading (item 33).
+                    linear_ops.cmd_state(ident, break_glass.REVIEW_STATE, **_door_guard(card))
                     continue
+                # Unconditional on purpose, door or not: the merge is GitHub's
+                # ground truth and Done is terminal — the same close the cron
+                # makes on Linear's read, which also re-reads nothing first.
                 linear_ops.cmd_state(ident, "Done")
                 linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
             elif state == "Todo" and not is_open:
@@ -10396,11 +11054,19 @@ def main(
                     # since=RESET_TAG: only deaths after the last un-park count.
                     dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                     if dead >= REQUEUE_CAP:
+                        # On the door's reading, the lane is confirmed live
+                        # BEFORE the label (item 33): a hold label must never
+                        # land on a card the park then refuses to move.
+                        if not _door_lane_still(card, labels_absent=(HOLD_LABEL,)):
+                            continue
                         linear_ops.add_label(ident, HOLD_LABEL)
                         # --park: a deliberate HOLD-cap park (DRE-1403). Without it
                         # the DRE-1885 building-card guard would re-route this
                         # In Progress → Backlog move to Todo and re-loop forever.
-                        linear_ops.cmd_state(ident, "Backlog", "--park")
+                        if linear_ops.cmd_state(
+                            ident, "Backlog", "--park", **_door_guard(card)
+                        ) is False and _door_guard(card):
+                            continue
                         linear_ops.cmd_comment(
                             ident,
                             f"🚨 held-for-human: agent keeps dying with no PR (hung or "
@@ -10409,7 +11075,13 @@ def main(
                             "split/fix the card and clear the label to retry.",
                         )
                     else:
-                        linear_ops.cmd_state(ident, "Todo")
+                        # From-lane-conditional on the door's reading (item
+                        # 33): requeued only if still In Progress and still
+                        # neither held nor hand-built — no receipt otherwise.
+                        if linear_ops.cmd_state(ident, "Todo", **_door_guard(
+                            card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)
+                        )) is False and _door_guard(card):
+                            continue
                         linear_ops.cmd_comment(
                             ident,
                             f"🪦 {DEAD_TAG}: In Progress with no PR past the "
@@ -10470,10 +11142,15 @@ def main(
                 # since=RESET_TAG: only deaths after the last un-park count.
                 dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                 if dead >= REQUEUE_CAP:
+                    if not _door_lane_still(card, labels_absent=(HOLD_LABEL,)):
+                        continue
                     linear_ops.add_label(ident, HOLD_LABEL)
                     # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
                     # the In Progress hold.
-                    linear_ops.cmd_state(ident, "Backlog", "--park")
+                    if linear_ops.cmd_state(
+                        ident, "Backlog", "--park", **_door_guard(card)
+                    ) is False and _door_guard(card):
+                        continue
                     linear_ops.cmd_comment(
                         ident,
                         f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
@@ -10482,7 +11159,10 @@ def main(
                         "and clear the label to retry.",
                     )
                 else:
-                    linear_ops.cmd_state(ident, "Todo")
+                    if linear_ops.cmd_state(ident, "Todo", **_door_guard(
+                        card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)
+                    )) is False and _door_guard(card):
+                        continue
                     linear_ops.cmd_comment(
                         ident,
                         f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to Todo "
@@ -10492,15 +11172,24 @@ def main(
     # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
     # count is a finding about the front door, not about the people using it.
     with _phase("report_break_glass"):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # a Linear count an idle pass does not buy
         report_break_glass()
     # The promise nothing kept (DRE-4492, DRE-5278): an epic with the critics
     # whose review never ran. The watcher is handed this repo's active epics
     # and its Planning epics with children, with their lanes, off the board
     # read this sweep already paid for (DRE-5286, `rereview_watch_scope`).
+    # NOT skipped on an idle pass (the PR #687 critic's item 3): the stall
+    # watchdog is fleet-wide and runs, and it leaves this repo's Planning epics
+    # with children to this watcher (`_with_the_critics`). Idle means nothing
+    # in motion or Backlog; a Planning epic is neither. The scope reads the
+    # lanes the fleet phases' board read already paid for, so it costs nothing.
     with _phase("report_rereview_missing"):
         try:
             watched, lane_of = rereview_watch_scope(epics)
             rereview_watch.report(watched, epic_thread, lane_of)
+        except BoardNotRead:
+            raise  # skipped by its phase (Stage 2 item 34; an idle pass)
         except Exception as e:  # noqa: BLE001 — a notice we could not post is a write
             _write_failures.append(f"rereview-missing: {e}")
             print(f"ERROR: report_rereview_missing: {e}", file=sys.stderr)

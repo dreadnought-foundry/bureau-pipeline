@@ -281,9 +281,35 @@ jobs:
              || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # The read door's identity check (Stage 2 item 38, review M1). The door
+      # trusts this job's OIDC token for `reconcile.yml@<the ref the stub
+      # called>`, but the scripts below were checked out at `pipeline_ref`.
+      # Unequal, a run would present one ref's identity while executing
+      # another ref's code — so the reusable refuses to run. Only when the door
+      # could be used: with BUREAU_READ off, or no token (a stub without
+      # `id-token: write`), there is no identity to protect and it passes.
+      - name: Refuse a pipeline_ref the stub did not call
+        env:
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
+
       - name: Sweep
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The read door (Stage 2 #5/#6a). The mode is the CALLER's variable,
+          # `off` when unset, so every repo reads Linear until it is flipped —
+          # `shadow` first, for a working day with zero unexplained
+          # `read-door-diff:` lines, then `on` (design §6). The door's address
+          # and audience are variables too; `BUREAU_PIPELINE_REF` lets the
+          # client refuse a token that names another ref than these scripts.
+          # NO `permissions:` block anywhere in this file: the stub grants
+          # `id-token: write`, and a reusable can only take permissions away.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
           # The sweep's READS go out as the pool app selected above (DRE-4282):
           # reconcile.py's gh_read() swaps this in, the way gh_dispatch() swaps
@@ -343,11 +369,15 @@ jobs:
           # blank page reads as "nothing was spent" when it means "unknown".
           BUDGET=$(grep '^linear-budget:' sweep.log || true)
           SPEND=$(grep '^sweep-spend:' sweep.log || true)
+          # The read door's own lines: the mode this pass ran in, any phase it
+          # skipped on a hold, and its exit line (served/unknown/unavailable).
+          DOOR=$(grep '^read-door' sweep.log || true)
           {
             echo "### Reconcile sweep — spend"
             echo
             echo '```'
             if [ -n "$SPEND" ]; then printf '%s\n' "$SPEND"; fi
+            if [ -n "$DOOR" ]; then printf '%s\n' "$DOOR"; fi
             if [ -n "$BUDGET" ]; then
               printf '%s\n' "$BUDGET"
             else

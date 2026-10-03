@@ -517,7 +517,14 @@ _LABEL_WRITERS = (
 #: The two dead-run cap sites in `main()`, each of which pairs the label with a
 #: deliberate park into Backlog. Anchored on the park flag rather than on a line
 #: number, so the pairing is what is asserted.
-_DEAD_RUN_PARK = r'linear_ops\.add_label\(ident, HOLD_LABEL\)\s*\n(?:\s*#.*\n)*\s*linear_ops\.cmd_state\(ident, "Backlog", "--park"\)'
+# The park may carry the read door's conditional-write keywords and be asked
+# whether it landed (Stage 2 item 33): `if linear_ops.cmd_state(ident,
+# "Backlog", "--park", **_door_guard(card)) is False …`. Still the label, then
+# the park, at both cap sites — which is the pairing this pins.
+_DEAD_RUN_PARK = (
+    r'linear_ops\.add_label\(ident, HOLD_LABEL\)\s*\n(?:\s*#.*\n)*'
+    r'\s*(?:if )?linear_ops\.cmd_state\(\s*ident, "Backlog", "--park"[^)]*\)'
+)
 
 
 class TestTheOtherWritersAreUnchanged:
