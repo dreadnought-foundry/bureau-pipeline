@@ -11,9 +11,9 @@
 - a fourth piece that reads what two others produce;
 - its own body says "This is a list for Planning to cut into work. It is not one plan."
 
-DRE-4915 was read at about 14:15 PT: still in Intake, untouched.
+DRE-4915 was read at 14:08 PT: still in Intake, untouched.
 
-**How this was recorded.** A proof-runner session on the operator's instruction recorded this on 2026-10-03, 13:22–14:25 PT. Runs were read from the sandbox's Actions pages. Comments and lanes were read from the console database (`make db-read`). The one hand act, observation 0, was made by a coordinating session with the operator key. Every time is Pacific (PDT). **Pipeline sha:** the sandbox's `plan.yml` rides `stable` = bureau-pipeline `518ac246419734d0bf4f09465c62f5bde4334cef`, as the run's own checkout shows (`HEAD is now at 518ac24 Merge pull request #695 …`). **Watch window:** opened 2026-10-03 13:23 PT and closes 2026-10-10 13:23 PT.
+**How this was recorded.** A proof-runner session on the operator's instruction recorded this on 2026-10-03, 13:22–14:10 PT. Runs were read from the sandbox's Actions pages. Comments and lanes were read from the console database (`make db-read`). The one hand act, observation 0, was made by a coordinating session with the operator key. Every time is Pacific (PDT). **Pipeline sha:** the sandbox's `plan.yml` rides `stable` = bureau-pipeline `518ac246419734d0bf4f09465c62f5bde4334cef`, as the run's own checkout shows (`HEAD is now at 518ac24 Merge pull request #695 …`). **Watch window:** opened 2026-10-03 13:23 PT and closes 2026-10-10 13:23 PT.
 
 | Criterion | Result |
 |---|---|
@@ -61,7 +61,7 @@ That path is recorded in full in DRE-5346's record, `docs/both-critics-before-gr
 
 ## Observation 5 — a roll-up parent closed by the sweep
 
-**Not observed.** It waits on DRE-4669. Read at about 14:15 PT from the console database:
+**Not observed.** It waits on DRE-4669. Read at 14:08 PT from the console database:
 
 | child epic of DRE-4669 | state |
 |---|---|
@@ -78,7 +78,7 @@ DRE-5740 is not a roll-up parent, so it is not a candidate. The rule is pinned b
 
 **Not done.** It is a hand edit of a production epic's description, and this sandbox proof does not make production edits. DRE-3530 stands as the card describes: In Progress, with a `roll-up` stamp and a split receipt, and its child epics DRE-3621 (Done), DRE-3622 (Done), DRE-3623 (Done), DRE-3624 (Planning) and DRE-3650 (Done).
 
-**The board search for the marker** (`description ILIKE '%BEGIN wave-commitment%'`, open cards, console database, about 14:15 PT):
+**The board search for the marker** (`description ILIKE '%BEGIN wave-commitment%'`, open cards, console database, 14:08 PT):
 
 | card | state | note |
 |---|---|---|
