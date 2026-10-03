@@ -578,8 +578,8 @@ class TestOneResendPerCause:
         assert executed == set(EXPECTED_CAUSES)
         assert len(sent) == 2 * len(EXPECTED_CAUSES)
         add_receipts(doc, sent, NOW)
-        later = NOW + timedelta(hours=1)
-        sent2, ledger2 = run(doc, monkeypatch, now=later)
+        # Half an hour on: DRE-9108's earlier re-send is still inside the stop.
+        sent2, ledger2 = run(doc, monkeypatch, now=NOW + timedelta(minutes=30))
         assert sent2 == []
         assert {a["outcome"] for a in ledger2["actions"]} == {"suppressed"}
         assert {a["target"] for a in ledger2["actions"]} == set(EXPECTED_CAUSES)
@@ -591,8 +591,8 @@ class TestOneResendPerCause:
         add_receipts(doc, sent, NOW)
         push_comment(doc, "DRE-9101",
                      dead_run.limit_marker("claude", "plan", None, "37110000077"),
-                     NOW + timedelta(minutes=30))
-        sent2, ledger2 = run(doc, monkeypatch, now=NOW + timedelta(hours=1))
+                     NOW + timedelta(minutes=10))
+        sent2, ledger2 = run(doc, monkeypatch, now=NOW + timedelta(minutes=30))
         assert {a["target"] for a in ledger2["actions"] if a["outcome"] == "executed"} == {
             "DRE-9101"}
         assert [w.kind for w in sent2] == ["linear_comment", "linear_state"]
