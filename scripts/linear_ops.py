@@ -137,6 +137,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess  # nosec B404 - one fixed argv (the key read), no shell
 import sys
 import time
@@ -510,6 +511,11 @@ def _fall_back(why: str) -> None:
     happened in neither. Never a key on the line — names only."""
     refused = spending_bucket()
     identity = declared_identity()
+    # Every request so far — the refused one included — went out on the
+    # primary key, so it is that bucket's (Stage 2 item 28). A process falls
+    # back at most once, and the rest of it is charged where
+    # `spending_bucket()` says at exit.
+    _budget["calls_by_bucket"] = {refused: _budget["calls"]}
     if refused == identity:
         refused = "the primary key"
     _budget["fell_back"] = True
@@ -584,6 +590,9 @@ def _reset_budget_state() -> None:
         reported=False,  # the exit line was printed
         limit=None,  # last bucket size seen (DRE-5589)
         fell_back=False,  # a refused key moved this process onto the fleet key
+        # requests charged to a bucket this process has LEFT (a fallback);
+        # the remainder of `calls` is the current bucket's (Stage 2 item 28)
+        calls_by_bucket={},
     )
 
 
@@ -718,40 +727,123 @@ def requests_made() -> int:
     return _budget["calls"]
 
 
-def calls_line() -> str:
-    """The one line that says how many Linear requests THIS process sent:
+#: This process's name on its calls lines — made once, on first use.
+_PROCESS: dict = {}
+_UNSAFE_TOKEN_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
 
-        linear-calls: <N> request(s) this run (budget: <bucket>)
 
-    N is `requests_made()` — the process's own count, exact, a retry and a
-    RATELIMITED answer included, a refusal sent without a request not. The
-    budget line's `spent N` is a difference between two readings of a SHARED
-    bucket, so a run that overlaps another is charged the other's requests,
-    and a run that saw no headers is `unknown`; nobody else's requests are in
-    this number (Stage 2 #11). `check_linear_budget.py` prefers it.
+def process_token() -> str:
+    """`<pid>@<step>-<nonce>`: which process printed a calls line, so a reader
+    that meets the same line twice — a step that `cat`s a log the process
+    already printed — counts it once (Stage 2 item 28, K2).
 
-    The bucket is the one the process is spending at exit. A run that fell
-    back from a refused token counts the refused request here too, under the
-    fleet key: that one request is the only thing the line cannot split."""
-    return f"linear-calls: {_budget['calls']} request(s) this run ({_budget_part()})"
+    The step is GitHub's `GITHUB_ACTION` (`local` off a runner), reduced to
+    `[A-Za-z0-9_.-]`: it is an environment string, and these lines are parsed
+    one line at a time. The nonce keeps apart two runners that hand out the
+    same pid. Never a key, never a URL."""
+    if "token" not in _PROCESS:
+        step = _UNSAFE_TOKEN_CHARS.sub("", os.environ.get("GITHUB_ACTION") or "") or "local"
+        _PROCESS["token"] = f"{os.getpid()}@{step[:64]}-{os.urandom(3).hex()}"
+    return _PROCESS["token"]
+
+
+def calls_lines() -> list[str]:
+    """The lines that say how many Linear requests THIS process sent, one per
+    bucket it spent:
+
+        linear-calls: <N> request(s) this run (process: <token>; budget: <bucket>)
+
+    N is the process's own count, exact — a retry and a RATELIMITED answer
+    included, a refusal sent without a request not; the Ns add up to
+    `requests_made()`. The budget line's `spent N` is a difference between two
+    readings of a SHARED bucket, so a run that overlaps another is charged the
+    other's requests, and a run that saw no headers is `unknown`; nobody
+    else's requests are in this number (Stage 2 #11). `check_linear_budget.py`
+    prefers it.
+
+    One line per bucket (Stage 2 item 28, K5): a planner whose token was
+    refused mid-run sent everything up to and including the refused request
+    on `planner-oauth`, and the rest on the fleet key — each is charged its
+    own. A process that never fell back prints one line."""
+    token = process_token()
+    charged = dict(_budget["calls_by_bucket"])
+    rest = _budget["calls"] - sum(charged.values())
+    if rest or not charged:
+        bucket = spending_bucket()
+        charged[bucket] = charged.get(bucket, 0) + rest
+    return [
+        f"linear-calls: {n} request(s) this run (process: {token}; budget: {bucket})"
+        for bucket, n in charged.items()
+    ]
 
 
 def _report_budget_at_exit() -> None:
-    """Print the budget line and the calls line ONCE, on stderr, if any Linear
-    call was made. Registered with atexit; a process that never touched Linear
-    says nothing. Each line is printed on its own, so a failure composing one
-    can never cost the other."""
+    """Print the budget line and the calls lines ONCE, on stderr, if any Linear
+    call was made. Registered with atexit, and run by the SIGTERM handler
+    below; a process that never touched Linear says nothing. Each is printed
+    on its own, so a failure composing one can never cost the other."""
     if _budget["reported"] or not _budget["calls"]:
         return
     _budget["reported"] = True
-    for compose in (budget_line, calls_line):
+    try:
+        lines = [budget_line()]
+    except Exception:  # pragma: no cover — telemetry must never fail an exit
+        lines = []
+    try:
+        lines += calls_lines()
+    except Exception:  # pragma: no cover
+        pass
+    for line in lines:
         try:
-            print(compose(), file=sys.stderr, flush=True)
-        except Exception:  # pragma: no cover — telemetry must never fail an exit
+            print(line, file=sys.stderr, flush=True)
+        except Exception:  # pragma: no cover
             pass
 
 
 atexit.register(_report_budget_at_exit)
+
+
+# ── A killed process still reports (Stage 2 item 28, K3) ────────────────────
+# GitHub cancels a step, and ends one at its timeout, with SIGINT and then
+# SIGTERM. SIGINT is a KeyboardInterrupt and runs atexit; Python's default
+# SIGTERM ends the process WITHOUT it — so the run worth measuring most, the
+# one that hit its clock, printed no spend at all. The handler prints the
+# lines, then hands the signal on: to a handler the script had already set,
+# or back to the default, re-raised so the process still dies BY the signal
+# and the runner sees a kill, never a clean exit. A script that sets its own
+# handler AFTER importing this module replaces this one; that is its call.
+_previous_sigterm: dict = {}
+
+
+def _on_sigterm(signum, frame) -> None:
+    _report_budget_at_exit()
+    previous = _previous_sigterm.get("handler")
+    if callable(previous):
+        previous(signum, frame)
+        return
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _install_sigterm_report() -> None:
+    """Idempotent — a reload re-runs this in the same module namespace, and
+    the handler already there reads that namespace. Leaves an IGNORED SIGTERM
+    ignored, and does nothing off the main thread, where Python refuses a
+    handler."""
+    try:
+        current = signal.getsignal(signal.SIGTERM)
+        if current == signal.SIG_IGN or (
+            getattr(current, "__module__", None) == __name__
+            and getattr(current, "__name__", None) == "_on_sigterm"
+        ):
+            return
+        _previous_sigterm["handler"] = current
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError, AttributeError):  # pragma: no cover
+        pass
+
+
+_install_sigterm_report()
 
 
 # The one-shot retry (DRE-3087). A sweep is dozens of calls through this seam,
