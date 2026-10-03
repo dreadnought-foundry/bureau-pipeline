@@ -623,9 +623,15 @@ class TestTheContractSaysSo:
         assert "a human moves a WORKBENCH or OPERATOR card" not in exit_text
         assert "sweep promotes" in exit_text
 
-    def test_the_todo_writers_clause_names_what_the_promoter_stamps(self):
-        writers = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
+    def test_the_hand_work_writers_clause_names_what_the_promoter_stamps(self):
+        # Since DRE-5322 the marks are stamped on the way into Hand-work, so
+        # that is the lane whose writers clause says so; Todo's says FLEET
+        # arrives unmarked and the person's card goes to Hand-work instead.
+        writers = lane_contract.lane("Hand-work")["clauses"]["writers"]["text"]
         assert reconcile.HAND_BUILT_LABEL in writers
+        assert linear_ops.NO_CODE_LABEL in writers
+        todo = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
+        assert "Hand-work" in todo and "unmarked" in todo
 
     def test_the_rendered_document_matches_the_contract(self):
         """`docs/lane-contract.md` is rendered from the file — a clause edited
