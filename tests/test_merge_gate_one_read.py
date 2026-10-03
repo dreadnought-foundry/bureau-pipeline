@@ -393,10 +393,23 @@ class EveryReadFailsTheWayItDidTest(unittest.TestCase):
         self.assertEqual(len(run.calls), 1, run.explain())
 
 
+# gh's `author` renderings of one bot, one fixture each (Stage 2 review G3,
+# addition 41). gh 2.100.0 renders the first (read live 2026-10-02 against
+# bureau-pipeline #677: `{"is_bot":true,"login":"app/agent-bureau-bot-4"}`,
+# where REST says `agent-bureau-bot-4[bot]`); the other two are the shapes a
+# different gh version could print.
+AUTHOR_APP_X = {"is_bot": True, "login": "app/dependabot"}    # `app/x`
+AUTHOR_X_IS_BOT = {"is_bot": True, "login": "dependabot"}     # `x` with is_bot
+AUTHOR_BARE_X = {"login": "dependabot"}                       # bare `x`
+AUTHOR_REST_X = {"login": "dependabot[bot]"}                  # REST's own spelling
+
+
 class TheAuthorIsSpelledTheRestWayTest(unittest.TestCase):
     """Condition D compares the author with `dependabot[bot]`, REST's
     spelling (DRE-2039). gh renders a bot as `app/<slug>`; the gate turns it
-    back. A person's login can hold no slash, so `app/` cannot be forged."""
+    back. A person's login can hold no slash, so `app/` cannot be forged.
+    A rendering that says nothing of a bot is NOT guessed at: it fails loud,
+    as condition D's `human` — one note, never a merge."""
 
     def dependabot(self, author: dict) -> Run:
         return run_gate({
@@ -405,13 +418,28 @@ class TheAuthorIsSpelledTheRestWayTest(unittest.TestCase):
             "pr_commits": [PATCH_COMMIT],
         })
 
-    def test_every_bot_rendering_is_the_real_dependabot(self):
-        for author in ({"is_bot": True, "login": "app/dependabot"},
-                       {"is_bot": True, "login": "dependabot"},
-                       {"login": "dependabot[bot]"}):
-            with self.subTest(author=author):
-                run = self.dependabot(author)
-                self.assertEqual(run.decision(), "merge", run.explain())
+    def test_app_x_is_dependabot(self):
+        run = self.dependabot(AUTHOR_APP_X)
+        self.assertEqual(run.decision(), "merge", run.explain())
+
+    def test_x_with_is_bot_is_dependabot(self):
+        run = self.dependabot(AUTHOR_X_IS_BOT)
+        self.assertEqual(run.decision(), "merge", run.explain())
+
+    def test_rests_own_spelling_is_dependabot(self):
+        run = self.dependabot(AUTHOR_REST_X)
+        self.assertEqual(run.decision(), "merge", run.explain())
+
+    def test_bare_x_fails_loud_and_never_merges(self):
+        run = self.dependabot(AUTHOR_BARE_X)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "human", run.explain())
+        self.assertIn("'dependabot'", run.proc.stdout)
+        self.assertEqual(run.merges, [])
+        self.assertEqual(
+            len([c for c in run.comments if "waiting for human merge" in c["body"]]), 1,
+            run.comments,
+        )
 
     def test_a_person_is_not_dependabot(self):
         run = self.dependabot({"is_bot": False, "login": "dependabot-fan"})

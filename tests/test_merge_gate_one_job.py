@@ -379,9 +379,18 @@ class TheCriticsCompletionIsNotAWakeTest(unittest.TestCase):
     workflow_run triggers — the scaffold's, agent-bureau's, this repo's own —
     names it exactly that, and the gate never waits on the critic's run:
     its check runs and the run itself sit at a review path, excluded from
-    condition 1 by verified origin (DRE-1994, DRE-5045). A review that
-    crashed without a comment is decided `wait` with or without this wake
-    and is re-dispatched by reconcile.recover_crashed_reviews.
+    condition 1 by verified origin (DRE-1994, DRE-5045).
+
+    A review that crashed WITHOUT a comment binds no verdict, so the gate
+    decided `wait` on that completion before #20 too: the wake never
+    recovered anything. (A crash that posts its neutral "could not run"
+    notice still wakes the gate through the comment leg.) What recovers a
+    silent crash is reconcile.recover_crashed_reviews, which re-dispatches
+    the review — and only where the repo's Reconcile workflow runs.
+    agent-bureau's was `disabled_manually` on 2026-10-02; there, before #20
+    and after it, nothing automatic recovers a silent crash. The medic skips
+    a crashed critic on purpose (DRE-1921). The head waits for a person to
+    dispatch QA Review again or push a commit.
 
     `Verify` is NOT skipped. verify.yml is no review path, so the gate waits
     on the Verifier's run as CI; its verdict comment is posted before that
