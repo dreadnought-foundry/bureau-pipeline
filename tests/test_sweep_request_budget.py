@@ -493,8 +493,10 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # full pass first asks ONE existence question (`reconcile.IDLE_QUERY`, `first:
 # 1`, ids only): is any card of this repo in Todo, In Progress, In Review or
 # Backlog? On a repo with work that is one request more than before; on an
-# idle repo it is the whole pass (`test_reconcile_idle_sweep.py`). With the
-# read door on, the check is asked of the door and costs no Linear request.
+# idle repo it skips promotion and the repo's work-lane phases, while the
+# fleet-wide Planning and Intake phases still run — the check plus their two
+# reads, three in all (`test_reconcile_idle_sweep.py`). With the read door on,
+# the check is asked of the door and costs no Linear request.
 SWEEP_REQUEST_BUDGET = 4
 
 

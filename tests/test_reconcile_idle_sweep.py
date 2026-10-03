@@ -7,12 +7,18 @@ decides, before the board is read:
 
   * the WIP cap is 0 → idle, no request at all;
   * no card of this repo is in motion (Todo / In Progress / In Review) and none
-    waits in Backlog → idle, ONE request (`reconcile.IDLE_QUERY`, `first: 1`,
-    ids only) — or none, when the read door answers it;
+    waits in Backlog → idle, decided by ONE request (`reconcile.IDLE_QUERY`,
+    `first: 1`, ids only) — or none, when the read door answers it;
   * otherwise → the pass runs exactly as before.
 
-Idle skips the board read, promotion and every phase that reads the board,
-and says so in ONE line. The same `sweep-spend:` accounting applies.
+Idle skips promotion and this repo's work-lane phases and says so in ONE
+line. The FLEET-WIDE phases still run — the Urgent fast path, the Planning
+stall watchdog, the frozen-holds repair and the planner line act on every
+repo's cards, and with most sweeps paused an idle repo may be the only one
+running them (the coordinator's decision, 2026-10-02 ~19:10 PT). So an idle
+pass costs the check plus their reads: the one board read and the planner
+line's Green Light read, three requests. The same `sweep-spend:` accounting
+applies.
 
 The repo here is demo-shaped: `agent-bureau-demo`, on a team board busy with
 OTHER repos' cards — which must not make the demo's pass pay for them.
@@ -134,16 +140,42 @@ def _lines(capsys, prefix):
     return [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith(prefix)]
 
 
-def test_an_idle_demo_pass_spends_one_request_and_says_so_once(capsys):
+def _lane_reads(board: TeamBoard) -> list[tuple]:
+    return [q for q in board.queries if q != reconcile.IDLE_QUERY]
+
+
+def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
     board = TeamBoard(*_busy_elsewhere())
     _pass(board)
-    assert board.queries == [reconcile.IDLE_QUERY]
+    assert board.queries[0] == reconcile.IDLE_QUERY
+    assert board.requests == 3  # the check, the one board read, Green Light
+    assert not any('eq: "Backlog"' in q for q in board.queries)  # no promotion read
     out = capsys.readouterr().out
     idle = [ln for ln in out.splitlines() if ln.startswith("idle:")]
     assert len(idle) == 1 and DEMO in idle[0]
+    assert "the fleet-wide Planning and Intake phases still run" in idle[0]
     assert "sweep-spend: sweep_idle 1 request(s)" in out
-    assert "sweep-spend: total 1 request(s) over 1 phase(s)" in out
+    assert "sweep-spend: total 3 request(s) over 3 phase(s)" in out
     assert "promotion:" not in out
+    assert "planner line:" in out and "urgent-fast-path:" in out
+
+
+def test_an_idle_pass_runs_the_fleet_phases_and_skips_the_repo_ones():
+    board = TeamBoard(*_busy_elsewhere())
+    fleet = ("flag_stranded", "advance_urgent_intake", "repair_frozen_planning_holds",
+             "serve_planner_line")
+    repo_scoped = ("promote_ready", "move_hand_built_to_review", "report_break_glass",
+                   "rereview_watch_scope")
+    with contextlib.ExitStack() as stack:
+        spies = {name: stack.enter_context(mock.patch.object(
+            reconcile, name, wraps=getattr(reconcile, name))) for name in fleet}
+        skipped = {name: stack.enter_context(mock.patch.object(
+            reconcile, name, side_effect=AssertionError(name))) for name in repo_scoped}
+        _pass(board)
+    for name, spy in spies.items():
+        assert spy.call_count == 1, name
+    for name, never in skipped.items():
+        assert never.call_count == 0, name
 
 
 def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
@@ -185,15 +217,18 @@ def test_a_demo_card_in_planning_does_not_make_the_pass_busy():
     assert not _busy(board)
 
 
-def test_a_wip_cap_of_zero_is_idle_with_no_request_at_all(monkeypatch, capsys):
+def test_a_wip_cap_of_zero_is_idle_and_the_check_asks_nothing(monkeypatch, capsys):
     monkeypatch.setattr(reconcile, "MAX_WIP", 0)
     board = TeamBoard(*_busy_elsewhere(),
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     _pass(board)
-    assert board.queries == []
+    assert reconcile.IDLE_QUERY not in board.queries
+    assert board.requests == 2  # only the fleet phases' board and Green Light reads
     out = capsys.readouterr().out
     assert "idle: agent-bureau-demo — the WIP cap is 0" in out
-    assert "sweep-spend: total 0 request(s)" in out
+    assert "sweep-spend: sweep_idle" not in out
+    assert "sweep-spend: total 2 request(s)" in out
+    assert "promotion:" not in out
 
 
 def test_an_unreadable_check_runs_the_full_pass():
@@ -211,8 +246,12 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
             monkeypatch.setenv(key, value)
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
-    assert board.queries == []
     assert lanes == "Todo,In Progress,In Review,Backlog"
+    # The check asked the door, not Linear. Linear answered only the fleet
+    # phases' reads of the lanes the door does not serve: Planning and Intake
+    # (6a) and the planner line's Green Light.
+    assert reconcile.IDLE_QUERY not in board.queries
+    assert board.requests == 2
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 

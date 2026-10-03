@@ -131,8 +131,9 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #:
 #: It was 42 until the idle check (the CEO, 2026-10-02; Stage 2 BP-2): one
 #: `first: 1` existence query before the board read, charged to `sweep_idle`,
-#: which on an idle repo replaces the whole pass and on this busy board is one
-#: request more. 42 + 1 = 43.
+#: which on an idle repo skips promotion and the repo's work-lane phases (the
+#: fleet-wide ones still run) and on this busy board is one request more.
+#: 42 + 1 = 43.
 #:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
