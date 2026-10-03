@@ -40,16 +40,18 @@ this module is where the medic asks them:
 Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
 rerun is new agent work on a card a person has said stop to. A Linear Sync
 rerun starts no agent: it finishes bookkeeping for work that already merged.
-On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
+A Merge Gate rerun starts no agent work either: the gate re-evaluates and
+merges only on critic APPROVE and green CI. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
 fleet's exhausted Linear quota, the gate refused them over a leftover
 `needs-human` label, and the refusal receipt it posted landed after the
 `🪦 limit-death` marker, which `limit_recovery.waiting()` reads as closing it.
 The medic's own refusal took both cards off the path that brings a limit death
 back. So the gate takes the failed workflow's name, and rule 1 applies to every
 workflow except the ones `BOOKKEEPING_WORKFLOWS` names. An empty or unknown
-name keeps rule 1: an unknown run is not evidence of bookkeeping. Merge Gate
-keeps it too: the gate MERGES, and whether a hold should block a merge is an
-open question to the CEO (Stage 2 review item 44, M12).
+name keeps rule 1: an unknown run is not evidence that the rerun starts no
+agent work. Whether a `needs-human` hold should also block a MERGE is an open
+question to the CEO (Stage 2 review item 44, M12); until he answers, Merge Gate
+keeps today's behavior and is exempt.
 
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
@@ -173,9 +175,21 @@ REPLAN_RECEIPT_MARK = dead_run.REPLAN_MARK
 # The lane that receipt sends the card to.
 REPLAN_STATE = "Planning"
 
-# Stage 2 fix #23. The workflows whose rerun is BOOKKEEPING: no agent runs,
-# and the work it finishes has already merged. The park rule does not apply
-# to them. Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,
+# Stage 2 fix #23. The workflows whose rerun starts NO AGENT WORK, so the
+# park rule does not apply to them:
+#
+#   * Linear Sync — bookkeeping for a PR that already merged (card-done).
+#   * Merge Gate — re-running it starts no agent work; the gate re-evaluates
+#     and merges only on critic APPROVE and green CI. It is not exempt
+#     because it "does not merge" — it does. It is exempt because the gate's
+#     safety is the critic and CI, not the hold label, which is mostly
+#     applied mechanically when a robot loop gives up and often lingers
+#     stale (Stage 2 review item 44, M12). Whether the label should block
+#     merging is an open question to the CEO; this keeps today's behavior
+#     until he answers, and taking it out is his decision.
+#
+# The constant keeps its name: "bookkeeping" here means "no agent work".
+# Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,
 # case-insensitively, because `github.event.workflow_run.name` is the calling
 # stub's name ("Linear Sync") and the reusable is "Linear Sync (reusable)".
 #
@@ -184,13 +198,7 @@ REPLAN_STATE = "Planning"
 # rule too: an empty name (an old stub, a missing input) or one this list has
 # never heard of is not evidence that the rerun starts no work, and dropping
 # the rule on a guess is how DRE-2937's third build would come back.
-#
-# Merge Gate is deliberately NOT here (Stage 2 review item 44, M12). It is
-# not bookkeeping: a rerun re-evaluates the PR and the gate may MERGE it.
-# Whether "needs a human" should block merging is a question put to the
-# CEO; until he answers, the rule fails closed for it. Adding it back is
-# his decision, not a tidy-up.
-BOOKKEEPING_WORKFLOWS = ("linear sync",)
+BOOKKEEPING_WORKFLOWS = ("linear sync", "merge gate")
 
 # The workflows the park rule exists for: a rerun starts agent work.
 # Documentation as data; `park_rule_applies` keeps the rule for these by
