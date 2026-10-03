@@ -25,6 +25,7 @@ The gate itself is pinned beside the DRE-1988 identity pins
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -101,10 +102,15 @@ def substitute(text: str) -> str:
     return re.sub(r"\$\{\{(.*?)\}\}", one, text)
 
 
+# The retry seam, stubbed: the answer to `--out FILE`, or to stdout — the shape
+# the read-once seam (Stage 2 fix #21) calls it in, keeping the thread it
+# shares with the fix-loop step.
 READ_STUB = textwrap.dedent("""\
     import os, shutil, sys
-    out = sys.argv[sys.argv.index("--out") + 1]
-    shutil.copy(os.environ["FIXTURE_THREAD"], out)
+    if "--out" in sys.argv:
+        shutil.copy(os.environ["FIXTURE_THREAD"], sys.argv[sys.argv.index("--out") + 1])
+    else:
+        sys.stdout.write(open(os.environ["FIXTURE_THREAD"]).read())
 """)
 
 
@@ -119,6 +125,8 @@ def run_fetch(thread, *, page_size: int = 100) -> tuple:
             f.write(READ_STUB)
         with open(os.path.join(scripts, "fix_handoff.py"), "w") as f:
             f.write("")
+        shutil.copy(os.path.join(os.path.dirname(__file__), "..", "scripts", "read_once.py"),
+                    scripts)
         pages = [thread[i:i + page_size] for i in range(0, len(thread), page_size)]
         fixture = os.path.join(work, "thread.json")
         with open(fixture, "w") as f:
