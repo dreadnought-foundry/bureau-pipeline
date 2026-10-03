@@ -1342,6 +1342,14 @@ def _door_state(name: str) -> tuple[str, str] | None:
 def _linear_state_list(team_id: str | None, team_key: str | None,
                        *, refresh: bool = False) -> list[dict]:
     slot = f"id:{team_id}" if team_id else f"key:{team_key}"
+    if not refresh and slot not in _workflow_states and not team_id:
+        # agent-task's card snapshot (Stage 2 #10) carries the team's states,
+        # read in the same request as the card: a held card's move needs none.
+        import agent_task_snapshot
+
+        handed = agent_task_snapshot.workflow_states(team_key)
+        if handed:
+            _workflow_states[slot] = handed
     if refresh or slot not in _workflow_states:
         if team_id:
             data = gql(

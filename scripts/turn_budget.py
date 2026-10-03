@@ -491,8 +491,16 @@ def _labels_of(identifier: str) -> tuple[list[str], str]:
     FAILS OPEN. A Linear read that fails costs the card its raise, never its
     run: the caller falls back to the default and says so. Same direction the
     dedupe guard and the credential clock take on an unreadable answer.
+
+    agent-task's card snapshot answers first when this step was handed one
+    (Stage 2 #10): the labels it read at the top of the job, no request.
     """
     try:
+        import agent_task_snapshot
+
+        snap = agent_task_snapshot.load(identifier)
+        if snap is not None:
+            return agent_task_snapshot.label_names(snap), ""
         import linear_ops
 
         return linear_ops._label_names(linear_ops.get_issue(identifier)), ""

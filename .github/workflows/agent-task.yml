@@ -296,6 +296,37 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
+      # ONE READ OF THE CARD FOR EVERY PRE-AGENT STEP (Stage 2 fix #10). The
+      # gate, the duplicate guard, the turn budget, the spoken thread and the
+      # In Progress move used to read the same card from Linear eleven times
+      # inside a minute. agent_task_snapshot.py reads it once — from the read door
+      # when the caller's BUREAU_READ is `on`, else one combined Linear read
+      # that also carries the team's lanes — and each of those steps is handed
+      # the file through BUREAU_CARD_SNAPSHOT. A door that cannot answer falls
+      # back to the one Linear read; a snapshot that cannot be taken writes no
+      # file, and every step then reads Linear itself exactly as before, so
+      # continue-on-error: this step can never stop a build. What stays live:
+      # the duplicate guard's read of the lane, and the move's DRE-2316
+      # re-read and read-back. The snapshot is handed to NO step after the
+      # move: the agent reads the card as it is.
+      - name: Card snapshot (one read for every pre-agent step)
+        id: snapshot
+        continue-on-error: true
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # The read door (Stage 2 #5): reconcile.yml's variables. The door is
+          # asked only when the caller set BUREAU_READ and its stub grants
+          # `id-token: write`; otherwise this is the one Linear read.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          python3 .bureau-pipeline/scripts/agent_task_snapshot.py take "$CARD" --out "$BUREAU_CARD_SNAPSHOT"
+
       # Todo-entry card-validation gate (DRE-1405). The relay can't write to
       # Linear, so a malformed card (no resolvable repo, or no agent: role
       # label) would otherwise either silently vanish at the relay or dispatch
@@ -308,6 +339,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10: the card snapshot this step reads instead of Linear.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
         run: |
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
@@ -333,6 +366,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10: the card snapshot this step reads instead of Linear.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
@@ -433,6 +468,8 @@ jobs:
           # The budget is a property of the CARD, so this step reads Linear.
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10: the card snapshot this step reads instead of Linear.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -492,6 +529,8 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10: the card snapshot this step reads instead of Linear.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
@@ -533,6 +572,14 @@ jobs:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
+          # Stage 2 #9/#10: a HELD card's move — no first read (the snapshot
+          # above decided on it), the lanes off the snapshot or the read door,
+          # and the DRE-2316 re-read and the read-back exactly as before.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
           # DRE-4368: the card's thread says whether this run resumed the dead
           # run's branch or started clean, and why.
           RESUME_CLAUSE: ${{ steps.resume.outputs.resume == 'true' && format('resume={0}', steps.resume.outputs.branch) || format('resume=none ({0})', steps.resume.outputs.reason || 'no resume decision') }}
@@ -540,7 +587,7 @@ jobs:
           set -o pipefail
           {
             python3 .bureau-pipeline/scripts/linear_ops.py state \
-              "${{ github.event.client_payload.identifier }}" "In Progress"
+              "${{ github.event.client_payload.identifier }}" "In Progress" --held
             # Heartbeat: record which model this attempt uses so the board/console
             # can surface per-attempt model (DRE-1354 AC). The run URL maps the
             # card to THIS Actions run so the reconcile sweep can check the run

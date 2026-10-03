@@ -230,7 +230,17 @@ def read(card: str) -> list[Voice]:
     failed — `main` turns that into UNKNOWN, never into an empty thread.
 
     The same read `comment_records` makes (the fifty newest outside a sweep,
-    the pass's cache inside one), and the viewer it came with."""
+    the pass's cache inside one), and the viewer it came with.
+
+    agent-task's card snapshot answers first when this step was handed one
+    (Stage 2 #10) — the same window and the viewer it was read with. A
+    snapshot that does not name the viewer is not used: without it the
+    pipeline's own comments could not be told from a person's."""
+    import agent_task_snapshot
+
+    snap = agent_task_snapshot.load(card)
+    if snap is not None and snap.get("viewer"):
+        return voices(snap["comments"], snap["viewer"], card=card)
     nodes, viewer = linear_ops._thread_and_viewer(card, "body", "user",
                                                   "createdAt")
     return voices(nodes, viewer, card=card)

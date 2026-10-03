@@ -696,9 +696,21 @@ def _receipt(identifier: str, decision: Decision, did_nothing: str) -> None:
 def cmd_gate(identifier: str) -> None:
     """The build guard. Every read fails open on its own, so a Linear blip costs
     the comment half or the lane half and a GitHub blip costs the PR half, and
-    none of them costs a healthy card its build."""
+    none of them costs a healthy card its build.
+
+    The comments come from agent-task's card snapshot when this step was
+    handed one (Stage 2 #10): taken at the top of this same job, seconds ago.
+    A twin dispatch waits in the per-card concurrency group until the first
+    run is over, so the first run's heartbeat is on the card before the twin's
+    snapshot is taken. The LANE is always this step's own fresh
+    read — whether the card moved while the dispatch sat queued is the
+    question."""
+    import agent_task_snapshot
+
+    snap = agent_task_snapshot.load(identifier)
     try:
-        bodies = linear_ops.comment_bodies(identifier)
+        bodies = (agent_task_snapshot.comment_bodies(snap) if snap
+                  else linear_ops.comment_bodies(identifier))
     except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
         print(f"comment read failed ({e}) — proceeding on fail-open",
               file=sys.stderr)
