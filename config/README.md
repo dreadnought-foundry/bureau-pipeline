@@ -51,6 +51,14 @@ of it is ever a runtime lookup.
   validates it. `plan.yml` claims against it in its `Planner slot — claim or
   wait` step, after the duplicate-dispatch guard and before any model step
   (DRE-5179); a run it does not admit waits in line and ends green.
+- **`whats-new-cutover.json`** — the switch for the What's New rule
+  (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
+  a pull request opened without a `What's new:` line, and `why`. Absent, the
+  rule is off. Read only through `scripts/whats_new.py` (`enforced_from`,
+  `enforced_for`); `standards/whats-new.md` says when it bites. The instant is
+  the time the file was written, never a future date, so a pull request opened
+  before it is never held. The critic reads no opening time: once the file is
+  present it names a missing line on any pull request it reviews.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
 - **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):
