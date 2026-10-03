@@ -47,14 +47,18 @@ loopback host (the cross-repo harness).
 
 Headers on every request:
   `Authorization: Bearer <GitHub Actions OIDC JWT>` (audience
-  `$BUREAU_READ_AUDIENCE`, default `DEFAULT_AUDIENCE`), `X-Bureau-Max-Age:
-  <seconds>` (always), `X-Bureau-Relations-Max-Age: <seconds>` (when
-  `relations=1`), `Accept: application/json`.
+  `$BUREAU_READ_AUDIENCE`, default `DEFAULT_AUDIENCE` — the door's
+  `PIPELINE_READ_AUDIENCE` default too), `X-Bureau-Max-Age: <seconds>`
+  (always), `X-Bureau-Relations-Max-Age: <seconds>` (when `relations=1`),
+  `Accept: application/json`. A FRESH token every request: the door claims
+  each `jti` once (replay, S3).
 
-Endpoints (query values comma-joined, URL-encoded):
-  GET /board?lanes=<L1,L2>&scope=repo|fleet&comments=50[&relations=1]
-  GET /cards?ids=<DRE-1,DRE-2>&comments=50[&relations=1]
-  GET /cards/<id>/dependents
+Endpoints (query values comma-joined, URL-encoded; `relations` always SAID,
+because the door serves relations when it is left out):
+  GET /board?lanes=<L1,L2>&scope=repo|fleet&comments=50&relations=0|1
+  GET /cards?ids=<DRE-1,DRE-2>&comments=50&relations=0|1
+  GET /cards/<id>/dependents?lanes=<L>&comments=50&relations=1
+      — the cards <id> blocks, in the lanes asked, as board nodes
   GET /workflow-states
 
 Envelope (HTTP 200 whenever the caller is authenticated):
@@ -75,8 +79,10 @@ machine reason in `freshness.reason` (`stale`, `relations-stale`,
 
 Statuses: 200; 401/403 (refused — the client stops using the door this run);
 404 on /cards or /dependents (a card outside the tenant — UNKNOWN for that one
-read, the door stays in use); 429 (throttled — stops this run); 503 (closed or
-the database is down — stops this run). Any other status stops this run too.
+read, the door stays in use); 429 (throttled — stops this run, on purpose: a
+sweep that waits out `Retry-After` holds its runner, and its reads fall back to
+Linear); 503 (closed or the database is down — stops this run). Any other
+status stops this run too.
 """
 from __future__ import annotations
 
@@ -96,7 +102,10 @@ from dataclasses import dataclass, field
 
 SCHEMA = "bureau-read/1"
 PATH_PREFIX = "/api/v1/pipeline"
-DEFAULT_AUDIENCE = "bureau-read-door"
+#: The one audience both sides default to: this client asks GitHub for it, and
+#: the door's `PIPELINE_READ_AUDIENCE` defaults to it (agent-bureau's
+#: `github_oidc.DEFAULT_AUDIENCE`). Overridable on both, together.
+DEFAULT_AUDIENCE = "https://app.agent-bureau.com/pipeline-read"
 
 MODE_ENV = "BUREAU_READ"
 URL_ENV = "BUREAU_READ_URL"
@@ -124,8 +133,6 @@ RELATIONS_MAX_AGE = 1200
 #: whole exchange within eight. Module constants so the tests can shrink them.
 CONNECT_TIMEOUT = 1.0
 TOTAL_TIMEOUT = 8.0
-#: A token this close to its `exp` is minted again rather than sent.
-REMINT_WITHIN_SECONDS = 60
 
 LINEAR_HOLD = "linear-hold"
 
@@ -160,31 +167,6 @@ CARD_FIELDS = {
 }
 #: Added to CARD_FIELDS when a read asks for `relations=1`.
 RELATION_FIELDS = {"inverseRelations": _INVERSE_RELATIONS}
-#: `/cards/<id>/dependents` answers with ONE node: the card itself, in the
-#: shape `merge_sweep_gate.QUERY` selects — its forward relations (the side
-#: that is not this card is the dependent) and its parent with the parent's
-#: children, which is everything `reconcile.merged_card_scope` and the
-#: merge-sweep gate decide on.
-DEPENDENTS_FIELDS = {
-    "identifier": None,
-    "state": {"name": None},
-    "relations": {
-        "pageInfo": {"hasNextPage": None},
-        "nodes": {
-            "type": None,
-            "issue": {"identifier": None},
-            "relatedIssue": {"identifier": None, "state": {"name": None}},
-        },
-    },
-    "parent": {
-        "identifier": None,
-        "state": {"name": None},
-        "children": {
-            "pageInfo": {"hasNextPage": None},
-            "nodes": {"identifier": None, "state": {"name": None}},
-        },
-    },
-}
 WORKFLOW_STATE_FIELDS = {"id": None, "name": None, "type": None}
 
 #: Fields whose VALUE may be null (Linear sends null for them too). Every other
@@ -248,8 +230,6 @@ def reset_for_tests() -> None:
         skipped=0,
         door_ms=0.0,
         disabled=None,  # the reason the door stopped being asked, or None
-        token=None,
-        token_exp=None,
         reported=False,
     )
 
@@ -421,19 +401,15 @@ def _mint() -> str:
 
 
 def _token() -> str:
-    """The run's token: minted once, minted again within a minute of `exp`."""
-    now = time.time()
-    exp = _state["token_exp"]
-    if _state["token"] and (exp is None or exp - now > REMINT_WITHIN_SECONDS):
-        return _state["token"]
+    """A FRESH token for one request. The door claims every `jti` once (its
+    replay store, S3), so a token sent twice is refused `replayed` — even after
+    a 400, 403 or 429 on the first use. GitHub's token endpoint is local to
+    the job and cheap; minting per request is the only way that cannot
+    collide with the door's rule."""
     token = _mint()
-    claims = token_claims(token)
-    problem = pipeline_ref_problem(claims, os.environ.get(PIPELINE_REF_ENV))
+    problem = pipeline_ref_problem(token_claims(token), os.environ.get(PIPELINE_REF_ENV))
     if problem:
         raise ReadUnknown("pipeline-ref-mismatch", problem, unavailable=True)
-    exp_claim = claims.get("exp")
-    _state["token"] = token
-    _state["token_exp"] = float(exp_claim) if isinstance(exp_claim, (int, float)) else None
     return token
 
 
@@ -664,9 +640,9 @@ def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
         raise ValueError("bureau_read.board: no lanes asked for")
     if scope not in ("repo", "fleet"):
         raise ValueError(f"bureau_read.board: scope {scope!r}")
-    query = {"lanes": ",".join(wanted), "scope": scope, "comments": str(comments)}
+    query = {"lanes": ",".join(wanted), "scope": scope, "comments": str(comments),
+             "relations": "1" if relations else "0"}
     if relations:
-        query["relations"] = "1"
         relations_max_age = relations_max_age or RELATIONS_MAX_AGE
     envelope = _get("/board", query, max_age=max_age,
                     relations_max_age=relations_max_age if relations else None)
@@ -690,9 +666,9 @@ def cards(ids, *, max_age: int, comments: int = 50, relations: bool = True,
     wanted = [str(i).strip().upper() for i in ids if str(i).strip()]
     if not wanted:
         return DoorRead(nodes=[])
-    query = {"ids": ",".join(wanted), "comments": str(comments)}
+    query = {"ids": ",".join(wanted), "comments": str(comments),
+             "relations": "1" if relations else "0"}
     if relations:
-        query["relations"] = "1"
         relations_max_age = relations_max_age or RELATIONS_MAX_AGE
     envelope = _get("/cards", query, max_age=max_age,
                     relations_max_age=relations_max_age if relations else None,
@@ -706,18 +682,32 @@ def cards(ids, *, max_age: int, comments: int = 50, relations: bool = True,
     return read
 
 
-def dependents(identifier: str, *, max_age: int,
+def dependents(identifier: str, *, max_age: int, lanes=None, comments: int = 50,
                relations_max_age: int | None = None) -> DoorRead:
-    """The card itself in `merge_sweep_gate.QUERY`'s shape (one node)."""
+    """The cards `identifier` blocks — every card whose relations name it as a
+    `blocks` — in `lanes` (every lane the door holds when None), each a board
+    node with its relations. Whole, or ReadUnknown: a candidate whose relations
+    the door cannot read makes the list unprovable, and the door says so."""
     ident = str(identifier).strip().upper()
-    envelope = _get(f"/cards/{urllib.parse.quote(ident, safe='')}/dependents", {},
+    query = {"comments": str(comments), "relations": "1"}
+    wanted = [str(lane) for lane in lanes] if lanes is not None else None
+    if wanted:
+        query = {"lanes": ",".join(wanted), **query}
+    envelope = _get(f"/cards/{urllib.parse.quote(ident, safe='')}/dependents", query,
                     max_age=max_age,
                     relations_max_age=relations_max_age or RELATIONS_MAX_AGE,
                     not_found_ok=True)
-    read = _accept(envelope, max_age=max_age, shape=DEPENDENTS_FIELDS, relations=True)
-    if len(read.nodes) != 1 or str(read.nodes[0].get("identifier")).upper() != ident:
-        raise _malformed(f"/dependents for {ident} answered "
-                         f"{[n.get('identifier') for n in read.nodes]}")
+    read = _accept(envelope, max_age=max_age, shape=_card_shape(True), relations=True)
+    for node in read.nodes:
+        lane = (node.get("state") or {}).get("name")
+        if wanted and lane not in wanted:
+            raise _malformed(f"/dependents of {ident} answered {node.get('identifier')} "
+                             f"in {lane!r}, not a lane asked for")
+        if not any(rel.get("type") == "blocks"
+                   and (rel.get("issue") or {}).get("identifier") == ident
+                   for rel in (node.get("inverseRelations") or {}).get("nodes") or []):
+            raise _malformed(f"/dependents of {ident} answered {node.get('identifier')}, "
+                             "whose relations do not name it")
     _state["served"] += 1
     return read
 
@@ -761,7 +751,8 @@ def _normal(node: dict) -> dict:
         "labels": sorted({(lbl or {}).get("name") or "" for lbl in
                           ((node.get("labels") or {}).get("nodes") or [])}),
         "title": node.get("title"),
-        "description": node.get("description"),
+        # The door serves "" where Linear may send null: one fact, not two.
+        "description": node.get("description") or "",
         "priority": node.get("priority"),
         "parent": (
             ((node.get("parent") or {}).get("identifier"),
