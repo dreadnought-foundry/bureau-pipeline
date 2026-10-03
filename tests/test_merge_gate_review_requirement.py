@@ -36,6 +36,7 @@ Run: python3 -m pytest tests/test_merge_gate_review_requirement.py -v
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess  # nosec B404 — fixed-arg GET calls to the gh CLI
 import unittest
@@ -112,14 +113,26 @@ class TheRuleTest(unittest.TestCase):
 
 
 def _gh_get(path: str):
-    """(payload, None) on success; (None, error text) on failure. GET only."""
-    p = subprocess.run(  # nosec B603 B607 — fixed-arg GET, no shell
-        ["gh", "api", "--method", "GET", path],
-        capture_output=True, text=True, timeout=30, check=False,
-    )
-    if p.returncode != 0:
-        return None, (p.stdout + p.stderr).strip()
-    return json.loads(p.stdout or "null"), None
+    """(payload, None) on success; (None, error text) on failure. GET only.
+
+    Several suites set a placeholder `GH_TOKEN` in this process at import
+    (CI sets one too). A 401 is retried once without the token variables, so
+    gh's own stored login answers where there is one; in CI there is none and
+    the repo is skipped."""
+    env = dict(os.environ)
+    for attempt in (1, 2):
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg GET, no shell
+            ["gh", "api", "--method", "GET", path],
+            capture_output=True, text=True, timeout=30, check=False, env=env,
+        )
+        if p.returncode == 0:
+            return json.loads(p.stdout or "null"), None
+        err = (p.stdout + p.stderr).strip()
+        if attempt == 1 and "HTTP 401" in err:
+            env = {k: v for k, v in env.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+            continue
+        return None, err
+    return None, err
 
 
 class NoMappedRepoRequiresAnApprovingReviewTest(unittest.TestCase):
