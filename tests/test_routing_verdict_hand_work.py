@@ -21,6 +21,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # the promotion suite's harness
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
@@ -111,6 +112,23 @@ class TestWhatTheSweepCarries:
         routing_verdict.record("WORKBENCH", doc)["destination"] = "Green Light"
         assert routing_verdict.sweep_promotes("WORKBENCH", doc) is False
 
+    @pytest.mark.parametrize("lane", ["In Progress", "In Review", "Done"])
+    def test_a_verdict_pointed_past_the_waiting_lanes_is_not_swept(self, lane):
+        """The sweep promotes a card to where it WAITS to be built, never past
+        it: a one-word edit sending WORKBENCH to Done must not have the sweep
+        close Backlog cards nobody built (the critic on #703)."""
+        doc = copy.deepcopy(routing_verdict.load())
+        routing_verdict.record("WORKBENCH", doc)["destination"] = lane
+        assert routing_verdict.sweep_promotes("WORKBENCH", doc) is False
+        assert lane not in routing_verdict.sweep_lanes(doc)
+
+    @pytest.mark.parametrize("lane", ["In Progress", "In Review", "Done"])
+    def test_fleet_pointed_past_todo_is_a_config_problem(self, lane):
+        doc = copy.deepcopy(routing_verdict.load())
+        routing_verdict.record("FLEET", doc)["destination"] = lane
+        problems = routing_verdict.config_problems(doc)
+        assert any("FLEET" in p and lane in p for p in problems), problems
+
 
 # --------------------------------------------------------------------------- #
 # promotion_refusal                                                           #
@@ -139,19 +157,35 @@ class TestThePromotionRefusal:
 
 
 class TestTheHandBuiltReceipt:
+    """The receipt a person reads is the note wrapped in the promoter's header,
+    `🧹 Auto-promoted Backlog → <lane>:`. It must name ONE lane — the lane the
+    card was really moved to (the critic on #703: a note saying "your turn in
+    Hand-work" under a `→ Todo` header sends the reader to an empty lane)."""
+
+    LANES = ("Backlog", "Todo", HAND_WORK, "In Progress", "In Review", "Done")
+
     @pytest.mark.parametrize("name", ("WORKBENCH", "OPERATOR"))
-    def test_the_note_names_the_destination_lane(self, name):
+    def test_the_note_names_no_lane_of_its_own(self, name):
         note = routing_verdict.hand_built_promotion(name)
-        assert HAND_WORK in note
-        assert "Todo" not in note
+        assert not [lane for lane in self.LANES if lane in note], note
 
     def test_fleet_has_no_hand_built_note(self):
         assert routing_verdict.hand_built_promotion("FLEET") is None
 
-    def test_the_note_follows_the_vocabulary(self):
-        doc = copy.deepcopy(routing_verdict.load())
-        routing_verdict.record("WORKBENCH", doc)["destination"] = "In Progress"
-        assert "In Progress" in routing_verdict.hand_built_promotion("WORKBENCH", doc)
+    @pytest.mark.parametrize("name", ("WORKBENCH", "OPERATOR"))
+    def test_the_receipt_the_promoter_posts_names_the_lane_it_moved_the_card_to(self, name):
+        """Built the way `promote_ready` builds it, over the promotion suite's
+        own board: whatever lane the card lands in, the receipt names that lane
+        and no other."""
+        import test_operator_card_promotion as promo
+
+        comment = promo.WORKBENCH if name == "WORKBENCH" else promo.OPERATOR
+        board = promo._Board(promo._card(comments=[comment]))
+        assert board.promote() == 1
+        landed = board.lane_of("DRE-3385")
+        receipt = board.receipt_for("DRE-3385")
+        named = [lane for lane in self.LANES if lane != "Backlog" and lane in receipt]
+        assert named == [landed], receipt
 
 
 # --------------------------------------------------------------------------- #
@@ -221,3 +255,20 @@ class TestTheDocuments:
                                      "standards/architecture.md"])
     def test_each_standard_names_hand_work(self, rel):
         assert HAND_WORK in _read(rel)
+
+    def test_the_lane_contract_no_longer_says_a_persons_card_goes_to_todo(self):
+        """The contract is what the pipeline enforces (standards/architecture.md),
+        so its clauses move with the vocabulary in the same PR (the critic on
+        #703): Backlog's exit and Todo's entrance stop saying Todo is where a
+        WORKBENCH or OPERATOR card goes today."""
+        clauses = {
+            ("Backlog", "exit"): lane_contract.lane("Backlog")["clauses"]["exit"],
+            ("Todo", "entrance"): lane_contract.lane("Todo")["clauses"]["entrance"],
+        }
+        for where, clause in clauses.items():
+            for key in ("text", "pending"):
+                said = clause.get(key) or ""
+                assert "Todo today" not in said, (where, key)
+                assert "Today that is FLEET for a dispatched agent run, and WORKBENCH" not in said
+                assert "once that lane is live" not in said, (where, key)
+            assert HAND_WORK in clause["text"], where
