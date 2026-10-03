@@ -229,7 +229,7 @@ def test_R3_a_hold_label_added_after_the_snapshot_is_not_promoted(monkeypatch, c
 
 def test_R4_an_epic_sent_back_after_the_snapshot_holds_its_children(monkeypatch):
     door_a = _c("DRE-101", "Backlog", parent="DRE-100", parent_lane="In Progress")
-    live_a = _c("DRE-101", "Backlog", parent="DRE-100", parent_lane="Plan Review")
+    live_a = _c("DRE-101", "Backlog", parent="DRE-100", parent_lane="Green Light")
     linear = Linear(live_a)
     monkeypatch.setattr(reconcile, "epic_records", lambda ids: {})
     monkeypatch.setattr(reconcile, "epic_blockers_unmet", lambda epic: False)

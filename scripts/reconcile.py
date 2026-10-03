@@ -5686,7 +5686,7 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # same labels, the same parent still active, every blocker read live
         # and Done, the same verdict. A relation added since the console's
         # poll, a blocker reopened, a `needs-human` added a minute ago, an epic
-        # sent back to Plan Review — each is caught here, and none of them can
+        # sent back to Green Light — each is caught here, and none of them can
         # be mixed with a door fact in the decision that writes. On Linear's
         # own read (`off`, `shadow`) this costs nothing and does not run.
         if card["identifier"] in _door_sourced or _door_wip[0]:
