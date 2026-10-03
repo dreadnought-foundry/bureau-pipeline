@@ -226,6 +226,18 @@ working day first (Stage 2 review item 50). The bar to keep: the planner bucket
 never below 1,500 of 5,000 requests, and at least 30% of complexity left on
 both buckets.
 
+**A token already known to be dead is never sent (Stage 2 #30).** The repository
+variable `LINEAR_PLANNER_KEY_EXPIRES_AT` holds the published token's expiry in
+epoch seconds. Every job that can hold the token (the four above, plus
+plan.yml's `plan` and `publish`) passes it to `scripts/linear_ops.py`. When the
+expiry has passed, or is less than a minute away, each process goes straight to
+the fleet key and prints one `linear-key: planner-oauth not sent (...)` line,
+rather than spending a 401 first. When the variable is absent, nothing changes.
+The console is the one that should publish it, after the secret and never ahead
+of it: an expiry published ahead of a fresh secret would push every run onto
+the fleet key until the secret caught up. Today the console publishes only the
+secret, so this check does nothing until it also publishes the variable.
+
 Division of labor:
 
 | in the product-repo stub | in the reusable workflow here |
