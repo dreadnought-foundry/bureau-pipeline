@@ -16,7 +16,8 @@ WHAT THIS FILE PINS, and why each half is here:
     seventh agent workflow and this test fails until someone decides which.
   * THE SHAPE of the step, on each of the six: `always()`, `continue-on-error`,
     after the last model step, no `${{ }}` in the body (the 21,000-character
-    expression ceiling, DRE-3484).
+    expression ceiling, DRE-3484) — and the run's own `effort_arg` handed to
+    the upload, on every job but those `EFFORT_PENDING` names (DRE-5356).
   * THE BEHAVIOUR of `scripts/upload_agent_log.py`, executed for real against
     stub `aws` and a stub OIDC endpoint: no upload without a successful scrub,
     one single-part `put-object` carrying `If-None-Match`, the key under the

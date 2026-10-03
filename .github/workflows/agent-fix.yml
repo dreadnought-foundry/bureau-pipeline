@@ -1682,12 +1682,13 @@ jobs:
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          EFFORT_ARG: ${{ steps.model.outputs.effort_arg }}
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           printf '%s' "$SECRETS_JSON" \
             | python3 .bureau-pipeline/scripts/upload_agent_log.py \
-                --log-file "$EXEC_FILE" || true
+                --log-file "$EXEC_FILE" $EFFORT_ARG || true
 
       # ---- RE-MINT BEFORE THE REPORT (DRE-4320) ----
       # The token minted at the top of this job is dead by now if the run
