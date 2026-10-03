@@ -271,11 +271,12 @@ class TestThePairIsNotHandedToTheFleet:
     exists for.
     """
 
-    def test_the_pair_is_promoted_to_todo_when_its_siblings_are_done(self):
+    def test_the_pair_is_promoted_to_its_destination_when_its_siblings_are_done(self):
+        # Hand-work since DRE-5322: a person's lane, read off the vocabulary.
         board = _Board(*_pair_in_backlog())
         assert board.promote() == 2
-        assert board.lane_of(PROOF) == "Todo"
-        assert board.lane_of(DEMO) == "Todo"
+        assert board.lane_of(PROOF) == routing_verdict.destination("OPERATOR") == "Hand-work"
+        assert board.lane_of(DEMO) == routing_verdict.destination("OPERATOR")
 
     def test_it_arrives_carrying_the_marks_that_keep_the_fleet_off_it(self):
         """The whole of the protection. An OPERATOR card in Todo WITHOUT these
@@ -302,8 +303,8 @@ class TestThePairIsNotHandedToTheFleet:
         """Nothing is dispatched for either card, so neither takes a slot."""
         board = _Board(*_pair_in_backlog())
         board.promote(active_count=reconcile.MAX_WIP - 1)
-        assert board.lane_of(PROOF) == "Todo"
-        assert board.lane_of(DEMO) == "Todo"
+        assert board.lane_of(PROOF) == routing_verdict.destination("OPERATOR")
+        assert board.lane_of(DEMO) == routing_verdict.destination("OPERATOR")
         assert "budget spent" not in capsys.readouterr().out
 
     def test_without_the_plan_time_stamp_nothing_is_marked_at_all(self):
@@ -329,8 +330,8 @@ class TestThePairIsNotHandedToTheFleet:
 class TestTheGateStillPromotesWork:
     def test_a_fleet_sibling_beside_the_pair_goes_to_todo_unmarked(self):
         """One sweep, two destinations for the work: the build card is handed to
-        an agent, the pair is handed to a person, and the marks are what tell
-        them apart once all three are sitting in the same lane."""
+        an agent in Todo, the pair is handed to a person in Hand-work (DRE-5322),
+        and the marks still say which is which."""
         work = {c["identifier"]: c for c in _planner_output()}[WORK[0]]
         fleet = routing_verdict.verdict_comment(
             "FLEET", "the acceptance criteria are unit-testable")
@@ -339,7 +340,7 @@ class TestTheGateStillPromotesWork:
         assert board.lane_of(WORK[0]) == "Todo"
         assert board.labels_on(WORK[0]) == []
         for identifier in (PROOF, DEMO):
-            assert board.lane_of(identifier) == "Todo"
+            assert board.lane_of(identifier) == routing_verdict.destination("OPERATOR")
             assert reconcile.HAND_BUILT_LABEL in board.labels_on(identifier)
 
 

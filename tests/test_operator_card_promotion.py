@@ -174,17 +174,18 @@ def _clear_write_failures():
 # 1: the move itself
 # --------------------------------------------------------------------------
 class TestTheSweepPerformsTheMove:
-    def test_a_workbench_child_is_promoted_to_todo(self):
+    def test_a_workbench_child_is_promoted_to_its_destination(self):
         """The headline. Active epic, blockers Done, WORKBENCH verdict — the
-        destination the vocabulary already declared is finally reached."""
+        destination the vocabulary already declared is finally reached. Since
+        DRE-5322 that is Hand-work, read off the vocabulary, not Todo."""
         board = _Board(_card(comments=[WORKBENCH]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-3385") == "Todo"
+        assert board.lane_of("DRE-3385") == routing_verdict.destination("WORKBENCH") == "Hand-work"
 
-    def test_an_operator_child_is_promoted_to_todo(self):
+    def test_an_operator_child_is_promoted_to_its_destination(self):
         board = _Board(_card(comments=[OPERATOR]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-3385") == "Todo"
+        assert board.lane_of("DRE-3385") == routing_verdict.destination("OPERATOR") == "Hand-work"
 
     def test_a_workbench_card_arrives_carrying_hand_built(self):
         board = _Board(_card(comments=[WORKBENCH]))
@@ -217,7 +218,7 @@ class TestTheSweepPerformsTheMove:
         ))
         assert board.promote() == 1
         assert board.labels_on("DRE-3385") == []
-        assert board.lane_of("DRE-3385") == "Todo"
+        assert board.lane_of("DRE-3385") == routing_verdict.destination("WORKBENCH")
 
     def test_nothing_is_dispatched_for_it(self):
         """The promoter never dispatches — the relay does, off the Todo
@@ -477,7 +478,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 1):
             board = _Board(card)
             assert board.promote(active_count=1) == 1
-        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3390") == routing_verdict.destination("OPERATOR")
         assert board.labels_on("DRE-3390") == list(routing_verdict.marks("OPERATOR"))
 
     def test_a_workbench_card_is_promoted_while_the_fleet_is_at_its_cap(self):
@@ -485,7 +486,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 1):
             board = _Board(card)
             assert board.promote(active_count=1) == 1
-        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3390") == routing_verdict.destination("WORKBENCH")
         assert "nothing was dispatched" in board.receipt_for("DRE-3390")
 
     def test_a_fleet_over_its_cap_does_not_hold_it_either(self):
@@ -495,7 +496,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 1):
             board = _Board(card)
             assert board.promote(active_count=3) == 1
-        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3390") == routing_verdict.destination("OPERATOR")
 
     def test_at_the_cap_the_fleet_card_beside_it_still_waits(self, capsys):
         """Control, and the half that must not move: the cap still caps. The
@@ -509,7 +510,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 1):
             board = _Board(*cards)
             assert board.promote(active_count=1) == 1
-        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3390") == routing_verdict.destination("OPERATOR")
         assert board.lane_of("DRE-3389") == "Backlog"
         assert board.lane_of("DRE-3391") == "Backlog"
         assert board.comments_on("DRE-3389") == []
@@ -532,7 +533,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 2):
             board = _Board(*cards)
             assert board.promote(active_count=0) == 3
-        assert board.lane_of("DRE-3399") == "Todo"
+        assert board.lane_of("DRE-3399") == routing_verdict.destination("OPERATOR")
         assert board.lane_of("DRE-3391") == "Todo"
         assert board.lane_of("DRE-3392") == "Backlog"
 
@@ -548,7 +549,7 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         with patch.object(reconcile, "MAX_WIP", 0):
             board = _Board(*cards)
             assert board.promote(active_count=0) == 1
-        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3390") == routing_verdict.destination("OPERATOR")
         assert board.lane_of("DRE-3391") == "Backlog"
 
     def test_five_waiting_fleet_cards_are_one_line_not_five(self, capsys):

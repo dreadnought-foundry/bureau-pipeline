@@ -289,7 +289,8 @@ class TestAOneOffPassesEveryOtherGate:
         drift back to "only FLEET leaves Backlog"."""
         board = _Board(_card(parent_state=None, comments=[WORKBENCH]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-2735") == "Todo"
+        # To the person's lane since DRE-5322, read off the vocabulary.
+        assert board.lane_of("DRE-2735") == routing_verdict.destination("WORKBENCH")
 
     def test_an_unmet_blocker_still_holds_it(self):
         board = _Board(

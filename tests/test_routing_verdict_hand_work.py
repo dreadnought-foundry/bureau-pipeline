@@ -165,9 +165,16 @@ class TestTheHandBuiltReceipt:
     LANES = ("Backlog", "Todo", HAND_WORK, "In Progress", "In Review", "Done")
 
     @pytest.mark.parametrize("name", ("WORKBENCH", "OPERATOR"))
-    def test_the_note_names_no_lane_of_its_own(self, name):
+    def test_the_note_names_the_destination_and_no_other_lane(self, name):
+        """Since DRE-5322 the promoter moves the card to the destination and
+        names it in the header, so the note may name it too — and only it."""
         note = routing_verdict.hand_built_promotion(name)
-        assert not [lane for lane in self.LANES if lane in note], note
+        assert [lane for lane in self.LANES if lane in note] == [HAND_WORK], note
+
+    def test_the_note_follows_the_vocabulary(self):
+        doc = copy.deepcopy(routing_verdict.load())
+        routing_verdict.record("WORKBENCH", doc)["destination"] = "Todo"
+        assert "your turn in Todo" in routing_verdict.hand_built_promotion("WORKBENCH", doc)
 
     def test_fleet_has_no_hand_built_note(self):
         assert routing_verdict.hand_built_promotion("FLEET") is None

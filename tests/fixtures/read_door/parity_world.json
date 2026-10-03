@@ -69,7 +69,7 @@
     "freshness": {"as_of": "2026-10-02T19:42:00.000Z", "age_seconds": 41, "basis": "record", "relations_as_of": null, "reason": null},
     "caller": {"repository": "dreadnought-foundry/portico", "slug": "portico", "tenant": "00000000-0000-0000-0000-000000000001", "scope": "repo"},
     "viewer": {"id": "fleet-user"},
-    "lanes": ["Todo", "In Progress", "In Review"],
+    "lanes": ["Todo", "In Progress", "In Review", "Hand-work"],
     "issues": {
       "nodes": [
         {

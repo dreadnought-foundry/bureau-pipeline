@@ -259,7 +259,7 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
             monkeypatch.setenv(key, value)
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
-    assert lanes == "Todo,In Progress,In Review,Backlog"
+    assert lanes == "Todo,In Progress,In Review,Hand-work,Backlog"
     # The check asked the door, not Linear. Linear answered only the fleet
     # phases' reads: the lanes the door does not serve (Planning and Intake,
     # 6a), the planner line's Green Light, and the NO-ROUTE watchdog's Todo and
@@ -314,7 +314,9 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert "nodes { id labels { nodes { name } } }" in q
     assert "pageInfo { hasNextPage }" in q
     assert 1 < reconcile.IDLE_PAGE <= 100
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Backlog")
+    # Hand-work counts as in motion (DRE-5322): a person's card there is owed
+    # the move to review and the idle alarm, which an idle pass skips.
+    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work", "Backlog")
 
 
 # ── The label match is routing's, not an exact string (PR #687 critic, item 1) ──
