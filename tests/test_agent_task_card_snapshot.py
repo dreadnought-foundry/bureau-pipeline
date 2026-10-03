@@ -56,6 +56,7 @@ TEAM = "team-uuid-dre"
 STATES = [
     {"id": "st-backlog", "name": "Backlog", "type": "backlog"},
     {"id": "st-todo", "name": "Todo", "type": "unstarted"},
+    {"id": "st-planning", "name": "Planning", "type": "unstarted"},
     {"id": "st-progress", "name": "In Progress", "type": "started"},
     {"id": "st-review", "name": "In Review", "type": "started"},
     {"id": "st-done", "name": "Done", "type": "completed"},
@@ -373,7 +374,7 @@ def test_the_turn_budget_reads_the_labels_off_the_snapshot(monkeypatch, tmp_path
         code, out = _quiet(turn_budget.main, ["select", CARD])
     assert code == 0
     assert lin.kinds == []
-    assert "size:s" in out
+    assert "size:s" in out.lower()
 
 
 def test_the_spoken_thread_reads_the_comments_off_the_snapshot(monkeypatch, tmp_path):

@@ -507,7 +507,14 @@ def cmd_gate(identifier: str) -> None:
     # Imported lazily so the pure core (and its tests) need no LINEAR_API_KEY.
     import linear_ops
 
-    issue = linear_ops.get_issue(identifier)
+    # agent-task's one card snapshot (Stage 2 #10), when this step was handed
+    # one: the lane, the fields and the comments this gate decides on, read
+    # once at the top of the job. Without one, the gate reads Linear as it
+    # always did. Every write below re-reads the card live (BP-3).
+    import card_snapshot
+
+    snap = card_snapshot.load(identifier)
+    issue = snap["issue"] if snap else linear_ops.get_issue(identifier)
     current = (issue.get("state") or {}).get("name", "").lower()
     if current not in _GATEABLE:
         print(f"{identifier} is in {current!r}, not a Todo-entry — gate skipped")
@@ -515,10 +522,11 @@ def cmd_gate(identifier: str) -> None:
         _emit_role("engineer")
         return
 
-    card = _fetch_card(linear_ops, identifier)
+    card = _card_from(issue) if snap else _fetch_card(linear_ops, identifier)
     description, labels = card["description"], card["labels"]
 
-    if current == "todo" and _carried_epic(linear_ops, identifier, card):
+    bodies = card_snapshot.comment_bodies(snap) if snap else None
+    if current == "todo" and _carried_epic(linear_ops, identifier, card, bodies):
         return  # an epic is never built — carried to its lane, build stopped
 
     gaps = missing(description, labels)
@@ -597,7 +605,8 @@ def cmd_gate(identifier: str) -> None:
     _emit_role(_role_from_labels(labels + new_labels))
 
 
-def _carried_epic(linear_ops, identifier: str, card: dict) -> bool:
+def _carried_epic(linear_ops, identifier: str, card: dict,
+                  bodies: list[str] | None = None) -> bool:
     """Stop a build dispatched at an epic, and carry the epic to its lane
     (DRE-5319). True when the card was an epic and the build is stopped.
 
@@ -615,11 +624,13 @@ def _carried_epic(linear_ops, identifier: str, card: dict) -> bool:
     (DRE-5268). Each branch writes its lane as a literal so the lane-writer
     check reads both. No label is repaired: the card is not going to be built.
     """
-    try:
-        bodies = linear_ops.comment_bodies(identifier)
-    except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
-        print(f"{identifier}: could not read its comments ({exc})", file=sys.stderr)
-        bodies = []
+    # `bodies` already in hand are agent-task's card snapshot (Stage 2 #10).
+    if bodies is None:
+        try:
+            bodies = linear_ops.comment_bodies(identifier)
+        except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
+            print(f"{identifier}: could not read its comments ({exc})", file=sys.stderr)
+            bodies = []
     if not epic_todo_gate.is_epic_card(card["title"], card["has_children"], bodies):
         return False
     before = epic_todo_gate.lane_before_todo(linear_ops, identifier)
@@ -734,7 +745,12 @@ def _fetch_card(linear_ops, identifier: str) -> dict:
              children { nodes { id } } } }""",
         {"id": identifier},
     )
-    issue = data["issue"]
+    return _card_from(data["issue"])
+
+
+def _card_from(issue: dict) -> dict:
+    """The gate's card fields off one card node — `_fetch_card`'s read, or
+    agent-task's card snapshot (Stage 2 #10), which carries the same fields."""
     return {
         "title": issue.get("title") or "",
         "description": issue.get("description") or "",
