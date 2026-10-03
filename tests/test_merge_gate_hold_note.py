@@ -132,6 +132,16 @@ with open(os.environ["GH_LOG"], "a") as fh:
     fh.write(json.dumps(args) + "\n")
 def opt(name):
     return args[args.index(name) + 1] if name in args else None
+if args[:2] == ["pr", "view"] and not opt("--jq"):
+    # The gate's one read (Stage 2 #19): the requested fields, the author in
+    # gh's own rendering of a bot (`app/<slug>`).
+    record = {"headRefName": os.environ["BRANCH"], "state": "OPEN",
+              "mergeStateStatus": "CLEAN", "isDraft": False,
+              "headRefOid": os.environ["HEAD_SHA"], "baseRefName": "main",
+              "url": "https://github.com/x/y/pull/1",
+              "author": {"is_bot": True, "login": "app/agent-bureau-bot"}}
+    print(json.dumps({f: record[f] for f in opt("--json").split(",") if f in record}))
+    raise SystemExit(0)
 if args[:2] == ["pr", "view"]:
     view = {".headRefName": os.environ["BRANCH"], ".state": "OPEN",
             ".mergeStateStatus": "CLEAN", ".isDraft": "false",

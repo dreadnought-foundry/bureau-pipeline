@@ -298,9 +298,16 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("agent/*|repair/*|dependabot/*", self.run_block)
 
     def test_pr_author_comes_from_githubs_own_pr_record(self):
-        # REST user.login ("dependabot[bot]"), not gh's app/-prefixed
-        # GraphQL rendering — deterministic across gh versions.
-        self.assertIn('pulls/$PR" --jq .user.login', self.run_block)
+        # Since Stage 2 #19 the author rides the gate's one `gh pr view`, and
+        # gh's `app/<slug>` rendering of a bot is turned back into REST's
+        # `<slug>[bot]` ("dependabot[bot]") before condition D compares it.
+        # tests/test_merge_gate_one_read.py runs every rendering.
+        m = re.search(r'gh pr view "\$PR" --json (\S+) > /tmp/pr-view\.json',
+                      self.run_block)
+        self.assertIsNotNone(m, "the gate's one pull request read is gone")
+        self.assertIn("author", m.group(1).split(","))
+        self.assertNotIn('pulls/$PR" --jq .user.login', self.run_block)
+        self.assertIn('ltrimstr("app/")', self.run_block)
         self.assertIn('--pr-author "$AUTHOR"', self.run_block)
 
     def test_commit_record_is_gathered_and_passed_fail_closed(self):

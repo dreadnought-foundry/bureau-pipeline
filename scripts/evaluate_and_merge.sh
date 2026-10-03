@@ -32,6 +32,9 @@ set -e
 # required read that fails kills the step.
 #
 # In order, it:
+#  0. Reads the pull request ONCE, every field in one `gh pr view`, into
+#     /tmp/pr-view.json. A failed read kills the step, and so does a field a
+#     decision is made on that comes back absent or null.
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
 #     dependabot/* (dependency bumps), and the three scheduled branches
@@ -39,15 +42,18 @@ set -e
 #     literals. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
-#  2. Gathers the records the decision reads, each from GitHub's own answer:
-#     mergeability, the draft flag, the head sha and its check runs, the
-#     three-dot compare of base against head, every page of the comments, the
-#     workflow runs on the head, the author and the commits, the Agent Fix
-#     lane, the open pull requests this branch carries, the code-owner rules,
-#     and the pull request's body and creation time. A record that cannot be
-#     read fails closed: it is written empty or unreadable, and the decision
-#     waits or holds on it. The body and creation time are the exception: they
-#     fail soft, an unread one is empty and holds nothing (DRE-5511).
+#  2. Gathers the records the decision reads, each from GitHub's own answer.
+#     From the one read: mergeability, the draft flag, the head sha, the
+#     author, and the body and creation time. Then the head's check runs and
+#     workflow runs, and `merge_gate.py precheck` asks whether condition 1
+#     waits on those two alone; if it does, the step says `decision=wait` and
+#     stops before reading anything else. Otherwise: the three-dot compare of
+#     base against head, every page of the comments, the commits, the Agent
+#     Fix lane, the open pull requests this branch carries and the code-owner
+#     rules. A record that cannot be read fails closed: it is written empty or
+#     unreadable, and the decision waits or holds on it. The body and creation
+#     time are the exception: they fail soft, an absent or null one is empty
+#     and holds nothing (DRE-5511).
 #  3. Runs merge_gate.py over them. It prints `decision=` (merge, hold, wait,
 #     conflict or human) and `reason=`, and optional lines: `carried=` and
 #     `carried_content_id=` when a verdict carried across a head change, and
@@ -102,9 +108,10 @@ set -e
 #   the qa-bot, which qa-review.yml and verify.yml admit; the workflow's own
 #   token would fire nothing. That is why the fork refresh runs on GH_TOKEN.
 # DRE-2039 (2026-07-11). Dependabot pull requests (dependabot/*) merge here,
-#   minor and patch bumps only. The author is REST's `user.login`, the literal
-#   `dependabot[bot]` (gh's GraphQL rendering varies by version), and the
-#   semver level is the update-type trailer in the commits. An unreadable
+#   minor and patch bumps only. The author is compared in REST's spelling,
+#   the literal `dependabot[bot]`; since Stage 2 #19 it comes from the one
+#   `gh pr view`, whose `app/<slug>` rendering of a bot is spelled back to
+#   `<slug>[bot]`. The semver level is the update-type trailer in the commits. An unreadable
 #   record leaves the gate waiting. A major or an unprovable level is `human`:
 #   one note, never a merge. The fix agent is never sent to a Dependabot
 #   conflict; Dependabot rebases its own.
@@ -263,11 +270,36 @@ set -e
 #   github.token expression into the step's env, and DRE-4103 moved the last
 #   one, QA_LOGIN's app-slug derivation. This file holds no expression, so
 #   there is no ceiling to trim for.
+# Stage 2 #19, #20 (package BP-5, 2026-10-02). The gate woke 3–6 times per
+#   head, 67–82% of its runs decided nothing, and each read the same pull
+#   request eight times: seven `gh pr view` calls, one per field, and a REST
+#   read for the author. Now one `gh pr view` carries all ten fields. Each old
+#   read's failure survives: the read itself, and any field a decision is made
+#   on, kills the step when absent or null (an unreadable draft state above
+#   all, DRE-3467); the body and creation time stay soft (DRE-5511); the author
+#   is spelled the REST way (DRE-2039). The re-read after a refused merge is
+#   kept on purpose: it asks whether the head moved SINCE the evaluation
+#   (DRE-2117), so it must be fresh. And when CI is still running, which is
+#   most wakes, merge_gate.py's precheck answers condition 1's wait from the
+#   check runs and the runs listing alone, so the run stops after three reads
+#   instead of sixteen. It never answers a conflicted or dependabot/* branch,
+#   because conditions 0 and D come before condition 1. One thing moves later:
+#   releasing a card parked for a code-owner review waits for the next full
+#   evaluation. The same package stopped the critic's own completion waking
+#   the gate (merge-gate.yml's `if:`).
 
 set -euo pipefail
 
-BRANCH=$(gh pr view "$PR" --json headRefName,state --jq .headRefName)
-STATE=$(gh pr view "$PR" --json state --jq .state)
+# ONE read of the pull request (Stage 2 #19). No fallback: a failed read kills
+# the step, as each of the eight reads it replaces did.
+gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url > /tmp/pr-view.json
+# A field a decision is made on: absent or null kills the step, never an empty value (DRE-3467).
+pr_field() {
+  jq -r --arg f "$1" 'if .[$f] == null then empty else .[$f] | tostring end' /tmp/pr-view.json | grep . \
+    || { echo "the pull request record carries no $1 — stopping (fail-closed)" >&2; return 1; }
+}
+BRANCH=$(pr_field headRefName)
+STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
 case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/split-ledger|bot/model-drift) ;; *) echo "not an agent branch — skip"; exit 0;; esac
@@ -276,22 +308,47 @@ CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]'
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
 
 # Condition 0; UNKNOWN is GitHub still computing, not a conflict (DRE-2416, DRE-2121).
-MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
+MSTATE=$(pr_field mergeStateStatus)
 
-# No `|| true`, on purpose: an unreadable draft state kills the step (DRE-3467).
-IS_DRAFT=$(gh pr view "$PR" --json isDraft --jq .isDraft)
+# No fallback, on purpose: an unreadable draft state kills the step (DRE-3467).
+IS_DRAFT=$(pr_field isDraft)
+
+SHA=$(pr_field headRefOid)
+BASE=$(pr_field baseRefName)
+# REST's spelling (DRE-2039): gh renders a bot `app/<slug>`; a person's login holds no slash.
+AUTHOR=$(jq -r '.author as $a | ($a.login // empty) | if startswith("app/") then ltrimstr("app/") + "[bot]" elif ($a.is_bot == true and (endswith("[bot]") | not)) then . + "[bot]" else . end' /tmp/pr-view.json | grep .) \
+  || { echo "the pull request record names no author — stopping (fail-closed)" >&2; exit 1; }
+PR_URL=$(jq -r '.url // ""' /tmp/pr-view.json 2>/dev/null || true)
 
 # REST check runs, not `gh pr checks`, which needs actions:read (DRE-1992).
-SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
 gh api "repos/$REPO_FULL/commits/$SHA/check-runs" > /tmp/check-runs.json
+# The workflow's own token; a blip is the unreadable marker (DRE-1994, DRE-5045).
+GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
+  || echo '{"readable":false}' > /tmp/workflow-runs.json
+REVIEW_WORKFLOWS=".github/workflows/qa-review.yml,.github/workflows/pr-review.yml"
+# Condition 1's wait from its two records, before any other read (Stage 2 #19).
+# A precheck that cannot run is `evaluate`: the full decision answers as before.
+python3 .bureau-pipeline/scripts/merge_gate.py precheck \
+  --check-runs-file /tmp/check-runs.json \
+  --workflow-runs-file /tmp/workflow-runs.json \
+  --review-workflows "$REVIEW_WORKFLOWS" \
+  --merge-state "$MSTATE" \
+  --head-branch "$BRANCH" \
+  > /tmp/precheck || echo 'precheck=evaluate' > /tmp/precheck
+if grep -qx 'precheck=wait' /tmp/precheck; then
+  echo "decision=wait"
+  grep -m1 '^reason=' /tmp/precheck || true
+  echo "stopped before the compare, comment, commit, fix-lane, stack and owner reads"
+  exit 0
+fi
+
 # The compare record, passed whole; a blip is `{}` and carries nothing (DRE-2340).
-BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
 gh api "repos/$REPO_FULL/compare/$BASE...$SHA" > /tmp/compare.json 2>/dev/null \
   || echo '{}' > /tmp/compare.json
-# The body and createdAt for the What's new: condition (DRE-5511). A blip is an
-# empty file and an empty time, never omitted flags: either reads as "nothing was
-# read" and the gate decides as before. DRE-5576 switches the rule on.
-gh pr view "$PR" --json body,createdAt > /tmp/pr-view.json 2>/dev/null || : > /tmp/pr-view.json
+# The body and createdAt for the What's new: condition (DRE-5511), from the one
+# read. Absent, null or unparseable is an empty file and an empty time, never
+# omitted flags: either reads as "nothing was read" and the gate decides as
+# before. DRE-5576 switches the rule on.
 jq -r '.body // ""' /tmp/pr-view.json > /tmp/pr-body.txt 2>/dev/null || : > /tmp/pr-body.txt
 CREATED_AT=$(jq -r '.createdAt // ""' /tmp/pr-view.json 2>/dev/null || true)
 # Every page, slurped; a failed read is "no verdicts yet" (DRE-4139, DRE-2681).
@@ -299,11 +356,7 @@ gh api --paginate --slurp \
   "repos/$REPO_FULL/issues/$PR/comments?per_page=100" \
   > /tmp/comments.json 2>/dev/null \
   || echo '[]' > /tmp/comments.json
-# The workflow's own token; a blip is the unreadable marker (DRE-1994, DRE-5045).
-GH_TOKEN="$WORKFLOW_TOKEN" gh api "repos/$REPO_FULL/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
-  || echo '{"readable":false}' > /tmp/workflow-runs.json
 # A blip is an empty record, and the gate waits on it (DRE-2039).
-AUTHOR=$(gh api "repos/$REPO_FULL/pulls/$PR" --jq .user.login)
 gh api "repos/$REPO_FULL/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
   || echo '[]' > /tmp/pr-commits.json
 # The workflow's own token; an unreadable lane is written in and waited on (DRE-4486).
@@ -327,7 +380,7 @@ python3 .bureau-pipeline/scripts/merge_gate.py \
   --compare-file /tmp/compare.json \
   --merge-state "$MSTATE" \
   --is-draft "$IS_DRAFT" \
-  --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
+  --review-workflows "$REVIEW_WORKFLOWS" \
   --head-branch "$BRANCH" \
   --pr-author "$AUTHOR" \
   --pr-commits-file /tmp/pr-commits.json \
@@ -501,4 +554,4 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA"; then
 fi
 echo "merged PR #$PR"
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-  "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $(gh pr view "$PR" --json url --jq .url)" || true
+  "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $PR_URL" || true
