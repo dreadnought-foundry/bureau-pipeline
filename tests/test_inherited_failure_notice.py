@@ -256,7 +256,9 @@ class FixLoopWiringTest(unittest.TestCase):
         self.assertIn("inherited-checks.md", self.src)
 
     def test_it_is_scoped_to_fix_mode_like_the_unfixable_gate(self):
-        step = self.src[self.src.index("inherited_failures.py") - 2000:
+        # 2600: the step grew a fallback read and a read-once seam (Stage 2
+        # fix #21) between its `if:` and the script call.
+        step = self.src[self.src.index("inherited_failures.py") - 2600:
                         self.src.index("inherited_failures.py")]
         self.assertIn("steps.pr.outputs.mode == 'fix'", step)
 

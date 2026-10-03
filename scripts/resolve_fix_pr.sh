@@ -16,9 +16,11 @@ set -e
 # stops here with go=false stops the whole job. In order:
 #
 #   1. Reads the pull request once with `gh pr view`: its state, head
-#      branch, head sha and merge state. The head sha goes out as
-#      `head_sha` first, because the Report step compares it with the head
-#      after the run to tell a fix that pushed nothing from one that did.
+#      branch, head sha, merge state and base branch. The head sha goes out
+#      as `head_sha` first, because the Report step compares it with the head
+#      after the run to tell a fix that pushed nothing from one that did. The
+#      base branch goes out as `base_ref` for the inherited-failure step,
+#      which used to read the pull request again for it (Stage 2 fix #21).
 #   2. Refuses anything that is not an `agent/*` or `repair/*` branch, and
 #      any pull request that is not OPEN, with go=false.
 #   3. Derives the card from the branch name, the first DRE-<n> in any
@@ -220,13 +222,18 @@ set -e
 #   That budget no longer applies here: this file holds no expression.
 #
 PR=${PR_NUMBER}
-INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus)
+INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
 BRANCH=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefName'])")
 MSTATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['mergeStateStatus'])")
 # Read by the Report step: did the fix push a new commit (step 1).
 HEAD_SHA=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefOid'])")
 echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+# The base branch, off the same read (Stage 2 fix #21): the inherited-failure
+# step used to read the pull request again for it. Empty when absent, and the
+# step then reads it itself.
+BASE_REF=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin).get('baseRefName') or '')")
+echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
 # agent/* and repair/* only (DRE-1927); a repair branch has no card.
 case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
 [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }

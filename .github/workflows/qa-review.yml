@@ -237,6 +237,18 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # THE PULL REQUEST, READ ONCE (Stage 2 fix #21). Every field any step
+      # below takes from `gh pr view`, named once: scripts/read_once.py reads
+      # them in ONE call the first time a step asks, and every later step gets
+      # its field from that read. Five steps used to read the record on their
+      # own — head commit, base branch, branch name, body, size — and the
+      # compare record, the comment thread and the changed-file list twice
+      # each. A failed read is never kept, so each step's failure handling is
+      # what it was. A step that needs another field adds it HERE — but
+      # never `body`: the critic's context reads the CURRENT body live, a
+      # copy read earlier in the job is strictly worse (DRE-3005,
+      # tests/test_fix_body_before_push.py), so the two body reads stay.
+      PR_RECORD_FIELDS: headRefName,headRefOid,baseRefName,changedFiles,additions,deletions
     steps:
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
@@ -349,11 +361,15 @@ jobs:
           # SPEND a review, and an API blip must degrade to "review it"
           # (the cheap mistake), never to a red run that reviews nothing.
           # `{}` / `[]` both yield no proof of a carry.
-          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
-          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName 2>/dev/null || true)
+          # The record, the compare record and the thread go through the job's
+          # read-once seam (Stage 2 fix #21): Resolve PR and the card context
+          # take the same answers from these reads instead of reading again.
+          SHA=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefOid 2>/dev/null || true)
+          BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field baseRefName 2>/dev/null || true)
           echo '{}' > /tmp/decide-compare.json
           if [ -n "$SHA" ] && [ -n "$BASE" ]; then
-            gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/decide-compare.json 2>/dev/null \
+            python3 "$PIPELINE_DIR"/scripts/read_once.py once "compare-$BASE...$SHA" -- \
+              gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/decide-compare.json 2>/dev/null \
               || echo '{}' > /tmp/decide-compare.json
           fi
           # Same call shape merge-gate.yml uses, so the skip and the gate
@@ -362,7 +378,8 @@ jobs:
           # unpaginated, both read GitHub's default 30 — the OLDEST 30 — and
           # a long PR's real verdict was invisible to each of them. Fixing
           # only the gate would have broken the promise in the line above.
-          gh api --paginate --slurp \
+          python3 "$PIPELINE_DIR"/scripts/read_once.py once "issue-comments-$PR" -- \
+            gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
             > /tmp/decide-comments.json 2>/dev/null \
             || echo '[]' > /tmp/decide-comments.json
@@ -484,7 +501,11 @@ jobs:
         run: |
           PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           echo "number=$PR" >> "$GITHUB_OUTPUT"
-          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          # The record is the job's ONE read (Stage 2 fix #21, PR_RECORD_FIELDS
+          # above): taken by Decide review on a pull_request run, here on a
+          # dispatch. A read that fails is not kept, so it is read again here,
+          # and fails this step loud exactly as `gh pr view` did.
+          BRANCH=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
           # Say the card in the LOG too, plan.yml's line exactly (DRE-4407).
@@ -510,7 +531,7 @@ jobs:
           # mid-review, the embedded SHA is already behind the new head and
           # the gate holds for a fresh review instead of merging code the
           # critic never saw.
-          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          SHA=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefOid)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           # DRE-3005 rule 3: the moment this review's read of the pull
           # request BODY begins. The critic reads the description through
@@ -527,13 +548,17 @@ jobs:
           echo "body_read_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           # DRE-2340: the CONTENT this review is about to read — the
           # three-dot diff of the SAME sha captured above, hashed by
-          # scripts/verdict_content.py. Fetched here rather than reused
-          # from the decide step so the id can never describe a different
-          # commit than the one the verdict binds. No id (a truncated
-          # 300-file record, or an API blip → `{}`) means the verdict binds
-          # the SHA alone, exactly as before this card.
-          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
-          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
+          # scripts/verdict_content.py. It used to be fetched here rather
+          # than reused from the decide step so the id could never describe a
+          # different commit than the one the verdict binds. Since fix #21
+          # the sha IS the decide step's (one read of the record), and the
+          # compare read is keyed by `$BASE...$SHA`, so a read the decide step
+          # made is reused only when it is about exactly this sha. No id (a
+          # truncated 300-file record, or an API blip → `{}`) means the
+          # verdict binds the SHA alone, exactly as before this card.
+          BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field baseRefName)
+          python3 "$PIPELINE_DIR"/scripts/read_once.py once "compare-$BASE...$SHA" -- \
+            gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
             || echo '{}' > /tmp/qa-compare.json
           CONTENT=$(python3 "$PIPELINE_DIR"/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
@@ -542,10 +567,11 @@ jobs:
           # but caps at 300 files and does not paginate (verdict_content.py
           # documents the same cap), and under-counting is the direction
           # that sends a 17k-line diff down the one-pass path that cannot
-          # review it. One extra field read on a call this step already
-          # makes; a blip leaves `{}` and the sizing degrades to the compare
-          # record alone.
-          gh pr view "$PR" --json changedFiles,additions,deletions > /tmp/qa-size.json 2>/dev/null \
+          # review it. Three fields of the job's one record read (fix #21);
+          # a blip leaves `{}` and the sizing degrades to the compare record
+          # alone.
+          python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" \
+            --pick changedFiles,additions,deletions > /tmp/qa-size.json 2>/dev/null \
             || echo '{}' > /tmp/qa-size.json
 
       # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
@@ -728,8 +754,9 @@ jobs:
             python3 "$PIPELINE_DIR"/scripts/card_snapshot.py description \
               "${RUNNER_TEMP:-/tmp}/card-snapshot.json" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
           fi
-          # Changed files vs the PR base, repo-root-relative.
-          gh pr diff "$PR" --name-only > /tmp/vqa/changed.txt 2>/dev/null || : > /tmp/vqa/changed.txt
+          # Changed files vs the PR base, repo-root-relative — read once for
+          # the job (fix #21); the repair context below takes the same list.
+          python3 "$PIPELINE_DIR"/scripts/read_once.py once "diff-names-$PR" -- gh pr diff "$PR" --name-only > /tmp/vqa/changed.txt 2>/dev/null || : > /tmp/vqa/changed.txt
           # The screen map is the harness's own contract (single source of truth).
           MJS=console/web/scripts/visual-qa/screens.mjs
           python3 "$PIPELINE_DIR"/scripts/visual_qa_plan.py \
@@ -935,8 +962,8 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/repair
-          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
-          gh pr diff "$PR" --name-only > /tmp/repair/changed.txt 2>/dev/null || : > /tmp/repair/changed.txt
+          BRANCH=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefName)
+          python3 "$PIPELINE_DIR"/scripts/read_once.py once "diff-names-$PR" -- gh pr diff "$PR" --name-only > /tmp/repair/changed.txt 2>/dev/null || : > /tmp/repair/changed.txt
           : > /tmp/repair/original-failure.log
           NOTE=""
           # The failing head SHA is encoded in the branch name itself —
@@ -1047,7 +1074,9 @@ jobs:
           # refutation is read back for THIS head and never for an older one.
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
         run: |
-          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName || true)
+          # The branch and the thread: the job's one read of each (fix #21).
+          # The body stays a live read: it is what the critic is handed.
+          BRANCH=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field headRefName || true)
           gh pr view "$PR" --json body --jq .body > /tmp/cardctx-pr-body.txt 2>/dev/null \
             || : > /tmp/cardctx-pr-body.txt
           # DRE-3084 — the refutation, when there is one. The fix agent
@@ -1066,7 +1095,10 @@ jobs:
           # today.
           : > /tmp/cardctx-refutation.txt
           SHA8=${HEAD_SHA:0:8}
-          gh api --paginate --slurp \
+          # On a pull_request run Decide review read this thread seconds ago;
+          # a refutation re-review is a workflow_dispatch, where Decide reads
+          # nothing, so this is the first read and sees the refutation.
+          python3 "$PIPELINE_DIR"/scripts/read_once.py once "issue-comments-$PR" -- gh api --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
             > /tmp/cardctx-comments.json 2>/dev/null \
             || echo '[]' > /tmp/cardctx-comments.json

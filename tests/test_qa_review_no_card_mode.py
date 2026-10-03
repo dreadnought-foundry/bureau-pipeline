@@ -92,6 +92,10 @@ def _steps():
     return doc["jobs"]["review"]["steps"]
 
 
+def _job_env() -> dict:
+    return yaml.safe_load(src())["jobs"]["review"].get("env") or {}
+
+
 def _step(step_id: str) -> dict:
     for step in _steps():
         if step.get("id") == step_id:
@@ -355,7 +359,13 @@ class LiveExtractionTest(unittest.TestCase):
             with open(gh, "w") as f:
                 f.write(
                     "#!/usr/bin/env bash\n"
-                    'if [[ "$*" == *headRefName* ]]; then\n'
+                    # The job's one read of the record (Stage 2 fix #21):
+                    # `--json <fields>` with no `--jq`, answered as JSON.
+                    'if [[ "$*" == *headRefName* && "$*" != *--jq* ]]; then\n'
+                    '  printf \'{"headRefName": "%s", "headRefOid": "%s", "baseRefName": "main", '
+                    '"changedFiles": 1, "additions": 1, "deletions": 0}\\n\' '
+                    '"$FAKE_BRANCH" "$(printf \'a%.0s\' $(seq 40))"\n'
+                    'elif [[ "$*" == *headRefName* ]]; then\n'
                     '  echo "$FAKE_BRANCH"\n'
                     "else\n"
                     '  cat "$FAKE_BODY_FILE"\n'
@@ -375,11 +385,15 @@ class LiveExtractionTest(unittest.TestCase):
                 # symlink above is that checkout.
                 PIPELINE_DIR=os.path.join(cwd, ".bureau-pipeline"),
                 PR="101",
+                PR_RECORD_FIELDS=_job_env()["PR_RECORD_FIELDS"],
                 CARD=card,
                 GH_TOKEN="test-token",
                 GITHUB_OUTPUT=out,
                 FAKE_BRANCH=branch,
                 FAKE_BODY_FILE=body_file,
+                # This case's own job temp (the read-once seam's store,
+                # Stage 2 #21): one case's record is never another's.
+                RUNNER_TEMP=td,
             )
             proc = subprocess.run(
                 ["bash", "-c", run_block],
