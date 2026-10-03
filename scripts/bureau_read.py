@@ -56,7 +56,9 @@ Headers on every request:
 Endpoints (query values comma-joined, URL-encoded; `relations` always SAID,
 because the door serves relations when it is left out):
   GET /board?lanes=<L1,L2>&scope=repo|fleet&comments=50&relations=0|1
-  GET /cards?ids=<DRE-1,DRE-2>&comments=50&relations=0|1
+  GET /cards?ids=<DRE-1,DRE-2>&comments=50|all&relations=0|1
+      — `comments=all` (agent-task's card snapshot, BP-4) is every stored
+        comment; `comments.pageInfo.hasNextPage` says whether that is all
   GET /cards/<id>/dependents?lanes=<L>&comments=50&relations=1
       — the cards <id> blocks, in the lanes asked, as board nodes
   GET /workflow-states
