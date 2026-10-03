@@ -1,0 +1,634 @@
+"""RED-first: the hygiene agent's Triage lane (DRE-5410).
+
+`scripts/hygiene_triage.py` reads the broken-card lane once and fixes the
+mechanical defects the standard already names, returning the card to
+`Backlog` — never `Todo` — with the cause named:
+
+  1. a prose blocker with no relation — the relation is added, which makes the
+     sentence true, and a card carrying a routing verdict returns to Backlog;
+  2. a dependency loop a Done card already broke — the card returns to
+     Backlog with the loop named;
+  3. a retired-repo card — marked `hand-built` and parked in Backlog;
+  4. a proof with an open pull request — moved to In Review;
+  5. a card whose parent epic is Canceled or Duplicate — canceled.
+
+Everything else is a `Left` row naming what a person must do.
+
+The fixture is `tests/fixtures/hygiene-triage-2026-09-30.json`, in the shape
+every hygiene lane fixture takes: `lanes`, `prs` and a `gh` map from an argv
+joined with single spaces to the stdout the fake `ctx.gh` answers. The ids a
+prose line claims that are not on the board are answered by the fake
+`ctx.linear` below, from `ISSUES`.
+
+Run: cd bureau-pipeline && python3 -m pytest tests/test_hygiene_triage.py -v
+"""
+from __future__ import annotations
+
+import ast
+import copy
+import importlib.util
+import json
+import os
+import re
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+
+import hygiene  # noqa: E402
+import linear_ops  # noqa: E402
+import reconcile  # noqa: E402
+
+MODULE_PATH = ROOT / "scripts" / "hygiene_triage.py"
+FIXTURE = ROOT / "tests" / "fixtures" / "hygiene-triage-2026-09-30.json"
+
+#: 21:05 UTC on 2026-09-30 is 14:05 in Pacific Daylight Time.
+NOW = datetime(2026, 9, 30, 21, 5, tzinfo=UTC)
+HOME = "dreadnought-foundry"
+BP = "dreadnought-foundry/bureau-pipeline"
+SUMMARY = "DRE-900"
+
+#: The cards a prose line claims that the board read does not carry, and the
+#: lane each is in. Anything else answers Linear's own "Entity not found".
+ISSUES = {"DRE-4301": "Done", "DRE-4302": "Done"}
+
+
+def load_lane():
+    if not MODULE_PATH.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("hygiene_triage", MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+lane = load_lane()
+
+
+def fixture() -> dict:
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+class FixtureGh:
+    """The read-only `gh` a lane sees, answering ONLY from the fixture's `gh`
+    map — a read the map does not hold fails the test. The core's own open
+    pull request list is answered from the fixture's `prs`."""
+
+    def __init__(self, doc: dict):
+        self.answers = dict(doc["gh"])
+        self.prs = doc["prs"]
+        self.calls: list = []
+
+    def __call__(self, argv):
+        argv = [str(a) for a in argv]
+        refusal = hygiene.read_gh_refusal(argv)
+        assert refusal is None, f"the lane asked ctx.gh for a write: {refusal}"
+        if argv[:3] == ["gh", "pr", "list"] and "open" in argv:
+            return json.dumps(self.prs.get(argv[argv.index("--repo") + 1], []))
+        key = " ".join(argv)
+        self.calls.append(key)
+        if key not in self.answers:
+            raise AssertionError(f"the fixture's gh map has no answer for {key!r}")
+        return self.answers[key]
+
+
+class FixtureLinear:
+    """The read-only `ctx.linear`: one issue read by identifier, answered from
+    `ISSUES`, and Linear's own refusal for an id that names no card."""
+
+    def __init__(self, issues=None):
+        self.issues = dict(ISSUES if issues is None else issues)
+        self.calls: list = []
+
+    def __call__(self, query, variables=None):
+        assert not query.lstrip().lower().startswith("mutation")
+        ident = (variables or {}).get("id")
+        self.calls.append(ident)
+        if ident not in self.issues:
+            raise linear_ops.LinearError(
+                "linear error from https://api.linear.app/graphql: "
+                "[{'message': 'Entity not found: Issue', "
+                "'extensions': {'code': 'INPUT_ERROR'}}]")
+        return {"issue": {"identifier": ident, "state": {"name": self.issues[ident]},
+                          "children": {"nodes": []}}}
+
+
+def context(doc, *, linear=None):
+    gh = FixtureGh(doc)
+    linear = linear if linear is not None else FixtureLinear()
+    ctx = hygiene.make_context(HOME, gh=gh, linear=linear, dry_run=False, now=NOW,
+                               summary_card=SUMMARY)
+    return ctx, gh, linear
+
+
+def plan(doc=None, *, linear=None):
+    doc = doc if doc is not None else fixture()
+    ctx, gh, linear = context(doc, linear=linear)
+    lanes = {name: [c for c in cards if c.get("identifier") != SUMMARY]
+             for name, cards in doc["lanes"].items()}
+    board = hygiene.Board(lanes=lanes, prs=doc["prs"])
+    assert lane is not None, f"{MODULE_PATH.name} does not exist yet"
+    return lane.plan(board, ctx), ctx, gh, linear
+
+
+def actions(items, target=None):
+    return [i for i in items if isinstance(i, hygiene.Action)
+            and (target is None or i.target == target)]
+
+
+def lefts(items, target=None):
+    return [i for i in items if isinstance(i, hygiene.Left)
+            and (target is None or i.target == target)]
+
+
+def card(doc, ident):
+    return next(c for cards in doc["lanes"].values() for c in cards
+                if c["identifier"] == ident)
+
+
+def kinds(action):
+    return [w.kind for w in action.writes]
+
+
+def comment_of(action):
+    return next(w for w in action.writes if w.kind == "linear_comment").body
+
+
+def the_action(items, target):
+    found = actions(items, target)
+    assert len(found) == 1, found
+    return found[0]
+
+
+# --------------------------------------------------------------------------- #
+# the lane's shape                                                             #
+# --------------------------------------------------------------------------- #
+
+
+class TestTheLane:
+    def test_its_heading_is_the_triage_lane(self):
+        assert lane is not None, f"{MODULE_PATH.name} does not exist yet"
+        assert lane.LANE == "Triage"
+
+    def test_the_core_discovers_it_by_the_glob(self):
+        names = [m.__name__ for m in hygiene.discover()]
+        assert "hygiene_triage" in names
+
+    def test_every_row_it_returns_takes_its_heading(self):
+        items, _ctx, _gh, _linear = plan()
+        assert items
+        assert {i.lane for i in items} == {"Triage"}
+
+    def test_another_owners_card_and_the_summary_card_are_never_touched(self):
+        items, _ctx, _gh, _linear = plan()
+        targets = {i.target for i in items}
+        assert "DRE-4461" not in targets  # repo:atlas — the EveryBite leg's
+        assert SUMMARY not in targets
+
+    def test_cards_outside_triage_are_never_rows(self):
+        items, _ctx, _gh, _linear = plan()
+        assert not {"DRE-4405", "DRE-4413"} & {i.target for i in items}
+
+
+# --------------------------------------------------------------------------- #
+# (1) a prose blocker with no relation                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestAProseBlocker:
+    def test_a_done_card_named_in_prose_with_a_verdict_is_three_writes_in_order(self):
+        doc = fixture()
+        items, _ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4401")
+        assert action.act == "hygiene-triage-return"
+        assert kinds(action) == ["linear_relation", "linear_comment", "linear_state"]
+        relation, note, state = action.writes
+        assert relation.card == "DRE-4401" and relation.blocked_by == "DRE-4301"
+        assert action.cause == "relation added, blocked by DRE-4301"
+        first = note.body.splitlines()[0]
+        assert first.startswith("🧹 hygiene: hyg-triage-returned — relation added, blocked by DRE-4301")
+        assert state.lane == "Backlog" and state.park is False
+        assert lefts(items, "DRE-4401") == []
+
+    def test_the_writes_carry_the_board_card_never_a_bare_id(self):
+        doc = fixture()
+        items, _ctx, _gh, _linear = plan(doc)
+        for write in the_action(items, "DRE-4401").writes:
+            assert write.card_id == card(doc, "DRE-4401")["id"]
+            assert write.children == ()
+
+    def test_the_same_card_with_no_verdict_gets_the_relation_no_move_and_a_left_row(self):
+        items, _ctx, _gh, _linear = plan()
+        found = actions(items, "DRE-4402")
+        writes = [w for a in found for w in a.writes]
+        relations = [w for w in writes if w.kind == "linear_relation"]
+        assert [(w.card, w.blocked_by) for w in relations] == [("DRE-4402", "DRE-4301")]
+        assert not [w for w in writes if w.kind == "linear_state"]
+        rows = lefts(items, "DRE-4402")
+        assert len(rows) == 1
+        assert "verdict" in rows[0].why
+
+    def test_a_claim_on_the_board_resolves_without_a_linear_read(self):
+        items, _ctx, _gh, linear = plan()
+        action = the_action(items, "DRE-4404")
+        assert kinds(action) == ["linear_relation", "linear_comment", "linear_state"]
+        assert action.writes[0].blocked_by == "DRE-4405"
+        assert action.cause == "relation added, blocked by DRE-4405"
+        assert "DRE-4405" not in linear.calls
+
+    def test_an_id_that_resolves_nowhere_is_no_write_and_one_left_row(self):
+        items, _ctx, _gh, _linear = plan()
+        assert actions(items, "DRE-4403") == []
+        rows = lefts(items, "DRE-4403")
+        assert len(rows) == 1
+        assert "DRE-4999" in rows[0].why
+        assert "reword" in rows[0].recommendation and "author" in rows[0].recommendation
+
+    def test_each_id_off_the_board_is_read_once_per_pass(self):
+        _items, _ctx, _gh, linear = plan()
+        assert sorted(linear.calls) == ["DRE-4301", "DRE-4999"]
+
+    def test_a_partly_resolvable_line_adds_what_resolves_and_moves_nothing(self):
+        doc = fixture()
+        card(doc, "DRE-4401")["description"] = card(doc, "DRE-4401")["description"].replace(
+            "DRE-4301", "DRE-4301, DRE-4999")
+        items, _ctx, _gh, _linear = plan(doc)
+        writes = [w for a in actions(items, "DRE-4401") for w in a.writes]
+        assert [w.blocked_by for w in writes if w.kind == "linear_relation"] == ["DRE-4301"]
+        assert not [w for w in writes if w.kind == "linear_state"]
+        assert len(lefts(items, "DRE-4401")) == 1
+
+    def test_a_linear_read_that_fails_is_not_an_id_that_resolves_nowhere(self, capsys):
+        def failing(query, variables=None):
+            raise linear_ops.LinearError("linear error from https://api.linear.app/graphql: HTTP 502")
+
+        items, _ctx, _gh, _linear = plan(linear=failing)
+        assert actions(items, "DRE-4401") == [] and lefts(items, "DRE-4401") == []
+        assert lefts(items, "DRE-4403") == []
+        assert "DRE-4401 skipped" in capsys.readouterr().err
+        assert actions(items, "DRE-4404")  # resolved on the board, no read needed
+
+    def test_nothing_rewrites_a_description(self):
+        items, _ctx, _gh, _linear = plan()
+        assert {w.kind for a in actions(items) for w in a.writes} <= {
+            "linear_relation", "linear_comment", "linear_state", "linear_label"}
+
+
+# --------------------------------------------------------------------------- #
+# (2) a dependency loop                                                        #
+# --------------------------------------------------------------------------- #
+
+
+class TestADependencyLoop:
+    def test_a_loop_with_a_done_card_returns_the_open_card_with_the_loop_named(self):
+        items, _ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4411")
+        assert action.act == "hygiene-triage-return"
+        assert action.cause == "loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"
+        assert kinds(action) == ["linear_comment", "linear_state"]
+        assert action.writes[1].lane == "Backlog" and action.writes[1].park is False
+        assert comment_of(action).splitlines()[0].startswith(
+            "🧹 hygiene: hyg-triage-returned — loop DRE-4411 → DRE-4310 → DRE-4411 broken")
+        assert lefts(items, "DRE-4411") == []
+
+    def test_a_loop_of_open_cards_is_no_write_and_one_left_row_naming_every_card(self):
+        items, _ctx, _gh, _linear = plan()
+        assert actions(items, "DRE-4412") == []
+        rows = lefts(items, "DRE-4412")
+        assert len(rows) == 1
+        assert "DRE-4412" in rows[0].why and "DRE-4413" in rows[0].why
+
+    def test_a_three_card_loop_is_read_through_the_board(self):
+        doc = fixture()
+        mid = copy.deepcopy(card(doc, "DRE-4413"))
+        mid["identifier"], mid["id"] = "DRE-4414", mid["id"][:-4] + "4414"
+        mid["inverseRelations"]["nodes"] = [
+            {"type": "blocks", "issue": {"identifier": "DRE-4413", "state": {"name": "Todo"}}}]
+        card(doc, "DRE-4413")["inverseRelations"]["nodes"] = [
+            {"type": "blocks", "issue": {"identifier": "DRE-4412", "state": {"name": "Triage"}}}]
+        card(doc, "DRE-4412")["inverseRelations"]["nodes"] = [
+            {"type": "blocks", "issue": {"identifier": "DRE-4414", "state": {"name": "Todo"}}}]
+        doc["lanes"]["Todo"].append(mid)
+        items, _ctx, _gh, _linear = plan(doc)
+        rows = lefts(items, "DRE-4412")
+        assert len(rows) == 1
+        assert all(i in rows[0].why for i in ("DRE-4412", "DRE-4413", "DRE-4414"))
+
+    def test_a_broken_loop_on_a_card_with_no_verdict_is_left_unmoved(self):
+        doc = fixture()
+        card(doc, "DRE-4411")["comments"]["nodes"] = []
+        items, _ctx, _gh, _linear = plan(doc)
+        assert not [w for a in actions(items, "DRE-4411") for w in a.writes
+                    if w.kind == "linear_state"]
+        assert len(lefts(items, "DRE-4411")) == 1
+
+
+# --------------------------------------------------------------------------- #
+# (3) a retired-repo card                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class TestARetiredRepo:
+    @pytest.mark.parametrize("ident, cause", [
+        ("DRE-4421", "retired repo legacy-site"),
+        ("DRE-4422", "archived repo dreadnought-foundry/agent-bureau-demo"),
+    ])
+    def test_it_is_marked_hand_built_and_parked(self, ident, cause):
+        items, ctx, _gh, _linear = plan()
+        action = the_action(items, ident)
+        assert action.act == "hygiene-triage-return"
+        assert action.cause == cause
+        assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
+        label, note, state = action.writes
+        assert (label.label, label.add) == (reconcile.HAND_BUILT_LABEL, True)
+        assert label.label == "hand-built"
+        assert note.body.splitlines()[0].startswith(f"🧹 hygiene: hyg-triage-returned — {cause}")
+        assert (state.lane, state.park) == ("Backlog", True)
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_live_repo_is_read_once_and_is_not_retired(self):
+        _items, _ctx, gh, _linear = plan()
+        assert gh.calls.count(f"gh api repos/{BP}") == 1
+
+
+# --------------------------------------------------------------------------- #
+# (4) a proof with an open pull request                                        #
+# --------------------------------------------------------------------------- #
+
+
+class TestAProofWithAnOpenPullRequest:
+    def test_it_moves_to_in_review_under_a_receipt_naming_the_pull_request(self):
+        items, ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4431")
+        assert action.act == "hygiene-review-move"
+        assert action.cause == "open pull request #688"
+        assert kinds(action) == ["linear_comment", "linear_state"]
+        assert comment_of(action).splitlines()[0].startswith(
+            "🧹 hygiene: hyg-moved-to-review — open pull request #688")
+        assert action.writes[1].lane == "In Review"
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_proof_with_no_pull_request_gets_nothing_from_this_rule(self):
+        items, _ctx, _gh, _linear = plan()
+        assert actions(items, "DRE-4432") == []
+
+    def test_a_merged_pull_request_is_not_an_open_one(self):
+        doc = fixture()
+        key = next(k for k in doc["gh"] if k.endswith("head:agent/DRE-4431"))
+        doc["gh"][key] = doc["gh"][key].replace('"OPEN"', '"MERGED"')
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4431") == []
+
+
+# --------------------------------------------------------------------------- #
+# (5) a moot card                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class TestAMootCard:
+    def test_a_card_under_a_canceled_epic_is_canceled_with_the_parent_named(self):
+        items, ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4441")
+        assert action.act == "hygiene-card-cancel"
+        assert action.cause == "parent DRE-4440 is Canceled"
+        assert kinds(action) == ["linear_comment", "linear_state"]
+        assert comment_of(action).splitlines()[0].startswith(
+            "🧹 hygiene: hyg-card-canceled — parent DRE-4440 is Canceled")
+        assert action.writes[1].lane == "Canceled"
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_duplicate_parent_is_named_as_one(self):
+        doc = fixture()
+        card(doc, "DRE-4441")["parent"]["state"]["name"] = "Duplicate"
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4441").cause == "parent DRE-4440 is Duplicate"
+
+    def test_the_same_card_given_children_is_refused_by_the_cores_guard(self):
+        doc = fixture()
+        moot = card(doc, "DRE-4441")
+        moot["children"]["nodes"] = [{"id": "c-1", "identifier": "DRE-4442",
+                                      "createdAt": "2026-09-21T16:00:00.000Z",
+                                      "state": {"name": "Todo"}}]
+        ctx, _gh, _linear = context(doc)
+        with pytest.raises(hygiene.Forbidden):
+            hygiene.guard(hygiene.linear_state(moot, "Canceled"), ctx)
+        items, _ctx, _gh, _linear = plan(doc)
+        assert not [w for a in actions(items, "DRE-4441") for w in a.writes
+                    if w.kind == "linear_state" and w.lane == "Canceled"]
+        assert len(lefts(items, "DRE-4441")) == 1
+
+
+# --------------------------------------------------------------------------- #
+# everything else — a row for a person                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestLeftForAPerson:
+    def test_a_plan_parked_with_needs_human_is_a_left_row(self):
+        items, _ctx, _gh, _linear = plan()
+        assert actions(items, "DRE-4451") == []
+        rows = lefts(items, "DRE-4451")
+        assert len(rows) == 1
+        assert "needs-human" in rows[0].why
+
+    def test_a_card_with_no_repo_label_is_a_left_row_naming_the_label(self):
+        doc = fixture()
+        bare = card(doc, "DRE-4432")
+        bare["labels"]["nodes"] = [{"name": "agent:engineer"}]
+        bare["title"] = "a card nobody labeled"
+        items, _ctx, _gh, _linear = plan(doc)
+        rows = lefts(items, "DRE-4432")
+        assert len(rows) == 1 and "repo:" in rows[0].why
+
+    def test_every_triage_card_in_scope_is_an_action_or_a_left_row(self):
+        doc = fixture()
+        items, ctx, _gh, _linear = plan(doc)
+        scoped = {c["identifier"] for c in hygiene.Board(lanes=doc["lanes"]).cards(ctx, "Triage")}
+        assert {i.target for i in items} == scoped
+
+
+# --------------------------------------------------------------------------- #
+# the whole fixture                                                            #
+# --------------------------------------------------------------------------- #
+
+EXPECTED = {
+    "DRE-4401": "hygiene-triage-return",
+    "DRE-4402": "hygiene-cause-name",
+    "DRE-4404": "hygiene-triage-return",
+    "DRE-4411": "hygiene-triage-return",
+    "DRE-4421": "hygiene-triage-return",
+    "DRE-4422": "hygiene-triage-return",
+    "DRE-4431": "hygiene-review-move",
+    "DRE-4441": "hygiene-card-cancel",
+}
+LEFT = ["DRE-4402", "DRE-4403", "DRE-4412", "DRE-4432", "DRE-4451"]
+
+_CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b|\bPT\b|\bUTC\b")
+_COUNT = re.compile(r"\b\d+\s+(?:time|times|attempt|attempts|round|rounds|minute|minutes|"
+                    r"hour|hours|card|cards|relation|relations|id|ids)\b", re.I)
+
+
+class TestTheWholeFixture:
+    def test_the_fixture_yields_exactly_these_actions_and_left_rows(self):
+        items, _ctx, _gh, _linear = plan()
+        assert {a.target: a.act for a in actions(items)} == EXPECTED
+        assert len(actions(items)) == len(EXPECTED)
+        assert sorted(r.target for r in lefts(items)) == LEFT
+
+    def test_no_action_writes_todo_in_progress_or_done(self):
+        items, ctx, _gh, _linear = plan()
+        lanes = [w.lane for a in actions(items) for w in a.writes if w.kind == "linear_state"]
+        assert lanes
+        assert not {"Todo", "In Progress", "Done"} & set(lanes)
+        for action in actions(items):
+            for write in action.writes:
+                hygiene.guard(write, ctx)
+
+    def test_no_cause_carries_a_count_or_a_clock(self):
+        items, _ctx, _gh, _linear = plan()
+        for action in actions(items):
+            assert not _CLOCK.search(action.cause), action.cause
+            assert not _COUNT.search(action.cause), action.cause
+            assert "·" not in action.cause
+
+    def test_every_receipt_carries_its_actions_cause_and_evidence(self):
+        items, _ctx, _gh, _linear = plan()
+        for action in actions(items):
+            head = hygiene.read_receipt(comment_of(action))
+            assert head["tag"] == hygiene.TAGS[action.act]
+            assert head["cause"] == action.cause
+            assert action.evidence
+
+    def test_every_gh_read_is_answered_from_the_fixture_and_none_repeats(self):
+        doc = fixture()
+        _items, _ctx, gh, _linear = plan(doc)
+        assert len(gh.calls) == len(set(gh.calls))
+        assert set(gh.calls) == set(doc["gh"])
+
+
+# --------------------------------------------------------------------------- #
+# idempotency, through the core's key                                          #
+# --------------------------------------------------------------------------- #
+
+
+def run(doc, monkeypatch, linear=None):
+    """One leg through the core, this lane alone, the write seam recorded."""
+    sent: list = []
+    monkeypatch.setattr(hygiene, "send", lambda write, ctx: sent.append(write))
+    monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [lane])
+    ctx, _gh, _linear = context(doc, linear=linear)
+    board_doc = {"taken_at": "2026-09-30T21:00:00Z", "lanes": doc["lanes"]}
+    return sent, hygiene.run_leg(board_doc, ctx)
+
+
+def add_receipts(doc, sent):
+    """Every receipt the pass posted, now in its card's comment window."""
+    for write in sent:
+        if write.kind == "linear_comment":
+            card(doc, write.card)["comments"]["nodes"].append(
+                {"body": write.body, "createdAt": "2026-09-30T21:05:00.000Z",
+                 "user": {"id": "u-hygiene"}})
+
+
+class TestIdempotency:
+    def test_a_second_pass_over_an_unchanged_fixture_sends_nothing(self, monkeypatch):
+        doc = fixture()
+        sent, ledger = run(doc, monkeypatch)
+        assert {a["target"] for a in ledger["actions"] if a["outcome"] == "executed"} == set(EXPECTED)
+        add_receipts(doc, sent)
+        sent2, ledger2 = run(doc, monkeypatch)
+        assert sent2 == []
+        assert {a["outcome"] for a in ledger2["actions"]} == {"suppressed"}
+
+    def test_the_same_card_back_for_a_second_undeclared_id_is_fixed_again(self, monkeypatch):
+        doc = fixture()
+        sent, _ledger = run(doc, monkeypatch)
+        add_receipts(doc, sent)
+        back = card(doc, "DRE-4401")
+        # The relation the first pass added is on the board now, and the
+        # author's line has grown a second id nothing stands behind.
+        back["inverseRelations"]["nodes"].append(
+            {"type": "blocks", "issue": {"identifier": "DRE-4301", "state": {"name": "Done"}}})
+        back["description"] = back["description"].replace("DRE-4301", "DRE-4301, DRE-4302")
+        sent2, ledger2 = run(doc, monkeypatch)
+        again = [a for a in ledger2["actions"] if a["target"] == "DRE-4401"]
+        assert [(a["outcome"], a["cause"]) for a in again] == [
+            ("executed", "relation added, blocked by DRE-4302")]
+        relations = [w.blocked_by for w in sent2
+                     if w.kind == "linear_relation" and w.card == "DRE-4401"]
+        assert relations == ["DRE-4302"]
+        assert [w.lane for w in sent2 if w.kind == "linear_state" and w.card == "DRE-4401"] == [
+            "Backlog"]
+
+    def test_a_card_back_under_a_parent_in_a_new_state_is_a_new_cause(self, monkeypatch):
+        doc = fixture()
+        sent, _ledger = run(doc, monkeypatch)
+        add_receipts(doc, sent)
+        card(doc, "DRE-4441")["parent"]["state"]["name"] = "Duplicate"
+        _sent2, ledger2 = run(doc, monkeypatch)
+        again = [a for a in ledger2["actions"] if a["target"] == "DRE-4441"]
+        assert [(a["outcome"], a["cause"]) for a in again] == [
+            ("executed", "parent DRE-4440 is Duplicate")]
+
+
+# --------------------------------------------------------------------------- #
+# what it may write, and how it reads                                          #
+# --------------------------------------------------------------------------- #
+
+ALLOWED = {"linear_state", "linear_comment", "linear_label", "linear_relation"}
+WRITE_CONSTRUCTORS = ALLOWED | {"gh_dispatch", "gh_rerun", "gh_update_branch",
+                                "gh_pr_close", "gh_pr_comment"}
+
+
+class TestWhatItMayWrite:
+    def test_the_module_calls_only_the_linear_constructors(self):
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        used = {n.attr for n in ast.walk(tree)
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                and n.value.id == "hygiene" and n.attr in WRITE_CONSTRUCTORS}
+        assert used == ALLOWED
+
+    def test_the_cores_static_scan_passes_over_it(self):
+        spec = importlib.util.spec_from_file_location(
+            "test_hygiene_core", ROOT / "tests" / "test_hygiene.py")
+        core_tests = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(core_tests)
+        assert MODULE_PATH.exists()
+        assert core_tests.scan(MODULE_PATH) == []
+
+
+class TestAReadThatFails:
+    def test_a_failed_gh_read_skips_that_card_and_no_other(self, capsys):
+        doc = fixture()
+        key = next(k for k in doc["gh"] if k.endswith("head:agent/DRE-4431"))
+        ctx, gh, _linear = context(doc)
+
+        def failing(argv):
+            if " ".join(argv) == key:
+                raise RuntimeError("gh exited 1: HTTP 502")
+            return gh(argv)
+
+        ctx.gh = failing
+        items = lane.plan(hygiene.Board(lanes=doc["lanes"], prs=doc["prs"]), ctx)
+        assert actions(items, "DRE-4431") == [] and lefts(items, "DRE-4431") == []
+        assert {a.target for a in actions(items)} == set(EXPECTED) - {"DRE-4431"}
+        assert "DRE-4431 skipped" in capsys.readouterr().err
+
+    def test_a_read_the_core_refuses_is_never_swallowed(self):
+        doc = fixture()
+        ctx, _gh, _linear = context(doc)
+
+        def refusing(argv):
+            raise hygiene.Forbidden("ctx.gh is read-only")
+
+        ctx.gh = refusing
+        with pytest.raises(hygiene.Forbidden):
+            lane.plan(hygiene.Board(lanes=doc["lanes"], prs=doc["prs"]), ctx)

@@ -1,0 +1,1075 @@
+{
+  "lanes": {
+    "Green Light": [],
+    "Todo": [
+      {
+        "id": "00000000-0000-4000-8000-000000004413",
+        "identifier": "DRE-4413",
+        "title": "bureau-pipeline: the other half of the open loop",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Todo"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "type": "blocks",
+              "issue": {
+                "identifier": "DRE-4412",
+                "state": {
+                  "name": "Triage"
+                }
+              }
+            }
+          ]
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Todo"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "Triage": [
+      {
+        "id": "00000000-0000-4000-8000-000000004401",
+        "identifier": "DRE-4401",
+        "title": "bureau-pipeline: a prose blocker naming a Done card",
+        "description": "Synthetic card text.\n\n**Blocked by:** DRE-4301\n\n## Acceptance criteria\n\n- [ ] synthetic",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🧱 prose-blocker-no-relation: DRE-4401 is not being promoted — its description declares a dependency the board does not hold.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004402",
+        "identifier": "DRE-4402",
+        "title": "bureau-pipeline: the same defect, no routing verdict",
+        "description": "Synthetic card text.\n\n**Blocked by:** DRE-4301\n\n## Acceptance criteria\n\n- [ ] synthetic",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧱 prose-blocker-no-relation: DRE-4402 is not being promoted — its description declares a dependency the board does not hold.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004403",
+        "identifier": "DRE-4403",
+        "title": "bureau-pipeline: a prose blocker naming no card at all",
+        "description": "Synthetic card text.\n\n**Blocked by:** DRE-4999\n\n## Acceptance criteria\n\n- [ ] synthetic",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🧱 prose-blocker-no-relation: DRE-4403 is not being promoted — its description declares a dependency the board does not hold.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004404",
+        "identifier": "DRE-4404",
+        "title": "bureau-pipeline: a prose blocker naming a card on the board",
+        "description": "Synthetic card text.\n\n**Blocked by:** DRE-4405\n\n## Acceptance criteria\n\n- [ ] synthetic",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🧱 prose-blocker-no-relation: DRE-4404 is not being promoted — its description declares a dependency the board does not hold.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004411",
+        "identifier": "DRE-4411",
+        "title": "bureau-pipeline: a loop a Done card already broke",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "type": "blocks",
+              "issue": {
+                "identifier": "DRE-4411"
+              },
+              "relatedIssue": {
+                "identifier": "DRE-4310"
+              }
+            }
+          ]
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "type": "blocks",
+              "issue": {
+                "identifier": "DRE-4310",
+                "state": {
+                  "name": "Done"
+                }
+              }
+            }
+          ]
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004412",
+        "identifier": "DRE-4412",
+        "title": "bureau-pipeline: a loop of open cards",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "type": "blocks",
+              "issue": {
+                "identifier": "DRE-4413",
+                "state": {
+                  "name": "Todo"
+                }
+              }
+            }
+          ]
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004421",
+        "identifier": "DRE-4421",
+        "title": "legacy-site: a card for a retired repo",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:legacy-site"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004422",
+        "identifier": "DRE-4422",
+        "title": "agent-bureau-demo: a card for an archived repo",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:agent-bureau-demo"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004431",
+        "identifier": "DRE-4431",
+        "title": "PROOF: the widget is observed live",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:ops"
+            },
+            {
+              "name": "hand-built"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004432",
+        "identifier": "DRE-4432",
+        "title": "PROOF: a proof with no pull request yet",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:ops"
+            },
+            {
+              "name": "hand-built"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004441",
+        "identifier": "DRE-4441",
+        "title": "bureau-pipeline: a card under a canceled epic",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": {
+          "identifier": "DRE-4440",
+          "state": {
+            "name": "Canceled"
+          }
+        },
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004451",
+        "identifier": "DRE-4451",
+        "title": "[EPIC] bureau-pipeline: a plan parked at the critic's bound",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:planner"
+            },
+            {
+              "name": "needs-human"
+            },
+            {
+              "name": "no-code"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000004461",
+        "identifier": "DRE-4461",
+        "title": "atlas: a card on another owner's leg",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:atlas"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000900",
+        "identifier": "DRE-900",
+        "title": "Hygiene agent — hourly summary",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "no-code"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": []
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "In Progress": [
+      {
+        "id": "00000000-0000-4000-8000-000000004405",
+        "identifier": "DRE-4405",
+        "title": "bureau-pipeline: a card the prose names, in flight",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "In Progress"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:bureau-pipeline"
+            },
+            {
+              "name": "agent:engineer"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "In Progress"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "In Review": []
+  },
+  "prs": {
+    "dreadnought-foundry/agent-bureau": [],
+    "dreadnought-foundry/agent-bureau-demo": [],
+    "dreadnought-foundry/bureau-pipeline": [],
+    "dreadnought-foundry/portico": []
+  },
+  "gh": {
+    "gh api repos/dreadnought-foundry/bureau-pipeline": "{\"full_name\": \"dreadnought-foundry/bureau-pipeline\", \"archived\": false}",
+    "gh api repos/dreadnought-foundry/agent-bureau-demo": "{\"full_name\": \"dreadnought-foundry/agent-bureau-demo\", \"archived\": true}",
+    "gh pr list --repo dreadnought-foundry/bureau-pipeline --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4431": "[{\"number\": 688, \"url\": \"https://github.com/dreadnought-foundry/bureau-pipeline/pull/688\", \"headRefName\": \"agent/DRE-4431-proof\", \"state\": \"OPEN\"}]",
+    "gh pr list --repo dreadnought-foundry/bureau-pipeline --state all --limit 30 --json number,url,headRefName,state --search head:agent/DRE-4432": "[]"
+  }
+}
