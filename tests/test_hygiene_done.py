@@ -292,7 +292,7 @@ class TestAProofProven:
     def test_a_record_with_every_row_met_closes_the_proof(self):
         items, _ctx, _gh = plan()
         (action,) = actions(items, "DRE-3904")
-        cause = "record docs/model-adoption-proof-2026-09.md at #605, 4 rows met"
+        cause = "record docs/model-adoption-proof-2026-09.md at #605, 3 rows met"
         assert action.act == "hygiene-proof-close"
         assert action.cause == cause
         assert [w.kind for w in action.writes] == ["linear_comment", "linear_state"]
@@ -342,7 +342,7 @@ class TestAProofProven:
         doc["gh"][contents_key(BP, path)] = contents_answer(path, text)
         items, _ctx, _gh = plan(doc)
         (action,) = actions(items, "DRE-3904")
-        assert action.cause == f"record {path} at #605, 4 rows met"
+        assert action.cause == f"record {path} at #605, 3 rows met"
 
     def test_a_proof_with_no_merged_pull_request_yields_nothing(self):
         doc = fixture()
@@ -425,8 +425,11 @@ class TestCriterionRows:
         assert reading.unmet == [] and len(reading.met) == 1
 
 
-#: The thirteen records at 2e5aefaf, and what the rule makes of each.
-CLOSES = {"model-adoption-proof-2026-09.md": 4, "seam-proof-dre3244.md": None}
+#: The thirteen records at 2e5aefaf, and what the rule makes of each. The
+#: model-adoption record's table has six rows: its own merge and the CEO's
+#: step are closing rows, and so is "ends with `What the CEO sees`" — it names
+#: the CEO — which leaves three judged, all met.
+CLOSES = {"model-adoption-proof-2026-09.md": 3, "seam-proof-dre3244.md": 4}
 NOT_MET = {
     "linear-identities-proof-2026-09.md": ["NO", "NO"],
     "planner-queue-proof-2026-10.md": ["Not met"],
@@ -473,8 +476,7 @@ class TestTheThirteenRecordsOnMain:
     def test_exactly_two_close(self, name):
         reading = need_lane().reading((RECORDS / name).read_text(encoding="utf-8"))
         assert reading.rows is not None and reading.unmet == [] and reading.met
-        if CLOSES[name] is not None:
-            assert len(reading.met) == CLOSES[name]
+        assert len(reading.met) == CLOSES[name]
 
     @pytest.mark.parametrize("name", sorted(NOT_MET))
     def test_exactly_six_are_left_with_the_row_not_met_named(self, name):
