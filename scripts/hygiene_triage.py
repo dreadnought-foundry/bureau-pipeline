@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""The hygiene agent's Triage lane (DRE-5410): the broken-card lane, read once,
+its mechanical defects fixed.
+
+Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
+reads the cards in `Triage` and fixes the defects the standard already names,
+returning a card to `Backlog` — never `Todo`, which dispatches — with the
+cause named. One action per card, the first of these that applies:
+
+1. **A moot card.** Its parent epic is `Canceled` or `Duplicate` on the board
+   read: the person decided on the parent, and the card is canceled with that
+   written down. Cause: `parent <DRE-N> is <state>`. A card with children is
+   an epic, which the core's guard refuses to close — this lane leaves it as a
+   row for a person rather than propose a write the guard would stop the whole
+   leg on.
+2. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
+   key of `config/repo-map.json` (cause `retired repo <slug>`), or a repo that
+   answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
+   repo <owner/repo>`). It is marked `reconcile.HAND_BUILT_LABEL` and parked in
+   Backlog.
+3. **A proof with an open pull request.** The title opens `PROOF:` and
+   `card_pr.find` — the one "did this card produce a pull request" seam —
+   answers an OPEN pull request in the card's repo. It moves to In Review, the
+   lane that pull request says it is in. Cause: `open pull request #<n>`.
+4. **A prose blocker with no relation.** `prose_blockers.undeclared_claims`
+   names the ids a declaring line claims with no `blockedBy` behind them. Each
+   id that resolves — on the board read, or by one `ctx.linear` read per pass —
+   gets the relation, which makes the sentence true (a relation to a Done card
+   is met and harmless). Cause: `relation added, blocked by <DRE-N[, DRE-M]>`.
+   The card returns to Backlog only when every claim resolved AND it carries a
+   routing verdict (`routing_verdict.verdict_on`): an id that resolves nowhere
+   is a sentence only its author can reword, and a card with no verdict has
+   nothing for Backlog to route on. Then the relation is still added, under a
+   `hyg-cause-named` receipt, and a `Left` row says what is missing. Nothing
+   rewrites a description.
+5. **A dependency loop.** The card's `blockedBy` chain returns to itself
+   through the relations on the board read — every card's inverse `blocks`
+   relations, and its own `blocks` relations read the other way round, so a
+   Done card off the board still closes a loop. When a card in the loop is met
+   (`prose_blockers.TERMINAL` — the gate's own reading of a blocker that holds
+   nothing) the card returns to Backlog, under the same verdict rule as (4).
+   Cause: `loop <A → B → A> broken, <DRE-N> is <state>`. When every card in it
+   is open, which edge to cut is a person's call.
+
+Everything else — a plan parked with `needs-human`, a card with no `repo:`
+label, a proof whose pull request is not open yet — is a `Left` row naming
+what the person must do, so every Triage card in this leg's scope is either an
+action or a row.
+
+No cause carries a count or the pass's time, and this lane adds no stop of its
+own on a repeat: the core's (tag, cause) key suppresses a card back in Triage
+for the same defect, and one back for a different relation or a different
+parent state is a new cause and is fixed again.
+
+A read that fails — a `gh` read, or a Linear read that answers anything but
+"not found" — skips that card for this pass, said on stderr and never guessed
+into an action. A read the core refuses is a lane bug and is raised.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+
+import card_pr
+import hygiene
+import linear_ops
+import prose_blockers
+import reconcile
+import routing_verdict
+
+LANE = "Triage"
+
+#: Where every write here returns a card to: the lane the dependency gate and
+#: the routing verdict re-evaluate it in. Never Todo.
+RETURN_LANE = prose_blockers.RETURN_LANE
+
+#: The parent states that make a child moot.
+MOOT_PARENT = ("Canceled", "Duplicate")
+
+PROOF_PREFIX = "PROOF:"
+NEEDS_HUMAN = "needs-human"
+
+#: One card by identifier — selecting `identifier`, `state` and `children`,
+#: as a card a lane read for itself must.
+ISSUE_QUERY = """query($id: String!) { issue(id: $id) {
+  identifier state { name } children(first: 1) { nodes { identifier } }
+} }"""
+
+#: Linear's answer for an id that names no card, as opposed to a read that
+#: failed.
+_NOT_FOUND = re.compile(r"entity not found|not found", re.I)
+
+ARROW = " → "
+
+
+def _bodies(card: dict) -> list:
+    return [(n or {}).get("body") or ""
+            for n in ((card.get("comments") or {}).get("nodes") or [])]
+
+
+def _labels(card: dict) -> list:
+    return [(n or {}).get("name") or "" for n in ((card.get("labels") or {}).get("nodes") or [])]
+
+
+def _repo_slug(card: dict) -> str | None:
+    for name in _labels(card):
+        if name.startswith("repo:"):
+            return name[len("repo:"):].strip().lower()
+    return None
+
+
+def _children(card: dict) -> list:
+    return (card.get("children") or {}).get("nodes") or []
+
+
+def _verdict(card: dict) -> str | None:
+    """The card's one routing verdict, or None — two different ones are no
+    verdict to route on either."""
+    try:
+        return routing_verdict.verdict_on(_bodies(card))
+    except routing_verdict.ConflictingVerdicts:
+        return None
+
+
+def _action(card: dict, act: str, cause: str, evidence: list, ctx: hygiene.Context,
+            before: list, after: list) -> hygiene.Action:
+    note = hygiene.linear_comment(card, hygiene.receipt(act, cause, evidence, ctx.now))
+    return hygiene.Action(lane=LANE, target=card["identifier"], act=act, cause=cause,
+                          evidence=list(evidence), writes=[*before, note, *after])
+
+
+def _left(card: dict, why: str, recommendation: str) -> hygiene.Left:
+    return hygiene.Left(lane=LANE, target=card["identifier"], why=why,
+                        recommendation=recommendation)
+
+
+class _Pass:
+    """What one pass reads once and shares across the lane's cards."""
+
+    def __init__(self, board: hygiene.Board, ctx: hygiene.Context):
+        self.ctx = ctx
+        self.cards = {c.get("identifier"): c for cards in board.lanes.values()
+                      for c in cards if c.get("identifier")}
+        self.blocked_by, self.states = _graph(board)
+        self.resolved: dict = {}
+        self.archived: dict = {}
+
+    def resolves(self, ident: str) -> bool:
+        """Does `ident` name a card? On the board read, or by one read."""
+        if ident in self.cards:
+            return True
+        if ident not in self.resolved:
+            try:
+                issue = (self.ctx.linear(ISSUE_QUERY, {"id": ident}) or {}).get("issue")
+            except linear_ops.LinearError as e:
+                if isinstance(e, linear_ops.LinearRateLimited) or not _NOT_FOUND.search(str(e)):
+                    raise
+                issue = None
+            self.resolved[ident] = bool(issue and issue.get("identifier"))
+        return self.resolved[ident]
+
+    def is_archived(self, repo: str) -> bool:
+        if repo not in self.archived:
+            answer = json.loads(self.ctx.gh(["gh", "api", f"repos/{repo}"]) or "{}")
+            self.archived[repo] = (answer or {}).get("archived") is True
+        return self.archived[repo]
+
+
+# --------------------------------------------------------------------------- #
+# (1) a moot card                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def moot(card: dict, ctx: hygiene.Context) -> list | None:
+    parent = card.get("parent") or {}
+    state = (parent.get("state") or {}).get("name")
+    if not parent.get("identifier") or state not in MOOT_PARENT:
+        return None
+    if _children(card):
+        return [_left(card, f"its parent {parent['identifier']} is {state}, and it has "
+                            "children of its own — an epic is never canceled by this agent",
+                      "a person decides whether its children's work goes on under "
+                      "another epic, then cancels it or moves it")]
+    cause = f"parent {parent['identifier']} is {state}"
+    return [_action(card, "hygiene-card-cancel", cause, [f"parent {parent['identifier']}"],
+                    ctx, [], [hygiene.linear_state(card, "Canceled")])]
+
+
+# --------------------------------------------------------------------------- #
+# (2) a retired-repo card                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def retired(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
+    slug = _repo_slug(card)
+    if slug is None:
+        return None
+    repo = ctx.repo_map.get(slug)
+    if repo is None:
+        cause, evidence = f"retired repo {slug}", [f"label repo:{slug}", "config/repo-map.json"]
+    elif seen.is_archived(repo):
+        cause, evidence = f"archived repo {repo}", [f"label repo:{slug}", f"gh api repos/{repo}"]
+    else:
+        return None
+    return [_action(card, "hygiene-triage-return", cause, evidence, ctx,
+                    [hygiene.linear_label(card, reconcile.HAND_BUILT_LABEL, True)],
+                    [hygiene.linear_state(card, RETURN_LANE, park=True)])]
+
+
+# --------------------------------------------------------------------------- #
+# (3) a proof with an open pull request                                        #
+# --------------------------------------------------------------------------- #
+
+
+def proof_in_review(card: dict, ctx: hygiene.Context) -> list | None:
+    if not (card.get("title") or "").startswith(PROOF_PREFIX):
+        return None
+    repo = ctx.repo_map.get(_repo_slug(card) or "")
+    if repo is None:
+        return None
+    pull = card_pr.find(card["identifier"], repo=repo,
+                        run=lambda args: ctx.gh(["gh", *args]))
+    if card_pr.pr_state(pull) != card_pr.OPEN:
+        return None
+    cause = f"open pull request #{pull['number']}"
+    return [_action(card, "hygiene-review-move", cause, [f"{repo}#{pull['number']}"], ctx,
+                    [], [hygiene.linear_state(card, "In Review")])]
+
+
+# --------------------------------------------------------------------------- #
+# (4) a prose blocker with no relation                                         #
+# --------------------------------------------------------------------------- #
+
+
+def _no_verdict(card: dict, what: str) -> hygiene.Left:
+    return _left(card, f"{what}, but it carries no routing verdict — Backlog has "
+                       "nothing to route it on",
+                 "a person moves it to Planning, where the planning exit routes it afresh")
+
+
+def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
+    claims = sorted(prose_blockers.undeclared_claims(card))
+    if not claims:
+        return None
+    found = [i for i in claims if seen.resolves(i)]
+    nowhere = [i for i in claims if i not in found]
+    out: list = []
+    rows: list = []
+    if nowhere:
+        rows.append(_left(card, f"its blocker line names {', '.join(nowhere)}, which "
+                                "names no card",
+                          "the sentence must be reworded by its author — set the real "
+                          "relation, or reword the line so it no longer opens with "
+                          "a declaring phrase"))
+    if found:
+        cause = f"relation added, blocked by {', '.join(found)}"
+        relations = [hygiene.linear_relation(card, i) for i in found]
+        evidence = [f"relation {card['identifier']} blocked by {i}" for i in found]
+        if nowhere:
+            out.append(_action(card, "hygiene-cause-name", cause, evidence, ctx, relations, []))
+        elif _verdict(card) is None:
+            out.append(_action(card, "hygiene-cause-name", cause, evidence, ctx, relations, []))
+            rows.append(_no_verdict(card, f"its blocker line is now true — blocked by "
+                                          f"{', '.join(found)}"))
+        else:
+            out.append(_action(card, "hygiene-triage-return", cause, evidence, ctx, relations,
+                               [hygiene.linear_state(card, RETURN_LANE)]))
+    return out + rows
+
+
+# --------------------------------------------------------------------------- #
+# (5) a dependency loop                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def _graph(board: hygiene.Board) -> tuple:
+    """`blocked_by[X]` — every card the board read says X waits on — and the
+    state of every card it names. A card's inverse `blocks` relations say who
+    blocks it; its own `blocks` relations say whom it blocks, which is how an
+    edge out of a Done card, never on the board read, is still seen."""
+    blocked_by: dict = {}
+    states: dict = {}
+    for cards in board.lanes.values():
+        for card in cards:
+            me = card.get("identifier")
+            if not me:
+                continue
+            states[me] = (card.get("state") or {}).get("name")
+            for rel in (card.get("inverseRelations") or {}).get("nodes") or []:
+                issue = rel.get("issue") or {}
+                if rel.get("type") == "blocks" and issue.get("identifier"):
+                    blocked_by.setdefault(me, set()).add(issue["identifier"])
+                    states.setdefault(issue["identifier"],
+                                      (issue.get("state") or {}).get("name"))
+            for rel in (card.get("relations") or {}).get("nodes") or []:
+                other = (rel.get("relatedIssue") or {}).get("identifier")
+                if rel.get("type") == "blocks" and other:
+                    blocked_by.setdefault(other, set()).add(me)
+    return blocked_by, states
+
+
+def find_loop(start: str, blocked_by: dict) -> list | None:
+    """The shortest `blockedBy` chain from `start` back to itself, as the
+    cards along it, `start` first — or None."""
+    paths = [[start]]
+    seen = {start}
+    while paths:
+        nxt = []
+        for path in paths:
+            for after in sorted(blocked_by.get(path[-1]) or ()):
+                if after == start:
+                    return path
+                if after not in seen:
+                    seen.add(after)
+                    nxt.append(path + [after])
+        paths = nxt
+    return None
+
+
+def loop(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
+    cycle = find_loop(card["identifier"], seen.blocked_by)
+    if cycle is None:
+        return None
+    named = ARROW.join(cycle + [cycle[0]])
+    met = next((i for i in cycle if seen.states.get(i) in prose_blockers.TERMINAL), None)
+    if met is None:
+        return [_left(card, f"dependency loop {named}, every card in it open",
+                      "a person decides which card really waits on which, and removes "
+                      "the other relation")]
+    if _verdict(card) is None:
+        return [_no_verdict(card, f"its loop {named} is broken — {met} is "
+                                  f"{seen.states[met]}")]
+    cause = f"loop {named} broken, {met} is {seen.states[met]}"
+    evidence = [f"relation {a} blocked by {b}" for a, b in zip(cycle, cycle[1:] + cycle[:1])]
+    return [_action(card, "hygiene-triage-return", cause, evidence + [f"{met} {seen.states[met]}"],
+                    ctx, [], [hygiene.linear_state(card, RETURN_LANE)])]
+
+
+# --------------------------------------------------------------------------- #
+# everything else                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def left_for_a_person(card: dict) -> hygiene.Left:
+    if NEEDS_HUMAN in _labels(card):
+        return _left(card, f"parked with {NEEDS_HUMAN} — a person owns it",
+                     "a person reads the park receipt on the card and decides how it is "
+                     f"finished, then clears {NEEDS_HUMAN}")
+    if _repo_slug(card) is None:
+        return _left(card, "it carries no repo: label, so nothing routes it",
+                     "a person sets the repo: label naming the repo its files live in")
+    return _left(card, "in Triage with no mechanical defect this agent fixes",
+                 "a person reads the card's newest refusal and fixes what it names")
+
+
+# --------------------------------------------------------------------------- #
+# the lane                                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def _plan_card(card: dict, ctx: hygiene.Context, seen: _Pass) -> list:
+    for rule in (lambda: moot(card, ctx), lambda: retired(card, ctx, seen),
+                 lambda: proof_in_review(card, ctx), lambda: prose_blocker(card, ctx, seen),
+                 lambda: loop(card, ctx, seen)):
+        items = rule()
+        if items is not None:
+            return items
+    return [left_for_a_person(card)]
+
+
+def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
+    out: list = []
+    seen = _Pass(board, ctx)
+    for card in board.cards(ctx, LANE):
+        try:
+            out += _plan_card(card, ctx, seen)
+        except hygiene.Forbidden:
+            raise  # a refused read is a lane bug, never a skipped card
+        except (RuntimeError, ValueError, KeyError, TypeError) as e:
+            print(f"hygiene: {LANE} — {card.get('identifier')} skipped this pass, "
+                  f"a read failed: {e}", file=sys.stderr)
+    return out
