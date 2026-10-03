@@ -247,11 +247,21 @@ jobs:
     # answer. The gate never waits on the critic's run — its check runs and
     # the run itself sit at a review path, excluded from condition 1 by
     # verified origin (DRE-1994, DRE-5045) — so with no new verdict that wake
-    # could only repeat the last evaluation. A review that crashed without
-    # commenting is decided `wait` with or without it, and
-    # reconcile.recover_crashed_reviews re-dispatches the review, whose
-    # comment is the wake. Every stub listing it names it `QA Review` (the
-    # scaffold's, agent-bureau's, and this repo's own pr-review.yml).
+    # could only repeat the last evaluation. A review that crashed WITHOUT a
+    # comment binds no verdict, so that wake decided `wait` before this change
+    # too and recovered nothing (a crash that posts its neutral notice still
+    # wakes the gate through the comment leg). The recovery is
+    # reconcile.recover_crashed_reviews re-dispatching the review, whose
+    # comment is then the wake — and it runs only where the repo's Reconcile
+    # workflow is enabled. Where it is off (agent-bureau's was
+    # `disabled_manually` on 2026-10-02) nothing automatic recovers a silent
+    # crash, with or without this wake: the medic skips a crashed critic on
+    # purpose (DRE-1921), and the head waits for a person to dispatch the
+    # review or push a commit. Every stub listing it names it `QA Review`
+    # (the scaffold's, agent-bureau's, and this repo's own pr-review.yml).
+    # Nothing requires an approving review on any mapped repo's main, so the
+    # comment's wake never reads BLOCKED waiting for the critic's formal
+    # review (tests/test_merge_gate_review_requirement.py reads them live).
     # `Verify` is deliberately still a wake: verify.yml is no review path, so
     # the gate waits on the Verifier's run as CI; its verdict comment posts
     # before that run ends, and an out-of-scope Verify posts none. Its
