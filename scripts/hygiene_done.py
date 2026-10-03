@@ -5,7 +5,9 @@ evidence says is done.
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
 reads the cards in `Todo`, `In Progress`, `In Review` and `Hand-work` once and
 returns four kinds of action, each closing receipt quoting the CEO's standing
-rule — "if the cards are proven with evidence then just approve them":
+rule — "if the cards are proven with evidence then just approve them". The
+`hyg-…` names below are the receipts' tags; the code returns the acts they map
+from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
 
 1. **Merged but never closed.** A card that is not an epic, not `no-code` and
    not `PROOF:`-titled, whose newest counting pull request
@@ -18,8 +20,11 @@ rule — "if the cards are proven with evidence then just approve them":
    under `docs/` or `architecture/` — the record. The record is read at the
    default branch and judged on the one shape a machine can read without
    judgment, a criterion table (`criterion_rows`): every row but the record's
-   own merge and the CEO's closing step (`CLOSING_ROW_WORDS`) must open with
-   one of `MET_WORDS`. Then a `hyg-proof-closed` receipt and Done. Cause:
+   own merge and the CEO's closing step (`is_closing_row`: one of
+   `CLOSING_ROW_WORDS`, in the shape of a merge to main the criterion leads
+   with, or of the CEO or the operator closing the card or reading the
+   record) must open with one of `MET_WORDS`, no hedge straight after it
+   (`HEDGES`). Then a `hyg-proof-closed` receipt and Done. Cause:
    `record <path> at #<n>, <k> rows met` — k is the record's, fixed once
    merged. Anything else is a `Left` row "ready for the CEO" naming the record
    and each row not met, or saying it has no criterion table. Checkboxes are
@@ -82,10 +87,14 @@ READ_LANES = ("Todo", "In Progress", "In Review", hygiene.HAND_WORK)
 OWN_PROOF = "DRE-5412"
 
 #: A criterion row naming one of these is the record's own merge or the CEO's
-#: closing step, and is skipped.
+#: closing step, and is skipped — but only in one of the two shapes below, so
+#: "Retry closes the loop" or "The nightly runs on main" is still judged.
 CLOSING_ROW_WORDS = ("merged", "on main", "the ceo", "close")
-#: A result cell opening with one of these, as a whole word, is met.
+#: A result cell opening with one of these, as a whole word, is met — unless a
+#: hedge follows straight after it ("Met, but only…", "Pass with caveats").
 MET_WORDS = ("met", "holds", "observed", "proven", "pass", "yes")
+HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and no", "and not",
+          "not")
 
 RECORD_ROOTS = ("docs/", "architecture/")
 SUPERSEDED = ("Canceled", "Duplicate")
@@ -108,6 +117,14 @@ _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
+_HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
+#: The record's own merge: the criterion leads with it — "Merged to main…",
+#: "The record is on main", "docs/<record>.md merged to main".
+_OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
+                        r"|\S+\.md (?:is )?(?:merged to|on) main)\b")
+#: The closing step: the CEO or the operator closes the card, or reads the record.
+_CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
+                           r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")
 
 #: `rows` is None when the record holds no criterion table; `met` and `unmet`
 #: are the (criterion, result) pairs that are not closing rows.
@@ -168,8 +185,10 @@ def criterion_rows(text: str) -> list | None:
 
 
 def is_closing_row(criterion: str) -> bool:
-    text = (criterion or "").replace("`", "").lower()
-    return any(word in text for word in CLOSING_ROW_WORDS)
+    text = " ".join((criterion or "").replace("`", "").lower().split())
+    if not any(word in text for word in CLOSING_ROW_WORDS):
+        return False
+    return _OWN_MERGE.match(text) is not None or _CLOSING_STEP.search(text) is not None
 
 
 def _plain(cell: str) -> str:
@@ -177,7 +196,8 @@ def _plain(cell: str) -> str:
 
 
 def row_met(result: str) -> bool:
-    return _MET.match(_plain(result).lower()) is not None
+    text = _plain(result).lower()
+    return _MET.match(text) is not None and _HEDGED.match(text) is None
 
 
 def reading(text: str) -> Reading:

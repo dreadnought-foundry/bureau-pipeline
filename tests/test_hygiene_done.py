@@ -292,7 +292,7 @@ class TestAProofProven:
     def test_a_record_with_every_row_met_closes_the_proof(self):
         items, _ctx, _gh = plan()
         (action,) = actions(items, "DRE-3904")
-        cause = "record docs/model-adoption-proof-2026-09.md at #605, 3 rows met"
+        cause = "record docs/model-adoption-proof-2026-09.md at #605, 4 rows met"
         assert action.act == "hygiene-proof-close"
         assert action.cause == cause
         assert [w.kind for w in action.writes] == ["linear_comment", "linear_state"]
@@ -342,7 +342,7 @@ class TestAProofProven:
         doc["gh"][contents_key(BP, path)] = contents_answer(path, text)
         items, _ctx, _gh = plan(doc)
         (action,) = actions(items, "DRE-3904")
-        assert action.cause == f"record {path} at #605, 3 rows met"
+        assert action.cause == f"record {path} at #605, 4 rows met"
 
     def test_a_proof_with_no_merged_pull_request_yields_nothing(self):
         doc = fixture()
@@ -424,12 +424,51 @@ class TestCriterionRows:
         reading = need_lane().reading(text)
         assert reading.unmet == [] and len(reading.met) == 1
 
+    @pytest.mark.parametrize("criterion, result", [
+        ("A card whose pull request merged is closed by the agent", "Not met — it stayed open"),
+        ("The nightly runs on main", "Not observed"),
+        ("Disclosed risks are listed", "Fails"),
+        ("Retry closes the loop", "Missed"),
+        ("The record ends with `What the CEO sees`", "Not met"),
+        ("The record shows the nightly runs on `main`", "Not observed"),
+    ])
+    def test_a_row_that_only_names_a_closing_word_is_judged(self, criterion, result):
+        assert need_lane().is_closing_row(criterion) is False
+        text = f"| Criterion | Result |\n|---|---|\n| it ran | Met |\n| {criterion} | {result} |\n"
+        assert need_lane().reading(text).unmet == [(criterion, result)]
+
+    @pytest.mark.parametrize("criterion", [
+        "A card whose pull request merged is closed by the agent",
+        "The nightly runs on main",
+        "Disclosed risks are listed",
+        "Retry closes the loop",
+    ])
+    def test_a_proof_with_such_a_row_not_met_is_left_not_closed(self, criterion):
+        doc = fixture()
+        path = "docs/a-proof.md"
+        text = (f"| Criterion | Result |\n|---|---|\n| it ran | **Met** |\n"
+                f"| {criterion} | **Not met** |\n")
+        doc["gh"][lookup_key(BP, "DRE-3904")] = json.dumps(
+            [merged_pr(BP, 605, "DRE-3904", "2026-09-30T21:56:26Z", [path])])
+        doc["gh"][contents_key(BP, path)] = contents_answer(path, text)
+        items, _ctx, _gh = plan(doc)
+        assert actions(items, "DRE-3904") == []
+        (row,) = lefts(items, "DRE-3904")
+        assert row.why.startswith("ready for the CEO") and criterion[:40] in row.why
+
+    @pytest.mark.parametrize("result", [
+        "Met, but only for the first card", "Pass with caveats", "Yes and no",
+        "**Met** — but not on agent-bureau", "Observed only once",
+    ])
+    def test_a_met_word_with_a_hedge_after_it_does_not_qualify(self, result):
+        assert need_lane().row_met(result) is False
+
 
 #: The thirteen records at 2e5aefaf, and what the rule makes of each. The
 #: model-adoption record's table has six rows: its own merge and the CEO's
-#: step are closing rows, and so is "ends with `What the CEO sees`" — it names
-#: the CEO — which leaves three judged, all met.
-CLOSES = {"model-adoption-proof-2026-09.md": 3, "seam-proof-dre3244.md": 4}
+#: step are closing rows; "ends with `What the CEO sees`" names the CEO but
+#: closes nothing, so it is judged — which leaves four judged, all met.
+CLOSES = {"model-adoption-proof-2026-09.md": 4, "seam-proof-dre3244.md": 4}
 NOT_MET = {
     "linear-identities-proof-2026-09.md": ["NO", "NO"],
     "planner-queue-proof-2026-10.md": ["Not met"],
