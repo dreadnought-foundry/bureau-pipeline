@@ -90,7 +90,7 @@ ISSUE_QUERY = """query($id: String!) { issue(id: $id) {
 
 #: Linear's answer for an id that names no card, as opposed to a read that
 #: failed.
-_NOT_FOUND = re.compile(r"entity not found|not found", re.I)
+_NOT_FOUND = re.compile(r"\bnot found\b", re.I)
 
 ARROW = " → "
 
@@ -258,12 +258,11 @@ def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
         cause = f"relation added, blocked by {', '.join(found)}"
         relations = [hygiene.linear_relation(card, i) for i in found]
         evidence = [f"relation {card['identifier']} blocked by {i}" for i in found]
-        if nowhere:
+        if nowhere or _verdict(card) is None:
             out.append(_action(card, "hygiene-cause-name", cause, evidence, ctx, relations, []))
-        elif _verdict(card) is None:
-            out.append(_action(card, "hygiene-cause-name", cause, evidence, ctx, relations, []))
-            rows.append(_no_verdict(card, f"its blocker line is now true — blocked by "
-                                          f"{', '.join(found)}"))
+            if not nowhere:
+                rows.append(_no_verdict(card, f"its blocker line is now true — blocked by "
+                                              f"{', '.join(found)}"))
         else:
             out.append(_action(card, "hygiene-triage-return", cause, evidence, ctx, relations,
                                [hygiene.linear_state(card, RETURN_LANE)]))
