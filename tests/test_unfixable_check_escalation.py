@@ -652,6 +652,9 @@ class GateScenarioTest(unittest.TestCase):
                  "PATH": f"{td / 'bin'}:{os.environ['PATH']}",
                  "GITHUB_OUTPUT": str(out),
                  "GH_LOG": str(td / "gh.jsonl"),
+                 # This scenario's own job temp (the read-once seam's store,
+                 # Stage 2 #21): one scenario's check runs are never another's.
+                 "RUNNER_TEMP": str(td),
                  "GH_CHECKS": str(td / "checks.json"),
                  "GH_COMMENTS": str(td / "comments.json"),
                  "GH_POSTED": str(td / "posted.md"),

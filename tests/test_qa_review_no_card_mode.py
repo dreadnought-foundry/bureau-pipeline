@@ -391,6 +391,9 @@ class LiveExtractionTest(unittest.TestCase):
                 GITHUB_OUTPUT=out,
                 FAKE_BRANCH=branch,
                 FAKE_BODY_FILE=body_file,
+                # This case's own job temp (the read-once seam's store,
+                # Stage 2 #21): one case's record is never another's.
+                RUNNER_TEMP=td,
             )
             proc = subprocess.run(
                 ["bash", "-c", run_block],

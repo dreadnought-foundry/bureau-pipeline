@@ -222,6 +222,10 @@ def run_card_fragment(name: str, head_ref: str) -> str:
                 "FAKE_BRANCH": head_ref,
                 # The pipeline's scripts, where the job's checkout puts them.
                 "PIPELINE_DIR": str(ROOT),
+                # This case's own job temp: the read-once seam keeps a job's
+                # reads there (Stage 2 #21), and one case's answer must never
+                # be another's.
+                "RUNNER_TEMP": str(td),
             },
         )
         assert proc.returncode == 0, f"{name}: {proc.stdout}{proc.stderr}"

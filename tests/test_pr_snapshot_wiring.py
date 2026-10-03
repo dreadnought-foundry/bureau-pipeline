@@ -162,7 +162,8 @@ class TheFixAgentSharesWhatItReadsTwiceTest(unittest.TestCase):
         step = _step("agent-fix.yml", "fix", "inherited")
         self.assertEqual((step.get("env") or {}).get("BASE_REF"), "${{ steps.pr.outputs.base_ref }}")
         # Only when Resolve could not say does the step read it itself.
-        self.assertIn('if [ -z "$BASE_REF" ]', step["run"])
+        self.assertIn('[ -n "$BASE_REF" ] || BASE_REF=$(gh api "repos/$REPO/pulls/$PR"',
+                      step["run"])
 
     def test_the_head_s_check_runs_are_read_once(self):
         for step_id in ("unfixable", "inherited"):
