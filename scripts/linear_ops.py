@@ -1316,12 +1316,21 @@ def _door_state_list() -> list[dict] | None:
                           "is a Linear write either way")
                 else:
                     print(f"read-door: workflow states unknown ({e.reason}) — read from Linear")
+            except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+                print(f"read-door: workflow states unreadable ({type(e).__name__}: {e}) — "
+                      "read from Linear")
         _door_workflow_states["nodes"] = nodes
     return _door_workflow_states["nodes"]
 
 
 def _door_state(name: str) -> tuple[str, str] | None:
-    """`(id, type)` for `name` when the door names it exactly once, else None."""
+    """`(id, type)` for `name` when the door names it exactly once, else None.
+
+    The door's list carries no team (`id name type`), so this is a fleet with
+    one Linear team (DRE, the only team on 2026-10-03). A second team whose
+    states the door has seen makes a shared name "twice" and a miss; a second
+    team the door has NOT seen yet would read the first team's id — revisit
+    this, and filter by `team_id`, the day a second team exists."""
     nodes = _door_state_list()
     if not nodes:
         return None
@@ -1680,9 +1689,11 @@ def cmd_state(
     `expect` and `labels_absent` are the CONDITIONAL write (`cmd_state_if`,
     Stage 2 item 33): every write a sweep decides from the read door's data
     passes the lanes and the absent labels its decision read, and the move is
-    refused when either read below shows otherwise. Both reads are ones this
-    function makes anyway, so the condition costs no request. Without them
-    this is the unconditional write it has always been.
+    refused when the card's live read shows otherwise. A conditional write is a
+    held card (below), so that is its ONE card read — the DRE-2316 pre-write
+    re-read; to a terminal target, which has no re-read, it is the first read.
+    Either way the condition costs no request. Without them this is the
+    unconditional write it has always been.
 
     `held` (`--held` on the command line) says the caller already HOLDS the
     card — it decided on the card's lane, read from the read door or by its
