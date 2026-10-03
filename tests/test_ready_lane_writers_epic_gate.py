@@ -82,8 +82,10 @@ class TheRealWriteLayer(unittest.TestCase):
     def test_the_seams_it_holds_are_derived_not_listed(self):
         self.assertEqual(
             set(rlw.todo_seams()),
+            # `_held_state_move` (Stage 2 #9): a held card's move, whose
+            # building-card reroute writes Todo through `guarded_state_write`.
             {"guarded_state_write", "cmd_state", "cmd_advance", "_create_card",
-             "create_card"},
+             "create_card", "_held_state_move"},
         )
 
 
@@ -97,6 +99,8 @@ class AGuardedSeamWithoutItsCallIsNamed(unittest.TestCase):
         # the one function, named once, not three times.
         self.assertEqual(_findings(problems, "cmd_state"), [])
         self.assertEqual(_findings(problems, "cmd_advance"), [])
+        # So does a held card's move (Stage 2 #9): the same one function.
+        self.assertEqual(_findings(problems, "_held_state_move"), [])
 
     def test_create_card_helper_without_the_refusal_is_one_finding(self):
         with _Copy(_without_refusal(_source(), "_create_card")) as root:

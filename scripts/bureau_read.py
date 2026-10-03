@@ -124,6 +124,11 @@ MODES = ("off", "shadow", "on")
 BOARD_MAX_AGE = 120
 #: A card an agent run is about to be dispatched at: one minute (BP-4).
 DISPATCH_CARDS_MAX_AGE = 60
+#: The workflow-state map a lane move turns a lane name into an id with (BP-3):
+#: an hour. A state's id never changes, and a renamed lane is a name the door
+#: does not hold yet — a miss, which the caller asks Linear for. Every move
+#: still re-reads its card live before it writes (DRE-2316).
+WORKFLOW_STATES_MAX_AGE = 3600
 #: Relations come from the console's 15-minute poll (no relation webhook
 #: exists), so twenty minutes is one missed poll. Not the safety on its own:
 #: every promotion re-reads its blockers live before it writes (item 32).
