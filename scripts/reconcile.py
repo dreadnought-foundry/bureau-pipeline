@@ -500,6 +500,23 @@ WATCHDOG_LANES = ("Todo", "In Progress")
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
 
+# A re-sent build is owed a full start window (DRE-5743). The re-send receipt
+# used to stand in for the whole of WATCHDOG_MINUTES the moment it was posted,
+# and on 2026-10-02 the sweep re-sent DRE-5595 at 14:47 PT and stamped it
+# needs-human at 14:48 — inside a Linear quota outage that was refusing the
+# build's own "I have started" write. Three more Todo cards were stamped the
+# same half hour, none of them needing a person, and the hold stopped the
+# sweep re-sending any of them. The window is the Todo lane's own stall window
+# — the one the nudge loop re-sends on — so the watchdog judges a re-send no
+# sooner than the sweep would send the next one.
+START_WINDOW_MINUTES = STALE_MINUTES["Todo"]
+
+# How far back a failure, or a run GitHub lists, still speaks for the no-run
+# reading (DRE-5743): the watchdog's own window, plus the start window of a
+# build sent at its beginning. Bounded, so one dead run cannot silence the
+# alarm for good.
+WATCHDOG_LOOKBACK_MINUTES = WATCHDOG_MINUTES + START_WINDOW_MINUTES
+
 # Planning's own lane and threshold (DRE-2736). Longer than WATCHDOG_MINUTES
 # on purpose: what a Planning card owes is a CLASSIFICATION, and producing one
 # is a planner run — plan.yml's job alone is capped at 45 minutes (DRE-2721
@@ -656,6 +673,13 @@ HAND_BUILT_LABEL = "hand-built"
 # LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
 # is the same evidence as the elapsed time: dispatch fired, nothing ran.
 _TODO_REDISPATCH_NOTE = "card sat in Todo with no run — re-dispatched"
+
+# And its failure receipt's words (DRE-5743): GitHub refused the re-send, so
+# no build was sent and a missing run receipt says nothing about one. The
+# receipt itself stays a literal — config/pipeline-acts.json's `unconverted`
+# block matches it by its text — and tests/test_watchdog_start_window.py pins
+# these words inside it.
+_TODO_REDISPATCH_FAILED_NOTE = "re-dispatch FAILED"
 
 
 def held(card: dict) -> bool:
@@ -1678,7 +1702,7 @@ def reset_sweep_cards() -> None:
     records (DRE-3642), its workflows listing (DRE-4378) and its in-flight build
     runs (DRE-4830). Called once at the top of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
-    global _build_runs, _build_runs_unreadable, _linear_lane_cards
+    global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
     _linear_lane_cards = None
     _door_sourced.clear()
@@ -1690,7 +1714,9 @@ def reset_sweep_cards() -> None:
     _workflows_listing = None
     _build_runs = None
     _build_runs_unreadable = None
+    _build_runs_listed = None
     _build_job_names.clear()
+    _build_job_unreadable.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
     _inverse_topup_refused.clear()
@@ -2060,6 +2086,94 @@ def _watchdog_cards() -> list[dict]:
     return cards + off_map
 
 
+def _pt(iso: str) -> str:
+    """An API timestamp as the Pacific time a person reads (DRE-5743)."""
+    return dead_run.pacific(datetime.fromisoformat(iso.replace("Z", "+00:00")))
+
+
+def _newest_receipt_at(nodes: list[dict], words: str) -> str | None:
+    """When the newest comment carrying `words` was posted, or None."""
+    for node in reversed(nodes):
+        if words in (node.get("body") or ""):
+            return node.get("createdAt") or None
+    return None
+
+
+def _no_run_reading(ident: str, nodes: list[dict], sent: str | None) -> tuple[str, str]:
+    """Can "nothing has started" be trusted for this card? (DRE-5743)
+
+    `(verdict, evidence)`: `stamp` — it can, and `evidence` is the sentence
+    the stamp carries; `wait` — a build was sent less than a start window ago;
+    `alive` — GitHub says the card's build is queued or running; `unknown` —
+    Linear or GitHub was failing in the window, so a missing run receipt is
+    not evidence of anything. `sent` is the newest re-send receipt's time.
+
+    A build's FIRST act is a Linear write (agent-task's `Card → In Progress`
+    posts the run receipt), so a Linear outage is exactly what makes a started
+    build look like one that never started. On 2026-10-02 that is how four
+    Todo cards were stamped needs-human — DRE-5595 a minute after its re-send.
+    The questions are asked cheapest first: what this sweep's own Linear
+    requests met, what the card's own thread records inside the lookback, and
+    only then the one GitHub listing the nudge loop already shares.
+    """
+    if linear_ops._budget.get("refused_after") is not None:
+        return "unknown", (
+            "Linear refused this sweep's own requests for quota, and the same "
+            "refusal keeps a build from recording that it started")
+    for node in reversed(nodes):
+        created = node.get("createdAt") or ""
+        if not created or age_minutes(created) > WATCHDOG_LOOKBACK_MINUTES:
+            continue
+        body = node.get("body") or ""
+        marker = dead_run.parse_limit_marker(body)
+        if marker is not None and marker["kind"] == "linear":
+            return "unknown", (
+                f"a run on this card hit Linear's request limit (recorded "
+                f"{_pt(created)}), so its writes to Linear were being refused")
+        if _TODO_REDISPATCH_FAILED_NOTE in body:
+            return "unknown", (
+                f"GitHub refused the sweep's re-send at {_pt(created)}, so no "
+                "build was sent for a receipt to come from")
+    workflow = build_workflow()
+    runs = _build_runs_recent()
+    if runs is None:
+        return "unknown", (
+            f"run lookup: {workflow}'s runs could not be read from GitHub")
+    candidates = [
+        r for r in runs
+        if r["status"] in IN_FLIGHT_STATUSES
+        or (r["createdAt"] and age_minutes(r["createdAt"]) <= WATCHDOG_LOOKBACK_MINUTES)
+    ]
+    found = dedupe_dispatch.sibling_on_this_card(candidates, ident, _build_run_job_names)
+    if found:
+        run = found[0]
+        named = f"{workflow} run {run['id']}"
+        if run["status"] in IN_FLIGHT_STATUSES:
+            return "alive", f"run lookup: {named} for this card is {run['status']}"
+        ran_at, sent_at = _moment(run["createdAt"]), _moment(sent)
+        if ran_at is not None and (sent_at is None or ran_at > sent_at):
+            sent = run["createdAt"]
+        if sent and age_minutes(sent) < START_WINDOW_MINUTES:
+            return "wait", (
+                f"last dispatch {_pt(sent)}, inside its {START_WINDOW_MINUTES}-"
+                f"minute start window; run lookup: {named}")
+        return "unknown", (
+            f"run lookup: {named} for this card was created "
+            f"{_pt(run['createdAt']) if run['createdAt'] else 'at an unknown time'}"
+            f" and finished {run['conclusion'] or run['status']}, but no "
+            "receipt from it reached the card — its write to Linear did not land")
+    unread = [r["id"] for r in candidates if r["id"] in _build_job_unreadable]
+    if unread:
+        return "unknown", (
+            f"run lookup: the jobs of {workflow} run(s) {', '.join(unread)} "
+            "could not be read, so whether one is this card's is not known")
+    last = f"last dispatch {_pt(sent)}" if sent else "last dispatch: none on record"
+    return "stamp", (
+        f"{last}; run lookup: {workflow} lists no run for this card in the "
+        f"last {WATCHDOG_LOOKBACK_MINUTES} minutes ({len(candidates)} run(s) "
+        "checked)")
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -2088,7 +2202,13 @@ def flag_stranded() -> set[str]:
           receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
           and plan both post them at run start) after WATCHDOG_MINUTES —
           or after a prior Todo-redispatch receipt, which resets updatedAt
-          every cycle and would otherwise hide the strand forever.
+          every cycle and would otherwise hide the strand forever, once
+          that re-send is START_WINDOW_MINUTES old (DRE-5743). Before it
+          stamps, `_no_run_reading` asks whether the missing receipt is
+          evidence at all: a build GitHub lists as queued or running is
+          not stranded, one sent inside its start window is not judged
+          yet, and a reading Linear or GitHub was failing under is
+          recorded UNKNOWN on the degraded ledger and holds nothing.
           Epics in these lanes are containers — no run ever targets them,
           so their receipt-less state is normal, not a strand. Epic-ness
           is the SHAPE (card_is_epic), never the planner-ownership label
@@ -2110,10 +2230,11 @@ def flag_stranded() -> set[str]:
     after a live ⏳ receipt).
 
     Flagging = one plain-English comment (🚨 + WATCHDOG_TAG) naming the
-    reason, plus HOLD_LABEL — no state move, no cancel. A false positive
-    (e.g. a run queued 30+ minutes behind a runner-capacity crunch, which
-    posts no receipt until it starts) costs a label a human removes; the
-    run itself is untouched. Fail loud beats fail silent (DRE-1979).
+    reason — and, for the no-run class, the evidence it was read off: the
+    last dispatch time and the run lookup's result (DRE-5743) — plus
+    HOLD_LABEL — no state move, no cancel. A false positive costs a label a
+    human removes; the run itself is untouched. Fail loud beats fail silent
+    (DRE-1979).
 
     Returns the identifiers flagged THIS sweep so the caller's nudge loop
     can skip them — their fetched labels predate the hold label.
@@ -2167,6 +2288,20 @@ def flag_stranded() -> set[str]:
         redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
         if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
             continue  # young — give the dispatch (and the gate's repair) time
+        # …but never sooner than a full start window after the newest re-send
+        # (DRE-5743): the receipt stands in for the elapsed time, not for the
+        # re-sent build's own chance to start. Its own timestamp when the
+        # board read carried one, else updatedAt — which the receipt bumped,
+        # so it is never earlier than the re-send.
+        nodes = linear_ops.window_nodes(card.get("comments"))
+        sent = _newest_receipt_at(nodes, _TODO_REDISPATCH_NOTE) if redispatched else None
+        if redispatched and age_minutes(sent or card["updatedAt"]) < START_WINDOW_MINUTES:
+            print(
+                f"watchdog: {ident} was re-sent "
+                f"{_pt(sent or card['updatedAt'])} — inside its "
+                f"{START_WINDOW_MINUTES}-minute start window, not judged yet"
+            )
+            continue
         if routing_verdict.is_parked(bodies):
             # DRE-2724: a PARKED card is well-formed and sitting still ON
             # PURPOSE. Reporting the intended state as a defect costs the card
@@ -2183,10 +2318,24 @@ def flag_stranded() -> set[str]:
         if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
             continue  # a run DID start (either class) — the dead-run machinery owns it now
         if routable:
+            # Is the missing receipt evidence at all? (DRE-5743) A build whose
+            # write to Linear was refused looks exactly like one that never
+            # started, and needs-human also stops the sweep re-sending it — so
+            # an untrustworthy reading is recorded UNKNOWN and holds nothing.
+            verdict, evidence = _no_run_reading(ident, nodes, sent)
+            if verdict == "unknown":
+                _degrade("flag_stranded", f"whether {ident}'s build started",
+                         evidence, then="UNKNOWN recorded, nothing held")
+                continue
+            if verdict != "stamp":
+                print(f"watchdog: {ident} not judged — {evidence}")
+                continue
             # Says what was OBSERVED and nothing more (DRE-2524). The old text
             # offered three suspects — the Actions budget, the LLM quota, the
             # relay — with no evidence for any of them, so the reader had to
             # check all three. One cause or "I don't know"; this is the latter.
+            # The evidence it was read off is named (DRE-5743), so a false
+            # stamp is visible at a glance.
             reason = (
                 f"no agent run has started. Observed: this card has sat in "
                 f"{state} for {WATCHDOG_MINUTES}+ minutes with no run receipt "
@@ -2194,7 +2343,8 @@ def flag_stranded() -> set[str]:
                 "as this sweep can see, nothing has begun. Why it has not "
                 "started is not known from here. If a run is merely queued, "
                 f"remove the '{HOLD_LABEL}' label and it will carry on; "
-                "otherwise this card needs a human to look."
+                "otherwise this card needs a human to look. "
+                f"Evidence: {evidence}."
             )
         else:
             live_confirmed = ""
@@ -3910,6 +4060,12 @@ _BUILD_RUNS_PAGE = "50"
 _build_runs: list | None = None
 _build_runs_unreadable: str | None = None
 _build_job_names: dict[str, list] = {}
+#: Every run the same listing returned, finished or not, with when it was
+#: created — the watchdog's dispatch time when a re-send's receipt never
+#: reached Linear (DRE-5743). And the runs whose jobs could not be read, so an
+#: unattributed run is never mistaken for another card's.
+_build_runs_listed: list | None = None
+_build_job_unreadable: set[str] = set()
 
 
 def _build_runs_in_flight() -> list | None:
@@ -3924,14 +4080,15 @@ def _build_runs_in_flight() -> list | None:
     that does not exist can be in flight, so the sweep answers "none" and stays
     green rather than going red every fifteen minutes forever.
     """
-    global _build_runs, _build_runs_unreadable
+    global _build_runs, _build_runs_unreadable, _build_runs_listed
     if _build_runs is not None:
         return _build_runs
     if _build_runs_unreadable is not None:
         return None
     workflow = build_workflow()
     args = ("run", "list", "--repo", REPO, "--workflow", workflow,
-            "--limit", _BUILD_RUNS_PAGE, "--json", "databaseId,status")
+            "--limit", _BUILD_RUNS_PAGE, "--json",
+            "databaseId,status,conclusion,createdAt")
     out, detail = _actions_read(args)
     if detail is not None:
         if workflow_on_default_branch(workflow) is False:
@@ -3940,7 +4097,7 @@ def _build_runs_in_flight() -> list | None:
                 "— this repo has no build stub, so no build run can be in "
                 "flight. Nothing to check, and nothing to report."
             )
-            _build_runs = []
+            _build_runs, _build_runs_listed = [], []
             return _build_runs
         _note_actions_read_failure(args, detail)
         _build_runs_unreadable = detail
@@ -3962,14 +4119,29 @@ def _build_runs_in_flight() -> list | None:
     # status`, the same payload `_actions_runs_busy` filters positively, and a
     # positive set cannot mistake a CONCLUSION that arrived in that field for a
     # live run — which would refuse the card's re-dispatch forever.
-    _build_runs = [
-        {"id": str(r.get("databaseId")), "status": str(r.get("status") or "")}
+    _build_runs_listed = [
+        {"id": str(r.get("databaseId")), "status": str(r.get("status") or ""),
+         "conclusion": str(r.get("conclusion") or ""),
+         "createdAt": str(r.get("createdAt") or "")}
         for r in runs
-        if isinstance(r, dict)
-        and r.get("databaseId")
-        and str(r.get("status") or "") in IN_FLIGHT_STATUSES
+        if isinstance(r, dict) and r.get("databaseId")
+    ]
+    _build_runs = [
+        {"id": r["id"], "status": r["status"]}
+        for r in _build_runs_listed
+        if r["status"] in IN_FLIGHT_STATUSES
     ]
     return _build_runs
+
+
+def _build_runs_recent() -> list | None:
+    """Every run the build listing returned, newest first — finished ones too,
+    each with its `createdAt` and `conclusion` — or None when the listing
+    could not be read (DRE-5743). The same one read `_build_runs_in_flight`
+    makes, so asking both costs one listing per sweep."""
+    if _build_runs_in_flight() is None:
+        return None
+    return _build_runs_listed or []
 
 
 def _build_run_job_names(run_id: str) -> list:
@@ -3984,6 +4156,8 @@ def _build_run_job_names(run_id: str) -> list:
     if run_id in _build_job_names:
         return _build_job_names[run_id]
     raw = gh_actions_read("api", f"repos/{REPO}/actions/runs/{run_id}/jobs")
+    if raw is None:
+        _build_job_unreadable.add(run_id)
     try:
         data = json.loads(raw) if raw else None
     except ValueError:

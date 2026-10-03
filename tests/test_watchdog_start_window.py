@@ -258,6 +258,16 @@ def test_a_run_older_than_the_lookback_does_not_block_the_stamp():
     assert flagged == {CARD}
 
 
+def test_the_failed_resend_words_are_the_receipts_own():
+    """The watchdog reads the nudge loop's failure receipt by its words; the
+    receipt is a literal (the act registry matches it by text), so the two
+    are pinned together here rather than by a shared constant."""
+    source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
+    assert f'"🚨 Reconcile: {reconcile._TODO_REDISPATCH_FAILED_NOTE} — ' in source
+    assert FAILED_RESEND.startswith(
+        f"🚨 Reconcile: {reconcile._TODO_REDISPATCH_FAILED_NOTE} — ")
+
+
 def test_a_failure_older_than_the_window_does_not_block_the_stamp():
     """An outage last week is not this window's: the watchdog still alarms."""
     marker = dead_run.limit_marker("linear", "build", None, "36100000001")

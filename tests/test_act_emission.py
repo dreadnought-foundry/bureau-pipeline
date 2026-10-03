@@ -139,6 +139,10 @@ def _drive_stranded_no_run(mp):
     mp.setattr(reconcile.validate_card, "VALID_SLUGS", {reconcile.REPO_SLUG})
     mp.setattr(reconcile.linear_ops, "comment_bodies", lambda *_a, **_k: [])
     mp.setattr(reconcile, "flag_stalled_planning", lambda: set())
+    # DRE-5743: the stamp names the run lookup it was read off. Hermetic, and
+    # pinned to one workflow name whichever repo the session imported first.
+    mp.setattr(reconcile, "build_workflow", lambda: "agent-task.yml")
+    mp.setattr(reconcile, "_actions_read", lambda args: ("[]", None))
     _card_recorder(mp)
     reconcile.flag_stranded()
 

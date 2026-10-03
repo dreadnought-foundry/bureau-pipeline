@@ -90,11 +90,20 @@ cancelled as a duplicate.
 * **The gate fails OPEN**, as it always has: it gates a build, not a merge, and a
   missed skip is the status quo while a false skip strands a healthy card.
 
-## Still blind, deliberately
+## The watchdog's half, closed later (DRE-5743)
 
-`flag_stranded`'s no-run class has the same blind spot and already documents it
-as an accepted false positive — *"If a run is merely queued, remove the
+`flag_stranded`'s no-run class had the same blind spot and documented it as an
+accepted false positive — *"If a run is merely queued, remove the
 `needs-human` label and it will carry on"*. It fired for real on DRE-4519 at
-15:29 PT. It alarms and labels rather than dispatching, so it is not the harm
-DRE-4830 names, and `build_run_refusal` is now available if that trade is ever
-revisited. Changing what the watchdog reports is a decision of its own.
+15:29 PT. It alarmed and labeled rather than dispatching, so it was not the
+harm DRE-4830 names, and it was left as a decision of its own.
+
+That decision was made after the Linear quota outage of 2026-10-02 stamped
+four healthy Todo cards `needs-human` — DRE-5595 one minute after the sweep
+re-sent it. Before it stamps, the watchdog now reads the same build-run
+listing this card added: a run GitHub lists as queued or running for the card
+is not stranded; a build sent less than a start window ago (the Todo lane's
+stall window) is not judged yet; and a run that finished without leaving a
+receipt, an unreadable listing, a Linear refusal or a failed re-send in the
+window is recorded UNKNOWN and holds nothing. The stamp names the last
+dispatch time and the run lookup it was read off.
