@@ -205,8 +205,11 @@ jobs:
           # The read door (Stage 2 #15). The merge-sweep gate and the scoped
           # passes below read the merged card's dependents from it in `on` —
           # the same four variables, the same `off` default, as reconcile.yml's
-          # Sweep. `card-done` reads none of them: the Done stays on GitHub's
-          # merge event. NO `permissions:` block anywhere in this file: the stub
+          # Sweep. The Done stays on GitHub's merge event: what moves the card is
+          # the merge, and the write is Linear's either way. The only door read
+          # `card-done` can make is the lane's id (`linear_ops`' workflow-state
+          # lookup, Stage 2 #9), which falls back to Linear on any miss. NO
+          # `permissions:` block anywhere in this file: the stub
           # grants `id-token: write`, and a reusable can only take permissions
           # away.
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
