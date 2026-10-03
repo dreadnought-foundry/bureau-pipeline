@@ -373,6 +373,22 @@ class TestAnEscalation:
             "costs more than a week of overlap.")
         assert "partner sign-up page" in rows[0].why or "question" in rows[0].why
 
+    @pytest.mark.parametrize("line", [
+        "**Recommendation:** close it on Friday.",
+        "**Recommendation**: close it on Friday.",
+        "Recommended — close it on Friday.",
+        "We can close it on Friday or Monday. I recommend close it on Friday.",
+    ])
+    def test_the_recommendation_reads_without_its_label_or_markup(self, line):
+        doc = fixture()
+        push_comment(doc, "DRE-9109", planning_escalation.escalation_comment(
+            "DRE-9109", f"Should the partner page close on Friday or on Monday?\n\n{line}"),
+            datetime(2026, 9, 30, 11, 15, tzinfo=UTC))
+        items, _ctx = plan(doc)
+        recommendation = lefts(items, "DRE-9109")[0].recommendation
+        assert recommendation.endswith("close it on Friday.")
+        assert "*" not in recommendation and not recommendation.lower().startswith("recommend")
+
     def test_a_question_that_states_no_recommendation_says_so(self):
         doc = fixture()
         push_comment(doc, "DRE-9109", planning_escalation.escalation_comment(
