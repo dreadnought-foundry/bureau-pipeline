@@ -78,22 +78,21 @@ def _no_ambient_event(monkeypatch) -> None:
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
 
 
-def _own_runner_temp(monkeypatch, tmp_path) -> None:
+def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
     """`scripts/read_once.py` keeps a job's reads in `$RUNNER_TEMP` (Stage 2
     fix #21) — and the CI that runs this suite IS a job, with one RUNNER_TEMP
     for the whole session. A harness that hands a step `os.environ` would let
     one test's cached answer stand in for the next test's stub. Each test gets
     an empty one of its own; a harness with several cases in one test gives
-    each case its own as well."""
-    runner_temp = tmp_path / "runner-temp"
-    runner_temp.mkdir()
-    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    each case its own as well. A fresh directory from the factory, never one
+    inside the test's own `tmp_path`, where a test may make its own."""
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path_factory.mktemp("runner-temp")))
 
 
 @pytest.fixture(autouse=True)
-def fresh_sweep_board(monkeypatch, tmp_path):
+def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_ambient_event(monkeypatch)
-    _own_runner_temp(monkeypatch, tmp_path)
+    _own_runner_temp(monkeypatch, tmp_path_factory)
     _lift_drain_slots(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
