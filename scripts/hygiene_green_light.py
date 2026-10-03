@@ -32,13 +32,13 @@ to `Planning` with one `hyg-resent-to-planning` receipt naming the cause:
    they are read once per such epic through `ctx.linear`. Cause: `child
    <DRE-N> has no acceptance criteria`.
 4. **A split or access escalation.** A `🙋 planning-escalation` whose stated
-   reason says the card is too big for one pull request or must be split, or
-   that the work needs a credential, a grant or an access no agent has — the
-   planner splits a card and routes an operator card, not the CEO. The words
-   must be about the work: "too large for mobile" or "an agent lacks the
-   finance context" is a business question, and stays one. The reason is
-   quoted in the receipt's evidence. Cause: `escalation asks for <split | access>, posted
-   <the escalation's time>`.
+   reason says the work is too big for one pull request, or that the work
+   needs a credential, a grant or an access no agent has — the planner splits
+   a card and routes an operator card, not the CEO. The words must be about
+   the work: "split this work into two phases", "too large for mobile" or "an
+   agent lacks the finance context" is a business question, and stays one.
+   The reason is quoted in the receipt's evidence. Cause: `escalation asks for
+   <split | access>, posted <the escalation's time>`.
 5. **A stall park.** A `🙋 planning-escalation` whose reason is the Planning
    stall watchdog's ("planning has produced nothing") or the planner line's
    ("waiting in line for a planner") — a run that died or a slot that never
@@ -102,31 +102,36 @@ STALL_OPENINGS = (
 )
 STALL_CAUSE = "stall park at "
 
-#: What a split or access reason must be about: the card or its work.
-_WORK = r"(?:this|the) (?:card|epic|work)"
-#: A reason asking for a split: the card or its work is too big for one pull
-#: request. "Too large for mobile" or "too broad a pilot" is not.
+#: A reason asking for a split: the work is too big for one pull request. Every
+#: alternative names that size — "split this work into two phases" or "split
+#: by region" says nothing about it and is a rollout question, and so is "too
+#: large for mobile" or "too broad a pilot".
 SPLIT = re.compile(
-    r"\btoo (?:big|large|broad) for (?:one|a single) (?:pull request|card)\b"
-    rf"|\b{_WORK} (?:must|should|needs? to|has to|ought to) be split\b"
-    rf"|\bsplit {_WORK} (?:into|in)\b"
-    r"|\bmore than one pull request\b",
+    r"\btoo (?:big|large|broad|much) for (?:one|a single) (?:pull request|card)\b"
+    r"|\b(?:does not|doesn't|will not|won't|cannot|can't|would not|wouldn't) fit "
+    r"(?:in|into) (?:one|a single) pull request\b"
+    r"|\bmore than one pull request\b"
+    r"|\b(?:two|three|four|five|several|multiple|separate) pull requests\b",
     re.I,
 )
+_ACCESS = r"(?:credentials?|grants?|access|permissions?|tokens?)"
 #: A reason asking for access: the work needs a credential, grant or access …
 ACCESS_NOUN = re.compile(
-    r"\b(?:needs?|requires?)\s+(?:an?\s+|the\s+|its\s+)?(?:[\w'-]+\s+){0,3}?"
-    r"(?:credentials?|grants?|access|permissions?|tokens?)\b",
+    rf"\b(?:needs?|requires?)\s+(?:an?\s+|the\s+|its\s+)?(?:[\w'-]+\s+){{0,3}}?{_ACCESS}\b",
     re.I,
 )
-#: … that no agent has. Both are required: "should partners get access" is a
-#: business question, not a missing grant, and so is "an agent lacks the
-#: finance context" with nothing the work needs.
+#: … that no agent has — said of that same thing, by name or as "one", "it" or
+#: "that". Both are required: "should partners get access" is a business
+#: question, not a missing grant, and so is "an agent lacks the finance
+#: context" or "no agent has met the partner" with nothing the work needs.
 AGENT_LACKS = re.compile(
-    r"\bno agent (?:has|holds|is granted|can)\b"
+    r"(?:\bno agent (?:has|holds|is granted|can \w+)"
     r"|\b(?:an agent|agents|the fleet|the pipeline) (?:lacks?|does not have|doesn't have"
-    r"|do not have|don't have|has no|have no|is not granted|are not granted)\b"
-    r"|\bonly (?:the|an) operator (?:has|holds|can)\b",
+    r"|do not have|don't have|has no|have no|is not granted|are not granted)"
+    r"|\bonly (?:the|an) operator (?:has|holds|can \w+))"
+    r"\s+(?:(?:one|it|them|that|those|this|these)"
+    r"(?=\s*(?:[.,;:!?—–-]|$|\s(?:and|or|so|but|yet|today|now)\b))"
+    rf"|(?:an?\s+|the\s+|its\s+|any\s+)?(?:[\w'-]+\s+){{0,3}}?{_ACCESS}\b)",
     re.I,
 )
 #: `Recommendation: …`, bold or not, and `Recommended — …`: the label and any
