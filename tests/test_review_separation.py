@@ -548,17 +548,30 @@ class ReviewWorkflowsEnforceItTest(unittest.TestCase):
                     f"{wf}: a card it could not read must fail CLOSED",
                 )
 
-    def test_the_select_step_can_reach_linear_to_read_the_card(self):
+    def test_the_card_snapshot_the_select_step_reads_can_reach_linear(self):
+        # Since Stage 2 fix #14 the select step reads the build's heartbeat
+        # out of the job's ONE card snapshot (scripts/card_snapshot.py); the
+        # snapshot step is the one that must be able to read the card.
         for wf in self.REVIEW_WORKFLOWS:
             with self.subTest(workflow=wf):
                 doc = yaml.safe_load((WORKFLOWS / wf).read_text())
-                steps = [
+                selects = [
                     s
                     for job in doc["jobs"].values()
                     for s in (job.get("steps") or [])
                     if s.get("id") == "model"
                 ]
-                self.assertTrue(steps, f"{wf}: no Select model step")
+                self.assertTrue(selects, f"{wf}: no Select model step")
+                for step in selects:
+                    self.assertIn("card_snapshot.py thread", step["run"],
+                                  f"{wf}: the select step does not read the snapshot")
+                steps = [
+                    s
+                    for job in doc["jobs"].values()
+                    for s in (job.get("steps") or [])
+                    if s.get("id") == "cardsnap"
+                ]
+                self.assertTrue(steps, f"{wf}: no card snapshot step")
                 for step in steps:
                     # The planner's bucket where the repo opted in, the fleet
                     # key otherwise (Stage 2 fix #12, review item 29) — a key
@@ -567,12 +580,12 @@ class ReviewWorkflowsEnforceItTest(unittest.TestCase):
                         (step.get("env") or {}).get("LINEAR_API_KEY"),
                         "${{ vars.LINEAR_AGENT_BUCKET == 'planner' && "
                         "secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
-                        f"{wf}: the select step cannot read the card",
+                        f"{wf}: the card snapshot step cannot read the card",
                     )
                     self.assertEqual(
                         (step.get("env") or {}).get("LINEAR_API_KEY_FALLBACK"),
                         "${{ secrets.LINEAR_API_KEY }}",
-                        f"{wf}: the select step has no fleet key to fall back to",
+                        f"{wf}: the card snapshot step has no fleet key to fall back to",
                     )
 
     def test_no_review_workflow_hardcodes_the_reviewers_model(self):
