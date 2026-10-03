@@ -255,6 +255,9 @@ class GreenLightResolvesBeforeTheBoardIsRenamedTest(unittest.TestCase):
     ]}}
 
     def resolve(self, board, name):
+        # Each resolve is a board as it is in its OWN run: the state list is
+        # kept per process (Stage 2 #9), and two boards in one test are two runs.
+        linear_ops.reset_workflow_states()
         with mock.patch.object(linear_ops, "gql", return_value=board):
             return linear_ops.state_id_and_type("team-1", name)
 

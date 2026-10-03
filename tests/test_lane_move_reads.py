@@ -60,6 +60,7 @@ STATES = [
 ]
 BY_NAME = {s["name"]: s for s in STATES}
 BY_ID = {s["id"]: s for s in STATES}
+_REAL_URLOPEN = urllib.request.urlopen
 
 
 class _Response:
@@ -92,7 +93,11 @@ class FakeLinear:
     def card(self, ident):
         return self.cards[ident]
 
-    def urlopen(self, req, timeout=None):
+    def urlopen(self, req, timeout=None, **kw):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if url != linear_ops.API:
+            # The read door's client mints its OIDC token over HTTP too.
+            return _REAL_URLOPEN(req, timeout=timeout, **kw)
         payload = json.loads(req.data)
         q = " ".join(payload["query"].split())
         v = payload.get("variables") or {}

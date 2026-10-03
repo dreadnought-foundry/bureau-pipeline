@@ -149,6 +149,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_marker  # noqa: E402 — ONE definition of the "which agent acted" marker
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import bureau_read  # noqa: E402 — the read door: workflow states from our database (Stage 2 #9)
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import epic_todo_gate  # noqa: E402 — ONE rule: an epic is never put in Todo (DRE-5316)
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
@@ -1250,19 +1251,106 @@ _LANE_RENAME_FALLBACKS = {
 }
 
 
-def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
-    """`(id, type)` for the named workflow state. `type` is Linear's lifecycle
-    bucket — one of: backlog, unstarted, started, completed, canceled — which is
-    what tells terminal (completed/canceled) states apart from in-flight ones.
+# ── Workflow states, read once per process (Stage 2 fix #9) ──────────────────
+# Every lane move turns a lane NAME into Linear's state id, and every one of
+# them used to ask Linear for the team's whole state list to do it — a request
+# per move for a list that does not change inside a run. A sweep that moves ten
+# cards asked ten times. So the list is kept for the process (one process is
+# one run), keyed by how it was asked for: the team's id when the caller read
+# the card, the team's KEY (the identifier's prefix) when it holds the card and
+# read nothing (`_held_state_move`).
+#
+# A name the kept list lacks is asked of Linear once more before it is "no
+# such lane": a lane created mid-run must not fail a move the old code would
+# have made.
+#
+# With `BUREAU_READ=on` the read door's `/workflow-states` answers first, once
+# per process. That list is only the states the console has SEEN on a card
+# (`linear_workflow_state` fills from deliveries), so a name it lacks is a miss
+# and goes to Linear — never "no such lane" — and a name it carries twice (two
+# teams) is not trusted either. The door's answer is used only for an exact
+# name: a pending rename is resolved on Linear's own list.
+_workflow_states: dict[str, list[dict]] = {}
+#: The door's list for this process: unread (absent), a list, or None (the
+#: door could not answer — Linear for the rest of the run).
+_door_workflow_states: dict[str, list[dict] | None] = {}
 
-    A lane this repo renamed falls back to its pre-rename name while the live
-    board still carries it (see `_LANE_RENAME_FALLBACKS`)."""
-    data = gql(
-        """query($teamId: ID) { workflowStates(filter: {team: {id: {eq: $teamId}}}) {
-             nodes { id name type } } }""",
-        {"teamId": team_id},
-    )
-    nodes = data["workflowStates"]["nodes"]
+
+def reset_workflow_states() -> None:
+    """Forget the kept state lists (a new run; tests)."""
+    _workflow_states.clear()
+    _door_workflow_states.clear()
+
+
+def _team_key(identifier: str) -> str:
+    """`DRE-123` → `DRE`: Linear's identifier is the team's key and a number."""
+    key, sep, _ = str(identifier or "").strip().partition("-")
+    return key.upper() if sep else ""
+
+
+def _door_mode() -> str:
+    """The read door's mode, without making an `off` run say anything: every
+    lane move is its own process from a workflow step, and the client's
+    once-per-process mode line would otherwise land in each one's log."""
+    if (os.environ.get(bureau_read.MODE_ENV) or "").strip().lower() in ("", "off"):
+        return "off"
+    return bureau_read.mode()
+
+
+def _door_state_list() -> list[dict] | None:
+    """The door's workflow states, read once per process; None when it cannot
+    answer. `linear-hold` makes a READER skip its phase (item 34); a lane move
+    is a write that goes to Linear whatever the lookup does, so here it is a
+    miss like any other, said in one line."""
+    if "nodes" not in _door_workflow_states:
+        nodes = None
+        if bureau_read.enabled():
+            try:
+                read = bureau_read.workflow_states(
+                    max_age=bureau_read.WORKFLOW_STATES_MAX_AGE)
+                nodes = [dict(n) for n in read.nodes]
+            except bureau_read.ReadUnknown as e:
+                if e.skip:
+                    print(f"read-door: workflow states unknown ({bureau_read.LINEAR_HOLD}) — "
+                          "this lane move looks its lane up on Linear: the move itself "
+                          "is a Linear write either way")
+                else:
+                    print(f"read-door: workflow states unknown ({e.reason}) — read from Linear")
+        _door_workflow_states["nodes"] = nodes
+    return _door_workflow_states["nodes"]
+
+
+def _door_state(name: str) -> tuple[str, str] | None:
+    """`(id, type)` for `name` when the door names it exactly once, else None."""
+    nodes = _door_state_list()
+    if not nodes:
+        return None
+    found = {(str(n.get("id")), str(n.get("type")))
+             for n in nodes if str(n.get("name") or "").lower() == name.lower()}
+    return found.pop() if len(found) == 1 else None
+
+
+def _linear_state_list(team_id: str | None, team_key: str | None,
+                       *, refresh: bool = False) -> list[dict]:
+    slot = f"id:{team_id}" if team_id else f"key:{team_key}"
+    if refresh or slot not in _workflow_states:
+        if team_id:
+            data = gql(
+                """query($teamId: ID) { workflowStates(filter: {team: {id: {eq: $teamId}}}) {
+                     nodes { id name type } } }""",
+                {"teamId": team_id},
+            )
+        else:
+            data = gql(
+                """query($teamKey: String) { workflowStates(filter: {team: {key: {eq: $teamKey}}}) {
+                     nodes { id name type } } }""",
+                {"teamKey": team_key},
+            )
+        _workflow_states[slot] = data["workflowStates"]["nodes"]
+    return _workflow_states[slot]
+
+
+def _match_state(nodes: list[dict], name: str) -> tuple[str, str] | None:
     for node in nodes:
         if node["name"].lower() == name.lower():
             return node["id"], node["type"]
@@ -1274,7 +1362,42 @@ def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
                     f"pre-rename lane {legacy!r} (DRE-2722, transitional)"
                 )
                 return node["id"], node["type"]
-    raise LinearError(f"no state named {name!r} on team")
+    return None
+
+
+def state_id_and_type(team_id: str | None, name: str, *,
+                      team_key: str | None = None) -> tuple[str, str]:
+    """`(id, type)` for the named workflow state. `type` is Linear's lifecycle
+    bucket — one of: backlog, unstarted, started, completed, canceled — which is
+    what tells terminal (completed/canceled) states apart from in-flight ones.
+
+    A lane this repo renamed falls back to its pre-rename name while the live
+    board still carries it (see `_LANE_RENAME_FALLBACKS`).
+
+    The team is its id, or — for a caller that read no card — its key. Linear
+    is asked once per process per team (see `_workflow_states` above), and not
+    at all when the read door names the lane (`BUREAU_READ=on`). In `shadow`
+    the door is read first, compared, and Linear's answer is the one used."""
+    mode = _door_mode()
+    if mode == "on":
+        served = _door_state(name)
+        if served is not None:
+            return served
+    elif mode == "shadow":
+        _door_state_list()
+    slot = f"id:{team_id}" if team_id else f"key:{team_key}"
+    kept = slot in _workflow_states
+    found = _match_state(_linear_state_list(team_id, team_key), name)
+    if found is None and kept:
+        found = _match_state(_linear_state_list(team_id, team_key, refresh=True), name)
+    if found is None:
+        raise LinearError(f"no state named {name!r} on team")
+    if mode == "shadow":
+        door = _door_state(name)
+        if door is not None and door != found:
+            print(f"read-door-diff: {bureau_read.SAME_STAMP} workflow-states {name}: "
+                  f"door={door!r} linear={found!r}")
+    return found
 
 
 # Linear lifecycle buckets that mean "this card is finished, do not reopen it".
@@ -1396,6 +1519,7 @@ def guarded_state_write(
     *,
     expect: tuple | None = None,
     labels_absent: tuple = (),
+    pre_read: dict | None = None,
 ) -> bool:
     """Write a card's state with the tightest terminal guard Linear allows.
 
@@ -1452,6 +1576,12 @@ def guarded_state_write(
     also refuses a card that has left `expect`'s lanes or gained one of
     `labels_absent`. A terminal target skips that read, so its caller checks
     the expectation on the read it already holds (`cmd_state`).
+
+    `pre_read` is that re-read, taken by a caller that decides on it too (a
+    HELD card's move, Stage 2 #9: `_held_state_move`, `cmd_advance`). It is the
+    same live read, made the same moment — the caller sends no request between
+    it and this call — so the window is exactly as narrow, and the card is
+    read once instead of twice.
     """
     terminal_target = target_type in _TERMINAL_TYPES
     # A terminal target skips the pre-write read below, so its no-op check uses
@@ -1461,7 +1591,7 @@ def guarded_state_write(
         # (1) The pre-write re-read. Skipped for a terminal target: closing a
         # card is always allowed, so there is nothing to refuse. LIVE, never
         # the command's memo (DRE-3236): this read is the race fix.
-        fresh = get_issue(identifier, fresh=True)
+        fresh = pre_read if pre_read is not None else get_issue(identifier, fresh=True)
         current = fresh.get("state") or {}
         fresh_state = current.get("type")
         fresh_name = current.get("name", fresh_state)
@@ -1533,6 +1663,7 @@ def cmd_state(
     *flags: str,
     expect: tuple | None = None,
     labels_absent: tuple = (),
+    held: bool = False,
 ) -> bool:
     """Move a card to `state_name`. True when it is there (written, or already
     there), False when a guard refused the move — so a caller never posts a
@@ -1544,6 +1675,12 @@ def cmd_state(
     refused when either read below shows otherwise. Both reads are ones this
     function makes anyway, so the condition costs no request. Without them
     this is the unconditional write it has always been.
+
+    `held` (`--held` on the command line) says the caller already HOLDS the
+    card — it decided on the card's lane, read from the read door or by its
+    own earlier read (Stage 2 fix #9). A conditional write is always a held
+    card: `expect` is the lane the caller read. A held card's move sends no
+    first read; see `_held_state_move`.
     """
     # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
     # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
@@ -1552,12 +1689,20 @@ def cmd_state(
     deliberate_park = "--park" in flags
     expect = tuple(expect) if expect is not None else None
     labels_absent = tuple(labels_absent or ())
+    target = None
+    if held or "--held" in flags or expect is not None:
+        target = state_id_and_type(None, state_name, team_key=_team_key(identifier))
+        if target[1] not in _TERMINAL_TYPES:
+            return _held_state_move(identifier, state_name, target, deliberate_park,
+                                    expect, labels_absent)
+        # A terminal target has no pre-write re-read to decide on, so the card
+        # is read below exactly as an unheld one is.
     issue = get_issue(identifier)
     refused = _expectation_refusal(identifier, issue, state_name, expect, labels_absent)
     if refused is not None:
         print(refused)
         return False
-    target_id, target_type = state_id_and_type(issue["team"]["id"], state_name)
+    target_id, target_type = target or state_id_and_type(issue["team"]["id"], state_name)
     # Ground-truth guard (DRE-1877): a merged PR moves its card to Done, and Done
     # is the truth. Never let a LATER, non-terminal transition drag a finished
     # card (completed/canceled) back into the working lanes. This is what stranded
@@ -1627,8 +1772,70 @@ def cmd_state(
     return False
 
 
+def _held_state_move(
+    identifier: str,
+    state_name: str,
+    target: tuple[str, str],
+    deliberate_park: bool,
+    expect: tuple | None,
+    labels_absent: tuple,
+) -> bool:
+    """`cmd_state` for a card the caller HOLDS, to a non-terminal lane (Stage 2
+    fix #9): ONE read of the card instead of two.
+
+    The unheld move reads the card first — for its team, its id, and four
+    decisions — and then reads it AGAIN immediately before the write, because
+    the first read is already stale by then (DRE-2316 lost that race by 280
+    ms). A caller that holds the card has made its decision already; here the
+    first read is dropped and every decision it made is made on the pre-write
+    re-read instead, which is the fresher of the two:
+
+      * the finished-card refusal (DRE-1877) and the conditional write's lane
+        and labels (item 33) — `guarded_state_write`, on `pre_read`;
+      * the building-card reroute to Todo (DRE-1885) — below, on the same read.
+
+    The lanes come first, by the team's key (a held card carries no team id),
+    from the process's kept list or the read door; so nothing is sent between
+    the re-read and the write that the unheld move does not send too. The
+    read-back after the write (DRE-1877/DRE-2316) is `guarded_state_write`'s,
+    unchanged.
+    """
+    target_id, target_type = target
+    todo = None
+    if target_type == "backlog" and not deliberate_park:
+        todo = state_id_and_type(None, "Todo", team_key=_team_key(identifier))
+    # (1) THE pre-write re-read (DRE-2316): LIVE, never a memo, and the only
+    # read of the card this move makes.
+    fresh = get_issue(identifier, fresh=True)
+    current = fresh.get("state") or {}
+    if (
+        todo is not None
+        and current.get("type") == "started"
+        and _HOLD_LABEL not in [n.lower() for n in _label_names(fresh)]
+    ):
+        # DRE-1885, decided on the live card: a building card is re-queued to
+        # Todo, never parked in Backlog where nothing re-promotes it.
+        if not guarded_state_write(identifier, fresh, todo[0], todo[1], "Todo",
+                                   expect=expect, labels_absent=labels_absent,
+                                   pre_read=fresh):
+            return False
+        print(
+            f"{identifier} is {current.get('name')!r} (building) — re-queued to 'Todo' "
+            f"instead of {state_name!r}; an actively-building card is never parked "
+            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
+            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
+        )
+        return True
+    if guarded_state_write(identifier, fresh, target_id, target_type, state_name,
+                           expect=expect, labels_absent=labels_absent, pre_read=fresh):
+        print(f"{identifier} → {state_name}")
+        return True
+    return False
+
+
 def cmd_advance(
-    identifier: str, to_state: str, from_states_csv: str, *flags: str
+    identifier: str, to_state: str, from_states_csv: str, *flags: str,
+    held: bool = False,
 ) -> None:
     """Move a card into `to_state`, but only out of one of `from_states_csv`.
 
@@ -1646,12 +1853,27 @@ def cmd_advance(
     one query and the stamp lives in its comments, exactly as `cmd_card_done`
     has it. `agent:planner` is NOT read here, for DRE-3044's reason — every
     card the relay sends to plan.yml wears it, one-offs included.
+
+    `held` / `--held` (Stage 2 fix #9): the caller holds the card, so its
+    first read is dropped. The lane is looked up first, by the team's key,
+    and the card is then read ONCE, live — the DRE-2316 pre-write re-read —
+    and `--not-epic`, the from-lane check and the finished-card refusal are
+    all decided on that read. A terminal `to_state` has no pre-write re-read,
+    so it reads the card exactly as an unheld advance does.
     """
     refuse_epic = "--not-epic" in flags
+    held = held or "--held" in flags
     for flag in flags:
-        if flag and flag != "--not-epic":
+        if flag and flag not in ("--not-epic", "--held"):
             raise LinearError(f"advance: unknown option {flag!r}")
-    issue = get_issue(identifier)
+    target = None
+    if held:
+        target = state_id_and_type(None, to_state, team_key=_team_key(identifier))
+        if target[1] in _TERMINAL_TYPES:
+            held = False
+    # A held card's one read is the live pre-write re-read; an unheld card's
+    # first read is followed by `guarded_state_write`'s own.
+    issue = get_issue(identifier, fresh=True) if held else get_issue(identifier)
     if refuse_epic and mid_epic.is_epic(
         issue.get("title"), bool(((issue.get("children") or {}).get("nodes")) or [])
     ):
@@ -1668,12 +1890,14 @@ def cmd_advance(
             f"{identifier} is in {issue['state']['name']!r}, not in {from_states_csv!r} — not advancing"
         )
         return
-    sid, stype = state_id_and_type(issue["team"]["id"], to_state)
+    sid, stype = target or state_id_and_type(issue["team"]["id"], to_state)
     # The from-states csv is checked against the read ABOVE, so this seam has
     # the same check-then-act race cmd_state had: agent-task's PR path runs
     # `advance <card> "In Review" "In Progress,Todo"`, and a card that goes Done
     # in between would be dragged back into review. Same guarded write (DRE-2316).
-    if guarded_state_write(identifier, issue, sid, stype, to_state):
+    # A held card's read above IS that re-read: nothing was sent since it.
+    if guarded_state_write(identifier, issue, sid, stype, to_state,
+                           pre_read=issue if held else None):
         print(f"{identifier} → {to_state}")
 
 
