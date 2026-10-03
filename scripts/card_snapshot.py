@@ -109,6 +109,8 @@ def _from_door(identifier: str) -> tuple[dict | None, object]:
                                  comments="all", relations=False)
     except bureau_read.ReadUnknown as e:
         return None, e.reason
+    except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+        return None, f"{type(e).__name__}: {e}"
     node = dict(read.nodes[0])
     comments = node.pop("comments", None) or {}
     nodes = linear_ops.window_nodes(comments)
