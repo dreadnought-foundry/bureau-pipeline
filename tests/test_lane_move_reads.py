@@ -465,6 +465,20 @@ def test_on_a_closed_door_falls_back_to_linear(monkeypatch):
     assert lin.kinds == ["states:key", "issue", "write", "history"]
 
 
+def test_on_a_door_answer_the_client_chokes_on_falls_back_to_linear(monkeypatch):
+    """Linear on ANY door error, not only the ones the client names: a lane
+    move must never die because the door did."""
+    def chokes(**kw):
+        raise TypeError("an envelope the client did not expect")
+
+    monkeypatch.setenv("BUREAU_READ", "on")
+    monkeypatch.setattr(bureau_read, "workflow_states", chokes)
+    with linear(monkeypatch, **{"DRE-1": {"lane": "In Progress"}}) as lin:
+        moved, _ = _quiet(linear_ops.cmd_state, "DRE-1", "In Review", held=True)
+    assert moved is True
+    assert lin.kinds == ["states:key", "issue", "write", "history"]
+
+
 def test_on_linear_hold_the_lane_move_still_looks_its_lane_up_and_says_so(monkeypatch):
     """`linear-hold` makes a READER skip its phase rather than spend the held
     bucket (item 34). A lane move is a write that goes to Linear regardless,
