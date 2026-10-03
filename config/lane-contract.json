@@ -459,10 +459,7 @@
     },
     {
       "name": "Hand-work",
-      "status": "arriving",
-      "arriving_by": "DRE-5240",
-      "reason": "The lane where a person's work waits. A WORKBENCH or OPERATOR card is built by a person, not a dispatched run, and today it sits in Todo beside the fleet's work, told apart only by its `hand-built` mark. Hand-work gives it a lane of its own, so Todo holds only what the fleet builds. Declared here before Linear has the state, so the board can grow it without turning the harness red; nothing routes to it until a later card flips its status to live.",
-      "board_action": "create workflow state `Hand-work`, type `unstarted`, on the DRE team, positioned immediately after `Todo`; then a later card of DRE-5240 flips this entry's status to live",
+      "status": "live",
       "segment": "work",
       "clauses": {
         "entrance": {

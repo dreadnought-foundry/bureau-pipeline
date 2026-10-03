@@ -16,9 +16,10 @@ Wave phase reached: **2** — the lane contract asserted by the harness. A claus
 | 3 | Green Light | planning | — |
 | 4 | Backlog | work | — |
 | 5 | Todo | work | 15 min |
-| 6 | In Progress | work | 60 min |
-| 7 | In Review | work | 120 min |
-| 8 | Done | work | — |
+| 6 | Hand-work | work | — |
+| 7 | In Progress | work | 60 min |
+| 8 | In Review | work | 120 min |
+| 9 | Done | work | — |
 
 Planning exit is the transition **Green Light → Backlog** — where the second critic writes its verdict, and the boundary the guard's scope is derived from.
 
@@ -92,6 +93,19 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 | **writers** | ONE promoter, and it is the sweep: reconcile.py's promote_ready() is the only thing that moves an epic's child into this lane, whether the 15-minute cron reaches it or plan.yml's activate route runs it the moment the second critic passes — the route triggers that promoter, it never promotes itself. It releases a child only once the epic carries a `plan-critic: stage=post result=PASS` marker for the current planning attempt (DRE-3059). It is also the writer that stamps a promoted card's marks — `hand-built`, and `no-code` on an OPERATOR card — and it applies them BEFORE the move, because an unmarked card in this lane is one the nudge loop dispatches an agent at fifteen minutes later (DRE-3385). The build run takes cards out of it.  
 Permitted writers: `reconcile.py`, `agent-task.yml`, `linear_ops.py`, `operator` | Phase 2 — live |
 | **evidence** | A verdict whose destination is this lane, no unmet blocking relation, and — for a FLEET card — room under the WIP cap. A hand-built card needs no room: nothing is dispatched for it, so it takes no slot and never counts against the cap while it sits here (DRE-3385).  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
+
+### Hand-work
+
+| Clause | What it requires | Enforcement |
+| --- | --- | --- |
+| **entrance** | A card enters on a WORKBENCH or OPERATOR routing verdict, the two whose actor is `operator` in config/routing-verdicts.json. The sweep moves it here, stamping the marks the verdict declares — `hand-built`, plus `no-code` for OPERATOR — before the move. Nothing is dispatched for it, it takes no slot under the WIP cap, it carries no stall window, and it is never reported as stalled. An epic never enters.  
+_Waiting on: DRE-5240 creates the state, points WORKBENCH and OPERATOR here and teaches the sweep the move; asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
+| **exit** | The person working it opens a pull request, and the sweep's hand-built-to-review move carries the card to In Review — or, for an OPERATOR card, the person closes it Done. Or the hygiene agent closes a card whose pull request merged while it sat here (DRE-5365).  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
+| **writers** | The sweep, which moves a WORKBENCH or OPERATOR card here and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.  
+Permitted writers: `reconcile.py`, `linear_ops.py`, `operator` | Phase 2 — live |
+| **evidence** | A WORKBENCH or OPERATOR routing verdict on the card, and the marks that verdict declares.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
 ### In Progress
@@ -172,27 +186,6 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 | **writers** | A human, only.  
 Permitted writers: `operator` | Phase 2 — live |
 | **evidence** | The card it duplicates, named on it.  
-_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-
-## Arriving
-
-Lanes the contract names before the board has them. Nothing routes to one yet: no live reader sees it, the harness does not require the state in Linear or in the console, and it permits both. Its clauses are written complete, so the board step below and a one-word flip of its status to live are all that remain.
-
-### Hand-work — arriving by DRE-5240
-
-The lane where a person's work waits. A WORKBENCH or OPERATOR card is built by a person, not a dispatched run, and today it sits in Todo beside the fleet's work, told apart only by its `hand-built` mark. Hand-work gives it a lane of its own, so Todo holds only what the fleet builds. Declared here before Linear has the state, so the board can grow it without turning the harness red; nothing routes to it until a later card flips its status to live.
-
-**Board step:** create workflow state `Hand-work`, type `unstarted`, on the DRE team, positioned immediately after `Todo`; then a later card of DRE-5240 flips this entry's status to live
-
-| Clause | What it will require | Enforcement once live |
-| --- | --- | --- |
-| **entrance** | A card enters on a WORKBENCH or OPERATOR routing verdict, the two whose actor is `operator` in config/routing-verdicts.json. The sweep moves it here, stamping the marks the verdict declares — `hand-built`, plus `no-code` for OPERATOR — before the move. Nothing is dispatched for it, it takes no slot under the WIP cap, it carries no stall window, and it is never reported as stalled. An epic never enters.  
-_Waiting on: DRE-5240 creates the state, points WORKBENCH and OPERATOR here and teaches the sweep the move; asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **exit** | The person working it opens a pull request, and the sweep's hand-built-to-review move carries the card to In Review — or, for an OPERATOR card, the person closes it Done. Or the hygiene agent closes a card whose pull request merged while it sat here (DRE-5365).  
-_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | The sweep, which moves a WORKBENCH or OPERATOR card here and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.  
-Permitted writers: `reconcile.py`, `linear_ops.py`, `operator` | Phase 2 — live |
-| **evidence** | A WORKBENCH or OPERATOR routing verdict on the card, and the marks that verdict declares.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
 ## The rules the harness asserts
