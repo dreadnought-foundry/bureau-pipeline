@@ -632,6 +632,18 @@ class TestBornWithItsRoutingVerdict:
         assert ops.labels_on(ident) == list(routing_verdict.marks("WORKBENCH"))
         assert "hand-built" in ops.labels_on(ident)
 
+    def test_a_workbench_discovery_still_lands_in_backlog_marked(self):
+        """DRE-5321 re-points WORKBENCH at Hand-work, which is where the SWEEP
+        carries it. Filing is unchanged: the card is born in Backlog, carrying
+        the marks, and no state write moves it anywhere at creation."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        created = next(c for c in ops.created if c["identifier"] == ident)
+        assert created["state"] == "Backlog"
+        assert [s for s in ops.states if s[0] == ident] == []
+        assert "hand-built" in ops.labels_on(ident)
+
     def test_an_operator_card_is_born_hand_built_and_no_code(self):
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
@@ -741,16 +753,25 @@ class TestBornWithItsRoutingVerdict:
         assert ops.comments == []
         for fileable in mid_epic.fileable_verdicts():
             assert fileable in str(err.value)
+            # ...and the lane each one lands in, read off the vocabulary
+            # (DRE-5321): FLEET in Todo, WORKBENCH and OPERATOR in Hand-work.
+            assert f"{fileable} → {routing_verdict.destination(fileable)}" in str(err.value)
 
     def test_the_verdicts_a_discovery_may_carry_are_the_ones_that_build(self):
         """Derived from the vocabulary, never restated: the fileable verdicts
-        are exactly those whose destination is the lane a sibling is picked up
-        in. PARKED goes to Backlog and NEEDS WORK to Planning — neither is a
-        card anybody builds."""
+        are exactly those the sweep carries out of Backlog (DRE-5321). FLEET
+        lands in Todo and WORKBENCH and OPERATOR in Hand-work, so "the lane a
+        sibling is picked up in" is no longer one lane. PARKED stays in Backlog
+        and NEEDS WORK goes back to Planning; neither is a card anybody builds."""
         assert mid_epic.fileable_verdicts() == ("FLEET", "WORKBENCH", "OPERATOR")
+        assert mid_epic.fileable_verdicts() == tuple(
+            v for v in routing_verdict.verdicts() if routing_verdict.sweep_promotes(v))
         for name in mid_epic.fileable_verdicts():
-            assert routing_verdict.destination(name) == mid_epic.DISCOVERY_LANE
-        assert mid_epic.DISCOVERY_LANE in lane_contract.lane_names()
+            assert routing_verdict.sweep_promotes(name)
+            assert routing_verdict.destination(name) in lane_contract.lane_names()
+        # The one-lane constant is gone (spelled in two halves so the card's
+        # `grep -rn` for it over scripts and tests prints nothing).
+        assert "DISCOVERY" + "_LANE" not in vars(mid_epic)
 
     def test_the_verdict_name_is_read_case_insensitively(self):
         ops = _FakeOps(epic_description="The epic.")

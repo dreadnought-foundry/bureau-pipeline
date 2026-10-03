@@ -350,8 +350,8 @@ class NothingElseLeavesIntakeTest(unittest.TestCase):
         fails here rather than in a live plan run."""
         self.assertEqual(plan_child_verdicts.ADOPTED_FROM, "Intake")
         self.assertEqual(plan_child_verdicts.ADOPTION_LANE, "Backlog")
-        self.assertNotEqual(plan_child_verdicts.ADOPTION_LANE,
-                            routing_verdict.PROMOTION_LANE)
+        self.assertNotIn(plan_child_verdicts.ADOPTION_LANE,
+                         routing_verdict.sweep_lanes())
 
 
 class AnUnapprovedEpicBuildsNothingTest(unittest.TestCase):

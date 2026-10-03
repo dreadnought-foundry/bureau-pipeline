@@ -429,8 +429,8 @@ it. Read the file, not this table, when the two ever disagree.
 | Verdict | Means | Destination | Who acts there |
 | -- | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
-| **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` | the operator, at an interactive session |
-| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` | the operator |
+| **WORKBENCH** | Needs an interactive flow or live system state | `Hand-work`, marked `hand-built` | the operator, at an interactive session |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `hand-built` + `no-code` | the operator |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
 | **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
 

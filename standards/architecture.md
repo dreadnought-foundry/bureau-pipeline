@@ -44,16 +44,16 @@ Intake → Planning → Green Light → Backlog → Todo → Hand-work → In Pr
   an agent escalation awaiting a decision, in one lane. An epic activates when
   the CEO moves ONLY the epic to `In Progress`.
 - **`Backlog`** — process-controlled: a card here carries a routing verdict, and
-  the sweep promotes every card whose verdict is bound for `Todo` — FLEET for a
-  dispatched run, WORKBENCH and OPERATOR marked `hand-built` for a person
-  (DRE-3385). PARKED stays, and a card carrying no verdict at all is refused.
+  the sweep promotes every card whose verdict it carries — FLEET to `Todo` for a
+  dispatched run, WORKBENCH and OPERATOR to `Hand-work` marked `hand-built` for
+  a person (DRE-3385, DRE-5321). PARKED stays, and a card carrying no verdict at all is refused.
   So is a card sent back since its verdict — one that has been in Intake,
   Green Light, Triage or a closed lane since — because a verdict approves one
   trip through Planning (`stale-verdict`, DRE-4962).
 - **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
   never dispatched, never reported stalled, carried to `In Review` when its pull
-  request opens. Live on the board since DRE-5320; nothing routes to it until
-  WORKBENCH and OPERATOR are pointed at it.
+  request opens. WORKBENCH and OPERATOR land here (DRE-5321), which leaves
+  `Todo` holding only what the fleet builds.
 - **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
   lane: `In Review` means "a pull request is open and being checked". The two
   lanes that preceded it were retired by DRE-2726 and deleted from the board and

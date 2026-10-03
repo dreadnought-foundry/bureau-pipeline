@@ -88,8 +88,9 @@ class TheReadyWorkLanesAreDerived(unittest.TestCase):
     """A ready-work lane is one the planning segment can send a card to and the
     pipeline then treats as work. Read out of the vocabularies, never typed."""
 
-    def test_the_ready_work_lanes_are_backlog_and_todo_today(self):
-        self.assertEqual(rlw.ready_lanes(), ("Backlog", "Todo"))
+    def test_the_ready_work_lanes_are_backlog_todo_and_hand_work_today(self):
+        # Hand-work joined when DRE-5321 pointed WORKBENCH and OPERATOR at it.
+        self.assertEqual(rlw.ready_lanes(), ("Backlog", "Todo", "Hand-work"))
 
     def test_a_lane_becomes_ready_work_because_the_vocabulary_says_so(self):
         # Re-point a shape's exit and the set moves with it. A hardcoded pair
