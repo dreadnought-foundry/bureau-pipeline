@@ -143,9 +143,40 @@ def test_the_door_serves_no_field_neither_read_selects():
     assert _merge(ACTIVE, BACKLOG) == {**bureau_read.CARD_FIELDS, **bureau_read.RELATION_FIELDS}
 
 
-def test_the_dependents_shape_is_the_merge_gates_query():
-    tree = selection_tree(merge_sweep_gate.QUERY[merge_sweep_gate.QUERY.index("{") + 1:])
-    assert tree["issue"] == bureau_read.DEPENDENTS_FIELDS
+def _shape_of(value):
+    """A value's field tree, the way `selection_tree` writes a selection."""
+    if isinstance(value, dict):
+        return {key: _shape_of(sub) for key, sub in value.items()}
+    if isinstance(value, list):
+        merged: dict = {}
+        for item in value:
+            merged = _merge(merged, _shape_of(item) or {})
+        return merged or None
+    return None
+
+
+def test_the_dependents_answer_is_board_nodes_and_reconcile_rebuilds_the_merge_query(
+        monkeypatch):
+    """`/cards/{id}/dependents` answers the cards `id` blocks, as board nodes
+    (AB-1's shape — reconciled with it, 2026-10-02). `merged_card_scope` reads
+    it plus `/cards?ids=<id>` and rebuilds the ONE card in exactly
+    `merge_sweep_gate.QUERY`'s selection, so every reader downstream of the
+    merge-sweep gate reads the shape it always read."""
+    merged = {**WORLD["door_work"]["issues"]["nodes"][0], "state": {"name": "Done"}}
+    dependent = WORLD["door_backlog"]["issues"]["nodes"][0]
+    monkeypatch.setattr(bureau_read, "mode", lambda: "on")
+    monkeypatch.setattr(bureau_read, "enabled", lambda: True)
+    monkeypatch.setattr(bureau_read, "cards", lambda ids, **kw: bureau_read.DoorRead(
+        nodes=[merged]))
+    monkeypatch.setattr(bureau_read, "dependents", lambda ident, **kw: bureau_read.DoorRead(
+        nodes=[dependent]))
+    built = reconcile._door_dependents("DRE-1001")
+    query = selection_tree(merge_sweep_gate.QUERY[merge_sweep_gate.QUERY.index("{") + 1:])
+    assert _shape_of(built) == query["issue"]
+    assert [d["identifier"] for d in merge_sweep_gate.dependents(built)] == ["DRE-1003"]
+    assert built["relations"]["pageInfo"]["hasNextPage"] is False
+    # The parent's children are not read: said as unknown, never as none.
+    assert built["parent"]["children"]["pageInfo"]["hasNextPage"] is True
 
 
 def test_the_relation_shape_is_the_gates_inline_relations():

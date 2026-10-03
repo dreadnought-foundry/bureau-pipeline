@@ -95,11 +95,17 @@ def test_board_sends_the_contract_and_returns_whole_nodes(monkeypatch):
     assert sorted(n["identifier"] for n in read.nodes) == ["DRE-1", "DRE-2"]
     sent = door.requests[0]
     assert sent["path"] == "/api/v1/pipeline/board"
-    assert sent["query"] == {"lanes": "Todo,In Progress", "scope": "repo", "comments": "50"}
+    # `relations=0` SAID, never left out: the door serves relations when the
+    # parameter is absent, and would then hold a board nobody asked relations
+    # of to the relations bound (`relations-stale`).
+    assert sent["query"] == {"lanes": "Todo,In Progress", "scope": "repo", "comments": "50",
+                             "relations": "0"}
     assert sent["headers"]["authorization"].startswith("Bearer ")
     assert sent["headers"]["x-bureau-max-age"] == "120"
     assert "x-bureau-relations-max-age" not in sent["headers"]
     assert issuer.requests[0]["audience"] == bureau_read.DEFAULT_AUDIENCE
+    # The one audience both sides default to (the door's PIPELINE_READ_AUDIENCE).
+    assert bureau_read.DEFAULT_AUDIENCE == "https://app.agent-bureau.com/pipeline-read"
     assert read.as_of == door.as_of and read.viewer_id == "fleet-user"
 
 
@@ -140,22 +146,21 @@ def test_a_read_without_a_max_age_is_refused_before_it_is_sent(monkeypatch, bad)
 # ── the token ───────────────────────────────────────────────────────────────
 
 
-def test_the_token_is_minted_once_per_run(monkeypatch):
+def test_every_request_carries_a_fresh_token(monkeypatch):
+    """The door claims each token's `jti` once (S3, replay): a token sent
+    twice is a 401 `replayed` — which would stop the door for the run on the
+    second read. So every request mints its own; the runner's endpoint is
+    cheap and local to the job."""
     with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
         _point(monkeypatch, door, issuer)
         bureau_read.board(["Todo"], max_age=120)
         bureau_read.board(["In Progress"], max_age=120)
         bureau_read.cards(["DRE-1"], max_age=120)
-    assert len(issuer.requests) == 1
-    assert len(door.requests) == 3
-
-
-def test_a_token_near_expiry_is_minted_again(monkeypatch):
-    with FakeIssuer(exp=int(time.time()) + 30) as issuer, FakeDoor(WORLD) as door:
-        _point(monkeypatch, door, issuer)
-        bureau_read.board(["Todo"], max_age=120)
-        bureau_read.board(["Todo"], max_age=120)
-    assert len(issuer.requests) == 2
+        tokens = [r["headers"]["authorization"] for r in door.requests]
+    assert len(issuer.requests) == len(door.requests) == 3
+    assert len(set(tokens)) == 3
+    jtis = {bureau_read.token_claims(t.split(" ", 1)[1])["jti"] for t in tokens}
+    assert len(jtis) == 3
 
 
 def test_no_token_env_falls_back_and_the_door_is_never_asked(monkeypatch):
@@ -423,14 +428,41 @@ def test_an_answer_for_another_repository_is_refused(monkeypatch):
             bureau_read.board(["Todo"], max_age=120)
 
 
-def test_dependents_answers_the_card_in_the_merge_gate_shape(monkeypatch):
+def test_dependents_answers_the_cards_it_blocks_in_the_board_shape(monkeypatch):
+    """`/cards/{id}/dependents` (the door's shape, reconciled with AB-1): the
+    cards whose relations say `id` blocks them, in the lanes asked, each in the
+    same node shape `/cards` serves."""
     with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
         _point(monkeypatch, door, issuer)
-        read = bureau_read.dependents("DRE-1", max_age=120)
-    node = read.nodes[0]
-    assert node["identifier"] == "DRE-1"
-    assert node["relations"]["nodes"][0]["relatedIssue"]["identifier"] == "DRE-3"
-    assert door.requests[0]["path"] == "/api/v1/pipeline/cards/DRE-1/dependents"
+        read = bureau_read.dependents("DRE-1", max_age=120, lanes=["Backlog"])
+    assert [n["identifier"] for n in read.nodes] == ["DRE-3"]
+    assert read.nodes[0]["inverseRelations"]["nodes"][0]["issue"]["identifier"] == "DRE-1"
+    sent = door.requests[0]
+    assert sent["path"] == "/api/v1/pipeline/cards/DRE-1/dependents"
+    assert sent["query"] == {"lanes": "Backlog", "comments": "50", "relations": "1"}
+
+
+def test_a_dependent_outside_the_lanes_asked_is_malformed(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.routes["dependents"] = (200, door.envelope([WORLD["DRE-2"]]))
+        _point(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.dependents("DRE-1", max_age=120, lanes=["Backlog"])
+    assert caught.value.reason == "malformed"
+
+
+def test_a_throttled_door_is_given_up_for_the_run_not_waited_on(monkeypatch):
+    """A 429 (`Retry-After`) stops the door for the run: a sweep that waits
+    out a throttle holds its runner, and the reads fall back to Linear —
+    the intended trade, said here so it is a decision and not an accident."""
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.routes["/board"] = (429, {"error": {"code": "THROTTLED"}})
+        _point(monkeypatch, door, issuer)
+        started = time.monotonic()
+        with pytest.raises(bureau_read.ReadUnknown):
+            bureau_read.board(["Todo"], max_age=120)
+        assert time.monotonic() - started < 1.0
+        assert not bureau_read.enabled()
 
 
 def test_workflow_states(monkeypatch):
@@ -460,6 +492,13 @@ def test_the_same_stamp_with_a_different_value_is_the_failure():
     diffs = bureau_read.compare(door, linear, door_as_of=AS_OF)
     assert [(d.klass, d.field) for d in diffs] == [("same-stamp-different-value", "labels")]
     assert not diffs[0].explained
+
+
+def test_an_empty_description_and_a_null_one_are_the_same():
+    """The door serves `""` where Linear may send `null` (AB-1's contract)."""
+    door = [card("DRE-1", "Todo", description="")]
+    linear = [card("DRE-1", "Todo", description=None)]
+    assert bureau_read.compare(door, linear, door_as_of=AS_OF) == []
 
 
 def test_label_order_is_not_a_difference():

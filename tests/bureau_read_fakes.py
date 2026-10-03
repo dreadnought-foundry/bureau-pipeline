@@ -55,7 +55,7 @@ def default_claims(**over) -> dict:
     now = int(time.time())
     claims = {
         "iss": "https://token.actions.githubusercontent.com",
-        "aud": "bureau-read-door",
+        "aud": "https://app.agent-bureau.com/pipeline-read",
         "repository": "dreadnought-foundry/portico",
         "repository_id": "1",
         "repository_owner_id": "2",
@@ -228,11 +228,17 @@ class FakeDoor(_Server):
                 return 404, {"error": {"code": "NOT_FOUND"}}
             return 200, self.envelope([self._shaped(self.world[i], query) for i in ids])
         if endpoint.startswith("/cards/") and endpoint.endswith("/dependents"):
+            # AB-1's shape: the cards `ident` blocks, in the lanes asked (every
+            # held lane when none is), each a full board node.
             ident = endpoint.split("/")[2]
-            node = self.dependents_node(ident)
-            if node is None:
+            if ident not in self.world:
                 return 404, {"error": {"code": "NOT_FOUND"}}
-            return 200, self.envelope([node])
+            lanes = [x for x in query.get("lanes", "").split(",") if x]
+            nodes = [self._shaped(n, query) for n in self.world.values()
+                     if (not lanes or n["state"]["name"] in lanes)
+                     and any(r.get("type") == "blocks" and r["issue"]["identifier"] == ident
+                             for r in ((n.get("inverseRelations") or {}).get("nodes") or []))]
+            return 200, self.envelope(nodes)
         if endpoint == "/workflow-states":
             return 200, self.envelope(
                 [{"id": "s1", "name": "Todo", "type": "unstarted"}],
@@ -242,7 +248,7 @@ class FakeDoor(_Server):
     @staticmethod
     def _shaped(node: dict, query: dict) -> dict:
         out = dict(node)
-        if query.get("relations") != "1":
+        if query.get("relations") == "0":
             out.pop("inverseRelations", None)
         else:
             out.setdefault("inverseRelations",
@@ -283,7 +289,8 @@ class FakeDoor(_Server):
 
 
 def door_env(*, door_url: str, issuer: FakeIssuer | None = None, mode: str = "on",
-             audience: str = "bureau-read-door", pipeline_ref: str | None = "stable",
+             audience: str = "https://app.agent-bureau.com/pipeline-read",
+             pipeline_ref: str | None = "stable",
              repository: str = "dreadnought-foundry/portico") -> dict:
     """The environment that points the client at a door and an issuer."""
     env = {
