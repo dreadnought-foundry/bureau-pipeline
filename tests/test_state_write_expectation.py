@@ -9,8 +9,9 @@ land on a card a person just labelled `needs-human`, or that just moved on.
 
 `cmd_state(..., expect=(lanes...), labels_absent=(labels...))` is the
 `cmd_state_if` the review asked for. It reuses the reads `cmd_state` already
-pays for — its first read and the guarded pre-write re-read — so it costs ZERO
-extra requests, and it refuses (returns False, writes nothing) when either read
+pays for — the guarded pre-write re-read (and, for a terminal target, its first
+read) — so it costs ZERO extra requests; since Stage 2 #9 it is a held card and
+costs one FEWER, because its decision's read was the caller's. It refuses (returns False, writes nothing) when either read
 shows the card outside the expected lanes or carrying a label the decision read
 as absent. It is a keyword on `cmd_state` rather than a new function so every
 call site keeps its literal destination lane, which is what
@@ -43,8 +44,15 @@ STATES = {
 
 
 class FakeCard:
-    """One card behind `linear_ops.gql`. `between` runs after the FIRST card
-    read and before the second — the race window the guard exists for."""
+    """One card behind `linear_ops.gql`. `between` runs just before the
+    PRE-WRITE read — the first card read after the lane lookup — so after the
+    decision and before the write: the race window the guard exists for.
+
+    An unconditional move reads the card, looks the lane up, then re-reads it
+    (DRE-2316). A conditional one is a HELD card since Stage 2 #9 (BP-3): the
+    caller decided on the card it read, so the move looks the lane up and then
+    reads the card ONCE — that read is the pre-write read. Either way `between`
+    lands in the same window."""
 
     def __init__(self, lane: str, labels=(), between=None):
         self.lane = lane
@@ -53,6 +61,7 @@ class FakeCard:
         self.reads = 0
         self.requests = 0
         self.writes: list[str] = []
+        self.looked_up = False
 
     def gql(self, query, variables=None):
         self.requests += 1
@@ -64,6 +73,7 @@ class FakeCard:
             self.lane = name
             return {"issueUpdate": {"success": True}}
         if "workflowStates" in q:
+            self.looked_up = True
             return {"workflowStates": {"nodes": [
                 {"id": i, "name": n, "type": t} for n, (i, t) in STATES.items()]}}
         if "history(" in q:
@@ -73,8 +83,9 @@ class FakeCard:
                 "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}
         if "issue(id:" in q:
             self.reads += 1
-            if self.reads == 2 and self.between:
-                self.between(self)
+            if self.looked_up and self.between:
+                between, self.between = self.between, None
+                between(self)
             sid, stype = STATES[self.lane]
             return {"issue": {
                 "id": "uuid-1", "identifier": "DRE-1", "title": "A card",
@@ -135,10 +146,13 @@ def test_a_hold_label_added_inside_the_race_window_refuses(fake):
 def test_the_expectation_costs_no_extra_request(fake):
     plain = fake("In Progress")
     linear_ops.cmd_state("DRE-1", "Todo")
+    linear_ops.reset_workflow_states()  # a fresh run: both look their lanes up
     guarded = fake("In Progress")
     linear_ops.cmd_state("DRE-1", "Todo", expect=("In Progress",),
                          labels_absent=("needs-human",))
-    assert guarded.requests == plain.requests
+    # Since Stage 2 #9 a conditional write is a held card: one request FEWER
+    # (no first read), never one more.
+    assert guarded.requests == plain.requests - 1
     assert guarded.writes == plain.writes == ["Todo"]
 
 

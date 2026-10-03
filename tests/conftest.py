@@ -37,6 +37,16 @@ def _reset_linear_budget() -> None:
         reset()
 
 
+def _reset_workflow_states() -> None:
+    """The Linear seam reads a team's workflow states once per PROCESS (Stage 2
+    BP-3): in production one process is one run; in a test session one test's
+    fake lanes and ids must never be the next test's."""
+    linear_ops = sys.modules.get("linear_ops")
+    reset = getattr(linear_ops, "reset_workflow_states", None)
+    if reset is not None:
+        reset()
+
+
 def _reset_read_door() -> None:
     """The read door's client keeps PROCESS state (Stage 2 BP-2): the mode it
     read once, its counters, whether the door stopped answering, its token. In
@@ -65,8 +75,10 @@ def fresh_sweep_board(monkeypatch):
     _lift_drain_slots(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
+    _reset_workflow_states()
     _reset_read_door()
     yield
     _reset_sweep_board()
     _reset_linear_budget()
+    _reset_workflow_states()
     _reset_read_door()
