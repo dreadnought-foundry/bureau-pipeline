@@ -34,6 +34,7 @@ import json
 import threading
 import time
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCHEMA = "bureau-read/1"
@@ -64,7 +65,7 @@ def default_claims(**over) -> dict:
             "reconcile.yml@refs/tags/stable"),
         "sub": "repo:dreadnought-foundry/portico:ref:refs/heads/main",
         "event_name": "schedule",
-        "jti": f"jti-{now}",
+        "jti": str(uuid.uuid4()),  # unique per token: the door claims each once
         "iat": now,
         "nbf": now,
         "exp": now + 300,
@@ -212,7 +213,7 @@ class FakeDoor(_Server):
         return 200, self.envelope(verdict="UNKNOWN", reason=reason)
 
     def answer(self, endpoint: str, query: dict):
-        for key in (endpoint, endpoint.split("/")[1] if endpoint.count("/") > 1 else None):
+        for key in (endpoint, endpoint.rsplit("/", 1)[-1]):
             if key in self.routes:
                 return self.routes[key]
         if endpoint == "/board":

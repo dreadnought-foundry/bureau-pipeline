@@ -162,7 +162,8 @@ def test_the_dependents_answer_is_board_nodes_and_reconcile_rebuilds_the_merge_q
     it plus `/cards?ids=<id>` and rebuilds the ONE card in exactly
     `merge_sweep_gate.QUERY`'s selection, so every reader downstream of the
     merge-sweep gate reads the shape it always read."""
-    merged = {**WORLD["door_work"]["issues"]["nodes"][0], "state": {"name": "Done"}}
+    merged = {**WORLD["door_work"]["issues"]["nodes"][0], "state": {"name": "Done"},
+              "parent": {"identifier": "DRE-1000", "state": {"name": "In Progress"}}}
     dependent = WORLD["door_backlog"]["issues"]["nodes"][0]
     monkeypatch.setattr(bureau_read, "mode", lambda: "on")
     monkeypatch.setattr(bureau_read, "enabled", lambda: True)
@@ -172,7 +173,12 @@ def test_the_dependents_answer_is_board_nodes_and_reconcile_rebuilds_the_merge_q
         nodes=[dependent]))
     built = reconcile._door_dependents("DRE-1001")
     query = selection_tree(merge_sweep_gate.QUERY[merge_sweep_gate.QUERY.index("{") + 1:])
-    assert _shape_of(built) == query["issue"]
+    # Every path the rebuilt card carries is one the query selects, and every
+    # field the query selects is there (an empty connection carries no node).
+    assert _merge(query["issue"], _shape_of(built)) == query["issue"]
+    assert set(built) == set(query["issue"])
+    assert set(built["parent"]) == set(query["issue"]["parent"])
+    assert set(built["relations"]["nodes"][0]) == set(query["issue"]["relations"]["nodes"])
     assert [d["identifier"] for d in merge_sweep_gate.dependents(built)] == ["DRE-1003"]
     assert built["relations"]["pageInfo"]["hasNextPage"] is False
     # The parent's children are not read: said as unknown, never as none.
