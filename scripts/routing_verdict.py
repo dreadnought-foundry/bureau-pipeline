@@ -11,11 +11,12 @@ below is the one way a verdict gets onto a card.
 
 ## Promoted is not the same as dispatched (DRE-3385)
 
-Three verdicts route to `Todo` — FLEET, WORKBENCH and OPERATOR — and the sweep
+Three verdicts leave Backlog by the sweep — FLEET to `Todo`, WORKBENCH and
+OPERATOR to `Hand-work`, the person-work lane (DRE-5321) — and the sweep
 performs the move for all three. Only FLEET is handed to an agent. That
 distinction lives in two readers here: `sweep_promotes` (is this card's
-destination the promotion lane) and `is_promotable` (may a run be dispatched at
-it). Collapsing them into one is what left OPERATOR and WORKBENCH with a
+destination a lane the sweep carries cards into) and `is_promotable` (may a run
+be dispatched at it). Collapsing them into one is what left OPERATOR and WORKBENCH with a
 destination written on them and no turn ever coming — "enters Backlog and goes
 to the queue when its turn comes, with no turn ever coming" (DRE-2735), and on
 2026-09-08, 33 of the board's 40 Backlog cards.
@@ -167,21 +168,25 @@ STALE_VERDICT_NEEDLE = f"🚨 {STALE_VERDICT_TAG}:"
 # exit itself is what a re-planned card has to show for its second trip.
 PLANNING_LANE = "Planning"
 
-# The lane the sweep promotes a Backlog card INTO (DRE-3385). THREE of the five
-# verdicts name it as their destination — FLEET, WORKBENCH and OPERATOR — and
-# what separates them is not where the card goes but who picks it up there. So
-# the promotion refusal reads the DESTINATION, never `promotable`: that field
-# answers the narrower question "may an unattended run be dispatched at this",
-# and reading it as "may the sweep move this" is exactly how OPERATOR and
-# WORKBENCH came to have a destination nothing ever carried them to — the
-# amendment to DRE-2724 wrote `Todo` on both, and `promote_ready` refused every
-# non-FLEET verdict, so 33 of 40 Backlog cards were cards with a destination and
-# no turn (read live 2026-09-08).
-PROMOTION_LANE = "Todo"
+# The lanes the sweep promotes a Backlog card INTO are READ, not declared
+# (DRE-5321). Until then one constant said `Todo`, because THREE of the five
+# verdicts named it — FLEET, WORKBENCH and OPERATOR — and what separated them
+# was who picks the card up, not where it goes. Hand-work changed that: a
+# person's card now has a lane of its own, so "the promotion lane" is two lanes
+# and a constant would have been a second copy of the vocabulary. The rule is
+# `sweep_promotes()`: a destination in the work segment, past the lane the
+# planning exit lands in. The promotion refusal still reads the DESTINATION,
+# never `promotable`: that field answers the narrower question "may an
+# unattended run be dispatched at this", and reading it as "may the sweep move
+# this" is exactly how OPERATOR and WORKBENCH came to have a destination nothing
+# ever carried them to — the amendment to DRE-2724 wrote `Todo` on both, and
+# `promote_ready` refused every non-FLEET verdict, so 33 of 40 Backlog cards
+# were cards with a destination and no turn (read live 2026-09-08).
 
 # Who performs that move, named so `config_problems()` can bind it to the lane
-# contract the way every actor is bound: a promoter the destination lane does
-# not permit is a move nothing may legally make (DRE-2859).
+# contract the way every actor is bound: a promoter a destination lane does not
+# permit is a move nothing may legally make (DRE-2859). Bound to EVERY lane the
+# sweep carries a card to, not only Todo.
 PROMOTER = "reconcile.py"
 
 # The marker must OPEN the comment. Anchored for the reason above, and for the
@@ -309,24 +314,49 @@ def is_promotable(name: str, doc: dict | None = None) -> bool:
     """May an unattended RUN be dispatched at this card? FLEET alone.
 
     Not the same question as `sweep_promotes` below, and the difference is the
-    whole of DRE-3385: three verdicts reach `Todo`, and only one of them is
-    handed to an agent when it gets there.
+    whole of DRE-3385: three verdicts are carried out of Backlog, and only one
+    of them is handed to an agent when it gets there.
     """
     return bool(record(name, doc)["promotable"])
+
+
+def _carried_lanes() -> tuple:
+    """The lanes the sweep may carry a Backlog card INTO, off the lane contract:
+    every live work-segment lane except the one the planning exit lands in.
+    Backlog is where a card waits for its turn; it is the lane the sweep
+    promotes OUT of, never into."""
+    landing = lane_contract.planning_exit()[1]
+    return tuple(
+        lane["name"] for lane in lane_contract.lanes("live")
+        if lane["segment"] == "work" and lane["name"] != landing
+    )
 
 
 def sweep_promotes(name: str, doc: dict | None = None) -> bool:
     """Does the sweep MOVE a Backlog card carrying this verdict?
 
-    True when the verdict's destination is `PROMOTION_LANE` — FLEET, WORKBENCH
-    and OPERATOR. PARKED stays in Backlog on purpose, and NEEDS WORK goes back
-    to Planning, which is the planner's move and never the sweep's.
+    True when the verdict's destination is a work-segment lane other than the
+    planning exit's landing lane (DRE-5321): FLEET (to Todo), WORKBENCH and
+    OPERATOR (to Hand-work). PARKED stays in Backlog on purpose, and NEEDS WORK
+    goes back to Planning, which is the planner's move and never the sweep's.
 
-    Read off the destination rather than listed, so a route added or re-pointed
-    in the vocabulary changes what the sweep does without anybody remembering
-    to edit a tuple in the promoter.
+    Read off the destination and the lane contract rather than listed, so a
+    route added or re-pointed in the vocabulary changes what the sweep does
+    without anybody remembering to edit a tuple in the promoter.
     """
-    return destination(name, doc) == PROMOTION_LANE
+    return destination(name, doc) in _carried_lanes()
+
+
+def sweep_lanes(doc: dict | None = None) -> tuple:
+    """Every lane the sweep carries a card into, in the vocabulary's order,
+    each once: the destinations of the verdicts `sweep_promotes`. Today
+    ("Todo", "Hand-work")."""
+    out: list[str] = []
+    for name in verdicts(doc):
+        lane = destination(name, doc)
+        if sweep_promotes(name, doc) and lane not in out:
+            out.append(lane)
+    return tuple(out)
 
 
 def marks(name: str, doc: dict | None = None) -> tuple:
@@ -390,22 +420,26 @@ def config_problems(doc: dict | None = None) -> list:
     except Exception as e:  # noqa: BLE001 — an unreadable contract is a problem, not a crash
         return [f"the lane contract could not be read, so nothing can be bound to it: {e}"]
 
-    # The promotion lane itself (DRE-3385). Three routes now depend on the
-    # sweep being able to make this move, so a lane that does not exist — or one
-    # the promoter may not write — is a dead end for all three at once, and it
-    # fails here rather than in a live sweep.
-    if PROMOTION_LANE not in lanes:
+    # The promotion lanes themselves (DRE-3385, DRE-5321). Three routes depend
+    # on the sweep being able to make these moves, so a lane the promoter may
+    # not write is a dead end for every route that lands there, and it fails
+    # here rather than in a live sweep. Every lane the sweep carries to is
+    # bound, read off the vocabulary — Todo for FLEET, Hand-work for WORKBENCH
+    # and OPERATOR — not one lane named in a constant.
+    carried = sweep_lanes(doc)
+    if not carried:
         problems.append(
-            f"the promotion lane {PROMOTION_LANE!r} is not a live lane in "
-            "config/lane-contract.json — the sweep has nowhere to promote to"
+            "no verdict routes to a lane the sweep carries cards into — the "
+            "sweep has nowhere to promote to"
         )
-    elif PROMOTER not in lane_contract.lane_writers(PROMOTION_LANE):
-        problems.append(
-            f"the promoter {PROMOTER!r} is not a permitted writer of "
-            f"{PROMOTION_LANE!r}, which permits only "
-            f"{', '.join(lane_contract.lane_writers(PROMOTION_LANE))} — the "
-            "move the sweep makes would not be one the contract allows"
-        )
+    for lane_name in carried:
+        if PROMOTER not in lane_contract.lane_writers(lane_name):
+            problems.append(
+                f"the promoter {PROMOTER!r} is not a permitted writer of "
+                f"{lane_name!r}, which permits only "
+                f"{', '.join(lane_contract.lane_writers(lane_name))} — the "
+                "move the sweep makes would not be one the contract allows"
+            )
 
     names = verdicts(doc)
     for name in names:
@@ -457,8 +491,8 @@ def config_problems(doc: dict | None = None) -> list:
         if not sweep_promotes(name, doc):
             problems.append(
                 f"verdict {name!r} is dispatched unattended but routes to "
-                f"{destination(name, doc)!r} rather than {PROMOTION_LANE!r} — "
-                "the sweep can only dispatch a card it promotes"
+                f"{destination(name, doc)!r}, a lane the sweep never carries a "
+                "card into — the sweep can only dispatch a card it promotes"
             )
 
     for label, verdict in label_map(doc).items():
@@ -661,9 +695,9 @@ def _destination_refusal(
 
     The half that is about a WRONG DESTINATION and nothing else. Since DRE-3385
     that is read off `sweep_promotes`, not off `promotable`: WORKBENCH and
-    OPERATOR are bound for `Todo` like FLEET and the sweep carries them there;
-    what they are not is DISPATCHED, and the promoter says so in the receipt
-    rather than by leaving the card behind.
+    OPERATOR are carried out of Backlog like FLEET, into `Hand-work` since
+    DRE-5321; what they are not is DISPATCHED, and the promoter says so in the
+    receipt rather than by leaving the card behind.
     """
     try:
         name = verdict_on(comment_bodies, doc)
@@ -700,8 +734,10 @@ def _no_verdict_refusal(identifier: str, inherits: str) -> str:
         "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
         '--why "<one line>"`\n\n'
         "This refusal is only about carrying NO verdict. A verdict routes the "
-        "card on purpose and says where — FLEET, WORKBENCH and OPERATOR all "
-        f"reach {PROMOTION_LANE}, and the last two say a person builds it."
+        "card on purpose and says where — "
+        + ", ".join(f"{name} reaches {destination(name)}"
+                    for name in verdicts() if sweep_promotes(name))
+        + "; only FLEET is dispatched, and the others say a person builds it."
     )
 
 
@@ -904,15 +940,17 @@ def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     whoever's turn it actually is has no way to tell.
 
     The marks are named because they are applied in the same breath: the reader
-    can see that the labels which keep the fleet off this card are on it.
+    can see that the labels which keep the fleet off this card are on it. So is
+    the lane it lands in, read off the vocabulary (DRE-5321) — `Hand-work`
+    today, never the word Todo restated here.
     """
     if is_promotable(name, doc):
         return None
     entry = record(name, doc)
     marked = ", ".join(f"`{m}`" for m in marks(name, doc))
     return (
-        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn — "
-        "a person builds this; nothing was dispatched."
+        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn in "
+        f"{destination(name, doc)} — a person builds this; nothing was dispatched."
         + (f" Marked {marked}." if marked else "")
     )
 

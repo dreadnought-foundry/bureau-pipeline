@@ -176,13 +176,6 @@ GREEN_LIGHT_LANES = ("Green Light",) + tuple(
     old for old, new in lane_scope.LANE_ALIASES.items() if new == "Green Light"
 )
 
-# The lane a filed discovery is PICKED UP in — the destination that decides which
-# routing verdicts a discovery may be born carrying (DRE-3342). Named once here
-# and read against the lane contract by tests/test_mid_epic_discovery.py, so a
-# lane renamed out from under it fails there rather than silently emptying
-# `fileable_verdicts()`.
-DISCOVERY_LANE = "Todo"
-
 # The managed region in the epic's description. Fenced by HTML comments so it is
 # invisible in rendered Linear and unambiguous to parse.
 ARTIFACT_BEGIN = "<!-- BEGIN epic-growth (managed by scripts/mid_epic.py) -->"
@@ -294,17 +287,21 @@ def fileable_verdicts() -> tuple:
     """The routing verdicts a discovery may be born with.
 
     DERIVED from the vocabulary, never restated: they are exactly the verdicts
-    whose destination is the lane a sibling is picked up in. PARKED sends the
-    card to Backlog and NEEDS WORK back to Planning — either one files a sibling
-    nobody comes for, which is the silent accretion this route replaces wearing
-    a verdict. A route added to `config/routing-verdicts.json` becomes fileable
-    here on its own, or does not, according to where it sends the card.
+    the sweep carries out of Backlog (`routing_verdict.sweep_promotes`), which
+    is where a filed sibling waits. Until DRE-5321 that was "the verdicts whose
+    destination is Todo"; once WORKBENCH and OPERATOR landed in Hand-work
+    instead, a destination test would have shrunk this to FLEET alone, so the
+    rule changed and the answer did not. PARKED stays in Backlog and NEEDS WORK
+    goes back to Planning — either one files a sibling nobody comes for, which
+    is the silent accretion this route replaces wearing a verdict. A route
+    added to `config/routing-verdicts.json` becomes fileable here on its own,
+    or does not, according to whether the sweep carries it.
     """
     import routing_verdict
 
     return tuple(
         name for name in routing_verdict.verdicts()
-        if routing_verdict.destination(name) == DISCOVERY_LANE
+        if routing_verdict.sweep_promotes(name)
     )
 
 
@@ -325,13 +322,16 @@ def verdict_problem(kind: str, verdict) -> str | None:
             "the amended plan asks for are filed after it is re-green-lit, and "
             "each of those may carry a verdict."
         )
+    import routing_verdict
+
     fileable = fileable_verdicts()
     if verdict.strip().upper() not in fileable:
+        lands = ", ".join(f"{name} → {routing_verdict.destination(name)}" for name in fileable)
         return (
             f"a discovery may be born carrying {', '.join(fileable)} — refusing "
-            f"{verdict.strip() or 'nothing'!r}. Those are the verdicts whose "
-            f"destination is `{DISCOVERY_LANE}`, the lane a sibling is picked up "
-            "in; every other route files a card nobody comes for."
+            f"{verdict.strip() or 'nothing'!r}. Those are the verdicts the sweep "
+            f"carries out of Backlog, each to the lane it is picked up in "
+            f"({lands}); every other route files a card nobody comes for."
         )
     return None
 

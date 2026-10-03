@@ -19,9 +19,10 @@
     "and it skips a non-FLEET verdict too).",
     "",
     "THE TURN COMES NOW (DRE-3385). The sweep promotes every verdict whose",
-    "destination is Todo — FLEET, WORKBENCH and OPERATOR — and stamps the",
-    "verdict's own `marks` before it moves the card, so a card a person builds",
-    "never sits in Todo unmarked. So DESTINATION and PROMOTABLE answer two",
+    "destination is a work lane past Backlog — FLEET to Todo, WORKBENCH and",
+    "OPERATOR to Hand-work since DRE-5321 — and stamps the verdict's own",
+    "`marks` before it moves the card, so a card a person builds never lands",
+    "unmarked. So DESTINATION and PROMOTABLE answer two",
     "different questions and both are read: destination says where the sweep",
     "carries the card, `promotable` says whether a run is dispatched at it",
     "there. Read as one, OPERATOR and WORKBENCH had a destination and no turn,",
@@ -61,16 +62,16 @@
     {
       "name": "WORKBENCH",
       "means": "Needs an interactive flow or live system state — driving an auth flow, forcing a token past expiry, confirming something in production.",
-      "destination": "Todo",
+      "destination": "Hand-work",
       "actor": "operator",
       "promotable": false,
       "marks": ["hand-built"],
-      "why": "It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes and stamping the mark before the card lands, because the destination written here was true for a year and nothing ever carried a card to it."
+      "why": "It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes and stamping the mark before the card lands, because the destination written here was true for a year and nothing ever carried a card to it. It lands in Hand-work, the person-work lane, not Todo (DRE-5240): Todo is the build button, and a person's card waiting there for days read as a stuck build queue."
     },
     {
       "name": "OPERATOR",
       "means": "Not code — a deploy, a migration run, a secret.",
-      "destination": "Todo",
+      "destination": "Hand-work",
       "actor": "operator",
       "promotable": false,
       "marks": ["hand-built", "no-code"],
