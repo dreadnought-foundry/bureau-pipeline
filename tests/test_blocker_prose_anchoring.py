@@ -217,7 +217,12 @@ def test_children_of_the_prose_jammed_epic_promote():
         }
         for ident in ("DRE-2494", "DRE-2496", "DRE-2497", "DRE-2498", "DRE-2650")
     ]
-    with patch.object(reconcile, "backlog_children", return_value=kids), patch.object(
+    # The cap is pinned here, not inherited from this repo's own stub: the
+    # subject is prose anchoring, and a restart cap below five (DRE-5733) must
+    # not read as the epic's children being held.
+    with patch.object(reconcile, "MAX_WIP", reconcile.DEFAULT_MAX_WIP), patch.object(
+        reconcile, "backlog_children", return_value=kids
+    ), patch.object(
         reconcile, "_fetch_epic_relations", return_value=_epic_2492()
     ), patch.object(reconcile, "card_state", return_value="In Progress"), patch.object(
         reconcile.linear_ops, "cmd_advance"

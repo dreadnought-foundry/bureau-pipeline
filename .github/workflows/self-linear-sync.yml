@@ -3,10 +3,8 @@
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
 # The merge handler promotes cards, so this stub is one of the repo's three
-# WIP-cap paths. It passes no max_wip, matching self-reconcile and self-plan —
-# override all three or none (DRE-2529). An empty input is resolved from
-# self-reconcile.yml, which sets none, so the cap is
-# reconcile.DEFAULT_MAX_WIP ("8") on every path (DRE-3994).
+# WIP-cap paths. It passes the same max_wip as self-reconcile and self-plan —
+# all three or none (DRE-2529).
 name: Linear Sync
 
 on:
@@ -31,4 +29,5 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/linear-sync.yml@main
     with:
       pipeline_ref: main
+      max_wip: "3"
     secrets: inherit
