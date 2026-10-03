@@ -275,3 +275,101 @@ def test_a_fallback_is_process_state_the_test_reset_clears(planner):
     t = planner(_Resp())
     linear_ops.gql(QUERY)
     assert t.keys == [PLANNER]
+
+
+# ── a token known to be dead is never sent (Stage 2 review item 30) ─────────
+# The fallback above is per PROCESS, and an agent's Linear calls are separate
+# `python3 linear_ops.py …` processes, so with a dead token every one of them
+# spends a 401 before its real request — for as long as the console stays down
+# (finding H5c). The console knows when the token it published expires; once it
+# publishes that as the repository variable LINEAR_PLANNER_KEY_EXPIRES_AT
+# (epoch seconds, the same number its token record stores), a process whose
+# token is past it goes straight to the fleet key and never sends the token.
+NOW = 1_790_000_000
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    monkeypatch.setattr(linear_ops.time, "time", lambda: float(NOW))
+
+
+def test_known_expired_token_never_sent(planner, clock, monkeypatch, capsys):
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, str(NOW - 10))
+    t = planner(_Resp(headers=_headers(351, 2500)), _Resp(headers=_headers(350, 2500)))
+    assert linear_ops.gql(QUERY) == {"viewer": {"id": "u1"}}
+    assert linear_ops.gql(QUERY) == {"viewer": {"id": "u1"}}
+    assert t.keys == [FLEET, FLEET]
+    err = capsys.readouterr().err
+    assert err.count("linear-key:") == 1
+    assert "linear-key: planner-oauth not sent (" in err
+    assert "— fell back to fleet" in err
+    assert "planner-token" not in err and FLEET not in err
+    assert linear_ops.budget_line().endswith("; budget: fleet)")
+
+
+def test_a_token_inside_the_safety_margin_is_not_sent_either(planner, clock, monkeypatch):
+    """A token with seconds to live dies mid-process; the margin spends the
+    fleet key instead of a 401."""
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV,
+                       str(NOW + linear_ops.EXPIRY_MARGIN_SECONDS - 1))
+    t = planner(_Resp())
+    linear_ops.gql(QUERY)
+    assert t.keys == [FLEET]
+
+
+def test_a_live_token_is_sent(planner, clock, monkeypatch, capsys):
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, str(NOW + 3600))
+    t = planner(_Resp(headers=_headers(4998, 5000)))
+    linear_ops.gql(QUERY)
+    assert t.keys == [PLANNER]
+    assert "linear-key:" not in capsys.readouterr().err
+    assert linear_ops.budget_line().endswith("; budget: planner-oauth)")
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_no_published_expiry_changes_nothing(planner, clock, monkeypatch, capsys, value):
+    if value is None:
+        monkeypatch.delenv(linear_ops.EXPIRES_ENV, raising=False)
+    else:
+        monkeypatch.setenv(linear_ops.EXPIRES_ENV, value)
+    t = planner(_Resp())
+    linear_ops.gql(QUERY)
+    assert t.keys == [PLANNER]
+    assert "linear-key:" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["soon", "2026-10-02T16:00:00Z", "12.5.1"])
+def test_an_unreadable_expiry_is_said_once_and_never_blocks_a_call(
+        planner, clock, monkeypatch, capsys, value):
+    """One documented shape — epoch seconds — and anything else is a defect to
+    say out loud, not a reason to fail a healthy call over telemetry."""
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, value)
+    t = planner(_Resp(), _Resp())
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert t.keys == [PLANNER, PLANNER]
+    err = capsys.readouterr().err
+    assert err.count(linear_ops.EXPIRES_ENV) == 1
+    assert "not epoch seconds" in err
+
+
+def test_an_expiry_with_no_fleet_key_to_fall_to_sends_the_only_key_there_is(
+        planner, clock, monkeypatch, capsys):
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, str(NOW - 10))
+    monkeypatch.delenv(linear_ops.FALLBACK_ENV)
+    t = planner(_Resp())
+    linear_ops.gql(QUERY)
+    assert t.keys == [PLANNER]
+    assert "linear-key:" not in capsys.readouterr().err
+
+
+def test_an_expiry_on_a_repo_already_on_the_fleet_key_changes_nothing(
+        planner, clock, monkeypatch, capsys):
+    """Not opted in, or no token published: the primary IS the fleet key, and
+    a stale variable says nothing about it."""
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, str(NOW - 10))
+    monkeypatch.setenv("LINEAR_API_KEY", FLEET)
+    t = planner(_Resp())
+    linear_ops.gql(QUERY)
+    assert t.keys == [FLEET]
+    assert "linear-key:" not in capsys.readouterr().err

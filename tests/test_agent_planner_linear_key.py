@@ -286,6 +286,39 @@ def test_the_opt_in_is_the_callers_variable_and_read_nowhere_else(name):
     assert uses == len(_key_steps(_doc(name))) + 1, (name, uses)
 
 
+# ── a token known to be dead is never sent (review item 30) ─────────────────
+EXPIRES_EXPR = "${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}"
+
+# Every job in the fleet that can hold the planner's token: the four agent
+# jobs, and the planner's own two — the gate lives in linear_ops, which every
+# one of them runs, and a planner sending a dead token is the same 401 storm.
+TOKEN_JOBS = {
+    **{name: (job,) for name, (job, _floor) in AGENT_WORKFLOWS.items()},
+    "plan.yml": ("plan", "publish"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(TOKEN_JOBS))
+def test_every_job_that_can_hold_the_token_is_told_when_it_expires(name):
+    """There is no clock in a GitHub expression, so the comparison happens in
+    linear_ops (tests/test_linear_ops_key_fallback.py); the job's only part is
+    handing it the published expiry. Job level, like the identity: every
+    step, the agent's own included, inherits it."""
+    doc = _doc(name)
+    for job_id in TOKEN_JOBS[name]:
+        env = doc["jobs"][job_id].get("env") or {}
+        assert env.get("LINEAR_PLANNER_KEY_EXPIRES_AT") == EXPIRES_EXPR, (name, job_id)
+    holders = {j for j, _s, _e in _key_steps(doc)}
+    assert holders <= set(TOKEN_JOBS[name]), (name, holders)
+
+
+def test_the_expiry_is_read_by_exactly_the_jobs_that_can_hold_the_token():
+    readers = {path.name for path in WORKFLOWS.glob("*.yml")
+               if any("LINEAR_PLANNER_KEY_EXPIRES_AT" in line
+                      for line in _code_lines(path.name))}
+    assert readers == set(TOKEN_JOBS), sorted(readers ^ set(TOKEN_JOBS))
+
+
 # ── the fence ───────────────────────────────────────────────────────────────
 def test_no_other_workflow_reads_the_planners_token():
     """Gates, medic, sweeps, relays and releases stay on the fleet key. A new
@@ -314,9 +347,12 @@ _FORBIDDEN = (
 
 CHANGED = (
     *(f".github/workflows/{name}" for name in sorted(AGENT_WORKFLOWS)),
+    ".github/workflows/plan.yml",
     "agents.yaml",
     "config/linear-identities.json",
+    "scripts/linear_ops.py",
     "tests/test_agent_planner_linear_key.py",
+    "tests/test_linear_ops_key_fallback.py",
 )
 
 
