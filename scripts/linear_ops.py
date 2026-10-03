@@ -1349,6 +1349,36 @@ def _clobbered_terminal_state(
     return None
 
 
+def _expectation_refusal(
+    identifier: str,
+    issue: dict,
+    state_name: str,
+    expect: tuple | None,
+    labels_absent: tuple,
+) -> str | None:
+    """Why a conditional write must not land on `issue` as read, or None.
+
+    The decision behind a conditional write (Stage 2 item 33) was made on a
+    card in one of `expect`'s lanes and without any of `labels_absent`. A card
+    that has left those lanes, or gained one of those labels, is a card the
+    decision was not about — the next sweep decides on what it finds."""
+    lane = ((issue.get("state") or {}).get("name")) or ""
+    if expect is not None and lane.lower() not in {e.lower() for e in expect}:
+        return (
+            f"{identifier} is in {lane!r}, not {', '.join(expect)!r} as the "
+            f"decision to move it to {state_name!r} read it — not writing; the "
+            "board moved since, and the next sweep decides on what it finds."
+        )
+    names = {n.lower() for n in _label_names(issue)}
+    present = sorted(lbl for lbl in labels_absent if lbl.lower() in names)
+    if present:
+        return (
+            f"{identifier} now carries {', '.join(present)!r}, which the decision "
+            f"to move it to {state_name!r} read as absent — not writing."
+        )
+    return None
+
+
 def _set_state(identifier: str, issue_id: str, state_id_value: str) -> None:
     gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
@@ -1363,6 +1393,9 @@ def guarded_state_write(
     target_id: str,
     target_type: str,
     state_name: str,
+    *,
+    expect: tuple | None = None,
+    labels_absent: tuple = (),
 ) -> bool:
     """Write a card's state with the tightest terminal guard Linear allows.
 
@@ -1413,6 +1446,12 @@ def guarded_state_write(
     decides, with the card's current lane as the lane before Todo. On a refusal
     nothing is sent, the refusal is posted once, and it returns False. The
     DRE-3621 write — In Progress to Todo — is the one this refuses.
+
+    `expect` / `labels_absent` make the write FROM-LANE-CONDITIONAL (Stage 2
+    item 33): the pre-write re-read in (1) — the read this pays for anyway —
+    also refuses a card that has left `expect`'s lanes or gained one of
+    `labels_absent`. A terminal target skips that read, so its caller checks
+    the expectation on the read it already holds (`cmd_state`).
     """
     terminal_target = target_type in _TERMINAL_TYPES
     # A terminal target skips the pre-write read below, so its no-op check uses
@@ -1433,6 +1472,10 @@ def guarded_state_write(
                 f"{state_name!r}; a finished card is ground truth and is never "
                 f"reopened by an automated transition."
             )
+            return False
+        refused = _expectation_refusal(identifier, fresh, state_name, expect, labels_absent)
+        if refused is not None:
+            print(refused)
             return False
     if current.get("id") == target_id:
         print(f"{identifier} is already in {state_name!r} — nothing to write.")
@@ -1484,13 +1527,36 @@ def guarded_state_write(
     return True
 
 
-def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
+def cmd_state(
+    identifier: str,
+    state_name: str,
+    *flags: str,
+    expect: tuple | None = None,
+    labels_absent: tuple = (),
+) -> bool:
+    """Move a card to `state_name`. True when it is there (written, or already
+    there), False when a guard refused the move — so a caller never posts a
+    receipt for a move that did not happen.
+
+    `expect` and `labels_absent` are the CONDITIONAL write (`cmd_state_if`,
+    Stage 2 item 33): every write a sweep decides from the read door's data
+    passes the lanes and the absent labels its decision read, and the move is
+    refused when either read below shows otherwise. Both reads are ones this
+    function makes anyway, so the condition costs no request. Without them
+    this is the unconditional write it has always been.
+    """
     # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
     # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
     # building-card reroute below. Everything else is treated as an ordinary
     # transition that must NOT be allowed to strand a building card.
     deliberate_park = "--park" in flags
+    expect = tuple(expect) if expect is not None else None
+    labels_absent = tuple(labels_absent or ())
     issue = get_issue(identifier)
+    refused = _expectation_refusal(identifier, issue, state_name, expect, labels_absent)
+    if refused is not None:
+        print(refused)
+        return False
     target_id, target_type = state_id_and_type(issue["team"]["id"], state_name)
     # Ground-truth guard (DRE-1877): a merged PR moves its card to Done, and Done
     # is the truth. Never let a LATER, non-terminal transition drag a finished
@@ -1515,7 +1581,7 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
             f"{state_name!r}; a finished card is ground truth and is never reopened "
             f"by an automated transition."
         )
-        return
+        return False
     # Building-card guard (DRE-1885, follow-on to DRE-1877, one lifecycle state
     # earlier): a card that is actively BUILDING — current state-type `started`
     # (In Progress) — must never be silently knocked into Backlog, where nothing
@@ -1544,17 +1610,21 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
         # Same guarded write as the ordinary path: the reroute is a write like
         # any other, and an unguarded one would simply become the new way to
         # clobber a card that went Done mid-decision (DRE-2316).
-        if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo"):
-            return
+        if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo",
+                                   expect=expect, labels_absent=labels_absent):
+            return False
         print(
             f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
             f"instead of {state_name!r}; an actively-building card is never parked "
             f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
             f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
         )
-        return
-    if guarded_state_write(identifier, issue, target_id, target_type, state_name):
+        return True
+    if guarded_state_write(identifier, issue, target_id, target_type, state_name,
+                           expect=expect, labels_absent=labels_absent):
         print(f"{identifier} → {state_name}")
+        return True
+    return False
 
 
 def cmd_advance(
