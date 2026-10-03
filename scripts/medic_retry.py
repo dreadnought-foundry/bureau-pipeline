@@ -49,9 +49,9 @@ The medic's own refusal took both cards off the path that brings a limit death
 back. So the gate takes the failed workflow's name, and rule 1 applies to every
 workflow except the ones `BOOKKEEPING_WORKFLOWS` names. An empty or unknown
 name keeps rule 1: an unknown run is not evidence that the rerun starts no
-agent work. Whether a `needs-human` hold should also block a MERGE is an open
-question to the CEO (Stage 2 review item 44, M12); until he answers, Merge Gate
-keeps today's behavior and is exempt.
+agent work. Merge Gate is exempt by the CEO's decision of 2026-10-02 (about
+17:37 PT, Stage 2 review item 44, M12): a `needs-human` hold does not block
+merging.
 
 Everything else keeps the retry it has always had. An infra error, a run that
 died before the agent (`num_turns: 0`), a run with no execution record at all:
@@ -184,9 +184,10 @@ REPLAN_STATE = "Planning"
 #     because it "does not merge" — it does. It is exempt because the gate's
 #     safety is the critic and CI, not the hold label, which is mostly
 #     applied mechanically when a robot loop gives up and often lingers
-#     stale (Stage 2 review item 44, M12). Whether the label should block
-#     merging is an open question to the CEO; this keeps today's behavior
-#     until he answers, and taking it out is his decision.
+#     stale (Stage 2 review item 44, M12). The CEO DECIDED this on
+#     2026-10-02 at about 17:37 PT: "needs a human" does NOT block merging.
+#     Making the hold itself smarter (reasons, self-clearing, trying without
+#     a person first) is a dated entry on roll-up DRE-4915, not this list.
 #
 # The constant keeps its name: "bookkeeping" here means "no agent work".
 # Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,

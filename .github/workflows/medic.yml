@@ -224,9 +224,11 @@ jobs:
           # refusing one over a leftover `needs-human` label posted the
           # receipt that closed DRE-5620's and DRE-5622's limit-death
           # markers. A Merge Gate rerun starts no agent work either: the gate
-          # re-evaluates and merges only on critic APPROVE and green CI
-          # (Stage 2 review item 44, M12). env, not inline (DRE-1996): the
-          # run name is agent-influenced text.
+          # re-evaluates and merges only on critic APPROVE and green CI, and
+          # the CEO decided on 2026-10-02 (about 17:37 PT) that "needs a
+          # human" does not block merging (Stage 2 review item 44, M12).
+          # env, not inline (DRE-1996): the run name is agent-influenced
+          # text.
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
         run: |
           # `|| OUT=""`: this gate must never be able to take the whole medic

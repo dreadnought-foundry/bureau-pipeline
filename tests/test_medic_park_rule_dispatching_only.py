@@ -38,8 +38,8 @@ not merge" (Stage 2 review item 44, M12): re-running it starts no agent work;
 the gate re-evaluates and merges only on critic APPROVE and green CI. A
 `needs-human` label is mostly applied mechanically when a robot loop gives up
 and often lingers stale, and the merge gate's real safety is the critic and
-CI, not the label. Whether the label should block merging is an open question
-to the CEO; this keeps today's behavior pending his answer.
+CI, not the label. The CEO decided on 2026-10-02 (about 17:37 PT) that
+"needs a human" does NOT block merging.
 """
 
 import contextlib
@@ -163,8 +163,8 @@ class TheRuleIsForDispatchingWorkflowsTest(unittest.TestCase):
     def test_a_held_cards_merge_gate_death_is_retried(self):
         """Stage 2 review item 44 (M12). Re-running the gate starts no agent
         work; the gate re-evaluates and merges only on critic APPROVE and
-        green CI, so a leftover hold label does not refuse the retry. Pending
-        the CEO's answer on whether the label should block merging."""
+        green CI, so a leftover hold label does not refuse the retry. The
+        CEO's decision of 2026-10-02: the hold does not block merging."""
         for name in ("Merge Gate", "merge gate", "Merge Gate (reusable)"):
             with self.subTest(workflow=name):
                 out = _outputs(_decide(name))
