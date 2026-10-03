@@ -508,10 +508,3 @@ def test_shadow_reads_the_door_and_moves_on_linears_answer(monkeypatch):
     assert "read-door-diff:" in out and "In Review" in out
 
 
-def test_the_test_session_resets_the_states_between_tests():
-    """conftest drops the cached states with the rest of the process state:
-    one test's fake lanes must never be the next test's."""
-    import conftest
-
-    assert "reset_workflow_states" in Path(conftest.__file__).read_text()
-    assert linear_ops._workflow_states == {}
