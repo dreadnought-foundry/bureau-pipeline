@@ -112,8 +112,10 @@ AGENT_LACKS = re.compile(
     r"|\bonly (?:the|an) operator\b",
     re.I,
 )
+#: `Recommendation: …`, bold or not, and `Recommended — …`: the label and any
+#: markup around it are not part of what is recommended.
 _RECOMMEND_LINE = re.compile(
-    r"^\W*recommend(?:ation|ed)?\W*?\s*[:—-]\s*(?P<text>\S.*)$", re.I)
+    r"^[\W_]*recommend(?:ation|ed)?[*_\s]*[:—-][*_\s]*(?P<text>\S.*)$", re.I)
 _RECOMMEND_WORD = re.compile(r"recommend", re.I)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _WHY = re.compile(r"\*\*Why it needs you:\*\*\s*(?P<reason>.*?)(?:\n\nThis card is parked in |\Z)",
