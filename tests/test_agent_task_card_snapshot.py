@@ -253,6 +253,20 @@ def test_on_a_door_that_cannot_answer_falls_back_to_one_linear_read(
     assert reason in out
 
 
+def test_on_a_door_answer_the_client_chokes_on_falls_back(monkeypatch, tmp_path):
+    """Linear on ANY door error: a dispatch never dies because the door did."""
+    def chokes(*a, **kw):
+        raise TypeError("an envelope the client did not expect")
+
+    monkeypatch.setenv("BUREAU_READ", "on")
+    monkeypatch.setattr(bureau_read, "cards", chokes)
+    path = tmp_path / "snap.json"
+    with linear(monkeypatch) as lin:
+        snap = _take(path)
+    assert lin.kinds == ["snapshot"]
+    assert snap["source"] == "linear"
+
+
 def test_on_a_door_missing_the_card_falls_back(monkeypatch, tmp_path):
     path = tmp_path / "snap.json"
     with linear(monkeypatch) as lin, door(monkeypatch):  # the door holds no card
