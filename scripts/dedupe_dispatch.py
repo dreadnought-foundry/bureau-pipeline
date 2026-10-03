@@ -705,11 +705,11 @@ def cmd_gate(identifier: str) -> None:
     snapshot is taken. The LANE is always this step's own fresh
     read — whether the card moved while the dispatch sat queued is the
     question."""
-    import card_snapshot
+    import agent_task_snapshot
 
-    snap = card_snapshot.load(identifier)
+    snap = agent_task_snapshot.load(identifier)
     try:
-        bodies = (card_snapshot.comment_bodies(snap) if snap
+        bodies = (agent_task_snapshot.comment_bodies(snap) if snap
                   else linear_ops.comment_bodies(identifier))
     except Exception as e:  # noqa: BLE001 — an unreadable card proceeds
         print(f"comment read failed ({e}) — proceeding on fail-open",

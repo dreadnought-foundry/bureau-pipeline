@@ -299,7 +299,7 @@ jobs:
       # ONE READ OF THE CARD FOR EVERY PRE-AGENT STEP (Stage 2 fix #10). The
       # gate, the duplicate guard, the turn budget, the spoken thread and the
       # In Progress move used to read the same card from Linear eleven times
-      # inside a minute. card_snapshot.py reads it once — from the read door
+      # inside a minute. agent_task_snapshot.py reads it once — from the read door
       # when the caller's BUREAU_READ is `on`, else one combined Linear read
       # that also carries the team's lanes — and each of those steps is handed
       # the file through BUREAU_CARD_SNAPSHOT. A door that cannot answer falls
@@ -325,7 +325,7 @@ jobs:
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
-          python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" --out "$BUREAU_CARD_SNAPSHOT"
+          python3 .bureau-pipeline/scripts/agent_task_snapshot.py take "$CARD" --out "$BUREAU_CARD_SNAPSHOT"
 
       # Todo-entry card-validation gate (DRE-1405). The relay can't write to
       # Linear, so a malformed card (no resolvable repo, or no agent: role

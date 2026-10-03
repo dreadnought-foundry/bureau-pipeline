@@ -511,9 +511,9 @@ def cmd_gate(identifier: str) -> None:
     # one: the lane, the fields and the comments this gate decides on, read
     # once at the top of the job. Without one, the gate reads Linear as it
     # always did. Every write below re-reads the card live (BP-3).
-    import card_snapshot
+    import agent_task_snapshot
 
-    snap = card_snapshot.load(identifier)
+    snap = agent_task_snapshot.load(identifier)
     issue = snap["issue"] if snap else linear_ops.get_issue(identifier)
     current = (issue.get("state") or {}).get("name", "").lower()
     if current not in _GATEABLE:
@@ -525,7 +525,7 @@ def cmd_gate(identifier: str) -> None:
     card = _card_from(issue) if snap else _fetch_card(linear_ops, identifier)
     description, labels = card["description"], card["labels"]
 
-    bodies = card_snapshot.comment_bodies(snap) if snap else None
+    bodies = agent_task_snapshot.comment_bodies(snap) if snap else None
     if current == "todo" and _carried_epic(linear_ops, identifier, card, bodies):
         return  # an epic is never built — carried to its lane, build stopped
 

@@ -1345,9 +1345,9 @@ def _linear_state_list(team_id: str | None, team_key: str | None,
     if not refresh and slot not in _workflow_states and not team_id:
         # agent-task's card snapshot (Stage 2 #10) carries the team's states,
         # read in the same request as the card: a held card's move needs none.
-        import card_snapshot
+        import agent_task_snapshot
 
-        handed = card_snapshot.workflow_states(team_key)
+        handed = agent_task_snapshot.workflow_states(team_key)
         if handed:
             _workflow_states[slot] = handed
     if refresh or slot not in _workflow_states:

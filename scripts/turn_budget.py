@@ -496,11 +496,11 @@ def _labels_of(identifier: str) -> tuple[list[str], str]:
     (Stage 2 #10): the labels it read at the top of the job, no request.
     """
     try:
-        import card_snapshot
+        import agent_task_snapshot
 
-        snap = card_snapshot.load(identifier)
+        snap = agent_task_snapshot.load(identifier)
         if snap is not None:
-            return card_snapshot.label_names(snap), ""
+            return agent_task_snapshot.label_names(snap), ""
         import linear_ops
 
         return linear_ops._label_names(linear_ops.get_issue(identifier)), ""
