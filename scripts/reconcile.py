@@ -10125,65 +10125,16 @@ def _door_dependents(merged: str) -> dict | None:
     shape — or None (mode off, door unavailable, or unknown: Linear answers).
     Raises BoardHeld on `linear-hold` in `on`: no Linear fallback (item 34).
 
-    Two door reads, no Linear request: `/cards?ids=<merged>` for its lane and
-    its parent, and `/cards/<merged>/dependents?lanes=Backlog` for the cards it
-    blocks. Only Backlog's: this scope feeds the promotion alone, and a card is
-    promoted only out of Backlog (`backlog_children(only=…)` keeps exactly
-    those). The parent's children are not read, and say so (`hasNextPage`):
-    nothing on this path counts them.
+    The rebuild is `merge_sweep_gate.door_card` — ONE rebuild for the merge
+    path (Stage 2 #15): Linear Sync's gate decides on it, and the pass the
+    gate starts scopes itself on it here. This wrapper only turns the door's
+    hold into this pass's skip.
     """
-    if bureau_read.mode() == "off" or not bureau_read.enabled():
-        return None
     try:
-        card = bureau_read.cards([merged], max_age=bureau_read.BOARD_MAX_AGE,
-                                 relations=False).nodes[0]
-        deps = bureau_read.dependents(merged, max_age=bureau_read.BOARD_MAX_AGE,
-                                      lanes=[BACKLOG_LANE]).nodes
-    except bureau_read.ReadUnknown as e:
-        if e.skip and bureau_read.mode() == "on":
-            _door_hold.append(e.reason)
-            raise BoardHeld(e.reason) from e
-        print(f"read-door: {merged}'s dependents unknown ({e}) — read from Linear")
-        return None
-    parent = card.get("parent")
-    return {
-        "identifier": card["identifier"],
-        "state": {"name": (card.get("state") or {}).get("name")},
-        "relations": {
-            "pageInfo": {"hasNextPage": False},
-            "nodes": [
-                {"type": "blocks", "issue": {"identifier": card["identifier"]},
-                 "relatedIssue": {"identifier": dep["identifier"],
-                                  "state": {"name": (dep.get("state") or {}).get("name")}}}
-                for dep in deps
-            ],
-        },
-        "parent": None if not parent else {
-            "identifier": parent.get("identifier"),
-            "state": {"name": (parent.get("state") or {}).get("name")},
-            "children": {"pageInfo": {"hasNextPage": True}, "nodes": []},
-        },
-    }
-
-
-def _shadow_compare_dependents(merged: str, door: dict, linear: dict) -> None:
-    """Backlog dependents and the parent's lane, door vs Linear. The door is
-    asked for Backlog's dependents only, so Linear's are cut to Backlog too.
-    Relations ride the console's poll, so a difference here is `door-older` by
-    construction: the shadow cannot prove relation freshness (review R10) — the
-    live re-check before every promotion is what guards it."""
-    def facts(card: dict) -> dict:
-        parent = card.get("parent") or {}
-        return {
-            "dependents": sorted(
-                d.get("identifier") for d in merge_sweep_gate.dependents(card)
-                if ((d.get("state") or {}).get("name")) == BACKLOG_LANE),
-            "parent": (parent.get("identifier"), (parent.get("state") or {}).get("name")),
-        }
-    d, l_ = facts(door), facts(linear)
-    diffs = [bureau_read.Diff(bureau_read.DOOR_OLDER, merged, key, d[key], l_[key])
-             for key in d if d[key] != l_[key]]
-    bureau_read.report_diffs("dependents", diffs, 1)
+        return merge_sweep_gate.door_card(merged)
+    except bureau_read.ReadUnknown as e:  # `linear-hold` in `on`, nothing else
+        _door_hold.append(e.reason)
+        raise BoardHeld(e.reason) from e
 
 
 def merged_card_scope() -> MergeScope | None:
@@ -10220,7 +10171,7 @@ def merged_card_scope() -> MergeScope | None:
         if card is None:
             card = (linear_ops.gql(merge_sweep_gate.QUERY, {"id": merged}) or {}).get("issue")
             if door_card is not None and card:
-                _shadow_compare_dependents(merged, door_card, card)
+                merge_sweep_gate.shadow_compare(merged, door_card, card)
     except linear_ops.LinearRateLimited:
         raise
     except Exception as e:  # noqa: BLE001 — an unreadable scope falls OPEN
