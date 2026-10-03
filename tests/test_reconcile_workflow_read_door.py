@@ -62,7 +62,10 @@ def test_the_reusable_refuses_a_pipeline_ref_it_was_not_called_at():
     names = [s.get("name") for s in _steps()]
     check = _step("Refuse a pipeline_ref the stub did not call")
     assert names.index(check["name"]) < names.index("Sweep")
-    assert 'bureau_read.py check-ref "${{ inputs.pipeline_ref }}"' in check["run"]
+    # Through `env`, never interpolated into the shell line.
+    assert 'bureau_read.py check-ref "$PIPELINE_REF"' in check["run"]
+    assert check["env"]["PIPELINE_REF"] == "${{ inputs.pipeline_ref }}"
+    assert "${{" not in check["run"]
     assert check["env"]["BUREAU_READ"] == "${{ vars.BUREAU_READ || 'off' }}"
     assert check["env"]["BUREAU_READ_AUDIENCE"] == "${{ vars.BUREAU_READ_AUDIENCE }}"
     assert "continue-on-error" not in check
