@@ -18,6 +18,19 @@ on:
           and not actually pinned (DRE-2026).
         type: string
         required: true
+      linear_identity:
+        description: >-
+          WHOSE Linear hour this review spends (DRE-3321). Must be a `name`
+          from `config/linear-identities.json` — `linear_ops` prints
+          `undeclared` for any other word rather than guessing, because a
+          confident wrong name sends the reader to the wrong bucket. The
+          default is `fleet`, the user every product repo's review runs as, so
+          a production stub passes nothing and is unchanged. A caller on its
+          own Linear key passes its own name (bureau-harness's stub runs this
+          workflow on the sandbox key and should pass `sandbox`).
+        type: string
+        required: false
+        default: "fleet"
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -25,6 +38,25 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's own Linear bucket (DRE-5589), which this workflow's
+      # Linear steps may spend too since Stage 2 (fix #12): an OAuth token
+      # authorized as the fleet user, which writes as Agent-Bureau but is
+      # metered apart from the fleet key — 5,000 requests an hour against
+      # 2,500, but only 2,000,000 complexity points an hour against the API
+      # key's 3,000,000 (linear.app/developers/rate-limiting, read
+      # 2026-10-02). The agent-bureau console keeps it fresh and publishes it
+      # as `Bearer <access token>` (DRE-5587); nothing in this repository ever
+      # refreshes it (DRE-2532).
+      #
+      # OPTIONAL, and spent only where the CALLING repo opts in with the
+      # variable `LINEAR_AGENT_BUCKET=planner` (Stage 2 review item 29): a
+      # repo without the variable reviews on the fleet key exactly as before
+      # even when the console has published the token to it, which is what
+      # keeps a `secrets: inherit` stub from flipping silently when `stable`
+      # advances. The critic itself still holds no Linear key at all (DRE-2052
+      # + DRE-2696).
+      LINEAR_PLANNER_KEY:
+        required: false
       # The critic mints its GitHub token from the qa-bot App, NOT the dispatch
       # bot (DRE-1921). The relay's repository_dispatch and the critic's review
       # API calls used to share the SAME bureau-bot installation, so they drew
@@ -156,7 +188,48 @@ jobs:
     # tests/test_critic_size_strategy.py pins this against the turn budget
     # and the backoff sleep, so changing either re-opens the arithmetic.
     timeout-minutes: 65
+    # Whose Linear hour the review spends (DRE-3321), and WHICH BUCKET of that
+    # user's (DRE-5589) — plan.yml's pattern, Stage 2 fixes #11 and #12. Job
+    # level, so no step has to carry it, including the next one added.
+    #
+    # Every step that holds a Linear key holds `vars.LINEAR_AGENT_BUCKET ==
+    # 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY` as
+    # LINEAR_API_KEY, and the fleet key again as LINEAR_API_KEY_FALLBACK. In
+    # GitHub's expressions `&&` binds tighter than `||` and both return an
+    # operand, so: a repo that has not set the variable gets the fleet key; an
+    # opted-in repo with no token published gets the fleet key (the empty
+    # secret falls through); an opted-in repo with a token gets the token.
+    # `==` ignores case, so `PLANNER` opts in too. `vars` is the caller's,
+    # like `vars.CLAUDE_AUTH_MODE`. The critic's own step still holds neither
+    # (DRE-2052 + DRE-2696).
+    #
+    # `||` falls back only on an EMPTY secret, and a token that later dies
+    # keeps its value, so linear_ops.gql steps onto the fallback on a 401 and
+    # nothing else (never a 400 or a rate limit — a rate limit on the
+    # planner's bucket is not a reason to spend the fleet's), and says so in
+    # one `linear-key:` line.
+    #
+    # Before any repo opts in, measure the complexity it would spend (Linear's
+    # `X-Complexity`, Stage 2 review item 50): the planner's bucket has
+    # 2,000,000 points an hour against the fleet key's 3,000,000, and planners
+    # already spend it.
+    #
+    # The identity is `fleet` because the planner's token is a HOME of the
+    # fleet user in config/linear-identities.json, not a user of its own.
+    # LINEAR_KEY_HOME follows the same opt-in — `planner-oauth` where the repo
+    # chose it, empty otherwise — and the `linear-budget:` line prints it only
+    # while the token is what is being spent. The word comes from the CALLER
+    # (reconcile.yml's DRE-3630 shape): bureau-harness runs this workflow on
+    # the sandbox key, and a literal here would print `budget: fleet` while it
+    # spends the sandbox's hour.
     env:
+      LINEAR_IDENTITY: ${{ inputs.linear_identity }}
+      LINEAR_KEY_HOME: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && 'planner-oauth' || '' }}
+      # The token's published expiry, epoch seconds (Stage 2 review item 30):
+      # linear_ops never sends a token past it, and goes straight to the
+      # fleet key instead of spending a 401 in every process. Empty until the
+      # console publishes the variable, and empty changes nothing.
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -591,7 +664,8 @@ jobs:
         env:
           # Reads — the pool-selected token (DRE-4282).
           GH_TOKEN: ${{ steps.reader.outputs.token }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
@@ -1020,7 +1094,8 @@ jobs:
           # Reads the card's own attempt heartbeat (DRE-3880) — see the run
           # block. This is the SELECT step, not the critic's agent step: the
           # critic itself is still denied Linear on purpose (DRE-2052/2696).
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -1904,8 +1979,8 @@ jobs:
       # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
       # every path of its own: the runs worth keeping are the ones that died,
       # and keeping a log must never change this job's conclusion. Anything
-      # that stops it — a refused scrub, no OIDC token (portico forbids
-      # `id-token: write` by policy), no AWS CLI (the self-hosted minis may
+      # that stops it — a refused scrub, no OIDC token (a calling stub that
+      # grants no `id-token: write`), no AWS CLI (the self-hosted minis may
       # not have one), a log over the single-part cap — is recorded as a GAP
       # on the run instead.
       #
@@ -1935,7 +2010,8 @@ jobs:
         if: always() && !cancelled() && steps.decide.outputs.review == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
           # DRE-3484: this is the LAST `${{ }}` this step had in its script,
@@ -2078,7 +2154,8 @@ jobs:
         # re-review is not a pull request opening.
         if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened')
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           # ANCHORED, and that is the point. The Resolve PR step's card grep is

@@ -137,6 +137,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess  # nosec B404 - one fixed argv (the key read), no shell
 import sys
 import time
@@ -428,8 +429,15 @@ def declared_identity() -> str:
 # A user is not always one bucket. An OAuth app authorized as the fleet user
 # writes as Agent-Bureau but is metered on its own 5,000 an hour, measured on
 # 2026-10-01 at 21:41 PT: the key read 351/2500 and the token 4998/5000, and 61
-# requests on the token moved the key by 6. plan.yml hands its steps that token
-# as `LINEAR_API_KEY` when the console has published one, the fleet key in
+# requests on the token moved the key by 6. The same bucket allows only
+# 2,000,000 complexity points an hour against the API key's 3,000,000
+# (linear.app/developers/rate-limiting, read 2026-10-02), so more requests is
+# not more of everything: a comment-heavy reader can run it dry on complexity
+# first (Stage 2 review item 50 — measure `X-Complexity` before a repo opts its
+# agents in). plan.yml hands its steps that token
+# as `LINEAR_API_KEY` when the console has published one — and agent-task,
+# agent-fix, qa-review and verify do the same in a repo whose variable
+# `LINEAR_AGENT_BUCKET` is `planner` — the fleet key in
 # `LINEAR_API_KEY_FALLBACK` beside it, and the token's home in
 # `LINEAR_KEY_HOME`. The line names the home only while the process is really
 # spending it: the two keys differ (a token was published) and no 401 has
@@ -441,6 +449,21 @@ def declared_identity() -> str:
 # only stepped around, for the rest of this one process.
 FALLBACK_ENV = "LINEAR_API_KEY_FALLBACK"
 HOME_ENV = "LINEAR_KEY_HOME"
+
+# ── A token KNOWN to be dead is never sent (Stage 2 review item 30) ─────────
+# Stepping around a dead token is per process, and an agent's Linear calls are
+# each their own `python3 linear_ops.py …` process, so a token that died while
+# the console was down cost a 401 on EVERY call until it came back. The console
+# knows the expiry of the token it published; when it also publishes that as
+# the repository variable LINEAR_PLANNER_KEY_EXPIRES_AT — epoch seconds, the
+# number its token record already stores — the workflows hand it to every job
+# that can hold the token, and a process whose token is past it (or within the
+# margin, so it cannot die mid-process) goes straight to the fleet key without
+# ever sending it. Absent or empty: nothing changes. Anything that is not epoch
+# seconds is said once and ignored — a published variable with the wrong shape
+# is a defect to fix, never a reason to fail a healthy call.
+EXPIRES_ENV = "LINEAR_PLANNER_KEY_EXPIRES_AT"
+EXPIRY_MARGIN_SECONDS = 60
 
 #: Linear's code for a key it will not accept. Read off the BODY, like the
 #: rate limit: the refusal can arrive as a 401, as a 400, or as a 200 carrying
@@ -502,22 +525,61 @@ class _KeyRefused(Exception):
         self.why = why
 
 
-def _fall_back(why: str) -> None:
+def _fall_back(why: str, verb: str = "refused") -> None:
     """Switch this process onto the fleet key, and say so ONCE.
+
+    `verb` says what happened to the primary: `refused` by Linear, or
+    `not sent` because its published expiry had passed (review item 30).
 
     The readings start over: what the token's bucket had left says nothing
     about the fleet key's, and a line spanning both would report a spend that
     happened in neither. Never a key on the line — names only."""
     refused = spending_bucket()
     identity = declared_identity()
+    # Every request so far — the refused one included — went out on the
+    # primary key, so it is that bucket's (Stage 2 item 28). A process falls
+    # back at most once, and the rest of it is charged where
+    # `spending_bucket()` says at exit. A token skipped before any request
+    # (its published expiry had passed) spent nothing, so it is charged
+    # nothing and gets no `0 request(s)` line of its own.
+    _budget["calls_by_bucket"] = {refused: _budget["calls"]} if _budget["calls"] else {}
     if refused == identity:
         refused = "the primary key"
     _budget["fell_back"] = True
     for field in ("first", "last", "reset_ms", "limit"):
         _budget[field] = None
     _budget["refilled"] = False
-    print(f"linear-key: {refused} refused ({why}) — fell back to {identity}",
+    print(f"linear-key: {refused} {verb} ({why}) — fell back to {identity}",
           file=sys.stderr, flush=True)
+
+
+def _published_expiry() -> int | None:
+    """LINEAR_PLANNER_KEY_EXPIRES_AT as epoch seconds, or None when it is
+    absent, empty or unreadable — the last said once per process."""
+    raw = (os.environ.get(EXPIRES_ENV) or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    if not _budget["expiry_unreadable_said"]:
+        _budget["expiry_unreadable_said"] = True
+        print(f"linear-key: {EXPIRES_ENV} is not epoch seconds ({raw[:40]!r}) — "
+              f"ignored; the token is sent and a 401 still falls back",
+              file=sys.stderr, flush=True)
+    return None
+
+
+def _skip_a_known_dead_token() -> None:
+    """Before the first request: when the token in hand has a fleet key to
+    fall back to and its published expiry has passed (or is within
+    EXPIRY_MARGIN_SECONDS), move onto the fleet key without sending it."""
+    if _fallback_key() is None:
+        return
+    expires = _published_expiry()
+    if expires is None or expires - time.time() > EXPIRY_MARGIN_SECONDS:
+        return
+    when = datetime.fromtimestamp(expires, _PT).strftime("%Y-%m-%d %H:%M PT")
+    _fall_back(f"published expiry {when} is past", verb="not sent")
 
 
 def _budget_part() -> str:
@@ -584,6 +646,10 @@ def _reset_budget_state() -> None:
         reported=False,  # the exit line was printed
         limit=None,  # last bucket size seen (DRE-5589)
         fell_back=False,  # a refused key moved this process onto the fleet key
+        # requests charged to a bucket this process has LEFT (a fallback);
+        # the remainder of `calls` is the current bucket's (Stage 2 item 28)
+        calls_by_bucket={},
+        expiry_unreadable_said=False,  # an unreadable published expiry was named
     )
 
 
@@ -718,19 +784,123 @@ def requests_made() -> int:
     return _budget["calls"]
 
 
+#: This process's name on its calls lines — made once, on first use.
+_PROCESS: dict = {}
+_UNSAFE_TOKEN_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def process_token() -> str:
+    """`<pid>@<step>-<nonce>`: which process printed a calls line, so a reader
+    that meets the same line twice — a step that `cat`s a log the process
+    already printed — counts it once (Stage 2 item 28, K2).
+
+    The step is GitHub's `GITHUB_ACTION` (`local` off a runner), reduced to
+    `[A-Za-z0-9_.-]`: it is an environment string, and these lines are parsed
+    one line at a time. The nonce keeps apart two runners that hand out the
+    same pid. Never a key, never a URL."""
+    if "token" not in _PROCESS:
+        step = _UNSAFE_TOKEN_CHARS.sub("", os.environ.get("GITHUB_ACTION") or "") or "local"
+        _PROCESS["token"] = f"{os.getpid()}@{step[:64]}-{os.urandom(3).hex()}"
+    return _PROCESS["token"]
+
+
+def calls_lines() -> list[str]:
+    """The lines that say how many Linear requests THIS process sent, one per
+    bucket it spent:
+
+        linear-calls: <N> request(s) this run (process: <token>; budget: <bucket>)
+
+    N is the process's own count, exact — a retry and a RATELIMITED answer
+    included, a refusal sent without a request not; the Ns add up to
+    `requests_made()`. The budget line's `spent N` is a difference between two
+    readings of a SHARED bucket, so a run that overlaps another is charged the
+    other's requests, and a run that saw no headers is `unknown`; nobody
+    else's requests are in this number (Stage 2 #11). `check_linear_budget.py`
+    prefers it.
+
+    One line per bucket (Stage 2 item 28, K5): a planner whose token was
+    refused mid-run sent everything up to and including the refused request
+    on `planner-oauth`, and the rest on the fleet key — each is charged its
+    own. A process that never fell back prints one line."""
+    token = process_token()
+    charged = dict(_budget["calls_by_bucket"])
+    rest = _budget["calls"] - sum(charged.values())
+    if rest or not charged:
+        bucket = spending_bucket()
+        charged[bucket] = charged.get(bucket, 0) + rest
+    return [
+        f"linear-calls: {n} request(s) this run (process: {token}; budget: {bucket})"
+        for bucket, n in charged.items()
+    ]
+
+
 def _report_budget_at_exit() -> None:
-    """Print the budget line ONCE, on stderr, if any Linear call was made.
-    Registered with atexit; a process that never touched Linear says nothing."""
+    """Print the budget line and the calls lines ONCE, on stderr, if any Linear
+    call was made. Registered with atexit, and run by the SIGTERM handler
+    below; a process that never touched Linear says nothing. Each is printed
+    on its own, so a failure composing one can never cost the other."""
     if _budget["reported"] or not _budget["calls"]:
         return
     _budget["reported"] = True
     try:
-        print(budget_line(), file=sys.stderr, flush=True)
+        lines = [budget_line()]
     except Exception:  # pragma: no cover — telemetry must never fail an exit
+        lines = []
+    try:
+        lines += calls_lines()
+    except Exception:  # pragma: no cover
         pass
+    for line in lines:
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except Exception:  # pragma: no cover
+            pass
 
 
 atexit.register(_report_budget_at_exit)
+
+
+# ── A killed process still reports (Stage 2 item 28, K3) ────────────────────
+# GitHub cancels a step, and ends one at its timeout, with SIGINT and then
+# SIGTERM. SIGINT is a KeyboardInterrupt and runs atexit; Python's default
+# SIGTERM ends the process WITHOUT it — so the run worth measuring most, the
+# one that hit its clock, printed no spend at all. The handler prints the
+# lines, then hands the signal on: to a handler the script had already set,
+# or back to the default, re-raised so the process still dies BY the signal
+# and the runner sees a kill, never a clean exit. A script that sets its own
+# handler AFTER importing this module replaces this one; that is its call.
+_previous_sigterm: dict = {}
+
+
+def _on_sigterm(signum, frame) -> None:
+    _report_budget_at_exit()
+    previous = _previous_sigterm.get("handler")
+    if callable(previous):
+        previous(signum, frame)
+        return
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _install_sigterm_report() -> None:
+    """Idempotent — a reload re-runs this in the same module namespace, and
+    the handler already there reads that namespace. Leaves an IGNORED SIGTERM
+    ignored, and does nothing off the main thread, where Python refuses a
+    handler."""
+    try:
+        current = signal.getsignal(signal.SIGTERM)
+        if current == signal.SIG_IGN or (
+            getattr(current, "__module__", None) == __name__
+            and getattr(current, "__name__", None) == "_on_sigterm"
+        ):
+            return
+        _previous_sigterm["handler"] = current
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError, AttributeError):  # pragma: no cover
+        pass
+
+
+_install_sigterm_report()
 
 
 # The one-shot retry (DRE-3087). A sweep is dozens of calls through this seam,
@@ -848,6 +1018,10 @@ def gql(query: str, variables: dict | None = None) -> dict:
     # there is none left, against a window that is the whole fleet's.
     if _budget["refused_after"] is not None:
         raise _refusal()
+    # A token the console has already said is dead is never sent (review item
+    # 30): every agent call is its own process, so without this each one would
+    # spend a 401 first for as long as the console stays down.
+    _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     try:
         out = _send(payload)

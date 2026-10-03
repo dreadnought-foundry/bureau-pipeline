@@ -542,3 +542,161 @@ def test_the_refusal_carries_no_key_and_no_url_but_the_api_host(transport,
     message = str(refused.value)
     assert "SECRETVALUE" not in message
     assert message.count("http") == 1 and linear_ops.API in message
+
+
+# ── Stage 2 #11: the run's OWN request count, printed ───────────────────────
+# `spent N` on the budget line is a difference between two readings of a
+# SHARED bucket, so every run that overlaps another is charged the other's
+# requests too — and a run that saw no headers says `unknown`. The seam has
+# always counted the requests it sent (`requests_made()`); it just never said
+# the number. In the busiest hour 600–950 requests could be pinned on no run.
+# So the exit prints a line per bucket beside the budget line:
+#
+#     linear-calls: <N> request(s) this run (process: <token>; budget: <bucket>)
+#
+# N is the process's own count, exact — nobody else's requests are in it. The
+# token names the process, so a reader that meets the same line twice (a step
+# that `cat`s a log) counts it once.
+def _calls(n: int, bucket: str) -> str:
+    return (f"linear-calls: {n} request(s) this run "
+            f"(process: {linear_ops.process_token()}; budget: {bucket})")
+
+
+def test_the_calls_line_is_the_processes_own_count_and_names_the_bucket(
+    transport, monkeypatch
+):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(
+        _Resp(headers=_headers(2400)),
+        # Another run spent 40 meanwhile: the budget line is charged them,
+        # the calls line is not.
+        _Resp(headers=_headers(2359)),
+        _Resp(headers=_headers(2357)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert "spent 43 this run" in linear_ops.budget_line()
+    assert linear_ops.calls_lines() == [_calls(3, "fleet")]
+
+
+def test_the_calls_line_is_exact_even_when_no_headers_came_back(transport):
+    """The budget line can only say `unknown` here; the count still knows."""
+    transport(_Resp(), _Resp())
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.budget_line().startswith("linear-budget: unknown")
+    assert linear_ops.calls_lines() == [_calls(2, "undeclared")]
+
+
+def test_the_calls_line_counts_the_request_that_was_rate_limited(transport):
+    """A RATELIMITED answer is a request sent; the refusals after it are not."""
+    transport(_Resp(headers=_headers(1)), _ratelimited_400(_headers(0)))
+    linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    assert linear_ops.calls_lines() == [_calls(2, "undeclared")]
+
+
+def test_the_exit_hook_prints_both_lines_once_on_stderr(transport, capsys,
+                                                        monkeypatch):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(_Resp(headers=_headers(50)), _Resp(headers=_headers(48)))
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    linear_ops._report_budget_at_exit()
+    linear_ops._report_budget_at_exit()
+    out, err = capsys.readouterr()
+    assert out == "", "stdout is parsed by $(...) callers — the line must not land there"
+    assert err.splitlines() == [linear_ops.budget_line(), _calls(2, "fleet")]
+
+
+def test_the_calls_line_carries_no_key_and_no_url(transport, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_api_SECRETVALUE")
+    transport(_Resp(headers=_headers(10)))
+    linear_ops.gql(QUERY)
+    (line,) = linear_ops.calls_lines()
+    assert "SECRETVALUE" not in line
+    assert "http" not in line and "api.linear.app" not in line
+
+
+def test_the_process_token_names_this_process_in_safe_characters(monkeypatch):
+    """`<pid>@<step>-<nonce>`: the pid and the step say which process it was,
+    and the nonce keeps two runners that reuse a pid apart. A step id is an
+    environment string, so anything but `[A-Za-z0-9_.-]` is dropped — the
+    line is parsed one line at a time, and a newline must not ride into it."""
+    import re
+
+    monkeypatch.setenv("GITHUB_ACTION", "__run_2\nlinear-calls: 99; budget: forged")
+    monkeypatch.setattr(linear_ops, "_PROCESS", {})
+    token = linear_ops.process_token()
+    assert re.fullmatch(rf"{os.getpid()}@[A-Za-z0-9_.-]+-[0-9a-f]{{6}}", token), token
+    assert token.startswith(f"{os.getpid()}@__run_2linear-calls99budgetforged-")
+    assert linear_ops.process_token() == token, "one token for the life of the process"
+
+
+# ── Stage 2 item 28 (H8, K3): a killed process still says what it spent ─────
+# GitHub cancels and times out a step with SIGINT, then SIGTERM. Python's
+# default SIGTERM ends the process WITHOUT running atexit, so a run killed at
+# its timeout — exactly the run worth measuring — printed nothing at all.
+_KILLED_SCRIPT = r'''
+import json, os, signal, sys, time
+sys.path.insert(0, sys.argv[1])
+{before}
+import linear_ops
+
+class R:
+    headers = {{"x-ratelimit-requests-remaining": "100"}}
+    def read(self): return json.dumps({{"data": {{"ok": 1}}}}).encode()
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+linear_ops.urllib.request.urlopen = lambda *a, **k: R()
+linear_ops.gql("query {{ viewer {{ id }} }}")
+linear_ops.gql("query {{ viewer {{ id }} }}")
+os.kill(os.getpid(), signal.SIGTERM)
+time.sleep(30)
+print("survived the SIGTERM", flush=True)
+'''
+
+
+def _run_killed(before: str = ""):
+    import signal
+    import subprocess
+
+    scripts = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    env = dict(os.environ, LINEAR_API_KEY="test-key", LINEAR_IDENTITY="fleet")
+    proc = subprocess.run(
+        [sys.executable, "-c", _KILLED_SCRIPT.format(before=before), scripts],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+    return proc, signal.SIGTERM
+
+
+def test_sigterm_still_prints_linear_calls():
+    proc, sigterm = _run_killed()
+    assert "survived" not in proc.stdout, "the handler must still end the process"
+    assert proc.returncode == -sigterm, (
+        "the process must still die BY the signal, so the runner sees a kill, "
+        f"not a clean exit — got {proc.returncode}: {proc.stderr}"
+    )
+    lines = proc.stderr.splitlines()
+    budget = [ln for ln in lines if ln.startswith("linear-budget: ")]
+    assert len(budget) == 1 and budget[0].startswith("linear-budget: 100 → 100 (spent 0 this run")
+    calls = [ln for ln in lines if ln.startswith("linear-calls: ")]
+    assert len(calls) == 1 and calls[0].startswith("linear-calls: 2 request(s) this run (process: ")
+    assert calls[0].endswith("; budget: fleet)")
+
+
+def test_a_sigterm_handler_the_script_set_first_still_runs():
+    """A script that handles SIGTERM itself keeps its handler: the lines are
+    printed, then the script's own handler decides what happens next."""
+    proc, _sigterm = _run_killed(before=(
+        "signal.signal(signal.SIGTERM, "
+        "lambda s, f: (print('own handler ran', flush=True), sys.exit(7)))"
+    ))
+    assert proc.returncode == 7, proc.stderr
+    assert "own handler ran" in proc.stdout
+    assert "linear-calls: 2 request(s) this run" in proc.stderr

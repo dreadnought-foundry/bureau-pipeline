@@ -34,6 +34,7 @@ on:
         required: true
 
 permissions:
+  id-token: write # the console's read door checks this run's OIDC badge; a reusable workflow can hold no more than its stub grants, so the stub grants it first
   contents: read
   actions: write  # dispatch agent-fix on DIRTY (qa-bot App has no Actions perms)
 
