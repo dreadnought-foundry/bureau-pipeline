@@ -1,0 +1,4 @@
+{
+  "enforced_from": "2026-10-03T17:45:58Z",
+  "why": "A pull request opened before this instant is never held for a missing What's new line, because it could not have known the rule."
+}
