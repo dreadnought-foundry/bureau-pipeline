@@ -8,7 +8,10 @@
 # The workflow_run list names this repo's own PR-check workflows — keep it
 # current when CI changes (DRE-2028: a pull_request workflow missing here is
 # a check the gate never re-evaluates on; tests/test_self_host_stubs.py
-# enforces the coverage structurally).
+# enforces the coverage structurally). QA Review is the one PR check left off
+# on purpose (Stage 2 #20): the critic's verdict comment is its wake, and the
+# reusable declines the run's completion, so listing it only queued a run
+# whose every job skipped. self-medic.yml still watches it.
 #
 # @main on purpose, fully qualified: a local ./ ref would resolve from the
 # PR's merge ref, letting a PR that edits merge-gate.yml choose the logic
@@ -17,7 +20,7 @@ name: Merge Gate
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, QA Review, Integration Harness, Smoke · setup-node-cached, Smoke · setup-python-cached]
+    workflows: [Pipeline Tests, Integration Harness, Smoke · setup-node-cached, Smoke · setup-python-cached]
     types: [completed]
   issue_comment:
     types: [created]

@@ -79,6 +79,9 @@ DECLARATION = {
     # line while the fleet's hour was the one running out. Like linear-sync
     # and plan, it has no sandbox caller, so the literal.
     "medic.yml": "fleet",
+    # Stage 2 #11 (BP-5): the gate advances and comments on cards with the
+    # fleet key, and printed `undeclared` until it said so.
+    "merge-gate.yml": "fleet",
     "agent-task.yml": FROM_THE_CALLER,
     "qa-review.yml": FROM_THE_CALLER,
     "agent-fix.yml": "fleet",
@@ -137,8 +140,8 @@ class DeclaredInTheWorkflowsTest(unittest.TestCase):
         # conflict-sweep, plan's plan and publish, agent-task's execute,
         # agent-fix's fix, qa-review's review, verify's verify, and the
         # medic's six (classify, retry_declined, stall_record, backoff,
-        # environment_hold, diagnose). Asserted as a floor so a renamed job
-        # cannot make this test pass by finding nothing.
+        # environment_hold, diagnose), plus the merge gate's. Asserted as a
+        # floor so a renamed job cannot make this test pass by finding nothing.
         self.assertGreaterEqual(seen, 15)
 
     def test_every_agent_workflow_with_a_sandbox_caller_takes_the_word_as_reconcile_does(self):

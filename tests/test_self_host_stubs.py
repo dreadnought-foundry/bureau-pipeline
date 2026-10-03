@@ -225,15 +225,35 @@ class WatchListTest(unittest.TestCase):
             names.add(doc.get("name") or fname)
         return names
 
+    #: PR check workflows whose COMPLETION is not a merge-gate wake (Stage 2
+    #: #20): the critic's verdict comment is its wake, and the reusable's
+    #: `evaluate.if` declines the run's completion — so listing it here only
+    #: queues a run whose every job skips.
+    NOT_A_GATE_WAKE = frozenset({"QA Review"})
+
     def test_merge_gate_watches_every_pr_check_workflow(self):
         watched = set(self._watch("self-merge-gate.yml"))
-        for name in self._pr_check_workflow_names():
+        for name in self._pr_check_workflow_names() - self.NOT_A_GATE_WAKE:
             self.assertIn(
                 name, watched,
                 f"pull_request workflow {name!r} is missing from the "
                 f"merge-gate watch list (DRE-2028) — the gate would never "
                 f"re-evaluate when it completes",
             )
+
+    def test_the_critics_completion_is_not_watched_by_the_gate(self):
+        """Stage 2 #20: the reusable declines a QA Review completion, so the
+        stub does not list it — the exemption above holds only while the
+        reusable's `if:` says so."""
+        watched = set(self._watch("self-merge-gate.yml"))
+        cond = str((_load("merge-gate.yml").get("jobs") or {})["evaluate"]["if"])
+        for name in self.NOT_A_GATE_WAKE:
+            self.assertNotIn(name, watched)
+            self.assertIn(f"github.event.workflow_run.name != '{name}'", cond)
+
+    def test_the_medic_still_watches_the_critic(self):
+        """Not a gate wake is not unwatched: the medic still sees it fail."""
+        self.assertIn("QA Review", set(self._watch("self-medic.yml")))
 
     def test_medic_watches_every_pr_check_workflow(self):
         watched = set(self._watch("self-medic.yml"))

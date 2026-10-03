@@ -116,13 +116,22 @@ class ScriptInvocationTest(unittest.TestCase):
 
     def test_pr_body_and_creation_time_are_gathered_and_passed(self):
         """DRE-5515: condition W (DRE-5511) reads the pull request's body and
-        GitHub's `createdAt`, from one `gh pr view` read, the body written to
-        the exact file the script is handed. The read is fail-SOFT: a blip
-        writes an empty body file and an empty `CREATED_AT`, which the
-        condition reads as "nothing was read" — the flags are still passed,
-        never skipped."""
-        self.assertIn('gh pr view "$PR" --json body,createdAt', self.run_block)
-        self.assertIn("|| : > /tmp/pr-view.json", self.run_block)
+        GitHub's `createdAt`, the body written to the exact file the script is
+        handed. Since Stage 2 #19 both ride the gate's ONE `gh pr view` read,
+        which is not swallowed — it carries the fields every decision is made
+        on, and a failed read of those always killed the step. What stays
+        fail-SOFT is the extraction: a body or time the record lacks, or a
+        record that will not parse, is an empty body file and an empty
+        `CREATED_AT`, which the condition reads as "nothing was read" — the
+        flags are still passed, never skipped."""
+        m = re.search(r'gh pr view "\$PR" --json (\S+) > /tmp/pr-view\.json\n',
+                      self.run_block)
+        self.assertIsNotNone(m, "the gate's one pull request read is gone")
+        self.assertIn("body", m.group(1).split(","))
+        self.assertIn("createdAt", m.group(1).split(","))
+        code = step_shell.code_lines(self.run_block)
+        self.assertEqual(sum("gh pr view" in ln for ln in code), 2,
+                         "one read, plus DRE-2117's re-read after a refused merge")
         self.assertIn(
             "jq -r '.body // \"\"' /tmp/pr-view.json > /tmp/pr-body.txt",
             self.run_block,
@@ -133,34 +142,31 @@ class ScriptInvocationTest(unittest.TestCase):
             "2>/dev/null || true)",
             self.run_block,
         )
-        invocation = self.run_block[
-            self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py"):
-        ]
+        # The DECISION's invocation, not `merge_gate.py precheck` (Stage 2 #19).
+        decide = self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py \\\n")
+        self.assertGreater(decide, -1)
+        invocation = self.run_block[decide:]
         invocation = invocation[:invocation.find("| tee /tmp/gate-decision")]
         self.assertIn("--pr-body-file /tmp/pr-body.txt", invocation)
         self.assertIn('--pr-created-at "$CREATED_AT"', invocation)
         # The read sits before the decision it feeds.
-        self.assertLess(
-            self.run_block.find("--json body,createdAt"),
-            self.run_block.find("python3 .bureau-pipeline/scripts/merge_gate.py"),
-        )
+        self.assertLess(m.start(), decide)
         # The script carries no `${` (tests/test_evaluate_and_merge.py).
         self.assertNotIn("${CREATED_AT}", self.run_block)
 
-    def _run_pr_body_read(self, gh_body):
-        """Run the script's own pr-body read lines, verbatim but for /tmp,
-        against a stub `gh`; return (body file text, CREATED_AT)."""
+    def _run_pr_body_read(self, view_text):
+        """Run the script's own body and createdAt extraction lines, verbatim
+        but for /tmp, over a written record; return (body file text,
+        CREATED_AT)."""
         lines = [
             ln for ln in self.run_block.splitlines()
             if "/tmp/pr-view.json" in ln and not ln.lstrip().startswith("#")
+            and ("/tmp/pr-body.txt" in ln or "CREATED_AT=" in ln)
         ]
-        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(len(lines), 2, lines)
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
-            (td / "bin").mkdir()
-            stub = td / "bin" / "gh"
-            stub.write_text("#!/usr/bin/env bash\n" + gh_body)
-            stub.chmod(0o755)  # nosec B103 — a test stub on PATH
+            (td / "pr-view.json").write_text(view_text)
             snippet = "\n".join(
                 ["set -euo pipefail"]
                 + [ln.replace("/tmp/", f"{td}/") for ln in lines]
@@ -168,25 +174,29 @@ class ScriptInvocationTest(unittest.TestCase):
             )
             proc = subprocess.run(  # nosec B603 B607 — fixed argv, our own lines
                 ["bash", "-c", snippet], capture_output=True, text=True,
-                env={**os.environ, "PR": "7",
-                     "PATH": f"{td / 'bin'}{os.pathsep}{os.environ['PATH']}"},
+                env={**os.environ, "PR": "7"},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             return (td / "pr-body.txt").read_text(), (td / "created-at").read_text()
 
     def test_pr_body_read_hands_over_what_github_printed(self):
-        body, created = self._run_pr_body_read(
-            "echo '{\"body\":\"What'\"'\"'s new: none\",\"createdAt\":\"2026-10-02T17:00:00Z\"}'\n"
-        )
+        body, created = self._run_pr_body_read(json.dumps(
+            {"body": "What's new: none", "createdAt": "2026-10-02T17:00:00Z"}
+        ))
         self.assertEqual(body.strip(), "What's new: none")
         self.assertEqual(created, "2026-10-02T17:00:00Z")
 
-    def test_failed_pr_body_read_is_an_empty_file_and_an_empty_time(self):
-        """An API blip must not kill the step under pipefail, and must leave
-        "nothing was read" — never a stale or partial record."""
-        body, created = self._run_pr_body_read("echo boom >&2; exit 1\n")
-        self.assertEqual(body, "")
-        self.assertEqual(created, "")
+    def test_a_body_the_record_lacks_is_an_empty_file_and_an_empty_time(self):
+        """Absent, null or unparseable must not kill the step under pipefail,
+        and must leave "nothing was read" — never a stale or partial
+        record."""
+        for text in (json.dumps({"state": "OPEN"}),
+                     json.dumps({"body": None, "createdAt": None}),
+                     "not json"):
+            with self.subTest(text=text):
+                body, created = self._run_pr_body_read(text)
+                self.assertEqual(body.strip(), "")
+                self.assertEqual(created, "")
 
     def test_origin_listing_uses_the_workflows_own_token(self):
         """The runs listing needs actions:read, which the qa-bot App
