@@ -434,7 +434,12 @@ def test_the_board_is_read_once_per_sweep():
     Green Light, which is outside SWEPT_LANES on purpose — widening the union
     would hand the CEO's queue to every reader of it, the hand-built move to
     In Review first. That read is its own paged query, it is the only one, and
-    it is of Green Light and nothing else."""
+    it is of Green Light and nothing else.
+
+    And the idle check (CEO, 2026-10-02): `reconcile.IDLE_QUERY` asks whether
+    ONE card of this repo is in motion or in Backlog — `first: 1`, ids only,
+    filtered by the repo label. It is not a board read and serves no reader;
+    it is what lets an idle repo skip the board read altogether."""
     active, backlog = _fixed_board()
     fake = _run_sweep(FakeLinear(active=active, backlog=backlog))
     lanes = [tuple(v["states"]) for v in fake.board_variables]
@@ -444,10 +449,11 @@ def test_the_board_is_read_once_per_sweep():
         f"{len(swept)} reads of SWEPT_LANES in one sweep — active_cards() must "
         "be read once and shared"
     )
-    assert others == [("Green Light",)], (
-        f"the only board read outside SWEPT_LANES is the planner line's Green "
-        f"Light: {others}"
+    assert others == [tuple(reconcile.IDLE_LANES), ("Green Light",)], (
+        f"the only lane reads outside SWEPT_LANES are the idle check's and the "
+        f"planner line's Green Light: {others}"
     )
+    assert reconcile.IDLE_QUERY in fake.queries
 
 
 def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
@@ -481,7 +487,15 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # out twice. It is one paged read per sweep, a function of the lane and never of
 # the cards in it, and Green Light stays outside SWEPT_LANES so no other reader
 # starts acting on the CEO's queue.
-SWEEP_REQUEST_BUDGET = 3
+#
+# 3 -> 4 (the CEO, 2026-10-02 ~18:00 PT; Stage 2 BP-2): the idle check. "An
+# idle sweep costs almost nothing" — the demo repo's sweep always runs — so a
+# full pass first asks ONE existence question (`reconcile.IDLE_QUERY`, `first:
+# 1`, ids only): is any card of this repo in Todo, In Progress, In Review or
+# Backlog? On a repo with work that is one request more than before; on an
+# idle repo it is the whole pass (`test_reconcile_idle_sweep.py`). With the
+# read door on, the check is asked of the door and costs no Linear request.
+SWEEP_REQUEST_BUDGET = 4
 
 
 def test_one_sweep_stays_within_the_request_budget():

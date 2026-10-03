@@ -305,6 +305,13 @@ _WATCHDOG_OWNERS = {
     "repair_frozen_planning_holds",
 }
 
+#: `held` has ONE reader `hand_built` does not: the idle check (the CEO,
+#: 2026-10-02). It reads `needs-human` to ask whether a Backlog card could be
+#: promoted at all — a held card never is, so a repo whose only Backlog cards
+#: are held has nothing waiting and its sweep skips the board. It reads the
+#: label and moves nothing; it never reads `hand-built`.
+_HELD_ONLY_OWNERS = {"sweep_idle"}
+
 #: THE INTAKE GATE IS NOT IN THIS SET ANY MORE (DRE-4141). It read hand-built
 #: because hand-built meant no classification was coming from the pipeline, so
 #: time spent in Intake was not a strand and the card must not be MOVED. No
@@ -362,7 +369,7 @@ def test_the_owner_sweep_can_actually_see_a_call():
     """Guard the guard: a detector that matches nothing would pass forever.
 
     """
-    assert _call_owners("held") == _WATCHDOG_OWNERS
+    assert _call_owners("held") == _WATCHDOG_OWNERS | _HELD_ONLY_OWNERS
     assert "report_intake_depth" not in _call_owners("held"), (
         "the Intake count consulted a label — it reports how big the lane is, "
         "and a count with an exemption answers a question nobody asked"
