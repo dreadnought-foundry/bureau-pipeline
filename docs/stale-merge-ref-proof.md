@@ -1,5 +1,191 @@
 # The stale merge-ref refresh, observed on the live board
 
+## 2026-10-02: a refresh, staged and observed on the sandbox
+
+**The rule worked once, on one pull request, against one `main` commit, and did
+nothing on the next sweep. Its sibling, red on its own failure, was left alone
+on both sweeps.** This was staged on the pipeline's sandbox,
+`dreadnought-foundry/bureau-harness` ("Pipeline integration-harness sandbox",
+DRE-2073), not on a production repository, on the CEO's instruction of
+2026-10-02 to clear the pipeline's proof cards with automated tests and without
+involving anyone. An agent session did the staging and the reading, and nobody
+operated anything by hand. The 2026-09-10 reading below is kept as it was
+written. This section answers the items it left "not observable".
+
+Times are Pacific (PDT, UTC−7). Run ids link to `bureau-harness` Actions.
+
+A note on log timestamps: the reusable runs `reconcile.py … | tee sweep.log`, so Python's stdout is block-buffered and the runner stamps each line when the buffer flushes, not when it was printed. That is why every `stale-merge-ref` line in one sweep shares one timestamp, and why sweep 1's line reads `00:00:26Z` although the write it announces landed at 16:59:59 PT (`23:59:59Z`). The quoted timestamps are flush times. The write and receipt times come from the commit and the comment themselves.
+
+### Why the sandbox can carry it
+
+* **A check that a `main` fault turns red for every pull request.** The
+  harness's own `ci.yml` job `test` runs on `pull_request` and on `push` to
+  `main`. Its push run on a `main` commit is the merge-base evidence the rule
+  reads.
+* **The same sweep.** The harness `Reconcile` stub calls
+  `bureau-pipeline/.github/workflows/reconcile.yml@main` with
+  `pipeline_ref: main`, on a `*/15` schedule and by `workflow_dispatch`.
+  `refresh_stale_merge_refs` is not one of the eight phases an off-rail sweep
+  skips (`OFF_RAIL_SKIPPED`), and `STALE_MERGE_REFRESH_CAP` is unset there, so
+  it defaults to 3.
+* **The rule's gates admit a harness pull request.** The branch is `agent/`,
+  the PR is not a draft and not `DIRTY`, and `fix_dispatch_blocked` consults
+  Linear only for a branch carrying `DRE-n`. The fixture branches carried none
+  on purpose, so nothing was read from or written to a card.
+
+No workflow was enabled for this, in any repository. Both sweeps were
+`workflow_dispatch` runs of the harness's already-active `Reconcile` workflow.
+
+### The staging
+
+| Step | What | Sha / id | PT |
+| --- | --- | --- | --- |
+| M0 | harness `main` before the proof, `test` green | `47299ff52e0f7841f48c53b2dd96b660bd96d51c` | — |
+| B | `agent/proof3145-own-failure`, cut from M0, adds a test that fails on purpose | head `81f92aaa327fdb2ec63aeaa7195ea07dac8e245e` | 2026-10-02 16:55:01 |
+| | PR [#3099](https://github.com/dreadnought-foundry/bureau-harness/pull/3099) opened; CI [37079798932](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079798932) `test` failure | | 16:55:09 |
+| | critic `REQUEST_CHANGES cause:defect @81f92aaa…` (QA Review [37079799565](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079799565)) | | 16:56:28 |
+| M1 | the fault: `tests/test_proof3145_main_fault.py` committed to `main` | `fc09c2ad679fbba4aad3a9990efa76d481873238` | 16:57:04 |
+| | M1 push CI [37079933906](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079933906): `test` failure | | 16:57:07 |
+| A | `agent/proof3145-main-fault`, cut from M1. It merges B's head, deletes B's failing test, and adds one harmless file | head `f4f066ef33c7a97093a0aaf5069f7b7f1105f979` | 16:57:09 |
+| | PR [#3100](https://github.com/dreadnought-foundry/bureau-harness/pull/3100) opened | | 16:57:17 |
+| | A's CI [37079949172](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079949172) on merge ref `d7588d1` (A into M1): `FAILED tests/test_proof3145_main_fault.py::…`, `1 failed, 5 passed` | | 16:57:24–16:57:35 |
+| M2 | the fix: the fault file deleted from `main`. The tree is `01e05fa2…`, identical to M0's | `9596d756df34fdebd841f6c9f8d3d85156f1b839` | 16:57:40 |
+| | M2 push CI [37079973820](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079973820): `test` success | | 16:57:58 |
+| | critic `APPROVE @f4f066ef…` on A (QA Review [37079949604](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079949604)) | | 16:58:57 |
+
+`main` was red for 36 seconds (16:57:04–16:57:40). No Integration Harness run
+was in flight in that window. The last one, bureau-pipeline run 37078484136,
+had finished before M1, and none started until after cleanup.
+
+**Why A carries B's head.** Without it, the merge gate would have merged A
+minutes after the refresh: CI turns green, and the APPROVE carries. A
+deliberately carries B's head commit, so the gate's stack rule (DRE-4103) holds
+A while B stands unapproved. A's own net diff against `main` is one harmless
+file, `proof-3145-a.md`, because B's failing test is added and deleted inside
+the branch.
+
+### 1. A live refresh: OBSERVED
+
+Sweep 1, [37080078687](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37080078687)
+(`workflow_dispatch`, dispatched 16:59:15, finished 17:00:33, success). The log
+line, verbatim, at `2026-10-03T00:00:26Z`:
+
+```
+stale-merge-ref: PR #3100 f4f066ef — test red on this head and on merge base fc09c2ad, green on `main` 9596d756 (1 commit(s) ahead) — the fault was main-side and `main` has fixed it; refreshing the merge ref onto `main` 9596d756
+```
+
+* **The write.** `update-branch` made head
+  `f9a53f6f478cdfd3eddd04dcfe7c25e0be4b9e87` ("Merge branch 'main' into
+  agent/proof3145-main-fault", author `agent-bureau-bot[bot]`, parents
+  `f4f066ef…` and `9596d756…`), at 16:59:59.
+* **The receipt on the pull request.** It was posted by `agent-bureau-bot[bot]`
+  at 17:00:01. Its first line is
+  `stale-merge-ref-refresh @9596d756df34fdebd841f6c9f8d3d85156f1b839` and its
+  trailer is
+  `📎 pipeline-act: merge-ref-refreshed · kind: recovery · state: dispatched · next: qa-review.yml · discharges: nothing · subscriber: qa-review.yml · tag: stale-merge-ref-refresh`.
+  It reads "1/3 refreshes used on this pull request".
+* **Head sha before and after.** Before: `f4f066ef33c7a97093a0aaf5069f7b7f1105f979`.
+  After: `f9a53f6f478cdfd3eddd04dcfe7c25e0be4b9e87`.
+* **The `main` sha the receipt names.** `9596d756df34fdebd841f6c9f8d3d85156f1b839`
+  (M2).
+* **CI on the new head.** The refresh's push came from the App, so it fired the
+  `synchronize` events, as the docstring says it must. CI
+  [37080139547](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37080139547)
+  finished at 17:00:54 with `test` **success**.
+* **The card receipt: not applicable on the sandbox.** Fixture branches carry
+  no `DRE-n`, so `branch_card()` is None and no card comment is made. That is
+  by design: the harness writes nothing to Linear. The card-side half of
+  criterion 1 is therefore not shown here.
+
+### 2. No second refresh: OBSERVED
+
+Sweep 2, [37080264618](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37080264618)
+(`workflow_dispatch`, dispatched 17:01:37, finished 17:02:26, success). `main`
+was still `9596d756`, and #3100 was open at head `f9a53f6f`. The log line,
+verbatim, at `2026-10-03T00:02:18Z`:
+
+```
+stale-merge-ref: PR #3100 — already-refreshed: already refreshed onto `main` 9596d756 — at most one refresh per `main` commit
+```
+
+#3100 kept exactly one `stale-merge-ref-refresh` comment. Its thread across
+the window was the critic's APPROVE, the one receipt, the gate's
+carried-verdict note and the gate's hold note. No scheduled sweep ran between
+the two dispatched ones. The last scheduled sweep before them,
+[37079139882](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37079139882),
+ran at 16:46, before either fixture existed.
+
+### 3. A pull request with its own failure left alone: OBSERVED
+
+#3099 was red on `test`, green on its merge base M0, and `behind_by` 2. Both
+sweeps printed the same line. In sweep 1 it was at `2026-10-03T00:00:26Z`, and
+in sweep 2 at `2026-10-03T00:02:18Z`:
+
+```
+stale-merge-ref: PR #3099 — own: test is green on the merge base — this pull request's own defect, and the fix loop owns it
+```
+
+No `update-branch` was made and no receipt was posted. #3099's head stayed
+`81f92aaa…` throughout, and its only comment is the critic's REQUEST_CHANGES.
+
+### 4. Did the critic verdict carry: YES, and no sibling card is needed
+
+QA Review [37080140026](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37080140026)
+ran on the refreshed head `f9a53f6f`. `should_review_pr.py` decided, verbatim:
+
+```
+review=false
+carried_sha=f4f066ef33c7a97093a0aaf5069f7b7f1105f979
+skipping 'agent/proof3145-main-fault' — the standing APPROVE for f4f066ef33c7a97093a0aaf5069f7b7f1105f979 still binds this head's content; re-reviewing would re-read an unchanged diff (DRE-2340)
+```
+
+No fresh review ran on the unchanged diff, so there is no finding against the
+carry and no sibling card. The merge gate agreed. Merge Gate
+[37080214676](https://github.com/dreadnought-foundry/bureau-harness/actions/runs/37080214676)
+(17:01:15) posted "♻️ Merge gate: carried verdict content:7ebcb25a…", then
+decided:
+
+```
+stacked_prs: 3 open pull request(s); stacked under #3100: #3099
+decision=hold
+reason=this branch also carries other open pull requests, and merging it would land their work in the base unapproved: #3099 — the critic asked for changes (REQUEST_CHANGES). Holding until each of them is approved or has merged on its own (DRE-4103)
+```
+
+So the gate would have merged on the carried verdict, and only the fixture's
+deliberate stack stopped it.
+
+### 5. What the console shows: NOT APPLICABLE on the sandbox
+
+The console reads the card, and a sandbox pull request has no card. The
+2026-09-10 reading below, of the act row and registry, still stands. A
+screenshot of a live receipt on a live card is still owed, and only a
+production refresh can supply it.
+
+### Put back
+
+Both pull requests were closed unmerged, A first so that closing B could not
+lift A's stack hold. #3100 was closed at 17:02:54 and #3099 at 17:02:57, and
+both branches were deleted. At 17:03 PT, harness `main` was
+`9596d756df34fdebd841f6c9f8d3d85156f1b839`, with `test` green and a tree
+identical to M0's.
+
+### Where this leaves the card, as of 2026-10-02
+
+| Acceptance criterion | State |
+| --- | --- |
+| One refresh observed, with PR receipt and card receipt | **Met for the PR** on the sandbox (#3100, sweep 37080078687). The card receipt is not applicable there, by design |
+| The same pull request not refreshed again on the next sweep | **Met** (sweep 37080264618, `already-refreshed`) |
+| A pull request with its own failure left alone, log line quoted | **Met** (#3099 on both sweeps, plus the 2026-09-10 production cases) |
+| Whether the critic verdict carried | **Met**: it carried (`review=false`, `carried_sha=f4f066ef…`). No sibling card is needed |
+| What the live console showed | **Partly met**: the act row is declared and shipped (2026-09-10). A live screenshot needs a production refresh on a carded PR |
+| `docs/stale-merge-ref-proof.md` merged to `main` | This document |
+
+---
+
+## The first reading (2026-09-10), kept as written
+
+Everything from here to the end is the first reading, made on production before any refresh had happened. It is unchanged.
+
 **DRE-3145.** Read by hand on 2026-09-10 between 06:46 and 06:53 PT against the
 live GitHub state of `dreadnought-foundry/bureau-pipeline` and
 `dreadnought-foundry/agent-bureau`. Nothing here was written, dispatched or
