@@ -471,7 +471,7 @@ _SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake", "Ba
 _HAND_WORK = "Hand-work"
 
 
-def _extra_lane_slots(lane: list[str], cards: int) -> dict[int, str]:
+def _extra_lane_slots(dealt: list[str], cards: int) -> dict[int, str]:
     """Card index → the lane `LANES` names that `_SYNTHETIC_DEAL` does not.
 
     One card per epic block, taken from a plain Todo card past the block's
@@ -484,7 +484,7 @@ def _extra_lane_slots(lane: list[str], cards: int) -> dict[int, str]:
     turn = 0
     for start in range(0, cards, _EPIC_EVERY):
         for i in range(start + _EPIC_CHILDREN + 1, min(start + _EPIC_EVERY, cards)):
-            if lane[i] == "Todo" and i % 5 not in (0, 1):
+            if dealt[i] == "Todo" and i % 5 not in (0, 1):
                 out[i] = extra[turn % len(extra)]
                 turn += 1
                 break

@@ -444,7 +444,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "ONE promoter, and it is the sweep: reconcile.py's promote_ready() is the only thing that moves an epic's child into this lane, whether the 15-minute cron reaches it or plan.yml's activate route runs it the moment the second critic passes — the route triggers that promoter, it never promotes itself. It releases a child only once the epic carries a `plan-critic: stage=post result=PASS` marker for the current planning attempt (DRE-3059). It is also the writer that stamps a promoted card's marks — `hand-built`, and `no-code` on an OPERATOR card — and it applies them BEFORE the move, because an unmarked card in this lane is one the nudge loop dispatches an agent at fifteen minutes later (DRE-3385). The build run takes cards out of it.",
+          "text": "ONE promoter, and it is the sweep: reconcile.py's promote_ready() is the only thing that moves an epic's child into this lane, whether the 15-minute cron reaches it or plan.yml's activate route runs it the moment the second critic passes — the route triggers that promoter, it never promotes itself. It releases a child only once the epic carries a `plan-critic: stage=post result=PASS` marker for the current planning attempt (DRE-3059). It moves a FLEET card here, unmarked: FLEET declares no marks. A WORKBENCH or OPERATOR card is not promoted here — the same promoter carries it to Hand-work, its marks stamped before that move (DRE-3385, DRE-5322). The build run takes cards out of it.",
           "who": ["reconcile.py", "agent-task.yml", "linear_ops.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
@@ -475,7 +475,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.",
+          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares, `hand-built` and `no-code` on an OPERATOR card, BEFORE the move, because an unmarked card is one the nudge loop could dispatch an agent at (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.",
           "who": ["reconcile.py", "linear_ops.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
