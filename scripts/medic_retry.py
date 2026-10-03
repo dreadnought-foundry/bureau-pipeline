@@ -811,7 +811,11 @@ def write_snapshot(path: str, card: str, facts: dict | None) -> None:
     Stage 2 fix #23. The limit step de-duplicates its marker against the
     card's comments, and used to ask Linear for the same window this gate had
     just read. The file is `json.dumps` of the bodies' window, so the step's
-    grep reads it exactly as it read `dump-comments`.
+    grep reads it the way it read `dump-comments`, over a narrower window: the
+    gate's snapshot holds the 50 newest comments (`card_facts`), where
+    `dump-comments` read the whole thread (DRE-5639). A marker for the same
+    run that fell out of the newest 50 between attempts would be written a
+    second time; that is unlikely, and a duplicate marker is harmless.
 
     `facts` None (no card, or a read that failed open) REMOVES the file: a
     stale snapshot from an earlier job on the same machine must never stand in
