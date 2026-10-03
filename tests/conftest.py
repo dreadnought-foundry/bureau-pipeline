@@ -37,6 +37,17 @@ def _reset_linear_budget() -> None:
         reset()
 
 
+def _reset_read_door() -> None:
+    """The read door's client keeps PROCESS state (Stage 2 BP-2): the mode it
+    read once, its counters, whether the door stopped answering, its token. In
+    production one process is one run; in a test session one test's `shadow`
+    or dead door must not become the next test's."""
+    bureau_read = sys.modules.get("bureau_read")
+    reset = getattr(bureau_read, "reset_for_tests", None)
+    if reset is not None:
+        reset()
+
+
 def _lift_drain_slots(monkeypatch) -> None:
     """The groom drain reads the planner slot ledger before it moves a card
     (DRE-5326), and releases no more cards than there are free slots. Every
@@ -54,6 +65,8 @@ def fresh_sweep_board(monkeypatch):
     _lift_drain_slots(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
+    _reset_read_door()
     yield
     _reset_sweep_board()
     _reset_linear_budget()
+    _reset_read_door()

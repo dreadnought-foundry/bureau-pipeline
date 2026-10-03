@@ -1,0 +1,150 @@
+{
+  "_comment": "One board, two renderings (Stage 2 shape parity). `linear_active` and `linear_backlog` are the GraphQL `issues` connections _fetch_active_cards and backlog_children receive from Linear; `door_work` and `door_backlog` are the read door's envelopes for the same cards, in the contract bureau_read.py documents. The comment windows are NEWEST FIRST, as Linear's `first:` window answers; an app actor's comment carries `user: null`, as GraphQL does; a partial window says hasNextPage with a cursor.",
+  "linear_active": {
+    "nodes": [
+      {
+        "id": "8a1f0c55-0000-4000-8000-000000001001",
+        "identifier": "DRE-1001",
+        "title": "Add the widget endpoint",
+        "description": "**Repo:** portico\n\nAdd it.",
+        "updatedAt": "2026-10-02T19:41:07.512Z",
+        "priority": 2,
+        "state": {"name": "Todo"},
+        "labels": {"nodes": [{"name": "repo:portico"}, {"name": "agent:engineer"}]},
+        "children": {"nodes": []},
+        "comments": {
+          "pageInfo": {"hasNextPage": false, "endCursor": "Y29tbWVudC0y"},
+          "nodes": [
+            {"body": "🧹 Auto-promoted Backlog → Todo: no parent epic.", "createdAt": "2026-10-02T19:41:07.100Z", "user": {"id": "fleet-user"}},
+            {"body": "Routing verdict: FLEET", "createdAt": "2026-10-01T08:00:00.000Z", "user": null}
+          ]
+        }
+      },
+      {
+        "id": "8a1f0c55-0000-4000-8000-000000001002",
+        "identifier": "DRE-1002",
+        "title": "Wire the widget into the console",
+        "description": null,
+        "updatedAt": "2026-10-02T18:02:44.001Z",
+        "priority": 0,
+        "state": {"name": "In Progress"},
+        "labels": {"nodes": [{"name": "repo:portico"}]},
+        "children": {"nodes": [{"id": "8a1f0c55-0000-4000-8000-000000009999"}]},
+        "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+      }
+    ],
+    "pageInfo": {"hasNextPage": false, "endCursor": null}
+  },
+  "linear_backlog": {
+    "nodes": [
+      {
+        "id": "8a1f0c55-0000-4000-8000-000000001003",
+        "identifier": "DRE-1003",
+        "title": "Document the widget",
+        "description": "Explain it.",
+        "createdAt": "2026-09-30T10:00:00.000Z",
+        "parent": {"identifier": "DRE-1000", "state": {"name": "In Progress"}},
+        "children": {"nodes": []},
+        "labels": {"nodes": [{"name": "repo:portico"}]},
+        "comments": {
+          "pageInfo": {"hasNextPage": true, "endCursor": "Y29tbWVudC01MA"},
+          "nodes": [
+            {"body": "Routing verdict: FLEET", "createdAt": "2026-10-01T09:00:00.000Z", "user": {"id": "planner-user"}}
+          ]
+        },
+        "inverseRelations": {
+          "pageInfo": {"hasNextPage": false, "endCursor": "cmVsLTE"},
+          "nodes": [
+            {"type": "blocks", "issue": {"identifier": "DRE-1001", "state": {"name": "Todo"}}},
+            {"type": "related", "issue": {"identifier": "DRE-1002", "state": {"name": "In Progress"}}}
+          ]
+        }
+      }
+    ],
+    "pageInfo": {"hasNextPage": false, "endCursor": null}
+  },
+  "door_work": {
+    "schema": "bureau-read/1",
+    "verdict": "FRESH",
+    "freshness": {"as_of": "2026-10-02T19:42:00.000Z", "age_seconds": 41, "basis": "record", "relations_as_of": null, "reason": null},
+    "caller": {"repository": "dreadnought-foundry/portico", "slug": "portico", "tenant": "00000000-0000-0000-0000-000000000001", "scope": "repo"},
+    "viewer": {"id": "fleet-user"},
+    "lanes": ["Todo", "In Progress", "In Review"],
+    "issues": {
+      "nodes": [
+        {
+          "id": "8a1f0c55-0000-4000-8000-000000001001",
+          "identifier": "DRE-1001",
+          "title": "Add the widget endpoint",
+          "description": "**Repo:** portico\n\nAdd it.",
+          "createdAt": "2026-09-29T12:00:00.000Z",
+          "updatedAt": "2026-10-02T19:41:07.512Z",
+          "priority": 2,
+          "state": {"name": "Todo"},
+          "labels": {"nodes": [{"name": "repo:portico"}, {"name": "agent:engineer"}]},
+          "parent": null,
+          "children": {"nodes": []},
+          "comments": {
+            "pageInfo": {"hasNextPage": false, "endCursor": "Y29tbWVudC0y"},
+            "nodes": [
+              {"body": "🧹 Auto-promoted Backlog → Todo: no parent epic.", "createdAt": "2026-10-02T19:41:07.100Z", "user": {"id": "fleet-user"}},
+              {"body": "Routing verdict: FLEET", "createdAt": "2026-10-01T08:00:00.000Z", "user": null}
+            ]
+          }
+        },
+        {
+          "id": "8a1f0c55-0000-4000-8000-000000001002",
+          "identifier": "DRE-1002",
+          "title": "Wire the widget into the console",
+          "description": null,
+          "createdAt": "2026-09-29T12:05:00.000Z",
+          "updatedAt": "2026-10-02T18:02:44.001Z",
+          "priority": 0,
+          "state": {"name": "In Progress"},
+          "labels": {"nodes": [{"name": "repo:portico"}]},
+          "parent": {"identifier": "DRE-1000", "state": {"name": "In Progress"}},
+          "children": {"nodes": [{"id": "8a1f0c55-0000-4000-8000-000000009999"}]},
+          "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+        }
+      ]
+    }
+  },
+  "door_backlog": {
+    "schema": "bureau-read/1",
+    "verdict": "FRESH",
+    "freshness": {"as_of": "2026-10-02T19:42:00.000Z", "age_seconds": 41, "basis": "record", "relations_as_of": "2026-10-02T19:30:00.000Z", "reason": null},
+    "caller": {"repository": "dreadnought-foundry/portico", "slug": "portico", "tenant": "00000000-0000-0000-0000-000000000001", "scope": "repo"},
+    "viewer": {"id": "fleet-user"},
+    "lanes": ["Backlog"],
+    "issues": {
+      "nodes": [
+        {
+          "id": "8a1f0c55-0000-4000-8000-000000001003",
+          "identifier": "DRE-1003",
+          "title": "Document the widget",
+          "description": "Explain it.",
+          "createdAt": "2026-09-30T10:00:00.000Z",
+          "updatedAt": "2026-10-02T17:00:00.000Z",
+          "priority": 0,
+          "state": {"name": "Backlog"},
+          "labels": {"nodes": [{"name": "repo:portico"}]},
+          "parent": {"identifier": "DRE-1000", "state": {"name": "In Progress"}},
+          "children": {"nodes": []},
+          "comments": {
+            "pageInfo": {"hasNextPage": true, "endCursor": "Y29tbWVudC01MA"},
+            "nodes": [
+              {"body": "Routing verdict: FLEET", "createdAt": "2026-10-01T09:00:00.000Z", "user": {"id": "planner-user"}}
+            ]
+          },
+          "inverseRelations": {
+            "pageInfo": {"hasNextPage": false, "endCursor": "cmVsLTE"},
+            "nodes": [
+              {"type": "blocks", "issue": {"identifier": "DRE-1001", "state": {"name": "Todo"}}},
+              {"type": "related", "issue": {"identifier": "DRE-1002", "state": {"name": "In Progress"}}}
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
