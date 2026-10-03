@@ -333,6 +333,23 @@ def test_known_expired_token_never_sent(planner, clock, monkeypatch, capsys):
     assert linear_ops.budget_line().endswith("; budget: fleet)")
 
 
+def test_a_token_never_sent_is_charged_nothing_on_the_calls_lines(
+        planner, clock, monkeypatch):
+    """BP-0 meets BP-1. The per-bucket calls lines (Stage 2 item 28) charge
+    every request made before a fallback to the bucket the process left. A
+    token skipped for its published expiry left before ANY request, so it
+    spent nothing, and the process prints one line, all of it the fleet's —
+    never a `0 request(s)` line naming the planner's bucket."""
+    monkeypatch.setenv(linear_ops.EXPIRES_ENV, str(NOW - 10))
+    planner(_Resp(headers=_headers(351, 2500)), _Resp(headers=_headers(350, 2500)))
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    lines = linear_ops.calls_lines()
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("linear-calls: 2 request(s) this run (")
+    assert lines[0].endswith("; budget: fleet)")
+
+
 def test_a_token_inside_the_safety_margin_is_not_sent_either(planner, clock, monkeypatch):
     """A token with seconds to live dies mid-process; the margin spends the
     fleet key instead of a 401."""
