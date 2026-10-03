@@ -45,12 +45,14 @@ CONTRACT = os.path.join(
 # The board after the cleanup this card ships: thirteen states become eleven
 # lanes. Written out ONCE, here, as the thing the tests below compare against —
 # every other list in the pipeline is derived from the contract file.
+# DRE-5320 made it twelve: `Hand-work`, the person-work lane after Todo.
 LIVE_LANES = (
     "Intake",
     "Planning",
     "Green Light",
     "Backlog",
     "Todo",
+    "Hand-work",
     "In Progress",
     "In Review",
     "Done",
@@ -172,7 +174,7 @@ class TestLaneCleanup:
                 "no longer has"
             )
 
-    def test_the_eleven_live_lanes_are_exactly_the_board_after_cleanup(self):
+    def test_the_twelve_live_lanes_are_exactly_the_board(self):
         assert set(lane_contract.lane_names(status="live")) == set(LIVE_LANES)
 
     def test_the_merged_lane_keeps_the_longer_stall_window(self):

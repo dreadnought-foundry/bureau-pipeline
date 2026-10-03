@@ -52,6 +52,9 @@ SUMMARY_CARD = "DRE-900"
 #: a test that reads the writer's own constant proves the writer agrees with
 #: itself.
 FIVE = ["Green Light", "Todo", "Triage", "In Progress", "In Review"]
+# What the board read covers once Hand-work is live (DRE-5320): the five, plus
+# the lane `board_lanes()` adds when the contract declares it.
+SIX = FIVE + ["Hand-work"]
 
 #: The twelve act names and their tags, exactly as the card writes them.
 ACTS = {
@@ -252,14 +255,14 @@ def _read(tmp_path, monkeypatch, paged, floor=None):
 
 
 class TestRead:
-    def test_one_paged_read_over_exactly_the_five_lanes(self, tmp_path, monkeypatch, no_gql):
+    def test_one_paged_read_over_exactly_the_board_lanes(self, tmp_path, monkeypatch, no_gql):
         paged = FakePaged([card("DRE-1", "Todo"), card("DRE-2", "Triage")], remaining=2000)
         code, out, _ = _read(tmp_path, monkeypatch, paged)
         assert code == 0
         assert len(paged.calls) == 1
         query, variables = paged.calls[0]
-        assert sorted(variables["states"]) == sorted(FIVE)
-        assert len(variables["states"]) == 5
+        assert sorted(variables["states"]) == sorted(SIX)
+        assert len(variables["states"]) == 6
         assert no_gql == []
 
     def test_the_read_is_the_board_snapshot_query(self, tmp_path, monkeypatch, no_gql):
@@ -276,19 +279,19 @@ class TestRead:
         assert doc["taken_at"].endswith("Z")
         assert [c["identifier"] for c in doc["lanes"]["Todo"]] == ["DRE-1"]
         assert [c["identifier"] for c in doc["lanes"]["Triage"]] == ["DRE-2"]
-        assert set(doc["lanes"]) == set(FIVE)
+        assert set(doc["lanes"]) == set(SIX)
 
-    def test_hand_work_is_read_only_once_the_contract_declares_it_live(self):
-        # DRE-5315 declared it `arriving` — named before the board has the
-        # state — and no live reader reads an arriving lane. The read takes it
-        # the day DRE-5240 flips it to live, with nothing here edited.
-        assert "Hand-work" not in lane_contract.lane_names()
-        assert sorted(hygiene.board_lanes()) == sorted(FIVE)
+    def test_hand_work_is_read_once_the_contract_declares_it_live(self):
+        # DRE-5315 declared it `arriving`, and no live reader reads an arriving
+        # lane. DRE-5320 flipped it to live, and the read took it with nothing
+        # here edited; an arriving Hand-work is still left out.
+        assert "Hand-work" in lane_contract.lane_names()
+        assert sorted(hygiene.board_lanes()) == sorted(SIX)
         contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
         hand_work = next(entry for entry in contract["lanes"] if entry["name"] == "Hand-work")
-        assert hand_work["status"] == "arriving"
-        hand_work["status"] = "live"
-        assert sorted(hygiene.board_lanes(contract)) == sorted(FIVE + ["Hand-work"])
+        assert hand_work["status"] == "live"
+        hand_work["status"] = "arriving"
+        assert sorted(hygiene.board_lanes(contract)) == sorted(FIVE)
 
     def test_below_the_floor_it_stands_down_and_asks_nothing_more(
         self, tmp_path, monkeypatch, capsys, no_gql
