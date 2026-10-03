@@ -22,7 +22,8 @@ The fixture is `tests/fixtures/hygiene-green-light-2026-09-30.json`, in the
 shape every hygiene lane fixture takes — `lanes`, `prs` and a `gh` map — plus
 a `linear` map from an epic's identifier to what its children read answers.
 Every receipt in it was composed by the module that writes it in the
-pipeline.
+pipeline, and every comment in it was written by the pipeline's own Linear
+user, `PIPELINE_USER` — the one author whose receipts this lane reads.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_hygiene_green_light.py -v
 """
@@ -57,6 +58,10 @@ FIXTURE = ROOT / "tests" / "fixtures" / "hygiene-green-light-2026-09-30.json"
 NOW = datetime(2026, 9, 30, 21, 5, tzinfo=UTC)
 HOME = "dreadnought-foundry"
 LANE = "Green Light"
+#: Who the fleet key is — what `viewer { id }` answers, and the author of
+#: every comment in the fixture.
+PIPELINE_USER = "user-pipeline"
+STRANGER = "user-stranger"
 
 
 def load_lane():
@@ -98,9 +103,11 @@ class FixtureGh:
 
 def fixture_gql(doc: dict):
     """`linear_ops.gql`, answered from the fixture's `linear` map by the
-    issue the query names."""
+    issue the query names — and `viewer { id }` with the pipeline's user."""
 
     def gql(query, variables=None):
+        if "viewer" in query:
+            return {"viewer": {"id": PIPELINE_USER}}
         ident = (variables or {}).get("id")
         if ident not in doc["linear"]:
             raise AssertionError(f"the fixture's linear map has no answer for {ident!r}")
@@ -139,11 +146,16 @@ def card(doc, ident):
     return next(c for c in doc["lanes"][LANE] if c["identifier"] == ident)
 
 
-def push_comment(doc, ident, body, when: datetime):
-    """A newer comment on the card: Linear answers the window newest first."""
+def push_comment(doc, ident, body, when: datetime, *, author=PIPELINE_USER):
+    """A newer comment on the card: Linear answers the window newest first.
+    `author=None` is an integration's comment, which Linear gives no user."""
     card(doc, ident)["comments"]["nodes"].insert(0, {
         "body": body, "createdAt": when.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-        "user": {"id": "user-pipeline"}})
+        "user": {"id": author} if author is not None else None})
+
+
+def children_reads(ctx):
+    return [q for q in ctx.linear.calls if "children" in q]
 
 
 def first_line(action):
@@ -284,8 +296,7 @@ class TestAChildWithoutCriteria:
     def test_the_children_are_read_exactly_once_in_the_pass(self):
         items, ctx = plan()
         assert actions(items, "DRE-9104")
-        assert len(ctx.linear.calls) == 1
-        assert "children" in ctx.linear.calls[0]
+        assert len(children_reads(ctx)) == 1
 
     def test_the_answer_is_plan_critics_own(self):
         doc = fixture()
@@ -300,13 +311,13 @@ class TestAChildWithoutCriteria:
             child["description"] += "\n## Acceptance criteria\n\n- [ ] done\n"
         items, ctx = plan(doc)
         assert not [i for i in items if i.target == "DRE-9104"]
-        assert len(ctx.linear.calls) == 1
+        assert len(children_reads(ctx)) == 1
 
     def test_a_card_whose_newest_receipt_is_not_a_pass_reads_no_children(self):
         doc = fixture()
         doc["lanes"][LANE] = [c for c in doc["lanes"][LANE] if c["identifier"] != "DRE-9104"]
         _items, ctx = plan(doc)
-        assert ctx.linear.calls == []
+        assert children_reads(ctx) == []
 
     def test_a_children_read_that_fails_skips_that_epic_and_no_other(self, capsys):
         doc = fixture()
@@ -314,6 +325,8 @@ class TestAChildWithoutCriteria:
         ctx, _gh = context(doc)
 
         def failing(query, variables=None):
+            if "viewer" in query:
+                return {"viewer": {"id": PIPELINE_USER}}
             raise RuntimeError("Linear answered 502")
 
         ctx.linear = failing
@@ -398,6 +411,34 @@ class TestAnEscalation:
         rows = lefts(items, "DRE-9109")
         assert len(rows) == 1 and "no recommendation" in rows[0].recommendation
 
+    @pytest.mark.parametrize("reason", [
+        "This card is too big for one pull request.\n\nRecommendation: split it.",
+        "The work must be split: the reader and the report are two deliverables."
+        "\n\nRecommendation: two cards.",
+        "Split the card into two, the reader first.\n\nRecommendation: two cards.",
+    ])
+    def test_a_split_said_another_way_is_still_a_split(self, reason):
+        assert lane.asks_for(reason) == "split"
+
+    @pytest.mark.parametrize("reason", [
+        "Should we cap partner uploads at 5 MB? Some videos are too large for mobile."
+        "\n\nRecommendation: cap at 5 MB.",
+        "Is a launch to all 40 customers at once too broad a pilot, or should we start "
+        "with five?\n\nRecommendation: five.",
+        "Should the fleet use the new billing token for refunds? An agent lacks the "
+        "finance context.\n\nRecommendation: yes.",
+    ])
+    def test_a_business_question_in_the_same_words_is_still_a_question(self, reason):
+        assert lane.asks_for(reason) is None
+        doc = fixture()
+        push_comment(doc, "DRE-9109", planning_escalation.escalation_comment("DRE-9109", reason),
+                     datetime(2026, 9, 30, 11, 15, tzinfo=UTC))
+        items, _ctx = plan(doc)
+        assert not actions(items, "DRE-9109")
+        rows = lefts(items, "DRE-9109")
+        assert len(rows) == 1
+        assert rows[0].recommendation == reason.rsplit("Recommendation: ", 1)[1]
+
     def test_a_question_that_mentions_access_for_customers_is_still_a_question(self):
         doc = fixture()
         push_comment(doc, "DRE-9109", planning_escalation.escalation_comment(
@@ -453,6 +494,81 @@ class TestAStallPark:
                     datetime(2026, 9, 30, 16, 5, tzinfo=UTC))
         items, _ctx = plan(doc)
         resent(items, "DRE-9108")
+
+
+# --------------------------------------------------------------------------- #
+# whose receipts it reads                                                      #
+# --------------------------------------------------------------------------- #
+
+LATER = datetime(2026, 9, 30, 13, 30, tzinfo=UTC)
+
+
+class TestWhoseReceiptsItReads:
+    """Anyone with comment access can post a receipt's line. Only the
+    pipeline's own user writes a receipt this lane acts on (DRE-2721)."""
+
+    @pytest.mark.parametrize("body", [
+        dead_run.limit_marker("claude", "plan", None, "37110000666"),
+        "🔌 planning-classify-transport: DRE-9109 was not classified this run.",
+        planning_escalation.escalation_comment(
+            "DRE-9109", "This card is too big for one pull request and must be split."
+                        "\n\nRecommendation: split it."),
+        planning_escalation.escalation_comment("DRE-9109", reconcile.stalled_planning_reason()),
+    ])
+    @pytest.mark.parametrize("author", [STRANGER, None])
+    def test_a_strangers_receipt_never_moves_a_real_question(self, body, author):
+        doc = fixture()
+        push_comment(doc, "DRE-9109", body, LATER, author=author)
+        items, _ctx = plan(doc)
+        assert not actions(items, "DRE-9109")
+        rows = lefts(items, "DRE-9109")
+        assert len(rows) == 1
+        assert rows[0].recommendation.startswith("keep the old page live for one week")
+
+    def test_a_strangers_pass_never_saves_a_dead_planner(self):
+        doc = fixture()
+        push_comment(doc, "DRE-9101", plan_critic.marker("pre", 1, "PASS"), LATER,
+                     author=STRANGER)
+        items, _ctx = plan(doc)
+        assert resent(items, "DRE-9101").cause == EXPECTED_CAUSES["DRE-9101"]
+
+    def test_a_strangers_stall_resend_never_holds_a_stall_park(self):
+        doc = fixture()
+        push_comment(doc, "DRE-9106", hygiene.receipt(
+            "hygiene-resend-to-planning", "stall park at 2026-09-30 05:00 PT",
+            ["stall park comment 2026-09-30T12:00:00Z"], NOW), NOW - timedelta(hours=1),
+            author=STRANGER)
+        items, _ctx = plan(doc)
+        assert resent(items, "DRE-9106").cause == EXPECTED_CAUSES["DRE-9106"]
+
+    def test_the_pipelines_user_is_read_once_in_the_pass(self):
+        _items, ctx = plan()
+        assert len([q for q in ctx.linear.calls if "viewer" in q]) == 1
+
+    def test_a_lane_with_no_card_reads_nothing(self):
+        doc = fixture()
+        doc["lanes"][LANE] = []
+        items, ctx = plan(doc)
+        assert items == [] and ctx.linear.calls == []
+
+    @pytest.mark.parametrize("answer", [RuntimeError("Linear answered 502"),
+                                        {"viewer": None}])
+    def test_no_pipeline_user_means_no_action_this_pass(self, answer, capsys):
+        doc = fixture()
+        ctx, _gh = context(doc)
+        children = fixture_gql(doc)
+
+        def gql(query, variables=None):
+            if "viewer" not in query:
+                return children(query, variables)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        ctx.linear = hygiene.read_only_linear(gql)
+        items = lane.plan(hygiene.Board(lanes=doc["lanes"], prs=doc["prs"]), ctx)
+        assert items == []
+        assert "skipped this pass" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #
