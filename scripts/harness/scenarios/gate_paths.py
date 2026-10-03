@@ -187,7 +187,13 @@ def pr_title(run_id: str, leg: str) -> str:
 
 
 def pr_body(run_id: str, leg: str) -> str:
+    # The line first (DRE-5576): the skew and stale heads are
+    # `agent/harness-…`, which owe a `What's new:` line, and the sandbox's
+    # critic and gate run at `main`. The named leg's dependabot/ head owes
+    # none; one body for every leg keeps the three alike.
     return (
+        "What's new: none\n"
+        "\n"
         f"Automated integration-harness probe (run `{run_id}`, scenario\n"
         "`gate_paths`, leg `" + leg + "`), opened by bureau-pipeline's\n"
         "harness suite to prove the live merge gate's semantics in this\n"

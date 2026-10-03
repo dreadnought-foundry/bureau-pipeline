@@ -64,7 +64,12 @@ def pr_title(run_id: str) -> str:
 
 
 def pr_body(run_id: str) -> str:
+    # The line first (DRE-5576): this head is `agent/harness-…`, which owes a
+    # `What's new:` line, and the sandbox's critic and gate run at `main` —
+    # without it the probe is sent back and held, and `stable` stops moving.
     return (
+        "What's new: none\n"
+        "\n"
         f"Automated integration-harness probe (run `{run_id}`), opened by\n"
         "bureau-pipeline's harness suite (`scripts/harness/`, scenario\n"
         "`bot_pr_flow`) to prove the live pipeline end to end in this\n"
