@@ -26,12 +26,18 @@ took the card off the one path that would have brought it back.
 
 The refusal was also wrong on its own terms. The park rule (DRE-2954) exists
 so the medic does not start NEW AGENT WORK on a card a person owns: a build, a
-fix, a plan. A Linear Sync or Merge Gate rerun starts no agent. It finishes
-bookkeeping for work that already merged, and whoever owns the card wants
-that bookkeeping done. So the gate now takes the failed workflow's name and
-applies the park rule to every workflow EXCEPT the named bookkeeping ones. An
-empty or unrecognized name keeps the park rule: that is the DRE-2937 incident's
+fix, a plan. A Linear Sync rerun starts no agent. It finishes bookkeeping
+for work that already merged, and whoever owns the card wants that
+bookkeeping done. So the gate now takes the failed workflow's name and applies
+the park rule to every workflow EXCEPT the named bookkeeping ones. An empty or
+unrecognized name keeps the park rule: that is the DRE-2937 incident's
 protection, and an unknown run must not lose it.
+
+Merge Gate is NOT bookkeeping (Stage 2 review, item 44 / M12). It MERGES: a
+rerun re-evaluates the PR, and the gate itself may merge it. Whether
+"needs a human" should block merging is a question put to the CEO, and until
+he answers the rule fails closed, so a held card's Merge Gate failure keeps
+the park rule like any agent workflow.
 """
 
 import contextlib
@@ -76,7 +82,7 @@ DRE5620_FACTS = {
 
 # The names `github.event.workflow_run.name` carries: the calling STUB's
 # `name:`, which is what medic.yml's stub watches by.
-BOOKKEEPING = ("Linear Sync", "Merge Gate")
+BOOKKEEPING = ("Linear Sync",)
 DISPATCHING = ("Agent Task", "Agent Fix", "Agent Plan")
 
 
@@ -152,8 +158,16 @@ class TheIncidentShapeTest(unittest.TestCase):
 
 
 class TheRuleIsForDispatchingWorkflowsTest(unittest.TestCase):
-    def test_merge_gate_is_bookkeeping_too(self):
-        self.assertEqual("true", _outputs(_decide("Merge Gate"))["retry"])
+    def test_merge_gate_is_not_bookkeeping_it_merges(self):
+        """Stage 2 review item 44 (M12): the gate merges, and whether a hold
+        should block a merge is the CEO's open question. Until he answers, a
+        held card's Merge Gate failure keeps the park rule — fail closed."""
+        for name in ("Merge Gate", "merge gate", "Merge Gate (reusable)"):
+            with self.subTest(workflow=name):
+                out = _outputs(_decide(name))
+                self.assertEqual("false", out["retry"])
+                self.assertEqual(medic_retry.RULE_PARKED, out["rule"])
+                self.assertTrue(medic_retry.park_rule_applies(name))
 
     def test_a_dispatching_workflow_still_honors_the_park(self):
         """DRE-2937's protection, unchanged: a build, fix or plan rerun on a
@@ -185,17 +199,17 @@ class TheRuleIsForDispatchingWorkflowsTest(unittest.TestCase):
         reusable is "Linear Sync (reusable)", and both must read the same
         (`dead_run._STAGE_BY_WORKFLOW`'s rule)."""
         for name in ("Linear Sync", "linear sync", "Linear Sync (reusable)",
-                     "  Merge Gate  ", "MERGE GATE (reusable)"):
+                     "  Linear Sync  ", "LINEAR SYNC (reusable)"):
             with self.subTest(workflow=name):
                 self.assertFalse(medic_retry.park_rule_applies(name))
         for name in ("", None, "Agent Task", "Agent Plan (reusable)",
-                     "Sync Linear", "QA Review"):
+                     "Sync Linear", "QA Review", "Merge Gate"):
             with self.subTest(workflow=name):
                 self.assertTrue(medic_retry.park_rule_applies(name))
 
     def test_the_bookkeeping_set_is_declared_as_data(self):
         self.assertEqual(
-            {"linear sync", "merge gate"},
+            {"linear sync"},
             set(medic_retry.BOOKKEEPING_WORKFLOWS),
         )
 
