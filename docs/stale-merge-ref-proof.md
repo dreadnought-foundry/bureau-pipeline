@@ -14,6 +14,8 @@ written. This section answers the items it left "not observable".
 
 Times are Pacific (PDT, UTC−7). Run ids link to `bureau-harness` Actions.
 
+A note on log timestamps: the reusable runs `reconcile.py … | tee sweep.log`, so Python's stdout is block-buffered and the runner stamps each line when the buffer flushes, not when it was printed. That is why every `stale-merge-ref` line in one sweep shares one timestamp, and why sweep 1's line reads `00:00:26Z` although the write it announces landed at 16:59:59 PT (`23:59:59Z`). The quoted timestamps are flush times. The write and receipt times come from the commit and the comment themselves.
+
 ### Why the sandbox can carry it
 
 * **A check that a `main` fault turns red for every pull request.** The
@@ -163,7 +165,7 @@ production refresh can supply it.
 
 Both pull requests were closed unmerged, A first so that closing B could not
 lift A's stack hold. #3100 was closed at 17:02:54 and #3099 at 17:02:57, and
-both branches were deleted. Harness `main` is
+both branches were deleted. At 17:03 PT, harness `main` was
 `9596d756df34fdebd841f6c9f8d3d85156f1b839`, with `test` green and a tree
 identical to M0's.
 
