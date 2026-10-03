@@ -19,7 +19,10 @@ comment are read past. Five kinds are mechanical, and each goes back to
    can read off a card.
 2. **A classifier transport failure.** The newest receipt is
    `🔌 planning-classify-transport` — a 429 or a 5xx, not a question. Cause:
-   `classifier transport failure at <the receipt's time>`.
+   `classifier transport failure at <the receipt's time>`. The SECOND
+   failure on a card is not this receipt but a `🙋 planning-escalation`
+   written with `transport=True`; this kind is keyed on the `🔌` receipt
+   alone, so that escalation is left for a person like any other.
 3. **A passed plan with a child missing criteria.** The newest receipt is a
    plan-critic PASS on an epic, and `plan_critic.cards_without_acceptance`
    names one of its children. The children's bodies are not on the board, so
