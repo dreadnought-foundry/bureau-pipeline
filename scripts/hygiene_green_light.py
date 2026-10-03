@@ -6,8 +6,11 @@ Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
 reads each card in `Green Light` once and sorts it by the newest planning
 receipt on it — a limit-death marker, a plan-critic record, a transport
 receipt or a planning escalation; this agent's own receipts and every other
-comment are read past. Five kinds are mechanical, and each goes back to
-`Planning` with one `hyg-resent-to-planning` receipt naming the cause:
+comment are read past. A receipt counts only when the pipeline's own Linear
+user wrote it — `viewer { id }`, read once a pass through `ctx.linear` — since
+anyone with comment access can post a receipt's line (DRE-2721,
+`plan_critic.trusted_bodies`). Five kinds are mechanical, and each goes back
+to `Planning` with one `hyg-resent-to-planning` receipt naming the cause:
 
 1. **A dead planner.** The newest receipt is `dead_run`'s `🪦 limit-death:`
    marker with `stage=plan` — the card was never planned, its planner hit a
@@ -29,10 +32,12 @@ comment are read past. Five kinds are mechanical, and each goes back to
    they are read once per such epic through `ctx.linear`. Cause: `child
    <DRE-N> has no acceptance criteria`.
 4. **A split or access escalation.** A `🙋 planning-escalation` whose stated
-   reason says the card is too big or must be split, or that the work needs a
-   credential, a grant or an access no agent has — the planner splits a card
-   and routes an operator card, not the CEO. The reason is quoted in the
-   receipt's evidence. Cause: `escalation asks for <split | access>, posted
+   reason says the card is too big for one pull request or must be split, or
+   that the work needs a credential, a grant or an access no agent has — the
+   planner splits a card and routes an operator card, not the CEO. The words
+   must be about the work: "too large for mobile" or "an agent lacks the
+   finance context" is a business question, and stays one. The reason is
+   quoted in the receipt's evidence. Cause: `escalation asks for <split | access>, posted
    <the escalation's time>`.
 5. **A stall park.** A `🙋 planning-escalation` whose reason is the Planning
    stall watchdog's ("planning has produced nothing") or the planner line's
@@ -62,7 +67,9 @@ It never approves a plan and never writes a build lane — the core's guard
 refuses that write whatever a lane returns.
 
 A `ctx.linear` read that fails skips that epic for this pass — said on stderr,
-never guessed into an action.
+never guessed into an action. A viewer read that fails, or names nobody,
+skips the whole lane for this pass the same way: with no author to vouch for
+a receipt, no receipt is read.
 """
 
 from __future__ import annotations
@@ -95,24 +102,31 @@ STALL_OPENINGS = (
 )
 STALL_CAUSE = "stall park at "
 
-#: A reason asking for a split: the card is too big for one pull request.
+#: What a split or access reason must be about: the card or its work.
+_WORK = r"(?:this|the) (?:card|epic|work)"
+#: A reason asking for a split: the card or its work is too big for one pull
+#: request. "Too large for mobile" or "too broad a pilot" is not.
 SPLIT = re.compile(
-    r"\btoo (?:big|large|broad)\b"
-    r"|\b(?:must|should|needs? to|has to|ought to) be split\b"
-    r"|\bsplit (?:it|this|the card|the work) (?:into|in)\b"
+    r"\btoo (?:big|large|broad) for (?:one|a single) (?:pull request|card)\b"
+    rf"|\b{_WORK} (?:must|should|needs? to|has to|ought to) be split\b"
+    rf"|\bsplit {_WORK} (?:into|in)\b"
     r"|\bmore than one pull request\b",
     re.I,
 )
-#: A reason asking for access: a credential, grant or access named …
-ACCESS_NOUN = re.compile(r"\b(?:credentials?|grants?|access|permissions?|tokens?)\b", re.I)
+#: A reason asking for access: the work needs a credential, grant or access …
+ACCESS_NOUN = re.compile(
+    r"\b(?:needs?|requires?)\s+(?:an?\s+|the\s+|its\s+)?(?:[\w'-]+\s+){0,3}?"
+    r"(?:credentials?|grants?|access|permissions?|tokens?)\b",
+    re.I,
+)
 #: … that no agent has. Both are required: "should partners get access" is a
-#: business question, not a missing grant.
+#: business question, not a missing grant, and so is "an agent lacks the
+#: finance context" with nothing the work needs.
 AGENT_LACKS = re.compile(
     r"\bno agent (?:has|holds|is granted|can)\b"
-    r"|\b(?:an agent|agents|the fleet|the pipeline)\b[^.]*?"
-    r"\b(?:lacks?|does not have|doesn't have|do not have|don't have|has no|have no"
-    r"|cannot|can't|is not granted|are not granted)\b"
-    r"|\bonly (?:the|an) operator\b",
+    r"|\b(?:an agent|agents|the fleet|the pipeline) (?:lacks?|does not have|doesn't have"
+    r"|do not have|don't have|has no|have no|is not granted|are not granted)\b"
+    r"|\bonly (?:the|an) operator (?:has|holds|can)\b",
     re.I,
 )
 #: `Recommendation: …`, bold or not, and `Recommended — …`: the label and any
@@ -126,6 +140,10 @@ _WHY = re.compile(r"\*\*Why it needs you:\*\*\s*(?P<reason>.*?)(?:\n\nThis card 
 
 #: How much of an escalation's reason the receipt quotes.
 QUOTE_CHARS = 300
+
+#: Who the key this pass runs under is — the fleet user in the workflow, the
+#: author of every receipt this lane reads (`linear_ops.comment_records`).
+VIEWER_QUERY = "query { viewer { id } }"
 
 CHILDREN_QUERY = (
     "query($id: String!) { issue(id: $id) { identifier "
@@ -168,9 +186,22 @@ def _is_escalation(first: str) -> bool:
                              f"{planning_escalation.REWRITE_MARK}{tag}"))
 
 
+def pipeline_user(ctx: hygiene.Context) -> str | None:
+    """The pipeline's own Linear user id — one `ctx.linear` read."""
+    data = ctx.linear(VIEWER_QUERY, {}) or {}
+    return (data.get("viewer") or {}).get("id") or None
+
+
+def pipeline_nodes(card: dict, me: str) -> list:
+    """The card's comments the pipeline's own user wrote, oldest→newest. An
+    integration's comment has no user and is nobody's."""
+    return [node for node in linear_ops.window_nodes(card.get("comments"))
+            if ((node.get("user") or {}).get("id")) == me]
+
+
 def classify(body: str) -> dict | None:
     """What a comment is to this lane, or None when it is not a planning
-    receipt this lane reads."""
+    receipt this lane reads. Handed only comments the pipeline wrote."""
     first = (body or "").split("\n", 1)[0].strip()
     marker = dead_run.parse_limit_marker(body)
     if marker is not None:
@@ -188,10 +219,11 @@ def classify(body: str) -> dict | None:
     return None
 
 
-def newest_receipt(card: dict) -> dict | None:
-    """The newest planning receipt on the card, with its time, or None."""
+def newest_receipt(card: dict, me: str) -> dict | None:
+    """The newest planning receipt the pipeline wrote on the card, with its
+    time, or None."""
     newest = None
-    for node in linear_ops.window_nodes(card.get("comments")):
+    for node in pipeline_nodes(card, me):
         found = classify(node.get("body") or "")
         when = _when(node.get("createdAt"))
         if found is not None and when is not None:
@@ -199,10 +231,10 @@ def newest_receipt(card: dict) -> dict | None:
     return newest
 
 
-def stall_resend(card: dict) -> dict | None:
+def stall_resend(card: dict, me: str) -> dict | None:
     """This agent's newest stall re-send on the card: its cause and time."""
     newest = None
-    for node in linear_ops.window_nodes(card.get("comments")):
+    for node in pipeline_nodes(card, me):
         head = hygiene.read_receipt(node.get("body") or "")
         when = _when(node.get("createdAt"))
         if (head and head["tag"] == hygiene.TAGS[ACT]
@@ -278,9 +310,10 @@ def children_without_criteria(card: dict, ctx: hygiene.Context) -> list:
                   key=lambda ident: (len(ident or ""), ident or ""))
 
 
-def _stall(card: dict, receipt: dict, ctx: hygiene.Context) -> hygiene.Action | hygiene.Left:
+def _stall(card: dict, receipt: dict, ctx: hygiene.Context,
+           me: str) -> hygiene.Action | hygiene.Left:
     cause = f"{STALL_CAUSE}{_stamp(receipt['at'])}"
-    prior = stall_resend(card)
+    prior = stall_resend(card, me)
     if (prior is not None and prior["cause"] != cause
             and ctx.now - prior["at"] < timedelta(hours=STOP_HOURS)):
         return left(
@@ -292,11 +325,11 @@ def _stall(card: dict, receipt: dict, ctx: hygiene.Context) -> hygiene.Action | 
     return resend(card, cause, [f"stall park comment {receipt['iso']}"], ctx)
 
 
-def _escalation(card: dict, receipt: dict, ctx: hygiene.Context):
+def _escalation(card: dict, receipt: dict, ctx: hygiene.Context, me: str):
     reason = receipt["reason"]
     stamp = _stamp(receipt["at"])
     if receipt["question"] and is_stall(reason):
-        return _stall(card, receipt, ctx)
+        return _stall(card, receipt, ctx, me)
     wants = asks_for(reason) if receipt["question"] else None
     if wants is not None:
         return resend(card, f"escalation asks for {wants}, posted {stamp}",
@@ -305,9 +338,10 @@ def _escalation(card: dict, receipt: dict, ctx: hygiene.Context):
                 recommendation(reason))
 
 
-def plan_card(card: dict, ctx: hygiene.Context):
-    """What this lane does about one card: an action, a left row, or None."""
-    receipt = newest_receipt(card)
+def plan_card(card: dict, ctx: hygiene.Context, me: str):
+    """What this lane does about one card: an action, a left row, or None.
+    `me` is the pipeline's own user, the one author whose receipts count."""
+    receipt = newest_receipt(card, me)
     if receipt is None:
         return left(card, "it carries no planning receipt this lane reads",
                     "a person reads the card — nothing on it says why it waits here")
@@ -342,14 +376,29 @@ def plan_card(card: dict, ctx: hygiene.Context):
                  else f"children {', '.join(missing)} have no acceptance criteria")
         return resend(card, cause, [*(f"child {m}" for m in missing),
                                     f"plan-critic PASS {receipt['iso']}"], ctx)
-    return _escalation(card, receipt, ctx)
+    return _escalation(card, receipt, ctx, me)
 
 
 def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
+    cards = list(board.cards(ctx, LANE))
+    if not cards:
+        return []
+    try:
+        me = pipeline_user(ctx)
+    except hygiene.Forbidden:
+        raise
+    except (RuntimeError, ValueError, KeyError, TypeError) as e:
+        me, why = None, f"the pipeline's Linear user could not be read: {e}"
+    else:
+        why = "Linear named no viewer for the pipeline's key"
+    if me is None:
+        print(f"hygiene: {LANE} — skipped this pass, {why}; no receipt can be "
+              f"told from a stranger's", file=sys.stderr)
+        return []
     out: list = []
-    for card in board.cards(ctx, LANE):
+    for card in cards:
         try:
-            item = plan_card(card, ctx)
+            item = plan_card(card, ctx, me)
         except hygiene.Forbidden:
             raise  # a refused read is a lane bug, never a skipped card
         except (RuntimeError, ValueError, KeyError, TypeError) as e:
