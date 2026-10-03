@@ -1332,9 +1332,9 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "🧹 Auto-promoted Backlog → Todo",
+      "anchor": "🧹 Auto-promoted Backlog → {destination}",
       "kind": "undeclared-act",
-      "means": "A Backlog card whose blockers are all Done is promoted to Todo on its own.",
+      "means": "A Backlog card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: Todo for FLEET, Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {

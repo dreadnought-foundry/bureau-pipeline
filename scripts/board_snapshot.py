@@ -455,6 +455,41 @@ _SYNTHETIC_BASE = 900000  # card numbers no real DRE card is near
 _EPIC_EVERY = 25
 _EPIC_CHILDREN = 12
 
+#: The order the synthetic board DEALS its cards into lanes, frozen (DRE-5322).
+#: This is a property of the fixture, not a statement of which lanes the sweep
+#: reads — that is `LANES`, and the board still names every one of them. It was
+#: `LANES` itself until Hand-work joined the sweep's union; dealing round-robin
+#: over a tuple that grows re-deals all 150 cards, so the replay's recorded
+#: decisions and its structural checks (nine active epics, the nudge loop's
+#: exhausted comment windows) would change for a reason that has nothing to do
+#: with the sweep. A lane `LANES` gains is given a few cards of its own instead
+#: (`_extra_lane_slots`), and only those cards move.
+_SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake", "Backlog")
+
+#: The lane a person's work waits in, and the marks a card there carries. A
+#: synthetic Hand-work card is a WORKBENCH card, as the sweep would land it.
+_HAND_WORK = "Hand-work"
+
+
+def _extra_lane_slots(lane: list[str], cards: int) -> dict[int, str]:
+    """Card index → the lane `LANES` names that `_SYNTHETIC_DEAL` does not.
+
+    One card per epic block, taken from a plain Todo card past the block's
+    children (so no epic, no child, no blocker chain moves), the lanes handed
+    out in turn. Deterministic, like the rest of the board."""
+    extra = [name for name in LANES if name not in _SYNTHETIC_DEAL]
+    if not extra:
+        return {}
+    out: dict[int, str] = {}
+    turn = 0
+    for start in range(0, cards, _EPIC_EVERY):
+        for i in range(start + _EPIC_CHILDREN + 1, min(start + _EPIC_EVERY, cards)):
+            if lane[i] == "Todo" and i % 5 not in (0, 1):
+                out[i] = extra[turn % len(extra)]
+                turn += 1
+                break
+    return out
+
 
 def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
     """A board in the snapshot's exact contract, built from invented cards.
@@ -469,7 +504,10 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
     through `scrub_card`, so it is exactly what `take` would write.
     """
     ident = [f"DRE-{_SYNTHETIC_BASE + i}" for i in range(cards)]
-    lane = [LANES[i % len(LANES)] for i in range(cards)]
+    lane = [_SYNTHETIC_DEAL[i % len(_SYNTHETIC_DEAL)] for i in range(cards)]
+    extra = _extra_lane_slots(lane, cards)
+    for i, name in extra.items():
+        lane[i] = name
 
     def at(i: int) -> str:
         return f"2026-01-01T{i // 60 % 24:02d}:{i % 60:02d}:00.000Z"
@@ -483,9 +521,11 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
     for i in range(cards):
         epic = i % _EPIC_EVERY == 0
         comments = []
-        if i % 3 == 0:
+        person = lane[i] == _HAND_WORK
+        if i % 3 == 0 or person:
             comments = [
-                {"body": "🧭 routing-verdict: **FLEET** — synthetic",
+                {"body": ("🧭 routing-verdict: **WORKBENCH** — synthetic" if person
+                          else "🧭 routing-verdict: **FLEET** — synthetic"),
                  "createdAt": at(i + 2), "user": {"id": f"synthetic-user-{i % 4}"}},
                 {"body": "synthetic comment " * 30,
                  "createdAt": at(i + 1), "user": None},
@@ -516,7 +556,8 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
             "updatedAt": at(i + 5),
             "state": {"name": lane[i]},
             "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
-                                 {"name": "agent:planner" if epic else "agent:engineer"}]},
+                                 {"name": "agent:planner" if epic else "agent:engineer"}]
+                       + ([{"name": "hand-built"}] if person else [])},
             "parent": None if p is None else {
                 "identifier": ident[p], "state": {"name": lane[p]}},
             "children": {"nodes": children},
