@@ -791,29 +791,64 @@ def _stamp(value):
         return None
 
 
+def _effective_stamp(node: dict):
+    """The later of the node's `updatedAt` and the newest comment in its own
+    window — the stamp both sides are classified by (DRE-5730).
+
+    The door serves `updatedAt` as exactly this (AB-1's contract). Linear's
+    own `updatedAt` moves for a comment, but not for one that lands within
+    about a minute of its last bump (2026-10-03: 62 of 100 active cards had a
+    newest comment up to 49 s after `updatedAt`). Compared raw, the door read
+    FIRST would look newer than Linear read after it — `door-newer`, a
+    failure — on a card where nothing differs but the arithmetic. Applied to
+    both sides, the same activity is the same stamp. None when the node has
+    no `updatedAt` (unstamped stays unstamped)."""
+    stamp = _stamp(node.get("updatedAt"))
+    if stamp is None:
+        return None
+    for comment in ((node.get("comments") or {}).get("nodes") or []):
+        at = _stamp((comment or {}).get("createdAt"))
+        if at is not None and at > stamp:
+            stamp = at
+    return stamp
+
+
 def _normal(node: dict) -> dict:
     """The facts a decision reads, normalized: labels as a set, comments in
-    order by (createdAt, body, author), relations as a set."""
-    comments = node.get("comments") or {}
-    rels = node.get("inverseRelations")
-    out = {
-        "lane": (node.get("state") or {}).get("name"),
-        "labels": sorted({(lbl or {}).get("name") or "" for lbl in
-                          ((node.get("labels") or {}).get("nodes") or [])}),
-        "title": node.get("title"),
+    order by (createdAt, body, author), relations as a set.
+
+    ONLY the fields the node carries (DRE-5730). A key absent from a node is
+    a field its query never selected — Reconcile's board read has no `parent`,
+    its Backlog read no `priority` — and comparing it would report the query,
+    not the data. A field that was selected and came back null is present,
+    and IS compared. The door's own nodes are always whole: the client refuses
+    a door answer missing any field (`missing-field`) before it gets here."""
+    out = {}
+    if "state" in node:
+        out["lane"] = (node.get("state") or {}).get("name")
+    if "labels" in node:
+        out["labels"] = sorted({(lbl or {}).get("name") or "" for lbl in
+                                ((node.get("labels") or {}).get("nodes") or [])})
+    if "title" in node:
+        out["title"] = node.get("title")
+    if "description" in node:
         # The door serves "" where Linear may send null: one fact, not two.
-        "description": node.get("description") or "",
-        "priority": node.get("priority"),
-        "parent": (
-            ((node.get("parent") or {}).get("identifier"),
-             ((node.get("parent") or {}).get("state") or {}).get("name"))
-            if node.get("parent") else None),
-        "children": bool((node.get("children") or {}).get("nodes")),
-        "comments": [
+        out["description"] = node.get("description") or ""
+    if "priority" in node:
+        # 0 is Linear's "No priority"; null says the same: one fact, not two.
+        out["priority"] = node.get("priority") or 0
+    if "parent" in node:
+        parent = node.get("parent")
+        out["parent"] = ((parent.get("identifier"), (parent.get("state") or {}).get("name"))
+                         if parent else None)
+    if "children" in node:
+        out["children"] = bool((node.get("children") or {}).get("nodes"))
+    if "comments" in node:
+        out["comments"] = [
             (c.get("createdAt"), c.get("body"), (c.get("user") or {}).get("id"))
-            for c in (comments.get("nodes") or [])
-        ],
-    }
+            for c in ((node.get("comments") or {}).get("nodes") or [])
+        ]
+    rels = node.get("inverseRelations")
     if rels is not None:
         out["relations"] = sorted(
             (r.get("type"), (r.get("issue") or {}).get("identifier"),
@@ -845,11 +880,13 @@ def compare(door_nodes, linear_nodes, *, door_as_of: str | None,
             fields: tuple | None = None) -> list[Diff]:
     """Classify every difference between the door's answer and Linear's.
 
-    The door is read FIRST, so it is never the newer of the two. Per card:
-    a difference with the door's `updatedAt` earlier than Linear's is
+    The door is read FIRST, so it is never the newer of the two. Per card,
+    by each side's `_effective_stamp` (`updatedAt` or a later comment):
+    a difference with the door's stamp earlier than Linear's is
     `door-older`; with the same stamp it is `same-stamp-different-value`; a
     door stamp later than Linear's is `door-newer` (a failure: impossible when
-    the door was read first). A card only Linear holds is `door-older` when it
+    the door was read first). Only fields BOTH nodes carry are compared
+    (`_normal`). A card only Linear holds is `door-older` when it
     changed after the door's `as_of`, else a same-stamp failure (the door
     should have held it). A card only the door holds left the lanes after the
     door's snapshot, which the later Linear read proves — `door-older`.
@@ -875,7 +912,7 @@ def compare(door_nodes, linear_nodes, *, door_as_of: str | None,
                             (d.get("state") or {}).get("name"), None))
             continue
         nd, nl = _normal(d), _normal(l_)
-        ds, ls = _stamp(d.get("updatedAt")), _stamp(l_.get("updatedAt"))
+        ds, ls = _effective_stamp(d), _effective_stamp(l_)
         for key in sorted(set(nd) | set(nl)):
             if fields is not None and key not in fields:
                 continue
