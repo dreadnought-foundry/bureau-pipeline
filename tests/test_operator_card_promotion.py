@@ -601,11 +601,14 @@ class TestTheContractSaysSo:
             if routing_verdict.is_promotable(name):
                 assert routing_verdict.sweep_promotes(name)
 
-    def test_the_promotion_lane_is_a_live_lane_the_promoter_may_write(self):
-        assert routing_verdict.PROMOTION_LANE in lane_contract.lane_names(status="live")
-        assert routing_verdict.PROMOTER in lane_contract.lane_writers(
-            routing_verdict.PROMOTION_LANE
-        )
+    def test_every_sweep_lane_is_a_live_lane_the_promoter_may_write(self):
+        # DRE-5321: the sweep carries cards to more than one lane (Todo for
+        # FLEET, Hand-work for WORKBENCH and OPERATOR), read off the vocabulary.
+        lanes = routing_verdict.sweep_lanes()
+        assert lanes == ("Todo", "Hand-work")
+        for lane in lanes:
+            assert lane in lane_contract.lane_names(status="live")
+            assert routing_verdict.PROMOTER in lane_contract.lane_writers(lane)
 
     def test_the_vocabulary_still_checks_out(self):
         assert routing_verdict.config_problems() == []
