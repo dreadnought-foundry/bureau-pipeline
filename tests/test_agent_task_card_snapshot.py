@@ -275,6 +275,25 @@ def test_on_a_door_missing_the_card_falls_back(monkeypatch, tmp_path):
     assert snap["source"] == "linear"
 
 
+@pytest.mark.parametrize("whole", [True, False])
+def test_on_a_long_door_thread_the_snapshot_keeps_the_newest_fifty(
+        monkeypatch, tmp_path, whole):
+    """The window every step's own Linear read took is the fifty NEWEST
+    (DRE-3250). The duplicate guard looks for the newest heartbeat and the
+    epic gate for the shape stamp: the oldest fifty would get both wrong. A
+    door holding fifty or more still answers when it cannot say that is all
+    (the newest fifty are what a Linear window holds too)."""
+    node = _door_card(comments=tuple(f"c{i}" for i in range(60)))
+    node["comments"]["pageInfo"]["hasNextPage"] = not whole
+    path = tmp_path / "snap.json"
+    with linear(monkeypatch) as lin, door(monkeypatch, node):
+        snap = _take(path)
+    assert lin.kinds == []
+    assert snap["source"] == "door"
+    assert card_snapshot.comment_bodies(snap) == [f"c{i}" for i in range(10, 60)]
+    assert snap["comments_partial"] is True
+
+
 def test_on_a_door_thread_it_cannot_vouch_for_is_not_used(monkeypatch, tmp_path):
     """The door says it does not hold the whole thread, and holds fewer than the
     fifty newest a Linear read would give: never half an answer."""
@@ -345,7 +364,7 @@ def test_load_of_a_missing_file_is_none(monkeypatch, tmp_path):
 # ── each pre-agent step, with and without a snapshot ────────────────────────
 
 
-def _snapshot(monkeypatch, tmp_path, lin_kw=None, door_node=None):
+def _snapshot(monkeypatch, tmp_path, lin_kw=None):
     path = tmp_path / "snap.json"
     with linear(monkeypatch, **(lin_kw or {})):
         _take(path)
@@ -508,7 +527,7 @@ def test_the_snapshot_is_taken_before_the_gate_and_never_fails_the_job():
     step = _step(SNAPSHOT_STEP)
     assert _index(SNAPSHOT_STEP) < _index("Card-validation gate")
     assert step.get("continue-on-error") is True
-    shell = step_shell.run_text(step) if hasattr(step_shell, "run_text") else step["run"]
+    shell = step_shell.step_shell(step)
     assert "card_snapshot.py take" in shell
     env = step.get("env") or {}
     assert env.get(card_snapshot.ENV) == "${{ runner.temp }}/card-snapshot.json"
