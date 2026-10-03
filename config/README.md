@@ -235,10 +235,13 @@ of it is ever a runtime lookup.
   bucket, kept fresh by the agent-bureau console in Secrets Manager
   `bureau/linear-oauth-planner/agent-bureau-token` and published as the repo
   Actions secret `LINEAR_PLANNER_KEY` in the form `Bearer <access token>`
-  (DRE-5587). `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
-  `agent-fix.yml`, `qa-review.yml` and `verify.yml`, and no other workflow —
-  reads it ahead of the fleet key, steps back onto the fleet key on a 401 —
-  never on a rate limit — and its `linear-budget:` line names
+  (DRE-5587). Linear meters it at 5,000 requests an hour against the API
+  key's 2,500, but at only 2,000,000 complexity points against the API key's
+  3,000,000. `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
+  `agent-fix.yml`, `qa-review.yml` and `verify.yml` in a repo that sets the
+  variable `LINEAR_AGENT_BUCKET=planner` (review item 29), and no other
+  workflow — reads it ahead of the fleet key, steps back onto the fleet key on
+  a 401 — never on a rate limit — and its `linear-budget:` line names
   `budget: planner-oauth` while the token is what it spends, which is
   how `scripts/check_linear_budget.py` keeps that spend out of the fleet
   key's row. Nothing in this repository refreshes the token; the console is

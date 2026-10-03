@@ -41,14 +41,22 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
-      # The planner's own Linear bucket (DRE-5589), spent by the build agent
-      # too since Stage 2 (fix #12): an OAuth token authorized as the fleet
-      # user, which writes as Agent-Bureau but is metered apart from the fleet
-      # key — 5,000 an hour against 2,500. The agent-bureau console keeps it
-      # fresh and publishes it as `Bearer <access token>` (DRE-5587); nothing
-      # in this repository ever refreshes it (DRE-2532). OPTIONAL: a repo
-      # without it builds on the fleet key exactly as before, because every
-      # step below reads `LINEAR_PLANNER_KEY || LINEAR_API_KEY`.
+      # The planner's own Linear bucket (DRE-5589), which the build agent may
+      # spend too since Stage 2 (fix #12): an OAuth token authorized as the
+      # fleet user, which writes as Agent-Bureau but is metered apart from the
+      # fleet key — 5,000 requests an hour against 2,500, but only 2,000,000
+      # complexity points an hour against the API key's 3,000,000
+      # (linear.app/developers/rate-limiting, read 2026-10-02). The
+      # agent-bureau console keeps it fresh and publishes it as `Bearer
+      # <access token>` (DRE-5587); nothing in this repository ever refreshes
+      # it (DRE-2532).
+      #
+      # OPTIONAL, and spent only where the CALLING repo opts in with the
+      # variable `LINEAR_AGENT_BUCKET=planner` (Stage 2 review item 29): a
+      # repo without the variable builds on the fleet key exactly as before
+      # even when the console has published the token to it, which is what
+      # keeps a `secrets: inherit` stub from flipping silently when `stable`
+      # advances.
       LINEAR_PLANNER_KEY:
         required: false
       BUREAU_APP_ID:
@@ -118,22 +126,37 @@ jobs:
     # level, so no step has to carry it, including the next one added.
     #
     # Every step that holds a Linear key — the agent's own included — holds
-    # `secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY` as LINEAR_API_KEY
-    # and the fleet key again as LINEAR_API_KEY_FALLBACK. `||` falls back only
-    # on an EMPTY secret, and a token that later dies keeps its value, so
-    # linear_ops.gql steps onto the fallback on a 401 and nothing else (never
-    # a 400 or a rate limit), and says so in one `linear-key:` line.
+    # `vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY ||
+    # secrets.LINEAR_API_KEY` as LINEAR_API_KEY, and the fleet key again as
+    # LINEAR_API_KEY_FALLBACK. In GitHub's expressions `&&` binds tighter than
+    # `||` and both return an operand, so: a repo that has not set the
+    # variable gets the fleet key; an opted-in repo with no token published
+    # gets the fleet key (the empty secret falls through); an opted-in repo
+    # with a token gets the token. `==` ignores case, so `PLANNER` opts in
+    # too. `vars` is the caller's, like `vars.BUREAU_CI_RUNS_ON`.
+    #
+    # `||` falls back only on an EMPTY secret, and a token that later dies
+    # keeps its value, so linear_ops.gql steps onto the fallback on a 401 and
+    # nothing else (never a 400 or a rate limit — a rate limit on the
+    # planner's bucket is not a reason to spend the fleet's), and says so in
+    # one `linear-key:` line.
+    #
+    # Before any repo opts in, measure the complexity it would spend (Linear's
+    # `X-Complexity`, Stage 2 review item 50): the planner's bucket has
+    # 2,000,000 points an hour against the fleet key's 3,000,000, and planners
+    # already spend it.
     #
     # The identity is `fleet` because the planner's token is a HOME of the
-    # fleet user in config/linear-identities.json, not a user of its own;
-    # LINEAR_KEY_HOME names that home, and the `linear-budget:` line prints it
-    # only while the token is what is being spent. The word comes from the
-    # CALLER (reconcile.yml's DRE-3630 shape): bureau-harness runs this
-    # workflow on the sandbox key, and a literal here would print
-    # `budget: fleet` while it spends the sandbox's hour.
+    # fleet user in config/linear-identities.json, not a user of its own.
+    # LINEAR_KEY_HOME follows the same opt-in — `planner-oauth` where the repo
+    # chose it, empty otherwise — and the `linear-budget:` line prints it only
+    # while the token is what is being spent. The word comes from the CALLER
+    # (reconcile.yml's DRE-3630 shape): bureau-harness runs this workflow on
+    # the sandbox key, and a literal here would print `budget: fleet` while it
+    # spends the sandbox's hour.
     env:
       LINEAR_IDENTITY: ${{ inputs.linear_identity }}
-      LINEAR_KEY_HOME: planner-oauth
+      LINEAR_KEY_HOME: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && 'planner-oauth' || '' }}
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — never keys). Empty ⇒ the probe is skipped
@@ -278,7 +301,7 @@ jobs:
       - name: Card-validation gate
         id: gate
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/validate_card.py gate \
@@ -303,7 +326,7 @@ jobs:
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           REPO: ${{ github.repository }}
@@ -403,7 +426,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # The budget is a property of the CARD, so this step reads Linear.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
@@ -462,7 +485,7 @@ jobs:
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           CARD: ${{ github.event.client_payload.identifier }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
@@ -502,7 +525,7 @@ jobs:
         id: inprogress
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
           # DRE-4368: the card's thread says whether this run resumed the dead
@@ -538,7 +561,7 @@ jobs:
         id: clock
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ github.event.client_payload.identifier }}
           MINTED_AT: ${{ steps.minted.outputs.at }}
@@ -615,7 +638,7 @@ jobs:
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
@@ -822,7 +845,7 @@ jobs:
           # config/pipeline-acts.json anchors the `build-heartbeat` act on
           # attempt 1's comment, and an anchor matching three places pins none
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
@@ -1026,7 +1049,7 @@ jobs:
           # config/pipeline-acts.json anchors the `build-heartbeat` act on
           # attempt 1's comment, and an anchor matching three places pins none
           # of them — scripts/pipeline_act.py check fails on the ambiguity.
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
@@ -1514,7 +1537,7 @@ jobs:
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}

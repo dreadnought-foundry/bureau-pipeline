@@ -206,6 +206,26 @@ Inside a called workflow, `github.event`, `github.event_name`, and
 resolves from the caller repo (set to `subscription` for OAuth-token auth;
 unset/anything else means API-key auth).
 
+### Which Linear bucket the agents spend: an opt-in per repo (Stage 2 #12, #29)
+
+The planner has read Linear on its own OAuth token since DRE-5589: the same
+Agent-Bureau user, metered apart from the fleet key. The build, fix, review and
+verify workflows can spend that token too, but **only in a repo that sets the
+repository (or organization) variable `LINEAR_AGENT_BUCKET` to `planner`**.
+Anywhere else they read the fleet key exactly as before, even when the console
+has published `LINEAR_PLANNER_KEY` to the repo. That matters for a stub that
+passes `secrets: inherit`: it already holds the token, so without the variable
+it would change buckets the moment `stable` advanced, with nobody deciding.
+`==` in a GitHub expression ignores case, so `PLANNER` opts in too.
+
+**Before setting it on any repo, measure what that repo's agents would spend.**
+The OAuth bucket allows 5,000 requests an hour against the API key's 2,500, but
+only 2,000,000 complexity points an hour against the API key's 3,000,000, and
+the planners already spend it. Record `X-Complexity` per agent-task run for a
+working day first (Stage 2 review item 50). The bar to keep: the planner bucket
+never below 1,500 of 5,000 requests, and at least 30% of complexity left on
+both buckets.
+
 Division of labor:
 
 | in the product-repo stub | in the reusable workflow here |
