@@ -1,0 +1,711 @@
+{
+ "lanes": {
+  "Green Light": [
+   {
+    "id": "issue-dre-9101",
+    "identifier": "DRE-9101",
+    "title": "agent-bureau: the console shows each lane's stall window",
+    "description": "agent-bureau: the console shows each lane's stall window\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T12:41:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:agent-bureau"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🪦 limit-death: kind=claude stage=plan reset=2026-09-30T15:00:00Z run=37110000001\n\nThis run hit the Claude account's usage limit during the plan stage and stopped there. That is a wait, not a fault in this card, the model or the service: no strike is spent against this card's budget, no model is recorded as having failed, and the card is neither requeued into the same wall nor parked for a human. The reconcile sweep re-enters the plan stage on its own once the window resets (at 2026-09-30 08:00 PT) or the account is switched — nothing else needs to happen.",
+       "createdAt": "2026-09-30T12:41:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "⏳ planner started",
+       "createdAt": "2026-09-30T11:04:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9101",
+       "createdAt": "2026-09-30T11:02:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T12:41:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9102",
+    "identifier": "DRE-9102",
+    "title": "bureau-pipeline: the medic names the wall it waited on",
+    "description": "bureau-pipeline: the medic names the wall it waited on\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T12:44:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:bureau-pipeline"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🪦 limit-death: kind=linear stage=plan reset=unknown run=37110000002\n\nThis run hit Linear's request budget (the workspace's hourly quota) during the plan stage and stopped there. That is a wait, not a fault in this card, the model or the service: no strike is spent against this card's budget, no model is recorded as having failed, and the card is neither requeued into the same wall nor parked for a human. The reconcile sweep re-enters the plan stage on its own once the window resets (at a time the run did not say) or the account is switched — nothing else needs to happen.",
+       "createdAt": "2026-09-30T12:44:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9102",
+       "createdAt": "2026-09-30T10:15:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-critic: stage=pre round=1 result=PASS collisions=0",
+       "createdAt": "2026-09-30T08:30:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T12:44:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9103",
+    "identifier": "DRE-9103",
+    "title": "portico: a moderator can pin a reply",
+    "description": "portico: a moderator can pin a reply\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T13:21:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:portico"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🔌 planning-classify-transport: DRE-9103 was not classified this run — the step that reads new cards could not reach its model.\n\n**What happened:** The classifier could not reach its model (429 rate limit error, transport), so nothing has read this card yet. That is our own plumbing failing, not a question about the work.\n\n**What happens next:** this run is failed on purpose so it runs again. The card has not moved and nothing has been decided about it. If the next run cannot reach a model either, this comes to you as a question.\n\nNothing is needed from you yet.",
+       "createdAt": "2026-09-30T13:21:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9103",
+       "createdAt": "2026-09-30T13:20:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T13:21:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9104",
+    "identifier": "DRE-9104",
+    "title": "[EPIC] bureau-pipeline: the release train reads its own window",
+    "description": "[EPIC] bureau-pipeline: the release train reads its own window\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T10:05:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:bureau-pipeline"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": [
+      {
+       "id": "issue-dre-9141",
+       "identifier": "DRE-9141",
+       "createdAt": "2026-09-30T09:00:00.000Z",
+       "state": {
+        "name": "Backlog"
+       }
+      },
+      {
+       "id": "issue-dre-9142",
+       "identifier": "DRE-9142",
+       "createdAt": "2026-09-30T09:00:00.000Z",
+       "state": {
+        "name": "Backlog"
+       }
+      },
+      {
+       "id": "issue-dre-9143",
+       "identifier": "DRE-9143",
+       "createdAt": "2026-09-30T09:00:00.000Z",
+       "state": {
+        "name": "Backlog"
+       }
+      }
+     ]
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "plan-critic: stage=post round=1 result=PASS collisions=0",
+       "createdAt": "2026-09-30T10:05:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-critic: stage=pre round=1 result=PASS collisions=0",
+       "createdAt": "2026-09-30T09:40:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9104",
+       "createdAt": "2026-09-30T09:00:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T10:05:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9105",
+    "identifier": "DRE-9105",
+    "title": "agent-bureau: the alert engine learns three new limits",
+    "description": "agent-bureau: the alert engine learns three new limits\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T14:31:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:agent-bureau"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🙋 planning-escalation: DRE-9105 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** This card holds three deliverables with a contract between them — the reader writes what the report reads — so it is too big for one pull request and must be split before an agent can build it.\n\nRecommendation: split it into three cards, the reader first and the other two blocked on it.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T14:31:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9105",
+       "createdAt": "2026-09-30T14:00:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T14:31:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9106",
+    "identifier": "DRE-9106",
+    "title": "bureau-pipeline: the groomer reads a card's history once",
+    "description": "bureau-pipeline: the groomer reads a card's history once\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T16:12:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:bureau-pipeline"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🙋 planning-escalation: DRE-9106 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** planning has produced nothing. This card has sat in Planning for 120+ minutes with nothing posted or changed on it — a card in Planning owes a decision about what it is and where it goes, and none has been recorded. Why is not known from here, which is why it is in front of you rather than being guessed at.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T16:12:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T16:12:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9107",
+    "identifier": "DRE-9107",
+    "title": "portico: the sign-in page names the portal",
+    "description": "portico: the sign-in page names the portal\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T17:26:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:portico"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🙋 planning-escalation: DRE-9107 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** this card has been waiting in line for a planner for about 3 hours and nothing has started it. Two planners run at a time across the company and the rest wait their turn, and a wait this long means the line has stopped moving for this card. Why is not known from here, which is why it is in front of you rather than being guessed at. Sending it back through Planning gives it a fresh place in line.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T17:26:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T17:26:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9108",
+    "identifier": "DRE-9108",
+    "title": "bureau-pipeline: the sweep's write ledger names each card once",
+    "description": "bureau-pipeline: the sweep's write ledger names each card once\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T19:40:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:bureau-pipeline"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🙋 planning-escalation: DRE-9108 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** planning has produced nothing. This card has sat in Planning for 120+ minutes with nothing posted or changed on it — a card in Planning owes a decision about what it is and where it goes, and none has been recorded. Why is not known from here, which is why it is in front of you rather than being guessed at.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T19:40:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9108",
+       "createdAt": "2026-09-30T16:20:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "🧹 hygiene: hyg-resent-to-planning — stall park at 2026-09-30 08:10 PT · 09:05 PT\nevidence: stall park comment 2026-09-30T15:10:00Z\n\n📎 pipeline-act: hygiene-resend-to-planning · kind: recovery · state: unchanged · next: plan.yml · discharges: nothing · subscriber: hygiene.yml · tag: hyg-resent-to-planning",
+       "createdAt": "2026-09-30T16:05:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "🙋 planning-escalation: DRE-9108 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** planning has produced nothing. This card has sat in Planning for 120+ minutes with nothing posted or changed on it — a card in Planning owes a decision about what it is and where it goes, and none has been recorded. Why is not known from here, which is why it is in front of you rather than being guessed at.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T15:10:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T19:40:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "id": "issue-dre-9109",
+    "identifier": "DRE-9109",
+    "title": "portico: the partner sign-up page moves to the new portal",
+    "description": "portico: the partner sign-up page moves to the new portal\n\n## Acceptance criteria\n\n- [ ] it works",
+    "createdAt": "2026-09-29T17:00:00.000Z",
+    "updatedAt": "2026-09-30T10:48:00.000Z",
+    "state": {
+     "name": "Green Light"
+    },
+    "labels": {
+     "nodes": [
+      {
+       "name": "repo:portico"
+      },
+      {
+       "name": "agent:planner"
+      }
+     ]
+    },
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "comments": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+     },
+     "nodes": [
+      {
+       "body": "🙋 planning-escalation: DRE-9109 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** We can keep the old partner sign-up page live for a week after the new one ships, or retire it the same day. Keeping it costs a week of running two sign-up paths; retiring it risks breaking the links partners already sent out, and we cannot see how many of those are in the wild.\n\nRecommendation: keep the old page live for one week, because a broken partner link costs more than a week of overlap.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+       "createdAt": "2026-09-30T10:48:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      },
+      {
+       "body": "plan-cycle: start epic=DRE-9109",
+       "createdAt": "2026-09-30T10:00:00.000Z",
+       "user": {
+        "id": "user-pipeline"
+       }
+      }
+     ]
+    },
+    "relations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "inverseRelations": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "history": {
+     "nodes": [
+      {
+       "createdAt": "2026-09-30T10:48:00.000Z",
+       "toState": {
+        "name": "Green Light"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "Todo": [],
+  "Triage": [],
+  "In Progress": [],
+  "In Review": []
+ },
+ "prs": {},
+ "gh": {},
+ "linear": {
+  "DRE-9104": {
+   "issue": {
+    "identifier": "DRE-9104",
+    "children": {
+     "nodes": [
+      {
+       "identifier": "DRE-9141",
+       "state": {
+        "name": "Backlog"
+       },
+       "description": "The train reads its window from the contract.\n\n## Acceptance criteria\n\n- [ ] the window is read once\n"
+      },
+      {
+       "identifier": "DRE-9142",
+       "state": {
+        "name": "Backlog"
+       },
+       "description": "The train names the window it waited on.\n\nIt should be clear to whoever reads the log.\n"
+      },
+      {
+       "identifier": "DRE-9143",
+       "state": {
+        "name": "Backlog"
+       },
+       "description": "PROOF: the train waits on its window.\n\nThe CEO reads this record and closes this card; there is no demo sitting.\n\n## Acceptance criteria\n\n- [ ] observed once\n"
+      }
+     ]
+    }
+   }
+  }
+ }
+}
