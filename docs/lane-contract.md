@@ -103,8 +103,8 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 _Waiting on: DRE-5240 creates the state, points WORKBENCH and OPERATOR here and teaches the sweep the move; asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **exit** | The person working it opens a pull request, and the sweep's hand-built-to-review move carries the card to In Review — or, for an OPERATOR card, the person closes it Done. Or the hygiene agent closes a card whose pull request merged while it sat here (DRE-5365).  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares, `hand-built` and `no-code` on an OPERATOR card, BEFORE the move, because an unmarked card is one the nudge loop could dispatch an agent at (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.  
-Permitted writers: `reconcile.py`, `linear_ops.py`, `operator` | Phase 2 — live |
+| **writers** | The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares, `hand-built` and `no-code` on an OPERATOR card, BEFORE the move, because an unmarked card is one the nudge loop could dispatch an agent at (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; the one-time migration that moved the person cards already in Todo (DRE-5323); and the person working it, who closes an OPERATOR card Done.  
+Permitted writers: `reconcile.py`, `linear_ops.py`, `hand_work_migration.py`, `operator` | Phase 2 — live |
 | **evidence** | A WORKBENCH or OPERATOR routing verdict on the card, and the marks that verdict declares.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
@@ -231,6 +231,7 @@ _Waiting on: the routing verdict exists and is readable (DRE-2724); still needed
 | `groomer.py` | the groomer — moves ONE approved batch out of Intake, in order | `scripts/groomer.py` |
 | `critic_score.py` | the critic's audit — moves a card the critic could not classify, with the reason on it | `scripts/critic_score.py` |
 | `backlog_cutover.py` | the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list | `scripts/backlog_cutover.py` |
+| `hand_work_migration.py` | the one-time move of a person's work out of Todo into Hand-work (DRE-5323) — run by hand, dry first; moves only cards marked hand-built or no-code, and names any epic or finished card it finds without writing to it | `scripts/hand_work_migration.py` |
 | `release-train.yml` | the release train — runs a surface's release script and verifies the tag it cut; it moves no card, and is here as the actor the six release acts name (DRE-3521) | `.github/workflows/release-train.yml` |
 | `hygiene.py` | the hygiene agent — the hourly pass that clears mechanical rows, each move under a 🧹 receipt naming the evidence it read | `scripts/hygiene.py` |
 | `guard` | the lane guard — returns a card whose occupancy is unjustified | DRE-2725, built in agent-bureau; reads its scope from lane_scope.py |
