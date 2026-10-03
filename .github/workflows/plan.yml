@@ -204,6 +204,11 @@ jobs:
     env:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
+      # The token's published expiry, epoch seconds (Stage 2 review item 30):
+      # linear_ops never sends a token past it, and goes straight to the
+      # fleet key instead of spending a 401 in every process. Empty until the
+      # console publishes the variable, and empty changes nothing.
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -5239,8 +5244,8 @@ jobs:
       # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
       # every path of its own: the runs worth keeping are the ones that died,
       # and keeping a log must never change this job's conclusion. Anything
-      # that stops it — a refused scrub, no OIDC token (portico forbids
-      # `id-token: write` by policy), no AWS CLI (the self-hosted minis may
+      # that stops it — a refused scrub, no OIDC token (a calling stub that
+      # grants no `id-token: write`), no AWS CLI (the self-hosted minis may
       # not have one), a log over the single-part cap — is recorded as a GAP
       # on the run instead.
       #
@@ -5304,6 +5309,11 @@ jobs:
     env:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
+      # The token's published expiry, epoch seconds (Stage 2 review item 30):
+      # linear_ops never sends a token past it, and goes straight to the
+      # fleet key instead of spending a 401 in every process. Empty until the
+      # console publishes the variable, and empty changes nothing.
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
     steps:
       - name: Mint bot token
         id: app

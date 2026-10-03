@@ -116,7 +116,7 @@ agents:
     maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/engineer.md
@@ -141,7 +141,7 @@ agents:
     maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/frontend.md
@@ -172,7 +172,7 @@ agents:
     maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/database-architect.md
@@ -194,7 +194,7 @@ agents:
     maxTurns: 400
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/devops.md
@@ -227,7 +227,7 @@ agents:
     maxTurns: 400
     maxBudget: 9
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -318,7 +318,7 @@ agents:
     maxTurns: 120
     maxBudget: 5
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
-    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/verifier.md
