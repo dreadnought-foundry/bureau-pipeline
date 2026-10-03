@@ -1316,6 +1316,9 @@ def _door_state_list() -> list[dict] | None:
                           "is a Linear write either way")
                 else:
                     print(f"read-door: workflow states unknown ({e.reason}) — read from Linear")
+            except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+                print(f"read-door: workflow states unreadable ({type(e).__name__}: {e}) — "
+                      "read from Linear")
         _door_workflow_states["nodes"] = nodes
     return _door_workflow_states["nodes"]
 
