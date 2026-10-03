@@ -539,8 +539,10 @@ def _fall_back(why: str, verb: str = "refused") -> None:
     # Every request so far — the refused one included — went out on the
     # primary key, so it is that bucket's (Stage 2 item 28). A process falls
     # back at most once, and the rest of it is charged where
-    # `spending_bucket()` says at exit.
-    _budget["calls_by_bucket"] = {refused: _budget["calls"]}
+    # `spending_bucket()` says at exit. A token skipped before any request
+    # (its published expiry had passed) spent nothing, so it is charged
+    # nothing and gets no `0 request(s)` line of its own.
+    _budget["calls_by_bucket"] = {refused: _budget["calls"]} if _budget["calls"] else {}
     if refused == identity:
         refused = "the primary key"
     _budget["fell_back"] = True
