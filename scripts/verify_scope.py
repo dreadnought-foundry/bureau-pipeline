@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """The Verifier's scope gate: does this pull request get a behavioral Verifier?
 
-    python3 scripts/verify_scope.py --card DRE-N --changed <file-list>
+    python3 scripts/verify_scope.py --card DRE-N --changed <file-list> [--snapshot <file>]
+
+With `--snapshot`, the card is read from the job's ONE card snapshot
+(`scripts/card_snapshot.py`, Stage 2 fix #14) and never from Linear: a missing
+snapshot is an unreadable card. Without it, the card is read from Linear as
+before.
 
 Prints `in_scope=true|false` and `is_ui=true|false` on stdout, in the shape
 `$GITHUB_OUTPUT` takes, and one human line on stderr naming each signal.
@@ -140,17 +145,38 @@ def read_card(identifier: str, *, gql=None) -> dict | None:
     }
 
 
+def card_from_snapshot(path: str) -> dict | None:
+    """`read_card`'s answer, out of the job's card snapshot instead of Linear.
+
+    The same rule: None for no snapshot (the read failed, or was held) and for
+    an empty description — no card signal, never an error that blocks.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import card_snapshot
+
+    snap = card_snapshot.load(path)
+    if snap is None or not (snap.get("description") or "").strip():
+        return None
+    return {"description": snap["description"],
+            "labels": [str(name or "") for name in snap.get("labels") or []]}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--card", default="", help="card id, e.g. DRE-4389 (empty = none)")
     ap.add_argument("--changed", required=True, help="file with one changed path per line")
+    ap.add_argument("--snapshot", default=None,
+                    help="the job's card snapshot (card_snapshot.py); Linear is never read")
     args = ap.parse_args(argv)
 
     try:
         changed = Path(args.changed).read_text().splitlines()
     except OSError:
         changed = []
-    card = read_card(args.card)
+    if args.snapshot is not None:
+        card = card_from_snapshot(args.snapshot) if args.card else None
+    else:
+        card = read_card(args.card)
     d = decide(changed, card)
     tf = lambda b: "true" if b else "false"  # noqa: E731
     print(f"in_scope={tf(d.in_scope)}")

@@ -70,8 +70,17 @@ def _lift_drain_slots(monkeypatch) -> None:
         monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: None)
 
 
+def _no_ambient_event(monkeypatch) -> None:
+    """The read door's client refuses to ask from a `pull_request` run (the
+    door refuses those tokens by design, S7) — and the CI that runs this suite
+    IS a `pull_request` run. A test that is about the event sets it itself; no
+    test inherits the runner's."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+
+
 @pytest.fixture(autouse=True)
 def fresh_sweep_board(monkeypatch):
+    _no_ambient_event(monkeypatch)
     _lift_drain_slots(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()

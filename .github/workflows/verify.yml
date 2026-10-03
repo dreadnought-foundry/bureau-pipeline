@@ -233,6 +233,43 @@ jobs:
           CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/verify-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
 
+      # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
+      # The scope gate below reads the card's description and labels, and the
+      # Select model step reads its thread (the build's `model-attempt:`
+      # heartbeat, DRE-3880). Each used to make its own Linear read; this is
+      # the one read, and both read the file it writes. scripts/card_snapshot.py
+      # says where it comes from: the console's read door when BUREAU_READ is
+      # `on` and the door can give the whole answer, else ONE Linear read.
+      #
+      # The door refuses every token minted for a pull_request or
+      # pull_request_target event, so a fork can never mint one (agent-bureau
+      # github_oidc.py check 7, review S7), and the client never asks from one.
+      # A pull_request verify is one Linear read where an in-scope one made two;
+      # only a workflow_dispatch re-verify can be served by the door.
+      #
+      # A read that fails writes no file: the scope gate then has no card
+      # signal and Select model fails CLOSED (`--built-on-unknown`), exactly as
+      # their own failed reads did. Never fails the job.
+      - name: Read the card once (read door, else one Linear read)
+        id: cardsnap
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          SNAP="${RUNNER_TEMP:-/tmp}/card-snapshot.json"
+          rm -f "$SNAP"
+          if [ -z "$CARD" ]; then
+            echo "no card on this pull request — nothing to read"
+            exit 0
+          fi
+          python3 .bureau-pipeline/scripts/card_snapshot.py take "$CARD" "$SNAP" \
+            || echo "no snapshot of $CARD — the steps that read it degrade as on an unreadable card"
+
       # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
       # The Verifier is expensive (it boots the app and drives a real E2E/
       # scenario path), and on single-system non-UI cards there is no
@@ -260,15 +297,16 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
           set +e
           mkdir -p /tmp/verify
           gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
-          if python3 .bureau-pipeline/scripts/verify_scope.py --card "$CARD" --changed /tmp/verify/changed.txt > /tmp/verify/scope.txt \
+          # The card comes from the job's one snapshot (fix #14), never from
+          # Linear here: no snapshot is no card signal, as a failed read was.
+          if python3 .bureau-pipeline/scripts/verify_scope.py --card "$CARD" --changed /tmp/verify/changed.txt \
+               --snapshot "${RUNNER_TEMP:-/tmp}/card-snapshot.json" > /tmp/verify/scope.txt \
              && grep -qE '^in_scope=(true|false)$' /tmp/verify/scope.txt; then
             cat /tmp/verify/scope.txt >> "$GITHUB_OUTPUT"
           else
@@ -419,15 +457,15 @@ jobs:
           # The probe authenticates with the same CLAUDE token the verifier uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          # Reads the card's own attempt heartbeat (DRE-3880) — see the run block.
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Reads the card's own attempt heartbeat (DRE-3880) out of the job's
+          # one card snapshot (Stage 2 fix #14) — see the run block. No Linear
+          # key here any more: the snapshot step made the read.
           CARD: ${{ steps.pr.outputs.card }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           BUILT_ON=""
-          if [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
-               dump-comments "$CARD" > "$RUNNER_TEMP/card-thread.json"; then
+          if [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/card_snapshot.py thread \
+               "$RUNNER_TEMP/card-snapshot.json" > "$RUNNER_TEMP/card-thread.json"; then
             BUILT_ON=$(python3 \
               .bureau-pipeline/scripts/model_fallback.py build-model \
               "$RUNNER_TEMP/card-thread.json")

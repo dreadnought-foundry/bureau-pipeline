@@ -89,7 +89,7 @@ DOCUMENTED_EXCEPTIONS = {
         "untrusted data. A live key would let the critic fetch card prose "
         "around that sanitizer, which is the discipline the stage exists to "
         "enforce. The Linear WORK of this workflow is done by ordinary "
-        "steps that do hold the key (Plan visual QA, Post verdict). And "
+        "steps that do hold the key (Read the card once, Post verdict). And "
         "unlike the fix and repair agents, nothing the critic is handed "
         "claims the key is in its env: briefs/critic.md (DRE-3084) carries "
         "the standing facts about the critic's own position and names no "
