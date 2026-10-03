@@ -1639,9 +1639,13 @@ _door_hold: list[str] = []
 # Linear's read of the lanes the door does not serve (Intake, Planning), when
 # the door served the rest.
 _linear_lane_cards: list[dict] | None = None
-# Set when this pass found the repo IDLE (`sweep_idle`): the board is not read
-# at all, and every phase that would read it is skipped without a word — the
-# one `idle:` line already said why.
+# Set when this pass found the repo IDLE (`sweep_idle`): the repo-scoped phases
+# — this repo's slice of the board, promotion, the hand-built move, the
+# re-review watcher, the break-glass count — are skipped without a word (the
+# one `idle:` line already said why). The FLEET-WIDE phases still run: the
+# Urgent fast path, the Planning stall watchdog, the frozen-holds repair and
+# the planner line act on every repo's cards, and an idle sweep must not
+# leave them to nobody (coordinator's decision, 2026-10-02 ~19:10 PT).
 _idle_pass: list[str] = []
 
 
@@ -1664,7 +1668,8 @@ class BoardHeld(BoardNotRead):
 
 class BoardIdle(BoardNotRead):
     """This repo has nothing in motion and nothing to promote (`sweep_idle`),
-    so the board is not read. Silent: the pass's one `idle:` line said it."""
+    so a repo-scoped phase is skipped. Silent: the pass's one `idle:` line
+    said it."""
 
 
 def reset_sweep_cards() -> None:
@@ -1865,8 +1870,6 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     Linear's answer is the one used. In `off` (the default) nothing changes.
     """
     global _swept_cards
-    if _idle_pass:
-        raise BoardIdle(_idle_pass[0])
     wanted = set(states)
     if not wanted <= set(SWEPT_LANES):
         return _fetch_active_cards(states)
@@ -10327,10 +10330,17 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 # with nothing to do must cost next to nothing. ONE cheap check decides, before
 # the board is read: the WIP cap (0 = this repo builds nothing — no request at
 # all), then whether any card of this repo is IN MOTION (Todo, In Progress,
-# In Review) or waiting in Backlog to be promoted. Neither → the board read,
-# promotion and every phase that reads the board are skipped, and the pass says
-# so in one line. The GitHub-side backstops still run: an open pull request is
-# work whatever the board says.
+# In Review) or waiting in Backlog to be promoted. Neither → promotion and the
+# repo-scoped phases are skipped, and the pass says so in one line.
+#
+# The FLEET-WIDE phases still run on an idle pass (the coordinator's decision,
+# 2026-10-02 ~19:10 PT, the CEO may overrule): the Urgent fast path, the
+# Planning stall watchdog, the frozen-holds repair and the planner line act on
+# every repo's cards, and with most sweeps paused an idle repo may be the only
+# one running them. They read the board as they always have, so an idle pass
+# costs the check plus those reads (about three requests), not one. The
+# GitHub-side backstops still run too: an open pull request is work whatever
+# the board says.
 IDLE_LANES = tuple(SWEEP_STATES) + (BACKLOG_LANE,)
 
 #: The smallest Linear question that answers it: does ONE card carrying this
@@ -10529,16 +10539,17 @@ def main(
     flagged: set[str] = set()
     if not promote_only:
         # The idle check (CEO, 2026-10-02): one cheap question before the
-        # board is read. Idle → the board read, promotion and every phase that
-        # reads the board are skipped (they raise BoardIdle, silently), and
-        # this is the pass's one line about it. Full passes only: the merge
-        # path's scoped passes are about a card that just moved.
+        # board is read. Idle → promotion and the repo-scoped phases are
+        # skipped (they raise BoardIdle, silently) while the fleet-wide ones
+        # run, and this is the pass's one line about it. Full passes only:
+        # the merge path's scoped passes are about a card that just moved.
         with _phase("sweep_idle"):
             why = sweep_idle()
             if why is not None:
                 _idle_pass.append(why)
-                print(f"idle: {REPO_SLUG} — {why}; skipped the board read, promotion "
-                      "and every phase that reads the board this pass")
+                print(f"idle: {REPO_SLUG} — {why}; skipped promotion and this repo's "
+                      "work-lane phases this pass (the fleet-wide Planning and "
+                      "Intake phases still run)")
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
@@ -10697,8 +10708,6 @@ def main(
         # of its work, and an unreadable thread is a READ failure.
         try:
             with _phase("release_groom_queue"):
-                if _idle_pass:
-                    raise BoardIdle(_idle_pass[0])  # reads the groom card first
                 release_groom_queue(line_left)
         except linear_ops.LinearError as e:
             _read_failures.append(f"groom queue: {e}")
@@ -10722,6 +10731,8 @@ def main(
     # this line appears only when this is the phase that paid for it.
     mine = None
     with _phase("board_read", enabled=not promote_only):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # this repo has nothing on the board
         mine = [
             c for c in active_cards()
             if card_repo(c) == REPO_SLUG and not automation_card(c)
@@ -10795,6 +10806,8 @@ def main(
     # have all returned above, which is what keeps a board-wide pass off the
     # merge path that runs on every merge in the fleet.
     with _phase("hand_built_to_review"):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # this repo's own pull requests' cards
         move_hand_built_to_review()
     # The nudge loop (DRE-3639): one phase, because a sweep's per-card
     # work is one question — what is stuck and what does it need — and a
@@ -11088,6 +11101,8 @@ def main(
     # and its Planning epics with children, with their lanes, off the board
     # read this sweep already paid for (DRE-5286, `rereview_watch_scope`).
     with _phase("report_rereview_missing"):
+        if _idle_pass:
+            raise BoardIdle(_idle_pass[0])  # this repo's epics: none in motion
         try:
             watched, lane_of = rereview_watch_scope(epics)
             rereview_watch.report(watched, epic_thread, lane_of)
