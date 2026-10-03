@@ -413,12 +413,26 @@ class TestAnEscalation:
 
     @pytest.mark.parametrize("reason", [
         "This card is too big for one pull request.\n\nRecommendation: split it.",
-        "The work must be split: the reader and the report are two deliverables."
-        "\n\nRecommendation: two cards.",
-        "Split the card into two, the reader first.\n\nRecommendation: two cards.",
+        "The work must be split: the reader and the report will not fit in one pull "
+        "request.\n\nRecommendation: two cards.",
+        "Split the card into two pull requests, the reader first.\n\nRecommendation: "
+        "two cards.",
+        "The reader and the report are more than one pull request of work.\n\n"
+        "Recommendation: two cards.",
     ])
     def test_a_split_said_another_way_is_still_a_split(self, reason):
         assert lane.asks_for(reason) == "split"
+
+    @pytest.mark.parametrize("reason", [
+        "The work needs a credential for the payments provider's live account, and "
+        "the fleet does not have it.\n\nRecommendation: an operator card.",
+        "This card requires write access to the billing bucket. The pipeline has no "
+        "access to that bucket.\n\nRecommendation: an operator card.",
+        "The work needs the partner's API token, and only the operator holds that."
+        "\n\nRecommendation: an operator card.",
+    ])
+    def test_an_access_said_another_way_is_still_access(self, reason):
+        assert lane.asks_for(reason) == "access"
 
     @pytest.mark.parametrize("reason", [
         "Should we cap partner uploads at 5 MB? Some videos are too large for mobile."
@@ -427,6 +441,14 @@ class TestAnEscalation:
         "with five?\n\nRecommendation: five.",
         "Should the fleet use the new billing token for refunds? An agent lacks the "
         "finance context.\n\nRecommendation: yes.",
+        "Should we split this work into two phases, pilot partners first and everyone "
+        "else after a month, or ship it all at once?\n\nRecommendation: two phases.",
+        "This epic should be split by region or by product line? Both are valid."
+        "\n\nRecommendation: by region.",
+        "Should the card be split into a partner release and a public one, or go out "
+        "as one launch?\n\nRecommendation: one launch.",
+        "Does the work need partner access? No agent has met the partner yet."
+        "\n\nRecommendation: ask the partner first.",
     ])
     def test_a_business_question_in_the_same_words_is_still_a_question(self, reason):
         assert lane.asks_for(reason) is None
