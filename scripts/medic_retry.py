@@ -40,8 +40,12 @@ this module is where the medic asks them:
 Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
 rerun is new agent work on a card a person has said stop to. A Linear Sync
 rerun starts no agent: it finishes bookkeeping for work that already merged.
-A Merge Gate rerun starts no agent work either: the gate re-evaluates and
-merges only on critic APPROVE and green CI. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
+A Merge Gate rerun re-evaluates and merges only on critic APPROVE and green
+CI, with one exception that IS agent work: on a conflicted PR its conflict arm
+dispatches Agent Fix in conflict mode, and Agent Fix clears `needs-human` when
+it starts. The gate's own wakes (CI completion, the critic's comment) already
+do that on a held card, so exempting the rerun adds no path that did not exist;
+it replays what the dead run would have done. On 2026-10-02 the card-done runs for DRE-5620 and DRE-5622 died on the
 fleet's exhausted Linear quota, the gate refused them over a leftover
 `needs-human` label, and the refusal receipt it posted landed after the
 `🪦 limit-death` marker, which `limit_recovery.waiting()` reads as closing it.
@@ -189,7 +193,10 @@ REPLAN_STATE = "Planning"
 #     Making the hold itself smarter (reasons, self-clearing, trying without
 #     a person first) is a dated entry on roll-up DRE-4915, not this list.
 #
-# The constant keeps its name: "bookkeeping" here means "no agent work".
+# The constant keeps its name, but "bookkeeping" is not quite "no agent work":
+# a Merge Gate rerun on a conflicted PR dispatches Agent Fix (conflict mode),
+# which clears `needs-human`, exactly as the gate's own wakes already do on a
+# held card. Exempting the rerun replays that; it opens no new path.
 # Matched the way `dead_run._STAGE_BY_WORKFLOW` matches: a prefix,
 # case-insensitively, because `github.event.workflow_run.name` is the calling
 # stub's name ("Linear Sync") and the reusable is "Linear Sync (reusable)".
