@@ -1058,8 +1058,11 @@ class TheCap(_Base):
             self.assertEqual(sum(o["admitted"] == "true" for o in outs), 2)
 
     def _readers(self, word):
+        # hygiene-done-records holds byte-pinned copies of proof records
+        # (tests/test_hygiene_done.py) — prose that quotes the cap, not a reader.
         p = subprocess.run(
-            ["grep", "-rlI", word, "scripts/", ".github/workflows/", "tests/"],
+            ["grep", "-rlI", "--exclude-dir=hygiene-done-records", word,
+             "scripts/", ".github/workflows/", "tests/"],
             cwd=ROOT, capture_output=True, text=True)
         return {os.path.normpath(x) for x in p.stdout.split()}
 
