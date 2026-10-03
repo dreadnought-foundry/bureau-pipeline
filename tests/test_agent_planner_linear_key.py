@@ -13,7 +13,13 @@ workflows below — plan.yml's pattern copied, not reinvented
 (tests/test_planner_linear_key.py pins the original):
 
 * every step that hands a process a Linear key, the agent's own step
-  included, hands it `secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY`;
+  included, hands it the planner's token ONLY when the calling repo has opted
+  in — `vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY
+  || secrets.LINEAR_API_KEY` — and the fleet key otherwise (Stage 2 review
+  item 29, finding H5b). Without the opt-in, a repo whose stub passes
+  `secrets: inherit` (portico, the demo) would start spending the planner's
+  bucket the moment `stable` advanced past this change, with nobody deciding;
+  the planner's own plan.yml needs no opt-in and keeps its expression;
 * beside it, `LINEAR_API_KEY_FALLBACK` is always the fleet key, because `||`
   falls back only on an EMPTY secret, and a published token that later dies
   still holds a value — `linear_ops.gql` steps onto the fallback on a 401 and
@@ -23,7 +29,8 @@ workflows below — plan.yml's pattern copied, not reinvented
   exactly as before, on the fleet key;
 * each job that holds the key names its identity and its key's home, so the
   `linear-budget:` line says `budget: planner-oauth` while the token is what
-  is being spent;
+  is being spent — and the home follows the same opt-in, so a repo that has
+  not opted in never names it;
 * and NOTHING ELSE reads the planner's token. The gates, the medic, the sweeps
   and the release workflows stay on the fleet key: the planner's bucket is for
   the agents, and a gate that quietly moved onto it would be one more spender
@@ -45,9 +52,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-PRIMARY_EXPR = "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
+OPT_IN = "vars.LINEAR_AGENT_BUCKET == 'planner'"
+PRIMARY_EXPR = (
+    "${{ " + OPT_IN + " && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
+)
 FALLBACK_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 HOME = "planner-oauth"
+HOME_EXPR = "${{ " + OPT_IN + " && 'planner-oauth' || '' }}"
 
 # The four agent workflows this change moves, and the job in each that holds
 # the key. A floor of key-holding steps per workflow, so a renamed key cannot
@@ -83,20 +94,65 @@ def _key_steps(doc: dict) -> list[tuple[str, str, dict]]:
     return out
 
 
-def _evaluate(expr: str, secrets: dict) -> str:
-    """GitHub's `a || b` over the secrets context: an unset secret reads as
-    the empty string, and `||` returns the first operand that is not falsy,
-    else the last. Modeled rather than trusted, as in
-    tests/test_planner_linear_key.py."""
+def _evaluate(expr: str, secrets: dict, variables: dict | None = None):
+    """GitHub's expression semantics for the subset these lines use, modeled
+    rather than trusted (as in tests/test_planner_linear_key.py), from the
+    Actions expression reference:
+
+    * an unset secret or variable reads as the empty string;
+    * `&&` binds tighter than `||`, and both return an OPERAND, not a boolean:
+      `&&` the first falsy operand else the last, `||` the first truthy
+      operand else the last — the documented `cond && a || b` idiom, including
+      its documented caveat that a falsy `a` falls through to `b` (which is
+      exactly what sends an opted-in repo with no published token to the
+      fleet key);
+    * `==` between strings IGNORES CASE, so `PLANNER` opts in too.
+    """
+    variables = variables or {}
     m = re.fullmatch(r"\$\{\{\s*(.+?)\s*\}\}", expr.strip())
     assert m, f"not a single expression: {expr!r}"
-    value = ""
-    for operand in (o.strip() for o in m.group(1).split("||")):
-        assert operand.startswith("secrets."), operand
-        value = secrets.get(operand[len("secrets."):], "")
+
+    def atom(text: str):
+        text = text.strip()
+        cmp = re.fullmatch(r"(.+?)\s*==\s*(.+)", text)
+        if cmp:
+            left, right = atom(cmp.group(1)), atom(cmp.group(2))
+            return str(left).lower() == str(right).lower()
+        lit = re.fullmatch(r"'([^']*)'", text)
+        if lit:
+            return lit.group(1)
+        if text.startswith("secrets."):
+            return secrets.get(text[len("secrets."):], "")
+        if text.startswith("vars."):
+            return variables.get(text[len("vars."):], "")
+        raise AssertionError(f"operand this model does not know: {text!r}")
+
+    def conj(text: str):
+        value = None
+        for part in text.split("&&"):
+            value = atom(part)
+            if not value:
+                return value
+        return value
+
+    value = None
+    for part in m.group(1).split("||"):
+        value = conj(part)
         if value:
             return value
     return value
+
+
+def test_the_model_reads_the_documented_ternary_idiom_as_github_does():
+    """The evaluator itself, on the documented example's shape, so a wrong
+    model cannot make the wiring tests below pass."""
+    expr = "${{ vars.X == 'main' && 'a' || 'b' }}"
+    assert _evaluate(expr, {}, {"X": "main"}) == "a"
+    assert _evaluate(expr, {}, {"X": "MAIN"}) == "a"
+    assert _evaluate(expr, {}, {"X": "other"}) == "b"
+    assert _evaluate(expr, {}, {}) == "b"
+    # The caveat: a falsy middle operand falls through.
+    assert _evaluate("${{ vars.X == 'main' && '' || 'b' }}", {}, {"X": "main"}) == "b"
 
 
 def _code_lines(name: str) -> list[str]:
@@ -166,28 +222,68 @@ def test_the_job_that_holds_the_key_names_its_home(name):
     job_id, _floor = AGENT_WORKFLOWS[name]
     assert {j for j, _s, _e in _key_steps(doc)} == {job_id}
     env = doc["jobs"][job_id].get("env") or {}
-    assert env.get("LINEAR_KEY_HOME") == HOME, name
+    # The home follows the opt-in: `planner-oauth` only where the repo chose
+    # the planner's bucket, and empty — which linear_ops never prints, because
+    # it is not a declared home — everywhere else.
+    assert env.get("LINEAR_KEY_HOME") == HOME_EXPR, name
     # Whose bucket is pinned by tests/test_linear_identity_declared.py; here
     # only that the job says one at all.
     assert env.get("LINEAR_IDENTITY"), name
 
 
-# ── absent means today ──────────────────────────────────────────────────────
+# ── fleet unless the repo opts in ───────────────────────────────────────────
+PUBLISHED = {"LINEAR_API_KEY": "fleet-key", "LINEAR_PLANNER_KEY": "Bearer tok"}
+UNPUBLISHED = ({"LINEAR_API_KEY": "fleet-key"},
+               {"LINEAR_API_KEY": "fleet-key", "LINEAR_PLANNER_KEY": ""})
+
+
 @pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
-def test_with_the_planner_key_absent_every_step_resolves_to_the_fleet_key(name):
-    for secrets in ({"LINEAR_API_KEY": "fleet-key"},
-                    {"LINEAR_API_KEY": "fleet-key", "LINEAR_PLANNER_KEY": ""}):
+def test_planner_token_needs_repo_opt_in(name):
+    """Stage 2 review P7 / H5b: a published token is NOT enough. A repo whose
+    stub passes `secrets: inherit` holds the token the moment the console
+    publishes it, so without this gate it would flip onto the planner's bucket
+    when `stable` advanced past this change — nobody deciding, nothing on the
+    board looking different. The variable is the decision."""
+    env_job = _doc(name)["jobs"][AGENT_WORKFLOWS[name][0]].get("env") or {}
+    for variables in ({}, {"LINEAR_AGENT_BUCKET": ""},
+                      {"LINEAR_AGENT_BUCKET": "fleet"},
+                      {"LINEAR_AGENT_BUCKET": "planner-oauth"}):
         for job, step, env in _key_steps(_doc(name)):
-            assert _evaluate(env["LINEAR_API_KEY"], secrets) == "fleet-key", (job, step)
-            assert _evaluate(env["LINEAR_API_KEY_FALLBACK"], secrets) == "fleet-key"
+            assert _evaluate(env["LINEAR_API_KEY"], PUBLISHED, variables) == "fleet-key", (
+                variables, job, step)
+        assert _evaluate(env_job["LINEAR_KEY_HOME"], PUBLISHED, variables) == "", variables
 
 
 @pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
-def test_with_the_planner_key_published_the_primary_is_the_token(name):
-    secrets = {"LINEAR_API_KEY": "fleet-key", "LINEAR_PLANNER_KEY": "Bearer tok"}
+@pytest.mark.parametrize("word", ["planner", "PLANNER", "Planner"])
+def test_an_opted_in_repo_with_the_token_published_spends_the_token(name, word):
+    """`==` on strings ignores case in GitHub expressions, so every casing of
+    `planner` is the same decision — said here so nobody is surprised."""
+    variables = {"LINEAR_AGENT_BUCKET": word}
+    env_job = _doc(name)["jobs"][AGENT_WORKFLOWS[name][0]].get("env") or {}
     for job, step, env in _key_steps(_doc(name)):
-        assert _evaluate(env["LINEAR_API_KEY"], secrets) == "Bearer tok", (job, step)
-        assert _evaluate(env["LINEAR_API_KEY_FALLBACK"], secrets) == "fleet-key"
+        assert _evaluate(env["LINEAR_API_KEY"], PUBLISHED, variables) == "Bearer tok", (job, step)
+        assert _evaluate(env["LINEAR_API_KEY_FALLBACK"], PUBLISHED, variables) == "fleet-key"
+    assert _evaluate(env_job["LINEAR_KEY_HOME"], PUBLISHED, variables) == HOME
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
+def test_an_opted_in_repo_with_no_token_published_stays_on_the_fleet_key(name):
+    variables = {"LINEAR_AGENT_BUCKET": "planner"}
+    for secrets in UNPUBLISHED:
+        for job, step, env in _key_steps(_doc(name)):
+            assert _evaluate(env["LINEAR_API_KEY"], secrets, variables) == "fleet-key", (job, step)
+            assert _evaluate(env["LINEAR_API_KEY_FALLBACK"], secrets, variables) == "fleet-key"
+
+
+@pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
+def test_the_opt_in_is_the_callers_variable_and_read_nowhere_else(name):
+    """`vars` in a reusable workflow resolves from the CALLER's repository —
+    the same reading `vars.BUREAU_CI_RUNS_ON` and `vars.CLAUDE_AUTH_MODE` rely
+    on. Every line that names the variable is one of the key lines or the job's
+    home, and nothing else in the file reads it."""
+    uses = sum(line.count("vars.LINEAR_AGENT_BUCKET") for line in _code_lines(name))
+    assert uses == len(_key_steps(_doc(name))) + 1, (name, uses)
 
 
 # ── the fence ───────────────────────────────────────────────────────────────
@@ -198,6 +294,14 @@ def test_no_other_workflow_reads_the_planners_token():
     readers = {path.name for path in WORKFLOWS.glob("*.yml")
                if any("LINEAR_PLANNER_KEY" in line for line in _code_lines(path.name))}
     assert readers == PLANNER_KEY_READERS, sorted(readers ^ PLANNER_KEY_READERS)
+
+
+def test_only_the_four_agent_workflows_ask_for_the_opt_in():
+    """The planner's own plan.yml has spent its bucket since DRE-5589 without
+    asking; the opt-in is for the agents that joined it, and only them."""
+    askers = {path.name for path in WORKFLOWS.glob("*.yml")
+              if any("LINEAR_AGENT_BUCKET" in line for line in _code_lines(path.name))}
+    assert askers == set(AGENT_WORKFLOWS), sorted(askers ^ set(AGENT_WORKFLOWS))
 
 
 # ── the agents never refresh ────────────────────────────────────────────────
