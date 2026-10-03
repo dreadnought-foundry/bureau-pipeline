@@ -108,9 +108,28 @@ NOT_UPLOADING = {
     # not a deferral with no owner (standards/design-parity.md's ledger rule).
 }
 
+#: Uploading jobs whose upload is not yet handed the run's effort (DRE-5356).
+#: plan.yml's one job runs thirteen model steps and keeps only the last one's
+#: transcript, so no single `effort_arg` is true for it until DRE-5350 adds the
+#: step that resolves which ran last — and DRE-5350 empties this.
+EFFORT_PENDING = {
+    ("plan.yml", "plan"),
+}
+
 #: What the step's `run:` body must call. Matched on the call, not on a step
 #: name — names are prose, this is the contract.
 UPLOAD_CALL = "upload_agent_log.py"
+
+#: The `effort_arg` output a model-selection step writes — `--effort <level>`,
+#: or empty when the model declares no effort (DRE-4836).
+EFFORT_ARG_EXPR = re.compile(
+    r"^\$\{\{\s*steps\.[A-Za-z0-9_-]+\.outputs\.effort_arg\s*\}\}$")
+
+#: `$EFFORT_ARG` unquoted, so an empty value is no argument at all and
+#: `--effort high` splits into its two words. Quoted, the first is an empty
+#: argument and the second one unknown flag — argparse exits 2, `|| true`
+#: hides it, and the log is lost.
+EFFORT_ARG_WORD = re.compile(r'(?<!["{\w])\$EFFORT_ARG(?![\w"}])')
 
 RUN_ID = "987654321"
 RUN_ATTEMPT = "2"
@@ -208,6 +227,35 @@ class StepShapeTest(unittest.TestCase):
                     f"{mj.filename} [{mj.job}]: the upload step must be handed "
                     f"the same execution file its death-cause receipt reads",
                 )
+
+    def test_the_step_hands_the_upload_the_runs_effort(self):
+        """DRE-5356: the effort DRE-4906 stores is the one the run was given.
+        It reaches the step through `env:`, from the job's own model-selection
+        step, and the upload call passes it on."""
+        for mj in _uploading_jobs():
+            if (mj.filename, mj.job) in EFFORT_PENDING:
+                continue
+            with self.subTest(workflow=mj.filename, job=mj.job):
+                step = _upload_steps(mj)[0]
+                env = step.get("env") or {}
+                self.assertRegex(
+                    str(env.get("EFFORT_ARG") or ""), EFFORT_ARG_EXPR,
+                    f"{mj.filename} [{mj.job}]: the upload step must be handed "
+                    f"`EFFORT_ARG: ${{{{ steps.<model>.outputs.effort_arg }}}}` "
+                    f"in its `env:`",
+                )
+                run = str(step.get("run") or "")
+                call = run.index(UPLOAD_CALL)
+                self.assertRegex(
+                    run[call:], EFFORT_ARG_WORD,
+                    f"{mj.filename} [{mj.job}]: the `{UPLOAD_CALL}` call must "
+                    f"pass `$EFFORT_ARG`, unquoted",
+                )
+
+    def test_effort_pending_names_only_uploading_jobs(self):
+        """An entry here that no longer uploads would skip nothing and hide
+        nothing — it would just outlive the job it excused."""
+        self.assertLessEqual(EFFORT_PENDING, UPLOADS)
 
     def test_no_uploading_job_declares_a_permissions_block(self):
         """A called job asking for more than its caller granted fails the whole
