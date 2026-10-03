@@ -306,3 +306,200 @@ def test_a_line_on_the_fleet_key_or_naming_no_bucket_stays_in_todays_row():
     assert [(r["workflow"], r["budget"], r["runs"], r["total"]) for r in rows] == [
         ("Reconcile", "", 3, 6),
     ]
+
+
+# ── Stage 2 #11: every process's own count, preferred ───────────────────────
+# Every process that talks to Linear now also prints, as it exits,
+#
+#     linear-calls: <N> request(s) this run (budget: <bucket>)
+#
+# — the requests IT sent, counted by the seam, not a difference between two
+# readings of a bucket other runs are draining at the same time. A run that
+# printed any is charged their sum, per bucket; its `sweep-spend: total` and
+# `linear-budget:` lines are not added. The sweep's total is a SUBSET of its
+# own process's count (one pass, not the whole process), and it says nothing
+# about the run's other processes, so the calls lines outrank it too. A log
+# from before this line existed reads exactly as it did.
+
+
+_TOKENS = iter(f"{4000 + i}@__run-{i:06x}" for i in range(10_000))
+
+
+def _calls_line(monkeypatch, calls: int, identity: str = "fleet",
+                token: str | None = None) -> str:
+    """The `linear-calls:` line composed by the seam itself, so the reader is
+    pinned against what the producer prints, never a restatement of it. Each
+    call is a different PROCESS unless the caller names the token — in a test
+    session every line would otherwise carry the one pytest process's token."""
+    token = token or next(_TOKENS)
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, identity)
+    monkeypatch.setattr(linear_ops, "process_token", lambda: token)
+    linear_ops._reset_budget_state()
+    linear_ops._budget["calls"] = calls
+    (line,) = linear_ops.calls_lines()
+    linear_ops._reset_budget_state()
+    return line
+
+
+def test_the_calls_line_is_read_off_the_line_linear_ops_prints(monkeypatch):
+    line = _calls_line(monkeypatch, 17)
+    assert line.startswith("linear-calls: 17 ")
+    assert clb.run_spend_from_log(_log("some other line", line)) == [17]
+    rows = clb.aggregate([("portico", "Agent Task", _log(line))])
+    assert [(r["budget"], r["runs"], r["total"], r["max"]) for r in rows] == [
+        ("", 1, 17, 17),
+    ]
+
+
+def test_an_overlapping_run_is_charged_its_own_count_not_the_shared_difference(
+    monkeypatch,
+):
+    """The budget line says 59 because another run drew on the same key
+    meanwhile; the process sent 20. The table says 20."""
+    log = _log(
+        "linear-budget: 731 → 672 (spent 59 this run; window resets 20:34 PT; budget: fleet)",
+        _calls_line(monkeypatch, 20),
+    )
+    rows = clb.aggregate([("atlas", "Agent Task", log)])
+    assert [(r["total"], r["max"], r["unknown_lines"]) for r in rows] == [(20, 20, 0)]
+
+
+def test_a_headerless_run_is_known_by_its_count(monkeypatch):
+    """`linear-budget: unknown` was a run seen with a spend nobody could know.
+    With the count beside it, it is known — and not an unknown line."""
+    log = _log(
+        "linear-budget: unknown (no rate-limit headers seen; budget: fleet)",
+        _calls_line(monkeypatch, 4),
+    )
+    rows = clb.aggregate([("deltasolv", "Medic", log)])
+    assert [(r["total"], r["unknown_lines"]) for r in rows] == [(4, 0)]
+    assert "unknown/rolled" not in clb.render_table(rows, [])
+
+
+def test_the_calls_lines_outrank_the_sweeps_own_total(monkeypatch):
+    """A reconcile run of two processes: the sweep (whose pass counted 20 of
+    the 23 requests its process sent) and a second step that sent 6. The run
+    sent 29, and that is what it is charged."""
+    log = _log(
+        *_echoed_sweep_step(),
+        "sweep-spend: promote_ready 5 request(s)",
+        _sweep_total_line(monkeypatch, 20),
+        "linear-budget: 731 → 672 (spent 59 this run; window resets 20:34 PT; budget: fleet)",
+        _calls_line(monkeypatch, 23),
+        "linear-budget: 672 → 660 (spent 12 this run; window resets 20:34 PT; budget: fleet)",
+        _calls_line(monkeypatch, 6),
+    )
+    assert clb.run_spend_from_log(log) == [23, 6]
+    rows = clb.aggregate([("agent-bureau", "Reconcile", log)])
+    assert [(r["runs"], r["total"], r["max"], r["unknown_lines"]) for r in rows] == [
+        (1, 29, 29, 0),
+    ]
+
+
+def test_a_log_from_before_the_calls_line_reads_as_it_always_did(monkeypatch):
+    """No `linear-calls:` anywhere: the sweep's total, else the budget lines."""
+    sweep = _log(_sweep_total_line(monkeypatch, 20),
+                 "linear-budget: 731 → 672 (spent 59 this run; window resets 20:34 PT)")
+    plain = _log("linear-budget: 900 → 895 (spent 5 this run; window resets 16:00 PT)")
+    assert clb.run_spend_from_log(sweep) == [20]
+    assert clb.run_spend_from_log(plain) == [5]
+
+
+def test_each_calls_line_lands_in_the_bucket_it_names(monkeypatch):
+    """DRE-5589's split, on the new line: the planner's OAuth bucket keeps its
+    own row; `fleet` and `undeclared` are the fleet key's, today's row."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    monkeypatch.setenv(linear_ops.HOME_ENV, "planner-oauth")
+    monkeypatch.setenv("LINEAR_API_KEY", "Bearer planner")
+    monkeypatch.setenv(linear_ops.FALLBACK_ENV, "lin_api_fleet")
+    monkeypatch.setattr(linear_ops, "process_token", lambda: "77@__run-planner")
+    linear_ops._reset_budget_state()
+    linear_ops._budget["calls"] = 60
+    (planner,) = linear_ops.calls_lines()
+    assert planner.endswith("; budget: planner-oauth)")
+    monkeypatch.delenv(linear_ops.HOME_ENV)
+    monkeypatch.delenv(linear_ops.FALLBACK_ENV)
+    rows = clb.aggregate([
+        ("atlas", "Agent Plan", _log(planner, _calls_line(monkeypatch, 6))),
+        ("atlas", "Agent Plan", _log(_calls_line(monkeypatch, 2, identity="nobody"))),
+    ])
+    got = {(r["workflow"], r["budget"]): (r["runs"], r["total"]) for r in rows}
+    assert got == {
+        ("Agent Plan", "planner-oauth"): (1, 60),
+        ("Agent Plan", ""): (2, 8),
+    }
+    assert "Agent Plan [planner-oauth]" in clb.render_table(rows, [])
+
+
+def test_a_calls_marker_mid_line_is_not_read(monkeypatch):
+    """Same rule as the other two markers: GitHub echoes a step's script into
+    the log, and a script that names the marker is not a process printing it."""
+    log = _log(
+        "\x1b[36;1mgrep '^linear-calls:' sweep.log\x1b[0m",
+        "echo \"linear-calls: 99 request(s) this run (budget: fleet)\"",
+        _calls_line(monkeypatch, 3),
+    )
+    assert clb.run_spend_from_log(log) == [3]
+
+
+# ── Stage 2 item 28 (H8, K2/K4) ─────────────────────────────────────────────
+def test_echoed_calls_line_counted_once(monkeypatch):
+    """K2. A step that `cat`s a log the process already printed puts its lines
+    in the run log twice — at the start of the line, where the reader looks.
+    The process token says it is the same process, so it is counted once."""
+    budget = "linear-budget: 900 → 870 (spent 30 this run; window resets 16:00 PT; budget: fleet)"
+    sweep = _calls_line(monkeypatch, 25, token="4242@__run_3-a1b2c3")
+    other = _calls_line(monkeypatch, 4, token="4250@__run_4-d4e5f6")
+    log = _log(budget, sweep, "linear-budget: 870 → 866 (spent 4 this run; "
+               "window resets 16:00 PT; budget: fleet)", other,
+               "== the sweep's log, kept ==", budget, sweep)
+    assert clb.run_spend_from_log(log) == [25, 4]
+    rows = clb.aggregate([("agent-bureau", "Reconcile", log)])
+    assert [(r["budget"], r["runs"], r["total"], r["max"], r["unknown_lines"])
+            for r in rows] == [("", 1, 29, 29, 0)]
+
+
+def test_mixed_run_reports_undeclared(monkeypatch):
+    """K4. One process said its own count; another printed only a budget line
+    (killed before it could say more, or a script from before the line). The
+    second's spend is not covered by any count, and it is reported as
+    `undeclared` — in its own row, never dropped and never folded into the
+    fleet key's exact number."""
+    log = _log(
+        "linear-budget: 900 → 870 (spent 30 this run; window resets 16:00 PT; budget: fleet)",
+        _calls_line(monkeypatch, 25),
+        "linear-budget: 870 → 858 (spent 12 this run; window resets 16:00 PT; budget: fleet)",
+        "linear-budget: unknown (no rate-limit headers seen; budget: fleet)",
+    )
+    assert clb.run_spend_from_log(log) == [25, 12, None]
+    rows = clb.aggregate([("portico", "Agent Task", log)])
+    got = {r["budget"]: (r["runs"], r["total"], r["unknown_lines"]) for r in rows}
+    assert got == {"": (1, 25, 0), "undeclared": (1, 12, 1)}
+    text = clb.render_table(rows, [])
+    assert "Agent Task [undeclared]" in text
+    assert text.splitlines()[-1].split()[:3] == ["TOTAL", "2", "37"]
+
+
+def test_a_run_whose_every_budget_line_is_covered_has_no_undeclared_row(monkeypatch):
+    log = _log(
+        "linear-budget: 900 → 870 (spent 30 this run; window resets 16:00 PT; budget: fleet)",
+        _calls_line(monkeypatch, 25),
+    )
+    rows = clb.aggregate([("portico", "Agent Task", log)])
+    assert [r["budget"] for r in rows] == [""]
+
+
+def test_a_split_process_covers_its_one_budget_line(monkeypatch):
+    """A process that fell back prints ONE budget line and a calls line per
+    bucket. Both calls lines belong to that budget line; it is covered once
+    and the next process's budget line is not."""
+    token = "4300@__run_2-0a0b0c"
+    log = _log(
+        "linear-budget: 351 → 340 (spent 11 this run; window resets 16:00 PT; budget: fleet)",
+        _calls_line(monkeypatch, 40, token=token).replace("budget: fleet", "budget: planner-oauth"),
+        _calls_line(monkeypatch, 11, token=token),
+        "linear-budget: 340 → 335 (spent 5 this run; window resets 16:00 PT; budget: fleet)",
+    )
+    rows = clb.aggregate([("atlas", "Agent Plan", log)])
+    got = {r["budget"]: r["total"] for r in rows}
+    assert got == {"planner-oauth": 40, "": 11, "undeclared": 5}

@@ -21,6 +21,21 @@ also prints `sweep-spend: total <N> request(s) …`, counted by the process
 itself, and a run that printed one is charged that and its budget lines are
 not added. Every other workflow is still read off its budget lines.
 
+Every process now says its own count (Stage 2 #11), and that outranks both:
+
+    linear-calls: <N> request(s) this run (process: <token>; budget: <bucket>)
+
+N is the requests that process sent on that bucket, counted by `linear_ops`
+itself — exact, known even when no rate-limit header came back, and free of
+anyone else's requests; a process that fell back mid-run prints one line per
+bucket. A run that printed any is charged their sum, per bucket, a line
+repeated with the same process token counted once, and its `sweep-spend:
+total` lines are not added: the sweep's total is a part of its own process's
+count, and it says nothing about the run's other processes. A budget line
+covered by the calls lines printed right after it adds nothing; one that no
+count covers is reported in its own `[undeclared]` row, never dropped. A log
+from before the line existed reads exactly as it did.
+
 A spend on ANOTHER BUCKET is kept in its own row (DRE-5589). The line ends
 `budget: <bucket>`, and the planner's OAuth token — the fleet user, metered
 apart from the fleet key — prints `budget: planner-oauth`. Adding that to the
@@ -80,6 +95,16 @@ _BUCKET_RE = re.compile(r";\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 _FLEET_BUCKETS = frozenset({"fleet", "undeclared"})
 # The last line of every sweep pass, reconcile.SweepSpend.report_total().
 _SWEEP_TOTAL_RE = re.compile(_LINE_START + r"sweep-spend: total (\d+) request")
+# The process's own count, linear_ops.calls_lines() (Stage 2 #11), the
+# process token that names who printed it (item 28), and the bucket it names
+# in the parentheses that close it.
+_CALLS_RE = re.compile(_LINE_START + r"linear-calls:\s*(\d+)\s+request")
+_CALLS_TOKEN_RE = re.compile(r"\(process:\s*([A-Za-z0-9_.@-]+);")
+_CALLS_BUCKET_RE = re.compile(r"[(;]\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
+# The row a budget line's spend lands in when the run printed calls lines and
+# none of them covers it (item 28, K4): reported, never dropped, and never
+# folded into an exact count it is not part of.
+UNDECLARED = "undeclared"
 
 UNKNOWN = "UNKNOWN"
 
@@ -104,13 +129,67 @@ def spent_from_log(log_text: str) -> list[int | None]:
 def bucket_of(line: str) -> str:
     """The bucket a budget line names — `""` for the fleet key's own (DRE-5589)."""
     m = _BUCKET_RE.search(line.rstrip())
-    bucket = m.group(1) if m else ""
+    return _fleet_or(m.group(1) if m else "")
+
+
+def _fleet_or(bucket: str) -> str:
     return "" if bucket in _FLEET_BUCKETS else bucket
+
+
+def counted_entries(log_text: str) -> list[tuple[str, int | None]] | None:
+    """A run's spend as `(bucket, spend)` entries in log order, read off its
+    `linear-calls:` lines — or None when it printed none (an older log).
+
+    - Each calls line is one entry, in the bucket it names (`""` for the
+      fleet key's own, as `bucket_of` reads a budget line).
+    - A line seen again with the same process token and bucket — a step that
+      `cat`s a log the process already printed — is counted once (item 28,
+      K2). A line with no token cannot be told from a repeat and is counted.
+    - A process prints its budget line and then its calls lines, one per
+      bucket, back to back. So a budget line whose next marker line is a
+      calls line is COVERED by that count and adds nothing. A budget line
+      followed by another budget line, or by nothing, is spend no count
+      covers — a process killed past any handler, or a script from before
+      the calls line — and lands in the `undeclared` row (item 28, K4), its
+      `spent N` or, for `window rolled` / `unknown`, an unknown entry.
+    """
+    markers: list[tuple[str, str]] = []
+    for line in (log_text or "").splitlines():
+        if _CALLS_RE.match(line):
+            markers.append(("calls", line))
+        elif _SEEN_RE.match(line):
+            markers.append(("budget", line))
+    if not any(kind == "calls" for kind, _ in markers):
+        return None
+    entries: list[tuple[str, int | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for i, (kind, line) in enumerate(markers):
+        if kind == "budget":
+            if i + 1 < len(markers) and markers[i + 1][0] == "calls":
+                continue
+            m = _SPENT_RE.match(line)
+            entries.append((UNDECLARED, int(m.group(3)) if m else None))
+            continue
+        b = _CALLS_BUCKET_RE.search(line.rstrip())
+        bucket = _fleet_or(b.group(1) if b else "")
+        t = _CALLS_TOKEN_RE.search(line)
+        if t:
+            if (t.group(1), bucket) in seen:
+                continue
+            seen.add((t.group(1), bucket))
+        entries.append((bucket, int(_CALLS_RE.match(line).group(1))))
+    return entries
 
 
 def run_spend_by_bucket(log_text: str) -> dict[str, list[int | None]]:
     """`run_spend_from_log`, split by the bucket each line names. A sweep's
     own total names none, and a sweep spends the fleet key, so it is `""`."""
+    counted = counted_entries(log_text)
+    if counted is not None:
+        out_counted: dict[str, list[int | None]] = {}
+        for bucket, spent in counted:
+            out_counted.setdefault(bucket, []).append(spent)
+        return out_counted
     lines = (log_text or "").splitlines()
     totals = [int(m.group(1)) for m in map(_SWEEP_TOTAL_RE.match, lines) if m]
     if totals:
@@ -125,10 +204,16 @@ def run_spend_by_bucket(log_text: str) -> dict[str, list[int | None]]:
 
 
 def run_spend_from_log(log_text: str) -> list[int | None]:
-    """What ONE run spent, entry by entry: its `sweep-spend: total` lines when
-    it printed any — the pass's own count — and otherwise its budget lines
-    (`spent_from_log`). Never both: a sweep's budget line counts the same
-    requests again, plus whatever else drew on the shared key meanwhile."""
+    """What ONE run spent, entry by entry: its `linear-calls:` lines when it
+    printed any — each process's own count, plus the spend of any budget line
+    no count covers (`counted_entries`) — else its `sweep-spend: total` lines
+    — the pass's own count — and otherwise its budget lines
+    (`spent_from_log`). A sweep's total is a part of its own process's count,
+    and a covered budget line counts the same requests again, plus whatever
+    else drew on the shared key meanwhile, so neither is added to a count."""
+    counted = counted_entries(log_text)
+    if counted is not None:
+        return [spent for _bucket, spent in counted]
     totals = [
         int(m.group(1))
         for m in map(_SWEEP_TOTAL_RE.match, (log_text or "").splitlines())
