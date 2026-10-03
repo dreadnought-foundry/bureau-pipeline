@@ -200,7 +200,7 @@ jobs:
     # opted-in repo with no token published gets the fleet key (the empty
     # secret falls through); an opted-in repo with a token gets the token.
     # `==` ignores case, so `PLANNER` opts in too. `vars` is the caller's,
-    # like `vars.BUREAU_CI_RUNS_ON`. The critic's own step still holds neither
+    # like `vars.CLAUDE_AUTH_MODE`. The critic's own step still holds neither
     # (DRE-2052 + DRE-2696).
     #
     # `||` falls back only on an EMPTY secret, and a token that later dies

@@ -279,8 +279,7 @@ def test_an_opted_in_repo_with_no_token_published_stays_on_the_fleet_key(name):
 @pytest.mark.parametrize("name", sorted(AGENT_WORKFLOWS))
 def test_the_opt_in_is_the_callers_variable_and_read_nowhere_else(name):
     """`vars` in a reusable workflow resolves from the CALLER's repository —
-    the same reading `vars.BUREAU_CI_RUNS_ON` and `vars.CLAUDE_AUTH_MODE` rely
-    on. Every line that names the variable is one of the key lines or the job's
+    the same reading `vars.CLAUDE_AUTH_MODE` relies on. Every line that names the variable is one of the key lines or the job's
     home, and nothing else in the file reads it."""
     uses = sum(line.count("vars.LINEAR_AGENT_BUCKET") for line in _code_lines(name))
     assert uses == len(_key_steps(_doc(name))) + 1, (name, uses)

@@ -138,7 +138,7 @@ jobs:
     # variable gets the fleet key; an opted-in repo with no token published
     # gets the fleet key (the empty secret falls through); an opted-in repo
     # with a token gets the token. `==` ignores case, so `PLANNER` opts in
-    # too. `vars` is the caller's, like `vars.BUREAU_CI_RUNS_ON`.
+    # too. `vars` is the caller's, like `vars.CLAUDE_AUTH_MODE`.
     #
     # `||` falls back only on an EMPTY secret, and a token that later dies
     # keeps its value, so linear_ops.gql steps onto the fallback on a 401 and
