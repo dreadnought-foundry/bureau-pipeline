@@ -2076,12 +2076,13 @@ jobs:
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.critic_retry.outputs.execution_file || steps.critic.outputs.execution_file }}
+          EFFORT_ARG: ${{ steps.model.outputs.effort_arg }}
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           printf '%s' "$SECRETS_JSON" \
             | python3 "$PIPELINE_DIR"/scripts/upload_agent_log.py \
-                --log-file "$EXEC_FILE" || true
+                --log-file "$EXEC_FILE" $EFFORT_ARG || true
 
       - name: Post verdict or neutral status
         id: post
