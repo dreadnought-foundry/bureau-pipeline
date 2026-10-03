@@ -280,6 +280,7 @@ class _Linear:
         "Green Light": ("st-greenlight", "backlog"),
         "Backlog": ("st-backlog", "backlog"),
         "Todo": ("st-todo", "unstarted"),
+        "Hand-work": ("st-handwork", "unstarted"),
         "In Progress": ("st-inprogress", "started"),
         "In Review": ("st-inreview", "started"),
         "Done": ("st-done", "completed"),

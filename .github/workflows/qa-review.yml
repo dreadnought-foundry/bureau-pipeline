@@ -2262,7 +2262,9 @@ jobs:
           # `reconcile.HAND_BUILT_REVIEW_LANES` draws. `Triage` IS here: a
           # broken card with an open pull request is being checked like any
           # other, and leaving it behind would recreate this defect in the one
-          # lane nobody watches.
+          # lane nobody watches. `Hand-work` IS here (DRE-5320): its exit is
+          # "the person working it opens a pull request" and the card goes to
+          # In Review, the move the sweep's hand-built-to-review also makes.
           #
           # `--not-epic` refuses an epic outright (`mid_epic.is_epic`, the one
           # helper): this step is driven by a BRANCH NAME, and one child's pull
@@ -2272,7 +2274,7 @@ jobs:
           # Linear outage must not turn a completed review red. The lane is the
           # least load-bearing thing this job writes.
           python3 "$PIPELINE_DIR"/scripts/linear_ops.py advance "$CARD" \
-            "In Review" "Intake,Triage,Planning,Backlog,Todo,In Progress" \
+            "In Review" "Intake,Triage,Planning,Backlog,Todo,Hand-work,In Progress" \
             --not-epic \
             || echo "::warning::could not write ${CARD}'s lane — the verdict is posted and unaffected"
 

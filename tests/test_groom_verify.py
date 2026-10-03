@@ -481,9 +481,11 @@ def reload_against(monkeypatch, tmp_path):
     importlib.reload(groom_verify)
 
 
-def test_in_flight_on_the_committed_contract_is_the_four_lanes_in_flow_order():
-    assert lane_contract.lane("Hand-work", "arriving")
-    assert groom_verify.IN_FLIGHT == ("Backlog", "Todo", "In Progress", "In Review")
+def test_in_flight_on_the_committed_contract_is_the_five_lanes_in_flow_order():
+    # Hand-work went live with DRE-5320, and joined with nothing here edited.
+    assert lane_contract.lane("Hand-work")
+    assert groom_verify.IN_FLIGHT == (
+        "Backlog", "Todo", "Hand-work", "In Progress", "In Review")
 
 
 def test_a_live_hand_work_lane_joins_in_flight_in_flow_order(reload_against):
@@ -494,8 +496,14 @@ def test_a_live_hand_work_lane_joins_in_flight_in_flow_order(reload_against):
         True, "DRE-1 is approved and in Hand-work")
 
 
-def test_while_hand_work_is_arriving_a_card_there_is_not_approved():
-    assert groom_verify.lane_says("DRE-1", "Hand-work") == (
+def test_while_hand_work_is_arriving_a_card_there_is_not_approved(reload_against):
+    doc = _contract_with(**{"Hand-work": "arriving"})
+    entry = next(e for e in doc["lanes"] if e["name"] == "Hand-work")
+    entry.update(arriving_by="DRE-5240", reason="arriving fixture",
+                 board_action="create the state")
+    fresh = reload_against(doc)
+    assert fresh.IN_FLIGHT == ("Backlog", "Todo", "In Progress", "In Review")
+    assert fresh.lane_says("DRE-1", "Hand-work") == (
         False, "DRE-1 is in Hand-work and has not been approved")
 
 

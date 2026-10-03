@@ -363,8 +363,8 @@ to ten cards behind it, in proposal order:
 — the description's own line, or a card or PR the ranked read's evidence names
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
-Done, read off `config/lane-contract.json`: Backlog, Todo, In Progress or In
-Review today, and Hand-work once the contract makes it live (DRE-5348).
+Done, read off `config/lane-contract.json`: Backlog, Todo, Hand-work (live
+since DRE-5320), In Progress or In Review (DRE-5348).
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.
 A replacement the check could not read does not stand either: Cancel is the

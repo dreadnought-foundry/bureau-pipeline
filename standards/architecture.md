@@ -33,7 +33,7 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 ## The board (the lane contract)
 ```
-Intake → Planning → Green Light → Backlog → Todo → In Progress → In Review → Done
+Intake → Planning → Green Light → Backlog → Todo → Hand-work → In Progress → In Review → Done
                                                    off to the side: Triage
                                                    terminal:  Canceled · Duplicate
 ```
@@ -50,6 +50,10 @@ Intake → Planning → Green Light → Backlog → Todo → In Progress → In 
   So is a card sent back since its verdict — one that has been in Intake,
   Green Light, Triage or a closed lane since — because a verdict approves one
   trip through Planning (`stale-verdict`, DRE-4962).
+- **`Hand-work`** — the person-work lane (DRE-5240): a card a person builds,
+  never dispatched, never reported stalled, carried to `In Review` when its pull
+  request opens. Live on the board since DRE-5320; nothing routes to it until
+  WORKBENCH and OPERATOR are pointed at it.
 - **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
   lane: `In Review` means "a pull request is open and being checked". The two
   lanes that preceded it were retired by DRE-2726 and deleted from the board and
