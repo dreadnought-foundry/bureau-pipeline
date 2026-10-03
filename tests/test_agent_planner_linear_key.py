@@ -62,12 +62,15 @@ HOME_EXPR = "${{ " + OPT_IN + " && 'planner-oauth' || '' }}"
 
 # The four agent workflows this change moves, and the job in each that holds
 # the key. A floor of key-holding steps per workflow, so a renamed key cannot
-# make this pass by finding nothing (counted 2026-10-02: 10, 7, 4, 5).
+# make this pass by finding nothing (counted 2026-10-02: 10, 7, 4, 5). The
+# critic and the verifier each hold one fewer since Stage 2 fix #14: their two
+# card reads became one snapshot step, and the steps that read the snapshot
+# hold no key (tests/test_review_card_snapshot_wiring.py).
 AGENT_WORKFLOWS = {
     "agent-task.yml": ("execute", 10),
     "agent-fix.yml": ("fix", 7),
-    "qa-review.yml": ("review", 4),
-    "verify.yml": ("verify", 5),
+    "qa-review.yml": ("review", 3),
+    "verify.yml": ("verify", 4),
 }
 
 # Every workflow that may read the planner's token. plan.yml is the original.

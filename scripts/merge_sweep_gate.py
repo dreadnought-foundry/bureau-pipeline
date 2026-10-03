@@ -70,14 +70,48 @@ cannot succeed (DRE-1921, `standards/vendor-boundaries.md` Q5).
 
 This module decides and prints. It never writes to Linear: every write on the
 merge path stays in `reconcile.py`, which owns them.
+
+## The read door (Stage 2 #15)
+
+With `BUREAU_READ=on` the one read above comes from the console's read door
+instead of Linear: `/cards?ids=<merged>` for its parent and
+`/cards/<merged>/dependents?lanes=Backlog` for the cards it blocks, rebuilt
+into `QUERY`'s shape by `door_card` — the same rebuild Reconcile's merge path
+scopes its passes with (`reconcile.merged_card_scope`), so the gate and the
+pass it starts read one answer. Two facts in it are deliberately not facts:
+
+* **The merged card's own lane.** `card-done` wrote it seconds before this
+  runs, and the door's copy can predate that write (`door-older`). Read as a
+  fact, a stale `In Review` would make every merge in `on` promote nothing —
+  silently, because the door answered FRESH. So in `on` the gate asks only
+  whether the door lists a Backlog dependent; a card `card-done` refused (the
+  no-code / `DEMO:` / epic guard) costs one promotion pass that promotes
+  nothing, because every promotion re-reads its whole predicate live first
+  (Stage 2 item 45).
+* **The parent's children.** The door serves no child states, so whether the
+  merge finished the epic is unknown — and unknown runs the pass, which reads
+  the epic's children live before it closes anything.
+
+Only a Backlog dependent counts in `on`: the promotion moves cards out of
+Backlog and nowhere else, so a dependent in another lane is a pass that could
+not have promoted it. A door that cannot answer whole — unknown, closed,
+throttled, a card it does not hold — falls back to the Linear read above; a
+door that says Linear is held (`linear-hold`) runs no pass and makes no Linear
+call, the same fall-closed as a rate-limited read. In `shadow` both are read,
+the difference is printed as `read-door-diff:` lines, and Linear decides.
+
+STDOUT IS THE FLAGS AND NOTHING ELSE: `linear-sync.yml` word-splits it into
+`reconcile.py` arguments. Every door line goes to stderr.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bureau_read  # noqa: E402 — the read door (Stage 2 #5/#15)
 import linear_ops  # noqa: E402
 import prose_blockers  # noqa: E402 — ONE definition of "terminal" (DRE-2676)
 
@@ -90,6 +124,10 @@ ALL_SWEEPS = (PROMOTE, CLOSE_EPICS)
 #: the dependency gate and `close_finished_epics` clear on, read from the one
 #: place that defines it rather than restated here.
 TERMINAL = prose_blockers.TERMINAL
+
+#: The one lane the promotion moves cards out of — the only lane the door is
+#: asked for dependents in.
+BACKLOG = "Backlog"
 
 #: How deep the two pages are read. A card that FILLS either page is reported
 #: as unknown (and sweeps) rather than counted clean — the same rule
@@ -184,9 +222,130 @@ def sweeps(card: dict) -> list[str]:
     return chosen
 
 
+def door_card(merged: str) -> dict | None:
+    """The merged card, rebuilt from the read door in `QUERY`'s shape — or
+    None (mode off, the door unavailable, or unknown: Linear answers).
+
+    Raises `bureau_read.ReadUnknown` only when the door says Linear is held
+    (`e.skip`) in `on`: the caller runs no Linear fallback for it (item 34).
+
+    Two door reads, no Linear request: `/cards?ids=<merged>` for its lane and
+    its parent, and `/cards/<merged>/dependents?lanes=Backlog` for the cards it
+    blocks. Only Backlog's: the promotion moves a card out of Backlog alone
+    (`backlog_children(only=…)` keeps exactly those). The parent's children are
+    not read, and say so (`hasNextPage`): the door serves no child states.
+
+    ONE rebuild for the merge path (Stage 2 #15): this gate and
+    `reconcile.merged_card_scope` both read it. Its lines go to stderr — this
+    module's stdout is the flags.
+    """
+    if bureau_read.mode() == "off" or not bureau_read.enabled():
+        return None
+    try:
+        card = bureau_read.cards([merged], max_age=bureau_read.BOARD_MAX_AGE,
+                                 relations=False).nodes[0]
+        deps = bureau_read.dependents(merged, max_age=bureau_read.BOARD_MAX_AGE,
+                                      lanes=[BACKLOG]).nodes
+    except bureau_read.ReadUnknown as e:
+        if e.skip and bureau_read.mode() == "on":
+            raise
+        print(f"read-door: {merged}'s dependents unknown ({e}) — read from Linear",
+              file=sys.stderr)
+        return None
+    parent = card.get("parent")
+    return {
+        "identifier": card["identifier"],
+        "state": {"name": (card.get("state") or {}).get("name")},
+        "relations": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {"type": "blocks", "issue": {"identifier": card["identifier"]},
+                 "relatedIssue": {"identifier": dep["identifier"],
+                                  "state": {"name": (dep.get("state") or {}).get("name")}}}
+                for dep in deps
+            ],
+        },
+        "parent": None if not parent else {
+            "identifier": parent.get("identifier"),
+            "state": {"name": (parent.get("state") or {}).get("name")},
+            "children": {"pageInfo": {"hasNextPage": True}, "nodes": []},
+        },
+    }
+
+
+def shadow_compare(merged: str, door: dict, linear: dict) -> None:
+    """Backlog dependents and the parent's lane, door vs Linear. The door is
+    asked for Backlog's dependents only, so Linear's are cut to Backlog too.
+    Relations ride the console's poll, so a difference here is `door-older` by
+    construction: the shadow cannot prove relation freshness (review R10) — the
+    live re-check before every promotion is what guards it. To stderr."""
+    def facts(card: dict) -> dict:
+        parent = card.get("parent") or {}
+        return {
+            "dependents": sorted(
+                d.get("identifier") for d in dependents(card)
+                if ((d.get("state") or {}).get("name")) == BACKLOG),
+            "parent": (parent.get("identifier"), (parent.get("state") or {}).get("name")),
+        }
+    d, l_ = facts(door), facts(linear)
+    diffs = [bureau_read.Diff(bureau_read.DOOR_OLDER, merged, key, d[key], l_[key])
+             for key in d if d[key] != l_[key]]
+    with contextlib.redirect_stdout(sys.stderr):
+        bureau_read.report_diffs("dependents", diffs, 1)
+
+
+def door_sweeps(card: dict) -> list[str]:
+    """`sweeps` for a card `door_card` rebuilt, in `on`.
+
+    The merged card's own lane is NOT read (see the module docstring): the
+    door's copy can predate the Done `card-done` just wrote. Every dependent
+    the rebuild carries is in Backlog, so any of them justifies the promotion
+    pass; the epic half is `finished_an_epic` unchanged, which reads the
+    rebuild's unknown children as unknown.
+    """
+    chosen = []
+    if dependents(card):
+        chosen.append(PROMOTE)
+    if finished_an_epic(card):
+        chosen.append(CLOSE_EPICS)
+    return chosen
+
+
+def _say(identifier: str, state: str, chosen: list[str], source: str = "") -> None:
+    print(
+        f"merge-sweep gate: {identifier} ({state}{source}) — "
+        f"{'unblocked a live card' if PROMOTE in chosen else 'unblocked nothing'}, "
+        f"{'finished its epic' if CLOSE_EPICS in chosen else 'finished no epic'}"
+        f" → {len(chosen)} board-wide sweep(s): {' '.join(chosen) or 'none'}",
+        file=sys.stderr,
+    )
+
+
 def decide(identifier: str) -> list[str]:
     """Read the merged card and answer. Never raises — the merge path must
     not go red because the gate could not decide; it falls back instead."""
+    door = None
+    try:
+        door = door_card(identifier)
+    except bureau_read.ReadUnknown as e:
+        # `linear-hold` in `on`: the fall-closed below, for the same reason.
+        bureau_read.note_skip("the merge-sweep gate", e.reason)
+        print(
+            f"merge-sweep gate: {identifier} unread — the read door says Linear "
+            f"is held ({e.reason}); running NO board-wide sweep and no Linear "
+            f"read. The cron sweep picks this up once the hold lifts.",
+            file=sys.stderr,
+        )
+        return []
+    except Exception as e:  # noqa: BLE001 — a door fault is a door fallback
+        print(f"read-door: {identifier}'s dependents unreadable ({e}) — read from Linear",
+              file=sys.stderr)
+        door = None
+    if door is not None and bureau_read.mode() == "on":
+        chosen = door_sweeps(door)
+        _say(identifier, "lane not read: card-done just wrote it", chosen,
+             ", from the read door")
+        return chosen
     try:
         card = (linear_ops.gql(QUERY, {"id": identifier}) or {}).get("issue")
     except linear_ops.LinearRateLimited as e:
@@ -214,14 +373,14 @@ def decide(identifier: str) -> list[str]:
             file=sys.stderr,
         )
         return list(ALL_SWEEPS)
+    if door is not None:
+        # `shadow`: the door was read first; Linear decides, the diff is said.
+        try:
+            shadow_compare(identifier, door, card)
+        except Exception as e:  # noqa: BLE001 — telemetry never decides a merge
+            print(f"read-door-diff: dependents not compared ({e})", file=sys.stderr)
     chosen = sweeps(card)
-    print(
-        f"merge-sweep gate: {identifier} ({_state(card)}) — "
-        f"{'unblocked a live card' if PROMOTE in chosen else 'unblocked nothing'}, "
-        f"{'finished its epic' if CLOSE_EPICS in chosen else 'finished no epic'}"
-        f" → {len(chosen)} board-wide sweep(s): {' '.join(chosen) or 'none'}",
-        file=sys.stderr,
-    )
+    _say(identifier, _state(card), chosen)
     return chosen
 
 

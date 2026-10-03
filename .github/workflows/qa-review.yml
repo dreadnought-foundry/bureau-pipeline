@@ -574,6 +574,54 @@ jobs:
             --pick changedFiles,additions,deletions > /tmp/qa-size.json 2>/dev/null \
             || echo '{}' > /tmp/qa-size.json
 
+      # ── The card, read ONCE for the whole job (Stage 2 fix #14) ───────────
+      # Two steps below read the card: Plan visual QA (its **Design:** line)
+      # and Select model (the build's `model-attempt:` heartbeat, DRE-3880).
+      # Each used to make its own Linear read; this is the one read, and both
+      # read the file it writes. scripts/card_snapshot.py says where it comes
+      # from: the console's read door when BUREAU_READ is `on` and the door can
+      # give the whole answer, else ONE Linear read of the description and the
+      # same comment window the old thread read took.
+      #
+      # THE DOOR NEVER SERVES A pull_request RUN, and that is the door's rule,
+      # not ours to loosen: it refuses every token minted for a pull_request or
+      # pull_request_target event, so a fork's pull request can never mint
+      # one (agent-bureau github_oidc.py check 7, review S7). The client does
+      # not even ask from one. Nearly every review is a pull_request run, so for
+      # them this is one Linear read where there were two; only a
+      # workflow_dispatch re-review (the sweep's, the refutation's, an
+      # operator's) can be served by the door.
+      #
+      # A read that fails writes no file, and each reader then degrades exactly
+      # as its own failed read did: no Design line (visual QA skips) and
+      # `--built-on-unknown` (the separation fails CLOSED). Under a Linear hold
+      # in `on` nothing is sent to Linear at all (Stage 2 item 34).
+      #
+      # The door's identity check (review item 38) is the client's: it refuses
+      # a token whose called ref is not BUREAU_PIPELINE_REF and reads Linear
+      # instead. Reconcile refuses to RUN on that mismatch; a review must not
+      # die for it, and with the client refusing no identity is presented.
+      - name: Read the card once (read door, else one Linear read)
+        id: cardsnap
+        if: steps.decide.outputs.review == 'true'
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          SNAP="${RUNNER_TEMP:-/tmp}/card-snapshot.json"
+          rm -f "$SNAP"
+          if [ -z "$CARD" ]; then
+            echo "no card on this pull request — nothing to read"
+            exit 0
+          fi
+          python3 "$PIPELINE_DIR"/scripts/card_snapshot.py take "$CARD" "$SNAP" \
+            || echo "no snapshot of $CARD — the steps that read it degrade as on an unreadable card"
+
       # ── Review-strategy stage (DRE-2466) ──────────────────────────────────
       # A pull request four times larger than anything the critic has ever
       # reviewed used to get the same review a two-file change gets: one
@@ -690,8 +738,6 @@ jobs:
         env:
           # Reads — the pool-selected token (DRE-4282).
           GH_TOKEN: ${{ steps.reader.outputs.token }}
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
         run: |
@@ -699,11 +745,14 @@ jobs:
           mkdir -p /tmp/vqa
           # The card description is the AUTHORITATIVE **Design:** source. The PR
           # body is agent-authored and not guaranteed to quote the ref verbatim,
-          # so we read the live card and also scan the PR body as a backstop.
+          # so we read the card and also scan the PR body as a backstop. The
+          # card comes from the job's one snapshot (Stage 2 fix #14); no
+          # snapshot reads as no Design line, as a failed read always did.
           gh pr view "$PR" --json body --jq .body > /tmp/vqa/pr-body.txt 2>/dev/null || true
           : > /tmp/vqa/card.txt
           if [ -n "$CARD" ]; then
-            python3 "$PIPELINE_DIR"/scripts/linear_ops.py description "$CARD" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
+            python3 "$PIPELINE_DIR"/scripts/card_snapshot.py description \
+              "${RUNNER_TEMP:-/tmp}/card-snapshot.json" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
           fi
           # Changed files vs the PR base, repo-root-relative — read once for
           # the job (fix #21); the repair context below takes the same list.
@@ -1123,17 +1172,16 @@ jobs:
           # The probe authenticates with the same CLAUDE token the critic uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          # Reads the card's own attempt heartbeat (DRE-3880) — see the run
-          # block. This is the SELECT step, not the critic's agent step: the
-          # critic itself is still denied Linear on purpose (DRE-2052/2696).
-          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
-          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Reads the card's own attempt heartbeat (DRE-3880) out of the job's
+          # one card snapshot (Stage 2 fix #14) — see the run block. No Linear
+          # key here any more: the snapshot step made the read. The critic
+          # itself is still denied Linear on purpose (DRE-2052/2696).
           CARD: ${{ steps.pr.outputs.card }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           BUILT_ON=""
-          if [ -n "$CARD" ] && python3 "$PIPELINE_DIR"/scripts/linear_ops.py \
-               dump-comments "$CARD" > "$RUNNER_TEMP/card-thread.json"; then
+          if [ -n "$CARD" ] && python3 "$PIPELINE_DIR"/scripts/card_snapshot.py thread \
+               "$RUNNER_TEMP/card-snapshot.json" > "$RUNNER_TEMP/card-thread.json"; then
             BUILT_ON=$(python3 \
               "$PIPELINE_DIR"/scripts/model_fallback.py build-model \
               "$RUNNER_TEMP/card-thread.json")
@@ -1200,8 +1248,9 @@ jobs:
       # rather than re-reading the author's prose is the point of the role.
       #
       # The Linear WORK of this workflow is done by ordinary steps that DO
-      # hold the key — "Plan visual QA" (reads the card's **Design:** ref)
-      # and "Post verdict or neutral status" (the card bookkeeping). Linear
+      # hold the key — "Read the card once" (the card's **Design:** ref and
+      # thread, Stage 2 fix #14; "Plan visual QA" reads its file) and "Post
+      # verdict or neutral status" (the card bookkeeping). Linear
       # state stays ground truth written by the pipeline, never an agent
       # claim. And unlike the fix and repair agents, nothing tells this agent
       # the key is in its env: `briefs/critic.md` (DRE-3084) carries only the

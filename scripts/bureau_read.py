@@ -31,6 +31,10 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   seconds per read.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
+* A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
+  refuses those tokens by design (its check 7, review S7), so the client never
+  mints one or asks (BP-8). Nearly every QA Review, Verify and Linear Sync run
+  is one; they read Linear exactly as before.
 
 ## The one UNKNOWN that is not a fallback
 
@@ -56,7 +60,9 @@ Headers on every request:
 Endpoints (query values comma-joined, URL-encoded; `relations` always SAID,
 because the door serves relations when it is left out):
   GET /board?lanes=<L1,L2>&scope=repo|fleet&comments=50&relations=0|1
-  GET /cards?ids=<DRE-1,DRE-2>&comments=50&relations=0|1
+  GET /cards?ids=<DRE-1,DRE-2>&comments=50|all&relations=0|1
+      — `all`: every stored comment, and only a provably whole thread is FRESH
+        to this client (`thread-incomplete` otherwise)
   GET /cards/<id>/dependents?lanes=<L>&comments=50&relations=1
       — the cards <id> blocks, in the lanes asked, as board nodes
   GET /workflow-states
@@ -124,10 +130,30 @@ MODES = ("off", "shadow", "on")
 BOARD_MAX_AGE = 120
 #: A card an agent run is about to be dispatched at: one minute (BP-4).
 DISPATCH_CARDS_MAX_AGE = 60
+#: The workflow-state map a lane move turns a lane name into an id with (BP-3):
+#: an hour. A state's id never changes, and a renamed lane is a name the door
+#: does not hold yet — a miss, which the caller asks Linear for. Every move
+#: still re-reads its card live before it writes (DRE-2316).
+WORKFLOW_STATES_MAX_AGE = 3600
 #: Relations come from the console's 15-minute poll (no relation webhook
 #: exists), so twenty minutes is one missed poll. Not the safety on its own:
 #: every promotion re-reads its blockers live before it writes (item 32).
 RELATIONS_MAX_AGE = 1200
+#: The card a critic or verifier is about to judge (BP-8, fix #14): its
+#: **Design:** line, labels and the build's model heartbeat. Two minutes, the
+#: board's bound: nothing here writes, and every one of those facts was set
+#: long before the pull request it is reviewing.
+REVIEW_CARD_MAX_AGE = 120
+
+#: The events whose OIDC token the door refuses by design (its check 7, review
+#: S7): a private repo that sends write tokens to fork pull requests would
+#: otherwise hand a fork a door token. Asking from one buys nothing but a
+#: refusal the door counts toward its refused-and-never-served alarm (M2), so
+#: the client never asks: no token is minted, nothing is sent, and the run
+#: reads Linear as it always did. A QA Review, a Verify and a Linear Sync run
+#: on `pull_request` — almost every one of them.
+EVENT_ENV = "GITHUB_EVENT_NAME"
+REFUSED_EVENTS = frozenset({"pull_request", "pull_request_target"})
 
 #: Timeouts (item 40, review M4): one attempt, connect within a second, the
 #: whole exchange within eight. Module constants so the tests can shrink them.
@@ -492,6 +518,12 @@ def _get(endpoint: str, query: dict, *, max_age: int,
     if _state["disabled"] is not None:
         raise ReadUnknown("unavailable", f"the door stopped answering earlier this "
                           f"run ({_state['disabled']})", unavailable=True)
+    event = os.environ.get(EVENT_ENV, "")
+    if event in REFUSED_EVENTS:
+        _state["unavailable"] += 1
+        _disable("event-refused", f"a {event} run's token is refused by the door")
+        raise ReadUnknown("event-refused", f"a {event} run's token is refused by the door",
+                          unavailable=True)
     started = time.monotonic()
     try:
         try:
@@ -660,9 +692,18 @@ def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
     return read
 
 
-def cards(ids, *, max_age: int, comments: int = 50, relations: bool = True,
+def cards(ids, *, max_age: int, comments: int | str = 50, relations: bool = True,
           relations_max_age: int | None = None) -> DoorRead:
-    """Exactly the cards named — every one of them, or ReadUnknown."""
+    """Exactly the cards named — every one of them, or ReadUnknown.
+
+    `comments="all"` asks for every stored comment, and then the WHOLE thread
+    is the answer: a node whose `comments.pageInfo.hasNextPage` is true (the
+    door cannot prove it holds the whole thread) is half an answer, so the
+    read is UNKNOWN `thread-incomplete`. The door stays in use: one card's
+    thread is not the door failing.
+    """
+    if comments != "all" and (not isinstance(comments, int) or isinstance(comments, bool)):
+        raise ValueError(f"bureau_read.cards: comments must be a count or 'all', got {comments!r}")
     wanted = [str(i).strip().upper() for i in ids if str(i).strip()]
     if not wanted:
         return DoorRead(nodes=[])
@@ -678,6 +719,15 @@ def cards(ids, *, max_age: int, comments: int = 50, relations: bool = True,
     got = [str(n.get("identifier") or "").upper() for n in read.nodes]
     if sorted(got) != sorted(set(wanted)):
         raise _malformed(f"/cards answered {sorted(got)} for {sorted(set(wanted))}")
+    if comments == "all":
+        partial = [n.get("identifier") for n in read.nodes
+                   if ((n.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage")
+                   is not False]
+        if partial:
+            _state["unknown"] += 1
+            raise ReadUnknown("thread-incomplete",
+                              f"the door cannot prove it holds every comment on "
+                              f"{', '.join(sorted(map(str, partial)))}")
     _state["served"] += 1
     return read
 
