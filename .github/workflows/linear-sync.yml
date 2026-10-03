@@ -179,9 +179,43 @@ jobs:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
 
+      # The read door's ref check (Stage 2 item 38, review M1), as reconcile.yml
+      # runs it: the OIDC token names the ref the stub CALLED this reusable at,
+      # and the scripts below were checked out at `pipeline_ref`. Only when the
+      # door could be used: with BUREAU_READ off, or no token, it says so and
+      # passes.
+      #
+      # `continue-on-error`, unlike reconcile.yml's, on purpose: the next step
+      # moves the merged card to Done off GitHub's merge event (DRE-2027), and a
+      # refused ref must never cost a card its Done. Nothing is lost by going
+      # on: the client refuses the door for the same mismatch on every request
+      # (`pipeline-ref-mismatch`), so the gate and the passes read Linear. This
+      # step is the loud annotation.
+      - name: Refuse a pipeline_ref the stub did not call
+        continue-on-error: true
+        env:
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
+
       - name: Card → Done
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The read door (Stage 2 #15). The merge-sweep gate and the scoped
+          # passes below read the merged card's dependents from it in `on` —
+          # the same four variables, the same `off` default, as reconcile.yml's
+          # Sweep. The Done stays on GitHub's merge event: what moves the card is
+          # the merge, and the write is Linear's either way. The only door read
+          # `card-done` can make is the lane's id (`linear_ops`' workflow-state
+          # lookup, Stage 2 #9), which falls back to Linear on any miss. NO
+          # `permissions:` block anywhere in this file: the stub
+          # grants `id-token: write`, and a reusable can only take permissions
+          # away.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
           # The stacked-landing closer's GitHub read (DRE-4650). Empty when the
           # mint above could not run; the closer fails closed on it.
           GH_TOKEN: ${{ steps.qa.outputs.token }}
