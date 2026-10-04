@@ -33,14 +33,31 @@ permissions:
   contents: read
 
 jobs:
+  # THE SUITE RUNS IN PARTS (DRE-5838). The clock history below is why: one
+  # runner could not hold the suite under any cap for more than a week. Each
+  # matrix entry runs one share of the test files, chosen by
+  # `scripts/unit_test_parts.py` from each file's measured seconds
+  # (`config/unit-test-durations.json`), and records the files it was handed.
+  # The job after it, `unit-result`, carries the name branch protection
+  # requires — `scripts unit tests` — reads those records back, and fails when
+  # a test file ran in no part or in two (`tests/test_unit_test_parts.py`).
+  # Adding a part is one more number in `matrix.part`; nothing else counts
+  # them, because each part is told the total by `strategy.job-total`.
   unit:
-    name: scripts unit tests
+    name: scripts unit tests (part ${{ matrix.part }})
     runs-on: ubuntu-latest
-    # The one job here that runs the WHOLE suite, so the only one whose clock
-    # tracks the suite's growth (DRE-3130). It sat at 5 until run 33987398284
-    # reported `6277 passed, 1 skipped, 649 subtests passed in 299.47s` and was
-    # cancelled four seconds later at 5m10s — a required check red on a suite
-    # that had already proved itself. The cap was spent before that PR existed:
+    strategy:
+      # One red part must not cancel the others: a canceled part hides its
+      # own failures behind somebody else's.
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4]
+    # The jobs here that run the WHOLE suite between them, so the only ones
+    # whose clock tracks the suite's growth (DRE-3130). It sat at 5 until run
+    # 33987398284 reported `6277 passed, 1 skipped, 649 subtests passed in
+    # 299.47s` and was cancelled four seconds later at 5m10s — a required
+    # check red on a suite that had already proved itself. The cap was spent
+    # before that PR existed:
     # the fifteen main runs before it ranged 3m11s to 4m44s, i.e. 16 seconds of
     # headroom against 93 seconds of run-to-run spread. A budget narrower than
     # its own variance is a coin flip.
@@ -74,7 +91,12 @@ jobs:
     # fix is DRE-5838 (split the suite into parallel parts): this cap has now
     # doubled four times in a month (5 to 10 to 20 to 40 to 80), and a clock
     # that has to double every week is measuring the suite, not limiting it.
-    timeout-minutes: 80
+    #
+    # AND THEN SPLIT (DRE-5838, 2026-10-04). The cap is now a PART's: 30
+    # minutes is over 2x the heaviest part's predicted share of the longest
+    # whole-suite run above, and `tests/test_unit_suite_time_budget.py` holds
+    # it there from the same measurements.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,6 +124,19 @@ jobs:
           python-version: "3.12"
           requirements: |
             requirements-dev.txt
+      # The files this part runs, and the record `unit-result` checks. Its
+      # own step, so a part that cannot be chosen fails here, by name, rather
+      # than handing pytest an empty list — which would run everything.
+      - name: Choose this part's test files
+        id: choose
+        env:
+          PART: ${{ matrix.part }}
+          OF: ${{ strategy.job-total }}
+        run: |
+          python3 scripts/unit_test_parts.py list --part "$PART" --of "$OF" \
+            --manifest "$RUNNER_TEMP/unit-parts/part-$PART.txt" \
+            > "$RUNNER_TEMP/unit-part-files.txt"
+          echo "part $PART of $OF: $(wc -l < "$RUNNER_TEMP/unit-part-files.txt") test files"
       # pytest, not stdlib unittest discover: half the suite is written
       # pytest-style (function tests), which unittest discover silently
       # collects as ZERO tests — they had never run in CI before this.
@@ -111,7 +146,53 @@ jobs:
           REPO: test/test
           GH_TOKEN: test
           BUREAU_REQUIRE_GIT_HISTORY: "1"
-        run: python3 -m pytest tests -v
+        run: |
+          mapfile -t FILES < "$RUNNER_TEMP/unit-part-files.txt"
+          python3 -m pytest -v "${FILES[@]}"
+      # Recorded whether or not this part's tests passed — a part that ran its
+      # files and failed still ran them. Overwritten on a re-run, so one part
+      # is one record however many attempts it took.
+      - name: Record what this part ran
+        if: always() && steps.choose.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unit-part-${{ matrix.part }}
+          path: ${{ runner.temp }}/unit-parts/part-${{ matrix.part }}.txt
+          overwrite: true
+          retention-days: 7
+
+  # The ONE result the merge gate and branch protection read (DRE-5838). Branch
+  # protection on `main` requires a check named exactly `scripts unit tests`;
+  # the parts report as `scripts unit tests (part N)`, so this job keeps the
+  # name, and it passes only when every part passed AND every test file ran in
+  # exactly one of them. `always()` is load-bearing: without it GitHub SKIPS
+  # this job when a part fails, and a skipped required check counts as passing.
+  # The repository checks that used to follow the suite in the single job run
+  # here, under the same required name.
+  unit-result:
+    name: scripts unit tests
+    needs: unit
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The same cached install as the parts (DRE-2589): the checks below
+      # read workflow YAML, and PyYAML comes from the one pinned manifest.
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      - name: Fetch what each part ran
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: unit-part-*
+          path: ${{ runner.temp }}/unit-parts
+          merge-multiple: true
+      - name: Every test file ran in exactly one part
+        run: python3 scripts/unit_test_parts.py check "$RUNNER_TEMP/unit-parts"
       - name: Workflow YAML parses
         run: python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"
       # Release-channel integrity (DRE-2026): every internal checkout of
@@ -185,6 +266,19 @@ jobs:
         run: python3 scripts/pipeline_act.py check
       - name: Every receipt composes through the one writer
         run: python3 scripts/check_act_receipts.py
+
+      # Last, and `always()`, so a red part is reported here even when an
+      # earlier step of this job also failed.
+      - name: Every part passed
+        if: always()
+        env:
+          PARTS: ${{ needs.unit.result }}
+        run: |
+          if [ "$PARTS" != "success" ]; then
+            echo "::error::the unit test parts finished '$PARTS', not 'success' — see the scripts unit tests (part N) jobs"
+            exit 1
+          fi
+          echo "every unit test part passed"
 
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
   # check here that leaves the repository: it reads the console's `ACTS` out of

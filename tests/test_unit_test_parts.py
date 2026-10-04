@@ -316,7 +316,8 @@ def test_the_suite_runs_as_a_matrix_of_parts():
     )
     run = "\n".join(str(s.get("run", "")) for s in job["steps"])
     assert "unit_test_parts.py list" in run
-    assert "matrix.part" in run and "strategy.job-total" in run
+    text = yaml.safe_dump(job["steps"])
+    assert "matrix.part" in text and "strategy.job-total" in text
     assert "pytest tests" not in run, "a part must not run the whole suite"
 
 
