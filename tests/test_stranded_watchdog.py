@@ -93,6 +93,21 @@ def _pin_live_snapshot(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_build_runs(monkeypatch):
+    """DRE-5743: the no-run class asks GitHub for the card's build runs before
+    it stamps. Every card here has none — hermetically, with no live gh call.
+    tests/test_watchdog_start_window.py is where the runs are tested. Every
+    other Actions read answers the quiet no-token path's empty string, as it
+    did before this stub."""
+    def read(args):
+        if args[0] == "run" and args[1] == "list":
+            return "[]", None
+        return "", None
+
+    monkeypatch.setattr(reconcile, "_actions_read", read)
+
+
 def _iso(minutes_ago: float) -> str:
     return (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat().replace(
         "+00:00", "Z"
@@ -227,12 +242,22 @@ def test_young_dispatchable_card_not_flagged():
 def test_redispatch_receipt_counts_as_elapsed_time():
     """The Todo-redispatch receipt bumps updatedAt every ~15-minute cycle, so
     a silently-failing dispatch loop never LOOKS 30 minutes stale. A prior
-    receipt with still no proof-of-life IS the 30-minute evidence."""
-    card = _card(minutes_stale=3)  # just bumped by the receipt itself
-    flagged, comment, _ = _run_watchdog(
-        [card],
-        bodies=["🧹 Reconcile: card sat in Todo with no run — re-dispatched."],
-    )
+    receipt with still no proof-of-life IS the 30-minute evidence — once the
+    re-sent build has had its own start window (DRE-5743: it used to count
+    the moment it was posted, and DRE-5595 was stamped a minute after its
+    re-send while Linear was refusing the build's writes)."""
+    window = reconcile.START_WINDOW_MINUTES
+    card = _card(minutes_stale=window + 1)  # bumped by the receipt itself
+    card["comments"] = {"nodes": [{
+        "body": "🧹 Reconcile: card sat in Todo with no run — re-dispatched.",
+        "createdAt": _iso(window + 1),
+    }]}
+    with patch.object(reconcile, "active_cards",
+                      side_effect=lambda states=reconcile.SWEEP_STATES: [
+                          c for c in [card] if c["state"]["name"] in states]), \
+         patch.object(reconcile.linear_ops, "cmd_comment") as comment, \
+         patch.object(reconcile.linear_ops, "add_label"):
+        flagged = reconcile.flag_stranded()
     assert flagged == {"DRE-1978"}
     assert "no agent run" in comment.call_args.args[1]
 

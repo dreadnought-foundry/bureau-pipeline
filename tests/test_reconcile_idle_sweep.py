@@ -139,6 +139,10 @@ def _pass(board: TeamBoard, *, stub=()):
         stack.enter_context(mock.patch.object(reconcile, "_dependabot_pr_listing",
                                               return_value=[]))
         stack.enter_context(mock.patch.object(reconcile, "_open_pr_listing", return_value=[]))
+        # And the build-run listing the no-run watchdog asks before it stamps
+        # (DRE-5743): empty, so a strand of this repo's is still stamped.
+        stack.enter_context(mock.patch.object(reconcile, "_build_runs_in_flight",
+                                              return_value=[]))
         stack.enter_context(mock.patch.object(linear_ops, "gql", side_effect=board.gql))
         stack.enter_context(mock.patch.object(linear_ops, "requests_made",
                                               lambda: board.requests))
