@@ -150,8 +150,18 @@ def _value(token: str):
     raise Unreadable(token)
 
 
+#: Status functions a job-level `if:` may carry. They read how the job's
+#: `needs` finished, never the event, so a schedule run satisfies them exactly
+#: as a pull request does. `always()` is the live one: the job carrying the
+#: required name `scripts unit tests` must run even when a part failed
+#: (DRE-5838), because GitHub counts a SKIPPED required check as passing.
+STATUS_FUNCTIONS = {"always()": True}
+
+
 def _term(text: str) -> bool:
     text = text.strip()
+    if text in STATUS_FUNCTIONS:
+        return STATUS_FUNCTIONS[text]
     while text.startswith("(") and text.endswith(")") and _split_top(
         text[1:-1], ")"
     ) == [text[1:-1]]:
@@ -390,6 +400,9 @@ def test_an_unreadable_gate_is_reported_not_assumed_green():
             "github.actor != 'dependabot[bot]'",
             True,
         ),
+        # The aggregate job's gate (DRE-5838): runs whatever its parts did.
+        ("always()", True),
+        ("${{ always() }}", True),
         # The shapes a later narrowing would reach for.
         ("github.event_name == 'schedule'", True),
         ("github.event_name != 'schedule'", False),
