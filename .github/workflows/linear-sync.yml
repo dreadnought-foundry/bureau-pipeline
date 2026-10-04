@@ -129,6 +129,12 @@ on:
       BUREAU_QA_APP_PRIVATE_KEY:
         required: false
 
+env:
+  # How many planners may run at once, as the console published it to this
+  # repo (epic DRE-5783). Empty when never published: planner_queue.cap()
+  # then reads config/planner-queue.json exactly as before.
+  PLANNER_MAX_RUNNING: ${{ vars.PLANNER_MAX_RUNNING }}
+
 jobs:
   card-done:
     if: github.event.pull_request.merged == true

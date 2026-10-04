@@ -139,6 +139,12 @@ on:
       BUREAU_APP_PRIVATE_KEY_4:
         required: false
 
+env:
+  # How many planners may run at once, as the console published it to this
+  # repo (epic DRE-5783). Empty when never published: planner_queue.cap()
+  # then reads config/planner-queue.json exactly as before.
+  PLANNER_MAX_RUNNING: ${{ vars.PLANNER_MAX_RUNNING }}
+
 jobs:
   sweep:
     # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). This
