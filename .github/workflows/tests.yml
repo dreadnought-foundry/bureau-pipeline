@@ -62,7 +62,19 @@ jobs:
     # in 19m38s and 19m41s and were cancelled at the cap. The fifteen green main
     # runs before them ranged 13m15s to 19m32s: 28 seconds of headroom against
     # 377 seconds of spread. 40 is ~2x the longest real run, same rule.
-    timeout-minutes: 40
+    #
+    # AND AT 40 (DRE-5839, measured 2026-10-04). PR #721 (DRE-5807) ran this
+    # job twice and lost it twice, with no test failed either time: job
+    # 111533604660 was canceled at 40m15s at 73%, and the rerun, job
+    # 111542354301 (run 37235481401), at 40m16s at 76%. The 34 most recent
+    # finished runs of this job on any branch took 23.2 to 38.0 minutes; the
+    # 40 most recent main runs (10-03 to 10-04) took 19m55s (1195s) to 39m21s
+    # (2361s, run 37155389278 — 39 seconds of headroom). 80 is ~2x the longest
+    # real run, same rule, with only 78 seconds to spare on that 2x. The real
+    # fix is DRE-5838 (split the suite into parallel parts): this cap has now
+    # doubled four times in a month (5 to 10 to 20 to 40 to 80), and a clock
+    # that has to double every week is measuring the suite, not limiting it.
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

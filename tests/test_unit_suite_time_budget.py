@@ -90,6 +90,29 @@ The fifteen green `main` runs before them, longest and shortest:
 time. 9,594 tests then, 13,222 now. A branch whose main is already cancelled
 at the cap cannot be what crossed it; the constants below are re-measured to
 this window.
+
+AND AT 40 MINUTES (DRE-5839, measured 2026-10-04) — this time without a single
+result printed. PR #721 (DRE-5807) ran the job twice and lost it twice, with no
+test failed in either log:
+
+    job 111533604660  2026-10-04T21:17:20Z -> 21:57:35Z  canceled 40m15s at 73%
+    job 111542354301  2026-10-04T22:03:19Z -> 22:43:35Z  canceled 40m16s at 76%
+                      (the rerun, run 37235481401 attempt 2)
+
+At 76% after 40 minutes, that suite needed roughly 53 minutes to finish. The
+34 most recent finished runs of this job on any branch took 23.2 to 38.0
+minutes (1392s to 2283s). The forty most recent `main` runs, longest and
+shortest:
+
+    39m21s  run 37155389278  2026-10-03T21:31:16Z -> 22:10:37Z   cap: 40m0s
+    19m55s  run 37097815047  2026-10-03T04:49:32Z -> 05:09:27Z
+
+39 seconds of headroom against 1,166 seconds of spread — the same shape a
+fourth time. 80 is ~2x that longest run, the same rule, and it clears 2x by
+only 78 seconds. DRE-5838 (split the suite into parallel parts) is the real
+fix: this cap has now doubled four times in a month (5 to 10 to 20 to 40 to
+80), and a clock that has to double every week is measuring the suite, not
+limiting it. The constants below are re-measured to this window.
 """
 from __future__ import annotations
 
@@ -103,19 +126,20 @@ WORKFLOWS = REPO / ".github" / "workflows"
 WORKFLOW = "tests.yml"
 JOB = "unit"
 
-#: Longest real `scripts unit tests` job on main in the sampled window
-#: (run 36668478468, 2026-09-30). It succeeded with 28 seconds to spare.
-OBSERVED_MAX_SECONDS = 1172
+#: Longest real `scripts unit tests` job in the sampled window, the forty most
+#: recent `main` runs (run 37155389278, 2026-10-03). It succeeded with 39
+#: seconds to spare under the 40m cap.
+OBSERVED_MAX_SECONDS = 2361
 
-#: Shortest in the same window (run 36661280696). The gap between the two is
+#: Shortest in the same window (run 37097815047). The gap between the two is
 #: the run-to-run spread the cap has to absorb, and it is the whole argument:
 #: a budget narrower than its own variance is a coin flip, not a limit.
-OBSERVED_MIN_SECONDS = 795
+OBSERVED_MIN_SECONDS = 1195
 OBSERVED_SPREAD_SECONDS = OBSERVED_MAX_SECONDS - OBSERVED_MIN_SECONDS
 
-#: Where run 36692848704 was cancelled, the second its 13,222-test suite had
-#: finished and printed its result (20m11s against a 20m0s cap).
-CANCELLED_AT_SECONDS = 1211
+#: Where job 111542354301 (run 37235481401, PR #721's rerun) was canceled, at
+#: 76% with no test failed (40m16s against a 40m0s cap).
+CANCELLED_AT_SECONDS = 2416
 
 
 def _timeout_minutes(workflow: str, job: str) -> int:
@@ -143,9 +167,9 @@ def test_the_cap_clears_the_point_where_a_suite_was_killed_mid_sentence():
     """
     wall = _timeout_minutes(WORKFLOW, JOB) * 60
     assert wall >= CANCELLED_AT_SECONDS + OBSERVED_SPREAD_SECONDS, (
-        f"{WORKFLOW} job {JOB!r} dies at {wall}s, but run 36692848704 reached "
-        f"{CANCELLED_AT_SECONDS}s with its 13,222-test result already printed "
-        f"and was cancelled. Clearing that point alone is not enough — the "
+        f"{WORKFLOW} job {JOB!r} dies at {wall}s, but job 111542354301 reached "
+        f"{CANCELLED_AT_SECONDS}s at 76% with no test failed and was "
+        f"canceled. Clearing that point alone is not enough — the "
         f"same suite varies by {OBSERVED_SPREAD_SECONDS}s run to run, so the "
         f"cap must clear it by at least that spread."
     )
@@ -157,7 +181,8 @@ def test_the_cap_has_real_margin_over_the_longest_real_run():
     The 5m cap sat 16 seconds above the longest observed run while that run's
     own spread was 93 seconds; the 10m cap that replaced it sat 52 seconds
     above, against a spread of 184; the 20m cap after that sat 28 seconds
-    above, against a spread of 377. By DRE-2422's standard ("a run that
+    above, against a spread of 377; the 40m cap after that sat 39 seconds
+    above, against a spread of 1,166. By DRE-2422's standard ("a run that
     SUCCEEDS with exactly zero margin left is not a budget"), each was already
     spent before the branch that tripped it existed. Doubling the observed
     maximum is the same deliberately generous shape the turn-budget siblings
