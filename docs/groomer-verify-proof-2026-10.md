@@ -352,7 +352,7 @@ gh run list -R $R --workflow "Pipeline Medic" -L 20 --json databaseId,event,crea
 | What the card asks for | Reading |
 |---|---|
 | The three inputs (`dry_run`, `lookup_budget`, `card`), as the run's own job logs carry them (the `grep` above), not as typed. A different card or budget means `RUN3` names somebody else's run: stop | ⟨FILL⟩ |
-| Targets with `lookup: "failed"` and with `lookup: "none"`, from the kept `proposal-verified.json`, with at least one failed | ⟨FILL: N failed, M none⟩. If none failed, this is not the observation: say so and wait for a morning with a file-naming card |
+| Targets with `lookup: "failed"` and with `lookup: "none"`, with at least one failed. The card says "from the kept `proposal-verified.json`", but on 2026-10-02 the per-card `lookup` field was in each `groom-verdict-*/verdict.json` and not in that file (`grep -c '"lookup"'` on it read 0). Count it with `jq -r .lookup obs3/verdicts/groom-verdict-*/verdict.json \| sort \| uniq -c`, and say which file the count came from | ⟨FILL: N failed, M none⟩. If none failed, this is not the observation: say so and wait for a morning with a file-naming card |
 | Each lookup leg's `groom-lookups: <owner> — 0 card(s) read, 0 request(s) of a budget of 0, <s> s of 300 s` | ⟨FILL: one per owner⟩ |
 | "Post the verified proposal" step green, its last line `groomer: not posted — the lookup failed for every card: no repo answered — …`, and no `dry run — nothing posted` above it | ⟨FILL⟩ |
 | The warning annotation carrying the same line on the run's summary page | ⟨FILL⟩ |
