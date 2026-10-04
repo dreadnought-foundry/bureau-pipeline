@@ -635,7 +635,11 @@ another repo. The run checks the split and then activates it:
 (`epic_split.py` is the contract here; the script lands with DRE-4717, and
 DRE-4718 wires it into `plan.yml`.) Each child then comes back to `Planning` on
 its own, is planned like any epic — its own cards, its own proof card, its own
-artifact — and goes to the CEO for its own green light.
+artifact — and goes to the CEO for its own green light. Naming the gate in
+front of a child in its body ("planned only after seven clean days live") is
+right, and it does not make the child a roll-up: under a parent stamped
+`roll-up`, the classifier reads no seam off the body, so only its own reading
+of the child can split it again (DRE-5800).
 
 **A roll-up cut at an observation-gated seam is the short case** (DRE-3244). It
 is exactly two children: the first ending at the observation, and the second
