@@ -74,7 +74,10 @@ for r in d["outcomes"].get("dead", []):
 ver = d.get("verification") or {}
 print("layer A unread sources:", json.dumps({k: {"n": len(e.get("cards", [])), "why": e.get("why")} for k, e in (ver.get("unread") or {}).items()}))
 print("layer A moved to cancel:", ver.get("moved_to_cancel"), "| cancels rejected:", ver.get("cancels_rejected"))
-for k in ("all_lookups_failed", "merged_prs_unread", "lookups_failed", "not_posted_why", "cancels_refused", "stale_priorities"):
+# DRE-5317's stop writes these under proposal["verify"] (groom_verify_agent.apply), not at the top level.
+for k in ("all_lookups_failed", "merged_prs_unread", "lookups_failed", "not_posted_why"):
+    print(f"verify.{k}:", json.dumps(v.get(k))[:600])
+for k in ("cancels_refused", "stale_priorities"):
     if k in d: print(f"{k}:", json.dumps(d[k])[:600])
 PY
 echo "done — files in $(pwd)"
