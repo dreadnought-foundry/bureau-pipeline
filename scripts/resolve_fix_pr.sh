@@ -16,7 +16,7 @@ set -e
 # stops here with go=false stops the whole job. In order:
 #
 #   1. Reads the pull request once with `gh pr view`: its state, head
-#      branch, head sha, merge state and base branch. The head sha goes out
+#      branch, head sha, merge state, base branch and draft flag. The head sha goes out
 #      as `head_sha` first, because the Report step compares it with the head
 #      after the run to tell a fix that pushed nothing from one that did. The
 #      base branch goes out as `base_ref` for the inherited-failure step,
@@ -46,6 +46,9 @@ set -e
 #      critic's standing verdict is REQUEST_CHANGES with no fix pushed
 #      since it landed; anything else is fix mode. Only verdicts the
 #      qa-bot authored and push markers the worker bot authored count.
+#  6b. Refuses fix mode on a DRAFT with go=false and no_work=true, posting
+#      nothing: a draft is a person's work in progress. Conflict mode on a
+#      draft still runs.
 #   7. Tells a hand dispatch from a machine one. A workflow_dispatch is by
 #      hand only when TRIGGERING_ACTOR is a plain login; `github-actions`
 #      and any `[bot]` actor is the pipeline restarting itself.
@@ -221,8 +224,20 @@ set -e
 #   the card-in-the-log line called the block "expression-budget tight".
 #   That budget no longer applies here: this file holds no expression.
 #
+# 2026-10-04 · DRE-5801. A draft gets no fix-mode run. Five hand-built
+#   drafts drew a critic REQUEST_CHANGES that day; the fix agent disputed
+#   each finding and each card was parked in Triage, to be moved back to
+#   Hand-work by hand (agent-bureau #3134, #3142, #3139, bureau-pipeline
+#   #714, #713). The critic now skips a draft, and this refusal covers a
+#   verdict that was already standing, or that landed before the PR went
+#   back to draft. The refusal reads GitHub's own `isDraft` off the one
+#   PR read in step 1. Conflict mode is not refused: the merge gate still
+#   routes a conflicted draft here (DRE-3467), because the branch has to
+#   be reconciled with its base whatever the flag says, and the Report
+#   step never parks a draft's card.
+#
 PR=${PR_NUMBER}
-INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName)
+INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
 BRANCH=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefName'])")
 MSTATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['mergeStateStatus'])")
@@ -284,6 +299,18 @@ if [ "$MSTATE" = "DIRTY" ]; then
   esac
 fi
 echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+# A draft gets no fix-mode run (DRE-5801), before the budgets can post a
+# hold; a conflict round still runs (DRE-3467).
+IS_DRAFT=$(echo "$INFO" | python3 -c "import json,sys; print(str(json.load(sys.stdin).get('isDraft') is True).lower())")
+if [ "$IS_DRAFT" = "true" ] && [ "$MODE" = "fix" ]; then
+  echo "PR is a draft — the fix loop waits until it is marked ready for review"
+  echo "NO WORK DONE: PR #$PR is a draft, a person's work in progress — the fix loop starts nothing on it and moves no card; marking it ready for review starts the normal review (DRE-5801)." \
+    > "${RUNNER_TEMP:-/tmp}/fix-no-work.txt"
+  echo "go=false" >> "$GITHUB_OUTPUT"
+  echo "no_work=true" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 
 # Hand dispatch or machine one, then the budgets (steps 7 and 8;
 # DRE-2813).

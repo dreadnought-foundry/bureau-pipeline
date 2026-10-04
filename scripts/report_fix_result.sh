@@ -48,7 +48,9 @@ set -e
 #    back to the bare body with `|| printf` when composition fails.
 # 6. Parking means the `needs-human` label and a move to Triage through
 #    `linear_ops.py advance`, falling back to `state --park`. Each park
-#    also posts a plain-English note on the card.
+#    also posts a plain-English note on the card. A draft's card is never
+#    parked: `park_for_human` reads the PR's `isDraft` first and leaves the
+#    card where it is when it is `true`.
 #
 # Inputs, all from the step's `env:`:
 #   GH_TOKEN         the worker App's token: every PR read and comment
@@ -167,6 +169,13 @@ set -e
 #   and the reason travels by file so none of it meets the shell.
 # 2026-10-02, DRE-5225. The block moved here from the step's `run:`,
 #   verbatim, with `step_shell.py move`.
+# 2026-10-04, DRE-5801. A draft's card is never parked. Five hand-built
+#   drafts drew REQUEST_CHANGES, the fix agent disputed each finding, and
+#   each card went to Triage with `needs-human` and had to be moved back to
+#   Hand-work by hand. The critic now skips drafts and the Resolve step
+#   refuses fix mode on one; this is the last line, for a conflict round on
+#   a draft and for a PR put back to draft while the run worked it. An
+#   unreadable flag parks as before.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -223,8 +232,13 @@ if [ "$REASON_RC" -eq 4 ]; then refuse "the no-push reason is not this run's"; f
 FORMAT=$(python3 .bureau-pipeline/scripts/fix_context.py --answer-format)
 
 # Broken card: Triage plus needs-human. A judgement call is Green Light (DRE-2722, DRE-2776).
+# Never a draft's card (DRE-5801): read live, at the park, since it can go back to draft mid-run.
 park_for_human() {
   [ -n "$CARD" ] || return 0
+  if [ "$(gh pr view "$PR" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null || true)" = "true" ]; then
+    echo "PR #$PR is a draft — leaving $CARD where it is: no needs-human, no Triage (DRE-5801)"
+    return 0
+  fi
   python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
