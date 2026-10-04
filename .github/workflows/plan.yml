@@ -1035,14 +1035,35 @@ jobs:
       # question: is this one pull request of work an agent can build
       # unattended, with nothing in it that is a decision?
       #
+      # BUT NOT A CARD A DECLARATION ROUTES TO A PERSON (DRE-5805). The routing
+      # rule is strict precedence — an explicit role label (`agent:ops`,
+      # `no-code`) decides first and no model is asked — and that read used to
+      # run only in the exit, behind the critic's pass. DRE-5349 wore both
+      # labels, was asked the critic's question, honestly answered no, and was
+      # sent back and parked for nothing. So the order of reads is now:
+      #
+      #   1. `Planning shape` — the shape stamp, and on a one-off the SAME
+      #      mechanical routing read the exit makes. When it lands on a verdict
+      #      whose actor is a person it writes the `person` output.
+      #   2. The critic steps below, only when `person` is empty.
+      #   3. `One-off route — checked on the way out`, on the critic's pass OR
+      #      on `person` — the exit stamps the verdict the label decided and
+      #      the card lands where every one-off lands; the sweep carries it to
+      #      Hand-work as it carries any OPERATOR card.
+      #
+      # A card a declaration routes to a person is moved on the declaration and
+      # never read by the critic: no model is selected, no read is sized, no
+      # critic runs and no decision is made. Who is a person is derived in the
+      # script from the vocabulary, so no gate here names a verdict.
+      #
       # IT FAILS CLOSED, and that is the one place this route inverts the epic
       # route. There a crash is not a rejection and the plan proceeds, because
       # the CEO still reads it. Here NOTHING reads the card afterwards, so a
       # critic that did not run must not be spent as a pass: the two steps that
       # can die carry `continue-on-error`, the decision runs on `!cancelled()`,
       # and `plan_critic.py decide --stage one-off` answers something other
-      # than `proceed` for anything that is not a PASS. The exit below moves
-      # the card only on `proceed`.
+      # than `proceed` for anything that is not a PASS. Of the cards the critic
+      # reads, the exit below moves only those it answered `proceed`.
       #
       # EACH NO GOES TO WHOEVER CAN ACT ON IT (DRE-5376). A `SEND_BACK` is a
       # defect in the card an agent can fix — `revise`: the planner rewrites
@@ -1062,7 +1083,7 @@ jobs:
       # one honest unbounded call.
       - name: Select model — one-off critic
         id: oomodel
-        if: steps.shape.outputs.route == 'one-off'
+        if: steps.shape.outputs.route == 'one-off' && steps.shape.outputs.person == ''
         # A ladder that cannot be walked must reach the decision step, not kill
         # the job: a dead run leaves the card in Planning with nobody told.
         continue-on-error: true
@@ -1138,7 +1159,7 @@ jobs:
       # number, never to a read that does not start.
       - name: One-off critic — turn ceiling
         id: ooturns
-        if: steps.shape.outputs.route == 'one-off'
+        if: steps.shape.outputs.route == 'one-off' && steps.shape.outputs.person == ''
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -1302,8 +1323,9 @@ jobs:
         id: oneoff
         # `!cancelled()`: the model selection or the critic may have died, and
         # that is exactly the case this step exists to answer. It never runs on
-        # another route.
-        if: ${{ !cancelled() && steps.shape.outputs.route == 'one-off' }}
+        # another route, nor on a person's card (DRE-5805): with no result
+        # file it would escalate to the CEO, the wrong reader too.
+        if: ${{ !cancelled() && steps.shape.outputs.route == 'one-off' && steps.shape.outputs.person == '' }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
@@ -1658,10 +1680,11 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage"
 
-      # ...and the move, only on a pass. The lane it goes to is the
-      # vocabulary's, so it is not written here.
+      # ...and the move, only on a pass — or on a card the shape step's routing
+      # read sent to a person, which no critic read (DRE-5805). The lane it
+      # goes to is the vocabulary's, so it is not written here.
       - name: One-off route — checked on the way out
-        if: steps.shape.outputs.route == 'one-off' && steps.oneoff.outputs.action == 'proceed'
+        if: steps.shape.outputs.route == 'one-off' && (steps.oneoff.outputs.action == 'proceed' || steps.shape.outputs.person != '')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}

@@ -83,9 +83,19 @@ are both one card and one pull request — the plan prompt decomposes an epic in
 exactly that — so the judgement branch's argument holds for both, and two
 readings of it is how the two readings drift.
 
+## A person's card is routed before any model reads it (DRE-5805)
+
+Precedence 1 is "no model is asked", and on the one-off route a model was
+asked first: `plan.yml` runs the pre-approval critic before the exit, and the
+exit — where the label precedence ran — only on the critic's pass. A card
+wearing `agent:ops` was asked whether an agent could build it, honestly
+answered no, and was sent back. So `decide` runs the same mechanical read on a
+one-off and writes `person_verdict()`'s answer as a step output; `plan.yml`
+skips the critic on it and runs the exit on it.
+
 CLI:
 
-    python3 scripts/planning_route.py check           # validate the routes
+    python3 scripts/planning_route.py check          # validate the routes
     python3 scripts/planning_route.py decide DRE-N [--github-output F]
     python3 scripts/planning_route.py exit DRE-N      # the one-off / roll-up exit
 """
@@ -127,6 +137,12 @@ HUMAN_ACTORS = ("operator",)
 #: `[epic]` in the title, which sent a child carrying that literal down the
 #: epic branch and past an explicit role label.
 ONE_OFF_SHAPE = "one-off"
+
+#: The `decide` step output naming the verdict a one-off's mechanical read
+#: routed to a PERSON, or empty (DRE-5805). `plan.yml` gates the one-off
+#: critic on it being empty and the exit on it being set, so it never names a
+#: verdict itself — who is a person is `person_verdict`'s to derive.
+PERSON_OUTPUT = "person"
 
 
 class Unroutable(Exception):
@@ -546,6 +562,41 @@ def mechanical_verdict(title: str, description: str, labels=(),
     return fleet_verdict(), _judgement_reason(description, doc)
 
 
+def person_verdict(card: dict, doc: dict | None = None) -> str:
+    """The verdict a one-off's mechanical read routes to a PERSON, or "".
+
+    DRE-5805. The routing rule is strict precedence — an explicit role label
+    decides first and no model is asked — and on the one-off route that read
+    ran only in the exit, which only the pre-approval critic's pass reaches.
+    DRE-5349 wore `agent:ops` and `no-code`: the critic was asked whether an
+    agent could build it, honestly answered no, and that no was a SEND_BACK.
+    The card was revised for nothing and parked in Triage.
+
+    So `decide` runs the SAME `mechanical_verdict` call the exit makes, and a
+    card it routes to a person is moved on that answer and never read by the
+    critic. "A person" is derived from the vocabulary, never listed: the
+    verdict's accountable actor is one of `HUMAN_ACTORS`, which is how
+    `proof_and_demo.py` derives the verdicts a proof may carry. A card the read
+    sends to the fleet, back to Planning, or to judgement answers "" — and the
+    critic reads it exactly as before.
+    """
+    verdict, _ = mechanical_verdict(
+        card.get("title") or "",
+        card.get("description") or "",
+        card.get("labels") or (),
+        bool(card.get("has_children")),
+        doc,
+        shape=ONE_OFF_SHAPE,
+    )
+    if verdict is None:
+        return ""
+    try:
+        actor = routing_verdict.actor(verdict, doc)
+    except routing_verdict.UnknownVerdict:
+        return ""
+    return verdict if actor in HUMAN_ACTORS else ""
+
+
 def _judgement_reason(description: str, doc: dict | None = None) -> str:
     """Why a one-off whose criteria name neither signal is built by the fleet.
 
@@ -732,11 +783,14 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         _write_outputs(github_output, [
             ("refused", "true"), ("route", ""),
             ("returned_child", "false"), ("parent", ""),
+            (PERSON_OUTPUT, ""),
         ])
         print(refusal.notice, file=sys.stderr)
         return 0
 
     child = _read_returned_child(linear_ops, identifier, bodies)
+    person = _read_person_verdict(linear_ops, identifier) \
+        if route.shape == ONE_OFF_SHAPE else ""
     _write_outputs(github_output, [
         ("refused", "false"),
         ("route", route.shape),
@@ -747,6 +801,8 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         # DRE-5242: the epic route's planner prompt reads these two.
         ("returned_child", "true" if child.returned else "false"),
         ("parent", child.parent),
+        # DRE-5805: the one-off critic is skipped, and the exit run, on this.
+        (PERSON_OUTPUT, person),
     ])
     print(json.dumps({
         "shape": route.shape,
@@ -759,8 +815,26 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         "returned_child": child.returned,
         "parent": child.parent,
         "returned_child_reason": child.reason,
+        PERSON_OUTPUT: person,
     }, indent=2))
     return 0
+
+
+def _read_person_verdict(lops, identifier: str) -> str:
+    """`person_verdict` for a live one-off, read WHOLE the way `_cmd_exit`
+    reads it — the list API truncates a description without saying so.
+
+    Fails open to "": a read that did not happen routes nobody, and the critic
+    reads the card exactly as it did before DRE-5805.
+    """
+    import critic_score
+
+    try:
+        return person_verdict(critic_score.read_card(lops, identifier))
+    except Exception as exc:  # noqa: BLE001 — a failed read is the critic's card, not a red run
+        print(f"planning route: the routing read of {identifier} failed, so the "
+              f"critic reads it ({exc})", file=sys.stderr)
+        return ""
 
 
 def _cmd_exit(identifier: str) -> int:

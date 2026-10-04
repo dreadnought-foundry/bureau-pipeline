@@ -230,7 +230,8 @@ whether the card is really one pull request and whether an agent can tell it is
 done from the card alone.
 
 **It fails CLOSED, and that is the one place this route inverts the epic
-route.** A pass moves the card to the build queue, and nothing else does; a
+route.** Of the cards it reads, a pass moves the card to the build queue, and
+nothing else does; a
 crash, an unusable result and an unavailable model take the escalation exit to
 `Green Light` with the reason in business terms. That does not contradict "a
 crash is not a rejection" — it is the same rule read in a different place.
@@ -239,6 +240,14 @@ because the second critic reads it next. On the
 one-off route **nothing** reads the card next, so "the critic did not decide"
 cannot be spent as "the critic said yes". The cheap outcome is a person
 answering a question; the expensive one is a build nobody asked for.
+
+**It never reads a card a declaration routes to a person** (DRE-5805). Routing
+is strict precedence, and an explicit role label (`agent:ops`, `no-code`)
+decides first with no model asked. So the shape step runs the same mechanical
+routing read the exit makes, and a one-off it routes to a verdict whose actor
+is a person is moved on that answer — the critic, whose honest answer to its
+question about such a card is "no", is not asked it. DRE-5349 was sent back and
+parked in Triage for exactly that.
 
 **Two ways to say no, and each goes to whoever can act on it** (DRE-5376).
 DRE-5375 was sent back with three findings, every one a defect in the card's
