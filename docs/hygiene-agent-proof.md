@@ -1,8 +1,8 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: THE REHEARSAL IS RUNNING. The live window is not open yet, and nothing below is a result.** As the card orders, the agent runs dry before it goes live: one hand dispatch with `dry_run` true (10:20 PT, §1), then two scheduled dry passes, due 10:37 and 11:37 PT on 2026-10-04. `HYGIENE_LIVE` is set to `true` after the 11:37 pass if both are clean.
+**Status: THE REHEARSAL IS RUNNING. The live window is not open yet, and nothing below is a result.** As the card orders, the agent runs dry before it goes live: a hand dispatch with `dry_run` true, then two scheduled dry passes. `HYGIENE_LIVE` is set to `true` after the second scheduled dry pass if both are clean. As read at 12:41 PT on 2026-10-04 there have been two hand dry dispatches (10:20 and 11:09 PT) and one scheduled dry pass (11:13 PT), all in §1. The second scheduled dry pass has not run yet.
 
-**The window opens at the first live pass, the 12:37 PT scheduled pass on 2026-10-04. It closes after the 24th live pass, due 11:37 PT on 2026-10-05.** After that pass finishes, the record is completed from the read-off steps in §8. GitHub's timer runs late, so read at about 12:00 PT. This pull request stays a **draft** until then, so the merge gate cannot land an empty record as the proof.
+**GitHub's timer runs late, so no time below is fixed in advance.** The `37 * * * *` slot that should have fired at 10:37 PT ran at 11:13 PT, 36 minutes late, and no scheduled pass had run in the 11:37 slot by 12:41 PT. **The window opens at the first pass whose log prints `dry_run=false`, and closes after the 24th live scheduled pass from there.** After that pass finishes, the record is completed from the read-off steps in §8. This pull request stays a **draft** until then, so the merge gate cannot land an empty record as the proof.
 
 **Which "working day".** The card defines it as "one working day — twenty-four scheduled passes". So the window is 24 back-to-back hourly passes of the `37 * * * *` schedule, counted from the first live one, not office hours. If `HYGIENE_LIVE` goes on later than planned, the window moves with it: it opens at the first pass whose `Decide dry run` step prints `dry_run=false`. If a lane gives the agent nothing to clear in those 24 passes, the card extends the window to the next working day for that lane, with a board read that shows the lane was empty.
 
@@ -10,11 +10,11 @@ Observed by a proof-helper session on the operator's instruction. Every time bel
 
 | Criterion | Result |
 |---|---|
-| Over one working day the agent cleared at least one row in each lane (pull requests, Green Light, Todo, Triage, proofs), each with its `🧹 hygiene:` receipt and PT time, no person acting; a `hyg-decision-needed` note counts as nothing | Pending: the window is not open yet (§3). Note that the 10:20 PT dry dispatch found **0 actions in every lane** and 16 rows it would leave alone (§1) |
+| Over one working day the agent cleared at least one row in each lane (pull requests, Green Light, Todo, Triage, proofs), each with its `🧹 hygiene:` receipt and PT time, no person acting; a `hyg-decision-needed` note counts as nothing | Pending: the window is not open yet (§3). The 10:20 PT dry dispatch found 0 actions in every lane. The 11:09 and 11:13 PT dry runs each found **2 actions in the Green Light lane** (DRE-5036 and DRE-3696 sent back to Planning) and 0 in every other lane (§1) |
 | A real business question in Green Light left in place and listed on the standing card's summary with its recommendation, PT time | Pending (§4). The dry dispatch already lists three planner questions in Green Light as left: DRE-5672, DRE-5519 and DRE-3698. Each one reads `recommend: the escalation states no recommendation line` |
 | Summary only in hours with change; one hour with no change and no summary; one hour where the same rows stood, nothing cleared, no summary | Pending (§5) |
 | Standing card outside Intake with `hand-built`, `no-code`, `agent:ops`, never offered by a groomer proposal, carrying only hygiene summaries; board read in the record | Pending (§2). The card exists as DRE-5774, and `HYGIENE_CARD` names it |
-| Two scheduled dry passes before `HYGIENE_LIVE`, plus the hand dispatch with `dry_run` true, each with run id, PT time and `would:` lines; none wrote anything | **Partly recorded** (§1): the hand dry dispatch, run 37220103263 at 10:20 PT. The two scheduled dry passes (10:37 and 11:37 PT) are still to be added |
+| Two scheduled dry passes before `HYGIENE_LIVE`, plus the hand dispatch with `dry_run` true, each with run id, PT time and `would:` lines; none wrote anything | **Partly recorded** (§1): the hand dry dispatches, runs 37220103263 at 10:20 PT and 37223294890 at 11:09 PT, and the first scheduled dry pass, run 37223608815 at 11:13 PT. The second scheduled dry pass has not run yet, and the board read showing none of them wrote is still to be added |
 | No epic approved, no PR merged, no default branch pushed, no `break-glass` applied by the agent, against Actions logs and board | Pending (§6) |
 | Merged on `main` at `docs/hygiene-agent-proof.md`, opens with this table, PT time on every observation; CEO closes; the agent did not close it (DRE-5411 `hygiene_done.OWN_PROOF`) | Open: this draft first, then the CEO. The dry dispatch already lists DRE-5412 as `this agent's own epic's proof — the CEO closes it` (§1) |
 
@@ -89,15 +89,50 @@ Triage
 hygiene: HYGIENE_CARD is unset — the summary was printed here and posted nowhere
 ```
 
-The log has no `would:` lines because the pass found **no action to take in any lane**: it would leave every row it saw for a person. That is the first warning for criterion 1. If the live passes see the same board, the agent clears nothing, and the card's own rule extends the window for each empty lane. The dispatch ran at 10:20 PT, before `HYGIENE_CARD` was set at 10:25 PT, so its summary went to the log only, as its last line says. It wrote nothing to the board.
+The log has no `would:` lines because the pass found no action to take in any lane: it would leave every row it saw for a person. The dispatch ran at 10:20 PT, before `HYGIENE_CARD` was set at 10:25 PT, so its summary went to the log only, as its last line says.
 
-**The two scheduled dry passes.** Still to be added: the 10:37 and 11:37 PT passes, each with its run id, its `dry_run=true` line, its `would:` lines (or `0 action(s)`), and a board read showing it wrote nothing except the summary comment the card allows on DRE-5774.
+**The second hand dispatch with `dry_run` true.** Run [37223294890](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37223294890), `workflow_dispatch` by `smeed652` on `main` at `0f4bf78`, created 11:09:17 PT on 2026-10-04, success. The log, trimmed:
+
+```
+hygiene: event=workflow_dispatch dry_run=true
+hygiene: 2280 request(s) left on the fleet key, at or above the floor of 100
+hygiene: DeltaSolv — 0 action(s), 0 failed, 0 left
+would: comment DRE-5036: 🧹 hygiene: hyg-resent-to-planning — planner died, limit-death kind=claude stage=plan at 2026-10-01 21:33 PT · 11:09 PT
+would: state DRE-5036 → Planning
+would: comment DRE-3696: 🧹 hygiene: hyg-resent-to-planning — classifier transport failure at 2026-10-02 08:25 PT · 11:09 PT
+would: state DRE-3696 → Planning
+hygiene: dreadnought-foundry — 2 action(s), 0 failed, 14 left
+hygiene: EveryBite — 0 action(s), 0 failed, 0 left
+would: comment DRE-5774:
+🧹 hygiene: summary 4effb7806514 · 11:10 PT
+```
+
+**The first scheduled dry pass.** Run [37223608815](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37223608815), `schedule` on `main` at `0f4bf78`, created 11:13:48 PT on 2026-10-04 (the 10:37 slot, 36 minutes late), success. The log, trimmed:
+
+```
+hygiene: event=schedule dry_run=true
+hygiene: 2315 request(s) left on the fleet key, at or above the floor of 100
+hygiene: EveryBite — 0 action(s), 0 failed, 0 left
+hygiene: DeltaSolv — 0 action(s), 0 failed, 0 left
+would: comment DRE-5036: 🧹 hygiene: hyg-resent-to-planning — planner died, limit-death kind=claude stage=plan at 2026-10-01 21:33 PT · 11:14 PT
+would: state DRE-5036 → Planning
+would: comment DRE-3696: 🧹 hygiene: hyg-resent-to-planning — classifier transport failure at 2026-10-02 08:25 PT · 11:14 PT
+would: state DRE-3696 → Planning
+hygiene: dreadnought-foundry — 2 action(s), 0 failed, 14 left
+would: comment DRE-5774:
+🧹 hygiene: summary 680c93735974 · 11:15 PT
+```
+
+Both later runs would clear two rows in the **Green Light** lane: each would post a `hyg-resent-to-planning` receipt and move the card back to Planning (the lane in `scripts/hygiene_green_light.py`). So the board is not empty for the agent, at least in Green Light. Their summaries list nothing to do in Todo and proofs or in Triage: every row there is `left` for a person, so those lanes may still need the card's extension rule. In both runs the summary for DRE-5774 is itself a `would:` line, so the log shows no write of any kind. The board read that confirms it is still to be added.
+
+**The second scheduled dry pass.** Still to be added, from the next scheduled run, whenever GitHub fires it: its run id, its `dry_run=true` line, its `would:` lines (or `0 action(s)`), and a board read showing it wrote nothing.
 
 | PT | run id | event | dry_run | actions / `would:` lines | summary |
 |---|---|---|---|---|---|
-| 10:20 | 37220103263 | workflow_dispatch | true | 0 in every leg; 16 left | log only (`HYGIENE_CARD` unset then) |
-| ~10:37 | | schedule | true | | |
-| ~11:37 | | schedule | true | | |
+| 10:20 | 37220103263 | workflow_dispatch | true | 0 in every lane; 16 left | log only (`HYGIENE_CARD` unset then) |
+| 11:09 | 37223294890 | workflow_dispatch | true | Green Light: 2 (DRE-5036, DRE-3696 → Planning); 0 elsewhere; 14 left | `would:` only (4effb7806514) |
+| 11:13 | 37223608815 | schedule (10:37 slot) | true | Green Light: 2 (DRE-5036, DRE-3696 → Planning); 0 elsewhere; 14 left | `would:` only (680c93735974) |
+| | | schedule | true | | |
 
 ## 2. The standing card
 
@@ -121,9 +156,9 @@ DRE-5774, `Hygiene agent — hourly summary`. Its labels are `repo:bureau-pipeli
 
 | # | run id | PT | conclusion | executed | summary (posted / none) | what changed |
 |---|---|---|---|---|---|---|
-| 1 | | ~12:37 on 10-04 (first live) | | | | |
+| 1 | | (first `dry_run=false` pass) | | | | |
 | … | | | | | | |
-| 24 | | ~11:37 on 10-05 | | | | |
+| 24 | | (24th live scheduled pass) | | | | |
 
 ## 6. What the agent did not do
 
@@ -131,17 +166,17 @@ DRE-5774, `Hygiene agent — hourly summary`. Its labels are `repo:bureau-pipeli
 
 ## 7. The console roster's `hygiene` entry
 
-## 8. Read-off steps (the 10:37 and 11:37 dry passes now; the rest after the 24th live pass, due 11:37 PT 2026-10-05)
+## 8. Read-off steps (the second scheduled dry pass when it runs; the rest after the 24th live pass)
 
 Run these with any operator read token. None of them writes.
 
 1. **Every pass.**
    `gh run list --repo dreadnought-foundry/bureau-pipeline --workflow Hygiene --created '>=2026-10-04T17:30:00Z' --limit 40 --json databaseId,event,createdAt,conclusion`
-   Keep the `schedule` rows. The two before `HYGIENE_LIVE` went on go in §1. From the first one whose log prints `dry_run=false` there should be 24, and they go in §5. Convert each `createdAt` to PT.
+   Keep every row, `schedule` and `workflow_dispatch` alike. Every run before `HYGIENE_LIVE` went on goes in §1. From the first run whose log prints `dry_run=false`, every run goes in §5: the 24 `schedule` rows are the window, and any `workflow_dispatch` row is listed too, marked as a hand dispatch that does not count toward the 24. Convert each `createdAt` to PT.
 2. **What each pass did.** For each run id:
    `gh run view <id> --repo dreadnought-foundry/bureau-pipeline --log | grep -E "hygiene:|would:|executed|refused|stood down|posted nowhere"`
    An `executed` action is a cleared row; a `hyg-decision-needed` note is not.
-3. **The receipts on the board.** Find the receipts posted in the window: use the console's activity feed, or run `python3 scripts/linear-api.py search "🧹 hygiene:"` once (one read, not a loop). For each lane, take one row whose receipt is the agent's, and check its thread to confirm no person acted on it between the receipt and the read.
+3. **The receipts on the board.** Find the receipts posted in the window: use the console's activity feed, or run agent-bureau's `scripts/linear-api.py search "🧹 hygiene:"` once from an agent-bureau checkout (one read, not a loop). For each lane, take one row whose receipt is the agent's, and check its thread to confirm no person acted on it between the receipt and the read.
 4. **The summaries.** Read DRE-5774's comments once. Every comment opens `🧹 hygiene: summary <digest> · <HH:MM PT>`. Match each comment to its pass in §5. A pass with no comment is a quiet hour. Tell the two kinds of quiet hour apart: one where nothing changed (the same digest as the previous summary, 0 executed), and one where the same rows stood and nothing was cleared. Then read the day's groomer proposals on DRE-4541 once, and confirm DRE-5774 is not offered.
 5. **What it did not do.** No run log contains a `merge` call (the guard builds none). In the board read, no epic moved Green Light → In Progress under the agent's identity during the window. `gh api repos/<owner>/<repo>/events` shows no push to a default branch by the bureau App in the window. No PR carries a `break-glass` label the agent applied.
 6. **The roster.** Open the console's agent roster and record what the `hygiene` entry shows.
