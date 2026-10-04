@@ -961,3 +961,145 @@ class TestTheExitCommandEscalates:
         assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
         assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
         assert card.states == [(CARD, planning_shape.destination("one-off"))]
+
+
+# ===========================================================================
+# 8: a card a declaration routes to a PERSON is routed before the critic
+#    (DRE-5805)
+# ===========================================================================
+#
+# DRE-5349 wore `agent:ops` and `no-code` and was stamped one-off — rightly:
+# one card, one pull request. The pre-approval critic was then asked whether
+# an agent could build it unattended, honestly answered no, and that no was a
+# SEND_BACK: the card was revised for nothing, the revision did not finish, and
+# it parked in Triage. The label precedence that would have routed it to a
+# person ran only in the exit, which only the critic's pass reaches. So
+# `decide` runs that same read on a one-off and says when it lands on a person.
+#
+# The fixtures carry only labels the router reads. `hand-built` is a mark the
+# sweep stamps once a verdict has routed a card, not an input, so it is not one.
+CLASSIFIED = ("repo:bureau-pipeline", "agent:planner")
+ROUTINE_CRITERIA = (
+    "## Acceptance criteria\n\n"
+    "- [ ] the health endpoint answers 200 on both paths\n"
+)
+
+
+def _routing_vocabulary() -> dict:
+    return json.loads((ROOT / "config" / "routing-verdicts.json").read_text(encoding="utf-8"))
+
+
+def _decided(card: _Card, tmp_path) -> dict:
+    out = tmp_path / "out.txt"
+    assert card.run(
+        lambda: planning_route.main(["decide", CARD, "--github-output", str(out)])
+    ) == 0
+    return dict(line.split("=", 1) for line in out.read_text().splitlines() if line)
+
+
+class TestAPersonsCardIsRoutedBeforeTheCritic:
+    def _person(self, labels, description=ROUTINE_CRITERIA, **kw) -> str:
+        return planning_route.person_verdict(
+            _read_card(description=description, labels=labels), **kw)
+
+    def _assert_a_person(self, verdict: str):
+        assert verdict, "the mechanical read routed this card to nobody"
+        assert routing_verdict.actor(verdict) in planning_route.HUMAN_ACTORS
+
+    def test_a_one_off_wearing_agent_ops_answers_operator_before_the_critic(self, tmp_path):
+        labels = CLASSIFIED + ("agent:ops",)
+        verdict = self._person(labels)
+        assert verdict == "OPERATOR"
+        self._assert_a_person(verdict)
+
+        card = _Card([_stamp("one-off")], description=ROUTINE_CRITERIA, labels=labels)
+        written = _decided(card, tmp_path)
+        assert written[planning_route.PERSON_OUTPUT] == "OPERATOR"
+        assert written["route"] == "one-off", "the shape is not the defect — it stays one-off"
+        assert card.posted == [] and card.states == [], (
+            "decide reads; the exit is still the one writer"
+        )
+
+    def test_a_one_off_wearing_no_code_answers_operator_before_the_critic(self, tmp_path):
+        labels = CLASSIFIED + ("no-code",)
+        verdict = self._person(labels)
+        assert verdict == "OPERATOR"
+        self._assert_a_person(verdict)
+
+        card = _Card([_stamp("one-off")], description=ROUTINE_CRITERIA, labels=labels)
+        assert _decided(card, tmp_path)[planning_route.PERSON_OUTPUT] == "OPERATOR"
+
+    def test_an_engineer_one_off_answers_no_person_and_goes_to_the_critic(self, tmp_path):
+        labels = CLASSIFIED + ("agent:engineer",)
+        assert planning_route.mechanical_verdict(
+            "a card", ROUTINE_CRITERIA, labels, shape="one-off")[0] == "FLEET"
+        assert self._person(labels) == ""
+
+        card = _Card([_stamp("one-off")], description=ROUTINE_CRITERIA, labels=labels)
+        written = _decided(card, tmp_path)
+        assert planning_route.PERSON_OUTPUT in written, (
+            "the output is always written, so the gate never reads a stale one"
+        )
+        assert written[planning_route.PERSON_OUTPUT] == ""
+
+    def test_a_card_sent_back_to_planning_answers_no_person(self):
+        """NEEDS WORK is the read's answer for a card with no exit condition,
+        and its actor is the planning run — the critic still reads it."""
+        assert planning_route.mechanical_verdict(
+            "a card", "Just do the thing.", CLASSIFIED, shape="one-off")[0] == "NEEDS WORK"
+        assert self._person(CLASSIFIED, description="Just do the thing.") == ""
+
+    def test_who_is_a_person_is_read_off_the_vocabulary(self):
+        """Derived, never listed: hand OPERATOR to an agent in the file and an
+        `agent:ops` card is a person's no longer, so the critic reads it."""
+        doc = _routing_vocabulary()
+        entry = next(v for v in doc["verdicts"] if v["name"] == "OPERATOR")
+        entry["actor"] = routing_verdict.actor("FLEET")
+        assert self._person(CLASSIFIED + ("agent:ops",), doc=doc) == ""
+
+    def test_a_card_that_cannot_be_read_goes_to_the_critic(self, tmp_path):
+        """The read fails open to today's absence: the critic still reads the
+        card, and nothing is routed on a read that did not happen."""
+        import critic_score
+
+        card = _Card([_stamp("one-off")], labels=CLASSIFIED + ("agent:ops",))
+        out = tmp_path / "out.txt"
+
+        def failing():
+            with patch.object(critic_score, "read_card",
+                              side_effect=RuntimeError("Linear is down")):
+                return planning_route.main(["decide", CARD, "--github-output", str(out)])
+        assert card.run(failing) == 0
+        written = dict(line.split("=", 1) for line in out.read_text().splitlines() if line)
+        assert written[planning_route.PERSON_OUTPUT] == ""
+        assert written["route"] == "one-off"
+
+    def test_only_a_one_off_is_read(self, tmp_path):
+        """An epic is never given a buildability verdict, and a roll-up is
+        split before anything is built — neither is read, and neither is a
+        person's card here."""
+        import critic_score
+
+        for shape in ("epic", "roll-up"):
+            card = _Card([_stamp(shape)], labels=CLASSIFIED + ("agent:ops",))
+            reads = []
+            out = tmp_path / f"{shape}.txt"
+
+            def decide():
+                with patch.object(critic_score, "read_card",
+                                  side_effect=lambda lops, i: reads.append(i)):
+                    return planning_route.main(["decide", CARD, "--github-output", str(out)])
+            assert card.run(decide) == 0
+            written = dict(line.split("=", 1) for line in out.read_text().splitlines() if line)
+            assert written[planning_route.PERSON_OUTPUT] == "", shape
+            assert reads == [], f"decide read the card for a {shape}"
+
+    def test_the_exit_stamps_the_verdict_the_label_decided(self):
+        """From the decision on, nothing changes: the exit stamps OPERATOR,
+        lands the card where every one-off lands, and the sweep carries it to
+        a person as it carries any OPERATOR card."""
+        card = _Card([_stamp("one-off")], description=ROUTINE_CRITERIA,
+                     labels=CLASSIFIED + ("agent:ops",))
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "OPERATOR"
+        assert card.states == [(CARD, planning_shape.destination("one-off"))]

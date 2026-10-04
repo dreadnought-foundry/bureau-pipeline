@@ -559,6 +559,78 @@ class ThePreApprovalCriticReadsTheOneOffExit(unittest.TestCase):
                                      pc.ONE_OFF_TURNS_RETRY_CAP)
 
 
+ONE_OFF_TURNS = "One-off critic — turn ceiling"
+ONE_OFF_RAN_OUT = "One-off critic — the read that ran out of turns"
+SHAPE_STEP = "Planning shape — which route this card takes"
+
+
+class APersonsCardIsRoutedBeforeTheCritic(unittest.TestCase):
+    """DRE-5805. The routing rule is strict precedence: an explicit role label
+    decides first and no model is asked. On the one-off route the label was
+    read only in the exit, which only the critic's pass reaches — so DRE-5349,
+    wearing `agent:ops` and `no-code`, was asked whether an agent could build
+    it, honestly answered no, and was sent back and parked for nothing.
+
+    The rail these pin: the shape step reads the label first and says when it
+    lands on a person; on that answer no model is selected, no read is sized,
+    no critic runs and no decision is made, and the exit runs on the answer.
+    """
+
+    def setUp(self):
+        import planning_route
+        self.person = f"steps.shape.outputs.{planning_route.PERSON_OUTPUT}"
+
+    def test_the_shape_step_comes_before_every_one_off_critic_step(self):
+        shape = index_of(SHAPE_STEP)
+        self.assertEqual("shape", step_named(SHAPE_STEP).get("id"))
+        for fragment in (ONE_OFF_MODEL, ONE_OFF_CTX, ONE_OFF_TURNS,
+                         ONE_OFF_CRITIC, ONE_OFF_DECISION, ONE_OFF_RAN_OUT):
+            self.assertLess(shape, index_of(fragment), fragment)
+
+    def test_the_steps_gated_on_the_route_alone_skip_a_persons_card(self):
+        for fragment in (ONE_OFF_MODEL, ONE_OFF_TURNS, ONE_OFF_DECISION):
+            gate = str(step_named(fragment).get("if") or "")
+            self.assertIn("steps.shape.outputs.route == 'one-off'", gate, fragment)
+            self.assertIn(f"{self.person} == ''", gate, fragment)
+
+    def test_the_steps_downstream_of_them_skip_on_their_own(self):
+        """Gated on a selected model or on a decision output, so they need no
+        gate of their own — and must keep the one they have."""
+        for fragment in (ONE_OFF_CTX, ONE_OFF_CRITIC):
+            self.assertIn("steps.oomodel.outputs.model != ''",
+                          str(step_named(fragment).get("if")), fragment)
+        self.assertIn("steps.oneoff.outputs.ran_out == 'true'",
+                      str(step_named(ONE_OFF_RAN_OUT).get("if")))
+
+    def test_the_exit_runs_on_a_pass_or_on_a_persons_card(self):
+        gate = " ".join(str(step_named(ONE_OFF_EXIT).get("if") or "").split())
+        self.assertIn("steps.shape.outputs.route == 'one-off'", gate)
+        self.assertRegex(
+            gate,
+            re.escape("(steps.oneoff.outputs.action == 'proceed' || ")
+            + re.escape(f"{self.person} != '')"),
+            "the exit must run on the critic's pass OR the person output, "
+            "and on nothing else",
+        )
+
+    def test_no_gate_names_a_verdict(self):
+        """Who is a person is derived from the vocabulary in the script; a
+        verdict named in YAML is that answer written twice."""
+        import routing_verdict
+        for fragment in (ONE_OFF_MODEL, ONE_OFF_TURNS, ONE_OFF_DECISION, ONE_OFF_EXIT):
+            gate = str(step_named(fragment).get("if") or "")
+            for verdict in routing_verdict.verdicts():
+                self.assertNotIn(verdict, gate, f"{fragment} names {verdict}")
+
+    def test_the_comment_over_the_route_states_the_new_order(self):
+        src = wf_src()
+        start = src.index("# --- The ONE-OFF route")
+        block = src[start:src.index(f"- name: {ONE_OFF_MODEL}", start)]
+        prose = " ".join(line.strip().lstrip("#").strip() for line in block.splitlines())
+        self.assertIn("never read by the critic", prose)
+        self.assertIn("DRE-5805", prose)
+
+
 class TheRoster(unittest.TestCase):
     """agents.yaml is the console's contract; config/models.yaml is the ladder."""
 
