@@ -1,6 +1,11 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: LIVE since 12:58:43 PT on 2026-10-04; criterion 5 met; the first live pass ran by hand at 13:28 PT (§1b); the window opens at the first live SCHEDULED pass (pending).** The card counts the working day in scheduled passes: "Then let the clock run live for one working day — twenty-four scheduled passes". So the 13:28 PT hand dispatch (run 37232211037) does not open the window and is not one of the 24. It is recorded in §1b as a pre-window live pass: it shows the live writes working end to end, but it does not count toward criterion 1 (see §1b for why). How the agent got to live:
+**Status: THE WINDOW IS OPEN. It opened at 14:15 PT on 2026-10-04 with the first live scheduled pass, run [37235338544](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37235338544) (the 13:37 slot, `dry_run=false`), and closes after the 24th scheduled live pass. Criterion 5 is met. The agent has been live since 12:58:43 PT, and its first live pass ran by hand at 13:28 PT (§1b).**
+
+**Expected close, with the arithmetic.**
+- Pass 1 is the 13:37 slot on 10-04, so pass *n* is the slot at 13:37 + (*n* − 1) hours, and pass 24 is the slot at 13:37 + 23 h = **the 12:37 slot on 2026-10-05**.
+- On 10-04 GitHub fired the slots late: the 10:37 slot at 11:13 (36 min), the 11:37 slot at 12:41 (64 min) and the 13:37 slot at 14:15 (38 min). At that lateness, pass 24 fires between 12:37 + 36 min = 13:13 and 12:37 + 64 min = 13:41, so **about 13:15–13:45 PT on 10-05**. Read the results after it completes.
+- **If the timer skips a slot, the window extends.** The card counts passes, not hours. It already skipped the 12:37 slot on 10-04, which never fired. Each skipped slot moves pass 24 one slot later. The card counts the working day in scheduled passes: "Then let the clock run live for one working day — twenty-four scheduled passes". So the 13:28 PT hand dispatch (run 37232211037) does not open the window and is not one of the 24. It is recorded in §1b as a pre-window live pass: it shows the live writes working end to end, but it does not count toward criterion 1 (see §1b for why). How the agent got to live:
 - `HYGIENE_LIVE` was on from 12:45:36 to 12:49:58 PT, and no pass ran in that time.
 - It was paused while the CEO was asked about DRE-5036 and DRE-3696.
 - The CEO briefly chose to keep both epics in Green Light as they are.
@@ -98,7 +103,20 @@ $ gh run list --repo dreadnought-foundry/bureau-pipeline --workflow hygiene.yml 
 
 - **First live pass, by hand, 13:28 PT** (run 37232211037, `dry_run=false`, by `smeed652`). It cleared DRE-5036 and DRE-3696 to Planning and posted the first summary on DRE-5774 (§1b). It is a pre-window pass: the card counts the day in scheduled passes.
 
-  **The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.** The 12:37 slot never fired. Its run id and PT time are **pending**; they go in the status line and as row 1 of §5. The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, which is the CEO's production-mode choice, not a person acting on those rows.
+- **The window opened at 14:15 PT.** The 12:37 slot never fired. The first scheduled pass after 12:58:43 PT is run [37235338544](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37235338544): the 13:37 slot, `schedule`, created 14:15:15 PT, success, on `c4fa502`. Its log, trimmed:
+
+```
+hygiene: event=schedule dry_run=false
+hygiene: 2484 request(s) left on the fleet key, at or above the floor of 100
+hygiene: dreadnought-foundry — 0 action(s), 0 failed, 15 left
+hygiene: EveryBite — 0 action(s), 0 failed, 0 left
+hygiene: DeltaSolv — 0 action(s), 0 failed, 0 left
+commented on DRE-5774
+```
+
+  It cleared nothing, because the two Green Light epics had already moved at 13:28. It posted a summary on DRE-5774, `🧹 hygiene: summary 8b30511228b2 · 14:16 PT` (read once at 14:35 PT). The summary posted because its digest moved: Triage now leaves DRE-5782 (`parked with needs-human`) where the 13:29 summary had DRE-5781. DRE-5774 now carries its creation comment and two summaries, nothing else.
+
+  Earlier text in this record anticipated this as "**The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.**" That is now resolved; the run id and time above are the start; they go in the status line and as row 1 of §5. The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, which is the CEO's production-mode choice, not a person acting on those rows.
 - `main` moved during the rehearsal. The 11:09 and 11:13 PT runs ran on `0f4bf78`, and the 12:41 PT run on `c4fa502`. Each live pass's head sha goes in §5.
 
 ## 1. The dry passes before going live
@@ -277,9 +295,9 @@ DRE-5774, `Hygiene agent — hourly summary`. Its labels are `repo:bureau-pipeli
 
 | # | run id | PT | conclusion | executed | summary (posted / none) | what changed |
 |---|---|---|---|---|---|---|
-| 1 | | (first `dry_run=false` pass) | | | | |
+| 1 | 37235338544 | 14:15:15 on 10-04 (13:37 slot) | success | 0 | posted, `8b30511228b2 · 14:16 PT` | the left-row set moved: DRE-5782 newly left in Triage (`parked with needs-human`), DRE-5781 gone |
 | … | | | | | | |
-| 24 | | (24th live scheduled pass) | | | | |
+| 24 | | the 12:37 slot on 10-05 if no slot is skipped; expect about 13:15–13:45 PT | | | | |
 
 ## 6. What the agent did not do
 
