@@ -714,7 +714,8 @@ written on it.
 On 2026-09-30 one drain moved nineteen cards at once, and the planners they
 started emptied the fleet's shared Linear key. Before any card moves, the drain
 reads the planner slot ledger once (`planner_queue.py`). The free slots are the
-cap (`config/planner-queue.json`, 3) minus the planners running, the dispatched
+cap (`planner_queue.cap()`: `PLANNER_MAX_RUNNING` where the console has
+published it, the file's `max_running` otherwise) minus the planners running, the dispatched
 slots, and the cards already waiting in line — a card added to a line starts no
 sooner and only pushes the line toward the wait bound — less every card a groom
 queue standing on the card still holds, so a later batch queues behind an
