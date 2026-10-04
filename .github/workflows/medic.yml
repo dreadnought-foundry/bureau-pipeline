@@ -311,7 +311,7 @@ jobs:
           BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
           echo "$BODY" | head -1
           if [ -z "${CARD:-}" ]; then
-            echo "::notice::Limit death on run $RUN_ID with no card in the head branch — the retry and the diagnosis are blocked, and no marker can be written (a planner run's head is the default branch)."
+            echo "::notice::Limit death on run $RUN_ID with no card in the head branch or the log — the retry and the diagnosis are blocked, and no marker can be written. Recovery needs a person: nothing names the card to bring back."
             exit 0
           fi
           # EXACTLY ONE marker per run: a re-run attempt reuses the run id,
@@ -332,8 +332,48 @@ jobs:
             echo "$CARD already carries the marker for run $RUN_ID — not posting a second"
             exit 0
           fi
-          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY" \
-            || echo "::warning title=Limit marker not written::$CARD hit a limit on run $RUN_ID and Linear refused the marker write (if the wall was Linear's, this is the same wall). The retry is still blocked; the reconcile sweep cannot bring the card back without the marker, so re-enter the stage by hand once the limit lifts."
+          # DRE-5837: the write is retried, and a write Linear still refuses
+          # leaves the death in $RUNNER_TEMP for the upload below — the run's
+          # own record, which the reconcile sweep reads over GitHub and turns
+          # into the marker once Linear answers. `post` prints `marker=…` and
+          # says on stderr whether recovery is automatic or needs a person.
+          # A `post` that cannot run at all reads as refused: the upload then
+          # finds no record and the next step says a person is needed.
+          OUT=$(python3 .bureau-pipeline/scripts/limit_death_record.py post "$CARD" "$BODY" \
+            --run-id "$RUN_ID" --died-at "$RUN_UPDATED_AT" \
+            --record "$RUNNER_TEMP/limit-death-record/record.json" \
+            --snapshot "$SNAPSHOT") || OUT="marker=refused"
+          printf '%s\n' "$OUT" | grep -E '^marker=' | tail -1 >> "$GITHUB_OUTPUT"
+
+      # DRE-5837: the death Linear would not take, kept on this run. A fixed
+      # name, because the Actions API lists artifacts by exact name and that
+      # one listing is how the sweep finds every record. A week covers any
+      # Linear outage: the sweep settles a record on its first pass that
+      # Linear answers, and deletes it. Never fails the job — every medic job
+      # `needs: classify`.
+      - name: Keep the limit death on this run
+        id: record
+        if: steps.limit.outputs.marker == 'refused'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: limit-death-record
+          path: ${{ runner.temp }}/limit-death-record/record.json
+          retention-days: 7
+          if-no-files-found: error
+
+      # Says, once the upload's outcome is known, whether the sweep brings
+      # the card back (the record was kept) or a person has to (it was not).
+      - name: Say who brings the card back
+        if: steps.limit.outputs.marker == 'refused'
+        env:
+          CARD: ${{ steps.r.outputs.card }}
+          OUTCOME: ${{ steps.record.outcome == 'success' && 'recorded' || 'lost' }}
+        run: |
+          python3 .bureau-pipeline/scripts/limit_death_record.py say "$CARD" --outcome "$OUTCOME" \
+            --record "$RUNNER_TEMP/limit-death-record/record.json" \
+            --snapshot "$RUNNER_TEMP/medic-card.json" \
+            || echo "::warning title=Limit death not recorded::$CARD hit a limit and neither the marker nor the run's record could be confirmed. Recovery needs a person: re-enter the failed stage on $CARD once the limit lifts."
 
   # Re-run transient flakes once — UNLESS the classifier flagged a critic
   # infra-crash (DRE-1921), in which case re-running cannot help and only

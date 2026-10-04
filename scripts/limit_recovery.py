@@ -8,8 +8,10 @@ what the medic used to do — once, immediately, spending an attempt, after whic
 nothing ever came back to the card. The CEO's instruction, verbatim: "Once I
 release [the account] it should automatically pick that up."
 
-This is the other half. Once per pass the reconcile sweep hands `recover()`
-the board it already read; for every card whose NEWEST `🪦 limit-death:` marker
+This is the other half. (When Linear refuses the medic's marker write, the
+run keeps the death as its own record and the sweep writes the marker from it
+before this pass reads the board — `limit_death_record.py`, DRE-5837.) Once
+per pass the reconcile sweep hands `recover()` the board it already read; for every card whose NEWEST `🪦 limit-death:` marker
 is the latest pipeline receipt on it, the stage that died is re-entered when
 EITHER
 
