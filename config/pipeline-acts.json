@@ -1100,6 +1100,13 @@
       "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. It exists so a hand-run migration leaves a trace someone can read afterwards; its only reader is the operator who ran it."
     },
     {
+      "file": "scripts/hand_work_migration.py",
+      "anchor": "ops.cmd_comment(ident, migration_note(row))",
+      "kind": "not-an-act",
+      "means": "The one-time Hand-work migration tells each person card it moved from Todo to Hand-work, and why (DRE-5323). The comment opens `🧳 hand-work-migration:`.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The migration is a one-shot move an operator runs by hand (`hand_work_migration.py run --apply`), the same shape as the backlog cutover's move note; its opener is what the proof card reads to tell a migrated card from a sweep-moved one."
+    },
+    {
       "file": "scripts/break_glass.py",
       "anchor": "refusal_notice(provenance)",
       "kind": "undeclared-act",

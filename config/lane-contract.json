@@ -160,6 +160,10 @@
       "what": "the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list",
       "path": "scripts/backlog_cutover.py"
     },
+    "hand_work_migration.py": {
+      "what": "the one-time move of a person's work out of Todo into Hand-work (DRE-5323) — run by hand, dry first; moves only cards marked hand-built or no-code, and names any epic or finished card it finds without writing to it",
+      "path": "scripts/hand_work_migration.py"
+    },
     "release-train.yml": {
       "what": "the release train — runs a surface's release script and verifies the tag it cut; it moves no card, and is here as the actor the six release acts name (DRE-3521)",
       "path": ".github/workflows/release-train.yml"
@@ -475,8 +479,8 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares, `hand-built` and `no-code` on an OPERATOR card, BEFORE the move, because an unmarked card is one the nudge loop could dispatch an agent at (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; and the person working it, who closes an OPERATOR card Done.",
-          "who": ["reconcile.py", "linear_ops.py", "operator"],
+          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares, `hand-built` and `no-code` on an OPERATOR card, BEFORE the move, because an unmarked card is one the nudge loop could dispatch an agent at (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; the one-time migration that moved the person cards already in Todo (DRE-5323); and the person working it, who closes an OPERATOR card Done.",
+          "who": ["reconcile.py", "linear_ops.py", "hand_work_migration.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
