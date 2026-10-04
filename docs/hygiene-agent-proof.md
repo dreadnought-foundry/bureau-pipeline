@@ -1,6 +1,6 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: LIVE since 12:58:43 PT on 2026-10-04; criterion 5 met; the window opens at the first live scheduled pass (pending).** How it got here:
+**Status: LIVE since 12:58:43 PT on 2026-10-04; criterion 5 met; the first live pass ran by hand at 13:28 PT (§1b); the window opens at the first live SCHEDULED pass (pending).** The card counts the working day in scheduled passes: "Then let the clock run live for one working day — twenty-four scheduled passes". So the 13:28 PT hand dispatch (run 37232211037) does not open the window and is not one of the 24. It is recorded in §1b as a pre-window live pass: it shows the live writes working end to end, but it does not count toward criterion 1 (see §1b for why). How the agent got to live:
 - `HYGIENE_LIVE` was on from 12:45:36 to 12:49:58 PT, and no pass ran in that time.
 - It was paused while the CEO was asked about DRE-5036 and DRE-3696.
 - The CEO briefly chose to keep both epics in Green Light as they are.
@@ -25,10 +25,10 @@ Observed by a proof-helper session on the operator's instruction. Every time bel
 
 | Criterion | Result |
 |---|---|
-| Over one working day the agent cleared at least one row in each lane (pull requests, Green Light, Todo, Triage, proofs), each with its `🧹 hygiene:` receipt and PT time, no person acting; a `hyg-decision-needed` note counts as nothing | Pending: the window is not open yet (§3). The 10:20 PT dry dispatch found 0 actions in every lane. The 11:09 and 11:13 PT dry runs each found **2 actions in the Green Light lane** (DRE-5036 and DRE-3696 sent back to Planning) and 0 in every other lane. The 12:41 PT pass found those two plus **1 in the pull-request lane** (the gate re-dispatched on agent-bureau #3139). No dry run found anything in Todo, Triage or proofs (§1) |
+| Over one working day the agent cleared at least one row in each lane (pull requests, Green Light, Todo, Triage, proofs), each with its `🧹 hygiene:` receipt and PT time, no person acting; a `hyg-decision-needed` note counts as nothing | Pending: the window is not open yet (§3). The 10:20 PT dry dispatch found 0 actions in every lane. The 11:09 and 11:13 PT dry runs each found **2 actions in the Green Light lane** (DRE-5036 and DRE-3696 sent back to Planning) and 0 in every other lane. The 12:41 PT pass found those two plus **1 in the pull-request lane** (the gate re-dispatched on agent-bureau #3139). No dry run found anything in Todo, Triage or proofs (§1). The first live pass, a hand dispatch at 13:28 PT, cleared DRE-5036 and DRE-3696 from Green Light with receipts. It ran before the window and was started by a person, so it does not count here (§1b) |
 | A real business question in Green Light left in place and listed on the standing card's summary with its recommendation, PT time | Pending (§4). The dry dispatch already lists three planner questions in Green Light as left: DRE-5672, DRE-5519 and DRE-3698. Each one reads `recommend: the escalation states no recommendation line` |
-| Summary only in hours with change; one hour with no change and no summary; one hour where the same rows stood, nothing cleared, no summary | Pending (§5) |
-| Standing card outside Intake with `hand-built`, `no-code`, `agent:ops`, never offered by a groomer proposal, carrying only hygiene summaries; board read in the record | Pending (§2). The card exists as DRE-5774, and `HYGIENE_CARD` names it |
+| Summary only in hours with change; one hour with no change and no summary; one hour where the same rows stood, nothing cleared, no summary | Pending (§5). The first summary landed on DRE-5774 at 13:29 PT, from the pre-window hand pass (§1b) |
+| Standing card outside Intake with `hand-built`, `no-code`, `agent:ops`, never offered by a groomer proposal, carrying only hygiene summaries; board read in the record | Pending (§2). The card exists as DRE-5774, and `HYGIENE_CARD` names it. At 13:38 PT it is in Hand-work and carries only the comment it was created with and one hygiene summary (§1b) |
 | Two scheduled dry passes before `HYGIENE_LIVE`, plus the hand dispatch with `dry_run` true, each with run id, PT time and `would:` lines; none wrote anything | **Met** (§1). Scheduled dry passes: 37223608815 (the 10:37 slot, fired 11:13 PT) and 37229265771 (the 11:37 slot, fired 12:41 PT). Hand dry dispatches: 37220103263 (10:20 PT) and 37223294890 (11:09 PT). Every log prints `dry_run=true`, and every action appears only as a `would:` line. A board read at 12:46 PT and agent-bureau #3139's comments show none of them wrote anything. `HYGIENE_LIVE` went on at 12:45:36 PT, after all four |
 | No epic approved, no PR merged, no default branch pushed, no `break-glass` applied by the agent, against Actions logs and board | Pending (§6) |
 | Merged on `main` at `docs/hygiene-agent-proof.md`, opens with this table, PT time on every observation; CEO closes; the agent did not close it (DRE-5411 `hygiene_done.OWN_PROOF`) | Open: this draft first, then the CEO. The dry dispatch already lists DRE-5412 as `this agent's own epic's proof — the CEO closes it` (§1) |
@@ -96,7 +96,9 @@ $ gh run list --repo dreadnought-foundry/bureau-pipeline --workflow hygiene.yml 
 37223608815  schedule  completed  2026-10-04T18:13:48Z
 ```
 
-  **The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.** Its run id and PT time are **pending**; they go in the status line and as row 1 of §5. The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, which is the CEO's production-mode choice, not a person acting on those rows.
+- **First live pass, by hand, 13:28 PT** (run 37232211037, `dry_run=false`, by `smeed652`). It cleared DRE-5036 and DRE-3696 to Planning and posted the first summary on DRE-5774 (§1b). It is a pre-window pass: the card counts the day in scheduled passes.
+
+  **The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.** The 12:37 slot never fired. Its run id and PT time are **pending**; they go in the status line and as row 1 of §5. The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, which is the CEO's production-mode choice, not a person acting on those rows.
 - `main` moved during the rehearsal. The 11:09 and 11:13 PT runs ran on `0f4bf78`, and the 12:41 PT run on `c4fa502`. Each live pass's head sha goes in §5.
 
 ## 1. The dry passes before going live
@@ -207,6 +209,51 @@ This pass adds a row in the **pull-request** lane: a gate re-dispatch on agent-b
 | 11:09 | 37223294890 | workflow_dispatch | true | Green Light: 2 (DRE-5036, DRE-3696 → Planning); 0 elsewhere; 14 left | `would:` only (4effb7806514) |
 | 11:13 | 37223608815 | schedule (10:37 slot) | true | Green Light: 2 (DRE-5036, DRE-3696 → Planning); 0 elsewhere; 14 left | `would:` only (680c93735974) |
 | 12:41 | 37229265771 | schedule (11:37 slot) | true | Green Light: 2 (the same); pull requests: 1 (gate re-dispatch, agent-bureau #3139); 0 elsewhere; 17 left | `would:` only (0a3dac74d839) |
+
+## 1b. The first live pass, by hand, before the window (13:28 PT)
+
+**The run.** [37232211037](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37232211037), `workflow_dispatch` by `smeed652` (the CEO's "use it normally", relayed by the fullstack session), created 13:28:15 PT on 2026-10-04, success, on `main` at `c4fa502`. The log, trimmed:
+
+```
+hygiene: event=workflow_dispatch dry_run=false
+hygiene: 2499 request(s) left on the fleet key, at or above the floor of 100
+commented on DRE-5036
+DRE-5036 → Planning
+commented on DRE-3696
+DRE-3696 → Planning
+hygiene: dreadnought-foundry — 2 action(s), 0 failed, 15 left
+hygiene: DeltaSolv — 0 action(s), 0 failed, 0 left
+hygiene: EveryBite — 0 action(s), 0 failed, 0 left
+commented on DRE-5774
+```
+
+**What it wrote, read once from Linear at 13:38 PT** (one query over the three cards):
+
+- **DRE-5036**: now in Planning. Moved `Green Light → Planning` at 13:29:02 PT by Agent-Bureau. Its receipt, at 13:29:02 PT:
+  ```
+  🧹 hygiene: hyg-resent-to-planning — planner died, limit-death kind=claude stage=plan at 2026-10-01 21:33 PT · 13:28 PT
+  evidence: run 36964491515, limit-death comment 2026-10-02T04:33:25.996Z
+  📎 pipeline-act: hygiene-resend-to-planning · kind: recovery · state: unchanged · next: plan.yml · discharges: nothing · subscriber: hygiene.yml · tag: hyg-resent-to-planning
+  ```
+- **DRE-3696**: now in Planning. Moved `Green Light → Planning` at 13:29:03 PT by Agent-Bureau. Its receipt, at 13:29:03 PT:
+  ```
+  🧹 hygiene: hyg-resent-to-planning — classifier transport failure at 2026-10-02 08:25 PT · 13:28 PT
+  evidence: transport comment 2026-10-02T15:25:58.792Z
+  📎 pipeline-act: hygiene-resend-to-planning · kind: recovery · state: unchanged · next: plan.yml · discharges: nothing · subscriber: hygiene.yml · tag: hyg-resent-to-planning
+  ```
+  Each card's move before that was `In Progress → Green Light` at 10:24 PT by `bureau-tools`, the operator identity.
+- **DRE-5774** (the standing card), still in Hand-work. Its first summary, at 13:29:13 PT, opens `🧹 hygiene: summary 37612657c36b · 13:29 PT`:
+  - Green Light: `cleared` DRE-5036 and DRE-3696. `left` DRE-5765, DRE-5519, DRE-5464, DRE-5035 and DRE-3698, each with its recommendation.
+  - Todo and proofs: `left` rows, among them DRE-5724, DRE-5346, DRE-5232, DRE-5077 and DRE-5072.
+
+**Does this pass open the window? No.** The card says:
+- "let the clock run live for one working day — twenty-four scheduled passes";
+- "read the standing card and the receipts after each pass";
+- criterion 1: "On the live board, over one working day, the operator observes the agent clear at least one row in each lane … and no person acting on that row".
+
+"The clock" is the hourly schedule, and the day is counted in scheduled passes. A hand dispatch is not the clock. The window therefore opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT. The 12:37 slot never fired, and the 13:37 slot had not fired by 13:38 PT, so that is still pending.
+
+**Does its evidence count toward the per-lane criteria? Not toward criterion 1.** Criterion 1 asks for rows cleared "over one working day", which is the 24 scheduled passes, and this pass came before them. It was also started by a person (`smeed652`), which is exactly what "no person acting" is meant to exclude. It is recorded here because it is the first live evidence that the Green Light lane clears end to end: receipt, lane move and summary. If no scheduled pass in the window clears a Green Light row, the card's own extension rule applies to that lane, and this pass does not replace it. For criteria 3 and 4, the summary it posted is the standing card's first, and the card still carries nothing but that summary and the comment it was created with.
 
 ## 2. The standing card
 
