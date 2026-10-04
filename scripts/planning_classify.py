@@ -68,6 +68,15 @@ becomes a `roll-up` and the stamp's **Why:** line names it after the literal
 contradiction the model has to resolve, and an upgrade here would be a default.
 No seam anywhere and the decision is what it was, byte for byte.
 
+Except under a roll-up (DRE-5800). A child epic the split route filed names
+the gate in front of it in its own body — "after seven clean days live" — and
+that gate is the parent's seam, already cut. The floor read it as a seam inside
+each child of DRE-5770 and sent both back into the split route, while the
+model's own reason said "not a roll-up". So when the card's parent is stamped
+`roll-up` (`roll_up_parent`), the floor is off: the model's `epic` stands, with
+the parent named in its reason, and only a `roll-up` the model itself answered
+makes a child one — nesting is still allowed, on the model's reading alone.
+
 The CEO's rule of 2026-09-23 (DRE-4699): a roll-up is never approved as a plan
 of its own. `planning_route` hands it to the planner, which splits it into child
 epics under the card (each a native `[EPIC]` sub-issue, the second blocked on
@@ -259,6 +268,13 @@ SHAPE_ROLL_UP = "roll-up"
 SEAM_MARK = "observation-gated seam:"
 SEAM_RULE = ("the seam rule (DRE-3244) splits this into child epics under this "
              "card, the second blocked on the first")
+
+# What an epic under a roll-up says when it names the gate in front of it
+# (DRE-5800). Never carries SEAM_MARK: the seam is the parent's, and a child
+# stamp carrying the literal would read as a seam inside the child.
+CHILD_NOTE = ("a child epic of the roll-up {parent}: the gate it names is the "
+              "parent's, already cut between the siblings, so it is not read as "
+              "a seam inside this epic")
 
 # How much of the sentence that fired comes back as evidence. A sentence, not a
 # section: it rides a Linear comment a person reads, beside the model's own
@@ -1495,12 +1511,14 @@ def classify(card: dict, *, call=None, model: str | None = None,
     # asked for. Every real Claude Code success bills its `modelUsage`, so this
     # falls back only for the plain-string `call` seam.
     decision = parse(answer.text, doc=doc, model=answer.model or answered_on)
-    decision = seam_decision(decision, card.get("description") or "")
+    decision = seam_decision(decision, card.get("description") or "",
+                             roll_up_parent=card.get("roll_up_parent"))
     return dataclasses.replace(decision, answered=True, asked=model,
                                fell_from=fell_from, fell_because=because)
 
 
-def seam_decision(decision: Decision, body: str) -> Decision:
+def seam_decision(decision: Decision, body: str, *,
+                  roll_up_parent: str | None = None) -> Decision:
     """The seam rule applied to a read answer (DRE-3244, DRE-3394).
 
     An `epic` cut at an observation-gated seam is a `roll-up`: it is split into
@@ -1523,10 +1541,28 @@ def seam_decision(decision: Decision, body: str) -> Decision:
     No seam anywhere and the decision comes back untouched, byte for byte in
     the `why`: the stamp on an ordinary epic must not move because this reader
     exists.
+
+    A child epic of a roll-up (`roll_up_parent`, DRE-5800) is never upgraded.
+    The split planner writes the gate in front of each child into its
+    description — "after seven clean days live" — and that gate is the
+    PARENT's seam, between the siblings, already cut. Read as a seam inside the
+    child it sent DRE-5771 and DRE-5773 back into the split route while the
+    model's own reason said "not a roll-up". So under a roll-up the model's
+    shape stands: its `epic` is kept, with the parent named in the reason, and
+    its `roll-up` (nesting is allowed) carries only the seam the model named.
     """
     if decision.shape not in (SHAPE_EPIC, SHAPE_ROLL_UP):
         return decision
-    seam = decision.seam or seam_evidence(body)
+    if roll_up_parent:
+        if decision.shape == SHAPE_EPIC:
+            if not (decision.seam or seam_evidence(body)):
+                return decision
+            note = CHILD_NOTE.format(parent=roll_up_parent)
+            return dataclasses.replace(
+                decision, seam=None, why=f"{decision.why.strip()} — {note}")
+        seam = decision.seam
+    else:
+        seam = decision.seam or seam_evidence(body)
     if not seam:
         return decision
     seam = " ".join(str(seam).split())
@@ -1604,6 +1640,9 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
     receipt = planning_shape.return_receipt(bodies)
     if receipt is not None:
         card = dict(card, returned=receipt)
+    parent = roll_up_parent(lops, identifier, doc=doc)
+    if parent is not None:
+        card = dict(card, roll_up_parent=parent)
     decision = classify(card, call=call, model=model, doc=doc)
     if decision.transport:
         # DRE-3074. A call that never reached a model buys one more run, off the
@@ -1643,6 +1682,31 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         # classified either way, and theirs is the one that stands.
         print(f"{identifier}: not stamping — {refusal}")
     return decision
+
+
+PARENT_QUERY = """query($id: String!) {
+  issue(id: $id) { parent { identifier } }
+}"""
+
+
+def roll_up_parent(lops, identifier: str, *, doc: dict | None = None) -> str | None:
+    """The roll-up this card is a child epic of, or None (DRE-5800).
+
+    The parent counts only when its own thread reads as one `roll-up` stamp —
+    the stamp the split route starts from, written before any child exists. A
+    parent with no stamp, another shape, or a stamp that cannot be read is not
+    known to be a roll-up, and the card keeps the seam floor it always had.
+    """
+    issue = (lops.gql(PARENT_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    parent = (issue.get("parent") or {}).get("identifier")
+    if not parent:
+        return None
+    try:
+        shape = planning_shape.shape_on(
+            lops.comment_bodies(parent, whole_thread=True), doc)
+    except (planning_shape.ConflictingShapes, planning_shape.UnknownShape):
+        return None
+    return parent if shape == SHAPE_ROLL_UP else None
 
 
 def returned_why(receipt: str) -> str:
