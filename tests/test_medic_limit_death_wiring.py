@@ -84,8 +84,11 @@ case "$*" in
     exec "$REAL_PYTHON" "$REAL_DEAD_RUN" "${ARGS[@]}" ;;
   *linear_ops.py\ dump-comments*)
     printf '%s\n' "${FAKE_COMMENTS:-[]}"; exit 0 ;;
-  *linear_ops.py\ comment*)
-    exit "${FAKE_COMMENT_RC:-0}" ;;
+  *limit_death_record.py\ post*)
+    # DRE-5837: the marker write, retried, with the run's own record as the
+    # fallback. Answers the output line the real command prints.
+    if [ "${FAKE_COMMENT_RC:-0}" != "0" ]; then echo "marker=refused"; else echo "marker=written"; fi
+    exit 0 ;;
 esac
 exit 0
 """
@@ -191,7 +194,7 @@ def _decide_call(result: dict) -> str:
 
 
 def _comment_calls(result: dict) -> list:
-    return [c for c in result["calls"] if "linear_ops.py comment" in c]
+    return [c for c in result["calls"] if "limit_death_record.py post" in c]
 
 
 # ── 1. the invocation ────────────────────────────────────────────────────────
@@ -302,11 +305,14 @@ class MarkerTest(unittest.TestCase):
 
     def test_a_refused_marker_write_does_not_fail_the_step(self):
         """Under a Linear limit the marker write itself can be refused. The
-        step says so and stays green; the retry is still blocked."""
+        step stays green, the retry is still blocked, and it publishes
+        `marker=refused` so the run keeps its own record of the death
+        (DRE-5837) — never a request to re-enter the stage by hand."""
         result = run_step(comment_rc=1)
         self.assertEqual(0, result["rc"], result["text"])
         self.assertIn("limit=true", result["outputs"])
-        self.assertIn("::warning", result["text"])
+        self.assertIn("marker=refused", result["outputs"])
+        self.assertNotIn("by hand", result["text"])
 
 
 # ── 3. anything else ─────────────────────────────────────────────────────────
