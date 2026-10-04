@@ -39,7 +39,8 @@ case "$*" in
 esac
 """
 RECORD = {"headRefName": "agent/DRE-7-x", "headRefOid": "a" * 40, "baseRefName": "main",
-          "body": "Implements DRE-7.", "changedFiles": 2, "additions": 10, "deletions": 2}
+          "body": "Implements DRE-7.", "changedFiles": 2, "additions": 10, "deletions": 2,
+          "isDraft": False}
 
 
 def _steps(wf: str, job: str) -> list[dict]:
@@ -135,8 +136,10 @@ class TheReviewWiringTest(unittest.TestCase):
 
     def test_the_job_names_the_record_s_fields_once(self):
         fields = set(_job_env("qa-review.yml", "review")["PR_RECORD_FIELDS"].split(","))
+        # isDraft (DRE-5801): Decide review skips a draft off the same record.
         self.assertEqual(fields, {"headRefName", "headRefOid", "baseRefName",
-                                  "changedFiles", "additions", "deletions"})
+                                  "changedFiles", "additions", "deletions",
+                                  "isDraft"})
 
     def test_the_content_id_binds_the_sha_the_verdict_binds(self):
         """DRE-2340: the compare record is keyed by BASE...SHA, so whatever the
