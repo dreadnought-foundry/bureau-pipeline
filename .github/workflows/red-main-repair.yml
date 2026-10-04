@@ -653,7 +653,8 @@ jobs:
       # reusable workflow that runs a model and fails the build when one
       # writes no receipt.
       #
-      # LAST STEP IN THE JOB, after the Report's loud failure on purpose: a
+      # AFTER THE REPORT'S LOUD FAILURE on purpose (only the working-log
+      # upload, which changes no conclusion, follows it): a
       # repair that produced neither a PR nor an escalation is exactly the
       # death this receipt exists to name, and a receipt taken before it would
       # record a job that had not failed yet. `always()` +
@@ -691,3 +692,39 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # THE RUN'S WORKING LOG (DRE-5353, after DRE-4269). The repair agent's
+      # transcript, scrubbed and put straight into our own store over OIDC —
+      # never an Actions artifact and never echoed, because several of the
+      # repos these runs happen in are public. The execution file is the one
+      # the death-cause receipt above reads.
+      #
+      # `always()` + `continue-on-error`, and `upload_agent_log.py` exits 0 on
+      # every path of its own: the runs worth keeping are the ones that died,
+      # and keeping a log must never change this job's conclusion — the
+      # Report's red above is the medic's signal and stays. Anything that
+      # stops it — a refused scrub, no OIDC token (a calling stub that grants
+      # no `id-token: write`), a store that does not trust this workflow yet
+      # (agent-bureau's DRE-5351, until it deploys), no AWS CLI, a log over
+      # the single-part cap — is recorded as a GAP on the run instead. A
+      # debounced or budget-exhausted run never reached the model, has no
+      # execution file, and records the same gap.
+      #
+      # The job's secrets arrive on STDIN, so the scrub can redact each one by
+      # value; never as an argument, which would reach the process table. The
+      # calling stub grants `id-token: write`; this file declares no
+      # `permissions:` block, because a called job asking for more than its
+      # caller granted fails the whole run at startup. Every `${{ }}` is in
+      # env:, never in the script.
+      - name: Keep the run's working log
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          EFFORT_ARG: ${{ steps.model.outputs.effort_arg }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          printf '%s' "$SECRETS_JSON" \
+            | python3 .bureau-pipeline/scripts/upload_agent_log.py \
+                --log-file "$EXEC_FILE" $EFFORT_ARG || true

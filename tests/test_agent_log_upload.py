@@ -12,9 +12,9 @@ WHAT THIS FILE PINS, and why each half is here:
     already answers "which reusable workflow jobs run a model" from the files
     themselves (DRE-4340), so this guard asks it rather than keeping a second
     list that drifts. Every job it finds must be classified — either it uploads
-    its working log, or it is named here with the reason it does not. Add a
-    seventh agent workflow and this test fails until someone decides which.
-  * THE SHAPE of the step, on each of the six: `always()`, `continue-on-error`,
+    its working log, or it is named here with the reason it does not. Add an
+    eighth agent workflow and this test fails until someone decides which.
+  * THE SHAPE of the step, on each of the seven: `always()`, `continue-on-error`,
     after the last model step, no `${{ }}` in the body (the 21,000-character
     expression ceiling, DRE-3484) — and the run's own `effort_arg` handed to
     the upload, on every job but those `EFFORT_PENDING` names (DRE-5356).
@@ -70,11 +70,14 @@ sys.path.insert(0, str(SCRIPTS))
 import check_death_receipts as receipts  # noqa: E402
 from model_fallback import EFFORT_LEVELS  # noqa: E402
 
-#: The six reusable workflow jobs that run an agent for a card and so keep a
-#: working log. The same six as `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
+#: The seven reusable workflow jobs that run an agent for a card and so keep a
+#: working log. The same seven as `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
 #: agent-bureau's `infra/lib/agent-log-stack.ts` — the upload roles trust
 #: exactly these `job_workflow_ref`s (DRE-4343), so a workflow added here and
 #: not there is refused at AssumeRoleWithWebIdentity and shows up only as gaps.
+#: The epic's six (engineer, fix, critic, verifier, planner, medic), and the
+#: red-main repair agent, reviewed for an upload role and added by DRE-5353 —
+#: agent-bureau's DRE-5351 trusts it at the store.
 UPLOADS = {
     ("agent-task.yml", "execute"),
     ("agent-fix.yml", "fix"),
@@ -82,16 +85,15 @@ UPLOADS = {
     ("verify.yml", "verify"),
     ("plan.yml", "plan"),
     ("medic.yml", "diagnose"),
+    ("red-main-repair.yml", "repair"),
 }
 
 #: Jobs that run a model and deliberately keep no working log, each with the
 #: reason. Kept as data so the discovery above can be exhaustive.
 NOT_UPLOADING = {
-    # The epic names the six agent runs (engineer, fix, critic, verifier,
-    # planner, medic). These two also run the vendor action and are left out on
-    # purpose — the agent-log roles do not trust them, and nobody has reviewed
-    # them for holding one (agent-log-stack.ts, DRE-4343).
-    ("red-main-repair.yml", "repair"),
+    # The model trial also runs the vendor action and is left out on purpose —
+    # the agent-log roles do not trust it, and nobody has reviewed it for
+    # holding one (agent-log-stack.ts, DRE-4343).
     ("model-trial.yml", "trial"),
     # The groomer's judged read is a model call through `planning_classify`,
     # not an agent run: there is no transcript, which is why its own death
@@ -103,10 +105,6 @@ NOT_UPLOADING = {
     # the output, uploaded as `groom-verdict-<card>` — and the agent-log roles
     # carry no trust-list entry for it (agent-log-stack.ts, DRE-4343).
     ("groomer.yml", "verify"),
-    # NOTE on red-main-repair: it IS a real agent run against a card, so
-    # "nobody has reviewed it" is a deferral, not a decision. The epic
-    # DRE-4267 owns that decision; a comment on the epic records it, so it is
-    # not a deferral with no owner (standards/design-parity.md's ledger rule).
 }
 
 #: Uploading jobs whose upload is not yet handed the run's effort (DRE-5356).

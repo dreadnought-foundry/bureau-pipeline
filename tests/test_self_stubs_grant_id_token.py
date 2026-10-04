@@ -11,12 +11,13 @@ looks shipped while uploading nothing.
 Which callers need it is DISCOVERED from each workflow's `uses:` line, never
 listed: the stub nobody remembered is exactly the one still missing the grant.
 
-The six reusables are the ones the upload roles trust
+The seven reusables are the ones the upload roles trust
 (`BUREAU_PIPELINE_AGENT_WORKFLOWS` in agent-bureau's
 `infra/lib/agent-log-stack.ts`, DRE-4343). That list lives in another repo and CI
 checks out one, so it is a COPY here under the two-copies rule: change one,
-change the other. `red-main-repair.yml` and `model-trial.yml` also run an agent
-and are deliberately absent from both — nobody has reviewed them for upload.
+change the other. `red-main-repair.yml` joined both after it was reviewed for
+upload (DRE-5353 here, DRE-5351 in agent-bureau). `model-trial.yml` also runs an
+agent and is deliberately absent from both — nobody has reviewed it for upload.
 """
 
 import unittest
@@ -34,6 +35,7 @@ UPLOAD_TRUSTED_REUSABLES = (
     "verify.yml",
     "plan.yml",
     "medic.yml",
+    "red-main-repair.yml",
 )
 
 
@@ -74,14 +76,16 @@ class SelfStubsGrantIdTokenTest(unittest.TestCase):
     def test_the_discovery_finds_the_stubs_it_exists_for(self):
         # Guard the guard: a discovery that finds nothing passes everything, and
         # one that silently narrows passes almost everything. The count is a
-        # tripwire, not the source of truth — a sixth caller is meant to trip it
-        # so whoever adds it grants the token too.
+        # tripwire, not the source of truth — a seventh caller is meant to trip
+        # it so whoever adds it grants the token too.
         callers = _callers()
         self.assertIn("self-agent-task.yml", callers)
         self.assertEqual(callers.get("pr-review.yml"), ["qa-review.yml"])
         self.assertEqual(
-            len(callers), 5,
-            f"discovery found {sorted(callers)}; this repo has five stubs calling "
+            callers.get("self-red-main-repair.yml"), ["red-main-repair.yml"])
+        self.assertEqual(
+            len(callers), 6,
+            f"discovery found {sorted(callers)}; this repo has six stubs calling "
             f"a trusted reusable. A new one needs `id-token: write` too — update "
             f"this count once it has it.",
         )
