@@ -5234,8 +5234,93 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The planner's
-      # transcript, scrubbed and put straight into our own store over OIDC —
+      # WHICH MODEL STEP'S TRANSCRIPT THE RUN KEPT (DRE-5350). Every model step
+      # in this job runs `anthropics/claude-code-action`, and the action writes
+      # every step's transcript to ONE fixed path — `EXECUTION_FILENAME`,
+      # `claude-execution-output.json` under `$RUNNER_TEMP`, in its
+      # `base-action/src/execution-file.ts`, with no step id in the name. So the
+      # working log below is always the LAST model step's transcript, whichever
+      # expression reads it. This step says which step that was, and the effort
+      # it was given: the model steps take their effort from different
+      # model-selection steps, so no single `effort_arg` is true for the job.
+      #
+      # It reads `outcome`, not `execution_file`, as the death receipt's
+      # MODEL_RAN does: a step that died after the agent started has still
+      # written the file. A step that SUCCEEDED hands its own effort on
+      # (`certain=true`). A step that failed or was cancelled is named with
+      # `certain=false` and no `effort_arg`: one that died before the agent
+      # started wrote nothing, and the file on disk is an earlier step's, and
+      # `outcome` cannot tell the two apart — the effort contract says never a
+      # guessed value. No model step ran, nothing is written.
+      #
+      # One `OUTCOME_<id>`/`EFFORT_<id>` pair per model step, each `EFFORT_`
+      # reading what that step's own `claude_args` reads, and `ORDER` listing
+      # the ids in workflow order — tests/test_plan_working_log.py holds this to
+      # the steps the file actually has. Every `${{ }}` is in env:, never in the
+      # script.
+      - name: Which model step's transcript the run kept
+        id: kept
+        if: always()
+        continue-on-error: true
+        env:
+          OUTCOME_oocritic: ${{ steps.oocritic.outcome }}
+          EFFORT_oocritic: ${{ steps.oomodel.outputs.effort_arg }}
+          OUTCOME_oorevise: ${{ steps.oorevise.outcome }}
+          EFFORT_oorevise: ${{ steps.model.outputs.effort_arg }}
+          OUTCOME_claude: ${{ steps.claude.outcome }}
+          EFFORT_claude: ${{ steps.model.outputs.effort_arg }}
+          OUTCOME_claude_retry: ${{ steps.claude_retry.outcome }}
+          EFFORT_claude_retry: ${{ steps.plan_cap.outputs.effort_arg }}
+          OUTCOME_prea: ${{ steps.prea.outcome }}
+          EFFORT_prea: ${{ steps.premodel.outputs.effort_arg }}
+          OUTCOME_replan: ${{ steps.replan.outcome }}
+          EFFORT_replan: ${{ steps.model.outputs.effort_arg }}
+          OUTCOME_replan_retry: ${{ steps.replan_retry.outcome }}
+          EFFORT_replan_retry: ${{ steps.replan_cap.outputs.effort_arg }}
+          OUTCOME_preb: ${{ steps.preb.outcome }}
+          EFFORT_preb: ${{ steps.premodel.outputs.effort_arg }}
+          OUTCOME_posta: ${{ steps.posta.outcome }}
+          EFFORT_posta: ${{ steps.postmodel.outputs.effort_arg }}
+          OUTCOME_postreplan: ${{ steps.postreplan.outcome }}
+          EFFORT_postreplan: ${{ steps.model.outputs.effort_arg }}
+          OUTCOME_postreplan_retry: ${{ steps.postreplan_retry.outcome }}
+          EFFORT_postreplan_retry: ${{ steps.postreplan_cap.outputs.effort_arg }}
+          OUTCOME_rollup: ${{ steps.rollup.outcome }}
+          EFFORT_rollup: ${{ steps.model.outputs.effort_arg }}
+          OUTCOME_rollup_retry: ${{ steps.rollup_retry.outcome }}
+          EFFORT_rollup_retry: ${{ steps.rollup_cap.outputs.effort_arg }}
+          ORDER: oocritic oorevise claude claude_retry prea replan replan_retry preb posta postreplan postreplan_retry rollup rollup_retry
+        run: |
+          read -ra IDS <<< "$ORDER"
+          for (( i=${#IDS[@]}-1; i>=0; i-- )); do
+            ID="${IDS[i]}"
+            OUTCOME_VAR="OUTCOME_$ID"
+            OUTCOME="${!OUTCOME_VAR:-}"
+            case "$OUTCOME" in
+              ''|skipped) continue ;;
+            esac
+            if [ "$OUTCOME" = success ]; then
+              EFFORT_VAR="EFFORT_$ID"
+              EFFORT="${!EFFORT_VAR:-}"
+              {
+                echo "step_id=$ID"
+                echo "effort_arg=$EFFORT"
+                echo "certain=true"
+              } >> "$GITHUB_OUTPUT"
+              echo "kept model step: $ID ${EFFORT:-(no effort)}" >> "$GITHUB_STEP_SUMMARY"
+            else
+              {
+                echo "step_id=$ID"
+                echo "certain=false"
+              } >> "$GITHUB_OUTPUT"
+              echo "kept model step: $ID (failed — transcript ownership unconfirmed, no effort stamped)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            break
+          done
+
+      # THE RUN'S WORKING LOG (DRE-4269, epic DRE-4267). The last model
+      # step's transcript, by the action's design (the step above names it),
+      # scrubbed and put straight into our own store over OIDC —
       # never an Actions artifact and never echoed, because several of the
       # repos these runs happen in are public. The execution file is the one
       # the receipt above reads; this job runs several model steps and keeps
@@ -5260,12 +5345,13 @@ jobs:
         continue-on-error: true
         env:
           CLAUDE_EXECUTION_FILE: ${{ steps.plan_done.outputs.execution_file || steps.claude.outputs.execution_file }}
+          EFFORT_ARG: ${{ steps.kept.outputs.effort_arg }}
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
           printf '%s' "$SECRETS_JSON" \
             | python3 .bureau-pipeline/scripts/upload_agent_log.py \
-                --log-file "$EXEC_FILE" || true
+                --log-file "$EXEC_FILE" $EFFORT_ARG || true
 
   # The plan artifact's build output and its publication (DRE-2720).
   #

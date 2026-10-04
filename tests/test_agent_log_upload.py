@@ -111,9 +111,7 @@ NOT_UPLOADING = {
 #: plan.yml's one job runs thirteen model steps and keeps only the last one's
 #: transcript, so no single `effort_arg` is true for it until DRE-5350 adds the
 #: step that resolves which ran last — and DRE-5350 empties this.
-EFFORT_PENDING = {
-    ("plan.yml", "plan"),
-}
+EFFORT_PENDING = set()
 
 #: What the step's `run:` body must call. Matched on the call, not on a step
 #: name — names are prose, this is the contract.
