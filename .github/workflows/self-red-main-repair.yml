@@ -43,6 +43,10 @@ permissions:
   actions: read
   contents: write
   pull-requests: write
+  # DRE-5353: the repair agent's scrubbed log uploads on a short-lived AWS
+  # login, and a reusable workflow can hold no more permission than the stub
+  # that calls it — so the grant has to live here.
+  id-token: write
 
 jobs:
   call:
