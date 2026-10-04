@@ -19,7 +19,11 @@ name: QA Review
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
+    # `ready_for_review` (DRE-5801): the critic skips a draft, so marking it
+    # ready is the event that starts its review. A product-repo stub needs the
+    # same type: one that does not list it reviews a PR marked ready only on
+    # its next push, because no sweep dispatches a review that never ran.
+    types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:

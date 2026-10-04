@@ -248,7 +248,8 @@ jobs:
       # never `body`: the critic's context reads the CURRENT body live, a
       # copy read earlier in the job is strictly worse (DRE-3005,
       # tests/test_fix_body_before_push.py), so the two body reads stay.
-      PR_RECORD_FIELDS: headRefName,headRefOid,baseRefName,changedFiles,additions,deletions
+      # `isDraft` (DRE-5801): Decide review skips a draft off this same read.
+      PR_RECORD_FIELDS: headRefName,headRefOid,baseRefName,changedFiles,additions,deletions,isDraft
     steps:
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
@@ -341,6 +342,11 @@ jobs:
       # never be wider than the carry); a blip in any reads as "no proof"
       # and the review runs, so the expensive mistake stays the safe
       # direction.
+      # DRE-5801: a DRAFT is not reviewed, on either event. On 2026-10-04
+      # five hand-built drafts drew REQUEST_CHANGES, the fix agent disputed
+      # each, and each card was parked in Triage. The flag is the PR record's
+      # own `isDraft` (the payload's `draft` when the read fails), and marking
+      # the PR ready fires `ready_for_review`, which reviews it normally.
       - name: Decide review
         id: decide
         env:
@@ -348,13 +354,23 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # The event's own copy of the draft flag, the fallback for a record
+          # read that failed. Empty on a dispatch, which carries no payload.
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           # The same App identity the verdict is posted under, so the
           # authorship filter here is the one merge-gate enforces.
           QA_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
         run: |
+          # A draft is skipped whatever started the run (DRE-5801). An
+          # unreadable flag reads as not a draft — the review runs.
+          DRAFT=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr "$PR" --fields "$PR_RECORD_FIELDS" --field isDraft 2>/dev/null || true)
+          [ -n "$DRAFT" ] || DRAFT="${PR_DRAFT:-}"
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "review=true" >> "$GITHUB_OUTPUT"
-            echo "workflow_dispatch — reviewing on request"
+            set +e
+            OUT=$(python3 "$PIPELINE_DIR"/scripts/should_review_pr.py --requested --is-draft "$DRAFT")
+            set -e
+            echo "$OUT"
+            echo "$OUT" | grep -E '^(review|draft)=' >> "$GITHUB_OUTPUT" || true
             exit 0
           fi
           # Every read here is fail-SOFT: this step decides whether to
@@ -396,10 +412,11 @@ jobs:
             --comments-file /tmp/decide-comments.json \
             --compare-file /tmp/decide-compare.json \
             --pr-commits-file /tmp/decide-commits.json \
-            --qa-login "$QA_LOGIN")
+            --qa-login "$QA_LOGIN" \
+            --is-draft "$DRAFT")
           set -e
           echo "$OUT"
-          echo "$OUT" | grep -E '^(review|carried_sha|content_id)=' >> "$GITHUB_OUTPUT" || true
+          echo "$OUT" | grep -E '^(review|carried_sha|content_id|draft)=' >> "$GITHUB_OUTPUT" || true
           # The head the decision was made about — the skip path re-publishes
           # the review check against exactly this commit.
           echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -2234,7 +2251,13 @@ jobs:
         # with "not advancing". A workflow_dispatch re-review carries no
         # `action` at all and is skipped here, which is correct — an operator
         # re-review is not a pull request opening.
-        if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened')
+        #
+        # NEVER A DRAFT, and READY_FOR_REVIEW is the opening (DRE-5801). A
+        # draft is not "being checked" — it is not reviewed, and In Review's
+        # evidence is not there yet; the hand-built sweep draws the same line
+        # (reconcile.move_hand_built_to_review). Marking it ready is the
+        # moment it is, so that event moves the card.
+        if: always() && !cancelled() && (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'ready_for_review') && !github.event.pull_request.draft
         env:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}

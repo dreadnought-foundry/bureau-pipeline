@@ -46,10 +46,22 @@ Called from qa-review.yml's "Decide review" step:
       [--compare-file <compare/{base}...{head}>] \
       [--pr-commits-file <pulls/{pr}/commits>] [--qa-login <login>]
 
+DRE-5801 adds the other skip that is not a guess: GitHub's own `isDraft`
+for the PR (`--is-draft`). A draft is a person's work in progress, and the
+rest of the pipeline already reads it that way — the merge gate never merges
+one (DRE-3467), the reconcile sweeps skip them. On 2026-10-04 the critic was
+the one that did not: five hand-built drafts drew REQUEST_CHANGES, the fix
+agent disputed each finding, and each card was parked in Triage for a person
+to move back to Hand-work. Marking the PR ready for review fires the review
+(`ready_for_review` in the stub), so the skip only waits. It applies to a
+dispatched re-review too (`--requested`), the second way a critic reaches a
+draft. An unreadable flag reviews — this step's fail-soft direction.
+
 Exit 0 → review (run the critic). Exit 1 → skip. Prints `review=true|false`
 on stdout for the workflow to capture as a step output, plus `carried_sha=`
-and `content_id=` on a skip so the workflow can re-publish the head-bound
-review check against the commit the verdict was earned on.
+and `content_id=` on a carry skip so the workflow can re-publish the
+head-bound review check against the commit the verdict was earned on, or
+`draft=true` on a draft skip, which publishes nothing.
 """
 
 from __future__ import annotations
@@ -147,6 +159,7 @@ def should_review(
     qa_login: str = "",
     head_content_id: str | None = None,
     pr_commit_shas=frozenset(),
+    is_draft: bool = False,
 ) -> bool:
     """True — the critic reviews every pull request (DRE-2250), unless a
     standing APPROVE already binds this head's content (DRE-2340).
@@ -193,7 +206,14 @@ def should_review(
     The skip is a strict SUBSET of the gate's carry, by construction (see
     carried_approve): skipping a review the gate will not honour deadlocks
     the PR, because nothing else ever orders that review.
+
+    A DRAFT IS NOT REVIEWED (DRE-5801). `is_draft` is GitHub's own flag, the
+    visible signal a person sets, so it is not a guess either. Nothing waits
+    on a verdict for a draft — the gate never merges one — and marking it
+    ready fires the review that skipping here deferred.
     """
+    if is_draft:
+        return False
     return carried_approve(
         comments, qa_login, head_content_id, pr_commit_shas
     ) is None
@@ -243,12 +263,41 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--qa-login", default="",
                     help="trusted verdict author, e.g. "
                          "agent-bureau-qa-bot[bot]; omitted = no carry")
+    ap.add_argument("--is-draft", default="",
+                    help="GitHub's own isDraft for the PR, `true`/`false` "
+                         "(DRE-5801); a draft is skipped, anything else "
+                         "unreadable reviews")
+    ap.add_argument("--requested", action="store_true",
+                    help="a dispatched re-review: reviewed on request unless "
+                         "the PR is a draft — no carry is consulted")
     return ap
+
+
+def _draft(raw: str) -> bool:
+    """True only for GitHub's literal `true`. Empty, `null` or anything else
+    is an unreadable flag, and an unreadable flag reviews: skipping on a
+    guess is the expensive mistake here, not reviewing."""
+    return (raw or "").strip().lower() == "true"
 
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     branch = args.branch
+    # DRE-5801: a draft first, on every event — before any carry is read,
+    # because a draft skip re-publishes nothing.
+    if _draft(args.is_draft):
+        print("review=false")
+        print("draft=true")
+        print(
+            f"skipping {branch or 'this pull request'!r} — it is a draft, a "
+            "person's work in progress; marking it ready for review starts "
+            "the review (DRE-5801)"
+        )
+        return 1
+    if args.requested:
+        print("review=true")
+        print("workflow_dispatch — reviewing on request")
+        return 0
     # DRE-4139: qa-review.yml fetches this record with the same call shape
     # merge-gate.yml uses, so the skip and the gate can never disagree about
     # the standing verdict — which now means every page of it, arriving as
