@@ -2969,7 +2969,9 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
        runner, own-repo only because the sweep's token reaches only its own
        owner. An unreadable status keeps the claim: the slot is held for at
        most the TTL, and a second dispatch is never the fallback.
-    2. FREE SLOTS. While one is free, the earliest waiting card recorded
+    2. FREE SLOTS. While one is free, the first waiting card in line (an
+       approval, then the order the CEO set on the Overview, then the earliest
+       arrival — `planner_queue.ordered_ledger`, DRE-5807) recorded
        against THIS repo is fired through `plan_run.fire` with the card
        record the board read returned, its recorded trigger and its recorded
        reason, on the plan event whatever its labels (DRE-5366) — never
@@ -3010,7 +3012,9 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
     cards = active_cards(swept) + (active_cards(extra) if extra else [])
     records = {card["identifier"]: card for card in cards}
     now = datetime.now(UTC)
-    line = planner_queue.ledger(cards, now)
+    # In the order the CEO set on the Overview, read through the console's
+    # door, then arrival order (DRE-5807) — the order `next` serves in.
+    line = planner_queue.ordered_ledger(cards, now)
 
     def release(claim, because: str) -> bool:
         try:

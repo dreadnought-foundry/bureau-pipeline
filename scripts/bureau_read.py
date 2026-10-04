@@ -66,6 +66,11 @@ because the door serves relations when it is left out):
   GET /cards/<id>/dependents?lanes=<L>&comments=50&relations=1
       — the cards <id> blocks, in the lanes asked, as board nodes
   GET /workflow-states
+  GET /planning-order
+      — the planner line's order (DRE-5807), outside the envelope below:
+        `{"order": ["DRE-…", …], "set_at", "set_by", "read_at"}`. Read
+        whatever the mode, and a failure never stops the door for the run
+        (`planning_order()` says why).
 
 Envelope (HTTP 200 whenever the caller is authenticated):
   {"schema": "bureau-read/1", "verdict": "FRESH"|"UNKNOWN",
@@ -771,6 +776,90 @@ def workflow_states(*, max_age: int) -> DoorRead:
         raise _malformed("/workflow-states answered no states")
     _state["served"] += 1
     return read
+
+
+# ── The planner line's order (DRE-5807) ─────────────────────────────────────
+#: `GET /planning-order` → `{"order": ["DRE-…", …], "set_at", "set_by",
+#: "read_at"}` — the order the CEO set by dragging the Overview's In line
+#: cards (agent-bureau DRE-5782). An empty order means arrival order.
+PLANNING_ORDER_PATH = "/planning-order"
+
+
+@dataclass
+class PlanningOrder:
+    """The order the CEO set for the planner line: identifiers, first first."""
+
+    order: list
+    set_at: str | None = None
+    set_by: str | None = None
+    read_at: str | None = None
+
+
+def _text_or_none(value) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def planning_order() -> PlanningOrder:
+    """The planner line's order, or ReadUnknown. Never part of one.
+
+    Not one of the board reads above, and it does not follow two of their
+    rules, on purpose:
+
+    * It is asked whatever `BUREAU_READ` says. The mode is the board reads'
+      rollout switch — off, then shadow against Linear, then on — and the
+      order has no Linear copy to shadow or fall back to. The door's address
+      (`BUREAU_READ_URL`) and an OIDC token are what it needs; without either
+      it is ReadUnknown, and the planner line runs in arrival order.
+    * A failure here never stops the door for the run's other reads. The
+      endpoint is new, so a door that predates it answers 404, and the board
+      reads must not pay for that. It is asked once per run, so one slow
+      answer costs one wait. It still honors the rules that protect the door:
+      a door that already stopped answering this run is not asked again, and
+      a `pull_request` run never asks (the door refuses those tokens, S7).
+
+    No freshness header: the order is the console's own record, not a copy of
+    Linear's. Nothing here touches the run's counters or prints anything: the
+    caller (`planner_queue.planning_order`) says the one line.
+    """
+    if _state["disabled"] is not None:
+        raise ReadUnknown("unavailable", f"the door stopped answering earlier this "
+                          f"run ({_state['disabled']})", unavailable=True)
+    event = os.environ.get(EVENT_ENV, "")
+    if event in REFUSED_EVENTS:
+        raise ReadUnknown("event-refused", f"a {event} run's token is refused by the door",
+                          unavailable=True)
+    try:
+        _base()  # refused BEFORE a token is minted for it
+        token = _token()
+        status, body = _http_get(PLANNING_ORDER_PATH, {}, {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        })
+    except ReadUnknown:
+        raise
+    except Exception as e:  # noqa: BLE001 — network, timeout, TLS: all ReadUnknown
+        reason = "timeout" if isinstance(e, TimeoutError) else "unavailable"
+        raise ReadUnknown(reason, f"{type(e).__name__}: {e}", unavailable=True) from e
+    if status != 200:
+        reason = {401: "refused", 403: "refused", 404: "not-found", 429: "throttled",
+                  503: "closed"}.get(status, "unavailable")
+        text = body.decode("utf-8", "replace")[:200]
+        raise ReadUnknown(reason, f"HTTP {status} {text}", status=status, unavailable=True)
+    try:
+        answer = json.loads(body.decode("utf-8"))
+    except ValueError as e:
+        raise ReadUnknown("malformed", "the answer is not JSON", unavailable=True) from e
+    order = answer.get("order") if isinstance(answer, dict) else None
+    if not isinstance(order, list) or not all(isinstance(i, str) for i in order):
+        raise ReadUnknown("malformed", "the answer carries no `order` list of identifiers",
+                          unavailable=True)
+    wanted = [i.strip().upper() for i in order if i.strip()]
+    return PlanningOrder(
+        order=list(dict.fromkeys(wanted)),
+        set_at=_text_or_none(answer.get("set_at")),
+        set_by=_text_or_none(answer.get("set_by")),
+        read_at=_text_or_none(answer.get("read_at")),
+    )
 
 
 # ── The shadow comparison (item 36, review M6) ──────────────────────────────

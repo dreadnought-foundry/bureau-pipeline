@@ -426,6 +426,14 @@ jobs:
           SENT_BY_RUN: ${{ github.event.client_payload.sent_by_run }}
           # Spelled exactly as the route step spells it.
           REASON: ${{ github.event.client_payload.reason }}
+          # The order the CEO set on the Overview (DRE-5807): a refused run's
+          # place is counted in it. Read through the console's read door —
+          # reconcile.yml's variables; the stub grants `id-token: write`
+          # (DRE-4348). No address, no token, or a door that cannot answer is
+          # arrival order and one log line, never a refused or failed claim.
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
           python3 .bureau-pipeline/scripts/planner_queue.py claim "$CARD" \
             --run-id "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
@@ -5145,6 +5153,12 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # The next card is the first in the order the CEO set on the
+          # Overview, after any approval, then arrival order (DRE-5807) — read
+          # as the claim step above reads it.
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
           python3 .bureau-pipeline/scripts/planner_queue.py next --github-output "$GITHUB_OUTPUT"
 
