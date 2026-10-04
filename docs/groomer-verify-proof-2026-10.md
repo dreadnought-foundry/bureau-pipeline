@@ -92,11 +92,18 @@ The inputs are read off the run itself, never off the command typed. Each job
 log prints its step's `env:` block, so:
 
 ```
-grep -hE ' (CARD|DRY_RUN|LOOKUP_BUDGET): ' obs1/job-*.log | sort -u
+grep -hE ' (CARD|DRY_RUN|LOOKUP_BUDGET): ' $(ls obs1/job-*.log | grep -v '\.verify\.log$') \
+  | awk -F'\t' '{sub(/^[^ ]+ +/, "", $3); print $1 "\t" $3}' | sort -u
 ```
 
-must show `CARD: <the card>`, `DRY_RUN: true` and `LOOKUP_BUDGET:` empty. A
-different card or budget means the id names somebody else's run: stop.
+The verify leg's log is left out on purpose: its steps set `CARD:` to the
+leg's own card, not the run's. The `awk` drops each line's timestamp so
+`sort -u` can dedupe, and keeps the job name, because every line's step
+column reads `UNKNOWN STEP`. The run's inputs are on these lines: `CARD:`
+under the `groom` and `post` jobs, `DRY_RUN:` under `post`, and
+`LOOKUP_BUDGET:` under each `lookup (<owner>)` job. They must show
+`CARD: <the card>`, `DRY_RUN: true` and `LOOKUP_BUDGET:` empty. A different
+card or budget on those lines means the id names somebody else's run: stop.
 
 Two reads the script does not make. `obs1/proposal/verify-targets.json` is the
 PRE-fold targets file: the `groom` job uploads it before any lookup leg runs,
@@ -338,7 +345,9 @@ gh run view $RUN3 -R $R --json databaseId,createdAt,event
 gh run watch $RUN3 -R $R                     # the read-off needs the finished run
 RUN=$RUN3 DAY=2026-10-05 bash docs/evidence/DRE-4973/readoff_morning.sh ./obs3
 # the inputs as the run carries them: CARD set, DRY_RUN true, LOOKUP_BUDGET 0
-grep -hE ' (CARD|DRY_RUN|LOOKUP_BUDGET): ' obs3/job-*.log | sort -u
+# (the verify leg's log is left out: its CARD is the leg's own card, as in §1)
+grep -hE ' (CARD|DRY_RUN|LOOKUP_BUDGET): ' $(ls obs3/job-*.log | grep -v '\.verify\.log$') \
+  | awk -F'\t' '{sub(/^[^ ]+ +/, "", $3); print $1 "\t" $3}' | sort -u
 # the stop's four keys live under `verify`, not at the top level, so summary.txt never prints them
 jq '.verify | {all_lookups_failed, merged_prs_unread, lookups_failed, not_posted_why}' obs3/verified/proposal-verified.json
 # the post step's last lines, and the annotation on the summary page
@@ -351,7 +360,7 @@ gh run list -R $R --workflow "Pipeline Medic" -L 20 --json databaseId,event,crea
 
 | What the card asks for | Reading |
 |---|---|
-| The three inputs (`dry_run`, `lookup_budget`, `card`), as the run's own job logs carry them (the `grep` above), not as typed. A different card or budget means `RUN3` names somebody else's run: stop | ⟨FILL⟩ |
+| The three inputs (`dry_run`, `lookup_budget`, `card`), as the run's own job logs carry them (the `grep` above), not as typed: `CARD:` on the `groom` and `post` lines, `DRY_RUN:` on `post`, `LOOKUP_BUDGET:` on each `lookup (<owner>)` line. A different card or budget on those lines means `RUN3` names somebody else's run: stop | ⟨FILL⟩ |
 | Targets with `lookup: "failed"` and with `lookup: "none"`, with at least one failed. The card says "from the kept `proposal-verified.json`", but on 2026-10-02 the per-card `lookup` field was in each `groom-verdict-*/verdict.json` and not in that file (`grep -c '"lookup"'` on it read 0). Count it with `jq -r .lookup obs3/verdicts/groom-verdict-*/verdict.json \| sort \| uniq -c`, and say which file the count came from | ⟨FILL: N failed, M none⟩. If none failed, this is not the observation: say so and wait for a morning with a file-naming card |
 | Each lookup leg's `groom-lookups: <owner> — 0 card(s) read, 0 request(s) of a budget of 0, <s> s of 300 s` | ⟨FILL: one per owner⟩ |
 | "Post the verified proposal" step green, its last line `groomer: not posted — the lookup failed for every card: no repo answered — …`, and no `dry run — nothing posted` above it | ⟨FILL⟩ |
