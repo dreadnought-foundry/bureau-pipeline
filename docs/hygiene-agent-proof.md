@@ -1,6 +1,6 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: THE WINDOW IS OPEN. It opened at 14:15 PT on 2026-10-04 with the first live scheduled pass, run [37235338544](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37235338544) (the 13:37 slot, `dry_run=false`), and closes after the 24th scheduled live pass. Criterion 5 is met. The agent has been live since 12:58:43 PT, and its first live pass ran by hand at 13:28 PT (§1b).**
+**Status: THE WINDOW IS OPEN. It opened at 14:15 PT on 2026-10-04 with the first live scheduled pass, run [37235338544](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/37235338544) (the 13:37 slot, `dry_run=false`), and closes after the 24th scheduled live pass. The closing rule is the card's own: "let the clock run live for one working day — twenty-four scheduled passes". Criterion 5 is met. The agent has been live since 12:58:43 PT, and its first live pass ran by hand at 13:28 PT (§1b).**
 
 **Expected close, with the arithmetic.**
 - Pass 1 is the 13:37 slot on 10-04, so pass *n* is the slot at 13:37 + (*n* − 1) hours, and pass 24 is the slot at 13:37 + 23 h = **the 12:37 slot on 2026-10-05**.
