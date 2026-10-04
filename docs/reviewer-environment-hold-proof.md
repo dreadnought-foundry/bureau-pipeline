@@ -160,7 +160,7 @@ What can be said without the fixture is the consequence: variant A's replayed 15
 
 The pipeline's own tests at the same commit, Python 3.12, fresh virtualenv from `requirements-dev.txt`: `tests/test_crashed_review_recovery.py` **25 passed**; `tests/test_reviewer_environment_sweep.py` **33 passed**; `tests/test_reviewer_environment.py` **72 passed**.
 
-**A design fact this replay surfaced (not part of this criterion):** `medic.yml`'s own "held after the second death" job cannot fire for this incident's shape. It needs a second *attempt* of a run whose branch names the card, and the sweep's retry is a fresh dispatched run on `main`. For a crashed review, the sweep's hold — the one shown here — is the only hold there is.
+**A design fact this replay surfaced (not part of this criterion):** `medic.yml`'s own "held after the second death" job cannot fire for this incident's shape. It needs a second *attempt* of a run whose branch names the card, and the sweep's retry is a fresh dispatched run on `main`. For a crashed review, the sweep's hold — the one shown here — is the only hold there is. (Since DRE-5802 the sweep's retry re-runs the crashed run, so a second crash is that run's attempt 2 and the medic's hold can fire too. The dispatch shown here is now only the fallback, used when no crashed run is found at the head.)
 
 ### How to re-run it
 

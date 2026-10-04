@@ -8636,16 +8636,79 @@ def _authoritative_review_checks(
     return bound or list(checks)
 
 
-def _post_rereview_receipt(pr: dict) -> None:
+def _crashed_review_run_at_head(sha: str) -> str:
+    """The run id of the NEWEST crashed review run at this head, or "".
+
+    DRE-5802. A crashed `pull_request` review leaves its red `call / review`
+    on the head, and only a new attempt of THAT run replaces it: a
+    workflow_dispatch re-review is attributed to the default branch, so its
+    check lands on main and the red one stays. The console then reads the PR
+    as APPROVED_BLOCKED and the "approved PR not merging" alert cannot fire
+    (proof DRE-5232, docs/verifier-fail-proof-2026-10.md §7).
+
+    Read off the run listing at the head commit, never a check run's
+    `details_url` (DRE-5292 — it can be the App's homepage). The newest
+    crashed run is the one whose check GitHub reads for the name. An
+    unreadable listing answers "" and the caller falls back to the dispatch.
+    """
+    out = gh_actions_read(
+        "run", "list", "--repo", REPO, "--workflow", review_workflow(),
+        "--commit", sha, "--limit", "20",
+        "--json", "databaseId,status,conclusion,createdAt",
+    )
+    try:
+        runs = json.loads(out or "[]")
+    except ValueError:
+        return ""
+    crashed = [
+        r for r in runs if isinstance(r, dict)
+        and r.get("status") == "completed"
+        and r.get("conclusion") in _REVIEW_CRASH_CONCLUSIONS
+        and str(r.get("databaseId") or "").isdigit()
+    ]
+    if not crashed:
+        return ""
+    return str(max(crashed, key=lambda r: r.get("createdAt") or "")["databaseId"])
+
+
+def _retry_crashed_review(pr: dict) -> str:
+    """Retry one crashed review; the receipt's wording for what was done, or
+    "" when nothing went through.
+
+    DRE-5802: re-run the crashed run itself (`gh run rerun --failed`, the call
+    limit recovery already makes) so its new attempt replaces the red check on
+    the head. With no run to re-run, or a re-run GitHub refuses (a run past
+    its re-run window), the review stub is dispatched as before: a fresh
+    verdict beside a stale red check still beats no review at all.
+    """
+    run_id = _crashed_review_run_at_head(pr["headRefOid"])
+    if run_id:
+        try:
+            gh_dispatch("run", "rerun", run_id, "--failed", "--repo", REPO)
+            return f"re-ran the crashed review run {run_id}"
+        except ReconcileWriteError as e:
+            print(
+                f"WARNING: crashed-review: PR #{pr['number']} — re-running "
+                f"run {run_id} was refused ({e}); dispatching "
+                f"{review_workflow()} instead, which leaves that run's red "
+                "check on the head"
+            )
+    if _nudge(review_workflow(), pr["number"]):
+        return f"re-dispatched {review_workflow()}"
+    return ""
+
+
+def _post_rereview_receipt(pr: dict, how: str = "") -> None:
     """Post the per-sha re-dispatch receipt on the PR (as the worker bot —
     the sweep's default GH_TOKEN). A failed post is recorded, not raised:
     the dispatch DID happen; the next sweep merely re-dispatches one extra
     review, and the red run tells medic why."""
+    how = how or f"re-dispatched {review_workflow()}"
     body = pipeline_act.receipt("review-retried-after-crash", (
         f"🔁 {CRASHED_REVIEW_DISPATCH_TAG} @{pr['headRefOid']}: the review "
         "run for this head crashed (an infra failure — it never produced a "
         "verdict, so this is NOT a code rejection), and the reconcile sweep "
-        f"re-dispatched {review_workflow()} (DRE-2282). At most "
+        f"{how} (DRE-2282). At most "
         f"{CRASHED_REVIEW_RETRY_CAP} automatic re-dispatch per head sha — a "
         "new commit re-arms a fresh budget; past the cap the stall is "
         "reported on the Linear card instead of retried."
@@ -8973,7 +9036,10 @@ def recover_crashed_reviews() -> None:
         _review_dispatch_in_flight is deliberately repo-wide and
         fail-closed, exactly as on the dependabot path.
       * crashed review check (completed failure/timed_out/cancelled) →
-        ONE re-dispatch of the review stub per head sha, receipted by a
+        ONE retry per head sha — a re-run of the crashed run itself, so its
+        new attempt replaces the red check on the head (DRE-5802), or a
+        dispatch of the review stub when no such run can be re-run —
+        receipted by a
         worker-bot PR comment (CRASHED_REVIEW_RETRY_CAP, the
         DEPENDABOT_RECEIPT_CAP shape — DRE-2071). A new commit changes the
         sha and re-arms the budget. The cap is per HEAD, never per sweep:
@@ -8998,8 +9064,9 @@ def recover_crashed_reviews() -> None:
     never silently dropped. DIRTY PRs belong to unstick_conflicts; a PR
     with unreadable check runs is skipped (DRE-2034). This path never
     merges, never fires repository_dispatch, and never dispatches a fix or
-    build agent — the only workflow it may start is the review stub, i.e.
-    the same hand remedy the 2026-08-07 outage needed eight times over.
+    build agent — the only workflow it may start is the review, re-run or
+    dispatched, i.e. the same hand remedy the 2026-08-07 outage needed eight
+    times over.
     The medic's deliberate skip of crashed critics (DRE-1921) is untouched.
 
     A backstop must never take the sweep down with it: per-PR failures are
@@ -9031,11 +9098,16 @@ def recover_crashed_reviews() -> None:
             checks = _review_checks_at_head(sha)
             if checks is None:
                 continue  # unreadable — never act on fabricated data (DRE-2034)
+            # A LIVE check at the head is read before DRE-2291's filter: a
+            # re-run's new attempt (DRE-5802) is a pull_request run, so its
+            # live `call / review` is the only sign of it, and the bound
+            # check beside it still records the crash being retried.
+            live = any(status != "completed" for status, *_ in checks)
             # DRE-2291: where the head carries the review's own bound check,
             # that IS the outcome — a run-attributed check the dispatch
             # cancelled must not keep speaking for this commit.
             checks = _authoritative_review_checks(checks)
-            if any(status != "completed" for status, *_ in checks):
+            if live:
                 print(
                     f"crashed-review: PR #{pr['number']} head {sha[:8]} has a "
                     "review still running — leaving alone (dispatching would "
@@ -9116,11 +9188,13 @@ def recover_crashed_reviews() -> None:
         )
         print(
             f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
-            f"review crashed with no verdict; re-dispatching {review_workflow()} "
+            "review crashed with no verdict; re-running the crashed run "
             f"({budget})"
         )
-        if _nudge(review_workflow(), pr["number"]):
-            _post_rereview_receipt(pr)
+        how = _retry_crashed_review(pr)
+        if how:
+            print(f"crashed-review: PR #{pr['number']} — {how}")
+            _post_rereview_receipt(pr, how)
     deferred = len(eligible) - CRASHED_REVIEW_SWEEP_CAP
     if deferred > 0:
         print(
