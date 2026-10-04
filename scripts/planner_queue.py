@@ -22,26 +22,52 @@ This module owns the grammar, the pure decision logic and the four writes.
 Nothing here touches a workflow: the `plan.yml` and `reconcile.py` cards of the
 epic call what this one declares.
 
-THE CAP IS ONE NUMBER. `config/planner-queue.json` holds it, found beside this
-script the way `lane_contract.CONTRACT_PATH` finds its own file — so a product
-repo running `.bureau-pipeline/scripts/planner_queue.py` reads
-`.bureau-pipeline/config/planner-queue.json`, never the product's `config/`.
-`PLANNER_QUEUE_CONFIG` overrides it (the test seam). A missing or malformed
-file RAISES; nothing falls back to a number nobody chose. `cap()` is the one
-reader of `max_running` and `waiting_max()` the one reader of
-`waiting_max_minutes`.
+THE CAP IS DECIDED IN ONE PLACE. `config/planner-queue.json` holds the
+numbers, found beside this script the way `lane_contract.CONTRACT_PATH` finds
+its own file — so a product repo running `.bureau-pipeline/scripts/planner_queue.py`
+reads `.bureau-pipeline/config/planner-queue.json`, never the product's
+`config/`. `PLANNER_QUEUE_CONFIG` overrides it (the test seam). A missing or
+malformed file RAISES; nothing falls back to a number nobody chose. `cap()` is
+the one reader of `max_running` and the one place the number in force is
+decided — `claim`'s admission, `next_in_line`, the sweep and the groom drain all
+go through it — and `waiting_max()` is the one reader of `waiting_max_minutes`.
 
-THE NUMBER IS THREE (DRE-5634, 2026-10-02). It shipped as four, and DRE-5326
-dropped it to two: on 2026-09-30 a groom drain put nineteen cards into
+THE NUMBER IN FORCE ON A REPO (DRE-5792, epic DRE-5783). The console owns it
+and publishes it to each repo as the GitHub Actions repo variable
+`PLANNER_MAX_RUNNING`, which the workflows hand their steps as an environment
+variable of the same name. The number in force on a repo is that variable when
+the console has published it there, and the file's `max_running` otherwise:
+set to a positive integer, it is the cap; set to anything else, the file's
+number is in force and `cap()` warns, quoting the value; unset or empty, the
+file's number is in force in silence. **Once a repo holds the variable, the
+file's `max_running` is not the number on that repo, and editing it changes
+nothing there** — `cap()` prints a `::notice::` saying so whenever the two
+differ. The way back to the file is deleting the variable, an operator act one
+repo at a time: `gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`. The
+console offers no unpublish.
+
+THE CEILING BOUNDS BOTH. `max_running_ceiling` is the most planners any repo
+may run, whatever the variable says: a published number above it is clamped to
+it with a warning, and a file whose `max_running` is above it is refused. The
+ceiling is never published — it is read from the file on every repo, variable
+or not, so a ceiling change is still a file edit that takes effect everywhere.
+`ceiling_reason` says why it stands where it does, and the console refuses a
+press above the ceiling in those words. `ceiling()` and `ceiling_reason()` are
+the one readers of the two keys.
+
+The file's number has moved with Linear's quota. It shipped as four, and
+DRE-5326 dropped it to two: on 2026-09-30 a groom drain put nineteen cards into
 Planning at 07:05 PT, four planner and critic steps ran at once, and four
 together spent about 185-260 Linear requests a minute against a key that
-refills about 42 a minute (2,500 an hour). The key was at zero by 07:40 PT
-and every Linear-touching run in the fleet was refused. Two running spent
-about 27 a minute. Since 2026-10-02 09:37 PT the planners spend their own
-5,000-an-hour OAuth bucket instead of that key (DRE-5589, the token renewed
-by the console, DRE-5587), so planners no longer starve the sweeps, and the
-CEO raised the number to three. The groom drain reads this ledger too, and
-releases no more cards than there are free slots (`groomer.free_planner_slots`).
+refills about 42 a minute (2,500 an hour). The key was at zero by 07:40 PT and
+every Linear-touching run in the fleet was refused. Two running spent about 27
+a minute. Since 2026-10-02 09:37 PT the planners spend their own 5,000-an-hour
+OAuth bucket instead of that key (DRE-5589, the token renewed by the console,
+DRE-5587), so planners no longer starve the sweeps, and the CEO raised the
+file's number to three (DRE-5634). Nobody has yet measured that bucket with
+four planners running, which is why the ceiling is four. The groom drain reads
+this ledger too, and releases no more cards than there are free slots
+(`groomer.free_planner_slots`).
 
 THE RULES, in the order the ledger applies them.
 
@@ -181,7 +207,8 @@ caller of `linear_ops.cmd_comment` here. It is declared in
 single-definition grammar, and it is not a new act.
 
 CLI (every command but `check` exits 0 on every path):
-  check                     exit 0 on a valid config file; 2 with the reason
+  check                     exit 0 on a valid config file, naming the number
+                            in force and where it came from; 2 with the reason
   claim <CARD> --run-id ID --repo O/N --trigger-state LANE
         [--sent-by-run ID] [--reason WORD] [--github-output PATH]
                             admitted= place= waiting= duplicate= inherited=
@@ -219,6 +246,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.normpath(os.path.join(_HERE, "..", "config", "planner-queue.json"))
 CONFIG_KEYS = ("max_running", "claim_ttl_minutes", "dispatched_grace_minutes",
                "waiting_max_minutes")
+#: The number the console publishes to a repo (DRE-5792): a GitHub Actions
+#: repo variable the caller's workflow hands its step under the same name.
+#: Upper case on purpose — the one-reader grep for the file's key never sees it.
+CAP_ENV = "PLANNER_MAX_RUNNING"
 
 #: One card's comments, for the handover check — the same fields the ledger
 #: read selects, for one card.
@@ -242,8 +273,9 @@ def config_path(path: str | None = None) -> str:
 
 
 def load(path: str | None = None) -> dict:
-    """The four numbers, validated. Raises `PlannerQueueError` naming the
-    resolved path and the defect — never a default."""
+    """The four numbers, the ceiling and its reason, validated. Raises
+    `PlannerQueueError` naming the resolved path and the defect — never a
+    default."""
     where = config_path(path)
     try:
         with open(where, encoding="utf-8") as fh:
@@ -266,11 +298,77 @@ def load(path: str | None = None) -> dict:
         if value <= 0:
             raise PlannerQueueError(f"{where}: {key} must be positive, got {value}")
         out[key] = value
+    if "max_running_ceiling" not in doc:
+        raise PlannerQueueError(f"{where}: missing key 'max_running_ceiling'")
+    top = doc["max_running_ceiling"]
+    if isinstance(top, bool) or not isinstance(top, int):
+        raise PlannerQueueError(
+            f"{where}: max_running_ceiling must be an integer, got {top!r}")
+    # The file's own number, read where it is always read: `cap()` with no
+    # published variable.
+    committed = cap(out, environ={})
+    if top < committed:
+        raise PlannerQueueError(
+            f"{where}: max_running_ceiling={top} is below max_running={committed} "
+            f"— a ceiling under the committed number is a defect")
+    out["max_running_ceiling"] = top
+    if "ceiling_reason" not in doc:
+        raise PlannerQueueError(f"{where}: missing key 'ceiling_reason'")
+    why = doc["ceiling_reason"]
+    if not isinstance(why, str) or not why.strip():
+        raise PlannerQueueError(
+            f"{where}: ceiling_reason must be a non-empty string, got {why!r}")
+    out["ceiling_reason"] = why
     return out
 
 
-def cap() -> int:
-    return load()["max_running"]
+def _published(environ=None) -> tuple[str | None, int | None]:
+    """`PLANNER_MAX_RUNNING` as the caller's workflow handed it: its text, None
+    when unset or empty (empty is unset — an unset repo variable reaches the
+    step as ""), and the positive integer it states, None when it states none."""
+    text = (os.environ if environ is None else environ).get(CAP_ENV, "").strip()
+    if not text:
+        return None, None
+    if re.fullmatch(r"[0-9]+", text) and int(text) > 0:
+        return text, int(text)
+    return text, None
+
+
+def cap(cfg: dict | None = None, environ=None) -> int:
+    """THE number in force on this repo, and the one place it is decided.
+
+    `PLANNER_MAX_RUNNING` when it is a positive integer, clamped to the file's
+    ceiling; the file's `max_running` when it is unset or empty, and when it is
+    anything else (with a warning). `cfg` is an already-loaded config — `claim`
+    loads once — and the file is loaded when none is given. `environ` stands in
+    for the process environment: `{}` asks what the file alone puts in force."""
+    cfg = cfg or load()
+    from_file = cfg["max_running"]
+    text, number = _published(environ)
+    if text is None:
+        return from_file
+    if number is None:
+        _warn(f"{CAP_ENV}='{text}' is not a positive integer; "
+              f"config/planner-queue.json max_running={from_file} is in force")
+        return from_file
+    top = ceiling(cfg)
+    in_force = min(number, top)
+    if number > top:
+        _warn(f"{CAP_ENV}={number} is above config/planner-queue.json "
+              f"max_running_ceiling={top}; {top} is in force")
+    if in_force != from_file:
+        held = f"{CAP_ENV}={text}" + (f" (clamped to {in_force})" if number > top else "")
+        _notice(f"{held} is in force on this repo; config/planner-queue.json "
+                f"max_running={from_file} is not read here")
+    return in_force
+
+
+def ceiling(cfg: dict | None = None) -> int:
+    return (cfg or load())["max_running_ceiling"]
+
+
+def ceiling_reason(cfg: dict | None = None) -> str:
+    return (cfg or load())["ceiling_reason"]
 
 
 def waiting_max() -> int:
@@ -865,9 +963,10 @@ def settle_claim(linear_ops, identifier, *, run_id, repo, trigger_state, reason=
         post_released(linear_ops, identifier, run_id=run_id, repo=repo,
                       trigger_state=trigger_state, because="duplicate")
         return _answer(False, waiting=len(led.waiting), duplicate=True)
-    if admits(led, mine, cfg["max_running"]):
+    limit = cap(cfg)
+    if admits(led, mine, limit):
         return _answer(True, waiting=len(led.waiting))
-    place, of = _place(led, mine, cfg["max_running"])
+    place, of = _place(led, mine, limit)
     post_waiting(linear_ops, identifier, run_id=run_id, repo=repo,
                  trigger_state=trigger_state, place=place, of=of, reason=reason)
     return _answer(False, place=place, waiting=of)
@@ -904,6 +1003,10 @@ def _handover(linear_ops, identifier, *, run_id, repo, trigger_state, sent_by_ru
 
 def _warn(message: str) -> None:
     print("::warning::" + " ".join(str(message).split()))
+
+
+def _notice(message: str) -> None:
+    print("::notice::" + " ".join(str(message).split()))
 
 
 def claim(linear_ops, identifier, *, run_id, repo, trigger_state, sent_by_run=None,
@@ -965,8 +1068,11 @@ def _cmd_check(args) -> int:
     except PlannerQueueError as exc:
         print(f"planner queue config: {exc}", file=sys.stderr)
         return 2
+    in_force = cap(cfg)
+    source = CAP_ENV if _published()[1] is not None else "the file"
     print(f"planner queue config OK: {config_path()} "
-          f"(max_running={cfg['max_running']})")
+          f"(max_running={cap(cfg, environ={})} max_running_ceiling={ceiling(cfg)} "
+          f"in force={in_force} ({source}))")
     return 0
 
 

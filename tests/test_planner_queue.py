@@ -22,6 +22,7 @@ One section per acceptance criterion, in the card's order:
  11. the reason a waiter arrived with is the reason it is re-dispatched with
  12. Green Light is read for its open claim only
  13. the cap is one number, found beside the script, with one reader
+ 13b. PLANNER_MAX_RUNNING: the number in force, bounded by the file's ceiling
  14. a bad config file raises, `check` exits 2, `claim` fails open
  15. the TTL outlasts the plan job, and the wait bound outlasts the TTL
  16. `waited_minutes` / `overdue`
@@ -232,7 +233,16 @@ def config_file(doc, raw: str | None = None):
 #: DRE-5288 sized the two re-plan ceilings per plan and the job clock rose with
 #: them.
 COMMITTED = {"max_running": 3, "claim_ttl_minutes": 115,
-             "dispatched_grace_minutes": 10, "waiting_max_minutes": 360}
+             "dispatched_grace_minutes": 10, "waiting_max_minutes": 360,
+             "max_running_ceiling": 4,
+             "ceiling_reason": (
+                 "The planners spend their own Linear bucket of 5,000 requests an "
+                 "hour (DRE-5589). The only per-slot measurement is from 2026-09-30, "
+                 "when four planner and critic steps together spent about 185 to 260 "
+                 "requests a minute on the old shared key; four slots at that rate "
+                 "would empty 5,000 in 19 to 27 minutes if sustained. Until the "
+                 "bucket has been measured with four planners running (the proof of "
+                 "DRE-5783), nothing above four is allowed.")}
 
 #: The ledger's behavior is tested at the four slots it was written against
 #: (DRE-5176). The committed number is `TheCap`'s contract alone: DRE-5326
@@ -252,6 +262,9 @@ class _Base(unittest.TestCase):
         patcher = mock.patch.dict(os.environ)
         patcher.start()
         os.environ.pop("PLANNER_QUEUE_CONFIG", None)
+        # The console's published number (DRE-5792) is unset unless a test
+        # sets it: a runner's environment never decides a test's cap.
+        os.environ.pop("PLANNER_MAX_RUNNING", None)
         self.addCleanup(patcher.stop)
         pinned = config_file(FOUR_SLOTS)
         pinned.__enter__()
@@ -1076,6 +1089,165 @@ class TheCap(_Base):
 
 
 # --------------------------------------------------------------------------- #
+# 13b. PLANNER_MAX_RUNNING — the console's number, under the file's ceiling    #
+# --------------------------------------------------------------------------- #
+
+
+def captured(fn, *args, **kwargs):
+    """`fn(*args, **kwargs)` and what it printed."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        value = fn(*args, **kwargs)
+    return value, out.getvalue()
+
+
+class PublishedCap(_Base):
+    """DRE-5792: the console publishes `PLANNER_MAX_RUNNING` to each repo, and
+    `cap()` is the one place the number in force is decided — for admission
+    through `claim` as much as for the sweep's `next_in_line`."""
+
+    def setUp(self):
+        super().setUp()
+        committed = config_file(COMMITTED)
+        committed.__enter__()
+        self.addCleanup(committed.__exit__, None, None, None)
+
+    def published(self, value):
+        return mock.patch.dict(os.environ, {"PLANNER_MAX_RUNNING": value})
+
+    def test_a_positive_integer_is_the_cap(self):
+        with self.published("4"):
+            self.assertEqual(captured(pq.cap)[0], 4)
+        with self.published("2"):
+            self.assertEqual(captured(pq.cap)[0], 2)
+
+    def test_above_the_ceiling_is_clamped_with_a_warning(self):
+        with self.published("9"):
+            value, out = captured(pq.cap)
+        self.assertEqual(value, 4)
+        warnings = [line for line in out.splitlines() if line.startswith("::warning::")]
+        self.assertEqual(len(warnings), 1, out)
+        self.assertIn("9", warnings[0])
+        self.assertIn("max_running_ceiling=4", warnings[0])
+
+    def test_anything_else_falls_back_to_the_file_with_a_warning(self):
+        for bad in ("abc", "0", "4.5", "true", "-4"):
+            with self.subTest(value=bad), self.published(bad):
+                value, out = captured(pq.cap)
+                self.assertEqual(value, 3)
+                warnings = [line for line in out.splitlines()
+                            if line.startswith("::warning::")]
+                self.assertEqual(len(warnings), 1, out)
+                self.assertIn(f"'{bad}'", warnings[0])
+                self.assertIn("max_running=3 is in force", warnings[0])
+                self.assertNotIn("::notice::", out)
+
+    def test_unset_or_empty_reads_the_file_in_silence(self):
+        value, out = captured(pq.cap)
+        self.assertEqual((value, out), (3, ""))
+        with self.published(""):
+            value, out = captured(pq.cap)
+        self.assertEqual((value, out), (3, ""))
+
+    def test_a_published_number_unlike_the_file_says_so(self):
+        with self.published("4"):
+            _, out = captured(pq.cap)
+        self.assertIn("::notice::PLANNER_MAX_RUNNING=4 is in force on this repo; "
+                      "config/planner-queue.json max_running=3 is not read here", out)
+        self.assertNotIn("::warning::", out)
+
+    def test_a_published_number_like_the_file_is_silent(self):
+        with self.published("3"):
+            value, out = captured(pq.cap)
+        self.assertEqual((value, out), (3, ""))
+
+    def test_cap_takes_an_already_loaded_config(self):
+        cfg = dict(COMMITTED, max_running=2)
+        with mock.patch.object(pq, "load", side_effect=AssertionError("loaded twice")):
+            self.assertEqual(captured(pq.cap, cfg)[0], 2)
+            with self.published("4"):
+                self.assertEqual(captured(pq.cap, cfg)[0], 4)
+
+    def test_claim_admits_by_the_published_number(self):
+        """The card's reason for being: `settle_claim` used to read the file's
+        number itself, so a published 4 changed who was dispatched next and
+        never who was admitted."""
+        idents = [self.board.add(f"DRE-{9700 + i}") for i in range(5)]
+        with self.published("4"):
+            for ident in idents:
+                claim_write(self.board, ident, f"run-{ident}")
+            outs, _ = captured(lambda: [claim_read(self.board, i, f"run-{i}")
+                                        for i in idents])
+        self.assertEqual([o["admitted"] for o in outs], ["true"] * 4 + ["false"])
+        self.assertEqual((outs[-1]["place"], outs[-1]["waiting"]), ("1", "1"))
+        newest = self.board.newest(idents[-1])
+        self.assertEqual((newest.state, newest.place, newest.of), ("waiting", 1, 1))
+
+    def test_claim_through_the_cli_admits_by_the_published_number(self):
+        idents = [self.board.add(f"DRE-{9710 + i}") for i in range(5)]
+        with self.published("4"):
+            outs = [cli_claim(i, f"run-{i}")[1] for i in idents]
+        self.assertEqual([o["admitted"] for o in outs], ["true"] * 4 + ["false"])
+        self.assertEqual((outs[-1]["place"], outs[-1]["waiting"]), ("1", "1"))
+
+    def test_the_ceiling_bounds_admission(self):
+        idents = [self.board.add(f"DRE-{9720 + i}") for i in range(6)]
+        with self.published("9"):
+            for ident in idents:
+                claim_write(self.board, ident, f"run-{ident}")
+            outs, _ = captured(lambda: [claim_read(self.board, i, f"run-{i}")
+                                        for i in idents])
+        self.assertEqual(sum(o["admitted"] == "true" for o in outs), 4)
+
+    def test_next_in_line_serves_a_fourth_card(self):
+        fill_running(self.board, 3)
+        waiter = self.board.add("DRE-9730")
+        self.board.seed(waiter, "waiting", self.board.clock, run="run-waiter")
+        self.board.tick(60)
+        self.assertIsNone(captured(pq.next_in_line, self.board.ledger())[0])
+        with self.published("4"):
+            found, _ = captured(pq.next_in_line, self.board.ledger())
+        self.assertEqual(found.card, waiter)
+
+    def test_the_file_number_is_read_once_inside_cap(self):
+        path = os.path.join(SCRIPTS, "planner_queue.py")
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+        self.assertEqual(len(re.findall(r'\["max_running"\]', source)), 1)
+        line = source[:source.index('["max_running"]')].count("\n") + 1
+        import ast  # noqa: PLC0415
+        fn = next(node for node in ast.walk(ast.parse(source))
+                  if isinstance(node, ast.FunctionDef) and node.name == "cap")
+        self.assertTrue(fn.lineno <= line <= fn.end_lineno, line)
+
+    def test_ceiling_and_reason_have_one_reader_each(self):
+        self.assertEqual(pq.ceiling(), 4)
+        self.assertEqual(pq.ceiling_reason(), COMMITTED["ceiling_reason"])
+        self.assertEqual(pq.ceiling(dict(COMMITTED, max_running_ceiling=6)), 6)
+
+    def test_check_names_the_number_in_force_and_its_source(self):
+        rc, _, out, _ = run_cli(["check"])
+        self.assertEqual(rc, 0)
+        self.assertIn("max_running=3 max_running_ceiling=4 in force=3 (the file)", out)
+        with self.published("4"):
+            rc, _, out, _ = run_cli(["check"])
+        self.assertEqual(rc, 0)
+        self.assertIn("max_running=3 max_running_ceiling=4 in force=4 "
+                      "(PLANNER_MAX_RUNNING)", out)
+        with self.published("abc"):
+            rc, _, out, _ = run_cli(["check"])
+        self.assertEqual(rc, 0)
+        self.assertIn("in force=3 (the file)", out)
+
+    def test_docstring_says_the_variable_wins_and_how_to_go_back(self):
+        doc = " ".join(pq.__doc__.split())
+        self.assertIn("the file's `max_running` is not the number on that repo", doc)
+        self.assertIn("gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>", doc)
+        self.assertIn("The ceiling is never published", doc)
+        self.assertNotIn("THE NUMBER IS THREE", doc)
+
+
+# --------------------------------------------------------------------------- #
 # 14. a bad config file                                                        #
 # --------------------------------------------------------------------------- #
 
@@ -1088,6 +1260,26 @@ BAD_CONFIGS = {
     "non-integer": json.dumps(dict(COMMITTED, max_running="4")),
     "a float": json.dumps(dict(COMMITTED, max_running=4.5)),
     "a boolean": json.dumps(dict(COMMITTED, max_running=True)),
+    "ceiling below max_running": json.dumps(dict(COMMITTED, max_running_ceiling=2)),
+    "missing ceiling": json.dumps({k: v for k, v in COMMITTED.items()
+                                   if k != "max_running_ceiling"}),
+    "ceiling not an integer": json.dumps(dict(COMMITTED, max_running_ceiling="4")),
+    "missing reason": json.dumps({k: v for k, v in COMMITTED.items()
+                                  if k != "ceiling_reason"}),
+    "empty reason": json.dumps(dict(COMMITTED, ceiling_reason="")),
+    "blank reason": json.dumps(dict(COMMITTED, ceiling_reason="   ")),
+    "reason not a string": json.dumps(dict(COMMITTED, ceiling_reason=4)),
+}
+
+#: The defect `load()` names for each of the ceiling's bad files.
+CEILING_DEFECTS = {
+    "ceiling below max_running": "max_running_ceiling=2 is below max_running=3",
+    "missing ceiling": "missing key 'max_running_ceiling'",
+    "ceiling not an integer": "max_running_ceiling must be an integer",
+    "missing reason": "missing key 'ceiling_reason'",
+    "empty reason": "ceiling_reason must be a non-empty string",
+    "blank reason": "ceiling_reason must be a non-empty string",
+    "reason not a string": "ceiling_reason must be a non-empty string",
 }
 
 
@@ -1123,6 +1315,8 @@ class BadConfig(_Base):
                 rc, _, _, err = run_cli(["check"])
                 self.assertEqual(rc, 2)
                 self.assertIn(path, err)
+                if kind in CEILING_DEFECTS:
+                    self.assertIn(CEILING_DEFECTS[kind], err)
         rc, _, out, _ = run_cli(["check"])
         self.assertEqual(rc, 0, out)
         p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "planner_queue.py"),

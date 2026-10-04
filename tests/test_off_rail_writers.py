@@ -190,7 +190,7 @@ def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)
     monkeypatch.setattr(reconcile, "REPO_SLUG", ON_RAIL)
     monkeypatch.setattr(reconcile, "FLEET_OUTAGE_SWEEP_CAP", 1, raising=False)
-    monkeypatch.setattr(reconcile.planner_queue, "cap", lambda: 4)
+    monkeypatch.setattr(reconcile.planner_queue, "cap", lambda cfg=None, environ=None: 4)
     monkeypatch.setenv(reconcile.GROOM_CARD_ENV, STANDING)
     for name in ("INTAKE_HOLD", "MERGED_CARD", "SWEEP_REASON", "SWEEP_CARD",
                  "CLAUDE_ACCOUNT", reconcile.planner_queue.CONFIG_ENV):

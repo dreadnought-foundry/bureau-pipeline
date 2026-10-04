@@ -67,7 +67,7 @@ def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     monkeypatch.delenv("MERGED_CARD", raising=False)
     monkeypatch.delenv(planner_queue.CONFIG_ENV, raising=False)
-    monkeypatch.setattr(planner_queue, "cap", lambda: CAP)
+    monkeypatch.setattr(planner_queue, "cap", lambda cfg=None, environ=None: CAP)
     ledgers = (reconcile._write_failures, reconcile._read_failures,
                reconcile._stale_defects)
     for ledger in ledgers:

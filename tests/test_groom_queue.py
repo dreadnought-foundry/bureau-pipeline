@@ -359,7 +359,7 @@ def test_serve_planner_line_says_how_many_slots_it_left():
     """The cap less running, dispatched and waiting — `free_planner_slots`'s
     arithmetic, after the line has been served."""
     from test_planner_queue_sweep import _world
-    with mock.patch.object(planner_queue, "cap", lambda: 2):
+    with mock.patch.object(planner_queue, "cap", lambda cfg=None, environ=None: 2):
         with _world([]):
             assert reconcile.serve_planner_line() == 2
         reconcile.reset_sweep_cards()

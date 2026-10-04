@@ -51,6 +51,24 @@ of it is ever a runtime lookup.
   validates it. `plan.yml` claims against it in its `Planner slot — claim or
   wait` step, after the duplicate-dispatch guard and before any model step
   (DRE-5179); a run it does not admit waits in line and ends green.
+  Two more keys bound the number (DRE-5792): `max_running_ceiling`, a positive
+  integer no smaller than `max_running`, and `ceiling_reason`, a non-empty
+  string saying why the ceiling stands where it does; `check` refuses a file
+  missing either, or with a ceiling below `max_running`. The console publishes
+  the number in force to each repo as the GitHub Actions repo variable
+  `PLANNER_MAX_RUNNING`, handed to the steps as an environment variable of the
+  same name, and `planner_queue.cap()` is the one place the rule is applied:
+  set to a positive integer, the variable is the cap, clamped to
+  `max_running_ceiling` with a warning; set to anything else, the file's
+  `max_running` is in force with a warning quoting the value; unset or empty,
+  the file's `max_running` is in force. **A repo holding the variable does not
+  read the file's `max_running` — on that repo it is a fallback only, and
+  editing it changes nothing there.** Deleting the variable is the way back
+  (`gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`, one repo at a
+  time). The ceiling is never published: it is read from this file on every
+  repo, so a ceiling change is a file edit that takes effect everywhere. The
+  console reads both keys off this file and refuses a number above the
+  ceiling with `ceiling_reason` as the words.
 - **`whats-new-cutover.json`** — the switch for the What's New rule
   (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
   a pull request opened without a `What's new:` line, and `why`. Absent, the
