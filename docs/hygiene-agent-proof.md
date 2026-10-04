@@ -1,12 +1,17 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: THE DRY REHEARSAL IS DONE. Going live is ON HOLD for a CEO answer, and the live window is pending.** As the card orders, the agent ran dry before going live (§1):
+**Status: paused by CEO decision 10-04 12:59 PT; criterion 5 met; window not started.** At 12:59 PT the CEO chose to keep DRE-5036 and DRE-3696 in Green Light as they are, so `HYGIENE_LIVE` stays `false` and the window is **on hold**. It resumes only when one of these happens:
+- the hygiene agent learns to leave epics the CEO parked alone (a skip-rule card, in the Backlog review);
+- the CEO approves those two epics;
+- the CEO moves those two epics.
+
+What happened before the hold: As the card orders, the agent ran dry before going live (§1):
 - two hand dispatches with `dry_run` true, at 10:20 and 11:09 PT;
 - two scheduled dry passes: the 10:37 slot, which fired at 11:13 PT, and the 11:37 slot, which fired at 12:41 PT.
 
 None of them wrote anything. Criterion 5 is met.
 
-**The live switch was on for four minutes, then paused (§0).** `HYGIENE_LIVE` was set to `true` at 12:45:36 PT and back to `false` at 12:49:58 PT. No pass ran in between; the newest run at 12:50 PT is still the 12:41 dry pass. The reason for the pause: both scheduled dry passes would have moved DRE-5036 and DRE-3696 from Green Light back to Planning, and those are epics the CEO put back in Green Light that morning. The CEO is being asked which lane they belong in. `HYGIENE_LIVE` returns after his answer.
+**The live switch was on for four minutes, then paused (§0).** `HYGIENE_LIVE` was set to `true` at 12:45:36 PT and back to `false` at 12:49:58 PT. No pass ran in between; the newest run at 12:50 PT is still the 12:41 dry pass. The reason for the pause: both scheduled dry passes would have moved DRE-5036 and DRE-3696 from Green Light back to Planning, and those are epics the CEO put back in Green Light that morning. At 12:59 PT the CEO answered: keep both in Green Light. So `HYGIENE_LIVE` stays off (the hold above).
 
 **GitHub's timer runs late, so no time below is fixed in advance.** It fired the 10:37 slot 36 minutes late (11:13 PT) and the 11:37 slot 64 minutes late (12:41 PT). **The window opens at the first scheduled pass whose log prints `dry_run=false` after `HYGIENE_LIVE` returns.** That is pending; read it with step 1 of §8. **It closes after the 24th live scheduled pass from there.** Count 24 hourly slots from the opening one, and allow for the timer firing each slot up to about an hour late. After that pass finishes, the record is completed from the read-off steps in §8. This pull request stays a **draft** until then, so the merge gate cannot land an unfinished record as the proof.
 
@@ -75,7 +80,8 @@ $ gh run list --repo dreadnought-foundry/bureau-pipeline --workflow hygiene.yml 
 37220103263  workflow_dispatch  completed  success  2026-10-04T17:20:01Z
 ```
 
-  Why: both scheduled dry passes would have sent DRE-5036 and DRE-3696 from Green Light back to Planning (§1), and those are epics the CEO returned to Green Light that morning. The CEO is being asked which lane they belong in. `HYGIENE_LIVE` returns after his answer, and the window opens at the first live scheduled pass after that.
+  Why: both scheduled dry passes would have sent DRE-5036 and DRE-3696 from Green Light back to Planning (§1), and those are epics the CEO returned to Green Light that morning. The CEO was asked which lane they belong in.
+- **Paused by CEO decision 10-04 12:59 PT; criterion 5 met; window not started.** The CEO kept DRE-5036 and DRE-3696 in Green Light as they are, and `HYGIENE_LIVE` stays `false` (read 12:57 PT: `HYGIENE_LIVE	false	2026-10-04T19:49:58Z`). The hold lifts only if the hygiene agent learns to leave epics the CEO parked alone (a skip-rule card, in the Backlog review), or the CEO approves or moves those two epics. After that, `HYGIENE_LIVE` returns and the window opens at the first live scheduled pass.
 - `main` moved during the rehearsal. The 11:09 and 11:13 PT runs ran on `0f4bf78`, and the 12:41 PT run on `c4fa502`. Each live pass's head sha goes in §5.
 
 ## 1. The dry passes before going live
