@@ -1,19 +1,23 @@
 # Hygiene agent — one working day on the live board — proof for DRE-5412 (epic DRE-5365)
 
-**Status: paused by CEO decision 10-04 12:59 PT; criterion 5 met; window not started.** At 12:59 PT the CEO chose to keep DRE-5036 and DRE-3696 in Green Light as they are, so `HYGIENE_LIVE` stays `false` and the window is **on hold**. It resumes only when one of these happens:
-- the hygiene agent learns to leave epics the CEO parked alone (a skip-rule card, in the Backlog review);
-- the CEO approves those two epics;
-- the CEO moves those two epics.
+**Status: LIVE since 12:58:43 PT on 2026-10-04; criterion 5 met; the window opens at the first live scheduled pass (pending).** How it got here:
+- `HYGIENE_LIVE` was on from 12:45:36 to 12:49:58 PT, and no pass ran in that time.
+- It was paused while the CEO was asked about DRE-5036 and DRE-3696.
+- The CEO briefly chose to keep both epics in Green Light as they are.
+- He then chose production mode ("Let hygiene finish their planning / put hygiene into production mode", relayed by the fullstack session).
+- `HYGIENE_LIVE` went back to `true` at 12:58:43 PT.
 
-What happened before the hold: As the card orders, the agent ran dry before going live (§1):
+The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, as every dry pass said it would.
+
+Before going live: As the card orders, the agent ran dry before going live (§1):
 - two hand dispatches with `dry_run` true, at 10:20 and 11:09 PT;
 - two scheduled dry passes: the 10:37 slot, which fired at 11:13 PT, and the 11:37 slot, which fired at 12:41 PT.
 
 None of them wrote anything. Criterion 5 is met.
 
-**The live switch was on for four minutes, then paused (§0).** `HYGIENE_LIVE` was set to `true` at 12:45:36 PT and back to `false` at 12:49:58 PT. No pass ran in between; the newest run at 12:50 PT is still the 12:41 dry pass. The reason for the pause: both scheduled dry passes would have moved DRE-5036 and DRE-3696 from Green Light back to Planning, and those are epics the CEO put back in Green Light that morning. At 12:59 PT the CEO answered: keep both in Green Light. So `HYGIENE_LIVE` stays off (the hold above).
+**The live switch was on for four minutes, then paused (§0).** `HYGIENE_LIVE` was set to `true` at 12:45:36 PT and back to `false` at 12:49:58 PT. No pass ran in between; the newest run at 12:50 PT is still the 12:41 dry pass. The reason for the pause: both scheduled dry passes would have moved DRE-5036 and DRE-3696 from Green Light back to Planning, and those are epics the CEO put back in Green Light that morning. He first chose to keep both, then chose production mode, and `HYGIENE_LIVE` went back to `true` at 12:58:43 PT (the sequence above).
 
-**GitHub's timer runs late, so no time below is fixed in advance.** It fired the 10:37 slot 36 minutes late (11:13 PT) and the 11:37 slot 64 minutes late (12:41 PT). **The window opens at the first scheduled pass whose log prints `dry_run=false` after `HYGIENE_LIVE` returns.** That is pending; read it with step 1 of §8. **It closes after the 24th live scheduled pass from there.** Count 24 hourly slots from the opening one, and allow for the timer firing each slot up to about an hour late. After that pass finishes, the record is completed from the read-off steps in §8. This pull request stays a **draft** until then, so the merge gate cannot land an unfinished record as the proof.
+**GitHub's timer runs late, so no time below is fixed in advance.** It fired the 10:37 slot 36 minutes late (11:13 PT) and the 11:37 slot 64 minutes late (12:41 PT). **The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.** That is pending; read it with step 1 of §8. **It closes after the 24th live scheduled pass from there.** Count 24 hourly slots from the opening one, and allow for the timer firing each slot up to about an hour late. After that pass finishes, the record is completed from the read-off steps in §8. This pull request stays a **draft** until then, so the merge gate cannot land an unfinished record as the proof.
 
 **Which "working day".** The card defines it as "one working day — twenty-four scheduled passes". So the window is 24 back-to-back hourly passes of the `37 * * * *` schedule, counted from the first live one, not office hours. If `HYGIENE_LIVE` goes on later than planned, the window moves with it: it opens at the first pass whose `Decide dry run` step prints `dry_run=false`. If a lane gives the agent nothing to clear in those 24 passes, the card extends the window to the next working day for that lane, with a board read that shows the lane was empty.
 
@@ -81,7 +85,18 @@ $ gh run list --repo dreadnought-foundry/bureau-pipeline --workflow hygiene.yml 
 ```
 
   Why: both scheduled dry passes would have sent DRE-5036 and DRE-3696 from Green Light back to Planning (§1), and those are epics the CEO returned to Green Light that morning. The CEO was asked which lane they belong in.
-- **Paused by CEO decision 10-04 12:59 PT; criterion 5 met; window not started.** The CEO kept DRE-5036 and DRE-3696 in Green Light as they are, and `HYGIENE_LIVE` stays `false` (read 12:57 PT: `HYGIENE_LIVE	false	2026-10-04T19:49:58Z`). The hold lifts only if the hygiene agent learns to leave epics the CEO parked alone (a skip-rule card, in the Backlog review), or the CEO approves or moves those two epics. After that, `HYGIENE_LIVE` returns and the window opens at the first live scheduled pass.
+- **Then production mode.** The CEO briefly chose to keep DRE-5036 and DRE-3696 in Green Light as they are, with `HYGIENE_LIVE` left `false`. He then chose production mode: "Let hygiene finish their planning / put hygiene into production mode", relayed by the fullstack session. An earlier draft of this record stamped the keep-them decision "12:59 PT". That was a clock-label error in the relaying session: the decision came before the 12:58:43 PT switch. Read at 12:59 PT:
+
+```
+$ gh variable list --repo dreadnought-foundry/bureau-pipeline | grep HYG
+HYGIENE_CARD	DRE-5774	2026-10-04T17:25:48Z
+HYGIENE_LIVE	true	2026-10-04T19:58:43Z
+$ gh run list --repo dreadnought-foundry/bureau-pipeline --workflow hygiene.yml --limit 2
+37229265771  schedule  completed  2026-10-04T19:41:54Z
+37223608815  schedule  completed  2026-10-04T18:13:48Z
+```
+
+  **The window opens at the first scheduled pass whose log prints `dry_run=false` after 12:58:43 PT.** Its run id and PT time are **pending**; they go in the status line and as row 1 of §5. The first live pass is expected to send DRE-5036 and DRE-3696 back to Planning, which is the CEO's production-mode choice, not a person acting on those rows.
 - `main` moved during the rehearsal. The 11:09 and 11:13 PT runs ran on `0f4bf78`, and the 12:41 PT run on `c4fa502`. Each live pass's head sha goes in §5.
 
 ## 1. The dry passes before going live
@@ -231,7 +246,7 @@ Run these with any operator read token. None of them writes.
 
 1. **Every pass.**
    `gh run list --repo dreadnought-foundry/bureau-pipeline --workflow Hygiene --created '>=2026-10-04T17:30:00Z' --limit 40 --json databaseId,event,createdAt,conclusion`
-   Keep every row, `schedule` and `workflow_dispatch` alike. Every run before `HYGIENE_LIVE` went on for good goes in §1. It was on only from 12:45:36 to 12:49:58 PT on 10-04, and no pass ran in that gap; read its new time with `gh variable list --repo dreadnought-foundry/bureau-pipeline | grep HYGIENE_LIVE`. For each later `schedule` row, run `gh run view <id> --repo dreadnought-foundry/bureau-pipeline --log | grep "dry_run="`. The first that prints `dry_run=false` opens the window: write its run id and PT time into the status paragraph as the window's start. From that run on, every run goes in §5: the 24 `schedule` rows are the window, and any `workflow_dispatch` row is listed too, marked as a hand dispatch that does not count toward the 24. Convert each `createdAt` to PT.
+   Keep every row, `schedule` and `workflow_dispatch` alike. Every run before `HYGIENE_LIVE` went on for good, at 12:58:43 PT (`19:58:43Z`) on 10-04, goes in §1. The earlier on-window, 12:45:36–12:49:58 PT, saw no pass. For each later `schedule` row, run `gh run view <id> --repo dreadnought-foundry/bureau-pipeline --log | grep "dry_run="`. The first that prints `dry_run=false` opens the window: write its run id and PT time into the status paragraph as the window's start. From that run on, every run goes in §5: the 24 `schedule` rows are the window, and any `workflow_dispatch` row is listed too, marked as a hand dispatch that does not count toward the 24. Convert each `createdAt` to PT.
 2. **What each pass did.** For each run id:
    `gh run view <id> --repo dreadnought-foundry/bureau-pipeline --log | grep -E "hygiene:|would:|executed|refused|stood down|posted nowhere"`
    An `executed` action is a cleared row; a `hyg-decision-needed` note is not.
