@@ -343,7 +343,8 @@ jobs:
             --run-id "$RUN_ID" --died-at "$RUN_UPDATED_AT" \
             --record "$RUNNER_TEMP/limit-death-record/record.json" \
             --snapshot "$SNAPSHOT") || OUT="marker=refused"
-          printf '%s\n' "$OUT" | grep -E '^marker=' | tail -1 >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$OUT" | grep -E '^marker=' | tail -1 >> "$GITHUB_OUTPUT" \
+            || echo "marker=refused" >> "$GITHUB_OUTPUT"
 
       # DRE-5837: the death Linear would not take, kept on this run. A fixed
       # name, because the Actions API lists artifacts by exact name and that
