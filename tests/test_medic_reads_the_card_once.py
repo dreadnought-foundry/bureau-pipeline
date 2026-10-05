@@ -284,15 +284,17 @@ class TheLimitStepRunsOnTheSnapshotTest(unittest.TestCase):
         self.assertEqual(0, result["rc"], result["text"])
         self.assertIn("limit=true", result["outputs"])
         self.assertEqual([], [c for c in result["calls"] if "dump-comments" in c])
-        self.assertEqual([], [c for c in result["calls"] if "linear_ops.py comment" in c])
+        # The marker write goes through the wiring harness's one seam
+        # (`limit_death_record.py post` since DRE-5837).
+        self.assertEqual([], wiring._comment_calls(result))
 
     def test_a_snapshot_without_the_marker_posts_it_without_a_second_read(self):
+        import test_medic_limit_death_wiring as wiring
+
         result = self._run([{"body": "🧠 model-attempt: x", "created_at": ""}])
         self.assertEqual(0, result["rc"], result["text"])
         self.assertEqual([], [c for c in result["calls"] if "dump-comments" in c])
-        self.assertEqual(
-            1, len([c for c in result["calls"] if "linear_ops.py comment" in c])
-        )
+        self.assertEqual(1, len(wiring._comment_calls(result)))
 
     def test_no_snapshot_falls_back_to_reading_the_card(self):
         result = self._run(None)
