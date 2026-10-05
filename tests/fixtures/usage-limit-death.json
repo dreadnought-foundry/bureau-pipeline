@@ -1,0 +1,35 @@
+[
+  {
+    "type": "system",
+    "subtype": "init",
+    "message": "Claude Code initialized",
+    "model": "claude-fable-5-1"
+  },
+  {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+      "status": "rejected",
+      "rateLimitType": "five_hour",
+      "utilization": 1.0
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "api_retry",
+    "attempt": 1,
+    "max_retries": 10,
+    "retry_delay_ms": 512,
+    "error_status": 429,
+    "error": "rate_limit"
+  },
+  {
+    "type": "result",
+    "subtype": "success",
+    "is_error": true,
+    "duration_ms": 1204,
+    "num_turns": 1,
+    "total_cost_usd": 0,
+    "api_error_status": 429,
+    "result": "You've hit your limit · resets 8:30pm (UTC)"
+  }
+]

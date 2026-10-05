@@ -4446,6 +4446,18 @@ jobs:
       # Every gate is an `if !` (this workflow is `bash -e` without `pipefail`)
       # and the children are read into a FILE and redirected into the stamper,
       # the rule every stamp site follows (tests/test_planner_stamps_children.py).
+      #
+      # …EXCEPT a re-plan our own token renewal killed (DRE-5856). The console
+      # renews the Claude chain about every eight hours and revokes the token
+      # before it; run 37328397948's re-plan died on that 401 two seconds after
+      # a renewal and this step parked the epic with `needs-human`, so the
+      # medic declined its retry and a person moved it back by hand. Nothing
+      # was wrong with the plan, and the planner never got to revise it. So a
+      # rotation (`credential_rotation.py check` on the re-plan's own record)
+      # parks nothing: it opens a fresh planning attempt — the re-run's critic
+      # would otherwise count its own unrevised round as "held twice" and park
+      # it after all — and leaves the step red, and the medic re-runs the job
+      # once, which GitHub hands the renewed token.
       - name: Re-check the revised plan — review mode
         id: recheck_review
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
@@ -4453,6 +4465,7 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REPLAN_OUTCOME: ${{ steps.postreplan_done.outputs.outcome || steps.postreplan.outcome }}
+          REPLAN_EXEC: ${{ steps.postreplan_done.outputs.execution_file || steps.postreplan.outputs.execution_file }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           ART="${{ runner.temp }}/plan-artifact.md"
@@ -4494,6 +4507,15 @@ jobs:
           fi
           echo "ok=false" >> "$GITHUB_OUTPUT"
           echo "::error::the revision did not pass the plan's own gates: $FAILED"
+          if [ "$REPLAN_OUTCOME" != "success" ] && \
+             python3 .bureau-pipeline/scripts/credential_rotation.py check \
+               "${REPLAN_EXEC:-${{ runner.temp }}/claude-execution-output.json}"; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🔁 The re-plan was cut off when the pipeline's Claude sign-in was renewed — a routine renewal, not anything in this plan — so nothing is parked. The planner never got to revise, so the second critic's last round is not counted against it, and a fresh planning attempt starts below. This run is red on purpose: the medic re-runs it once, on the renewed sign-in. The epic stays in Planning, and nothing here is yours to do."
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
+            exit 1
+          fi
           BOUNCED=""
           if [ -s "$BOUNCE_FILE" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \

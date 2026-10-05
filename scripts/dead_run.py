@@ -120,6 +120,12 @@ A LIMIT DEATH IS A WAIT, NOT A DEATH (DRE-3171):
               list DRE-3970 built, minus `overloaded_error`: a 529 is the
               service being busy, clears by itself, and names no reset, so it
               is a capacity signature but never a limit death.
+              A TOKEN OUR OWN RENEWAL REVOKED IS NEVER THIS (DRE-5856). The
+              console renews the Claude chain about every eight hours and
+              revokes the token before it, so a run in flight dies on a 401.
+              The receipt step prints `credential_rotation.log_line()` for
+              it, and `limit_kind` vetoes the Claude answer on that line: the
+              medic re-runs the run on the renewed token instead.
 
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
@@ -168,6 +174,10 @@ import check_agent_result  # noqa: E402 — after the path insert, by design
 # the same one rather than keeping a second, older copy of the same sentences.
 # Import-safe: model_fallback does no I/O and imports nothing of ours.
 import model_fallback  # noqa: E402 — after the path insert, by design
+
+# A run our own token renewal killed (DRE-5856): the line the receipt step
+# prints into the log, and the one reader of it. Import-safe: no I/O at import.
+import credential_rotation  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -376,9 +386,19 @@ def limit_kind(text: str) -> str | None:
     lower-cased data and the vendor prints "Switch to another model" with a
     capital S. The Linear signatures below keep their own casing: `RATELIMITED`
     and `LinearRateLimited` are codes, not prose.
+
+    THE CREDENTIAL-ROTATION VETO (DRE-5856) is the same kind of veto, on the
+    same side. A run whose Claude token was revoked under it by the console's
+    renewal hit no wall: it is re-run, never marked. Planner run 37328397948
+    died on `API Error: 401 OAuth access token has been revoked` at
+    utilization 0.06 and was marked `kind=claude` because its log carried
+    "monthly spend limit" — in a comment of plan.yml's own script, which
+    GitHub echoes into every planner run's log. The evidence is the receipt
+    step's printed line (`credential_rotation.in_log`), because the 401 itself
+    never reaches the log. Linear is untouched, as it is by the turn cap.
     """
     text = text or ""
-    if not turn_cap_in_text(text) and any(
+    if not turn_cap_in_text(text) and not credential_rotation.in_log(text) and any(
         sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES
     ):
         return "claude"

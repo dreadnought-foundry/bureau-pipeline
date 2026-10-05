@@ -77,6 +77,7 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_agent_result  # noqa: E402 — the death classes and agent_started
+import credential_rotation  # noqa: E402 — a token our own renewal revoked (DRE-5856)
 import death_cause  # noqa: E402 — which wall, its reset, its quote
 import execution_result  # noqa: E402 — the loader and the spend whitelist
 import usage_reading  # noqa: E402 — the run identity its sibling already writes
@@ -362,6 +363,12 @@ def emit(args: argparse.Namespace) -> int:
         f.write("\n")
     line = summary_line(doc)
     print(line)
+    # DRE-5856: the one place a run's log can say its Claude token was revoked
+    # under it. The action redacts the transcript out of the log, and the
+    # medic's limit classifier reads the log, so without this line a renewal
+    # that killed a run is read off whatever else the log happens to quote.
+    if credential_rotation.from_file(args.execution_file):
+        print(credential_rotation.log_line())
     print(f"death receipt written: {args.out} (delivery {doc['delivery_id']})")
     _append(args.step_summary, line)
     _append(args.github_output, f"path={args.out}")
