@@ -2000,10 +2000,12 @@ def _fleet_or_linear(lanes: tuple[str, ...], label: str) -> list[dict]:
     BoardHeld for this group (no Linear fallback, item 34). A door that
     stopped answering — on this read or earlier in the run — sends it to
     Linear as every read is sent, under the line that stop already printed.
-    `off` and `shadow` make no fleet read: the Linear read they always made.
+    `off` and `shadow` make no fleet read: the Linear read they always made,
+    through `active_cards` as it always was — the seam the sweep's own tests
+    stand in for, so `off` stays byte-identical.
     """
     if bureau_read.mode() != "on":
-        return _fetch_active_cards(lanes)
+        return active_cards(lanes)
     if lanes in _fleet_lane_cards:
         return _fleet_lane_cards[lanes]
     if lanes in _fleet_hold:

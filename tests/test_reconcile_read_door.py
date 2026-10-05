@@ -821,6 +821,27 @@ def test_off_and_shadow_make_no_fleet_read_and_spend_what_they_spent(monkeypatch
     assert reconcile._door_sourced == set()
 
 
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_off_and_shadow_read_green_light_through_active_cards(monkeypatch, mode):
+    """The planner line's Green Light read goes through `active_cards` outside
+    `on`, as it did before the fleet read — the seam the sweep's other tests
+    stand in for. A stand-in there answers it, and Linear is never asked."""
+    board = _fleet_board("portico")
+    asked = []
+
+    def stand_in(states=reconcile.SWEPT_LANES):
+        asked.append(tuple(states))
+        return [c for c in board if c["state"]["name"] in states]
+
+    monkeypatch.setattr(reconcile, "active_cards", stand_in)
+    linear = Linear()
+    with door_at(monkeypatch, *board, mode=mode) as door, wired(linear):
+        reconcile.serve_planner_line()
+    assert ("Green Light",) in asked
+    assert linear.queries == []
+    assert _fleet_asks(door) == []
+
+
 # ── DRE-5848: a move decided on a fleet-served card is conditional ─────────
 
 
