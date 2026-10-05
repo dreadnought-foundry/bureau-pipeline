@@ -89,8 +89,31 @@ def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path_factory.mktemp("runner-temp")))
 
 
+#: CI's own value for the Linear key (tests.yml sets `LINEAR_API_KEY: test-key`).
+CI_LINEAR_KEY = "test-key"
+#: The other Linear keys a job can carry; CI carries none of them.
+OTHER_LINEAR_KEYS = ("LINEAR_API_KEY_FALLBACK", "LINEAR_PLANNER_KEY", "LINEAR_RELEASE_KEY")
+
+
+def _no_live_linear_key(monkeypatch) -> None:
+    """Every test starts with CI's Linear key, wherever the suite runs (DRE-5846).
+
+    CI sets `LINEAR_API_KEY: test-key`, so a test that reaches Linear gets a
+    refusal that costs nothing. An engineer agent runs this same suite with the
+    FLEET key in its environment (agent-task.yml hands it over), and there the
+    same test spends a real request — and some of them write. Measured on main
+    1800714: 228 tests open 412 connections to api.linear.app. On 2026-10-04
+    two agents' full runs sat on the two largest drains of the fleet's
+    2,500-an-hour key (about 2,200 and 1,150 requests), which stopped every
+    sweep in the fleet for an hour. A test that needs another key sets its own."""
+    monkeypatch.setenv("LINEAR_API_KEY", CI_LINEAR_KEY)
+    for name in OTHER_LINEAR_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def fresh_sweep_board(monkeypatch, tmp_path_factory):
+    _no_live_linear_key(monkeypatch)
     _no_ambient_event(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
     _lift_drain_slots(monkeypatch)
