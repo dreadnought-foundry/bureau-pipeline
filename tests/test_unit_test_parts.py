@@ -455,3 +455,48 @@ def test_measure_reads_seconds_per_file_from_junit_xml(tmp_path):
         '<testcase classname="tests.test_unit_test_parts.TestX" name="b" time="2"/>'
         '</testsuite></testsuites>')
     assert parts.measure([report]) == {"tests/test_unit_test_parts.py": 3.25}
+
+
+def _module_defaults(path: Path) -> dict[str, str]:
+    """The `os.environ.setdefault(KEY, VALUE)` calls a test module makes at
+    import, read with `ast` (never executed)."""
+    import ast
+
+    found = {}
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        call = node.value if isinstance(node, ast.Expr) else None
+        if (isinstance(call, ast.Call)
+                and ast.unparse(call.func) == "os.environ.setdefault"
+                and len(call.args) == 2
+                and all(isinstance(a, ast.Constant) for a in call.args)):
+            found.setdefault(call.args[0].value, call.args[1].value)
+    return found
+
+
+def test_every_part_starts_from_the_environment_the_whole_suite_had():
+    """Test modules set environment defaults AT IMPORT, and modules such as
+    `reconcile` read them once, at their own first import. In one runner the
+    alphabetically first module that sets a key decides it for the whole
+    process; a part that does not collect that module would let some other
+    module decide, and tests written against the whole-suite value go red —
+    which is exactly what the first two runs of this PR did (DRE-5838:
+    `test_close_epics`, `test_promote_only`, then
+    `test_check_agent_result_failed_delivery` once the split moved).
+
+    So every key a test module defaults must be set in the parts' env, to the
+    value the whole suite would have had: the job's own value where the old
+    job already set one, otherwise the first module's in collection order.
+    """
+    env = next(s for s in _jobs()[PARTS_JOB]["steps"]
+               if s.get("name") == "Unit tests").get("env", {})
+    decided: dict[str, str] = {}
+    for rel in parts.discover(ROOT):
+        for key, value in _module_defaults(ROOT / rel).items():
+            decided.setdefault(key, value)
+    assert decided, "no test module sets an environment default?"
+    for key, value in decided.items():
+        assert key in env, (
+            f"{key} is defaulted by test modules at import but not set for "
+            f"the parts — whole-suite value {value!r}"
+        )
+    assert env["REPO_SLUG"] == decided["REPO_SLUG"]

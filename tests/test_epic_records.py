@@ -127,18 +127,6 @@ class FakeLinear:
 
 
 @pytest.fixture(autouse=True)
-def _this_repo_is_agent_bureau(monkeypatch):
-    """`reconcile.REPO_SLUG` is read ONCE, when the first test module in the
-    process imports `reconcile` — and every module sets its own default first.
-    The value above only wins when this module happens to be collected before
-    the others that set one (DRE-5838: the parts of `scripts unit tests` each
-    collect a different subset, and this test went red in one of them). Pin
-    the repo these cases are written for rather than inherit a neighbour's."""
-    monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/agent-bureau")
-    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
-
-
-@pytest.fixture(autouse=True)
 def _fresh_pass():
     """The record is a PASS cache: in production one process is one sweep, in a
     test session one process is hundreds. (`tests/conftest.py` resets it around
