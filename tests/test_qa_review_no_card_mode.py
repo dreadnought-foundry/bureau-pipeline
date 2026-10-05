@@ -363,7 +363,7 @@ class LiveExtractionTest(unittest.TestCase):
                     # `--json <fields>` with no `--jq`, answered as JSON.
                     'if [[ "$*" == *headRefName* && "$*" != *--jq* ]]; then\n'
                     '  printf \'{"headRefName": "%s", "headRefOid": "%s", "baseRefName": "main", '
-                    '"changedFiles": 1, "additions": 1, "deletions": 0}\\n\' '
+                    '"changedFiles": 1, "additions": 1, "deletions": 0, "isDraft": false}\\n\' '
                     '"$FAKE_BRANCH" "$(printf \'a%.0s\' $(seq 40))"\n'
                     'elif [[ "$*" == *headRefName* ]]; then\n'
                     '  echo "$FAKE_BRANCH"\n'
