@@ -126,8 +126,23 @@ THE RULES, in the order the ledger applies them.
     later run posts `released … because duplicate` for itself and no
     `waiting`.
   * The line: a `waiting` receipt whose trigger is `in progress` (the activate
-    route, a CEO approval) sorts to the FRONT; otherwise first come, first
-    served by place.
+    route, a CEO approval) sorts to the FRONT; then the cards the CEO named in
+    the order he set on the Overview, in that order; then everyone else, first
+    come, first served by place.
+
+THE ORDER THE CEO SETS (DRE-5807, its console half DRE-5782). The CEO drags
+the Overview's In line cards to choose which one a free planner takes next.
+The console keeps that order and serves it through the read door as `GET
+/api/v1/pipeline/planning-order` (`bureau_read.planning_order`). The line reads
+it ONLY where the next card is chosen or a place is counted — `next`, a refused
+claim's `waiting` place, and the sweep's backstop (`reconcile.
+serve_planner_line`) — through ONE wrapper, `planning_order()`, and orders
+through ONE key, `_line_rank`, so the receipt's "place N of M", `next` and the
+backstop never disagree. An identifier the order names that is not waiting
+(running, parked, gone) is skipped. A door that cannot answer — no address
+configured, no token, refused, 404, 5xx, a timeout, an answer outside the
+contract — leaves the line in arrival order, said in one line, and never stalls
+or fails it: the order decides who is NEXT, never whether anyone is.
 
 THE LANES. The ledger reads `LEDGER_LANES`: a plan-route card sits in
 `Planning` (where it stays when the plan route hands it to the second critic),
@@ -731,6 +746,9 @@ class Ledger:
     lanes: dict = field(default_factory=dict)
     now: datetime | None = None
     ttl_minutes: int = 0
+    #: The order the CEO set on the Overview (DRE-5807): identifiers, first
+    #: first. Empty is arrival order.
+    order: tuple = ()
     _slots: dict = field(default_factory=dict, repr=False)
     _views: dict = field(default_factory=dict, repr=False)
 
@@ -740,13 +758,42 @@ class Ledger:
     def slot_key(self, r: Receipt) -> tuple:
         return self._slots.get(_rid(r), _key(r))
 
+    def named(self, card: str) -> int:
+        """`card`'s position in the set order; every card it does not name
+        shares the one position after the last it does."""
+        try:
+            return self.order.index(card)
+        except ValueError:
+            return len(self.order)
 
-def ledger(cards, now=None, *, config: dict | None = None) -> Ledger:
+
+_FAR = datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _line_rank(led: Ledger, front: bool, card: str, place: datetime | None) -> tuple:
+    """THE order of the line, and the one key every reader sorts it by: an
+    approval's `in progress` trigger first, then the order the CEO set, then
+    place — first come, first served — with a card that has no place yet
+    behind every card that has one."""
+    return (0 if front else 1, led.named(card), 0 if place else 1, place or _FAR, card)
+
+
+def _normal_order(order) -> tuple:
+    """Identifiers as the board spells them, each once, first mention wins."""
+    wanted = (str(i).strip().upper() for i in (order or ()))
+    return tuple(dict.fromkeys(i for i in wanted if i))
+
+
+def ledger(cards, now=None, *, config: dict | None = None, order=None) -> Ledger:
     """The fleet's planner slots, read off cards in the sweep's shape
-    (`identifier`, `state.name`, `comments.nodes[{id, body, createdAt}]`)."""
+    (`identifier`, `state.name`, `comments.nodes[{id, body, createdAt}]`).
+
+    `order` is the order the CEO set (`planning_order()`); it orders
+    `waiting` and nothing else — who runs and how many slots are free are the
+    receipts' alone."""
     cfg = config or load()
     at = _now(now)
-    out = Ledger(now=at, ttl_minutes=cfg["claim_ttl_minutes"])
+    out = Ledger(now=at, ttl_minutes=cfg["claim_ttl_minutes"], order=_normal_order(order))
     line = []
     for card in cards or []:
         ident = card.get("identifier")
@@ -774,7 +821,8 @@ def ledger(cards, now=None, *, config: dict | None = None) -> Ledger:
             place = out.places[ident] = view.line_place()
             stand = view.line_receipt()
             if stand is not None:
-                line.append(((0 if _front(stand.trigger) else 1, _dt(place), ident), stand))
+                line.append((_line_rank(out, _front(stand.trigger), ident, _dt(place)),
+                             stand))
     out.waiting = [r for _, r in sorted(line, key=lambda pair: pair[0])]
     return out
 
@@ -810,21 +858,17 @@ def _place(led: Ledger, mine: Receipt, limit: int) -> tuple[int, int]:
     Cards already waiting keep their line entries. A claimant that has not yet
     read but will be refused counts too: by its own earlier line entry if it
     has one, and otherwise BEHIND this card — its `waiting` will be posted
-    after this one's.
+    after this one's — unless the order the CEO set puts it ahead. Every
+    comparison is `_line_rank`, the key the line itself is sorted by.
     """
-    far = datetime.max.replace(tzinfo=timezone.utc)
-
-    def rank(front, entry, ident):
-        return (0 if front else 1, 0 if entry else 1, entry or far, ident)
-
     my_entry = _dt(led._views[mine.card].arrival(mine))
-    my_rank = rank(_front(mine.trigger), my_entry, mine.card)
+    my_rank = _line_rank(led, _front(mine.trigger), mine.card, my_entry)
     ahead, total = 0, 1
     for w in led.waiting:
         if w.card == mine.card:
             continue
         total += 1
-        if rank(_front(w.trigger), _dt(led.places.get(w.card)), w.card) < my_rank:
+        if _line_rank(led, _front(w.trigger), w.card, _dt(led.places.get(w.card))) < my_rank:
             ahead += 1
     for r in led.running:
         if r.card == mine.card or led.lanes.get(r.card) not in WAITING_LANES:
@@ -837,9 +881,10 @@ def _place(led: Ledger, mine: Receipt, limit: int) -> tuple[int, int]:
             continue  # admitted, or will be
         total += 1
         entry = _dt(led._views[r.card].arrival(r))
-        if entry is None and my_entry is None and _front(r.trigger) == _front(mine.trigger):
-            continue  # fresh, and posting after this card
-        if rank(_front(r.trigger), entry, r.card) < my_rank:
+        if (entry is None and my_entry is None and _front(r.trigger) == _front(mine.trigger)
+                and led.named(r.card) == led.named(mine.card)):
+            continue  # fresh, level with this card, and posting after it
+        if _line_rank(led, _front(r.trigger), r.card, entry) < my_rank:
             ahead += 1
     return ahead + 1, total
 
@@ -920,6 +965,53 @@ def _nodes(card: dict) -> list:
     return (card.get("comments") or {}).get("nodes") or []
 
 
+ORDER_FALLBACK = ("planner line: the Overview's order could not be read ({why}) — "
+                  "the line runs in arrival order")
+
+
+def _say(line: str) -> None:
+    """The order read's one line goes to stderr, as the read door's do: the
+    CLI's stdout carries its `key=value` answers."""
+    print(line, file=sys.stderr, flush=True)
+
+
+def planning_order() -> list:
+    """The order the CEO set on the Overview (DRE-5807), read through the
+    console's read door — or `[]`, arrival order, when it cannot be read.
+
+    THE ONE READER: `settle_claim`, `next` and the sweep's backstop all come
+    through here. It never raises and never blocks past the door client's own
+    bound (connect 1 s, the whole answer 8 s, `bureau_read`), and it says
+    exactly one line each time it is asked: what it read, or why it fell back.
+    """
+    try:
+        import bureau_read  # noqa: PLC0415 — `check` must run with this file alone
+        read = bureau_read.planning_order()
+    except Exception as exc:  # noqa: BLE001 — a read failure never stalls the line
+        reason = getattr(exc, "reason", None) or type(exc).__name__
+        detail = " ".join(str(getattr(exc, "detail", None) or exc).split())
+        _say(ORDER_FALLBACK.format(why=f"{reason}: {detail}" if detail else reason))
+        return []
+    order = list(_normal_order(read.order))
+    if order:
+        _say(f"planner line: the Overview's order names {len(order)} card(s), set by "
+             f"{read.set_by or 'an unrecorded person'} at {read.set_at or 'an unrecorded time'}"
+             " — they go first, after any approval; the rest follow in arrival order")
+    else:
+        _say("planner line: no order is set on the Overview — the line runs in arrival order")
+    return order
+
+
+def ordered_ledger(cards, now=None, *, config: dict | None = None) -> Ledger:
+    """The ledger with the CEO's order applied — the door asked only when the
+    order can change who is next: two or more cards waiting."""
+    cfg, at = config or load(), _now(now)
+    led = ledger(cards, at, config=cfg)
+    if len(led.waiting) < 2:
+        return led
+    return ledger(cards, at, config=cfg, order=planning_order())
+
+
 # --------------------------------------------------------------------------- #
 # claim                                                                        #
 # --------------------------------------------------------------------------- #
@@ -966,6 +1058,11 @@ def settle_claim(linear_ops, identifier, *, run_id, repo, trigger_state, reason=
     limit = cap(cfg)
     if admits(led, mine, limit):
         return _answer(True, waiting=len(led.waiting))
+    # Refused: the place it waits at is counted in the order the line is
+    # served in, the CEO's order included (DRE-5807). Read only now — an
+    # admitted run has no place to count.
+    led = ledger(cards, now=led.now, config=cfg, order=planning_order())
+    mine = next(r for r in led._views[identifier].open_claims() if _rid(r) == _rid(mine))
     place, of = _place(led, mine, limit)
     post_waiting(linear_ops, identifier, run_id=run_id, repo=repo,
                  trigger_state=trigger_state, place=place, of=of, reason=reason)
@@ -1099,7 +1196,7 @@ def _cmd_next(args) -> int:
     import linear_ops  # noqa: PLC0415
     found = None
     try:
-        found = next_in_line(ledger(read_board(linear_ops)))
+        found = next_in_line(ordered_ledger(read_board(linear_ops)))
     except Exception as exc:  # noqa: BLE001
         _warn(f"planner queue: could not read the line — {exc}")
     owner, _, name = (found.repo if found else "").partition("/")
