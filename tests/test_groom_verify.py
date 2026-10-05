@@ -352,6 +352,8 @@ def test_a_pr_whose_branch_could_not_be_read_leaves_the_card_unread():
     assert cancel(got) == []
     row = record(got, "DRE-101")
     assert (row["verdict"], row["unread"]) == ("unread", ["merged_prs"])
+    other_card = record(got, "DRE-102")
+    assert (other_card["verdict"], other_card["unread"]) == ("clean", [])
 
 
 def test_a_pr_already_proven_for_the_card_is_not_read_again_for_its_branch():

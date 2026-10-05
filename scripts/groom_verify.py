@@ -378,9 +378,15 @@ def merged_mentions(identifiers: list[str], *, run=None, owners=None,
                             except Exception as e:  # noqa: BLE001
                                 heads[url] = e
                         if isinstance(heads[url], Exception):
-                            gaps.setdefault(
-                                i, f"the branch of {url} could not be read: "
-                                   f"{heads[url]}")
+                            # Unread only for a card the PR names: a search
+                            # chunk asks for five, and the other four's
+                            # answer does not hang on this branch.
+                            named = "\n".join(item.get(k) or ""
+                                              for k in ("title", "body"))
+                            if re.search(_ref(i), named):
+                                gaps.setdefault(
+                                    i, f"the branch of {url} could not be "
+                                       f"read: {heads[url]}")
                             continue
                         if not _pr_is_for(i, item, branch=heads[url],
                                           attached=on):
