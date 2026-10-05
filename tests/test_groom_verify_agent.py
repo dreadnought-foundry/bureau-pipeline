@@ -8,7 +8,8 @@ The two failures the epic names, held here:
   * DRE-2382's file still exists, and only a reader of the code could see the
     card was obsolete — so an `obsolete` answer carrying a `file:line` proof
     moves the card to the Cancel list with that proof as the reason, and the
-    next spare that is still needed takes its slot;
+    next spare that is still needed joins the Planning list in the rules'
+    order;
   * a run that dies must land as `unverified`, never as `still-needed` — no
     verdict file, a failed or skipped step, an answer without proof, and a
     verdict artifact that never arrived all say `unverified` with the reason.
@@ -217,7 +218,7 @@ def row_of(prop, identifier):
 # --------------------------------------------------------------------------
 # criterion 1 — an obsolete answer with file:line proof cancels the card
 # --------------------------------------------------------------------------
-def test_an_obsolete_answer_with_file_line_proof_cancels_and_the_next_spare_holds_the_slot(tmp_path):
+def test_an_obsolete_answer_with_file_line_proof_cancels_and_the_next_spare_joins_in_order(tmp_path):
     prop = proposal()
     assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
     pfile, targets, _ = build_targets(tmp_path, prop)
@@ -242,9 +243,9 @@ def test_an_obsolete_answer_with_file_line_proof_cancels_and_the_next_spare_hold
                              "the portal directly.")
     assert ("src/legacy_migration_lib.ts:886 — export function "
             "migrateRoster(portal) {") in reason
-    # The next spare still needed holds the canceled card's position.
-    assert planning(after) == ["DRE-101", "DRE-104", "DRE-103"]
-    assert row_of(after, "DRE-104")["position"] == 2
+    # The next spare still needed joins the list in the rules' order.
+    assert planning(after) == ["DRE-101", "DRE-103", "DRE-104"]
+    assert row_of(after, "DRE-104")["position"] == 3
     assert row_of(after, "DRE-104")["cycle"] == row_of(prop, "DRE-102")["cycle"]
     assert "DRE-104" not in [r["identifier"] for r in after["outcomes"]["not-now"]]
     seq = {r["identifier"]: r for r in after["sequence"]}
@@ -273,7 +274,7 @@ def test_an_unverified_spare_never_takes_a_slot_and_a_done_spare_is_canceled(tmp
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
-    assert planning(after) == ["DRE-106", "DRE-102", "DRE-103"]
+    assert planning(after) == ["DRE-102", "DRE-103", "DRE-106"]
     assert {"DRE-101", "DRE-105"} <= {r["identifier"] for r in cancel(after)}
     assert row_of(after, "DRE-105")["source"] == "verify-agent"
     assert "DRE-104" in [r["identifier"] for r in after["outcomes"]["not-now"]]
@@ -771,7 +772,7 @@ def test_apply_cancels_the_three_cancel_answers_and_keeps_partly_solved(tmp_path
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
-    assert planning(after) == ["DRE-105", "DRE-106", "DRE-103"]
+    assert planning(after) == ["DRE-103", "DRE-105", "DRE-106"]
     dead = {r["identifier"]: r for r in cancel(after)}
     for identifier in ("DRE-101", "DRE-102", "DRE-104"):
         answer, said = answers[identifier]
@@ -1132,7 +1133,7 @@ def _excluded_doc(card_id, reason):
             "finished_at": "2026-09-29T06:00:01Z"}
 
 
-def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_holds_the_slot(tmp_path):
+def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_joins_in_order(tmp_path):
     prop = proposal()
     assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
     pfile, targets, _ = build_targets(tmp_path, prop)
@@ -1147,8 +1148,10 @@ def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_holds_th
     # The workflow's apply step passes no `--targets`.
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
-    assert planning(after) == ["DRE-104", "DRE-102", "DRE-103"]
-    assert row_of(after, "DRE-104")["position"] == 1
+    assert planning(after) == ["DRE-102", "DRE-103", "DRE-104"]
+    assert row_of(after, "DRE-104")["position"] == 3
+    assert row_of(after, "DRE-104")["reason"] == (
+        "in the batch by the rules — newest first, position 3")
     assert "DRE-101" not in [r["identifier"] for r in cancel(after)]
     waiting = {r["identifier"]: r for r in after["outcomes"]["not-now"]}
     want = f"excluded without judgement: {reason}"
@@ -1177,6 +1180,32 @@ def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_holds_th
     assert "DRE-101" not in "\n".join(groomer._render_not_now(after))
 
 
+def test_two_planning_cards_leaving_keep_the_rules_order_and_the_spares_follow(tmp_path):
+    # DRE-5858: a promoted spare used to take the leaving card's position, so
+    # it sat ahead of a card the rules had placed before it.
+    prop = proposal()
+    assert planning(prop) == ["DRE-101", "DRE-102", "DRE-103"]
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    d = tmp_path / "verdicts" / "groom-verdict-DRE-101"
+    d.mkdir(parents=True)
+    write(d / "verdict.json", _excluded_doc("DRE-101", "hand-built"))
+    run_verdict(tmp_path, "DRE-103", targets, raw=raw_answer(
+        tmp_path, "DRE-103", "obsolete", [PROOF_LINE]))
+    for other in ("DRE-102", "DRE-104", "DRE-105"):
+        run_verdict(tmp_path, other, targets, raw=raw_answer(
+            tmp_path, other, "still-needed", [PROOF_LINE]))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == ["DRE-102", "DRE-104", "DRE-105"]
+    assert [row_of(after, i)["position"]
+            for i in ("DRE-102", "DRE-104", "DRE-105")] == [1, 2, 3]
+    assert row_of(after, "DRE-105")["reason"] == (
+        "in the batch by the rules — newest first, position 3")
+    assert after["verify"]["slots_unfilled"] == 0
+    assert after["id"] == groomer.proposal_id(after)
+
+
 def test_an_excluded_spare_takes_no_slot_and_is_listed_the_same_way(tmp_path):
     prop = proposal()
     pfile, targets, _ = build_targets(tmp_path, prop)
@@ -1192,7 +1221,7 @@ def test_an_excluded_spare_takes_no_slot_and_is_listed_the_same_way(tmp_path):
 
     after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
 
-    assert planning(after) == ["DRE-101", "DRE-105", "DRE-103"]
+    assert planning(after) == ["DRE-101", "DRE-103", "DRE-105"]
     assert "DRE-104" not in [r["identifier"] for r in cancel(after)]
     waiting = {r["identifier"]: r for r in after["outcomes"]["not-now"]}
     assert waiting["DRE-104"]["reason"] == f"excluded without judgement: {reason}"
