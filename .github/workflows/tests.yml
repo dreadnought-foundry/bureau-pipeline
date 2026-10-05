@@ -145,6 +145,15 @@ jobs:
           LINEAR_API_KEY: test-key
           REPO: test/test
           GH_TOKEN: test
+          # Test modules default REPO_SLUG at import, and `reconcile` reads it
+          # once, at its own first import — so in one runner the first module
+          # collected, `test_absent_workflow_is_not_unreadable.py`, decided it
+          # for everyone. A part that does not collect that module let another
+          # decide, and tests written against the whole-suite value went red on
+          # this card's first two runs. Setting it here gives every part the
+          # environment the whole suite had, whatever the split
+          # (`tests/test_unit_test_parts.py` derives the value and holds it).
+          REPO_SLUG: agent-bureau
           BUREAU_REQUIRE_GIT_HISTORY: "1"
         run: |
           mapfile -t FILES < "$RUNNER_TEMP/unit-part-files.txt"
