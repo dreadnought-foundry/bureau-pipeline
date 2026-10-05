@@ -161,9 +161,12 @@ class ReconcileCallSitesDeclareTheirArguments(unittest.TestCase):
     def test_the_lint_runs_in_ci(self):
         """A guard nothing runs is a guard nobody keeps."""
         tests_yml = yaml.safe_load((WORKFLOWS / "tests.yml").read_text())
+        # Any job: since DRE-5838 the suite runs in parts and the repo
+        # checks run in the job carrying the required name.
         runs = [
             step.get("run", "")
-            for step in tests_yml["jobs"]["unit"]["steps"]
+            for job in tests_yml["jobs"].values()
+            for step in job.get("steps", [])
         ]
         self.assertTrue(
             any("check_reconcile_env.py" in run for run in runs), runs

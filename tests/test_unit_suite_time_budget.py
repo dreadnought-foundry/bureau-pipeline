@@ -113,14 +113,27 @@ only 78 seconds. DRE-5838 (split the suite into parallel parts) is the real
 fix: this cap has now doubled four times in a month (5 to 10 to 20 to 40 to
 80), and a clock that has to double every week is measuring the suite, not
 limiting it. The constants below are re-measured to this window.
+
+AND THEN SPLIT (DRE-5838, 2026-10-04). The job no longer runs the whole suite in
+one runner: `unit` is a matrix of parts, each handed a share of the test files
+by `scripts/unit_test_parts.py`, and a separate job keeps the required check
+name `scripts unit tests` (`tests/test_unit_test_parts.py`). So the clock below
+is a PART's clock, and the arithmetic is the same rule applied to a part: the
+heaviest part's predicted share of the longest whole-suite run, doubled. The
+whole-suite measurements above stay — they are what a part's share is a share
+of.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "scripts"))
+
+import unit_test_parts  # noqa: E402
 WORKFLOWS = REPO / ".github" / "workflows"
 
 WORKFLOW = "tests.yml"
@@ -158,25 +171,38 @@ def test_the_unit_job_declares_a_wall_clock():
     assert _timeout_minutes(WORKFLOW, JOB) > 0
 
 
-def test_the_cap_clears_the_point_where_a_suite_was_killed_mid_sentence():
-    """THE defect, twice: the suite finished, said so, and the check went red.
+def _part_count() -> int:
+    doc = yaml.safe_load((WORKFLOWS / WORKFLOW).read_text())
+    return len(doc["jobs"][JOB]["strategy"]["matrix"]["part"])
 
-    A required check that kills a run whose answer is already printed is worse
-    than a slow one: nobody gets the exit code, so it spends a full critic
-    round and a fix-loop attempt on a question the suite already answered.
+
+def _heaviest_part_seconds() -> float:
+    """The heaviest part's predicted share of the longest whole-suite run."""
+    files = unit_test_parts.discover(REPO)
+    weights = unit_test_parts.weigh(
+        files, unit_test_parts.load_weights(unit_test_parts.DURATIONS))
+    split = unit_test_parts.assign(files, _part_count(), weights)
+    heaviest = max(sum(weights[f] for f in part) for part in split)
+    return OBSERVED_MAX_SECONDS * heaviest / sum(weights.values())
+
+
+def test_the_cap_clears_the_heaviest_part_with_the_spread_on_top():
+    """THE defect, four times: the suite was still running, and the check went
+    red. A part's clock has to clear the part's own predicted work plus the
+    run-to-run spread, scaled to its share — the 16-vs-93 shape must not
+    reappear one level down.
     """
     wall = _timeout_minutes(WORKFLOW, JOB) * 60
-    assert wall >= CANCELLED_AT_SECONDS + OBSERVED_SPREAD_SECONDS, (
-        f"{WORKFLOW} job {JOB!r} dies at {wall}s, but job 111542354301 reached "
-        f"{CANCELLED_AT_SECONDS}s at 76% with no test failed and was "
-        f"canceled. Clearing that point alone is not enough — the "
-        f"same suite varies by {OBSERVED_SPREAD_SECONDS}s run to run, so the "
-        f"cap must clear it by at least that spread."
+    share = _heaviest_part_seconds()
+    spread = OBSERVED_SPREAD_SECONDS * share / OBSERVED_MAX_SECONDS
+    assert wall >= share + spread, (
+        f"{WORKFLOW} job {JOB!r} gives each part {wall}s, but the heaviest "
+        f"part is predicted at {share:.0f}s with {spread:.0f}s of spread."
     )
 
 
-def test_the_cap_has_real_margin_over_the_longest_real_run():
-    """Not just above the maximum — above it with room.
+def test_the_cap_has_real_margin_over_the_heaviest_part():
+    """Not just above the heaviest part — above it with room.
 
     The 5m cap sat 16 seconds above the longest observed run while that run's
     own spread was 93 seconds; the 10m cap that replaced it sat 52 seconds
@@ -184,15 +210,25 @@ def test_the_cap_has_real_margin_over_the_longest_real_run():
     above, against a spread of 377; the 40m cap after that sat 39 seconds
     above, against a spread of 1,166. By DRE-2422's standard ("a run that
     SUCCEEDS with exactly zero margin left is not a budget"), each was already
-    spent before the branch that tripped it existed. Doubling the observed
-    maximum is the same deliberately generous shape the turn-budget siblings
-    use, and it leaves room for a suite that has grown by ~3,600 tests since
-    the last time this was measured.
+    spent before the branch that tripped it existed. Doubling the measured
+    work is the same deliberately generous shape the turn-budget siblings use;
+    since DRE-5838 the measured work is a part's, not the whole suite's.
     """
     wall = _timeout_minutes(WORKFLOW, JOB) * 60
-    assert wall >= OBSERVED_MAX_SECONDS * 2, (
-        f"{WORKFLOW} job {JOB!r} runs the whole suite in {wall}s against a "
-        f"longest real run of {OBSERVED_MAX_SECONDS}s. The suite grows every "
-        f"week; a cap without 2x headroom over measured work turns the next "
-        f"few dozen green tests into a red required check."
+    share = _heaviest_part_seconds()
+    assert wall >= share * 2, (
+        f"{WORKFLOW} job {JOB!r} gives each part {wall}s against a heaviest "
+        f"part predicted at {share:.0f}s. The suite grows every week; a cap "
+        f"without 2x headroom over measured work turns the next few dozen "
+        f"green tests into a red required check."
     )
+
+
+def test_the_aggregate_job_declares_a_wall_clock_too():
+    """The job carrying the required name waits on the parts, then runs the
+    static checks. It needs its own cap, or it inherits GitHub's six hours."""
+    doc = yaml.safe_load((WORKFLOWS / WORKFLOW).read_text())
+    named = [k for k, j in doc["jobs"].items()
+             if j.get("name") == "scripts unit tests"]
+    assert len(named) == 1, named
+    assert _timeout_minutes(WORKFLOW, named[0]) > 0
