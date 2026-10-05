@@ -32,9 +32,13 @@ alone.
 
 ## Skipped, with the reason printed
 
-  * a person card with a dispatched run receipt (`⏳`, `🧠`) newer than its
-    `hand-built` / `no-code` mark — a run that started after the mark is a run
-    nobody should have to explain away by moving the card under it;
+  * a person card with a run receipt newer than its `hand-built` / `no-code`
+    mark — a run that started after the mark is a run nobody should have to
+    explain away by moving the card under it. A run receipt is a `⏳` heartbeat,
+    or a `🧠 model-attempt:` heartbeat naming an agent starting (a dispatched
+    build). The Planning classifier's and the groomer's `🧠 model-attempt:`
+    receipts are a model reading the card, not a run at it, and do not count
+    (DRE-5877: they held DRE-4968 and the groomer's standing card in Todo);
   * with `--only`, a named card that is not in Todo.
 
 It refuses to run at all, before any write, when Linear cannot be read. No card
@@ -92,8 +96,19 @@ PERSON_MARKS = tuple(sorted({
 MERGED_RECEIPT = "✅ Merged:"
 FINISHED_MARKERS = (MERGED_RECEIPT, linear_ops.MERGED_NOT_CLOSED_MARKER)
 
-#: A dispatched run's proof-of-life receipts (`reconcile._LIFE_PREFIXES`).
-LIFE_PREFIXES = ("⏳", "🧠")
+#: A run's phase heartbeats (`⏳ n/5`, and the ⏳ notices posted into a live
+#: run): every one is about a run that started.
+PHASE_PREFIX = "⏳"
+
+#: The heartbeat posted before an agent gets a turn: agent-task.yml's
+#: `🧠 model-attempt: <model> — <role> agent starting (turns=…)` for a build,
+#: plan.yml's `— planner agent starting.` for a planner. The other
+#: `🧠 model-attempt:` lines are a model reading the card — the Planning
+#: classifier's `— planning classifier read the card.`, the groomer's `— groomer
+#: judgement ranked the census` on its standing card every morning — and are
+#: not a run at the card (DRE-5877). `reconcile._LIFE_PREFIXES` counts them as
+#: life on purpose; this rule asks a narrower question.
+_AGENT_STARTING = re.compile(r"^🧠 model-attempt:.* — [a-z][a-z0-9-]* agent starting\b")
 
 _CARD_ID = re.compile(r"^DRE-\d+$")
 
@@ -215,18 +230,25 @@ def mark_added_at(card: dict) -> datetime | None:
     return newest or _when(card.get("createdAt"))
 
 
+def is_run_receipt(body: str) -> bool:
+    """Whether this comment says a run started at the card: a `⏳` heartbeat,
+    or a `🧠 model-attempt:` naming an agent starting. Never a classifier's or
+    the groomer's receipt."""
+    text = (body or "").lstrip()
+    return text.startswith(PHASE_PREFIX) or bool(_AGENT_STARTING.match(text))
+
+
 def run_after_mark(card: dict) -> str | None:
-    """Why this person card must not move — a dispatched run receipt newer than
-    its mark — or None."""
+    """Why this person card must not move — a run receipt newer than its mark
+    — or None."""
     mark = mark_added_at(card)
     for comment in reversed(_comments(card) or []):
-        body = (comment.get("body") or "").lstrip()
-        if not body.startswith(LIFE_PREFIXES):
+        if not is_run_receipt(comment.get("body") or ""):
             continue
         at = _when(comment.get("createdAt"))
         if at is None or mark is None or at > mark:
             return (
-                f"a dispatched run receipt at {comment.get('createdAt')} is newer "
+                f"a run receipt at {comment.get('createdAt')} is newer "
                 f"than its person mark ({mark.isoformat() if mark else 'unreadable'})"
                 " — a run started after the card was marked, so it is not moved"
             )
