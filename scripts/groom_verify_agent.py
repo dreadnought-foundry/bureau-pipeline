@@ -938,11 +938,15 @@ def apply(proposal: dict, found: dict[str, dict],
     # The list is in the rules' order (DRE-5858): each card's place in the
     # sequence `propose` walked, never the slot a spare inherited — so a
     # promoted spare follows every card the rules placed, and is numbered
-    # from 1 with them. Its reason names that number, so it comes last.
+    # from 1 with them. The rules' reason names that number, so it is
+    # rewritten after it — on a promoted spare, and on any card that moved
+    # up. A reason the rules did not write names no number and is kept.
     kept.sort(key=lambda r: (by_seq.get(r["identifier"]) or r)["position"])
     for n, row in enumerate(kept, 1):
+        ours = (row["identifier"] in promoted
+                or row.get("reason") == groomer._rules_reason("now", row))
         row["position"] = n
-        if row["identifier"] in promoted:
+        if ours:
             row["reason"] = groomer._rules_reason("now", row)
     outcomes["now"] = kept
     gone = set(canceled) | set(promoted)

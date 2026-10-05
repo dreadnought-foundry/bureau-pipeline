@@ -1152,6 +1152,9 @@ def test_an_excluded_planning_card_leaves_both_lists_and_the_next_spare_joins_in
     assert row_of(after, "DRE-104")["position"] == 3
     assert row_of(after, "DRE-104")["reason"] == (
         "in the batch by the rules — newest first, position 3")
+    # A card that moved up says its new number, not the one it was proposed at.
+    for row in after["outcomes"]["now"]:
+        assert row["reason"].endswith(f"position {row['position']}")
     assert "DRE-101" not in [r["identifier"] for r in cancel(after)]
     waiting = {r["identifier"]: r for r in after["outcomes"]["not-now"]}
     want = f"excluded without judgement: {reason}"
@@ -1202,8 +1205,36 @@ def test_two_planning_cards_leaving_keep_the_rules_order_and_the_spares_follow(t
             for i in ("DRE-102", "DRE-104", "DRE-105")] == [1, 2, 3]
     assert row_of(after, "DRE-105")["reason"] == (
         "in the batch by the rules — newest first, position 3")
+    for row in after["outcomes"]["now"]:
+        assert row["reason"].endswith(f"position {row['position']}")
     assert after["verify"]["slots_unfilled"] == 0
     assert after["id"] == groomer.proposal_id(after)
+
+
+def test_a_renumbered_card_keeps_a_reason_the_rules_did_not_write(tmp_path):
+    # Only the rules' sentence names a position, so only it is rewritten when
+    # a card moves up; a reason someone else wrote stays word for word.
+    prop = proposal()
+    written = "the roster import is blocked on it"
+    for rows in (prop["outcomes"]["now"], prop["sequence"]):
+        for row in rows:
+            if row["identifier"] == "DRE-102":
+                row["reason"] = written
+    pfile, targets, _ = build_targets(tmp_path, prop)
+    d = tmp_path / "verdicts" / "groom-verdict-DRE-101"
+    d.mkdir(parents=True)
+    write(d / "verdict.json", _excluded_doc("DRE-101", "hand-built"))
+    for other in ("DRE-102", "DRE-103", "DRE-104"):
+        run_verdict(tmp_path, other, targets, raw=raw_answer(
+            tmp_path, other, "still-needed", [PROOF_LINE]))
+
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts")
+
+    assert planning(after) == ["DRE-102", "DRE-103", "DRE-104"]
+    assert row_of(after, "DRE-102")["position"] == 1
+    assert row_of(after, "DRE-102")["reason"] == written
+    assert row_of(after, "DRE-103")["reason"] == (
+        "in the batch by the rules — newest first, position 2")
 
 
 def test_an_excluded_spare_takes_no_slot_and_is_listed_the_same_way(tmp_path):
