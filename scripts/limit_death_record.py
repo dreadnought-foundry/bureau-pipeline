@@ -25,8 +25,8 @@ The medic's own line (`medic_line`) names the card and says whether recovery
 is automatic or needs a person. It is automatic when the marker landed or the
 record was kept, unless the sweep would hand the marker to a person anyway
 (`limit_recovery.handoff_reason`, or a `needs-human` hold the sweep honours
-for that stage). It needs a person only when neither the marker nor the record
-could be kept. It never asks for a by-hand re-entry otherwise.
+for that stage) — and it needs a person when neither the marker nor the record
+could be kept. Only that last case asks for a re-entry by hand.
 
 ## The sweep: read the records, write the marker once Linear answers
 
