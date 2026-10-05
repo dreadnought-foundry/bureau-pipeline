@@ -1,19 +1,20 @@
 # Groomer newest-first proof — one real morning, and the 2026-09-26 proposal replayed (DRE-4968)
 
-**Status: OBSERVED 2026-10-05, NOT A PASS.** The morning ran and posted on
-time. Its merged-PR count is a number, and no card on its Planning list was
-already done. Two criteria fail:
+**Status: OBSERVED 2026-10-05. THIS IS A FAILING PROOF, merged on purpose so it can be wrong in public.**
+The card stays open on its failures.
 
-- **The served Planning list is not newest first.** Three cards from behind the
-  list took the slots of three excluded cards, at those cards' positions and
-  not at their own (§3).
-- **The replay catches one of the three cards on evidence that existed on
-  2026-09-26.** It flags all three, but two of them only on board state written
-  after that proposal (§8).
+| Criterion | Verdict |
+|---|---|
+| Merged-PR count is a number | **Met**: 940 |
+| No card on the Planning list was already done | **Met** |
+| The Planning list is newest first | **Fails**: three spares took excluded cards' slots (§3) |
+| The replay flags DRE-2897, DRE-3526 and DRE-2382 with evidence | **Fails, read strictly**: only DRE-2897 is caught on evidence that existed on 2026-09-26 (§8) |
+| All eight sections observed live | **Not complete**: §7 ("Don't do" stayed put) was not exercised, because nobody pressed "Don't do" on this proposal by 08:20 PT |
 
-A third finding, outside the criteria: the morning's one Cancel, DRE-4059, is
-wrong (§4). Section 7 is not exercised yet. Nobody had pressed "Don't do" on
-this proposal by 08:20 PT.
+The morning itself ran and posted on time. The defects behind the failures, each
+with its code location on `main` `442dc2c`, are listed under "Defects for fix
+cards" at the end. A third defect, outside the criteria, is there too: the
+morning's one Cancel, DRE-4059, is wrong (§4).
 
 The proof for [DRE-4968](https://linear.app/dreadnoughtfoundry/issue/DRE-4968),
 from epic DRE-4963. Every time is Pacific (PDT, UTC−7) and labeled PT. Read off
@@ -280,6 +281,45 @@ date their evidence, because the card does not ask about them.
 - **DRE-4059's Cancel is wrong** (§4). If the CEO approves this proposal as
   served, the drain would cancel a card whose work has not shipped. He should
   press "Don't do" on it.
+
+## Defects for fix cards
+
+Each is observed on 2026-10-05 and located on bureau-pipeline `main` `442dc2c`.
+The route for each is a mid-epic discovery on DRE-4963. The operator files it,
+and this record does not.
+
+1. **A promoted spare takes the excluded card's slot, not its own place in the
+   order.** `scripts/groom_verify_agent.py:925`, in the walk over `now` at
+   `:903–926`:
+   `row.update(identifier=taker, position=slot["position"],`. When the verify
+   step excludes or cancels a Planning card, the next still-needed spare is
+   written at the vacated position. On this morning that put DRE-5564, DRE-5662
+   and DRE-5658 (created 10-01 and 10-02 PT) at #5, #11 and #18, ahead of cards
+   created on 10-03 and 10-04. The 08:04 PT dry run did the same, with DRE-5658
+   at #5. Expected: the served list keeps the rules' order (band, then newest
+   UTC day, then repo, then timestamp, with collisions and blockers honored),
+   and the spares join in their own sequence order.
+2. **Layer A reads "card DRE-N" anywhere in a merged PR's body as "this PR is
+   for DRE-N".** `scripts/groom_verify.py:214–216`, in `_pr_is_for`: the
+   `\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|implements?|card)\b\s*:?\s*\**\s*DRE-N`
+   alternative includes the bare word `card`. bureau-pipeline #415 (DRE-4058's
+   PR, `Closes DRE-4058.`) says "The sibling card DRE-4059 covers who gets
+   asked at all…". That matched, so DRE-4059 went on the Cancel list as
+   `already done`, and its work has not shipped. Expected: a PR counts as for a
+   card only on a closing keyword, its title, its branch, or a Linear issue
+   link, never on a mention.
+3. **Layer A's merged-PR search cannot see EveryBite or DeltaSolv, so it marks
+   every card unread on that source.** `scripts/groom_verify.py:304–308`
+   (`blind = …`; `the Bureau App token's installation cannot see …`). The
+   search runs on one token, the Bureau App's dreadnought-foundry installation.
+   The per-owner lookup legs read all three owners the same morning. This is
+   already a card, **DRE-5746**, which is on this morning's Planning list at #15,
+   so no new card is needed.
+
+Not defects, and not for fix cards:
+- **The replay's strict reading (§8)** is a limit of replaying on today's board.
+  The check is not wrong.
+- **§7** waits on a click.
 
 ## The card's criteria
 
