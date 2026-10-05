@@ -131,6 +131,19 @@ live in `LIMIT_SIGNATURES`. `overloaded_error` is excluded on purpose: an HTTP
 529 is the service being busy, it clears by itself and names no reset, so
 waiting for one would park a card on a window that was never closed. The
 turn-cap veto still runs first over the wider list.*
+*Amended 2026-10-04 (DRE-5837): the marker write can itself be refused. On
+2026-10-02 epic DRE-3624's planner died on the Claude usage limit, Linear
+refused the medic's marker, and with no marker `limit_recovery.py` had nothing
+to bring back — the card sat two days. The medic now writes the marker
+through `scripts/limit_death_record.py`, three attempts, and a write Linear
+still refuses is kept on the medic run itself as a `limit-death-record`
+artifact (seven days' retention). Each sweep lists those artifacts over the
+Actions API, writes the missing marker once Linear answers — unless the card
+already carries one for that run, or the stage has run again since — and
+deletes the record it settled, so `limit_recovery.py` re-enters the stage as
+before. The medic's run-log line names the card and says whether recovery is
+automatic or needs a person; it asks for a by-hand re-entry only when neither
+the marker nor the record could be kept.*
 
 **Verdict:** covered.
 

@@ -155,6 +155,7 @@ import groomer  # noqa: E402
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
 import lane_contract  # noqa: E402
+import limit_death_record  # noqa: E402 — DRE-5837: a limit death Linear would not let the medic mark
 import limit_recovery  # noqa: E402 — DRE-3171: re-enter the stage a limit death left
 import linear_ops  # noqa: E402
 # DRE-2340: ONE implementation of the verdict binding — the sweep must read
@@ -10183,9 +10184,14 @@ def recover_limit_deaths() -> None:
     over `active_cards()`, the lanes promotion counts — never a count of this
     repo's whole board (DRE-4934), and never of the Planning and Intake cards
     this pass now also sees: a card waiting on a plan holds no build slot.
+
+    A limit death whose marker Linear refused (DRE-5837) is read first, off
+    the run's own record (`backfill_limit_records`), so the card it names
+    carries its marker before the recovery reads the board.
     """
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
+        backfill_limit_records(cards)
         # The lane each card is in NOW, as this pass knows it: the board's
         # reading, then each move this pass makes. A move decided on the read
         # door's facts is from-lane-conditional on it (item 33), and a refused
@@ -10208,6 +10214,67 @@ def recover_limit_deaths() -> None:
         raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
+def _limit_record(run_id: str) -> str | None:
+    """One run's `limit-death-record` file, or None when it could not be read."""
+    with tempfile.TemporaryDirectory() as into:
+        _, failed = _actions_read(("run", "download", run_id, "-n",
+                                   limit_death_record.RECORD_NAME, "-D", into, "--repo", REPO))
+        if failed is not None:
+            _degrade("limit-death-record", f"run {run_id}'s record", failed,
+                     then="the record is read again next sweep")
+            return None
+        try:
+            with open(os.path.join(into, limit_death_record.RECORD_FILE), encoding="utf-8") as f:
+                return f.read()
+        except OSError as e:
+            _degrade("limit-death-record", f"run {run_id}'s record", e,
+                     then="the record is read again next sweep")
+            return None
+
+
+def backfill_limit_records(cards: list[dict]) -> None:
+    """DRE-5837: give a card the limit-death marker Linear refused the medic.
+
+    The medic keeps such a death on its own run, as a `limit-death-record`
+    artifact; this reads every one in ONE Actions listing and hands them to
+    `limit_death_record.backfill`, which writes the marker (put on `cards`
+    too, so the recovery below sees it this pass) and deletes what it
+    settled. The listing and the downloads go under GH_DISPATCH_TOKEN, the
+    token reconcile.yml always sets with Actions access; without it the
+    Actions API cannot be told "unreadable" from "none" (`_actions_read`),
+    so nothing is read. An unreadable listing is DEGRADED, never red: the
+    records are read again next pass, and the recovery still runs — and so it
+    does after any other fault in here, which is logged and swallowed.
+    """
+    if not os.environ.get("GH_DISPATCH_TOKEN"):
+        return
+    try:
+        _backfill_limit_records(cards)
+    except BoardNotRead:
+        raise
+    except Exception as e:  # noqa: BLE001 — the recovery after this must still run
+        print(f"limit-death-record: skipped this pass ({type(e).__name__}: {e})",
+              file=sys.stderr)
+
+
+def _backfill_limit_records(cards: list[dict]) -> None:
+    listing, failed = _actions_read((
+        "api", f"repos/{REPO}/actions/artifacts?name={limit_death_record.RECORD_NAME}&per_page=100"))
+    if failed is not None:
+        _degrade("limit-death-record", "the artifact listing", failed,
+                 then="the records are read again next sweep")
+        return
+    records = limit_death_record.records_from_listing(listing, _limit_record)
+    for line in limit_death_record.backfill(
+        linear_ops, cards, records,
+        delete=lambda artifact: gh_dispatch(
+            "api", "-X", "DELETE", f"repos/{REPO}/actions/artifacts/{artifact}"),
+    ):
+        print(line)
+        if line.startswith("ERROR:"):
+            _write_failures.append(line)
 
 
 def _moved_or_raise(ident: str, lane: str, lanes_now: dict, moved) -> None:
