@@ -22,7 +22,9 @@ THE TWO SHAPES, both read off the execution file the action writes:
     401` or `API Error: 401` in `result`, with `revoked` in `result`;
   * the CLI RETRIED a call on a 401 — a `system`/`api_retry` event with
     `error_status: 401` or `error: "authentication_failed"` — and the run
-    then died.
+    then died on a 401 that does not say `expired`. The result must be the
+    401 itself: a run that got past a brief 401 and later hit its turn limit
+    died of the turn limit.
 
 Read POSITIVELY, the same discipline as `death_cause.py`: the words alone are
 not enough (an agent can write "revoked" about anything, so only the result
@@ -67,6 +69,7 @@ LOG_MARK = f"{ROTATION_TAG}:"
 
 _STATUS = "401"
 _REVOKED = "revoked"
+_EXPIRED = "expired"
 _RETRY_SUBTYPE = "api_retry"
 _RETRY_ERROR = "authentication_failed"
 _API_401 = re.compile(r"API Error:\s*401\b", re.I)
@@ -103,9 +106,9 @@ def in_execution(data) -> bool:
     """Did this run die because its Claude token was revoked under it?
 
     `data` is the execution output as the action writes it. True only for a
-    run that DIED (`is_error: true`) and either died on a 401 saying
-    `revoked`, or retried a call on a 401 first; never when its last word is
-    a capacity wall.
+    run that DIED (`is_error: true`) on a 401 and either says `revoked`, or
+    retried a call on a 401 first and does not say `expired`; never when its
+    last word is a capacity wall.
     """
     messages = _messages(data)
     final = _final(messages)
@@ -116,8 +119,12 @@ def in_execution(data) -> bool:
     if any(sig in lowered for sig in model_fallback.CAPACITY_SIGNATURES):
         return False
     status = str(final.get("api_error_status") or "").strip()
-    if (status == _STATUS or _API_401.search(result)) and _REVOKED in lowered:
+    if not (status == _STATUS or _API_401.search(result)):
+        return False
+    if _REVOKED in lowered:
         return True
+    if _EXPIRED in lowered:
+        return False
     return any(_retried_on_401(m) for m in messages)
 
 

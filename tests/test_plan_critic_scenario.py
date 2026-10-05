@@ -2375,11 +2375,15 @@ class ReviewReplanArtifactWalk(unittest.TestCase):
     def test_a_re_plan_that_died_on_anything_else_still_parks(self):
         # The same 401 that says "expired" is the chain NOT renewing — not
         # what a re-run on the current token fixes — so it parks as before.
+        # The real CLI retries the 401 before it gives up, so the record
+        # carries that retry event, as the incident's does.
         expired = os.path.join(self.tmp, "expired.json")
         with open(expired, "w") as f:
-            json.dump({"type": "result", "subtype": "success", "is_error": True,
-                       "api_error_status": 401,
-                       "result": "API Error: 401 OAuth access token has expired."}, f)
+            json.dump([{"type": "system", "subtype": "api_retry", "attempt": 1,
+                        "error_status": 401, "error": "authentication_failed"},
+                       {"type": "result", "subtype": "success", "is_error": True,
+                        "api_error_status": 401,
+                        "result": "API Error: 401 OAuth access token has expired."}], f)
         self._recheck(proof_plan(), 1, outcome="failure", REPLAN_EXEC=expired)
         self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
         self.assertNotIn(pc.cycle_marker(EPIC), self._thread())

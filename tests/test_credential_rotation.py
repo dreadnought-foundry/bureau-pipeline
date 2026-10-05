@@ -157,6 +157,27 @@ def test_an_expired_token_is_not_a_rotation():
     assert credential_rotation.in_execution([record]) is False
 
 
+def test_an_expired_token_after_a_401_retry_is_not_a_rotation():
+    """The real CLI retries the 401 before it gives up, so an expired-token
+    death carries the retry event too — and it is still expiry."""
+    retry = {"type": "system", "subtype": "api_retry", "error_status": 401,
+             "error": "authentication_failed"}
+    record = _result(api_error_status=401,
+                     result="API Error: 401 OAuth access token has expired.")
+    assert credential_rotation.in_execution([retry, record]) is False
+
+
+def test_a_401_retry_then_a_death_on_something_else_is_not_one():
+    """A brief 401 the run got past is not what killed it: the final result
+    must itself be the 401."""
+    retry = {"type": "system", "subtype": "api_retry", "error_status": 401,
+             "error": "authentication_failed"}
+    max_turns = _result(subtype="error_max_turns", result="max turns reached")
+    assert credential_rotation.in_execution([retry, max_turns]) is False
+    no_result = _result(result="")
+    assert credential_rotation.in_execution([retry, no_result]) is False
+
+
 def test_a_401_retry_the_run_recovered_from_is_not_one():
     retry = {"type": "system", "subtype": "api_retry", "error_status": 401}
     final = _result(is_error=False, result="done")
