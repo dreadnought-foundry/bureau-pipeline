@@ -403,3 +403,30 @@ def test_the_durations_record_covers_the_live_tree():
         "most test files carry no measurement — re-measure "
         "(python3 scripts/unit_test_parts.py measure <junit.xml>...)"
     )
+
+
+def test_measure_reads_seconds_per_file_from_a_ci_log(tmp_path):
+    # A green run's own `pytest -v` log is a measurement: the runner stamps
+    # every result line, and each line's gap from the one before it is that
+    # test's time.
+    log = tmp_path / "part-1.log"
+    log.write_text(
+        "scripts unit tests\tUnit tests\t2026-10-04T22:14:26.0000000Z "
+        "tests/test_conftest_marker.py::test_a PASSED [  0%]\n"
+        "scripts unit tests\tUnit tests\t2026-10-04T22:14:28.5000000Z "
+        "tests/test_unit_test_parts.py::test_b PASSED [  1%]\n"
+        "scripts unit tests\tUnit tests\t2026-10-04T22:14:29.0000000Z "
+        "some other line\n"
+        "scripts unit tests\tUnit tests\t2026-10-04T22:14:31.5000000Z "
+        "tests/test_unit_test_parts.py::test_c FAILED [  2%]\n")
+    assert parts.measure([log]) == {"tests/test_unit_test_parts.py": 5.5}
+
+
+def test_measure_reads_seconds_per_file_from_junit_xml(tmp_path):
+    report = tmp_path / "part-1.xml"
+    report.write_text(
+        '<testsuites><testsuite>'
+        '<testcase classname="tests.test_unit_test_parts" name="a" time="1.25"/>'
+        '<testcase classname="tests.test_unit_test_parts.TestX" name="b" time="2"/>'
+        '</testsuite></testsuites>')
+    assert parts.measure([report]) == {"tests/test_unit_test_parts.py": 3.25}

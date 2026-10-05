@@ -27,10 +27,12 @@ what the parts RAN, not a recomputation of what they should have run — a
 matrix that drops an entry, or a part run against another commit, is caught
 here rather than trusted.
 
-`measure` rebuilds the durations record from pytest `--junit-xml` reports, one
-per part or one for the whole suite:
+`measure` rebuilds the durations record from pytest `--junit-xml` reports, or
+from the GitHub Actions logs of the parts' `pytest -v` (each result line is
+timestamped by the runner, so a green run's logs ARE a measurement):
 
-    python3 scripts/unit_test_parts.py measure part-*.xml --note "<how>"
+    gh run view <run> --log --job <job> > part-1.log   # one per part
+    python3 scripts/unit_test_parts.py measure part-*.log --note "<how>"
 
 Run: python3 scripts/unit_test_parts.py list --part 1 --of 4
      python3 scripts/unit_test_parts.py check <dir of part-*.txt manifests>
@@ -40,9 +42,11 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import statistics
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -194,10 +198,37 @@ def check(root: Path, ran: Path) -> list[str]:
     return problems
 
 
+#: One result line of a GitHub Actions log of `pytest -v`: the runner's
+#: timestamp, then the test's node id.
+LOG_LINE = re.compile(
+    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z (tests/\S+?\.py)::")
+
+
+def _measure_log(log: Path, seconds: dict[str, float]) -> None:
+    """Seconds per file from a CI log of `pytest -v`: each result line's
+    timestamp minus the one before it, summed per file. Approximate by a test
+    at each file's edges, which is plenty for balancing."""
+    previous = None
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = LOG_LINE.search(line)
+        if not m:
+            continue
+        stamp = datetime.fromisoformat(m.group(1)).timestamp() + float(
+            "0" + (m.group(2) or ".0")[:7])
+        if previous is not None:
+            f = m.group(3)
+            seconds[f] = seconds.get(f, 0.0) + max(0.0, stamp - previous)
+        previous = stamp
+
+
 def measure(reports: list[Path]) -> dict[str, float]:
-    """Seconds per test file, summed from pytest junit-xml reports."""
+    """Seconds per test file, summed from pytest junit-xml reports or from
+    GitHub Actions logs of `pytest -v` (anything not ending `.xml`)."""
     seconds: dict[str, float] = {}
     for report in reports:
+        if report.suffix != ".xml":
+            _measure_log(report, seconds)
+            continue
         for case in ET.parse(report).getroot().iter("testcase"):
             dotted = case.get("classname") or ""
             # pytest writes `tests.test_x.SomeClass` or `tests.test_x`.
