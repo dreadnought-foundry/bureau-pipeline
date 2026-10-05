@@ -34,10 +34,20 @@ directory you did not create.
 
 The pipeline's own scripts are no longer in the tree you are experimenting on:
 in a review run they live at **`$PIPELINE_DIR`** (it is in your environment),
-so `python3 "$PIPELINE_DIR"/scripts/check_tdd_commits.py origin/main HEAD` is
-how you run one. The `.bureau-pipeline/scripts/…` paths your context's
-engineering standard quotes are the BUILD agent's checkout in a product repo,
-not yours.
+so this is how you run one:
+
+    BASE=$(python3 "$PIPELINE_DIR"/scripts/read_once.py pr <n> --fields "$PR_RECORD_FIELDS" --field baseRefName)
+    python3 "$PIPELINE_DIR"/scripts/check_tdd_commits.py "origin/$BASE" HEAD
+
+The TDD check compares against the pull request's **base branch**, never a
+literal `main` (DRE-5896). `<n>` is the pull request number your prompt names,
+and the first line is the review run's own read of the base: `baseRefName`
+from the job's one record of the pull request (`PR_RECORD_FIELDS`,
+`scripts/read_once.py`), so it asks GitHub nothing new. A repo whose pull
+requests target another branch — atlas lands on `sid/main` — would otherwise
+have every commit on that branch that `main` lacks counted as part of the pull
+request. The `.bureau-pipeline/scripts/…` paths your context's engineering
+standard quotes are the BUILD agent's checkout in a product repo, not yours.
 
 ## A fixture is a snapshot, never the card (DRE-3084)
 
