@@ -10,6 +10,8 @@ What is pinned here, against a REAL HTTP fake door (`bureau_read_fakes.py`):
   * in `BUREAU_READ=on` the pass makes ONE `/cards` read for every branch's
     card, and no Linear lane read at all;
   * the door's lane is the one the watchdog decides on;
+  * inside a pass, the door's comment window answers the once-only check, so
+    it needs no Linear read either;
   * a door that cannot answer whole (UNKNOWN, a card it does not hold, a door
     that is down) sends those cards to Linear exactly as before, and the sweep
     log says how many;
@@ -169,6 +171,41 @@ def test_no_candidate_branch_asks_the_door_nothing(monkeypatch):
     assert door.requests == []
     live.assert_not_called()
     assert comments == []
+
+
+def test_the_door_comment_window_answers_the_once_only_check_without_linear(monkeypatch):
+    """Inside a pass the door's comment window goes into the pass cache, so
+    `comment_bodies` finds A's earlier notice without a Linear read: A stays
+    quiet, and B — whose window holds no notice — is reported, still with no
+    Linear read. Drop the seeding and every branch asks Linear for its thread."""
+    branches = {A[0]: "a" * 40, B[0]: "b" * 40}
+    warned = f"🚨 {reconcile.UNLANDED_TAG} branch {A[0]}: the branch carries work"
+    queries: list[str] = []
+    comments: list[tuple[str, str]] = []
+    fake = _fake_gh(branches)
+
+    def no_linear(query, variables=None):
+        queries.append(" ".join(query.split())[:120])
+        raise AssertionError("unexpected Linear query")
+
+    reconcile.linear_ops.open_pass()
+    try:
+        with door_at(monkeypatch, card(A[1], "In Progress", comments=[warned]),
+                     card(B[1], "In Progress", comments=["an unrelated note"])), \
+                mock.patch.object(reconcile, "gh", side_effect=fake), \
+                mock.patch.object(reconcile, "gh_read", side_effect=fake), \
+                mock.patch.object(reconcile, "active_cards", return_value=[]), \
+                mock.patch.object(reconcile, "card_state") as live, \
+                mock.patch.object(reconcile.linear_ops, "gql", side_effect=no_linear), \
+                mock.patch.object(reconcile.linear_ops, "cmd_comment",
+                                  side_effect=lambda ident, body: comments.append((ident, body))):
+            reconcile.flag_unlanded_work()
+    finally:
+        reconcile.linear_ops.reset_pass_cache()
+    assert queries == []
+    assert reconcile._write_failures == []
+    live.assert_not_called()
+    assert _posted(comments) == [B[1]]
 
 
 def test_the_sweep_log_says_the_door_answered_and_linear_read_none(monkeypatch, capsys):
