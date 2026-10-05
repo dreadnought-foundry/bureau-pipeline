@@ -1755,6 +1755,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The re-plan was cut off when the pipeline's Claude sign-in was renewed",
+      "step": "Re-check the revised plan — review mode",
+      "kind": "undeclared-act",
+      "means": "The re-plan was killed by the console's renewal of the Claude token, so nothing is parked and the medic re-runs the run once on the renewed token (DRE-5856).",
+      "why": "Act-shaped, and the registry has no row for it. Giving it one is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the console's own list of acts in agent-bureau, which the act-registry consumers job checks — and DRE-5856 is a classification fix, not that. The recovery it announces is the medic's ordinary retry, which already has its own record on the run. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "--record)\"",
+      "step": "Re-check the revised plan — review mode",
+      "kind": "not-an-act",
+      "means": "A fresh planning attempt is opened for a re-plan the token renewal killed, so the re-run's second critic does not count its own unrevised round against the bound (DRE-5856).",
+      "why": "A boundary record, the same `plan-cycle:` line the plan route writes, not a receipt for a downstream actor. Its body and its round grammar belong to scripts/plan_critic.py, which counts them; a trailer would break the sole-record rule that keeps the boundary unforgeable."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — planner agent starting.",
       "step": "Plan heartbeat",
       "kind": "not-an-act",
