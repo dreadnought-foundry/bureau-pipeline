@@ -278,7 +278,7 @@ class TheQueueAnswer(RouteHarness):
     def test_the_decision_runs_in_the_activate_branch_before_the_attempt_opens(self):
         run = route_run()
         self.assertIn(DECIDE, run)
-        self.assertEqual(run.count("epic_cap.py decide"), 1)
+        self.assertEqual(run.count(".bureau-pipeline/scripts/epic_cap.py"), 1)
         at = run.index(DECIDE)
         branch = run.rindex('elif [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then', 0, at)
         self.assertLess(branch, at)
@@ -342,7 +342,8 @@ class TheStartAnswer(RouteHarness):
         self.route("in progress", "re-run", ANSWER="start", CYCLE="open")
         names = [c[0] if c[0] != "linear_ops" else c[1] for c in self.calls()]
         self.assertEqual(names, ["children", "epic_cap", "remove-label",
-                                 "dump-comments", "plan_critic", "comment",
+                                 "dump-comments", "plan_critic",
+                                 "plan_critic", "comment",
                                  "plan_critic", "comment"])
         self.assertEqual(self.linear()[-1][2], plan_critic.cycle_marker(EPIC))
         self.assertEqual(self.mode(), "activate")
@@ -537,6 +538,9 @@ class TheAct(unittest.TestCase):
         self.assertEqual(here, [])
         acts = [act for path, _, act in car.shell_act_flags() if path.endswith("plan.yml")]
         self.assertIn(epic_cap.QUEUED_ACT, acts)
+        composed = [s.composed_as for s in car.sites()
+                    if s.path.endswith("plan.yml") and s.step == ROUTE]
+        self.assertIn(epic_cap.QUEUED_ACT, composed)
 
 
 # --------------------------------------------------------------------------- #

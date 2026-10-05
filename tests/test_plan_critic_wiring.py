@@ -357,7 +357,10 @@ class TheBoundIsWired(unittest.TestCase):
     def test_the_boundary_is_posted_alone_too(self):
         route = str(step_named(ROUTE).get("run") or "")
         self.assertIn("cycle-start --epic \"$EPIC\" --record", route)
-        self.assertEqual(route.count("linear_ops.py comment"), 2)
+        # The two halves of the boundary, plus the epic cap's queued receipt
+        # (DRE-5136), which is an act of its own and opens no attempt.
+        self.assertEqual(route.count("linear_ops.py comment")
+                         - route.count("--act=epic-approval-queued"), 2)
 
     def test_the_job_timeout_leaves_room_for_two_planner_runs_and_two_reviews(self):
         doc = yaml.safe_load(wf_src())

@@ -957,6 +957,24 @@
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
       }
+    },
+    {
+      "name": "epic-approval-queued",
+      "tag": "epic-queued",
+      "adopted": true,
+      "kind": "hold",
+      "means": "The CEO approved an epic while the fleet was at its cap of epics in motion, so the approval is recorded and the epic waits in line in Green Light, labeled `epic-queued`, with its place in line stated.",
+      "state": "held",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "plan.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the hold ends when another epic closes and the sweep starts this one in its turn, and nothing declares when an epic closes — so there is no bound on the wait to read as stuck.",
+      "why": "DRE-5136, the activation half of the epic cap (DRE-5129). `plan.yml`'s route step asks `epic_cap.py decide` (DRE-5134) where it would answer `activate`; on `queue`, or when Linear could not be read, it labels the epic, posts this receipt once per planning attempt — the body `decide` wrote, stating place k of n and how many epics are in motion — and returns the epic to Green Light. A HOLD: nothing is dispatched at the epic while it waits, and the sweep (`reconcile.py`, DRE-5152) discharges it by starting the epic when the count falls under the cap. The tag is epic_cap.QUEUED_TAG, the same string as the label, and the console learned it first (DRE-5135). It discharges nothing: a hold starts an obligation, it does not end one.",
+      "emits": {
+        "file": ".github/workflows/plan.yml",
+        "anchor": "\"$(cat \"$RUNNER_TEMP/epic-cap-receipt.md\")\" --act=epic-approval-queued"
+      }
     }
   ],
   "console": {

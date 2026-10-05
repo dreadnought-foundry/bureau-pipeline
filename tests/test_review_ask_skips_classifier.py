@@ -182,7 +182,7 @@ def _run_shell(step: dict, raw: str, *, trigger: str, reason: str,
     with open(script, "w") as fh:
         fh.write("set -e\n" + run)
     env = dict(os.environ, GITHUB_OUTPUT=out, REASON=reason, MAX_WIP="3",
-               RUNNER_TEMP=raw)
+               RUNNER_TEMP=raw, GITHUB_STEP_SUMMARY=os.devnull)
     proc = subprocess.run(["bash", script], capture_output=True, text=True,
                           cwd=raw, env=env)
     if proc.returncode != 0:
@@ -191,7 +191,7 @@ def _run_shell(step: dict, raw: str, *, trigger: str, reason: str,
 
 
 def _stub_scripts(raw: str) -> dict:
-    """The two Linear-facing scripts the route step calls, answering as a
+    """The Linear-facing scripts the route step calls, answering as a
     planned epic with eight children whose critic thread is unremarkable."""
     lops = os.path.join(raw, "linear_ops_stub.py")
     with open(lops, "w") as fh:
@@ -214,7 +214,12 @@ def _stub_scripts(raw: str) -> dict:
             "else:\n"
             "    print('plan-critic-cycle: stub')\n"
         )
-    return {"linear_ops.py": lops, "plan_critic.py": critic}
+    # The epic cap (DRE-5136), asked where the route step would answer
+    # `activate`: room in the fleet, so the activate row still activates.
+    cap = os.path.join(raw, "epic_cap_stub.py")
+    with open(cap, "w") as fh:
+        fh.write("print('start')\n")
+    return {"linear_ops.py": lops, "plan_critic.py": critic, "epic_cap.py": cap}
 
 
 def walk(trigger: str, reason: str) -> tuple[list[str], dict]:

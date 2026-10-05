@@ -240,11 +240,19 @@ class TestTheRepositoryPasses:
         assert units == wheres
 
     def test_a_kind_with_no_record_and_no_write_is_not_a_problem(self):
-        # `queued-epic` is in the vocabulary while the CEO's acceptance of kind
-        # (c) stands; DRE-5136 declares its record with the write it lands.
-        assert "queued-epic" in grl.kinds()
-        assert not [r for r in grl.arrivals() if r["kind"] == "queued-epic"]
+        # `weekly-report` is in the vocabulary, and its write site lives in
+        # agent-bureau, so this repository declares no record for it.
+        assert "weekly-report" in grl.kinds()
+        assert not [r for r in grl.arrivals() if r["kind"] == "weekly-report"]
         assert grl.problems() == []
+
+    def test_the_queued_epic_is_declared_with_the_write_it_lands(self):
+        # DRE-5136 declared kind (c)'s record in the pull request that added
+        # its write: the route step's queue answer.
+        queued = [r for r in grl.arrivals() if r["kind"] == "queued-epic"]
+        assert [r["where"] for r in queued] == ["plan.yml#Route — plan or activate"]
+        units = {unit for _, unit in grl.green_light_writes()}
+        assert "plan.yml#Route — plan or activate" in units
 
     def test_the_callers_found_are_exactly_the_ones_declared(self):
         contract = _contract()

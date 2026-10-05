@@ -179,6 +179,8 @@ def main():
         log("state " + " ".join(args[1:]))
     elif cmd == "add-label":
         log("add-label " + args[1])
+    elif cmd == "remove-label":
+        log("remove-label " + args[1])
     elif cmd == "children":
         print(os.environ.get("STUB_KIDS", "4"))
     elif cmd == "children-json":
@@ -213,6 +215,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+'''
+
+# The epic cap (DRE-5136): the route step asks `epic_cap.py decide` where it
+# would answer `activate`. These walks are about the two critics, so the cap
+# always has room; tests/test_epic_cap_activation.py walks the queue.
+EPIC_CAP_STUB = '''#!/usr/bin/env python3
+print("start")
 '''
 
 RECONCILE_STUB = '''#!/usr/bin/env python3
@@ -337,6 +346,7 @@ class CriticWalk(unittest.TestCase):
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
+        self._stub("epic_cap.py", EPIC_CAP_STUB)
         self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(self.bin)
@@ -388,6 +398,8 @@ class CriticWalk(unittest.TestCase):
             STUB_EPICS=json.dumps(EPICS_IN_FLIGHT),
             STUB_NOW=STUB_NOW,
             GITHUB_OUTPUT=self.gho,
+            GITHUB_STEP_SUMMARY=os.devnull,
+            RUNNER_TEMP=self.tmp,
             GITHUB_REPOSITORY="dreadnought-foundry/bureau-pipeline",
             MAX_WIP="8",
             LINEAR_API_KEY="test-key",
@@ -2223,6 +2235,7 @@ class ReviewReplanArtifactWalk(unittest.TestCase):
                     os.path.join(self.pipeline, "agents.yaml"))
         self._stub("linear_ops.py", LINEAR_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
+        self._stub("epic_cap.py", EPIC_CAP_STUB)
         self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
         self._stub("validate_card.py", VALIDATE_STUB)
         self.artifact = os.path.join(self.tmp, "plan-artifact.md")
