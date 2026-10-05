@@ -371,6 +371,13 @@
                 "code_owner_hold.py#_cmd_hold",
                 "merge-gate.yml#Evaluate and merge"
               ]
+            },
+            {
+              "kind": "queued-epic",
+              "writer": "plan.yml",
+              "where": "plan.yml#Route — plan or activate",
+              "evidence": "the ⏸️ epic-queued: receipt carrying the epic-approval-queued act trailer, and the epic-queued label",
+              "card": "DRE-5136"
             }
           ],
           "enforced_from": "5",

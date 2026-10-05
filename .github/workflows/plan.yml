@@ -827,6 +827,12 @@ jobs:
       #   anything else  review, re-review, review-retry,     review
       #                  re-run
       #
+      # ...and a FOURTH answer, `queued` (DRE-5136), only where the table says
+      # `activate`: the epic cap (`epic_cap.py decide`, DRE-5134) is asked
+      # there, and an approval at the cap is labeled `epic-queued`, receipted
+      # once per planning attempt and returned to Green Light to wait in
+      # line. No step is gated on `queued`, so nothing below runs on it.
+      #
       # `in progress` + `re-review` / `review-retry` stays `activate`: the
       # pipeline's own re-asks on an approved epic, and the re-review watcher's
       # In Progress re-ask (DRE-5278), arrive there, and since DRE-5281 the
@@ -909,26 +915,82 @@ jobs:
               review|re-review|review-retry|re-run) REVIEW=true ;;
             esac
           fi
+          # DRE-5136: an epic that leaves for Planning — re-planned after an
+          # amendment, or handed back for the review it missed — has left the
+          # epic cap's line, so both branches that write Planning take the
+          # `epic-queued` label off after the move. Without it the epic would
+          # come back to Green Light still labeled, and the sweep would start
+          # it as if approved. Idempotent: a write only when the label is on.
           if [ "$REVIEW" = "true" ]; then
             # The review route. The epic comes back to Planning to be read —
             # written here, by the run that reads it — and the second critic's
             # steps below run on it (`mode == 'review'`).
             echo "mode=review" >> "$GITHUB_OUTPUT"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            python3 .bureau-pipeline/scripts/linear_ops.py remove-label "$EPIC" epic-queued
             open_attempt_if_a_person_asked
           elif [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
-            # The activate route only ROUTES here (DRE-2721); the state
-            # change, the announcement and the promotion are "Activate the
-            # approved epic" at the foot of the job. Since DRE-5281 that step
-            # runs no review: it activates a plan the second critic passed on
-            # this attempt and hands anything else to the review it missed. A
-            # person's `re-run` at a park opens the fresh attempt it is owed
-            # first, here, as it always has.
-            echo "mode=activate" >> "$GITHUB_OUTPUT"
-            open_attempt_if_a_person_asked
+            # The epic cap (DRE-5136), asked here and nowhere else in this
+            # step: only where the step would answer `activate`. The decision
+            # is `epic_cap.py decide`'s (DRE-5134) and this step makes none of
+            # its own — it prints `start` or `queue`, says on stderr which rule
+            # answered, and on `queue` writes the receipt body to the file.
+            # Exit 2: the cap file could not be read — a config defect
+            # `epic_cap.py check` catches in CI, and an unreadable cap must
+            # never freeze every approval in the fleet, so the epic activates.
+            # Exit 3: Linear could not be read — the gate holds rather than
+            # lets through, and queues with the body `decide` wrote for that
+            # case; the sweep starts it on its next pass if there is room.
+            CAP_RC=0
+            CAP=$(python3 .bureau-pipeline/scripts/epic_cap.py decide --epic "$EPIC" --receipt-file "$RUNNER_TEMP/epic-cap-receipt.md" \
+              2> "$RUNNER_TEMP/epic-cap-rule.txt") || CAP_RC=$?
+            cat "$RUNNER_TEMP/epic-cap-rule.txt"
+            cat "$RUNNER_TEMP/epic-cap-rule.txt" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$CAP_RC" = "3" ] || { [ "$CAP_RC" = "0" ] && [ "$CAP" = "queue" ]; }; then
+              # Approved at the cap: recorded, and waiting in line. The label
+              # goes on BEFORE the lane moves — the label is what tells a
+              # queued row apart from a decision (`green_light_rows.py`). The
+              # receipt is posted once per planning attempt: moving a queued
+              # epic to In Progress again changes nothing, and the receipt
+              # already on the card says so. `mode=queued` gates no step, so
+              # nothing below runs while it waits — no activation, no
+              # promotion, no hand-back. The children stay put on their own:
+              # the sweep promotes no child of an epic outside Todo and In
+              # Progress.
+              python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" epic-queued
+              SAID=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments "$EPIC" \
+                "⏸️ epic-queued:" --since "plan-cycle: start epic=$EPIC")
+              if [ "$SAID" -gt 0 ]; then
+                echo "$EPIC already carries this planning attempt's epic-queued receipt — not posted again"
+              else
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$(cat "$RUNNER_TEMP/epic-cap-receipt.md")" --act=epic-approval-queued
+              fi
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+              echo "mode=queued" >> "$GITHUB_OUTPUT"
+              QUEUED="$EPIC queued: approved, labeled epic-queued and back in Green Light to wait in line for the sweep — $(tr '\n' ' ' < "$RUNNER_TEMP/epic-cap-rule.txt")"
+              echo "$QUEUED"
+              echo "$QUEUED" >> "$GITHUB_STEP_SUMMARY"
+            else
+              if [ "$CAP_RC" != "0" ] && [ "$CAP_RC" != "2" ]; then
+                echo "::warning::epic_cap.py decide exited $CAP_RC — $EPIC activates rather than wait on a decision that never ran"
+              fi
+              # The activate route only ROUTES here (DRE-2721); the state
+              # change, the announcement and the promotion are "Activate the
+              # approved epic" at the foot of the job. Since DRE-5281 that step
+              # runs no review: it activates a plan the second critic passed on
+              # this attempt and hands anything else to the review it missed. A
+              # person's `re-run` at a park opens the fresh attempt it is owed
+              # first, here, as it always has. The label comes off first: a
+              # no-op on an epic never queued, the removal on one re-approved
+              # once room opened, the confirmation on one the sweep started.
+              python3 .bureau-pipeline/scripts/linear_ops.py remove-label "$EPIC" epic-queued
+              echo "mode=activate" >> "$GITHUB_OUTPUT"
+              open_attempt_if_a_person_asked
+            fi
           else
             echo "mode=plan" >> "$GITHUB_OUTPUT"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            python3 .bureau-pipeline/scripts/linear_ops.py remove-label "$EPIC" epic-queued
             open_attempt
           fi
 
