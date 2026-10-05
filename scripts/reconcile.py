@@ -7139,6 +7139,12 @@ def flag_unlanded_work() -> None:
     BRANCH listing, the per-branch confirm, the compare and the card read each
     fail closed. A per-branch failure is recorded on the fail-loudly rail and
     the rest of the sweep continues (the DRE-2035 isolation discipline).
+
+    THE READ DOOR (DRE-5847): in `BUREAU_READ=on` the lanes of every PR-less
+    branch's card come from ONE door `/cards` read (`_unlanded_door_lanes`),
+    and a card the door could not answer is read from Linear exactly as
+    before, when its branch reaches the lane check. In `off` and `shadow`
+    nothing changes: one Linear lane read per stale branch, no new line.
     """
     pr_refs = pr_head_refs()
     if pr_refs is None:
@@ -7148,9 +7154,14 @@ def flag_unlanded_work() -> None:
     if branches is None:
         print("unlanded: branch listing unreadable — reporting nothing this sweep")
         return  # fail closed: a blip is not "this card has no branch"
+    door_lanes = _unlanded_door_lanes(sorted({
+        branch_card(b["name"]) for b in branches
+        if b["name"] not in pr_refs and b.get("sha")
+    }))
+    from_linear: list[str] = []
     for branch in branches:
         try:
-            _flag_one_unlanded_branch(branch, pr_refs)
+            _flag_one_unlanded_branch(branch, pr_refs, door_lanes, from_linear)
         except Exception as e:  # noqa: BLE001 — isolate one branch, sweep the rest
             _write_failures.append(
                 f"unlanded watchdog on branch {branch.get('name')}: {e}"
@@ -7159,11 +7170,57 @@ def flag_unlanded_work() -> None:
                 f"ERROR: unlanded watchdog on branch {branch.get('name')}: {e}",
                 file=sys.stderr,
             )
+    if bureau_read.mode() == "on":
+        print(f"unlanded: card lanes — {len(door_lanes)} from the door in one read, "
+              f"{len(from_linear)} read from Linear (the door could not answer them)")
     _flag_hand_built_idle(branches, pr_refs)
 
 
-def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
-    """Evaluate ONE card branch and report it if no PR was ever opened."""
+def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
+    """`{identifier: lane}` for the unlanded watchdog's cards, from ONE door
+    `/cards` read (DRE-5847) — or `{}`, and every card's lane is then read
+    from Linear as it always was.
+
+    `{}` in `off` and `shadow`, with no cards to ask about, and when the door
+    cannot answer whole: `/cards` is all-or-nothing, so UNKNOWN (a card it
+    does not hold included) and unavailable both mean "Linear, for these".
+    `linear-hold` is the exception (Stage 2 item 34): the fallback would
+    spend the held bucket, so the phase raises BoardHeld and is skipped.
+
+    Only a lane and the comment window are read off the answer. Nothing here
+    moves a card — the watchdog only ever adds a notice — so there is no lane
+    move for a live re-read to guard.
+    """
+    if bureau_read.mode() != "on":
+        return {}
+    if _door_hold:
+        raise BoardHeld(_door_hold[0])
+    if not cards or not bureau_read.enabled():
+        return {}
+    try:
+        read = bureau_read.cards(cards, max_age=bureau_read.BOARD_MAX_AGE,
+                                 relations=False)
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            _door_hold.append(e.reason)
+            raise BoardHeld(e.reason) from e
+        print(f"read-door: unlanded card lanes unknown ({e}) — the {len(cards)} "
+              "card(s) are read from Linear this pass")
+        return {}
+    lanes: dict[str, str] = {}
+    for node in read.nodes:
+        lanes[node["identifier"]] = node["state"]["name"]
+        linear_ops.remember_comments(node.get("identifier"), node.get("comments"))
+    return lanes
+
+
+def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
+                              door_lanes: dict[str, str] | None = None,
+                              from_linear: list[str] | None = None) -> None:
+    """Evaluate ONE card branch and report it if no PR was ever opened.
+
+    `door_lanes` is `_unlanded_door_lanes`'s answer; a card missing from it is
+    read from Linear and appended to `from_linear`."""
     name, sha = branch["name"], branch.get("sha") or ""
     if name in pr_refs or not sha:
         return  # a PR exists (any state) — every other backstop applies
@@ -7193,11 +7250,15 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
     if idle < UNLANDED_MINUTES:
         return  # still moving; the PR may be seconds away
     card = branch_card(name)
-    try:
-        state = card_state(card)
-    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> defer
-        print(f"unlanded: could not read {card}: {e} — deferring to a later sweep")
-        return
+    state = (door_lanes or {}).get(card)
+    if state is None:
+        if from_linear is not None:
+            from_linear.append(card)
+        try:
+            state = card_state(card)
+        except Exception as e:  # noqa: BLE001 — any Linear/transport error -> defer
+            print(f"unlanded: could not read {card}: {e} — deferring to a later sweep")
+            return
     if state in structural_repair.TERMINAL_STATES:
         return  # a finished card's leftover branch is route F/I, not this alarm
     if state == "Todo":
