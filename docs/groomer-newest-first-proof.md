@@ -3,6 +3,15 @@
 **Status: OBSERVED 2026-10-05. THIS IS A FAILING PROOF, merged on purpose so it can be wrong in public.**
 The card stays open on its failures.
 
+**The decision to merge it.** The CEO decided this, and the operator posted it
+on #715 on 2026-10-05 at 18:21 UTC as an Operator decision: "merge this record
+now as DRE-4968's deliverable … The card closes only after the fix cards
+DRE-5857, DRE-5858 and DRE-5746 land and a clean morning is observed." The
+merge does not close the card. DRE-4968 carries the `no-code` label (read from
+Linear 2026-10-05), and `linear-sync.yml`'s `card-done` step refuses that label
+(`auto_done_skip_reason` in `scripts/linear_ops.py`). It leaves the card's state
+alone and comments on the card.
+
 | Criterion | Verdict |
 |---|---|
 | Merged-PR count is a number | **Met**: 940 |
@@ -228,7 +237,15 @@ artifact of run 36244896914. `generated_at` is `2026-09-26T13:31:54Z`, which is
 **How it was run.** The operator's fullstack session ran it on the CEO's go,
 2026-10-05 08:07–08:10 PT. It used bureau-pipeline `main` at `111a5e717` (a
 tarball) and the two scripts on this branch, which are byte-identical to the
-ones it ran (sha256 checked):
+ones it ran (sha256 checked). Their sha256, so the check can be repeated with
+`sha256sum docs/evidence/DRE-4968/*`:
+
+```
+20ebc331faf07fda15e67f2219bc1f3fb05559a550f96e579a85d72a9ca11259  docs/evidence/DRE-4968/replay_layer_a.py
+d034a5eaa02959d391743fd06bf32881a9afcb91f3a0eeb30f62bee55839f1de  docs/evidence/DRE-4968/replay_layer_b.sh
+```
+
+The commands:
 
 ```
 python3 docs/evidence/DRE-4968/replay_layer_a.py ./bp-main p0926/proposal.json ./replay
