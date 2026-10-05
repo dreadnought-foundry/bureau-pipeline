@@ -166,6 +166,31 @@ def test_an_unmeasured_file_is_weighed_as_a_typical_one():
     assert parts.weigh(["tests/test_new.py"], {}) == {"tests/test_new.py": 1.0}
 
 
+def _where(split: list[list[str]]) -> dict[str, int]:
+    return {f: i for i, part in enumerate(split) for f in part}
+
+
+def test_a_new_test_file_moves_no_other_file_between_parts():
+    # Test modules here leak state through the process (a module-level
+    # `os.environ.setdefault` read once by `reconcile`), so a file's
+    # neighbours in its part are part of what it was tested against. A pull
+    # request that adds one test file must not reshuffle every part — that
+    # would expose some unrelated test's luck in a PR that never touched it.
+    measured = {f: float(i % 5 + 1) for i, f in enumerate(FILES)}
+    before = _where(parts.assign(FILES, 4, measured))
+    after = _where(parts.assign(FILES + ["tests/test_aa_new.py"], 4, measured))
+    assert {f: after[f] for f in FILES} == before
+
+
+def test_a_deleted_test_file_moves_no_other_file_between_parts():
+    measured = {f: float(i % 5 + 1) for i, f in enumerate(FILES)}
+    before = _where(parts.assign(FILES, 4, measured))
+    kept = [f for f in FILES if f != "tests/test_03.py"]
+    after = _where(parts.assign(kept, 4, measured))
+    assert {f: after[f] for f in kept} == {f: before[f] for f in kept}
+    assert "tests/test_03.py" not in after
+
+
 def test_more_parts_than_files_is_refused():
     with pytest.raises(ValueError):
         parts.assign(FILES[:3], 4, {})

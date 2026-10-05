@@ -32,6 +32,18 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 import reconcile  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _this_repo_is_agent_bureau(monkeypatch):
+    """`reconcile.REPO_SLUG` is read ONCE, when the first test module in the
+    process imports `reconcile` — and every module sets its own default first.
+    The value above only wins when this module happens to be collected before
+    the others that set one (DRE-5838: the parts of `scripts unit tests` each
+    collect a different subset, and this test went red in one of them). Pin
+    the repo these cases are written for rather than inherit a neighbour's."""
+    monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/agent-bureau")
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+
+
 def _phase_mocks():
     """Patch every sweep phase with recorders; promotion path returns cleanly."""
     return {
