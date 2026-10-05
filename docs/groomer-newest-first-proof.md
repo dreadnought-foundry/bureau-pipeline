@@ -119,9 +119,8 @@ rules — newest first, position N`. The observation 1 dry run at 08:04 PT
 
 **Pass bar: not met.** The served Planning list breaks newest first at three
 positions. If the bar is the rules' order, the fix is for a promoted spare to
-take its place by the sequence, not the excluded card's slot. That goes to the
-epic as a mid-epic discovery (`scripts/mid_epic.py discovery DRE-4963`). This
-record does not file it.
+take its place by the sequence, not the excluded card's slot. Fix card:
+DRE-5858.
 
 ## 4. The checks
 
@@ -162,7 +161,7 @@ dreadnought-foundry, and that is how it reached DRE-4059. Its one hit this
 morning was a false one: a PR that names a card as unfinished work was read as
 that card's PR. Both points belong to epic DRE-4963 as discoveries. The unread
 search is already DRE-5746, which sits on this Planning list at #15. The false
-match is not filed anywhere yet.
+match is DRE-5857.
 
 ## 5. Nothing on the Planning list was already done
 
@@ -273,8 +272,7 @@ date their evidence, because the card does not ask about them.
   It is read if the CEO answers today. Otherwise the next morning he presses
   one is read.
 - **Newest first** fails on the served list (§3). A fix and a later morning
-  are needed. The route is a mid-epic discovery on DRE-4963, which the operator
-  files.
+  are needed. Fix card: DRE-5858.
 - **The replay** catches one of three on evidence from its own day (§8).
   Whether that meets the card's intent is the CEO's call. Read strictly, it does
   not.
@@ -285,11 +283,11 @@ date their evidence, because the card does not ask about them.
 ## Defects for fix cards
 
 Each is observed on 2026-10-05 and located on bureau-pipeline `main` `442dc2c`.
-The route for each is a mid-epic discovery on DRE-4963. The operator files it,
-and this record does not.
+Each now has its fix card, filed by the operator's session on 2026-10-05:
+DRE-5858 (defect 1), DRE-5857 (defect 2) and DRE-5746 (defect 3).
 
 1. **A promoted spare takes the excluded card's slot, not its own place in the
-   order.** `scripts/groom_verify_agent.py:925`, in the walk over `now` at
+   order. Fix card: DRE-5858. It breaks the "newest first" criterion.** `scripts/groom_verify_agent.py:925`, in the walk over `now` at
    `:903–926`:
    `row.update(identifier=taker, position=slot["position"],`. When the verify
    step excludes or cancels a Planning card, the next still-needed spare is
@@ -300,7 +298,7 @@ and this record does not.
    UTC day, then repo, then timestamp, with collisions and blockers honored),
    and the spares join in their own sequence order.
 2. **Layer A reads "card DRE-N" anywhere in a merged PR's body as "this PR is
-   for DRE-N".** `scripts/groom_verify.py:214–216`, in `_pr_is_for`: the
+   for DRE-N". Fix card: DRE-5857. It caused the wrong DRE-4059 Cancel (§4).** `scripts/groom_verify.py:214–216`, in `_pr_is_for`: the
    `\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|implements?|card)\b\s*:?\s*\**\s*DRE-N`
    alternative includes the bare word `card`. bureau-pipeline #415 (DRE-4058's
    PR, `Closes DRE-4058.`) says "The sibling card DRE-4059 covers who gets
@@ -314,7 +312,7 @@ and this record does not.
    search runs on one token, the Bureau App's dreadnought-foundry installation.
    The per-owner lookup legs read all three owners the same morning. This is
    already a card, **DRE-5746**, which is on this morning's Planning list at #15,
-   so no new card is needed.
+   so no new card is needed. Fix card: DRE-5746.
 
 Not defects, and not for fix cards:
 - **The replay's strict reading (§8)** is a limit of replaying on today's board.
@@ -326,7 +324,7 @@ Not defects, and not for fix cards:
 | Criterion | Result |
 |---|---|
 | The record holds one real morning with all eight sections, observed live | **Partly met.** Sections 1–6 and 8 are read off run 37314573171 and the replay. Section 7 is not exercised yet (no "Don't do" pressed) |
-| The merged-PR count is a number, and the Planning list is newest first | **Not met.** The count is 940, a number. The served list breaks newest first at #5, #11 and #18, where spares took excluded cards' slots (`groom_verify_agent.py:925`) |
+| The merged-PR count is a number, and the Planning list is newest first | **Not met.** The count is 940, a number. The served list breaks newest first at #5, #11 and #18, where spares took excluded cards' slots (`groom_verify_agent.py:925`). Fix card: DRE-5858 |
 | No card on that morning's Planning list was already done | **Met.** None of the 20. DRE-5662 is partly done and has work left (§5) |
 | The replay of `b9eecae64787` flags DRE-2897, DRE-3526 and DRE-2382 with evidence | **Not met, read strictly.** All three are flagged. Only DRE-2897's evidence predates the proposal. DRE-2382 (layer B, from the CEO's later cancel comment) and DRE-3526 (layer A, from DRE-4630's 09-29 cancel) are flagged by board state written after it (§8) |
 | The CEO closes this card after reading the record | Open |
