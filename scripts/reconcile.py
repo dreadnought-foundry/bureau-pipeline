@@ -1593,6 +1593,9 @@ def drain_retiring_lanes() -> None:
         if lane.get("replaced_by")
     }
     if not draining:
+        # Still no Linear read for nothing — but one line, so the log tells
+        # "ran and found nothing" from "never ran" (DRE-5519).
+        print("drain: nothing to move — the lane contract names no retiring lane")
         return
     try:
         stranded = active_cards(tuple(draining))
@@ -1619,6 +1622,9 @@ def drain_retiring_lanes() -> None:
             raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
     if stranded:
         print(f"drain: moved {len(stranded)} card(s) out of retiring lane(s)")
+    else:
+        print("drain: nothing to move — 0 card(s) in the retiring lane(s) "
+              f"{', '.join(draining)}")
 
 
 # ONE board read per sweep (DRE-2929). Four callers ask active_cards() for
@@ -1818,12 +1824,17 @@ def carry_epics_out_of_todo() -> None:
 
     Another repo's epic is left to that repo's sweep, which reads the same
     board; an epic with no `repo:` label is everybody's (`_another_repos_card`).
+
+    A pass that finds no epic says so in one line (DRE-5519).
     """
+    in_todo = 0
+    epics = 0
     for card in active_cards((epic_todo_gate.TODO,)):
         # The lane this read says the card is in, asked again: every write
         # below is made on the strength of it, so it is never taken on trust.
         if (card.get("state") or {}).get("name") != epic_todo_gate.TODO:
             continue
+        in_todo += 1
         if _another_repos_card(card):
             continue
         ident = card["identifier"]
@@ -1832,6 +1843,7 @@ def carry_epics_out_of_todo() -> None:
         bodies = card_comment_bodies(card)
         if not epic_todo_gate.is_epic_card(title, kids, bodies):
             continue
+        epics += 1
         before = epic_todo_gate.lane_before_todo(linear_ops, ident)
         try:
             # From-lane-conditional when the board came from the read door
@@ -1858,6 +1870,8 @@ def carry_epics_out_of_todo() -> None:
         )
         if body is not None:
             epic_todo_gate.post_refusal(linear_ops, ident, body)
+    if not epics:
+        print(f"epic-not-todo: nothing to carry — no epic among the {in_todo} card(s) in Todo")
 
 
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
@@ -2974,16 +2988,23 @@ def repair_frozen_planning_holds() -> set[str]:
     move (the Intake age-out removed by DRE-4141 stated the same trade).
     """
     repaired: set[str] = set()
+    planning = [card for card in active_cards(PLANNING_LANE)
+                if card["state"]["name"] == "Planning"]
     candidates = [
-        card for card in active_cards(PLANNING_LANE)
-        if card["state"]["name"] == "Planning"
-        and held(card)
+        card for card in planning
+        if held(card)
         and not hand_built(card)
         and not _another_repos_card(card)
         and not routing_verdict.is_parked(card_comment_bodies(card))
         and any(WATCHDOG_TAG in b for b in card_comment_bodies(card))
     ]
     if not candidates:
+        # No candidate, no GitHub read — but one line, so the log tells "ran
+        # and found nothing" from "never ran" (DRE-5519).
+        print(
+            "planning-repair: nothing to repair — 0 frozen card(s) among the "
+            f"{len(planning)} card(s) in Planning"
+        )
         return repaired
     prs = _open_pr_listing()
     if prs is None:
@@ -10353,6 +10374,8 @@ def recover_limit_deaths() -> None:
     A limit death whose marker Linear refused (DRE-5837) is read first, off
     the run's own record (`backfill_limit_records`), so the card it names
     carries its marker before the recovery reads the board.
+
+    A pass that re-enters nothing says so in one line (DRE-5519).
     """
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
@@ -10362,6 +10385,7 @@ def recover_limit_deaths() -> None:
         # door's facts is from-lane-conditional on it (item 33), and a refused
         # one raises, so the receipt never claims a re-entry that did not land.
         lanes_now = {c["identifier"]: c for c in cards}
+        acted = False
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
             MAX_WIP - wip_count(wip_base(active_cards())),
@@ -10372,9 +10396,13 @@ def recover_limit_deaths() -> None:
                 linear_ops.cmd_state(ident, lane, **_door_guard(lanes_now.get(ident)))),
             dispatch=redispatch, cards=cards,
         ):
+            acted = True
             print(line)
             if line.startswith("ERROR:"):
                 _write_failures.append(line)
+        if not acted:
+            print(f"limit-recovery: nothing to re-enter — {len(cards)} card(s) read, "
+                  "none with a limit death to recover")
     except BoardNotRead:
         raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
