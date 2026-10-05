@@ -1513,13 +1513,16 @@ SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
 )
 
-# Which of those lanes the read door serves (Stage 2 #6a, design D1). The
-# console does not store a card with no `repo:` label, and Intake and Planning
-# are where those cards live — the Urgent fast path, the Planning watchdog and
-# the planner line read them on purpose — so those two lanes stay on Linear
-# (one paged read, about two requests a sweep). The work lanes, where this
-# repo's own cards are, come from the door. Phase 2 (#6b) stores unlabeled
-# cards and moves the rest. Backlog is the promotion read's own lane.
+# How the read door serves those lanes (Stage 2 #6a, DRE-5848). The work
+# lanes, where this repo's own cards are, are one `scope=repo` read. Intake and
+# Planning hold every repo's cards and the unlabeled ones — the Urgent fast
+# path, the Planning watchdog and the planner line read them on purpose — so
+# they are one `scope=fleet` read: the whole team's cards in those lanes, which
+# the console has stored since AB-2b and serves to steward repos once its
+# `PIPELINE_READ_UNROUTED` is open. The pipeline keeps no list of which repos
+# those are; the door's answer decides. A repo it declines that scope to reads
+# the two lanes from Linear in the one paged read the sweep always made
+# (`_fleet_or_linear`). Backlog is the promotion read's own lane.
 DOOR_LINEAR_LANES = tuple(lane for lane in SWEPT_LANES if lane in INTAKE_LANE + PLANNING_LANE)
 DOOR_WORK_LANES = tuple(lane for lane in SWEPT_LANES if lane not in DOOR_LINEAR_LANES)
 BACKLOG_LANE = "Backlog"
@@ -1670,9 +1673,15 @@ _door_wip: list[bool] = [False]
 # Set when the door said Linear is held (`linear-hold`): every read of the work
 # lanes this pass raises BoardHeld, and its phase is skipped (item 34).
 _door_hold: list[str] = []
-# Linear's read of the lanes the door does not serve (Intake, Planning), when
-# the door served the rest.
+# Intake and Planning (`DOOR_LINEAR_LANES`) when the work-lane read fell back
+# to Linear's whole-board read, which carries them too (DRE-5848).
 _linear_lane_cards: list[dict] | None = None
+# The `scope=fleet` reads this pass, one per lane group — Intake and Planning,
+# and the planner line's Green Light — each the door's answer or Linear's
+# (`_fleet_or_linear`, DRE-5848). A group the door said `linear-hold` for is
+# in `_fleet_hold` instead, and every ask of it this pass is skipped.
+_fleet_lane_cards: dict[tuple[str, ...], list[dict]] = {}
+_fleet_hold: dict[tuple[str, ...], str] = {}
 # Set when this pass found the repo IDLE (`sweep_idle`): the repo-scoped phases
 # — this repo's slice of the board, promotion, the hand-built move, the
 # re-review watcher, the break-glass count — are skipped without a word (the
@@ -1715,6 +1724,8 @@ def reset_sweep_cards() -> None:
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
     _linear_lane_cards = None
+    _fleet_lane_cards.clear()
+    _fleet_hold.clear()
     _door_sourced.clear()
     _door_wip[0] = False
     _door_hold.clear()
@@ -1899,11 +1910,14 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     real query: the union is what was read, and answering from it would be a
     confident empty (drain_retiring_lanes is that caller by construction).
 
-    THE READ DOOR (Stage 2 #6a). In `BUREAU_READ=on` the work lanes come from
-    the console's door and Intake/Planning from Linear (`DOOR_LINEAR_LANES`);
-    a door that cannot give the whole answer falls back to exactly the one
-    Linear read above. In `shadow` the door is read FIRST and compared, and
-    Linear's answer is the one used. In `off` (the default) nothing changes.
+    THE READ DOOR (Stage 2 #6a, DRE-5848). In `BUREAU_READ=on` the work lanes
+    come from the console's door at `scope=repo`, and Intake/Planning
+    (`DOOR_LINEAR_LANES`) from its `scope=fleet` read; a door that cannot give
+    the whole answer falls back to exactly the one Linear read above, and a
+    door that declines the fleet scope to this repo to the one Linear read of
+    those two lanes (`_fleet_or_linear`). In `shadow` the door is read FIRST
+    and compared, and Linear's answer is the one used. In `off` (the default)
+    nothing changes.
     """
     global _swept_cards
     wanted = set(states)
@@ -1945,7 +1959,7 @@ def _door_work_cards() -> list[dict]:
             raise BoardHeld(e.reason) from e
         print(f"read-door: board unknown ({e}) — read from Linear this pass")
         _swept_cards = _fetch_active_cards(SWEPT_LANES)
-        if _linear_lane_cards is None:
+        if _linear_lane_cards is None and DOOR_LINEAR_LANES not in _fleet_lane_cards:
             _linear_lane_cards = [c for c in _swept_cards
                                   if c["state"]["name"] in DOOR_LINEAR_LANES]
         return _swept_cards
@@ -1958,11 +1972,66 @@ def _door_work_cards() -> list[dict]:
 
 
 def _linear_lanes() -> list[dict]:
-    """Intake and Planning, from Linear (6a): the lanes the door does not serve."""
-    global _linear_lane_cards
-    if _linear_lane_cards is None:
-        _linear_lane_cards = _fetch_active_cards(DOOR_LINEAR_LANES)
-    return _linear_lane_cards
+    """Intake and Planning in `BUREAU_READ=on` (DRE-5848): off the door's
+    `scope=fleet` read, or — when the door declines that scope to this repo —
+    the one Linear read of the two lanes (`_fleet_or_linear`). When the
+    work-lane read already fell back to Linear's whole board, which carries
+    both lanes, they are taken from it and nothing more is asked."""
+    if _linear_lane_cards is not None:
+        return _linear_lane_cards
+    return _fleet_or_linear(DOOR_LINEAR_LANES, "Intake/Planning")
+
+
+def _fleet_or_linear(lanes: tuple[str, ...], label: str) -> list[dict]:
+    """Every card in `lanes`, the whole team's: the door's `scope=fleet` read
+    in `BUREAU_READ=on`, else the one paged Linear read of them (DRE-5848).
+
+    Asked at most once per lane group per pass, and cached for it the way the
+    work lanes are. A served card is door-sourced — every lane move decided on
+    it is from-lane-conditional (item 33) — and its comment window goes to the
+    pass cache, exactly like a work-lane card.
+
+    Which repos the door serves the fleet to is the console's to say
+    (`PIPELINE_FLEET_REPOS`, and `PIPELINE_READ_UNROUTED` open); no list of
+    them is kept here. A declined scope — UNKNOWN for any reason but
+    `linear-hold`, or a 401/403/404 the client reads as `refused` or
+    `not-found` — sends this read to Linear with one line naming the reason,
+    and leaves the door in use for every other read. `linear-hold` raises
+    BoardHeld for this group (no Linear fallback, item 34). A door that
+    stopped answering — on this read or earlier in the run — sends it to
+    Linear as every read is sent, under the line that stop already printed.
+    `off` and `shadow` make no fleet read: the Linear read they always made,
+    through `active_cards` as it always was — the seam the sweep's own tests
+    stand in for, so `off` stays byte-identical.
+    """
+    if bureau_read.mode() != "on":
+        return active_cards(lanes)
+    if lanes in _fleet_lane_cards:
+        return _fleet_lane_cards[lanes]
+    if lanes in _fleet_hold:
+        raise BoardHeld(_fleet_hold[lanes])
+    cards = None
+    if bureau_read.enabled():
+        try:
+            read = bureau_read.board(lanes, scope="fleet", max_age=bureau_read.BOARD_MAX_AGE)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                _fleet_hold[lanes] = e.reason
+                raise BoardHeld(e.reason) from e
+            if e.unavailable:
+                print(f"read-door: board unknown ({e}) — read from Linear this pass")
+            else:
+                print(f"read-door: {label} read from Linear this pass — the door does "
+                      f"not serve scope=fleet to this repo ({e.reason})")
+        else:
+            cards = list(read.nodes)
+            for card in cards:
+                _door_sourced.add(card["identifier"])
+                linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    if cards is None:
+        cards = _fetch_active_cards(lanes)
+    _fleet_lane_cards[lanes] = cards
+    return cards
 
 
 # ── The shadow comparison (Stage 2 item 36) ─────────────────────────────────
@@ -2542,12 +2611,16 @@ def flag_stalled_planning() -> set[str]:
                 continue
             if any(WATCHDOG_TAG in b for b in bodies):
                 continue  # flagged once already — idempotent forever
+            # A card the door's read put here is read live once, before the
+            # release: a card that left Planning since gets neither (item 33).
+            if not _door_lane_still(card):
+                continue
             # The release first (DRE-5378), the note second: the note must be
             # the newest comment when the card enters Triage, or the plan-gate
             # lets the relay re-plan it (`escalate_out_of_planning`).
             _end_line_place(ident, bodies)
             if escalate_out_of_planning(card, waiting_too_long_reason(waited),
-                                        bodies):
+                                        bodies, live_checked=True):
                 flagged.add(ident)
                 print(
                     f"watchdog: {ident} has waited {waited:.0f} minutes for a "
@@ -2767,7 +2840,8 @@ def stall_park_note(identifier: str, reason: str) -> str:
 
 
 def escalate_out_of_planning(card: dict, reason: str,
-                             bodies: list[str] | None = None) -> bool:
+                             bodies: list[str] | None = None, *,
+                             live_checked: bool = False) -> bool:
     """Post the reason and park the card in Triage. True when it moved.
 
     ONE seam for every way out of Planning the sweep takes — the stall
@@ -2802,8 +2876,15 @@ def escalate_out_of_planning(card: dict, reason: str,
     guarded on a live re-read (`linear_ops.cmd_state`). A write that did not
     happen never reads as done: the failure goes on the fail-loudly rail,
     which exits the sweep red for the medic.
+
+    A card the read door's fleet read served (DRE-5848) is read live once
+    before the note — skipped when the caller already did (`live_checked`) —
+    and its move is from-lane-conditional on Planning (item 33): a card that
+    left Planning since the door's read gets no note and no move, and False.
     """
     ident = card["identifier"]
+    if not live_checked and not _door_lane_still(card):
+        return False
     if bodies is None:
         bodies = card_comment_bodies(card)
     attempt = plan_critic.current_cycle_entries(bodies, ident)
@@ -2813,13 +2894,16 @@ def escalate_out_of_planning(card: dict, reason: str,
                   "re-asserting the move only")
         else:
             linear_ops.cmd_comment(ident, stall_park_note(ident, reason))
-        linear_ops.cmd_state(ident, PARKED_STATE)
+        moved = linear_ops.cmd_state(ident, PARKED_STATE, **_door_guard(card))
     except linear_ops.LinearError as e:
         _write_failures.append(f"{ident} planning stall park: {e}")
         print(
             f"ERROR: failed to park {ident} out of Planning: {e}",
             file=sys.stderr,
         )
+        return False
+    if moved is False and _door_guard(card):
+        print(f"planning: {ident} left Planning since the door's read — not parked")
         return False
     return True
 
@@ -2956,9 +3040,12 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
 
     WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`): the ones
     inside SWEPT_LANES come off the board read this sweep already paid for,
-    and Green Light — outside it — is one real paged query, the one extra
-    request this phase costs, paid because a run whose epic has just moved
-    there still holds its slot until its release step. The ledger itself, the
+    and Green Light — outside it — is read because a run whose epic has just
+    moved there still holds its slot until its release step. In
+    `BUREAU_READ=on` that is the door's own `scope=fleet` read of it, cached
+    apart from Intake and Planning's; where the door declines that scope, and
+    in `off` and `shadow`, it is one real paged Linear query, the one extra
+    request this phase costs (`_fleet_or_linear`, DRE-5848). The ledger itself, the
     order of the line and every receipt's text are `planner_queue`'s; nothing
     here decides who is next.
 
@@ -3010,7 +3097,8 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
         return 0
     swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
     extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
-    cards = active_cards(swept) + (active_cards(extra) if extra else [])
+    cards = active_cards(swept) + (
+        _fleet_or_linear(extra, "/".join(extra)) if extra else [])
     records = {card["identifier"]: card for card in cards}
     now = datetime.now(UTC)
     # In the order the CEO set on the Overview, read through the console's
@@ -3233,13 +3321,19 @@ def release_groom_queue(free: int) -> list[str]:
             remaining.append(entry)
             continue
         try:
-            linear_ops.cmd_state(ident, GROOM_RELEASE_TO)
+            # From-lane-conditional when the door's fleet read put the card in
+            # Intake (DRE-5848, item 33); `{}` on Linear's read.
+            moved = linear_ops.cmd_state(ident, GROOM_RELEASE_TO, **_door_guard(found))
         except linear_ops.LinearError as e:
             _write_failures.append(f"{ident} groom queue release: {e}")
             print(f"ERROR: groom queue: {ident} was not moved to "
                   f"{GROOM_RELEASE_TO}: {e}", file=sys.stderr)
             halted = True
             remaining.append(entry)
+            continue
+        if moved is False and _door_guard(found):
+            print(f"groom queue: {ident} left Intake since the door's read — not "
+                  "released; the next pass reads where it went")
             continue
         slots -= 1
         released.append(ident)
@@ -3778,7 +3872,13 @@ def advance_urgent_intake() -> set[str]:
     eligible = [e for e in eligible if e[1] not in recent]
     budget = max(0, URGENT_SWEEP_CAP - len(recent))
     taking, waiting = eligible[:budget], eligible[budget:]
+    by_ident = {card["identifier"]: card for card in candidates}
     for raised, ident in taking:
+        # The receipt is a claim the cap counts, so a card the door's fleet
+        # read put in Intake is read live first (DRE-5848, item 33): one that
+        # left Intake since gets no receipt and no move.
+        if not _door_lane_still(by_ident[ident]):
+            continue
         try:
             # The receipt first: it is the claim the cross-repo cap counts,
             # and a move that then fails still leaves the reason on the card.

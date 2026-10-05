@@ -261,14 +261,16 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
         for key, value in door_env(door_url=door.url, issuer=issuer,
                                    repository=f"dreadnought-foundry/{DEMO}").items():
             monkeypatch.setenv(key, value)
+        door.decline_fleet("lane-not-held")
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
     assert lanes == "Todo,In Progress,In Review,Hand-work,Backlog"
     # The check asked the door, not Linear. Linear answered only the fleet
-    # phases' reads: the lanes the door does not serve (Planning and Intake,
-    # 6a), the planner line's Green Light, and the NO-ROUTE watchdog's Todo and
-    # In Progress, which the door cannot serve for cards no repo owns (the PR
-    # #687 critic's item 2).
+    # phases' reads: the lanes this door declines at `scope=fleet` — it serves
+    # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
+    # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
+    # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
+    # for cards no repo owns (the PR #687 critic's item 2).
     assert reconcile.IDLE_QUERY not in board.queries
     assert board.requests == 3
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
