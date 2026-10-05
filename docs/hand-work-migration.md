@@ -45,13 +45,29 @@ verdict (if it has one), parent, and what happens to it.
 
 ## When a card is skipped
 
-- **A person card with a run receipt (`⏳` or `🧠`) newer than its person mark.**
+- **A person card with a run receipt newer than its person mark.**
   The mark is when `hand-built` or `no-code` was added, read from the card's
   history. If the mark is not in the history (it was set when the card was
   created, or is older than the history window), the script uses the card's
   creation time, so any run receipt counts as newer. A run that started after
   the card was marked is something a person should look at before the card
   moves.
+
+  Only a real run counts as a run receipt (`is_run_receipt`, DRE-5877):
+  - a `⏳` heartbeat, which a run posts once it has started (`⏳ 1/5 plan`, and
+    so on);
+  - a `🧠 model-attempt:` line that names an agent starting. A dispatched
+    build posts `… — engineer agent starting (turns=…)` before the agent gets a
+    turn, and the planner posts `… — planner agent starting.`.
+
+  Other `🧠 model-attempt:` lines record a model reading the card. No run was
+  dispatched at it, so they do not count:
+  - the Planning classifier's `… — planning classifier read the card.`;
+  - the groomer's `… — groomer judgement ranked the census …`, which it posts
+    on its standing card every morning.
+
+  Before DRE-5877 the script counted any `⏳` or `🧠` comment as a run. That is
+  how it skipped DRE-4968 and DRE-4541 on 2026-10-04 (reading 2 below).
 - **A card named with `--only` that is not in Todo.** The migration only moves
   cards out of Todo, and never reaches into another lane.
 
@@ -207,8 +223,8 @@ for the reasons above: DRE-4968 and DRE-4541.
 operator moved it by hand at 07:35 PT, as described next.
 
 **Both skips were false, and the cause is a defect in the skip rule.** The rule
-treats any comment that starts with `⏳` or `🧠` (`LIFE_PREFIXES` in
-`scripts/hand_work_migration.py`) as a run dispatched at the card. Neither
+at `1b48c8cdd` treated any comment that starts with `⏳` or `🧠` (`LIFE_PREFIXES`
+in `scripts/hand_work_migration.py`) as a run dispatched at the card. Neither
 receipt was a run dispatched at the card:
 
 - DRE-4968's receipt at 09:30 PT on 2026-09-26 is `🧠 model-attempt … planning
@@ -223,6 +239,11 @@ The operator moved both cards by hand at 07:35 PT on 2026-10-04, with the
 comment "Moved to Hand-work by the operator (10-04, sweep-restart Step 0)".
 Linear's history shows `Todo -> Hand-work` by `bureau-tools` for both. This is
 reported to the operator as a defect and has not been filed as a card.
+
+**Fixed by DRE-5877.** The skip rule now counts only a real run receipt
+("When a card is skipped" above). The classifier's receipt on DRE-4968 and the
+groomer's on DRE-4541 no longer hold a card, so the script now moves the
+groomer's standing card like any other person card.
 
 **The "Before the run" paragraph, checked against Linear's history between 08:30 and
 08:45 PT on 2026-10-05:**
@@ -397,7 +418,8 @@ DRE-5318 hands it off.
 1. **The skip rule.** It counts a Planning-classifier or groomer `🧠` receipt as
    a dispatched run. That makes the script unable to move the groomer's standing
    card (reading 2), and the groomer paragraph above says otherwise. This is a
-   defect for the operator to file. It is not filed here.
+   defect for the operator to file. It is not filed here. *Since closed:*
+   DRE-5877 changed the rule so only a real run counts.
 2. **Reading 5.** The Hand-work view's count is not the lane's `no-code` count,
    because the view now lists every person's card in any open lane. Someone has
    to decide whether the criterion or the view should change.
