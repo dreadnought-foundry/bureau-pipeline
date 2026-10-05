@@ -36,7 +36,9 @@ and the four subcommands here are everything around it.
     answer, checked, in the fixed shape the proposal reads.
   * `apply` — back in the groom job: a Planning card proved `done-elsewhere`,
     `obsolete` or `not-worth-it` goes on the Cancel list with the proof as its reason, the next spare
-    still needed takes its slot, and the proposal id is recomputed — except
+    still needed joins the Planning list, the list is re-ordered by the
+    rules' order and renumbered from 1 (DRE-5858), and the proposal id is
+    recomputed — except
     an epic with an open child, which keeps its place and is listed in
     `cancels_refused` (DRE-5309). And it
     decides whether the morning is posted at all (DRE-5317): the lookup
@@ -899,7 +901,7 @@ def apply(proposal: dict, found: dict[str, dict],
 
     canceled: list[str] = []
     promoted: dict[str, dict] = {}
-    kept, unfilled, emptied = [], 0, 0
+    kept, unfilled = [], 0
     for slot in now:
         identifier = slot["identifier"]
         verdict_ = marks.get(identifier, {}).get("verdict")
@@ -915,7 +917,6 @@ def apply(proposal: dict, found: dict[str, dict],
         if taker is None:
             # `slots_unfilled` counts what a Cancel emptied, as the page
             # says; the excluded card is named under its own heading.
-            emptied += 1
             if verdict_ != EXCLUDED:
                 unfilled += 1
             continue
@@ -926,8 +927,7 @@ def apply(proposal: dict, found: dict[str, dict],
                    cycle=slot.get("cycle"), cycle_id=slot.get("cycle_id"))
         if base.get("held"):
             row["held"] = True
-        row.update(reason=groomer._rules_reason("now", row), trigger=None,
-                   evidence=None, judged=False, reasons={})
+        row.update(trigger=None, evidence=None, judged=False, reasons={})
         kept.append(row)
     # A spare proved done elsewhere, obsolete or not worth it is canceled
     # the same way, in order.
@@ -935,10 +935,15 @@ def apply(proposal: dict, found: dict[str, dict],
                  if marks[i]["verdict"] in CANCELS and i not in promoted
                  and not refuse(i)]
 
-    kept.sort(key=lambda r: r["position"])
-    if emptied:
-        for n, row in enumerate(kept, 1):
-            row["position"] = n
+    # The list is in the rules' order (DRE-5858): each card's place in the
+    # sequence `propose` walked, never the slot a spare inherited — so a
+    # promoted spare follows every card the rules placed, and is numbered
+    # from 1 with them. Its reason names that number, so it comes last.
+    kept.sort(key=lambda r: (by_seq.get(r["identifier"]) or r)["position"])
+    for n, row in enumerate(kept, 1):
+        row["position"] = n
+        if row["identifier"] in promoted:
+            row["reason"] = groomer._rules_reason("now", row)
     outcomes["now"] = kept
     gone = set(canceled) | set(promoted)
     outcomes["not-now"] = [r for r in outcomes["not-now"]

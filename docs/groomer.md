@@ -453,7 +453,9 @@ own Linear identity could not be read, in which case every card is excluded
 and none is read). An excluded card gets no agent and no token, and its
 verdict is `excluded` with the reason. It is dropped from the batch and stays
 where it is on the board: off the Planning list, the next still-needed spare
-takes its slot, it goes on no Cancel list and nothing moves it, and the page
+joins the Planning list, which is re-ordered by the rules' order and
+renumbered from 1 (DRE-5858) — so the spare follows every card the rules
+placed — it goes on no Cancel list and nothing moves it, and the page
 names it under `## Verified against main` with its reason. It is judged again
 on a morning none of the four holds.
 
