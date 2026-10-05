@@ -176,6 +176,9 @@ class FakeDoor(_Server):
 
     `world` maps identifier → a full node (CARD_FIELDS + inverseRelations).
     `routes` overrides an endpoint with `(status, body[, delay])` or a callable.
+    `fleet` is how a `/board?scope=fleet` read is answered (DRE-5848): None
+    serves it from `world` like any board read; `decline_fleet` sets the
+    answer a door gives a caller it does not serve that scope to.
     """
 
     def __init__(self, world: dict | None = None, *, as_of: str = "2026-10-02T20:00:00.000Z",
@@ -189,7 +192,17 @@ class FakeDoor(_Server):
         self.repository = repository
         self.held_lanes = set(held_lanes) if held_lanes is not None else None
         self.routes: dict = {}
+        self.fleet: tuple | None = None
         self.requests: list[dict] = []
+
+    def decline_fleet(self, reason: str | None = None, *, status: int | None = None) -> None:
+        """Answer every `scope=fleet` read the way a door that does not serve
+        this caller the fleet would: an UNKNOWN `reason`, or an HTTP `status`."""
+        if status is not None:
+            self.fleet = (status, {"error": {"code": "FORBIDDEN" if status in (401, 403)
+                                             else "NOT_FOUND"}})
+        else:
+            self.fleet = self.unknown(reason or "lane-not-held")
 
     def envelope(self, nodes=None, *, verdict="FRESH", reason=None, lanes=None,
                  nodes_key="issues") -> dict:
@@ -217,6 +230,8 @@ class FakeDoor(_Server):
             if key in self.routes:
                 return self.routes[key]
         if endpoint == "/board":
+            if query.get("scope") == "fleet" and self.fleet is not None:
+                return self.fleet
             lanes = [x for x in query.get("lanes", "").split(",") if x]
             if self.held_lanes is not None and not set(lanes) <= self.held_lanes:
                 return self.unknown("lane-not-held")
