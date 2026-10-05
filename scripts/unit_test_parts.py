@@ -104,22 +104,47 @@ def weigh(files: list[str], measured: dict[str, float]) -> dict[str, float]:
 
 
 def assign(files: list[str], of: int, measured: dict[str, float]) -> list[list[str]]:
-    """Split `files` into `of` parts by weight — heaviest first, each onto the
-    lightest part so far (ties to the lower part). Deterministic whatever the
-    order `files` arrives in; each part's files come back sorted."""
+    """Split `files` into `of` parts by weight. Deterministic whatever the
+    order `files` arrives in; each part's files come back sorted.
+
+    STABLE ON PURPOSE. Every file in the durations record is placed first,
+    heaviest first, each onto the lightest part so far (ties to the lower
+    part) — computed from the RECORD, including files since deleted, so where
+    a measured file runs depends on nothing but the record. Files the record
+    does not know (new ones) are then placed in name order the same way. So a
+    pull request that adds or deletes a test file moves no other file between
+    parts. That matters here because test modules leak state through the
+    process — `reconcile` reads `REPO_SLUG` once, at whichever module's import
+    comes first — so a file's neighbours in its part are part of what it was
+    tested against, and a reshuffle would expose some unrelated test's luck in
+    a pull request that never touched it. Only re-measuring moves files, and
+    the pull request that re-measures runs every part.
+    """
     if of < 1:
         raise ValueError(f"need at least one part, got {of}")
     if of > len(files):
         raise ValueError(
             f"{of} parts but only {len(files)} test files — a part would be "
             f"empty, and pytest handed no files runs everything")
+    present = set(files)
     weights = weigh(files, measured)
     loads = [0.0] * of
     split: list[list[str]] = [[] for _ in range(of)]
-    for f in sorted(files, key=lambda f: (-weights[f], f)):
+
+    def place(f: str, weight: float) -> None:
         i = min(range(of), key=lambda i: (loads[i], i))
-        split[i].append(f)
-        loads[i] += weights[f]
+        if f in present:
+            split[i].append(f)
+        loads[i] += weight
+
+    for f in sorted(measured, key=lambda f: (-measured[f], f)):
+        place(f, measured[f])
+    for f in sorted(present - set(measured)):
+        place(f, weights[f])
+    if not all(split):
+        raise ValueError(
+            "a part has no test files left — most of the durations record "
+            "names deleted files; re-measure it")
     return [sorted(p) for p in split]
 
 
