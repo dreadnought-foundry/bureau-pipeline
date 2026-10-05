@@ -29,6 +29,14 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   the door is not asked again for the rest of the run: every later read goes
   straight to Linear (design §3). One slow door must not cost a sweep eight
   seconds per read.
+
+  The one exception is a `scope=fleet` board read answered 401, 403 or 404
+  (DRE-5848). The door serves the fleet to steward repos only, and only once
+  the console's `PIPELINE_READ_UNROUTED` is open, so a refusal there is the
+  door declining that SCOPE to this repo, not the door failing: that one read
+  is UNKNOWN (`refused` or `not-found`) and the door stays in use. A token the
+  door really refuses is refused again on the next `scope=repo` read, which
+  stops the door for the run as before.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
@@ -88,9 +96,10 @@ carry every id asked for, and no other. `UNKNOWN` carries `issues: null` and a
 machine reason in `freshness.reason` (`stale`, `relations-stale`,
 `reread-pending`, `linear-hold`, `missing-field`, `lane-not-held`).
 
-Statuses: 200; 401/403 (refused — the client stops using the door this run);
+Statuses: 200; 401/403 (refused — the client stops using the door this run,
+except on a `scope=fleet` /board read, where it is UNKNOWN for that one read);
 404 on /cards or /dependents (a card outside the tenant — UNKNOWN for that one
-read, the door stays in use); 429 (throttled — stops this run, on purpose: a
+read, the door stays in use), and on a `scope=fleet` /board read (the same); 429 (throttled — stops this run, on purpose: a
 sweep that waits out `Retry-After` holds its runner, and its reads fall back to
 Linear); 503 (closed or the database is down — stops this run). Any other
 status stops this run too.
@@ -513,8 +522,13 @@ def _require_max_age(name: str, value) -> int:
 
 
 def _get(endpoint: str, query: dict, *, max_age: int,
-         relations_max_age: int | None = None, not_found_ok: bool = False) -> dict:
-    """The envelope for one read, or ReadUnknown. Counts and times everything."""
+         relations_max_age: int | None = None, not_found_ok: bool = False,
+         refusal_ok: bool = False) -> dict:
+    """The envelope for one read, or ReadUnknown. Counts and times everything.
+
+    `refusal_ok` reads a 401, 403 or 404 as UNKNOWN for this one read and
+    leaves the door in use: a scope the door does not serve this caller
+    (DRE-5848), never the door failing."""
     _require_max_age("max_age", max_age)
     if relations_max_age is not None:
         _require_max_age("relations_max_age", relations_max_age)
@@ -555,6 +569,11 @@ def _get(endpoint: str, query: dict, *, max_age: int,
         if status == 404 and not_found_ok:
             _state["unknown"] += 1
             raise ReadUnknown("not-found", f"{endpoint}: 404", status=404)
+        if status in (401, 403, 404) and refusal_ok:
+            _state["unknown"] += 1
+            text = body.decode("utf-8", "replace")[:200]
+            raise ReadUnknown("not-found" if status == 404 else "refused",
+                              f"HTTP {status} {text}", status=status)
         if status != 200:
             reason = {401: "refused", 403: "refused", 429: "throttled",
                       503: "closed"}.get(status, "unavailable")
@@ -671,7 +690,11 @@ def _card_shape(relations: bool) -> dict:
 def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
           relations: bool = False, relations_max_age: int | None = None) -> DoorRead:
     """Every card in `lanes`, for this repo's tenant (`scope=repo`) or the
-    fleet (`scope=fleet`, steward repos only). Whole, or ReadUnknown."""
+    fleet (`scope=fleet`, steward repos only). Whole, or ReadUnknown.
+
+    A `scope=fleet` read the door refuses (401, 403, 404) is UNKNOWN for this
+    read only — `refused` or `not-found` — and the door stays in use for the
+    rest of the run (DRE-5848)."""
     wanted = [str(lane) for lane in lanes]
     if not wanted:
         raise ValueError("bureau_read.board: no lanes asked for")
@@ -682,7 +705,8 @@ def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
     if relations:
         relations_max_age = relations_max_age or RELATIONS_MAX_AGE
     envelope = _get("/board", query, max_age=max_age,
-                    relations_max_age=relations_max_age if relations else None)
+                    relations_max_age=relations_max_age if relations else None,
+                    refusal_ok=scope == "fleet")
     read = _accept(envelope, max_age=max_age, shape=_card_shape(relations),
                    relations=relations)
     echoed = envelope.get("lanes")
