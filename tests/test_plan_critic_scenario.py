@@ -2341,6 +2341,49 @@ class ReviewReplanArtifactWalk(unittest.TestCase):
         self.assertIn("did not finish", note)
         self.assertNotIn("stamp-verdicts", self._log())
 
+    def test_a_re_plan_killed_by_the_token_renewal_is_re_run_not_parked(self):
+        # DRE-5856: run 37328397948's re-plan died on `API Error: 401 OAuth
+        # access token has been revoked`, two seconds after the console renewed
+        # the Claude chain — and this step parked the epic in Triage with
+        # `needs-human`, which made the medic decline its one retry. The
+        # second critic's send-back is already on the thread, as it was then.
+        with open(self.thread_path, "w") as f:
+            json.dump([{"body": pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK,
+                                          "no card manufactures the operator step"),
+                        "authored_by_pipeline": True, "created_at": STUB_NOW}], f)
+        rotation = os.path.join(ROOT, "tests", "fixtures",
+                                "credential-rotation-37328397948.json")
+        self._recheck(proof_plan(), 1, outcome="failure", REPLAN_EXEC=rotation)
+        self.assertEqual(self._outputs().get("ok"), "false")
+        # Not parked: no label, no lane move — the run is red for the medic.
+        self.assertEqual(self._lane_writes(), [])
+        self.assertNotIn("needs-human", self._log())
+        self.assertNotIn("stamp-verdicts", self._log())
+        thread = self._thread()
+        note = thread[-2]
+        self.assertIn("renew", note)
+        self.assertIn("medic", note)
+        self.assertNotIn("Triage", note)
+        # The planner never got to revise, so the re-run's critic reads the
+        # plan as a fresh attempt: the send-back above is not counted against
+        # the bound, which would otherwise park the unrevised plan as "held
+        # twice and not settled".
+        self.assertEqual(thread[-1], pc.cycle_marker(EPIC))
+        cycle = pc.current_cycle(self._records(), EPIC)
+        self.assertEqual(pc.send_backs(cycle, pc.STAGE_POST), 0)
+
+    def test_a_re_plan_that_died_on_anything_else_still_parks(self):
+        # The same 401 that says "expired" is the chain NOT renewing — not
+        # what a re-run on the current token fixes — so it parks as before.
+        expired = os.path.join(self.tmp, "expired.json")
+        with open(expired, "w") as f:
+            json.dump({"type": "result", "subtype": "success", "is_error": True,
+                       "api_error_status": 401,
+                       "result": "API Error: 401 OAuth access token has expired."}, f)
+        self._recheck(proof_plan(), 1, outcome="failure", REPLAN_EXEC=expired)
+        self.assertEqual(self._lane_writes(), ["add-label needs-human", "state Triage"])
+        self.assertNotIn(pc.cycle_marker(EPIC), self._thread())
+
     def test_invalid_children_park_before_any_other_gate_runs(self):
         with open(self.artifact, "w") as f:
             f.write(VALID_ARTIFACT)
