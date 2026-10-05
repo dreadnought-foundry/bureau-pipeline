@@ -36,6 +36,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import backlog_cutover  # noqa: E402 — `card_ids_in_code`, the "no allowlist" check
+import groomer_receipt  # noqa: E402 — the groomer's own receipt writer (DRE-5877)
 import hand_work_migration as hwm  # noqa: E402
 import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
@@ -286,6 +287,19 @@ class TestSkips:
         hwm.run(ops, rows, apply=True)
         assert [(i, s) for i, s, _ in ops.states] == [("DRE-11", HAND_WORK)]
 
+    def test_a_dispatched_build_newer_than_the_mark_is_skipped(self):
+        """agent-task.yml's heartbeat, posted before a build agent gets a turn."""
+        card = _card("DRE-12", labels=(HAND_BUILT,),
+                     history=[{"createdAt": "2026-09-05T00:00:00.000Z",
+                               "addedLabels": [{"name": HAND_BUILT}]}],
+                     comments=[_verdict("WORKBENCH"),
+                               (BUILD_STARTING, "2026-09-06T00:00:00.000Z")])
+        rows, ops = _rows([card])
+        assert rows[0]["skip"] and "newer" in rows[0]["skip"]
+        hwm.run(ops, rows, apply=True)
+        assert ops.states == []
+
+
     def test_a_named_card_outside_todo_is_skipped_with_the_reason(self, capsys):
         ops = FakeOps([WORKBENCH_CARD])
         with mock.patch.object(hwm, "linear_ops", ops):
@@ -319,6 +333,107 @@ class TestSkips:
             assert hwm.main(["run"]) == 0
         assert ops.states == [] and ops.comments == []
         assert "dry run — nothing was written" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# 4b: a classifier or groomer receipt is not a run (DRE-5877)
+# --------------------------------------------------------------------------
+#: agent-task.yml's build heartbeat, as `.github/workflows/agent-task.yml` posts it.
+BUILD_STARTING = ("🧠 model-attempt: claude-opus-5-5 — engineer agent starting "
+                  "(turns=400, fresh run). Run: https://github.com/x/y/actions/runs/1")
+#: plan.yml's classifier heartbeat — the one DRE-4968 carried on 2026-09-26.
+CLASSIFIER_READ = ("🧠 model-attempt: claude-sonnet-5-5 (asked) / claude-sonnet-5-5 "
+                   "(answered) — planning classifier read the card.")
+#: The groomer's morning receipt, composed by the groomer's own writer.
+GROOMER_RANKED = groomer_receipt.receipt_line({
+    "population": 29,
+    "judgement": {"enabled": True, "calls": 1, "ranked": 29,
+                  "receipt": "claude-sonnet-5-5 (asked) / claude-sonnet-5-5 (answered)"},
+})
+
+#: DRE-4541 as the migration read it on 2026-10-04: marked `hand-built` on
+#: 09-21, no verdict, no parent — the groomer's standing card, carrying the
+#: groomer's proposal and its `🧠 model-attempt` receipt from 10-02.
+GROOMER_STANDING_CARD = _card(
+    "DRE-4541", title="groomer: morning proposal",
+    labels=(HAND_BUILT, "repo:agent-bureau", "initiative:bureau"),
+    history=[{"createdAt": "2026-09-21T23:36:08.531Z",
+              "addedLabels": [{"name": HAND_BUILT}]}],
+    comments=[("🧺 groom-proposal: 7c67df2ec85f", "2026-10-02T13:18:20.000Z"),
+              (GROOMER_RANKED, "2026-10-02T13:18:33.772Z")])
+
+#: DRE-4968 as the migration read it: marked at 16:28:53, then the Planning
+#: classifier's receipt two minutes later.
+CLASSIFIED_OPERATOR_CARD = _card(
+    "DRE-4968", title="an operator job",
+    labels=("ceo", HAND_BUILT, "repo:bureau-pipeline", NO_CODE, "agent:ops"),
+    history=[{"createdAt": "2026-09-26T16:28:53.060Z",
+              "addedLabels": [{"name": HAND_BUILT}, {"name": NO_CODE}]}],
+    comments=[(CLASSIFIER_READ, "2026-09-26T16:30:45.991Z"),
+              _verdict("OPERATOR")])
+
+
+class TestOnlyARunCounts:
+    def test_the_groomer_receipt_is_the_shape_its_writer_posts(self):
+        assert GROOMER_RANKED.startswith("🧠 model-attempt:")
+        assert "groomer judgement ranked the census" in GROOMER_RANKED
+
+    def test_the_groomers_standing_card_moves(self):
+        rows, ops = _rows([GROOMER_STANDING_CARD])
+        assert rows[0]["class"] == "person"
+        assert rows[0]["skip"] is None
+        assert rows[0]["action"] == f"moves to {HAND_WORK}"
+        result = hwm.run(ops, rows, apply=True)
+        assert [(i, s) for i, s, _ in ops.states] == [("DRE-4541", HAND_WORK)]
+        assert result["moved"] == ["DRE-4541"]
+
+    def test_a_classifier_receipt_does_not_hold_a_card(self):
+        rows, ops = _rows([CLASSIFIED_OPERATOR_CARD])
+        assert rows[0]["skip"] is None
+        hwm.run(ops, rows, apply=True)
+        assert [(i, s) for i, s, _ in ops.states] == [("DRE-4968", HAND_WORK)]
+
+    def test_a_build_after_the_groomer_receipt_still_holds_the_card(self):
+        card = _card("DRE-4541", labels=(HAND_BUILT,),
+                     history=[{"createdAt": "2026-09-21T23:36:08.531Z",
+                               "addedLabels": [{"name": HAND_BUILT}]}],
+                     comments=[(GROOMER_RANKED, "2026-10-02T13:18:33.772Z"),
+                               (BUILD_STARTING, "2026-10-03T09:00:00.000Z")])
+        rows, _ = _rows([card])
+        assert rows[0]["skip"] and "2026-10-03T09:00:00.000Z" in rows[0]["skip"]
+
+    @pytest.mark.parametrize("body,is_run", [
+        (BUILD_STARTING, True),
+        ("🧠 model-attempt: claude-opus-5-5 — planner agent starting. why", True),
+        ("⏳ 1/5 plan — continuing within 400 turns", True),
+        ("⏳ credential expires in 10 minutes — push what is green.", True),
+        (CLASSIFIER_READ, False),
+        (GROOMER_RANKED, False),
+        ("🧠 model-attempt: claude-opus-5-5 — the planner ran on the model that "
+         "answered. Run: https://github.com/x/y/actions/runs/2", False),
+        ("🧺 groom-proposal: d50db9746997", False),
+        ("a person mentions an engineer agent starting", False),
+    ])
+    def test_what_counts_as_a_run_receipt(self, body, is_run):
+        assert hwm.is_run_receipt(body) is is_run
+
+    def test_the_skip_reason_names_a_run_not_any_receipt(self):
+        card = _card("DRE-13", labels=(HAND_BUILT,),
+                     history=[{"createdAt": "2026-09-05T00:00:00.000Z",
+                               "addedLabels": [{"name": HAND_BUILT}]}],
+                     comments=[(BUILD_STARTING, "2026-09-06T00:00:00.000Z")])
+        rows, _ = _rows([card])
+        assert rows[0]["skip"].startswith("a run receipt at ")
+
+    def test_the_doc_states_the_rule(self):
+        text = (ROOT / "docs" / "hand-work-migration.md").read_text()
+        skipped = text.split("## When a card is skipped", 1)[1].split("\n## ", 1)[0]
+        assert "(`⏳` or `🧠`)" not in skipped
+        for phrase in ("agent starting", "planning classifier read the card",
+                       "groomer judgement ranked the census", "DRE-5877"):
+            assert phrase in skipped, phrase
+        groomer = text.split("## The groomer's standing card", 1)[1].split("\n## ", 1)[0]
+        assert "moves like any other" in groomer
 
 
 # --------------------------------------------------------------------------
