@@ -12,7 +12,9 @@ What this file holds:
   * a comment declaring the card superseded, done or not to be built moves it
     to the Cancel list with the comment quoted, and the next spare card takes
     its slot;
-  * a merged pull request that is FOR the card moves it too, citing the PR;
+  * a merged pull request that is FOR the card moves it too, citing the PR —
+    and only a closing line, an `agent/DRE-N-…` branch or the card's own pull
+    request attachment makes it so; a mention never does (DRE-5857);
   * a card that says it supersedes this one, and is Done or approved and in
     flight, moves it too;
   * a Cancel that names a replacement stands only when the replacement is
@@ -101,6 +103,8 @@ class FakeLinear:
                     {"type": "related", "relatedIssue": r}
                     for r in d.get("related", [])]},
                 "inverseRelations": {"nodes": []},
+                "attachments": {"nodes": [
+                    {"url": u} for u in d.get("attachments", [])]},
                 "parent": ({"identifier": "DRE-999", "children": {
                     "nodes": d["siblings"]}} if d.get("siblings") else None),
             }, "searchIssues": {"nodes": d.get("search", [])}}
@@ -119,13 +123,18 @@ def pr(number, *, title="a change", body="", repo="portico"):
 
 class FakeGh:
     """`gh api`, as `groom_context._gh_json` runs it: the installation, the
-    merged-PR search and a single pull request."""
+    merged-PR search and a single pull request — whose head branch is the
+    one thing a search result does not carry (`heads`, by URL)."""
 
-    def __init__(self, prs=(), *, fail_search=False, merged=None):
+    def __init__(self, prs=(), *, fail_search=False, merged=None, heads=None,
+                 fail_pulls=False):
         self.prs = list(prs)
         self.fail_search = fail_search
         self.merged = dict(merged or {})
+        self.heads = dict(heads or {})
+        self.fail_pulls = fail_pulls
         self.queries: list[str] = []
+        self.pulls: list[str] = []
 
     def __call__(self, args):
         joined = " ".join(args)
@@ -142,7 +151,12 @@ class FakeGh:
         found = re.search(r"repos/(\S+?)/pulls/(\d+)", joined)
         if found:
             url = f"https://github.com/{found.group(1)}/pull/{found.group(2)}"
-            return json.dumps({"merged_at": self.merged.get(url)})
+            self.pulls.append(url)
+            if self.fail_pulls:
+                raise groom_context.ContextError(
+                    f"gh api {joined} failed rc=1: HTTP 502")
+            return json.dumps({"merged_at": self.merged.get(url),
+                               "head": {"ref": self.heads.get(url, "main")}})
         raise AssertionError(f"unexpected gh call: {joined}")
 
 
@@ -246,10 +260,9 @@ def test_a_comment_naming_an_unapproved_replacement_is_not_evidence():
 # --------------------------------------------------------------------------
 # merged pull requests
 # --------------------------------------------------------------------------
-def test_a_merged_pr_whose_body_names_the_card_moves_it_citing_the_pr():
+def test_a_merged_pr_whose_body_closes_the_card_moves_it_citing_the_pr():
     gh = FakeGh([pr(431, title="Clear the overwritten answer's status",
-                    body="Card: https://linear.app/dreadnoughtfoundry/issue/"
-                         "DRE-103/an-autosave-overwrite\n\nWhat it does …")])
+                    body="Closes DRE-103.\n\nWhat it does …")])
     got = checked(gh=gh)
     assert [r["identifier"] for r in cancel(got)] == ["DRE-103"]
     assert PR_431 in cancel(got)[0]["reason"]
@@ -259,25 +272,149 @@ def test_a_merged_pr_whose_body_names_the_card_moves_it_citing_the_pr():
     assert row["evidence"][0]["url"] == PR_431
 
 
-def test_a_merged_pr_whose_title_names_the_card_counts():
-    gh = FakeGh([pr(431, title="feat(DRE-101): the export clears the status")])
+@pytest.mark.parametrize("line", [
+    "Closes DRE-101.", "Fixes DRE-101", "Resolves DRE-101", "closed DRE-101",
+    "fixed: DRE-101", "**Resolves:** DRE-101", "This resolved DRE-101 today."])
+def test_every_closing_keyword_makes_the_pr_for_the_card(line):
+    gh = FakeGh([pr(431, body=f"Some words.\n\n{line}\n")])
     assert [r["identifier"] for r in cancel(checked(gh=gh))] == ["DRE-101"]
 
 
+def test_a_merged_pr_on_the_cards_agent_branch_counts():
+    gh = FakeGh([pr(431, title="the export clears the status",
+                    body="Why: DRE-101 asked for it.")],
+                heads={PR_431: "agent/DRE-101-export-clears-status"})
+    got = checked(gh=gh)
+    assert [r["identifier"] for r in cancel(got)] == ["DRE-101"]
+    assert gh.pulls == [PR_431]
+
+
+def test_a_merged_pr_the_card_carries_as_its_own_attachment_counts():
+    linear = FakeLinear({"DRE-102": {"attachments": [PR_431]}})
+    gh = FakeGh([pr(431, body="Part of the work DRE-102 describes.")])
+    got = checked(linear=linear, gh=gh)
+    assert [r["identifier"] for r in cancel(got)] == ["DRE-102"]
+    assert record(got, "DRE-102")["evidence"][0]["url"] == PR_431
+
+
+def test_a_title_that_names_the_card_is_a_mention_and_not_evidence():
+    """A title names whatever the change is about; the branch, a closing
+    line or the card's own attachment says what it is FOR."""
+    gh = FakeGh([pr(431, title="feat(DRE-4966): stop proposing DRE-101")],
+                heads={PR_431: "agent/DRE-4966-the-check"})
+    assert cancel(checked(gh=gh)) == []
+
+
+def test_a_linear_link_in_the_body_is_a_mention_and_not_evidence():
+    gh = FakeGh([pr(431, body="Found by https://linear.app/dreadnoughtfoundry/"
+                              "issue/DRE-101/the-proof\n\nCloses DRE-4966.")],
+                heads={PR_431: "agent/DRE-4966-the-check"})
+    assert cancel(checked(gh=gh)) == []
+
+
+@pytest.mark.parametrize("line", [
+    "The sibling card DRE-101 covers who gets asked at all.",
+    "Card: DRE-101", "Implements the half DRE-101 left open.",
+    "Follow-up: DRE-101", "Blocked on DRE-101."])
+def test_a_bare_mention_never_makes_the_pr_for_the_card(line):
+    gh = FakeGh([pr(431, body=f"Closes DRE-4966.\n\n{line}\n")],
+                heads={PR_431: "agent/DRE-4966-the-check"})
+    assert cancel(checked(gh=gh)) == []
+
+
+def test_a_branch_for_a_longer_identifier_is_not_this_card():
+    gh = FakeGh([pr(431, body="Why: DRE-101.")],
+                heads={PR_431: "agent/DRE-1012-something-else"})
+    assert cancel(checked(gh=gh)) == []
+
+
 def test_a_pr_naming_a_longer_identifier_is_not_this_card():
-    gh = FakeGh([pr(431, title="feat(DRE-1012): something else")])
+    gh = FakeGh([pr(431, body="Closes DRE-1012.")])
     assert cancel(checked(gh=gh)) == []
 
 
 def test_a_pr_that_only_mentions_the_card_in_passing_is_not_evidence():
     """A PR body lists the cards it read, blocked on or was motivated by —
-    this card's own PR names four it does not deliver. Only a PR that is FOR
-    the card counts: its title names it, its body carries the card's link, or
-    a closing line names it."""
+    DRE-4966's own PR names four it does not deliver. Only a PR that is FOR
+    the card counts: a closing line names it, its branch is the card's, or
+    the card carries it as its own attachment."""
     gh = FakeGh([pr(500, title="feat(DRE-4966): the check",
                     body="Why: the proposal offered DRE-102 on 2026-09-26.")])
     got = checked(gh=gh)
     assert cancel(got) == []
+
+
+def test_a_pr_whose_branch_could_not_be_read_leaves_the_card_unread():
+    """The branch is one of the three ways in, so a pull request whose
+    branch could not be read is a source not read — never a clean card."""
+    gh = FakeGh([pr(431, body="Why: DRE-101.")], fail_pulls=True)
+    got = checked(gh=gh)
+    assert cancel(got) == []
+    row = record(got, "DRE-101")
+    assert (row["verdict"], row["unread"]) == ("unread", ["merged_prs"])
+    other_card = record(got, "DRE-102")
+    assert (other_card["verdict"], other_card["unread"]) == ("clean", [])
+
+
+def test_a_pr_already_proven_for_the_card_is_not_read_again_for_its_branch():
+    gh = FakeGh([pr(431, body="Closes DRE-101.")])
+    groom_verify.merged_mentions(["DRE-101"], run=gh, owners=OWNERS)
+    assert gh.pulls == []
+
+
+# --------------------------------------------------------------------------
+# DRE-5857: bureau-pipeline #415 closes DRE-4058 and only names DRE-4059
+# --------------------------------------------------------------------------
+PR_415 = json.loads((ROOT / "tests" / "fixtures"
+                     / "groom_verify_pr415_mention.json").read_text())
+
+
+def _item_415():
+    p = PR_415["pr"]
+    return {"title": p["title"], "body": p["body"], "html_url": p["html_url"],
+            "repository_url": p["repository_url"],
+            "pull_request": {"merged_at": p["merged_at"]}}
+
+
+def test_415_is_for_the_card_it_closes_and_not_the_sibling_it_names():
+    item = _item_415()
+    assert "sibling card DRE-4059 covers" in item["body"]
+    branch = PR_415["pr"]["head_ref"]
+    assert groom_verify._pr_is_for("DRE-4058", item)
+    assert groom_verify._pr_is_for("DRE-4058", item, branch=branch)
+    assert not groom_verify._pr_is_for("DRE-4059", item)
+    assert not groom_verify._pr_is_for(
+        "DRE-4059", item, branch=branch,
+        attached=set(PR_415["attachments"]["DRE-4059"]))
+
+
+def test_415_without_its_closing_line_is_still_for_DRE_4058_by_branch_and_attachment():
+    item = dict(_item_415(), body="The sibling card DRE-4059 covers it.")
+    assert groom_verify._pr_is_for("DRE-4058", item,
+                                   branch=PR_415["pr"]["head_ref"])
+    assert groom_verify._pr_is_for(
+        "DRE-4058", item, attached=set(PR_415["attachments"]["DRE-4058"]))
+    assert not groom_verify._pr_is_for("DRE-4058", item)
+
+
+def test_the_10_05_morning_replayed_keeps_DRE_4059_off_the_cancel_list():
+    """Proposal d50db9746997: the same thirty cards, the same pull request,
+    the same attachments. DRE-4059 stays on the Planning list, read clean."""
+    order = PR_415["planning"] + PR_415["spares"]
+    cards = [card(i, repo="bureau-pipeline", days=n + 1)
+             for n, i in enumerate(order)]
+    p = PR_415["pr"]
+    linear = FakeLinear({i: {"attachments": urls}
+                         for i, urls in PR_415["attachments"].items()})
+    gh = FakeGh([_item_415()], heads={p["html_url"]: p["head_ref"]})
+    got = checked(cards, linear=linear, gh=gh,
+                  capacity=len(PR_415["planning"]))
+    assert "DRE-4059" not in [r["identifier"] for r in cancel(got)]
+    assert cancel(got) == []
+    assert planning(got) == PR_415["planning"]
+    row = record(got, "DRE-4059")
+    assert (row["verdict"], row["evidence"]) == ("clean", [])
+    assert got["verification"]["moved_to_cancel"] == []
 
 
 def test_the_search_is_quoted_scoped_to_merged_prs_and_per_owner():

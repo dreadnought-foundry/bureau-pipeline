@@ -22,12 +22,15 @@ The morning's Planning list plus `SPARE` cards after it, in proposal order:
     be built (`_DECLARES`) is evidence, quoted;
   * **merged pull requests** — searched for the quoted `"DRE-N"` with the
     Bureau App token the Groom step carries as `GH_TOKEN` (DRE-4964's
-    contract), per fleet owner. A merged PR that is FOR the card is evidence:
-    its title names the card, or its body carries the card's Linear link or a
-    closing line naming it (`_pr_is_for`). A body that only mentions the card
-    is not — this card's own pull request names four cards it does not
-    deliver, and each of them would be proposed for cancellation the next
-    morning;
+    contract), per fleet owner. A merged PR that is FOR the card is evidence,
+    and only three things make it so (`_pr_is_for`, DRE-5857): a closing line
+    in its body (`Closes`/`Fixes`/`Resolves DRE-N`), its branch
+    `agent/DRE-N-…`, or the card carrying it as its own pull request
+    attachment. Anything else is a mention, and a mention never is — this
+    card's own pull request names four cards it does not deliver, and
+    bureau-pipeline #415, which closes DRE-4058, says "the sibling card
+    DRE-4059 covers…": the 10-05 proposal offered to cancel DRE-4059, live
+    and unbuilt, on that sentence alone;
   * **other cards** — a card a Linear search finds, a `related` card, or a
     sibling under the same parent, whose text says it supersedes, replaces,
     absorbs or covers this one (`_covers`) and which is itself a real
@@ -120,6 +123,7 @@ CARD_QUERY = """query($id: String!, $term: String!) {
   issue(id: $id) {
     identifier
     comments(first: 50) { nodes { body createdAt } }
+    attachments(first: 50) { nodes { url } }
     relations(first: 20) { nodes {
       type relatedIssue { identifier title description state { name } } } }
     inverseRelations(first: 20) { nodes {
@@ -204,16 +208,35 @@ def _sentence(text: str, match: re.Match) -> str:
     return _LINE_LEAD.sub("", text[start:end]).strip()
 
 
-def _pr_is_for(identifier: str, item: dict) -> bool:
-    """Is this merged PR FOR the card — not merely about it?"""
-    if re.search(_ref(identifier), item.get("title") or ""):
+def _url_key(url: str | None) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def _pr_is_for(identifier: str, item: dict, *, branch: str | None = None,
+               attached=()) -> bool:
+    """Is this merged PR FOR the card — not merely about it? (DRE-5857)
+
+    Three ways in, and no others: a closing line in the body — GitHub's own
+    keywords, `Closes`/`Fixes`/`Resolves` and their tenses — the head branch
+    `agent/DRE-N-…`, or the PR among the card's own attachments (`attached`,
+    their URLs). A title, a Linear link or "card DRE-N" names a card; it
+    does not say the PR delivered it."""
+    if re.search(rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b"
+                 rf"\s*:?\s*\**\s*:?\s*{_ref(identifier)}",
+                 item.get("body") or "", re.I):
         return True
-    body = item.get("body") or ""
-    if re.search(rf"/issue/{re.escape(identifier)}(?!\d)", body):
+    if branch and re.match(rf"agent/{re.escape(identifier)}(?:-|$)", branch,
+                           re.I):
         return True
-    return bool(re.search(
-        rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|implements?|card)\b"
-        rf"\s*:?\s*\**\s*{_ref(identifier)}", body, re.I))
+    url = _url_key(item.get("html_url"))
+    return bool(url) and url in {_url_key(u) for u in attached}
+
+
+def attachments(detail: dict | None) -> set[str]:
+    """The pull request URLs (and any other links) the card carries."""
+    nodes = (((detail or {}).get("issue") or {}).get("attachments")
+             or {}).get("nodes") or []
+    return {n["url"] for n in nodes if n.get("url")}
 
 
 def _plain(text: str, fallback: str) -> str:
@@ -269,10 +292,27 @@ def _search(run, query: str) -> list[dict]:
         page += 1
 
 
-def merged_mentions(identifiers: list[str], *, run=None,
-                    owners=None) -> tuple[dict, dict, list[str]]:
+def _head_ref(run, url: str) -> str:
+    """The head branch of one pull request — the one thing `_pr_is_for`
+    needs that a search result does not carry."""
+    parts = _PR_URL.match(url or "")
+    if not parts:
+        raise ValueError(f"{url!r} is not a pull request URL")
+    owner, repo, number = parts.groups()
+    doc = groom_context._api(run, [f"repos/{owner}/{repo}/pulls/{number}"],
+                             "the pull request")
+    return ((doc.get("head") or {}).get("ref")) or ""
+
+
+def merged_mentions(identifiers: list[str], *, run=None, owners=None,
+                    attached=None) -> tuple[dict, dict, list[str]]:
     """`({card: [merged PR for it]}, {card: why the search was not read},
     [owner whose search answered])`.
+
+    `attached` is `{card: its attachment URLs}`. A search result that is not
+    already for a card by its closing line or the card's attachment has its
+    branch read, once per PR; a branch that could not be read leaves the card
+    unread on this source rather than clean.
 
     One search per owner per `SEARCH_CHUNK` cards, each card quoted. An owner
     the token's installation cannot see leaves every card unread — a search
@@ -287,6 +327,8 @@ def merged_mentions(identifiers: list[str], *, run=None,
     found: dict[str, list[dict]] = {i: [] for i in identifiers}
     gaps: dict[str, str] = {}
     searched: list[str] = []
+    attached = attached or {}
+    heads: dict[str, str | Exception] = {}
     if not identifiers:
         return found, gaps, searched
     if not (os.environ.get(groom_context.TOKEN_ENV) or "").strip():
@@ -325,8 +367,31 @@ def merged_mentions(identifiers: list[str], *, run=None,
                 if not (item.get("pull_request") or {}).get("merged_at"):
                     continue
                 for i in chunk:
-                    if _pr_is_for(i, item) and item not in found[i]:
-                        found[i].append(item)
+                    if item in found[i]:
+                        continue
+                    on = attached.get(i) or ()
+                    if not _pr_is_for(i, item, attached=on):
+                        url = item.get("html_url") or ""
+                        if url not in heads:
+                            try:
+                                heads[url] = _head_ref(run, url)
+                            except Exception as e:  # noqa: BLE001
+                                heads[url] = e
+                        if isinstance(heads[url], Exception):
+                            # Unread only for a card the PR names: a search
+                            # chunk asks for five, and the other four's
+                            # answer does not hang on this branch.
+                            named = "\n".join(item.get(k) or ""
+                                              for k in ("title", "body"))
+                            if re.search(_ref(i), named):
+                                gaps.setdefault(
+                                    i, f"the branch of {url} could not be "
+                                       f"read: {heads[url]}")
+                            continue
+                        if not _pr_is_for(i, item, branch=heads[url],
+                                          attached=on):
+                            continue
+                    found[i].append(item)
     return found, gaps, searched
 
 
@@ -484,8 +549,19 @@ def check(proposal: dict, *, lops, run=None, owners=None,
     planning, spares = window(proposal, spare)
     candidates = planning + spares
     real = _Replacements(lops, run)
-    prs, pr_gaps, searched = merged_mentions(candidates, run=run,
-                                             owners=owners)
+
+    # The cards first: their attachments are one of the three ways a merged
+    # PR is for a card, so the search is read against them.
+    details: dict[str, dict | Exception] = {}
+    for identifier in candidates:
+        try:
+            details[identifier] = read_card(lops, identifier)
+        except Exception as e:  # noqa: BLE001 — an unread source is named
+            details[identifier] = e
+    prs, pr_gaps, searched = merged_mentions(
+        candidates, run=run, owners=owners,
+        attached={i: attachments(d) for i, d in details.items()
+                  if not isinstance(d, Exception)})
 
     rows: list[dict] = []
     unread: dict[str, dict] = {}
@@ -496,13 +572,12 @@ def check(proposal: dict, *, lops, run=None, owners=None,
 
     for identifier in candidates:
         evidence, missing = [], []
-        try:
-            detail = read_card(lops, identifier)
-        except Exception as e:  # noqa: BLE001 — an unread source is named
-            detail = None
+        detail = details[identifier]
+        if isinstance(detail, Exception):
             for source in ("comments", "other_cards"):
-                gap(source, identifier, f"Linear did not answer: {e}")
+                gap(source, identifier, f"Linear did not answer: {detail}")
                 missing.append(source)
+            detail = None
         if detail is not None:
             evidence += comment_evidence(identifier, detail, real)
         if identifier in pr_gaps:
