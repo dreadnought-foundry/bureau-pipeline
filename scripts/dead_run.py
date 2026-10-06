@@ -325,13 +325,26 @@ _STAGE_BY_WORKFLOW = (
     ("qa review", "review"),
     ("linear sync", "sync"),
 )
+# A death in the plan workflow's second-critic review re-enters `review`, not
+# `plan` (DRE-5455): the epic already has its cards, and the re-review watcher
+# (DRE-5640, DRE-5842) is what brings a dead review back. Anchored at the START
+# of the failed step's name, never a substring, so "Re-plan after the second
+# critic sent it back" and "Re-mint bot token — second critic" stay `plan`. The
+# review step itself is continue-on-error; the step that fails the job on its
+# behalf is "Review — the review died".
+_REVIEW_STEP_PREFIXES = ("second critic", "review —")
+# One Claude usage window (DRE-5455). A Claude wall whose text names no reset
+# is marked with a reset this long after the run ended, so the recovery sweep
+# has a clock to bring the card back on. A wall still up then costs one short
+# start that dies at its first model call and is marked again.
+CLAUDE_RESET_ASSUMED_HOURS = 5
 _CLAUDE_RESET = re.compile(
     r"resets\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>am|pm)\s*\(UTC\)", re.I
 )
 _LINEAR_RESET = re.compile(r"x-ratelimit-requests-reset\s*[:=]\s*(\d{10,13})", re.I)
 _MARKER_LINE = re.compile(
     rf"^{re.escape(LIMIT_MARK)} kind=(\S+) stage=(\S+) reset=(\S+) run=(\S+)"
-    r"(?: account=(\S+))?\s*$"
+    r"(?: account=(\S+))?(?: assumed=(\S+))?\s*$"
 )
 _ISO_Z = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -468,12 +481,17 @@ def workflow_for_stage(stage: str) -> str:
 def limit_stage(workflow_name: str, failed_step: str = "") -> str | None:
     """The stage a death in `workflow_name` has to re-enter, or None when the
     workflow is not one a card's run lives in (a Reconcile sweep dying on the
-    quota is a run fault with no card to bring back)."""
+    quota is a run fault with no card to bring back). In the plan workflow a
+    step whose name opens with `second critic` or `review —` is the second
+    critic's review, and answers `review` (DRE-5455)."""
     name = (workflow_name or "").strip().lower()
+    step = (failed_step or "").strip().lower()
     for prefix, stage in _STAGE_BY_WORKFLOW:
         if name.startswith(prefix):
-            if stage == "plan" and "classif" in (failed_step or "").lower():
+            if stage == "plan" and "classif" in step:
                 return "classify"
+            if stage == "plan" and step.startswith(_REVIEW_STEP_PREFIXES):
+                return "review"
             return stage
     return None
 
@@ -490,39 +508,75 @@ def pacific(when: datetime) -> str:
 
 
 def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
-                 account: str | None = None) -> str:
+                 account: str | None = None, reset_assumed: bool = False) -> str:
     """The ONE comment a limit death leaves. Line one is the machine-readable
     marker limit_recovery reads back through parse_limit_marker(); the
-    paragraph is for the person reading the card."""
+    paragraph is for the person reading the card, and says what brings the
+    card back.
+
+    `reset_assumed` (DRE-5455) marks a Claude reset the run never stated:
+    the line ends ` assumed=yes`, after `account=` when there is one. It means
+    nothing without a reset, and nothing on a Linear death."""
+    assumed = bool(reset_assumed and reset and kind == "claude")
     reset_field = reset.astimezone(UTC).strftime(_ISO_Z) if reset else "unknown"
     first = f"{LIMIT_MARK} kind={kind} stage={stage} reset={reset_field} run={run_id or 'unknown'}"
     if account:
         first += f" account={account}"
+    if assumed:
+        first += " assumed=yes"
     wall = (
         "the Claude account's usage limit" if kind == "claude"
         else "Linear's request budget (the workspace's hourly quota)"
     )
-    when = f"at {pacific(reset)}" if reset else "at a time the run did not say"
+    if assumed:
+        back = (
+            f"The run named no reset time, so the reset is assumed five hours "
+            f"after the run ended (one usage window), at {pacific(reset)}, and "
+            f"the reconcile sweep re-enters the {stage} stage then. If the wall "
+            f"is still up then, the run dies at its first model call and is "
+            f"marked again, and a third death on an assumed clock within a day "
+            f"is handed to a person."
+        )
+    elif reset:
+        back = (
+            f"The reconcile sweep re-enters the {stage} stage on its own once "
+            f"the window resets (at {pacific(reset)})."
+        )
+    elif kind == "linear":
+        back = (
+            f"The run named no reset time, so the reconcile sweep re-enters the "
+            f"{stage} stage on its next pass."
+        )
+    else:
+        back = (
+            "The run named no reset time, so nothing tells the reconcile sweep "
+            "when the wall comes down, and it hands the card to a person."
+        )
+    if account:
+        back += (
+            f" The marker records the account {account}: a change of that "
+            f"account brings the card back sooner."
+        )
     paragraph = (
         f"This run hit {wall} during the {stage} stage and stopped there. That "
         f"is a wait, not a fault in this card, the model or the service: no "
         f"strike is spent against this card's budget, no model is recorded as "
         f"having failed, and the card is neither requeued into the same wall "
-        f"nor parked for a human. The reconcile sweep re-enters the {stage} "
-        f"stage on its own once the window resets ({when}) or the account is "
-        f"switched — nothing else needs to happen."
+        f"nor parked for a human. {back}"
     )
     return f"{first}\n\n{paragraph}"
 
 
 def parse_limit_marker(body: str) -> dict | None:
     """The marker's fields off a comment body, or None when it is not one.
-    `reset` is a UTC datetime or None; `account` is a label or None."""
+    `reset` is a UTC datetime or None; `account` is a label or None;
+    `assumed` is True only for `assumed=yes` (DRE-5455), False for every other
+    marker — every marker written before that field existed included."""
     first = (body or "").split("\n", 1)[0].strip()
     found = _MARKER_LINE.match(first)
     if not found:
         return None
-    kind, stage, reset_field, run_id, account = found.groups()
+    kind, stage, reset_field, run_id, account, assumed = found.groups()
     reset = None
     if reset_field != "unknown":
         try:
@@ -530,22 +584,26 @@ def parse_limit_marker(body: str) -> dict | None:
         except ValueError:
             reset = None
     return {"kind": kind, "stage": stage, "reset": reset, "run": run_id,
-            "account": account or None}
+            "account": account or None, "assumed": assumed == "yes"}
 
 
 @dataclass(frozen=True)
 class LimitDeath:
     """A run that hit a wall: which wall, which stage, when it comes down,
-    which GitHub run died, and — when known — which account it was on."""
+    which GitHub run died, and — when known — which account it was on.
+    `reset_assumed` says the reset is the assumed Claude window, not one the
+    run stated (DRE-5455)."""
 
     kind: str
     stage: str
     reset: datetime | None
     run_id: str
     account: str | None = None
+    reset_assumed: bool = False
 
     def marker(self) -> str:
-        return limit_marker(self.kind, self.stage, self.reset, self.run_id, self.account)
+        return limit_marker(self.kind, self.stage, self.reset, self.run_id, self.account,
+                            reset_assumed=self.reset_assumed)
 
 
 class Decision:
@@ -1298,12 +1356,20 @@ def main(argv: list[str]) -> int:
                 now = datetime.now(UTC)
             if now.tzinfo is None:
                 now = now.replace(tzinfo=UTC)
+            # DRE-5455: a Claude wall that names no reset gets one usage
+            # window from the run's own completion time, marked as assumed.
+            # A stated reset is never assumed over, and Linear is unchanged.
+            reset = limit_reset(limit_text, kind, now)
+            reset_assumed = kind == "claude" and reset is None
+            if reset_assumed:
+                reset = now.astimezone(UTC) + timedelta(hours=CLAUDE_RESET_ASSUMED_HOURS)
             limit = LimitDeath(
                 kind=kind,
                 stage=stage,
-                reset=limit_reset(limit_text, kind, now),
+                reset=reset,
                 run_id=_flag_value(rest, "--run-id") or "unknown",
                 account=_flag_value(rest, "--account") or None,
+                reset_assumed=reset_assumed,
             )
     turn_facts = ""
     if turn_exhaustion and exec_path:

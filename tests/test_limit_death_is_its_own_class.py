@@ -341,6 +341,7 @@ def test_the_marker_round_trips_through_the_parser():
         "reset": datetime(2026, 9, 5, 20, 30, tzinfo=UTC),
         "run": RUN,
         "account": "main",
+        "assumed": False,
     }
     unknown = dead_run.decide(0, limit=_death(reset=None)).comments[0]
     assert dead_run.parse_limit_marker(unknown)["reset"] is None
@@ -554,7 +555,8 @@ def test_a_wall_sentence_in_any_case_still_classifies():
 
 def test_cli_decide_classifies_the_spend_limit_log(tmp_path, capsys):
     """End to end on the medic's own call: the marker the sweep reads is
-    written, with `reset=unknown` because a spend limit names no window."""
+    written, with a reset assumed five hours after the run ended (DRE-5455)
+    because a spend limit names no window."""
     log = tmp_path / "medic-log.txt"
     log.write_text(SPEND_LIMIT_RECORD, encoding="utf-8")
     rc = dead_run.main([
@@ -566,7 +568,8 @@ def test_cli_decide_classifies_the_spend_limit_log(tmp_path, capsys):
     assert rc == 0
     assert out[0] == "limit"
     assert out[2] == (
-        "🪦 limit-death: kind=claude stage=plan reset=unknown run=34924370626"
+        "🪦 limit-death: kind=claude stage=plan reset=2026-09-15T08:17:00Z "
+        "run=34924370626 assumed=yes"
     )
 
 
