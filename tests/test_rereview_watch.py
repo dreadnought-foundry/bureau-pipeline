@@ -1187,17 +1187,22 @@ class DiedNoRetry(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found["firing"], 1)
 
-    def test_it_asks_again_after_its_grace_whatever_a_limit_marker_says(self):
-        """DRE-5640: limit_recovery leaves a Planning review death to this
-        watcher, which does NOT read the Claude wall. A 🪦 limit-death marker
-        whose assumed reset is hours away changes nothing: past the grace the
-        watcher asks for the review again — the interaction the recovery
-        sweep's line and its three-deaths bound are written against."""
+    def test_it_waits_out_a_limit_marker_then_asks_again(self):
+        """DRE-5640 leaves a Planning review death to this watcher, and
+        DRE-5842 has it read the Claude wall: a 🪦 limit-death marker whose
+        assumed reset is hours away keeps it quiet, and once the reset has
+        passed it asks for the review again as a fresh run
+        (tests/test_rereview_watch_leaves_limit_deaths.py holds the rest)."""
         wall = _rec("🪦 limit-death: kind=claude stage=review "
                     "reset=2026-09-15T22:44:00Z run=" + DEAD_RUN + " assumed=yes",
                     "2026-09-15T17:44:00Z")
-        found = rw.overdue(died_thread(wall), EPIC, pc.REVIEW_LANE, LATER, 45)
-        self.assertIsNotNone(found, "the wall's reset is not a grace this reads")
+        reading = rw.read(died_thread(wall), EPIC, pc.REVIEW_LANE, LATER, 45)
+        self.assertIsNone(reading.found, "the wall is still up")
+        self.assertIn("waiting on a claude limit death (review stage)",
+                      reading.why)
+        found = rw.overdue(died_thread(wall), EPIC, pc.REVIEW_LANE,
+                           "2026-09-15T22:45:00Z", 45)
+        self.assertIsNotNone(found, "the wall is down")
         self.assertEqual(found["silence"], rw.DIED)
         self.assertEqual(found["firing"], 1)
         self.assertEqual(found["dispatch_reason"],
