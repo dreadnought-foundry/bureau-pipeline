@@ -391,12 +391,20 @@ if sys.argv[1] == "state-of":
     print(os.environ.get("FAKE_LANE", ""))
 if sys.argv[1] == "proof-waiting" and os.environ.get("FAKE_REFUSE_HOLD"):
     sys.exit("proof: refused")
+# linear_ops.proof_text_refusal's console hold markers, refused the same way.
+if sys.argv[1] == "proof-observed" and any(
+        m in sys.argv[3].lower() for m in ("budget exhausted", "holding for a human")):
+    sys.exit("proof: refused")
+if sys.argv[1] == "advance" and os.environ.get("FAKE_NOT_ADVANCING"):
+    print(f"{sys.argv[2]} is in 'Done', not in {sys.argv[4]!r} — not advancing")
 """
 
 _SPOKEN_THREAD_STUB = """\
 import json, os, sys
 open(os.environ["CALLS"], "a").write(json.dumps(["spoken_thread"] + sys.argv[1:]) + "\\n")
 answer = os.environ.get("FAKE_ANSWER", "")
+if answer == "unreadable":
+    sys.exit(3)
 if not answer:
     sys.exit(1)
 print(answer)
@@ -438,7 +446,8 @@ class _StepHarness(unittest.TestCase):
 
     #: Harness-only names, never the step's own env.
     _HARNESS = ("PATH", "CALLS", "FAKE_PR", "FAKE_LANE", "FAKE_ANSWER",
-                "FAKE_REFUSE_HOLD", "RUNNER_TEMP", "GITHUB_STEP_SUMMARY")
+                "FAKE_REFUSE_HOLD", "FAKE_NOT_ADVANCING", "RUNNER_TEMP",
+                "GITHUB_STEP_SUMMARY")
 
     def _exec(self, env: dict) -> tuple:
         step = _step(self.STEP)
@@ -464,7 +473,8 @@ class ResultStepTest(_StepHarness):
     STEP = RESULT_STEP
 
     def _run(self, *, pr: str = "", escalation: str | None = None,
-             description: str = DESCRIPTION, refuse_hold: bool = False) -> list:
+             description: str = DESCRIPTION, refuse_hold: bool = False,
+             not_advancing: bool = False) -> list:
         if escalation is not None:
             self.escalation.write_text(escalation)
         env = {
@@ -480,6 +490,8 @@ class ResultStepTest(_StepHarness):
         }
         if refuse_hold:
             env["FAKE_REFUSE_HOLD"] = "1"
+        if not_advancing:
+            env["FAKE_NOT_ADVANCING"] = "1"
         done, posted, lines = self._exec(env)
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         card_pr = [l for l in lines if l.startswith("card_pr ")]
@@ -505,7 +517,8 @@ class ResultStepTest(_StepHarness):
         self.assertEqual("/tmp/agent-escalation.txt", env["ESCALATION_FILE"])
         self.assertEqual("agent/${{ github.event.client_payload.identifier }}-proof-record",
                          env["RECORD_BRANCH"])
-        self.assertEqual("${{ github.event.client_payload.description }}",
+        # The sanitized description, the one the rest of the workflow reads.
+        self.assertEqual("${{ steps.card.outputs.description }}",
                          env["CARD_DESCRIPTION"])
 
     def test_exit_1_an_open_record_pull_request_carries_the_card_to_review(self):
@@ -580,6 +593,16 @@ class ResultStepTest(_StepHarness):
         self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
         self.assertIn("hold could not be posted", self.summary.read_text())
 
+    def test_a_park_the_card_refused_says_so_in_the_summary(self):
+        posted = self._run(escalation="Approve the release in the console?\n",
+                           not_advancing=True)
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        self.assertIn("did not move DRE-77 to Green Light", self.summary.read_text())
+
+    def test_a_park_that_moved_says_nothing_of_a_refusal(self):
+        self._run(escalation="Approve the release in the console?\n")
+        self.assertNotIn("did not move", self.summary.read_text())
+
     def test_exit_4_nothing_came_out(self):
         posted = self._run()
         self.assertEqual(
@@ -600,13 +623,19 @@ class ResultStepTest(_StepHarness):
 
 
 class ReturnStepTest(_StepHarness):
-    """The return from Green Light (DRE-5925): only on the dispatcher's return
-    reason AND a card in Green Light, the discharge record before the move,
-    and only into `Hand-work` — all before the agent step."""
+    """The return from Green Light (DRE-5925): a card in Green Light with an
+    answer of his posted after the park returns, whatever the dispatch reason
+    — so a return that died between its two writes is finished by the next
+    dispatch. The discharge record before the move, and only into
+    `Hand-work` — all before the agent step."""
 
     STEP = RETURN_STEP
     REASON = f"{RETURN_REASON} at 2026-10-06 09:12 PT"
     ANSWER = "2026-10-06 09:12 PT\tPressed it; the release shows v3."
+    DISCHARGE = ["linear_ops", "proof-observed", "DRE-77",
+                 "the CEO answered via the console at 2026-10-06 09:12 PT: "
+                 "Pressed it; the release shows v3."]
+    RETURN = ["linear_ops", "advance", "DRE-77", "Hand-work", "Green Light"]
 
     def _run(self, *, reason: str = REASON, lane: str = "Green Light",
              answer: str = ANSWER) -> tuple:
@@ -627,37 +656,64 @@ class ReturnStepTest(_StepHarness):
         self.assertEqual([
             ["linear_ops", "state-of", "DRE-77"],
             ["spoken_thread", "answer", "DRE-77"],
-            ["linear_ops", "proof-observed", "DRE-77",
-             "the CEO answered via the console at 2026-10-06 09:12 PT: "
-             "Pressed it; the release shows v3."],
-            ["linear_ops", "advance", "DRE-77", "Hand-work", "Green Light"],
+            self.DISCHARGE,
+            self.RETURN,
         ], posted)
 
-    def test_any_other_reason_does_nothing_and_says_so(self):
-        for reason in ("", "first run: the release carrying the epic is live",
-                       "second dispatch after a dead run",
-                       f"not a {RETURN_REASON}"):
+    def test_an_answered_card_still_in_green_light_returns_on_any_reason(self):
+        # The return that died after its discharge record: the card is still
+        # in Green Light, his answer still follows the park, and the next
+        # dispatch carries some other reason. It finishes the return.
+        for reason in ("second dispatch after a dead run",
+                       "first run: the release carrying the epic is live", ""):
             done, posted, _ = self._run(reason=reason)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual([self.DISCHARGE, self.RETURN],
+                             [c for c in posted if c[1] in ("proof-observed", "advance")],
+                             reason)
+            self.calls.unlink(missing_ok=True)
+
+    def test_an_unanswered_park_on_any_other_reason_does_nothing_and_says_so(self):
+        for reason in ("", "second dispatch after a dead run",
+                       f"not a {RETURN_REASON}"):
+            done, posted, _ = self._run(reason=reason, answer="")
             self.assertEqual(0, done.returncode, done.stderr)
-            self.assertEqual([], posted, reason)
+            self.assertEqual([["linear_ops", "state-of", "DRE-77"],
+                              ["spoken_thread", "answer", "DRE-77"]], posted, reason)
             self.assertIn("nothing to return", done.stdout)
             self.calls.unlink(missing_ok=True)
 
     def test_any_other_lane_does_nothing_and_says_so(self):
         for lane in ("Hand-work", "In Review", "Triage", ""):
-            done, posted, _ = self._run(lane=lane)
-            self.assertEqual(0, done.returncode, done.stderr)
-            self.assertEqual([["linear_ops", "state-of", "DRE-77"]], posted, lane)
-            self.assertIn("nothing to return", done.stdout)
-            self.calls.unlink(missing_ok=True)
+            for reason in (self.REASON, "second dispatch after a dead run"):
+                done, posted, _ = self._run(lane=lane, reason=reason)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual([["linear_ops", "state-of", "DRE-77"]], posted, lane)
+                self.assertIn("nothing to return", done.stdout)
+                self.calls.unlink(missing_ok=True)
 
     def test_an_unreadable_lane_or_answer_fails_before_any_write(self):
-        for kwargs in ({"lane": "unreadable"}, {"answer": ""}):
+        for kwargs in ({"lane": "unreadable"}, {"answer": ""},
+                       {"answer": "unreadable"},
+                       {"answer": "unreadable", "reason": "second dispatch after a dead run"}):
             done, posted, _ = self._run(**kwargs)
             self.assertNotEqual(0, done.returncode, kwargs)
             self.assertEqual([], [c for c in posted if c[1] in ("proof-observed", "advance")],
                              kwargs)
             self.calls.unlink(missing_ok=True)
+
+    def test_words_the_record_refuses_still_discharge_and_return(self):
+        # `proof-observed` refuses the console's fix-budget hold markers; his
+        # words carrying one must not leave the card parked.
+        done, posted, _ = self._run(
+            answer="2026-10-06 09:12 PT\tStop holding for a human and ship it.")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        writes = [c for c in posted if c[1] in ("proof-observed", "advance")]
+        self.assertEqual(["proof-observed", "proof-observed", "advance"],
+                         [c[1] for c in writes])
+        self.assertEqual("the CEO answered via the console at 2026-10-06 09:12 PT "
+                         "— his words are in that answer on this card", writes[1][3])
+        self.assertEqual(self.RETURN, writes[2])
 
 
 if __name__ == "__main__":
