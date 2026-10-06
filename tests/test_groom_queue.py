@@ -224,8 +224,10 @@ def test_one_card_per_free_slot_oldest_batch_first():
          "unqueued": []},
         {"id": NEWER, "released": ["DRE-21"], "left": [], "unqueued": []}]
     # One read of the standing card's WHOLE thread — the proposal card
-    # outgrows the fifty-comment window.
-    assert queue.thread_reads == [(STANDING, True)]
+    # outgrows the fifty-comment window. (Each released card's own window is
+    # read once too, for its groom-moved note — DRE-3326.)
+    assert [r for r in queue.thread_reads if r[0] == STANDING] == [
+        (STANDING, True)]
 
 
 def test_place_order_within_a_batch_not_card_number():
@@ -440,7 +442,9 @@ def test_a_stalled_queue_files_one_no_code_card_in_triage():
     assert OLDER in body and "2 cards" in body
     assert "DRE-10" in body
     assert queue.of("find_open") == [(reconcile.GROOM_STALL_TITLE,)]
-    assert queue.of("comment") == []
+    # Nothing on the standing card. The card the pass tried carries its
+    # groom-moved note, written before the lane write that failed (DRE-3326).
+    assert [c for c in queue.of("comment") if c[0] == STANDING] == []
 
 
 def test_never_a_second_card_while_the_first_is_open():

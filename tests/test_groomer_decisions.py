@@ -156,9 +156,13 @@ def _outcome(body, identifier):
 
 
 def _sole_record(ops):
-    assert len(ops.written) == 1, (
-        f"the drain wrote {len(ops.written)} record(s), not one")
-    target, body = ops.written[0]
+    # Each moved card's own `groom-moved` note (DRE-3326) is on that card,
+    # not a record of the batch — test_groomer_moved_note.py holds it.
+    written = [(t, b) for t, b in ops.written
+               if not groomer.parse_moved_note(b)]
+    assert len(written) == 1, (
+        f"the drain wrote {len(written)} record(s), not one")
+    target, body = written[0]
     assert target == PROPOSAL_CARD
     return body
 

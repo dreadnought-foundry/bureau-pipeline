@@ -482,6 +482,15 @@ DRAIN_REFUSED_TAG = "groom-drain-refused"
 # agreed to, so the card carries why it was closed and which batch closed it.
 CANCELLED_TAG = "groom-cancelled"
 
+# The note on a card moved into Planning (DRE-3326), the same discipline as the
+# cancel note: `🧺 groom-moved: <proposal id> — <verdict> · Intake → Planning ·
+# by <writer> · record on <batch card>`, one line, written on the card itself
+# BEFORE its lane changes, by the drain and by the sweep's queue release alike.
+# The batch-card records say which cards a batch took; this says, on each card,
+# which batch took it — so reversing a batch is a search for
+# `groom-moved: <id>` across the board, not a walk of a table on another card.
+MOVED_TAG = "groom-moved"
+
 # The groom queue (DRE-5435). A drain moves no more cards to Planning than
 # there are free planner slots (DRE-5326), and every card past them is QUEUED:
 # it stays in Intake, gains QUEUED_LABEL, and ONE `🧺 groom-queued: <id>`
@@ -500,8 +509,8 @@ QUEUED_LABEL = "groom-queued"
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
 ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
-               DRAIN_REFUSED_TAG, CANCELLED_TAG, QUEUED_TAG, RELEASED_TAG,
-               console_receipt.TAG)
+               DRAIN_REFUSED_TAG, CANCELLED_TAG, MOVED_TAG, QUEUED_TAG,
+               RELEASED_TAG, console_receipt.TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
@@ -3619,6 +3628,11 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     while the rest moves. No model is called and the population is never
     re-read — a drain is a move, not a judgement.
 
+    A card moved to Planning has its `🧺 groom-moved: <id> — …` note written
+    on it first (`moved_note`, DRE-3326), naming its position on the approved
+    list, the drain as its writer and this card as the batch's, so the batch
+    is findable from each card it moved.
+
     An agreed Cancel card is cancelled with its reason written on it first,
     as `🧺 groom-cancelled: <id> — <reason>`, and moves to `Canceled` — never
     `Done`, and never onto a cycle (DRE-4733). A card on either list that has
@@ -3757,6 +3771,13 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
 
     moved = []
     for row in plan["moving"]:
+        # The note first, as a cancelled card's reason is: a crash before the
+        # lane write leaves a card in Intake naming the batch that tried to
+        # move it, never a card in Planning nobody can say why about.
+        lops.cmd_comment(row["identifier"],
+                         moved_note(record["id"], position=row["position"],
+                                    of=len(record["batch"]), batch_card=card,
+                                    frm=lane, to=to))
         if cycle[1]:
             # Only a cycle the record actually named. A proposal with an empty
             # batch resolves none, and writing `cycleId: null` onto a card an
@@ -4067,6 +4088,80 @@ def cancelled_note(pid: str, reason: str) -> str:
     """
     return (f"{MARK} {CANCELLED_TAG}: {pid} — "
             f"{' '.join((reason or 'no reason given').split())}\n")
+
+
+_MOVED_LINE = re.compile(
+    rf"^{MARK} {MOVED_TAG}: ([0-9a-f]{{6,}}) — (.+?) · (.+?) → (.+?) · "
+    rf"by (.+?) · record on ([A-Z][A-Z0-9]*-\d+)\s*$")
+_MOVED_POSITION = re.compile(
+    r"^position (\d+) of (\d+) on the approved Planning list$")
+_MOVED_ADDED = "added by the CEO, no position"
+_MOVED_BY_DRAIN = "the drain"
+_MOVED_BY_RELEASE = re.compile(r"^the sweep's queue release, place (\d+)$")
+
+
+def moved_position(record: dict | None, identifier: str) -> tuple[int | None,
+                                                                   int | None]:
+    """`(position, of)` for a card on the approved proposal `record`, as
+    `moved_note` takes them: its place on the Planning list and the list's
+    length, `(None, length)` for a card not on it — an addition — and
+    `(None, None)` when there is no record to read a position off."""
+    if record is None:
+        return None, None
+    position = next((row["position"] for row in record["batch"]
+                     if row["identifier"] == identifier), None)
+    return position, len(record["batch"])
+
+
+def moved_note(pid: str, *, position: int | None, of: int | None,
+               batch_card: str, place: int | None = None,
+               frm: str = "Intake", to: str = DRAIN_TO) -> str:
+    """`🧺 groom-moved: <proposal id> — <verdict> · <from> → <to> · by
+    <writer> · record on <batch card>`, on a card moved into Planning, and
+    nothing else (DRE-3326). The ONE renderer: the drain's move loop and the
+    sweep's queue release (`reconcile.release_groom_queue`) both call it.
+
+    The verdict is what the approved batch said about the card: `position
+    <n> of <m> on the approved Planning list`, or `added by the CEO, no
+    position` for a card the CEO reached in for. `of=None` is a release whose
+    proposal record could not be read, and the note says so rather than
+    calling the card an addition. The writer is `the drain`, or `the sweep's
+    queue release, place <p>` when `place` names the card's place in the groom
+    queue. Written BEFORE the card's lane changes, so a card is never in
+    Planning without it.
+    """
+    if of is None:
+        verdict = f"no position read: proposal {pid} is not on {batch_card}"
+    elif position is None:
+        verdict = _MOVED_ADDED
+    else:
+        verdict = f"position {position} of {of} on the approved Planning list"
+    writer = (_MOVED_BY_DRAIN if place is None
+              else f"the sweep's queue release, place {place}")
+    return (f"{MARK} {MOVED_TAG}: {pid} — {verdict} · {frm} → {to} · "
+            f"by {writer} · record on {batch_card}\n")
+
+
+def parse_moved_note(body: str | None) -> dict | None:
+    """`{"id", "verdict", "position", "of", "added", "from", "to", "writer",
+    "place", "batch_card"}` off a `moved_note`, or None when `body` is not
+    one. Anchored at the first line, as the queued record is: a comment that
+    quotes the note is not the note. `position`/`of` are None unless the
+    verdict names a position, and `place` is None for the drain's own note."""
+    lines = (body or "").splitlines()
+    found = _MOVED_LINE.match(lines[0].strip()) if lines else None
+    if not found:
+        return None
+    pid, verdict, frm, to, writer, batch_card = found.groups()
+    ranked = _MOVED_POSITION.match(verdict)
+    released = _MOVED_BY_RELEASE.match(writer)
+    return {"id": pid, "verdict": verdict,
+            "position": int(ranked.group(1)) if ranked else None,
+            "of": int(ranked.group(2)) if ranked else None,
+            "added": verdict == _MOVED_ADDED,
+            "from": frm, "to": to, "writer": writer,
+            "place": int(released.group(1)) if released else None,
+            "batch_card": batch_card}
 
 
 # --------------------------------------------------------------------------- #

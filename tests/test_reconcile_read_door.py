@@ -945,12 +945,15 @@ def _groom_queue(monkeypatch):
 
 
 def test_a_groom_release_of_a_fleet_served_card_is_conditional(monkeypatch):
+    """The release writes in two halves since DRE-3326 — the card's
+    groom-moved note, then its lane — so a door-decided card is re-read live
+    before the first half, and one that has left Intake gets neither."""
     _groom_queue(monkeypatch)
     linear = Linear(_queued("Canceled"))
     with door_at(monkeypatch, _queued("Intake")), wired(linear):
         assert reconcile.release_groom_queue(1) == []
-    assert linear.writes == []
-    assert linear.refused == [("DRE-541", reconcile.GROOM_RELEASE_TO, ("Intake",), ())]
+    assert linear.writes == [] and linear.comments == []
+    assert "get_issue DRE-541" in linear.queries
 
 
 def test_a_groom_release_of_a_fleet_served_card_still_in_intake_lands(monkeypatch):

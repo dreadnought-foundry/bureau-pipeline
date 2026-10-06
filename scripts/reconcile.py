@@ -3412,11 +3412,14 @@ def release_groom_queue(free: int) -> list[str]:
         it still carries one;
       * a card still in Intake whose label a person removed has been taken
         out of the queue by that person, and is never released;
-      * otherwise, while a slot is free, the card moves to Planning and its
-        label comes off. Entering Planning starts its plan run the way any
-        Intake-to-Planning move does, and the card joins the planner line
-        there with a fresh wait (DRE-5378). A move that fails is a write
-        failure and ends the releases for this pass.
+      * otherwise, while a slot is free, the card gets its `groomer.
+        moved_note` — the batch, its position off the proposal record on the
+        same thread, this release and its queue place (DRE-3326) — then moves
+        to Planning and its label comes off. A note that will not post is a
+        write failure and moves nothing. Entering Planning starts its plan
+        run the way any Intake-to-Planning move does, and the card joins the
+        planner line there with a fresh wait (DRE-5378). A move that fails
+        is a write failure and ends the releases for this pass.
 
     ONE `🧺 groom-released` comment per pass that changed the queue, a line
     per batch it touched — never one per card.
@@ -3446,6 +3449,10 @@ def release_groom_queue(free: int) -> list[str]:
         print("groom queue: empty — nothing to release")
         return released
     board = {c["identifier"]: c for c in active_cards(SWEPT_LANES)}
+    # Each batch's proposal record, off the thread already read: a released
+    # card's note names its position on the approved list (DRE-3326).
+    records_by_id = {pid: groomer.proposal_record(pid, records)
+                     for pid in dict.fromkeys(e["id"] for e in standing)}
     changes: dict[str, dict] = {}
 
     def change(pid: str) -> dict:
@@ -3475,6 +3482,27 @@ def release_groom_queue(free: int) -> list[str]:
                   f"'{groomer.QUEUED_LABEL}' — taken out of the queue by hand")
             continue
         if halted or slots <= 0:
+            remaining.append(entry)
+            continue
+        if not _door_lane_still(found):
+            # A write in two halves, the note then the lane: a card the door's
+            # read put in Intake and that has left it gets neither.
+            continue
+        position, of = groomer.moved_position(records_by_id.get(pid), ident)
+        try:
+            # The note first, as the drain writes it (DRE-3326): a card is
+            # never in Planning without the line naming the batch that put it
+            # there. A note Linear refused moves nothing, and a note an earlier
+            # pass posted before its lane write failed is not written twice.
+            if not _groom_noted(ident, pid):
+                linear_ops.cmd_comment(ident, groomer.moved_note(
+                    pid, position=position, of=of, place=entry["place"],
+                    batch_card=card, to=GROOM_RELEASE_TO))
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} groom queue note: {e}")
+            print(f"ERROR: groom queue: {ident}'s batch note could not be read "
+                  f"or posted, so it was not released: {e}", file=sys.stderr)
+            halted = True
             remaining.append(entry)
             continue
         try:
@@ -3518,6 +3546,20 @@ def release_groom_queue(free: int) -> list[str]:
     if remaining and free > 0 and not released and not changes:
         _report_groom_stall(records, remaining)
     return released
+
+
+def _groom_noted(ident: str, pid: str) -> bool:
+    """Does `ident` already carry the pipeline's `groomer.moved_note` for batch
+    `pid` (DRE-3326)? One read of the card's comment window, made only for a
+    card about to be released. A release whose lane write failed after its
+    note posted is retried on the next pass, and every pass of a stalled
+    queue would otherwise add another note to the same card."""
+    for record in groomer.decision_records(linear_ops, ident):
+        note = (groomer.parse_moved_note(record.get("body"))
+                if record.get("authored_by_pipeline") else None)
+        if note and note["id"] == pid:
+            return True
+    return False
 
 
 def _report_groom_stall(records: list[dict], remaining: list[dict]) -> None:

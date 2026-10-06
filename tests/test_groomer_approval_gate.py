@@ -124,6 +124,12 @@ def _thread(proposal, **kwargs):
     return [_record(proposal), _approval(proposal, **kwargs)]
 
 
+def _records(ops):
+    """What the drain wrote, less each moved card's own `groom-moved` note
+    (DRE-3326) — those are on the cards, not records of the batch."""
+    return [(t, b) for t, b in ops.written if not groomer.parse_moved_note(b)]
+
+
 def _batch_ids(proposal):
     return [r["identifier"] for r in sorted(proposal["outcomes"]["now"],
                                             key=lambda r: r["position"])]
@@ -337,8 +343,11 @@ def test_the_drain_records_every_card_it_moved_with_its_position():
     proposal = _proposal()
     ops = FakeOps(comments=_thread(proposal))
     groomer.drain(ops, card=PROPOSAL_CARD)
-    assert len(ops.written) == 1, "the drain wrote no record of what it moved"
-    target, body = ops.written[0]
+    # Each moved card's own `groom-moved` note is DRE-3326's, tested in
+    # test_groomer_moved_note.py; the record on the proposal card is one.
+    records = _records(ops)
+    assert len(records) == 1, "the drain wrote no record of what it moved"
+    target, body = records[0]
     assert target == PROPOSAL_CARD
     assert body.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}: {proposal['id']}")
     for position, identifier in enumerate(_batch_ids(proposal), start=1):
@@ -362,8 +371,9 @@ def test_the_drain_records_a_card_that_already_left_and_where_it_is():
     gone = _batch_ids(proposal)[0]
     ops = FakeOps(comments=_thread(proposal), lanes={gone: "Done"})
     groomer.drain(ops, card=PROPOSAL_CARD)
-    assert len(ops.written) == 1, "the drain wrote more than its one record"
-    target, body = ops.written[0]
+    records = _records(ops)
+    assert len(records) == 1, "the drain wrote more than its one record"
+    target, body = records[0]
     assert target == PROPOSAL_CARD
     assert body.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}: {proposal['id']}")
     row = next(ln for ln in body.splitlines() if f"| {gone} |" in ln)
