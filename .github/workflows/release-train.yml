@@ -54,7 +54,15 @@
 #      matter are green-at-SHA and the brake, not identity.
 #   Q2 WHICH SECRETS STORE. The caller's. `RELEASE_ROLE_ARN` is the caller's
 #      OWN OIDC role, so a repo can only ever deploy itself; the two Linear
-#      keys are optional and pass through to the script's environment. NOTE
+#      keys are optional and pass through to the script's environment. So is
+#      the worker App pair, `BUREAU_APP_ID` and `BUREAU_APP_PRIVATE_KEY`
+#      (DRE-5949): it reaches the train only when the stub passes it, and
+#      then the `release` job mints the App's installation token and stores
+#      it as the caller checkout's git credential, so the surface script's
+#      tag push is made by the App, which holds `workflows: write`. Without
+#      the pair, the push is made with `github.token` exactly as before, and
+#      GitHub refuses a tag whose range changes a `.github/workflows/` file.
+#      NOTE
 #      that `vars.RELEASE_HOLD` below resolves against the CALLING repository
 #      and the organization, never against this repo's own variables — the
 #      fleet-wide brake is therefore the ORG variable
@@ -190,6 +198,14 @@ on:
       LINEAR_RELEASE_KEY:
         required: false
       LINEAR_API_KEY:
+        required: false
+      # The worker App (agent-bureau-bot) the tag push is made with
+      # (DRE-5949). Optional: a stub that passes neither hands the train
+      # empty strings, and the release job then pushes with github.token as
+      # it always has.
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
         required: false
 
 jobs:
@@ -398,14 +414,53 @@ jobs:
     concurrency:
       group: release:${{ github.repository }}:${{ matrix.surface }}
       cancel-in-progress: false
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # mint below checks the App id's PRESENCE through this mirror — the id
+      # only, NEVER the key (the verify.yml pool-probe pattern). Empty when
+      # the stub passes no pair, and the mint is then skipped.
+      BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
     steps:
+      # The tag-push credential (DRE-5949). GitHub never grants github.token
+      # the `workflows` scope, so a tag whose range since the last tag
+      # changes a `.github/workflows/` file is refused when pushed with it —
+      # portico-portals-v1.0.112 on 2026-10-05, after the release was live.
+      # The worker App's installation grants `workflows: write`. First in the
+      # job: the token lives one hour and the job is bound at sixty minutes.
+      # continue-on-error, so a wrong secret in one repo is the warning below
+      # and today's push, never a stopped train (DRE-3263).
+      - name: Mint the tag-push token
+        id: app
+        if: env.BUREAU_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # `outcome`, not `conclusion`: under continue-on-error a failed mint
+      # concludes success, and only its outcome says it failed.
+      - name: Say the pair did not mint
+        if: env.BUREAU_APP_ID != '' && steps.app.outcome != 'success'
+        run: |
+          echo "::warning::release-train: the caller passed BUREAU_APP_ID but the App token did not mint; this tag is pushed with github.token, which GitHub refuses when the range changes a .github/workflows/ file"
+
       # The plan's chosen sha, not the branch: whatever landed while this job
       # queued is the next run's business, not this one's — and the script
       # runs in a checkout of exactly the commit it is handed as RELEASE_SHA.
+      #
+      # `token:` is the ONLY place the App token goes (DRE-5949):
+      # actions/checkout stores it as this checkout's git credential, and
+      # that credential is what the surface script's `git push` of the tag
+      # uses. Never GH_TOKEN, never the script's environment — the decision
+      # record's creator stays github-actions[bot], which is what keeps the
+      # train from triggering itself. With the mint skipped or failed the
+      # expression yields github.token, and this checkout is exactly today's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ matrix.sha }}
           fetch-depth: 0
+          token: ${{ steps.app.outputs.token || github.token }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

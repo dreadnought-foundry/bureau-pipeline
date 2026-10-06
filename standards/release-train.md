@@ -128,6 +128,8 @@ jobs:
       RELEASE_ROLE_ARN: ${{ secrets.BUREAU_RELEASE_ROLE_ARN }}
       LINEAR_RELEASE_KEY: ${{ secrets.LINEAR_RELEASE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+      BUREAU_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
     with:
       pipeline_ref: stable
       surface: ${{ inputs.surface }}
@@ -238,6 +240,27 @@ block with the `schedule:` omitted.
 a repo can only ever deploy itself. The two Linear keys are optional and pass
 through to the script's environment; `LINEAR_API_KEY` is also what the train
 writes a declared surface's Linear release with.
+
+**The worker App pair is optional too, and it is what lets a tag cover a
+workflow change (DRE-5949).** `BUREAU_APP_ID` and `BUREAU_APP_PRIVATE_KEY` are
+the worker App's (agent-bureau-bot) — every onboarded repo already holds them,
+because the build and verify workflows require them. Passed, the release job
+mints the App's installation token and stores it as the git credential of its
+checkout of the caller, so the surface script's `git push` of the tag is made
+by the App, whose installation grants `workflows: write`. That buys a tag over
+a range that changes a `.github/workflows/` file: on 2026-10-05 portico's
+release went live and then `portico-portals-v1.0.112` was refused, because
+GitHub never grants `github.token` that scope. A stub that passes nothing gets
+today's push with `github.token`, which works for every other range. A pair
+that is passed but does not mint is one warning on the run and the same
+`github.token` push — never a stopped train. Nothing else changes identity:
+the decision record and What's new are still written with `github.token`, so
+the train still cannot wake itself. One thing does change, and it is GitHub's
+rule rather than ours: a tag pushed by the App fires real `push` and `create`
+events in the caller, where `github.token`'s pushes start no workflow runs.
+The stub above triggers on no tag ref, so the train does not wake itself; a
+caller workflow declared `on: push: tags:` now runs on the release tag, which
+is what such a workflow asks for.
 
 ## The fleet's hours, and the wake-up that reads them
 

@@ -1670,7 +1670,10 @@ def test_the_surface_job_checks_out_the_chosen_sha_not_the_head():
     assert release["strategy"]["matrix"] == {
         "include": "${{ fromJSON(needs.plan.outputs.matrix) }}"
     }
-    checkout = release["steps"][0]
+    # The first checkout, not the first step: the tag-push token is minted
+    # ahead of it (DRE-5949).
+    checkout = next(s for s in release["steps"]
+                    if str(s.get("uses", "")).startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "${{ matrix.sha }}"
     run = next(s for s in release["steps"] if s.get("name") == "Run the surface")
     assert run["env"]["PLAN_SHA"] == "${{ matrix.sha }}"
