@@ -508,6 +508,64 @@ def _drive_roll_up_split(mp):
     ), "DRE-1")
 
 
+def _queued_epic(state: str) -> dict:
+    return {
+        "id": "uuid-1", "identifier": "DRE-1", "title": "[EPIC] an epic",
+        "description": "the plan", "state": {"name": state},
+        "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
+                             {"name": "epic-queued"}]},
+    }
+
+
+@site("epic-queue-started", "epic-queue-started")
+def _drive_epic_started(mp):
+    """The start of the next waiting epic (DRE-5152): one slot free, one epic
+    waiting, the owner's sweep. Frozen from the first render, like the proof
+    hold above: the body is `epic_cap.started_receipt`, new with DRE-5134."""
+    import epic_cap  # noqa: PLC0415 — only these drivers need it
+
+    mp.setattr(reconcile, "REPO_SLUG", epic_cap.START_OWNER_SLUG)
+    mp.setattr(epic_cap, "waiting_line", lambda: [_queued_epic("Green Light")])
+    mp.setattr(epic_cap, "fleet_state", lambda: {
+        "cap": 15, "count_rollup_parents": False,
+        "in_motion": [{"identifier": f"DRE-{n}"} for n in range(100, 114)],
+        "waiting": [_queued_epic("Green Light")],
+    })
+    mp.setattr(reconcile.linear_ops, "get_issue",
+               lambda *_a, **_k: _queued_epic("Green Light"))
+    mp.setattr(reconcile.linear_ops, "cmd_advance", lambda *_a, **_k: None)
+    mp.setattr(reconcile, "card_state", lambda _i: "In Progress")
+    _card_recorder(mp)
+    reconcile.start_queued_epics()
+
+
+@site("epic-start-redispatched", "epic-start-redispatched")
+def _drive_epic_start_redispatched(mp):
+    """The one re-dispatch of a start the relay never activated (DRE-5152):
+    started two hours before a frozen clock, nothing posted since, and the
+    epic's own repo sweeping. Frozen from the first render."""
+    import epic_cap  # noqa: PLC0415
+    import plan_run  # noqa: PLC0415
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    started = pipeline_act.receipt(
+        epic_cap.STARTED_ACT, epic_cap.started_receipt(1, 15, 15))
+    mp.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
+    mp.setattr(epic_cap, "labeled_elsewhere",
+               lambda: [{"identifier": "DRE-1", "state": {"name": "In Progress"}}])
+    mp.setattr(reconcile.linear_ops, "get_issue",
+               lambda *_a, **_k: _queued_epic("In Progress"))
+    mp.setattr(reconcile.linear_ops, "comment_records", lambda *_a, **_k: [{
+        "body": started, "authored_by_pipeline": True,
+        "created_at": "2026-10-06T10:00:00Z",
+    }])
+    mp.setattr(reconcile.linear_ops, "gql",
+               lambda *_a, **_k: {"issue": _queued_epic("In Progress")})
+    mp.setattr(plan_run, "fire", lambda *_a, **_k: (True, ""))
+    _card_recorder(mp)
+    reconcile.tend_epic_queue(now)
+
+
 #: The hygiene agent's twelve acts (DRE-5368). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the

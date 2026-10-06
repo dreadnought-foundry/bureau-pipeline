@@ -241,6 +241,12 @@ LABEL_RULE_SITES = {
 ROUTED_SITES = {
     ("review_rerun.py", "_cmd_dispatch"),
 }
+# Asks for an epic's activate run, which lives in plan.yml, so it pins
+# PLAN_EVENT like the planner line rather than trusting the label (DRE-5152:
+# the sweep's one re-dispatch of a start the relay never activated).
+EPIC_START_SITES = {
+    ("reconcile.py", "_redispatch_epic_start"),
+}
 
 
 def _fire_calls() -> list[tuple[str, str, ast.Call]]:
@@ -267,7 +273,8 @@ def _fire_calls() -> list[tuple[str, str, ast.Call]]:
 
 def test_every_fire_call_site_is_classified():
     sites = {(name, fn) for name, fn, _ in _fire_calls()}
-    assert sites == PLANNER_LINE_SITES | LABEL_RULE_SITES | ROUTED_SITES, (
+    assert sites == (PLANNER_LINE_SITES | LABEL_RULE_SITES | ROUTED_SITES
+                     | EPIC_START_SITES), (
         "a plan_run.fire call site was added or moved — say whether it serves "
         "the planner line (it must pass event=plan_run.PLAN_EVENT) or keeps "
         f"the label rule: {sorted(sites)}")
@@ -275,7 +282,7 @@ def test_every_fire_call_site_is_classified():
 
 def test_no_planner_line_call_site_can_produce_agent_execute():
     for name, fn, node in _fire_calls():
-        if (name, fn) not in PLANNER_LINE_SITES:
+        if (name, fn) not in PLANNER_LINE_SITES | EPIC_START_SITES:
             continue
         event = [kw.value for kw in node.keywords if kw.arg == "event"]
         assert len(event) == 1, f"{name}:{fn} fires without pinning the event"

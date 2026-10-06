@@ -367,14 +367,49 @@ class TestTheTrailerCarriesNoForeignTag:
         assert any("stranded-watchdog" in p for p in pipeline_act.problems(doc))
 
     def test_the_check_catches_a_discharge_that_smuggles_a_foreign_tag(self):
-        """`discharges` names an ACT, never a tag — for exactly this reason."""
+        """`discharges` names an ACT, never a tag — for exactly this reason.
+
+        Nothing discharges `reviewer-unavailable` today, so one act is made to:
+        an act's own tag in its own name is no collision on its own (DRE-5152),
+        and the defect is the trailer that carries it into another receipt."""
         doc = _doc()
         for act in doc["acts"]:
             if act["name"] == "reviewer-unavailable":
                 act["name"] = "reviewer-down-report"
             if act.get("discharges") == "reviewer-unavailable":
                 act["discharges"] = "reviewer-down-report"
+        if not any(a.get("discharges") == "reviewer-down-report" for a in doc["acts"]):
+            next(a for a in doc["acts"] if a["name"] != "reviewer-down-report")[
+                "discharges"] = "reviewer-down-report"
         assert any("reviewer-down" in p for p in pipeline_act.problems(doc))
+
+    @staticmethod
+    def _named_for_its_own_tag(doc):
+        """Rename one act nothing discharges to its own tag; return it."""
+        discharged = {a.get("discharges") for a in doc["acts"]}
+        act = next(a for a in doc["acts"] if a["name"] not in discharged)
+        act["name"] = act["tag"]
+        return act
+
+    def test_an_act_named_for_its_own_tag_is_not_a_collision(self):
+        """DRE-5152: `epic-start-redispatched` is that act's name AND its tag
+        (`epic_cap.REDISPATCHED_ACT` and `REDISPATCHED_TAG`). Every receipt
+        already carries its OWN tag — in its body and in its trailer's `tag:`
+        field — so a name equal to it puts no key into a receipt that the
+        receipt did not carry. Only a FOREIGN tag in a name is the defect."""
+        doc = _doc()
+        act = self._named_for_its_own_tag(doc)
+        assert not [p for p in pipeline_act.problems(doc)
+                    if "contains the tag" in p and repr(act["name"]) in p]
+
+    def test_an_act_discharging_one_named_for_its_tag_is_still_caught(self):
+        """The hazard that rule guards stays guarded: an act that discharges
+        the one named for its tag carries that tag in its own trailer."""
+        doc = _doc()
+        act = self._named_for_its_own_tag(doc)
+        other = next(a for a in doc["acts"] if a is not act)
+        other["discharges"] = act["name"]
+        assert any(f"live key {act['tag']!r}" in p for p in pipeline_act.problems(doc))
 
     # `test_nothing_changes_behaviour_yet` stood here until DRE-2826. It
     # asserted that no `scripts/` module imported the writer, and its own

@@ -70,6 +70,23 @@ def _lift_drain_slots(monkeypatch) -> None:
         monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: None)
 
 
+def _empty_epic_queue(monkeypatch) -> None:
+    """The sweep's two epic-queue phases read Linear directly, not through the
+    pass's board snapshot (DRE-5152): `epic_cap.labeled_elsewhere` in every
+    full sweep and `epic_cap.waiting_line` in the owner's. Some 47 suites run
+    a whole `reconcile.main()` without faking `linear_ops.gql`, and under CI's
+    key a direct read is refused — a read failure, which turns the pass red.
+    None of them is about the epic line, so for them nobody is labeled and
+    nobody is waiting, at no request. `fleet_state` needs no answer: it is read
+    only after a line that is not empty. `test_epic_cap.py`,
+    `test_epic_cap_sweep.py`, `test_off_rail_writers.py` and
+    `test_sweep_real_board.py` put back what they mean."""
+    epic_cap = sys.modules.get("epic_cap")
+    for name in ("labeled_elsewhere", "waiting_line"):
+        if getattr(epic_cap, name, None) is not None:
+            monkeypatch.setattr(epic_cap, name, lambda: [])
+
+
 def _no_ambient_event(monkeypatch) -> None:
     """The read door's client refuses to ask from a `pull_request` run (the
     door refuses those tokens by design, S7) — and the CI that runs this suite
@@ -117,6 +134,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_ambient_event(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
     _lift_drain_slots(monkeypatch)
+    _empty_epic_queue(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()
