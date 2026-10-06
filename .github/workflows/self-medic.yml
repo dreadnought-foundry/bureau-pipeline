@@ -66,11 +66,17 @@
 # already carries a receipt with the same tag and cause, the summary posts only
 # when its digest moved, and the `hygiene` concurrency group queues a retry
 # behind any pass still in flight rather than letting the two overlap.
+#
+# Proof Task (DRE-5924) is watched on the same terms. Retrying it is safe
+# because the run resumes its own branch and re-reads the card: a retried
+# proof run amends the record it already began rather than opening a second
+# one, and it never re-posts the dispatcher's receipt — that is the sweep's,
+# and the run writes no lane.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake, Model adoption, Hygiene]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake, Model adoption, Hygiene, Proof Task]
     types: [completed]
 
 permissions:
