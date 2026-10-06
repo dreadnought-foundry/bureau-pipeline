@@ -99,7 +99,7 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_forty_six_acts(self):
+    def test_the_registry_still_declares_forty_seven_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
         field being data rather than a default.
@@ -117,8 +117,9 @@ class TestEveryActDeclaresItsCadence:
         added the hygiene agent's twelve acts, every one of them null;
         forty-four since DRE-5136 added the hold an epic approved at the cap
         waits under; forty-six since DRE-5152 added the start that ends it and
-        the one re-dispatch of a start the relay never activated."""
-        assert len(pipeline_act.acts()) == 46
+        the one re-dispatch of a start the relay never activated;
+        forty-seven since DRE-5926 added the sweep's dispatch of a proof run."""
+        assert len(pipeline_act.acts()) == 47
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
@@ -206,6 +207,8 @@ class TestEveryActDeclaresItsCadence:
             ".github/workflows/agent-fix.yml": 120 * 60,
             # The plan job a started epic's activate run is (DRE-5152).
             ".github/workflows/plan.yml": 115 * 60,
+            # The proof job a dispatched proof run is (DRE-5926).
+            ".github/workflows/proof-task.yml": 120 * 60,
         }
         for workflow, seconds in bounds.items():
             text = (ROOT / workflow).read_text(encoding="utf-8")
