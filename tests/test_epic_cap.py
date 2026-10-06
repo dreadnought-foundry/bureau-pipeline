@@ -34,6 +34,12 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 import epic_cap  # noqa: E402
 import linear_ops  # noqa: E402
 
+#: The two reads as the module defines them, kept at import — before
+#: `tests/conftest.py` answers them with an empty queue for every test (DRE-5152).
+#: The tests of the reads themselves put these back.
+REAL_WAITING_LINE = epic_cap.waiting_line
+REAL_LABELED_ELSEWHERE = epic_cap.labeled_elsewhere
+
 #: The yardstick `reconcile.EPIC_RECORD_PAGE` names: `backlog_children`, 100
 #: cards × a 50-comment window, live since DRE-2929.
 KNOWN_ANSWERED_WEIGHT = 100 * 50
@@ -660,7 +666,8 @@ def test_fleet_state_pages_55_in_progress_issues_in_7_requests(board, capsys):
     assert "7" in err and "1" in err
 
 
-def test_waiting_line_is_one_request_in_queue_order(board):
+def test_waiting_line_is_one_request_in_queue_order(board, monkeypatch):
+    monkeypatch.setattr(epic_cap, "waiting_line", REAL_WAITING_LINE)
     fake = board(waiting=[
         _approved("DRE-60", "2026-09-20T10:00:00.000Z", priority=4),
         _approved("DRE-61", "2026-09-21T10:00:00.000Z", priority=2),
@@ -670,7 +677,8 @@ def test_waiting_line_is_one_request_in_queue_order(board):
     assert [e["identifier"] for e in line] == ["DRE-61", "DRE-60"]
 
 
-def test_labeled_elsewhere_returns_only_the_ones_outside_green_light(board):
+def test_labeled_elsewhere_returns_only_the_ones_outside_green_light(board, monkeypatch):
+    monkeypatch.setattr(epic_cap, "labeled_elsewhere", REAL_LABELED_ELSEWHERE)
     fake = board(labeled=[
         {"identifier": "DRE-70", "state": {"name": GREEN_LIGHT}},
         {"identifier": "DRE-71", "state": {"name": "Planning"}},

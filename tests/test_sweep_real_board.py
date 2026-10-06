@@ -36,6 +36,10 @@ WHAT IS UNDER TEST:
     cut fail by name.
   * The replay runs in under `SECONDS_CEILING` seconds and touches no network:
     `urllib.request.urlopen` is never called.
+  * The epic queue's two phases (DRE-5152) run on their REAL reads too:
+    `tests/conftest.py` answers `epic_cap.labeled_elsewhere` and
+    `epic_cap.waiting_line` with an empty queue for every other suite, and
+    this replay puts the real ones back and answers their queries off the board.
 
 THE CEILING IS HONEST, NOT ASPIRATIONAL. `REAL_BOARD_SWEEP_BUDGET` is what
 this replay measured on the day it landed. Each cut sibling lowers it to what
@@ -70,6 +74,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import board_snapshot  # noqa: E402
+import epic_cap  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import validate_card  # noqa: E402
@@ -79,6 +84,11 @@ import validate_card  # noqa: E402
 # query changes shape. This subclass adds only the shapes the cuts suite's
 # hand-built board never provoked.
 from test_sweep_request_cuts import FakeLinear  # noqa: E402
+
+#: The epic queue's two reads as `epic_cap` defines them, kept at import —
+#: before `tests/conftest.py` stands them in with an empty queue (DRE-5152).
+REAL_LABELED_ELSEWHERE = epic_cap.labeled_elsewhere
+REAL_WAITING_LINE = epic_cap.waiting_line
 
 #: What ONE full sweep may spend on Linear READS over the committed board, with
 #: no phase mocked. MEASURED BY THIS REPLAY ON 2026-09-17: 52 requests — the
@@ -135,9 +145,18 @@ from test_sweep_request_cuts import FakeLinear  # noqa: E402
 #: fleet-wide ones still run) and on this busy board is one request more.
 #: 42 + 1 = 43.
 #:
+#: It was 43 until DRE-5152 (measured 2026-10-06: 45) let the sweep start the
+#: next waiting epic. Two phases read Linear directly, off the board read on
+#: purpose: `tend_epic_queue` asks `epic_cap.LABELED_QUERY` for every card
+#: carrying `epic-queued` outside Green Light (one request, in every repo's
+#: full sweep), and `start_queued_epics`, because this replay sweeps as the
+#: owner (`epic_cap.START_OWNER_SLUG`), asks `epic_cap.WAITING_QUERY` for the
+#: line (one request). This board labels nobody, so neither reads further —
+#: no per-epic read and no `fleet_state`. 43 + 2 = 45.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 43
+REAL_BOARD_SWEEP_BUDGET = 45
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -227,6 +246,19 @@ class ReplayLinear(FakeLinear):
             card = self._find(v.get("id", "")) or {}
             nodes = list(reversed((card.get("history") or {}).get("nodes") or []))
             return {"issue": {"history": {"nodes": nodes}}}
+        if 'labels: {name: {eq: "%s"}}' % epic_cap.QUEUED_LABEL in q:
+            # The epic queue's two reads (DRE-5152): the cards carrying
+            # `epic-queued` outside Green Light, or the waiting line in it.
+            self.queries.append((query, v))
+            waiting = 'state: {name: {eq: "Green Light"}}' in q
+            nodes = [
+                card for card in self.cards.values()
+                if any(l["name"] == epic_cap.QUEUED_LABEL
+                       for l in (card.get("labels") or {}).get("nodes") or [])
+                and (card["state"]["name"] == "Green Light") == waiting
+            ]
+            return {"issues": {"nodes": nodes,
+                               "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         return super().gql(query, variables)
 
 
@@ -425,6 +457,10 @@ def _run_replay() -> Replay:
         enter(patch.object(
             validate_card, "VALID_SLUGS", {"agent-bureau", "atlas", SLUG}))
         enter(patch.object(linear_ops, "gql", side_effect=fake.gql))
+        # Every phase live means the epic queue's reads too: the real ones,
+        # answered by the fake above (conftest stands them in elsewhere).
+        enter(patch.object(epic_cap, "labeled_elsewhere", REAL_LABELED_ELSEWHERE))
+        enter(patch.object(epic_cap, "waiting_line", REAL_WAITING_LINE))
         # The sweep attributes a phase's spend to the difference between two
         # readings of its own ledger, and that ledger counts what the REAL seam
         # sent. With the seam replaced by the fake, the fake's count is the
@@ -741,6 +777,18 @@ def test_the_replay_runs_in_under_thirty_seconds(replay):
     assert replay.seconds < SECONDS_CEILING, (
         f"the replay took {replay.seconds:.1f}s, ceiling {SECONDS_CEILING}s"
     )
+
+
+def test_the_epic_queue_ran_on_its_real_reads(replay):
+    """DRE-5152: both phases ran, each on the one query it makes over a board
+    that labels nobody — so the line was read and the fleet was not."""
+    asked = [" ".join(q.split()) for q, _ in replay.fake.queries]
+    labeled = [q for q in asked if " ".join(epic_cap.LABELED_QUERY.split()) == q]
+    waiting = [q for q in asked if " ".join(epic_cap.WAITING_QUERY.split()) == q]
+    in_motion = [q for q in asked if " ".join(epic_cap.IN_MOTION_QUERY.split()) == q]
+    assert len(labeled) == 1 and len(waiting) == 1, replay.table()
+    assert in_motion == [], "nobody is waiting, so the fleet is never counted"
+    assert "epic-start: nobody waiting" in replay.printed
 
 
 def test_the_replay_never_touches_the_network(replay):
