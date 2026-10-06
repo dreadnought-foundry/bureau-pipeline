@@ -74,6 +74,7 @@ from test_runs_on_switchable import (  # noqa: E402
     BUILD_JOBS,
     BUILD_SWITCHABLE,
     SWITCHABLE,
+    _is_reusable,
     _load,
     _runner_jobs,
     expected_runs_on,
@@ -108,10 +109,13 @@ def test_the_build_lane_is_exactly_three_jobs() -> None:
         "agent-fix.yml": {"fix"},
         "qa-review.yml": {"review"},
     }
+    # Among the reusables only: this repo's own workflows read the same
+    # chains from its own variables (DRE-5948), pinned in
+    # tests/test_own_runs_on_lane.py.
     mentions = {
         path.name
         for path in sorted(WORKFLOWS.glob("*.yml"))
-        if BUILD_VAR in path.read_text()
+        if _is_reusable(_load(path)) and BUILD_VAR in path.read_text()
     }
     assert mentions == set(BUILD_JOBS), (
         f"only {sorted(BUILD_JOBS)} may name {BUILD_VAR}; found {sorted(mentions)}"
