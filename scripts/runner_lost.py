@@ -2,7 +2,8 @@
 """A default-branch CI run whose jobs GitHub never gave a machine is re-run
 once, by the reconcile sweep (DRE-5901). Stdlib only.
 
-THE INCIDENT (2026-10-05, PT). The console repo's CI on main at 559c8b9 ended
+THE INCIDENT (2026-10-05, PT). CI on main at 559c8b9, in the repo the console
+ships from, ended
 `cancelled`: every job carried "The job was not acquired by Runner of type
 hosted even after multiple attempts". Nothing failed and no test ran. The
 release train ships only a commit whose CI concluded success, so it left

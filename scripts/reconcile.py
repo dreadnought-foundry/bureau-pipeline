@@ -10959,6 +10959,11 @@ class _RunnerLostOps:
         return runner_lost.window_from(own, previous)
 
 
+#: What a default branch's name looks like here — enough to tell a branch
+#: from a gh error body, not git's whole ref grammar.
+_BRANCH_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/+-]*")
+
+
 def rerun_runner_lost_ci() -> None:
     """DRE-5901: re-run, once, a default-branch CI run whose every non-green
     job GitHub cancelled "not acquired by Runner" — and report, once, a re-run
@@ -10973,7 +10978,16 @@ def rerun_runner_lost_ci() -> None:
     board is exactly when a stranded train goes unnoticed. A refused re-run is
     a write failure and turns the run red.
     """
-    for line in runner_lost.sweep(REPO, default_branch(), _RunnerLostOps()):
+    branch = default_branch()
+    # `default_branch()` is the silent gh(): a refused call hands back its
+    # JSON error body, which would otherwise go into the listing's URL as the
+    # branch and come back as an empty list that says nothing was lost.
+    if not _BRANCH_NAME.fullmatch(branch) or ".." in branch:
+        _degrade("runner-lost", f"{REPO}'s default branch",
+                 f"not a branch name: {branch[:200]!r}",
+                 then="re-running nothing this sweep")
+        return
+    for line in runner_lost.sweep(REPO, branch, _RunnerLostOps()):
         if line.startswith("ERROR:"):
             _write_failures.append(line)
             print(line, file=sys.stderr)
