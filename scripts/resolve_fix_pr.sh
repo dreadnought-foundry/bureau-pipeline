@@ -21,6 +21,10 @@ set -e
 #      after the run to tell a fix that pushed nothing from one that did. The
 #      base branch goes out as `base_ref` for the inherited-failure step,
 #      which used to read the pull request again for it (Stage 2 fix #21).
+#  1b. Refuses a proof record, a head ref `proof_dispatch.proof_record_branch`
+#      reads as `agent/DRE-<n>-proof-record`, with go=false, no_work=true
+#      and a `fix-refused:` line, in every mode and on every leg, before
+#      the thread is read or a mode or budget is resolved.
 #   2. Refuses anything that is not an `agent/*` or `repair/*` branch, and
 #      any pull request that is not OPEN, with go=false.
 #   3. Derives the card from the branch name, the first DRE-<n> in any
@@ -236,6 +240,19 @@ set -e
 #   be reconciled with its base whatever the flag says, and the Report
 #   step never parks a draft's card.
 #
+# 2026-10-06 · DRE-5927. A proof record gets no fix run in any mode. On
+#   portico #911 (DRE-5591) the critic sent a record back for rows that were
+#   not observed; the fix agent was dispatched, found it held no AWS
+#   credentials and stopped, and a person chased the pull request. A
+#   record's defects are rows only the proof run, holding the proof
+#   identities, can observe again. Every leg reaches this step — the
+#   comment-triggered start and every workflow_dispatch, which skips the
+#   decision step — so the refusal sits here, at step 1b, and the sweep's
+#   `fix_dispatch_blocked` refuses the dispatch before it is made. An
+#   operator's answer on a record still dispatches one run, by design, and
+#   that run ends here with one no-work notice. The branch is the signal:
+#   a record opened by hand on an ordinary card branch keeps today's path.
+#
 PR=${PR_NUMBER}
 INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
@@ -249,6 +266,17 @@ echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 # step then reads it itself.
 BASE_REF=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin).get('baseRefName') or '')")
 echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+# A proof record is the proof run's to re-observe, never the fix agent's to
+# patch (step 1b, DRE-5927). The head ref reaches the predicate as argv, and
+# a predicate that cannot run stops the step (bash -e) rather than read as no.
+IS_RECORD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_dispatch; print(str(proof_dispatch.proof_record_branch(sys.argv[1])).lower())' "$BRANCH")
+if [ "$IS_RECORD" = "true" ]; then
+  echo "fix-refused: #$PR is a proof record ($BRANCH) — the proof run re-observes it, the fix agent does not patch it" \
+    | tee "${RUNNER_TEMP:-/tmp}/fix-no-work.txt"
+  echo "go=false" >> "$GITHUB_OUTPUT"
+  echo "no_work=true" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 # agent/* and repair/* only (DRE-1927); a repair branch has no card.
 case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
 [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }

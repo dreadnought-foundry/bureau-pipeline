@@ -4048,7 +4048,20 @@ def card_parked_for_human(identifier: str) -> bool:
 def fix_dispatch_blocked(pr: dict) -> bool:
     """True when the PR's card is human-parked and the caller must NOT
     dispatch agent-fix for it. A ref with no card (repair/*, experiments)
-    has no park state to consult and never blocks."""
+    has no park state to consult and never blocks.
+
+    A proof record (`agent/DRE-<n>-proof-record`) is always blocked, before
+    any Linear read (DRE-5927): its defects are rows only the proof run can
+    observe again, and a fix agent sent at one can only establish that.
+    Imported here, not at the top: proof_dispatch imports this module."""
+    import proof_dispatch  # noqa: PLC0415 — the import cycle above
+
+    if proof_dispatch.proof_record_branch(pr.get("headRefName")):
+        print(
+            f"park-gate: PR #{pr['number']} is a proof record — the proof run "
+            "re-observes it, not the fix agent"
+        )
+        return True
     card = branch_card(pr.get("headRefName") or "")
     if card and card_parked_for_human(card):
         print(

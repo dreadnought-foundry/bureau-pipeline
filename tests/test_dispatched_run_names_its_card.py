@@ -211,6 +211,9 @@ def run_card_fragment(name: str, head_ref: str) -> str:
         os.chmod(td / "gh", 0o755)
         out = td / "github_output"
         out.touch()
+        # The pipeline checkout, where agent-fix.yml's Resolve step reads it:
+        # its proof-record check (DRE-5927) imports `.bureau-pipeline/scripts`.
+        (td / ".bureau-pipeline").symlink_to(ROOT)
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
             cwd=td, capture_output=True, text=True, check=False,
