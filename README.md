@@ -209,9 +209,10 @@ unset/anything else means API-key auth).
 ### Which Linear bucket the agents spend: an opt-in per repo (Stage 2 #12, #29)
 
 The planner has read Linear on its own OAuth token since DRE-5589: the same
-Agent-Bureau user, metered apart from the fleet key. The build, fix, review and
-verify workflows can spend that token too, but **only in a repo that sets the
-repository (or organization) variable `LINEAR_AGENT_BUCKET` to `planner`**.
+Agent-Bureau user, metered apart from the fleet key. The build, fix, review,
+verify and proof workflows can spend that token too, but **only in a repo that
+sets the repository (or organization) variable `LINEAR_AGENT_BUCKET` to
+`planner`**.
 Anywhere else they read the fleet key exactly as before, even when the console
 has published `LINEAR_PLANNER_KEY` to the repo. That matters for a stub that
 passes `secrets: inherit`: it already holds the token, so without the variable

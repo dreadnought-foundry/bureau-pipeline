@@ -60,10 +60,10 @@ REQUIRED_ENV_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 
 # The planner's workflow hands its own Linear bucket first and the fleet key
 # when none is published (DRE-5589) — still a key that reaches the process.
-# The build, fix and verify agents spend the same bucket where the calling
-# repo opts in, the fleet key otherwise (Stage 2 fix #12 and review item 29,
-# tests/test_agent_planner_linear_key.py); qa-review's agent steps are the
-# critic, which holds no key at all (DOCUMENTED_EXCEPTIONS below).
+# The build, fix, verify and proof agents spend the same bucket where the
+# calling repo opts in, the fleet key otherwise (Stage 2 fix #12 and review
+# item 29, tests/test_agent_planner_linear_key.py); qa-review's agent steps
+# are the critic, which holds no key at all (DOCUMENTED_EXCEPTIONS below).
 _PLANNER_FIRST = "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
 _OPTED_IN_PLANNER = ("${{ vars.LINEAR_AGENT_BUCKET == 'planner' && "
                      "secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}")
@@ -72,6 +72,8 @@ REQUIRED_ENV_EXPR_BY_WORKFLOW = {
     "agent-task.yml": _OPTED_IN_PLANNER,
     "agent-fix.yml": _OPTED_IN_PLANNER,
     "verify.yml": _OPTED_IN_PLANNER,
+    # DRE-5924: the proof run, copied from agent-task.yml.
+    "proof-task.yml": _OPTED_IN_PLANNER,
 }
 
 # Steps that deliberately run WITHOUT Linear, keyed (workflow file, step
