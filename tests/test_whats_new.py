@@ -246,6 +246,19 @@ class TestEntry:
         entry = Entry(kind="new", audience="everyone", title="A.")
         assert entry.body == "" and entry.open is None
 
+    def test_cards_default_to_none_and_write_no_key(self):
+        entry = Entry(kind="new", audience="everyone", title="A.")
+        assert entry.cards == ()
+        assert "cards" not in entry.as_item()
+
+    def test_as_item_carries_cards_as_a_list_when_set(self):
+        entry = Entry(kind="new", audience="everyone", title="A.", open="/x",
+                      cards=("DRE-5893",))
+        assert entry.as_item() == {
+            "kind": "new", "audience": "everyone", "title": "A.", "body": "",
+            "open": "/x", "cards": ["DRE-5893"],
+        }
+
     def test_a_parsed_entry_is_a_valid_item(self):
         entry = whats_new.parse_line(
             "What's new: improved, everyone: Searching a document now finds "
@@ -584,6 +597,51 @@ class TestValidate:
         assert document == before
 
 
+class TestCards:
+    """`cards` names the card that delivered an item (DRE-6015). It is read off
+    the pull request's branch; the title still never names a card number."""
+
+    @staticmethod
+    def _with_cards(cards) -> dict:
+        document = _example()
+        for item in document["items"]:
+            item.pop("cards", None)
+        document["items"][0]["cards"] = cards
+        return document
+
+    def test_an_item_carrying_cards_is_valid(self):
+        assert whats_new.validate(self._with_cards(["DRE-5893"])) == []
+
+    def test_several_cards_are_valid(self):
+        assert whats_new.validate(self._with_cards(["DRE-5893", "DRE-17"])) == []
+
+    def test_an_item_without_cards_is_valid(self):
+        document = _example()
+        for item in document["items"]:
+            item.pop("cards", None)
+        assert whats_new.validate(document) == []
+
+    @pytest.mark.parametrize("cards", [
+        [], ["5893"], ["dre-5893"], ["DRE-"], ["DRE-5893x"], [" DRE-5893"],
+        ["DRE-5893", ""], [5893], "DRE-5893", None, {"DRE-5893": True},
+    ])
+    def test_anything_else_is_one_problem_naming_the_field(self, cards):
+        problems = whats_new.validate(self._with_cards(cards))
+        assert len(problems) == 1, problems
+        assert problems[0].startswith("items[0].cards: "), problems
+
+    def test_the_title_rule_still_refuses_a_card_number(self):
+        document = self._with_cards(["DRE-5893"])
+        document["items"][0]["title"] = "Searching finds words inside tables (DRE-5893)."
+        problems = whats_new.validate(document)
+        assert len(problems) == 1, problems
+        assert problems[0].startswith("items[0].title: ")
+        assert "DRE-5893" in problems[0]
+
+    def test_cards_are_not_a_title_rule_exemption(self):
+        assert whats_new.check_wording("The panel from DRE-5893 is in.") != []
+
+
 class TestTheOpenPath:
     """The line and the file hold `open` to one rule: a page inside the product."""
 
@@ -741,3 +799,13 @@ class TestTheStandard:
 
     def test_it_is_short(self, text):
         assert len(text.splitlines()) <= 100
+
+    def test_the_example_shows_cards_on_one_item(self):
+        items = _example()["items"]
+        assert items[0]["cards"] == ["DRE-5893"]
+        assert "cards" not in items[1]
+
+    def test_it_says_where_cards_come_from(self, text):
+        flat = " ".join(text.split())
+        assert ("`cards`, when present, lists the card that delivered the entry, "
+                "read off the pull request's branch and never written by hand") in flat
