@@ -66,9 +66,14 @@ is not red on every pass for a card nobody was told about.
     and nothing here re-enters it. A re-run keeps its run id, and the medic
     marks a run id once, so a re-run dying on the same wall would leave no
     marker and nothing would bring it back. The re-review watcher asks for the
-    review again as a fresh run once the wall is down (`rereview_watch`,
-    DRE-5842); this pass says so on its line and makes no write. The hand-off
-    checks still come first, so a review death a person must see is told.
+    review again as a fresh run (`rereview_watch`, DRE-5842), and it does NOT
+    read the Claude wall: it asks once its own grace
+    (`REREVIEW_GRACE_MINUTES`) has passed behind the review's tombstone,
+    whether or not the marker's reset has (waiting for the reset is DRE-5842's,
+    not yet in the watcher). A review that dies again on the
+    same wall is marked again, so the bound below still counts it; this pass
+    says so on its line and makes no write. The hand-off checks still come
+    first, so a review death a person must see is told.
 
 ## The assumed clock is bounded (DRE-5640)
 
@@ -130,6 +135,7 @@ import dead_run  # noqa: E402 — the marker's one definition
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
 import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
+import review_rerun  # noqa: E402 — the re-run-the-review act's one spelling
 
 RECOVERY_TAG = "limit-recovery"
 RECOVERY_MARK = f"🔁 {RECOVERY_TAG}:"
@@ -306,13 +312,23 @@ def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str 
             and assumed_deaths >= CLAUDE_ASSUMED_DEATHS_MAX):
         times = (_COUNT_WORDS[assumed_deaths] if assumed_deaths < len(_COUNT_WORDS)
                  else str(assumed_deaths))
+        if stage == "review" and _lane(card) == PLANNING_LANE:
+            # The second critic's review: a re-run keeps its run id, which the
+            # medic has already marked, so a re-run is the one way NOT back.
+            way_back = (f"the second critic's review comes back as a fresh run: "
+                        f"the re-review watcher asks for it on its own, or a "
+                        f"person posts `{review_rerun.RERUN_REVIEW_ACT}` on the "
+                        f"epic. Not Re-run failed jobs: a re-run keeps the dead "
+                        f"run's id, and a second death on it is never marked")
+        else:
+            way_back = ("a person re-enters the card by hand: Intake then "
+                        "Planning for a classify or plan stage, Todo for a build, "
+                        "and Re-run failed jobs for a fix, review or sync run")
         return (f"the run has died {times} times in a day on a Claude limit that "
                 f"named no reset time, each time brought back on an assumed "
                 f"five-hour clock, and a wall still standing after that is not the "
-                f"five-hour usage window. Once the account can run again, a person "
-                f"re-enters the card by hand: Intake then Planning for a classify "
-                f"or plan stage, Todo for a build, and Re-run failed jobs for a "
-                f"fix, review or sync run")
+                f"five-hour usage window. Once the account can run again, "
+                f"{way_back}")
     if _needs_rerun(card, marker) and not (marker.get("run") or "").isdigit():
         return (f"the marker names no GitHub run to re-run, so the failed {stage} "
                 f"run has to be re-run by hand (Actions → Re-run failed jobs), or "
@@ -417,7 +433,7 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         if marker.get("stage") == "review" and _lane(card) == PLANNING_LANE:
             lines.append(f"{RECOVERY_TAG}: {ident} review death ({marker['kind']} limit) "
                          f"is the re-review watcher's — it asks for the review again "
-                         f"once the wall is down")
+                         f"after its own grace and does not read the Claude wall")
             continue
         why = trigger(marker, now, active_account)
         if why is None:

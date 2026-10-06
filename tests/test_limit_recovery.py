@@ -969,7 +969,9 @@ def test_a_review_death_on_a_planning_card_is_the_rereview_watchers():
     assert s.reruns == [] and s.moves == [] and s.dispatched == []
     assert s.comments == []
     assert ("limit-recovery: DRE-5640 review death (claude limit) is the re-review "
-            "watcher's — it asks for the review again once the wall is down") in lines
+            "watcher's — it asks for the review again after its own grace and does "
+            "not read the Claude wall") in lines
+    assert not any("once the wall is down" in line for line in lines), lines
 
 
 def test_a_review_death_on_a_planning_card_spends_no_wip_room():
@@ -993,5 +995,24 @@ def test_a_third_assumed_review_death_on_a_planning_card_is_handed_off():
     s.recover([dated_card(nodes=nodes)], now=NOW)
     assert s.reruns == [] and s.moves == [] and s.dispatched == []
     assert len(s.comments) == 1
-    assert s.comments[0][1].startswith(limit_recovery.HANDOFF_MARK)
-    assert "three times in a day" in s.comments[0][1]
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "three times in a day" in body
+    # The way back is a fresh review, never a re-run of the dead one.
+    assert "re-review watcher" in body
+    import review_rerun
+    assert f"`{review_rerun.RERUN_REVIEW_ACT}` on the epic" in body
+    assert "Not Re-run failed jobs" in body
+    for other in ("Intake then Planning", "Todo for a build"):
+        assert other not in body, other
+
+
+def test_a_third_assumed_review_death_in_review_keeps_the_rerun_way_back():
+    s = Seams()
+    nodes = _three_deaths(stage="review", newest=_review_death())
+    s.recover([dated_card(lane="In Review", nodes=nodes)], now=NOW)
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "Re-run failed jobs for a fix, review or sync run" in body
+    assert "re-review watcher" not in body
