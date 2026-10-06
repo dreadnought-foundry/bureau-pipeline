@@ -4294,11 +4294,17 @@ def report_intake_blockers() -> list[tuple[str, str]]:
                   f"({blocked['state']['name']}) — already said on {target}")
             continue
         try:
-            linear_ops.cmd_comment(target, _intake_blocker_body(blocker, blocked))
+            full = linear_ops.cmd_comment(target, _intake_blocker_body(blocker, blocked))
         except linear_ops.LinearError as e:
             _write_failures.append(f"{tag}: {stop} holds up {work} — notice on {target}: {e}")
             print(f"ERROR: {tag}: could not say {stop} holds up {work} on {target}: {e}",
                   file=sys.stderr)
+            continue
+        if full is not None:
+            # Linear refused the comment because the thread is full (DRE-3343):
+            # nothing landed, so nothing is claimed — the next pass tries again.
+            print(f"{tag}: {stop} (Intake) holds up {work} "
+                  f"({blocked['state']['name']}) — NOT said on {target}: {full}")
             continue
         said[target].add((stop, work))
         print(f"{tag}: {stop} (Intake) holds up {work} "
@@ -12205,6 +12211,9 @@ def main(
                 report_intake_blockers()
         except linear_ops.LinearError as e:
             _read_failures.append(f"intake blockers: {e}")
+            print(f"ERROR: report_intake_blockers: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"intake blockers: {e}")
             print(f"ERROR: report_intake_blockers: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and

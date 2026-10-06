@@ -537,3 +537,16 @@ def test_a_full_relation_page_is_read_to_its_end():
     with mock.patch.object(reconcile, "complete_inverse_relations") as complete:
         sweep(board)
     assert complete.called
+
+
+def test_a_notice_linear_refused_for_a_full_thread_is_not_claimed(capsys):
+    """`cmd_comment` answers a full thread with a condition rather than an
+    error (DRE-3343): nothing landed, so the log must not say it was said."""
+    board = the_board()
+    with wired(board):
+        with mock.patch.object(reconcile.linear_ops, "cmd_comment",
+                               return_value="comment cap reached"):
+            reconcile.report_intake_blockers()
+    out = capsys.readouterr().out
+    assert "NOT said on DRE-900" in out
+    assert "said on DRE-900 now" not in out
