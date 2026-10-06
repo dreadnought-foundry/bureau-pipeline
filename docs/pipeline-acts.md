@@ -327,14 +327,21 @@ when the card's seven conditions hold: a `PROOF:` card of this repo in
 `Hand-work`, its epic `In Progress`, its blockers terminal, no hold standing,
 nobody else on it and no run alive, a dispatch left in its budget of two, and
 the release carrying its siblings' merges live. A card in `Green Light` whose
-park named the CEO's press is dispatched once per signed answer of his.
+park named the CEO's press is dispatched once per signed answer of his. A card
+in `In Review` whose record pull request the critic sent back
+(`REQUEST_CHANGES` at the head) is dispatched again to amend the record, when no
+receipt is newer than that verdict or the newer one's run reads `dead` — at
+most twice per pull request, then held with `🔬 proof-waiting` for an operator
+(DRE-5931). It is read after the first runs, under the same one-per-pass cap,
+and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
     🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)
 
 The reasons open `first proof run`, `second dispatch — no run started after`,
-`second dispatch — run` and `re-run after the CEO's answer at`; the counts are
+`second dispatch — run`, `re-run after the CEO's answer at` and `re-run after
+the critic's findings at`; the counts are
 `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
 `after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and

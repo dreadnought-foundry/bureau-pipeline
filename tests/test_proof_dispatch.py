@@ -18,7 +18,7 @@ Pinned here, over a fixture board:
     budget of two counted apart from the first run's, its three stops, the
     hold after two, and its place behind the first runs under one cap;
   * the dry run, which writes nothing;
-  * the read bound: five candidates cost at most nine Linear requests;
+  * the read bound: five candidates cost at most eight Linear requests;
   * the step in `reconcile.yml`: gated on a full pass, the stub tested before
     any Python runs.
 """
@@ -735,10 +735,11 @@ def test_main_runs_the_dry_run_when_the_variable_is_unset(monkeypatch, capsys):
 # --------------------------------------------------------------------------- #
 
 
-def test_five_candidates_cost_at_most_nine_linear_reads(monkeypatch, capsys):
+def test_five_candidates_cost_at_most_eight_linear_reads(monkeypatch, capsys):
     """The real readers — `reconcile.active_cards`, the card read, the thread
-    read — over a faked transport that counts every request. Three lanes read
-    once each (`In Review` since DRE-5931), then two reads a candidate."""
+    read — over a faked transport that counts every request. `In Review`
+    (DRE-5931) costs nothing more: the sweep's one board read serves it with
+    `Hand-work`, and `Green Light` is the other read."""
     import reconcile
 
     monkeypatch.delenv("BUREAU_READ", raising=False)
@@ -771,8 +772,8 @@ def test_five_candidates_cost_at_most_nine_linear_reads(monkeypatch, capsys):
         run_state=h.run_state, release=h.release, fire=h.fire,
         voices=fake_voices, now=NOW)
     lines = _lines(capsys)
-    assert len(calls) <= 9, calls
-    assert len(calls) == 3 + 2 * proof_dispatch.PROOF_CANDIDATES_PER_PASS
+    assert len(calls) <= 8, calls
+    assert len(calls) == 2 + 2 * proof_dispatch.PROOF_CANDIDATES_PER_PASS
     deferred = [l for l in lines if "deferred — candidate cap, read next pass" in l]
     assert len(deferred) == 2 and tally.deferred == 2
 
