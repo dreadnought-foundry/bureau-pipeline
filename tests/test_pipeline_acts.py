@@ -367,13 +367,20 @@ class TestTheTrailerCarriesNoForeignTag:
         assert any("stranded-watchdog" in p for p in pipeline_act.problems(doc))
 
     def test_the_check_catches_a_discharge_that_smuggles_a_foreign_tag(self):
-        """`discharges` names an ACT, never a tag — for exactly this reason."""
+        """`discharges` names an ACT, never a tag — for exactly this reason.
+
+        Nothing discharges `reviewer-unavailable` today, so one act is made to:
+        an act's own tag in its own name is no collision on its own (DRE-5152),
+        and the defect is the trailer that carries it into another receipt."""
         doc = _doc()
         for act in doc["acts"]:
             if act["name"] == "reviewer-unavailable":
                 act["name"] = "reviewer-down-report"
             if act.get("discharges") == "reviewer-unavailable":
                 act["discharges"] = "reviewer-down-report"
+        if not any(a.get("discharges") == "reviewer-down-report" for a in doc["acts"]):
+            next(a for a in doc["acts"] if a["name"] != "reviewer-down-report")[
+                "discharges"] = "reviewer-down-report"
         assert any("reviewer-down" in p for p in pipeline_act.problems(doc))
 
     @staticmethod

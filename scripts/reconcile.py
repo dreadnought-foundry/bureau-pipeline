@@ -188,8 +188,12 @@ import pipeline_act  # noqa: E402
 # turn for a planner is not a dead planner, and its wait has its own bound.
 import planner_queue  # noqa: E402
 # DRE-5435: the one repo whose sweep releases the groom queue — the repo that
-# starts waiting epics (DRE-5152), named once there.
+# starts waiting epics (DRE-5152), named once there. DRE-5152's two phases
+# read the epic line and the count of epics in motion through it.
 import epic_cap  # noqa: E402
+# DRE-5152: the lane the activate route is asked for in, when the sweep
+# re-dispatches a start the relay never activated.
+import review_rerun  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -6116,8 +6120,10 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     return promoted
 
 
-def close_finished_epics(epic_identifiers: set[str]) -> None:
+def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
     """An In Progress epic whose children are all terminal closes itself.
+    Returns the epics it closed: on the merge path a close is the moment a
+    slot in the epic cap opens, and the next waiting epic starts (DRE-5152).
 
     Per-epic isolation (DRE-3148): this was the one Linear call in the sweep
     with no guard, so a single `TimeoutError` from Linear killed the whole
@@ -6137,17 +6143,22 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
         # this read can have is already a per-epic gap by the time it returns,
         # and the guard below turns each one back into the skip it was.
         epic_records(epics)
+    closed: set[str] = set()
     for epic in epics:
         try:
-            _close_epic_if_finished(epic)
+            if _close_epic_if_finished(epic):
+                closed.add(epic)
         except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
             print(
                 f"epic-close: could not close {epic} ({exc}) — skipped this sweep",
                 file=sys.stderr,
             )
+    return closed
 
 
-def _close_epic_if_finished(epic: str) -> None:
+def _close_epic_if_finished(epic: str) -> bool:
+    """Close `epic` if every child is closed and one is Done; True when it
+    closed."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -6173,6 +6184,279 @@ def _close_epic_if_finished(epic: str) -> None:
         # chain into the pipeline (DRE-1772). Merge-time hook; the full
         # sweep is the backstop.
         advance_unblocked_epics(epic)
+        return True
+    return False
+
+
+# ── The epic line: the sweep starts the next waiting epic (DRE-5152) ────────
+# DRE-5136 leaves an epic approved at the cap waiting in Green Light, labeled
+# `epic-queued`. These two phases are the other half. `start_queued_epics`
+# moves the head of the line to In Progress when the count of epics in motion
+# is under the cap, and posts the `▶️ epic-started:` receipt. The move IS the
+# trigger: the relay fires `plan.yml`'s activate route on every In Progress
+# entry of an epic, whoever made it, and that route's cap gate removes the
+# label. So the start fires no `repository_dispatch` of its own — one
+# dispatcher per transition (DRE-3659, DRE-3664).
+#
+# The relay lives in agent-bureau and cannot be read from here, so
+# `tend_epic_queue` confirms instead of assuming: the label still on an In
+# Progress epic is an activation that has not run. Past the act's cadence,
+# with nothing the pipeline wrote since the start — a `🎟️ planner-slot:`
+# receipt from a run waiting for a planner is such a comment, and so is the
+# activate route's hand-back note — the epic's own repo's sweep asks for the
+# activate run itself, ONCE, and says so with `▶️ epic-start-redispatched:`. A
+# start carrying that receipt is never asked for again (DRE-2071: a receipt
+# that knows the outcome, a retry bounded per transition); the console shows
+# it overdue.
+#
+# Both read Linear directly, through `epic_cap` and `linear_ops`, never the
+# pass's board snapshot, and neither reads `_idle_pass`: they are fleet-wide,
+# and the owner's own sweep is often idle. What they cost is stated on the card
+# and measured in tests/test_sweep_real_board.py.
+
+#: Why the sweep asked for the activate run itself — the dispatch's `reason`.
+EPIC_START_RELAY_MISSED = "epic-start-relay-missed"
+
+
+def _epic_labels(issue: dict) -> set[str]:
+    return {
+        (label.get("name") or "").lower()
+        for label in ((issue or {}).get("labels") or {}).get("nodes") or []
+    }
+
+
+def tend_epic_queue(now: datetime | None = None) -> None:
+    """Keep `epic-queued` honest, and confirm the starts of this repo's epics.
+
+    One read, `epic_cap.labeled_elsewhere()`: every card carrying the label
+    outside Green Light, with its lane. Outside In Progress too, it has left
+    the line — an epic the CEO parked or canceled, a card labeled by hand —
+    and the label comes off. In Progress, it is a start whose activation has
+    not run yet: each is read for its `repo:` label, and only the sweep of
+    that repo reads its thread and confirms it (`_confirm_epic_start`), because
+    only that repo's sweep can dispatch to that repo's stub. Nothing else is
+    ever written to an In Progress epic.
+
+    Every on-rail repo's full sweep runs this; `--close-only` never does.
+    """
+    now = now or datetime.now(UTC)
+    try:
+        labeled = epic_cap.labeled_elsewhere()
+    except epic_cap.EpicCapError as e:
+        print(f"epic-queue: the epic cap could not be read ({e}) — skipped this pass")
+        return
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"epic queue: {e}")
+        print(f"ERROR: tend_epic_queue: {e}", file=sys.stderr)
+        return
+    for issue in labeled:
+        ident = issue.get("identifier") or ""
+        lane = ((issue.get("state") or {}).get("name")) or ""
+        if lane == epic_cap.GREEN_LIGHT:
+            continue  # in the line: the start's to move, never this phase's
+        if lane != epic_cap.IN_PROGRESS:
+            try:
+                linear_ops.remove_label(ident, epic_cap.QUEUED_LABEL)
+            except Exception as e:  # noqa: BLE001 — isolate one card, tend the rest
+                print(f"epic-queue: could not remove the label from {ident} ({e}) "
+                      "— skipped this pass", file=sys.stderr)
+                continue
+            print(f"epic-queue: {ident} left the line ({lane}) — label removed")
+            continue
+        try:
+            epic = linear_ops.get_issue(ident, fresh=True)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"epic queue {ident}: {e}")
+            print(f"ERROR: tend_epic_queue: {ident}: {e}", file=sys.stderr)
+            continue
+        repo = card_repo(epic)
+        if repo != REPO_SLUG:
+            print(f"epic-queue: {ident} is started and not yet activated — "
+                  f"{repo or 'its own repo'}'s sweep confirms it")
+            continue
+        if ((epic.get("state") or {}).get("name")) != epic_cap.IN_PROGRESS:
+            continue  # it moved since the list was read; the next pass reads it again
+        try:
+            thread = linear_ops.comment_records(ident)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"epic queue {ident}: {e}")
+            print(f"ERROR: tend_epic_queue: {ident}: {e}", file=sys.stderr)
+            continue
+        _confirm_epic_start(epic, thread, now)
+
+
+def _epic_receipt_at(thread: list[dict], tag: str) -> datetime | None:
+    """When the newest pipeline-written `▶️ <tag>:` receipt was posted."""
+    times = [
+        _moment(row.get("created_at")) for row in thread
+        if row.get("authored_by_pipeline")
+        and (row.get("body") or "").lstrip().startswith(f"▶️ {tag}:")
+    ]
+    return max((t for t in times if t is not None), default=None)
+
+
+def _confirm_epic_start(epic: dict, thread: list[dict], now: datetime) -> None:
+    """Did the activate route run on a start the sweep made? Re-dispatch it,
+    once, when the answer is no.
+
+    Read off the thread, pipeline-written comments only — a person asking
+    "is this running?" says nothing about whether it is:
+      * no `epic-started` receipt — not a start the sweep made; `plan.yml`'s
+        gate owns an epic moved to In Progress any other way;
+      * an `epic-start-redispatched` receipt newer than it — asked for once
+        already, and never again for this start;
+      * anything else the pipeline wrote newer than it — the route ran (a
+        planner-slot receipt, the activation, the hand-back note);
+      * younger than the act's cadence — still within its run's bound.
+    Otherwise the relay never fired, and the activate run is asked for here.
+    """
+    ident = epic["identifier"]
+    started = _epic_receipt_at(thread, epic_cap.STARTED_TAG)
+    if started is None:
+        print(f"epic-queue: {ident} is In Progress with the label but no start "
+              "receipt — not a start the sweep made, so plan.yml's gate owns it")
+        return
+    retried = _epic_receipt_at(thread, epic_cap.REDISPATCHED_TAG)
+    if retried is not None and retried > started:
+        print(f"epic-queue: {ident} — its activation was already asked for again "
+              "after its start; one re-dispatch per start, so it stays an overdue "
+              "act in the console")
+        return
+    since = [
+        row for row in thread
+        if row.get("authored_by_pipeline")
+        and (_moment(row.get("created_at")) or started) > started
+    ]
+    if since:
+        print(f"epic-queue: {ident} — the pipeline has written on it since its "
+              "start, so the start took")
+        return
+    cadence = pipeline_act.cadence_s(epic_cap.STARTED_ACT)
+    waited = (now - started).total_seconds()
+    if waited < cadence:
+        print(f"epic-queue: {ident} started {waited / 60:.0f} minute(s) ago — its "
+              f"activation has {cadence // 60} minutes before the sweep asks again")
+        return
+    _redispatch_epic_start(ident, waited)
+
+
+def _redispatch_epic_start(ident: str, waited: float) -> None:
+    """Ask for the activate run the relay never fired, and post the receipt
+    only on a confirmed dispatch (the DRE-1254 false-receipt class)."""
+    try:
+        # The whole card, description included: `plan.yml` reads the epic's
+        # text off the dispatch payload, and `get_issue` does not select it.
+        card = (linear_ops.gql(plan_run.CARD_QUERY, {"id": ident}) or {}).get("issue")
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"epic queue {ident}: {e}")
+        print(f"ERROR: tend_epic_queue: {ident}: {e}", file=sys.stderr)
+        return
+    if not card:
+        _read_failures.append(f"epic queue {ident}: Linear returned no such card")
+        print(f"ERROR: tend_epic_queue: {ident}: Linear returned no such card",
+              file=sys.stderr)
+        return
+    try:
+        ok, err = plan_run.fire(card, REPO,
+                                trigger_state=review_rerun.TRIGGER_STATE_ACTIVATE,
+                                reason=EPIC_START_RELAY_MISSED, event=plan_run.PLAN_EVENT)
+    except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
+        ok, err = False, f"redispatch {ident}: {e}"
+    if not ok:
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    body = (
+        f"▶️ {epic_cap.REDISPATCHED_TAG}: this epic was started from the line "
+        f"{waited / 60:.0f} minutes ago and its activation never ran — the "
+        f"`{epic_cap.QUEUED_LABEL}` label is still on it and the pipeline has "
+        "posted nothing since — so the sweep asked for the activate run itself. "
+        "It asks once per start: if this run does not take either, the epic "
+        "shows as overdue in the console."
+    )
+    try:
+        linear_ops.cmd_comment(ident, pipeline_act.receipt(epic_cap.REDISPATCHED_ACT, body))
+    except Exception as e:  # noqa: BLE001 — the dispatch went; the receipt did not
+        _write_failures.append(f"{ident} epic-start receipt: {e}")
+        print(f"ERROR: {ident} was re-dispatched but its receipt did not post: {e}",
+              file=sys.stderr)
+        return
+    print(f"epic-queue: {ident} — the relay never activated its start; "
+          f"re-dispatched the activate run at {REPO}")
+
+
+def start_queued_epics(close_pass: bool = False) -> None:
+    """Start the next waiting epics while the cap has room.
+
+    The periodic sweep of ONE repo runs it (`epic_cap.START_OWNER_SLUG`): the
+    start is pure Linear and fleet-wide, and every repo asking would pay the
+    fleet-wide read six times over for one answer. `close_pass` is the
+    exception — any repo's `--close-only` pass that closed an epic, the moment
+    a slot opened. A race between the two is bounded twice: `cmd_advance`
+    refuses a card no longer in Green Light, and `plan.yml`'s cap gate queues
+    again an epic a race started past the cap.
+
+    The line is read first, so a pass with nobody waiting never counts the
+    fleet. Then the first `free` epics of the line, in its order, never
+    re-derived: each is re-read and must still be waiting, is moved, and the
+    move is confirmed before the receipt is posted. Anything else stops the
+    pass — another sweep got there first, and the next pass re-reads; the
+    next in line is never taken instead. The label stays on: the activate
+    route removes it, and `tend_epic_queue` reads it as the start not taken.
+    An In Progress epic is never moved here, whatever the count.
+    """
+    if not close_pass and REPO_SLUG != epic_cap.START_OWNER_SLUG:
+        print(f"epic-start: not the owner (REPO_SLUG={REPO_SLUG}) — "
+              f"{epic_cap.START_OWNER_SLUG} starts the line")
+        return
+    try:
+        line = epic_cap.waiting_line()
+        if not line:
+            print("epic-start: nobody waiting")
+            return
+        fleet = epic_cap.fleet_state()
+    except epic_cap.EpicCapError as e:
+        print(f"epic-start: the epic cap could not be read ({e}) — skipped this pass")
+        return
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"epic start: {e}")
+        print(f"ERROR: start_queued_epics: {e}", file=sys.stderr)
+        return
+    cap, waiting = fleet["cap"], fleet["waiting"]
+    in_motion = len(fleet["in_motion"])
+    free = epic_cap.free_slots(fleet)
+    if free == 0:
+        print(f"epic-start: {in_motion} of {cap} in motion, {len(waiting)} "
+              "waiting — nothing to start")
+        return
+    for place, queued in enumerate(waiting[:free], start=1):
+        ident = queued.get("identifier") or ""
+        try:
+            fresh = linear_ops.get_issue(ident, fresh=True)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"epic start {ident}: {e}")
+            print(f"ERROR: start_queued_epics: {ident}: {e}", file=sys.stderr)
+            return
+        lane = ((fresh.get("state") or {}).get("name")) or ""
+        if lane != epic_cap.GREEN_LIGHT or epic_cap.QUEUED_LABEL not in _epic_labels(fresh):
+            print(f"epic-start: {ident} is no longer waiting ({lane}) — another "
+                  "sweep got there first; stopped this pass")
+            return
+        try:
+            linear_ops.cmd_advance(ident, epic_cap.IN_PROGRESS, epic_cap.GREEN_LIGHT)
+            if card_state(ident) != epic_cap.IN_PROGRESS:
+                print(f"epic-start: {ident} did not move to In Progress — stopped "
+                      "this pass")
+                return
+            in_motion += 1
+            linear_ops.cmd_comment(ident, pipeline_act.receipt(
+                epic_cap.STARTED_ACT, epic_cap.started_receipt(place, in_motion, cap)))
+        except Exception as e:  # noqa: BLE001 — one epic's write stops the pass, not the sweep
+            print(f"epic-start: could not start {ident} ({e}) — stopped this pass",
+                  file=sys.stderr)
+            return
+        print(f"epic-start: {ident} started (was {place} of {len(waiting)} in line; "
+              f"{in_motion} of {cap} in motion)")
 
 
 # UNKNOWN-mergeable polling bounds (DRE-2121). GitHub computes a PR's
@@ -10819,11 +11103,12 @@ def _phase_name(fn) -> str:
 # The harness sandbox runs this sweep with a `REPO_SLUG` that is not a key of
 # config/repo-map.json, and its README promises zero Linear writes. Most of a
 # pass is scoped to this repo's own cards or pull requests and does nothing
-# there. Eight phases are not: they write to any card whose `repo:` label is
+# there. Ten phases are not: eight write to any card whose `repo:` label is
 # absent, because an unlabeled card is everybody's (`_another_repos_card`) —
 # and the 130+ cards aged out of Intake on 2026-09-09/10 were that promise
-# broken by one such writer. `main()` skips exactly these eight when the
-# sweep is off the rail, and says so once per phase.
+# broken by one such writer — and the epic line's two (DRE-5152) change any
+# repo's waiting epic. `main()` skips exactly these ten when the sweep is off
+# the rail, and says so once per phase.
 
 
 def off_rail() -> bool:
@@ -10841,8 +11126,8 @@ def off_rail() -> bool:
 OFF_RAIL_PREFIX = "off-rail"
 
 #: The fleet-wide board writers a sweep off the rail skips, in the order
-#: `main()` runs them, each with what it would have done. A ninth joins here
-#: deliberately, by name; tests/test_off_rail_writers.py pins the set.
+#: `main()` runs them, each with what it would have done. An eleventh joins
+#: here deliberately, by name; tests/test_off_rail_writers.py pins the set.
 OFF_RAIL_SKIPPED: dict[str, str] = {
     "drain_retiring_lanes":
         "moved every card out of a retiring lane, whoever owns it",
@@ -10858,6 +11143,10 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
         "escalated and un-held unlabeled Planning cards our watchdog froze",
     "serve_planner_line":
         "released expired planner-slot claims on any repo's card",
+    "tend_epic_queue":
+        "removed the epic-queued label from any repo's card that left the line",
+    "start_queued_epics":
+        "started the next waiting epic of any repo, Green Light to In Progress",
     "carry_epics_out_of_todo":
         "carried unlabeled epics out of Todo",
 }
@@ -11076,6 +11365,7 @@ def main(
     if close_only:
         # The epic close is the whole of this pass, scope read included, so it
         # is one phase (DRE-3639) — the same shape `--promote-only` takes below.
+        closed: set[str] = set()
         with _phase("close_finished_epics"):
             # Scoped to the merged card's own parent on the merge path
             # (DRE-3236): that is the only epic this merge can have finished,
@@ -11089,16 +11379,32 @@ def main(
                     if scope.parent and scope.parent_state in SWEPT_LANES
                     else set()
                 )
-                close_finished_epics(epics)
+                closed = set(close_finished_epics(epics) or ())
                 print(
                     f"close-only: epic close evaluated for {scope.card}'s parent "
                     f"({len(epics)} epic(s))"
                 )
-                return
-            epics = repo_epics(active_cards())
-            close_finished_epics(epics)
-            print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
-            return
+            else:
+                epics = repo_epics(active_cards())
+                closed = set(close_finished_epics(epics) or ())
+                print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
+        # A close is the moment a slot in the epic cap opens, so whichever
+        # repo's merge closed an epic starts the next one in line (DRE-5152),
+        # owner or not — the owner's next periodic pass is up to fifteen
+        # minutes away. OUTSIDE the close's phase on purpose: everything
+        # inside one is charged to it, and the start has its own spend line.
+        if closed:
+            if off_rail() and "start_queued_epics" in OFF_RAIL_SKIPPED:
+                print(off_rail_notice("start_queued_epics",
+                                      OFF_RAIL_SKIPPED["start_queued_epics"]))
+            else:
+                try:
+                    with _phase("start_queued_epics"):
+                        start_queued_epics(close_pass=True)
+                except Exception as e:  # noqa: BLE001 — the close already happened
+                    _write_failures.append(f"epic start: {e}")
+                    print(f"ERROR: start_queued_epics: {e}", file=sys.stderr)
+        return
     nudges = 0
     flagged: set[str] = set()
     if not promote_only:
@@ -11312,6 +11618,31 @@ def main(
     if not promote_only:
         with _phase("close_finished_epics"):
             close_finished_epics(epics)
+        # The epic line (DRE-5152): the label kept honest and the last starts
+        # confirmed, then the next waiting epic started if the cap has room —
+        # after the close, which is what opens a slot, and before the carry.
+        # Fleet-wide, so neither reads `_idle_pass` (the owner's sweep is
+        # often idle) and both stop at the rail. The start is the owner's
+        # alone; `start_queued_epics` says so in other repos' sweeps.
+        if off_rail() and "tend_epic_queue" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("tend_epic_queue", OFF_RAIL_SKIPPED["tend_epic_queue"]))
+        else:
+            try:
+                with _phase("tend_epic_queue"):
+                    tend_epic_queue()
+            except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+                _write_failures.append(f"epic queue: {e}")
+                print(f"ERROR: tend_epic_queue: {e}", file=sys.stderr)
+        if off_rail() and "start_queued_epics" in OFF_RAIL_SKIPPED:
+            print(off_rail_notice("start_queued_epics",
+                                  OFF_RAIL_SKIPPED["start_queued_epics"]))
+        else:
+            try:
+                with _phase("start_queued_epics"):
+                    start_queued_epics()
+            except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+                _write_failures.append(f"epic start: {e}")
+                print(f"ERROR: start_queued_epics: {e}", file=sys.stderr)
         # BEFORE promote_ready reads its candidates, and that order is
         # load-bearing (DRE-5347): a child's parent lane is read after the
         # carry, never before it, so an approved epic dragged into Todo is back

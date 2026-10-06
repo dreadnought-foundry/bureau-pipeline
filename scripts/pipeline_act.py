@@ -633,8 +633,12 @@ def _collision_problems(entries, tags) -> list:
     out: list[str] = []
     for entry in entries:
         name = entry.get("name") or ""
+        # An act's OWN tag in its name is no collision (DRE-5152): its receipt
+        # carries that tag already, in the body and in the trailer's `tag:`
+        # field. A trailer that would carry it into ANOTHER act's receipt — an
+        # act discharging this one — is caught by `_binding_problems`.
         for other in tags:
-            if other and other in name:
+            if other and other in name and other != entry.get("tag"):
                 out.append(
                     f"the act name {name!r} contains the tag {other!r} — a "
                     "trailer carries act NAMES, so this name would put a live "

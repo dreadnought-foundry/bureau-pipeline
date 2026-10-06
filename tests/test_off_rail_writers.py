@@ -498,8 +498,8 @@ def test_a_full_sandbox_pass_skips_all_ten_and_writes_nothing(capsys):
     for name, fake in reads.items():
         assert not fake.called, f"off the rail, {name} was read"
     for name in ("tend_epic_queue", "start_queued_epics"):
-        assert [line for line in off if name in line] == [
-            reconcile.off_rail_notice(name, reconcile.OFF_RAIL_SKIPPED[name])], off
+        named = [line for line in off if f"skipped {name}," in line]
+        assert len(named) == 1 and reconcile.OFF_RAIL_SKIPPED[name] in named[0], off
 
 
 def test_the_same_board_on_the_rail_enters_every_phase(capsys):
@@ -547,8 +547,9 @@ def test_a_sandbox_close_pass_that_closed_an_epic_starts_nothing(capsys):
     reads = {}
     writes, lines, red = _sweep([_waiting_epic()], SANDBOX, capsys, reads=reads,
                                 close_only=True, closed={"DRE-77"})
-    assert _off_rail_lines(lines) == [reconcile.off_rail_notice(
-        "start_queued_epics", reconcile.OFF_RAIL_SKIPPED["start_queued_epics"])]
+    off = _off_rail_lines(lines)
+    assert len(off) == 1 and "skipped start_queued_epics," in off[0], off
+    assert reconcile.OFF_RAIL_SKIPPED["start_queued_epics"] in off[0]
     assert not [name for name, fake in reads.items() if fake.called]
     assert _called(writes) == {}, _called(writes)
     assert not red

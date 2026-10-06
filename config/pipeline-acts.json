@@ -953,6 +953,42 @@
       }
     },
     {
+      "name": "epic-queue-started",
+      "tag": "epic-started",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A slot under the epic cap opened and this epic was next in line, so the sweep moved it from Green Light to In Progress, which dispatches its activate run through the relay.",
+      "state": "dispatched",
+      "next_actor": "plan.yml",
+      "discharges": "epic-approval-queued",
+      "subscriber": "reconcile.py",
+      "cadence_s": 6900,
+      "cadence_why": "The activate run the start hands work to: .github/workflows/plan.yml gives its plan job timeout-minutes: 115 (105 when DRE-5152 was written; DRE-5288 raised it), so 6900 seconds after the start the run that should have activated the epic is over, whatever it did.",
+      "why": "DRE-5152, the other half of DRE-5136's queue. `start_queued_epics` in `scripts/reconcile.py` reads the line and the count of epics in motion through `scripts/epic_cap.py` (DRE-5134) and, while the cap has room, moves the head of the line to In Progress. The move is the dispatch: the relay fires `plan.yml`'s activate route on every In Progress entry of an epic, whoever made it, and that route removes the `epic-queued` label, so the sweep fires no dispatch of its own on a start (DRE-3659, DRE-3664) — the state is dispatched, as for fix-loop-restarted. The body is `epic_cap.started_receipt`, stating the place the epic had and how many epics are in motion now. It discharges the queued hold. The tag is epic_cap.STARTED_TAG, and the console learned it first (DRE-5135).",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "epic_cap.STARTED_ACT, epic_cap.started_receipt("
+      }
+    },
+    {
+      "name": "epic-start-redispatched",
+      "tag": "epic-start-redispatched",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The sweep started this epic from the line, but its activation never ran: the epic-queued label was still on it past the start's cadence and the pipeline had posted nothing since. So the epic's own repo's sweep asked for the activate run itself, once.",
+      "state": "dispatched",
+      "next_actor": "plan.yml",
+      "discharges": "epic-queue-started",
+      "subscriber": "reconcile.py",
+      "cadence_s": 6900,
+      "cadence_why": "The activate run the start hands work to: .github/workflows/plan.yml gives its plan job timeout-minutes: 115 (105 when DRE-5152 was written; DRE-5288 raised it), so 6900 seconds after the start the run that should have activated the epic is over, whatever it did.",
+      "why": "DRE-5152. The relay lives in agent-bureau and cannot be read from here, so `tend_epic_queue` confirms a start rather than assuming it: the label left on an In Progress epic is the activation that has not run, and any pipeline-authored comment newer than the start receipt (the receipt of a run waiting for a planner, the activation, the activate route's hand-back note) reads as the start taken. Only the sweep of the epic's own repo asks, through `plan_run.fire` with the activate trigger and reason epic-start-relay-missed, because only that repo's token can dispatch to its stub, and the receipt is posted only on a confirmed dispatch. One per start (the DRE-2071 lesson): a start carrying this receipt is never asked for again, and stays an overdue act in the console. The name is the tag, as epic_cap.REDISPATCHED_ACT and REDISPATCHED_TAG fix it; the console learned it first (DRE-5135).",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "pipeline_act.receipt(epic_cap.REDISPATCHED_ACT"
+      }
+    },
+    {
       "name": "reviewer-outage-fleet-wide",
       "tag": "fleet-reviewer-outage",
       "adopted": true,
