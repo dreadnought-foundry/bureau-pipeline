@@ -438,6 +438,61 @@ def test_14_of_15_with_an_older_equal_priority_epic_waiting_queues(capsys):
     assert "rule 3" in err and "DRE-50" in err
 
 
+# DRE-5934: rule 3 queues only when the epics ahead are owed every free slot —
+# start iff `ahead < cap - others`. Run 37398828431 queued DRE-5036 at 7 of 15
+# with one epic (DRE-3624) ahead: eight slots free, and both should have run.
+def test_dre_5036_second_in_line_with_eight_slots_free_starts(capsys):
+    head = _approved("DRE-3624", "2026-10-05T18:12:00.000Z", priority=3)
+    asked = _asked("DRE-5036", priority=3, at="2026-10-06T01:22:00.000Z")
+    fleet = _fleet(7, [head])
+    assert epic_cap.place("DRE-5036", epic_cap._line_with(fleet, "DRE-5036", asked)) == (2, 2)
+    answer, err = _decide(capsys, fleet, asked)
+    assert answer == "start"
+    assert "rule 4" in err
+    assert "7 of 15" in err and "1 waiting ahead" in err and "8 slots free" in err
+    assert "room for this one too" in err
+
+
+def test_14_of_15_with_one_waiting_ahead_still_queues_the_slot_is_owed(capsys):
+    head = _approved("DRE-50", "2026-09-01T10:00:00.000Z", priority=3)
+    answer, err = _decide(capsys, _fleet(14, [head]), _asked(priority=3))
+    assert answer == "queue"
+    assert "rule 3" in err and "DRE-50" in err
+    assert "14 of 15" in err and "1 waiting ahead" in err and "1 slot free" in err
+
+
+def test_13_of_15_with_two_waiting_ahead_queues(capsys):
+    ahead = [_approved("DRE-50", "2026-09-01T10:00:00.000Z", priority=3),
+             _approved("DRE-51", "2026-09-02T10:00:00.000Z", priority=3)]
+    answer, err = _decide(capsys, _fleet(13, ahead), _asked(priority=3))
+    assert answer == "queue"
+    assert "rule 3" in err and "DRE-50" in err and "DRE-51" in err
+    assert "13 of 15" in err and "2 waiting ahead" in err and "2 slots free" in err
+
+
+def test_13_of_15_with_one_waiting_ahead_starts(capsys):
+    head = _approved("DRE-50", "2026-09-01T10:00:00.000Z", priority=3)
+    answer, err = _decide(capsys, _fleet(13, [head]), _asked(priority=3))
+    assert answer == "start"
+    assert "rule 4" in err
+    assert "13 of 15" in err and "1 waiting ahead" in err and "2 slots free" in err
+
+
+def test_13_of_15_counts_only_the_epics_ahead_not_the_ones_behind(capsys):
+    waiting = [_approved("DRE-50", "2026-09-01T10:00:00.000Z", priority=3),
+               _approved("DRE-51", "2026-09-02T10:00:00.000Z", priority=4)]
+    answer, err = _decide(capsys, _fleet(13, waiting), _asked(priority=3))
+    assert answer == "start"
+    assert "1 waiting ahead" in err
+
+
+def test_nobody_waiting_ahead_names_zero_waiting_and_the_free_slots(capsys):
+    answer, err = _decide(capsys, _fleet(14), _asked())
+    assert answer == "start"
+    assert "rule 4" in err
+    assert "14 of 15" in err and "0 waiting ahead" in err and "1 slot free" in err
+
+
 def test_rule_3_receipt_says_the_epic_ahead_takes_the_slot(capsys):
     ahead = _approved("DRE-50", "2026-09-25T10:00:00.000Z", priority=2)
     fleet = _fleet(14, [ahead])
