@@ -1105,6 +1105,11 @@ def test_the_train_is_a_reusable_workflow_in_the_shape_of_the_other_eight():
     assert secrets["RELEASE_ROLE_ARN"]["required"] is True
     assert secrets["LINEAR_RELEASE_KEY"]["required"] is False
     assert secrets["LINEAR_API_KEY"]["required"] is False
+    # DRE-5949: the worker App pair the tag push is made with — optional, so
+    # a stub passing nothing keeps today's `github.token` push.
+    assert secrets["BUREAU_APP_ID"]["required"] is False
+    assert secrets["BUREAU_APP_PRIVATE_KEY"]["required"] is False
+    assert [k for k, v in secrets.items() if v["required"]] == ["RELEASE_ROLE_ARN"]
 
 
 def test_the_per_surface_job_runs_in_its_own_lane():
@@ -1139,6 +1144,11 @@ def test_the_stub_is_data_plus_one_uses_line():
     job = next(iter(stub["jobs"].values()))
     assert set(job) <= {"uses", "with", "secrets", "permissions"}
     assert job["secrets"]["RELEASE_ROLE_ARN"]
+    # DRE-5949: one by one, never `secrets: inherit`.
+    assert job["secrets"]["BUREAU_APP_ID"] == "${{ secrets.BUREAU_APP_ID }}"
+    assert job["secrets"]["BUREAU_APP_PRIVATE_KEY"] == (
+        "${{ secrets.BUREAU_APP_PRIVATE_KEY }}"
+    )
     assert job["with"]["surface"] == "${{ inputs.surface }}"
 
 
