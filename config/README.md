@@ -39,7 +39,10 @@ of it is ever a runtime lookup.
   `count_rollup_parents`, whether a roll-up parent takes a slot. Set by the
   CEO on 2026-09-28 (`decided`, `decided_by`, `why`): 45 epics were in motion,
   14 of them real builds, so the cap fits those plus one slot, and a roll-up
-  parent holds no cards of its own. Read on the pipeline side only through
+  parent holds no cards of its own. An epic takes a slot only while it has a
+  card left to build (DRE-5918): an open child that is not an epic, not a
+  `PROOF:` and not marked `hand-built` or `no-code`. The rule is
+  `counts_against_cap` in `scripts/epic_cap.py`. Read on the pipeline side only through
   `scripts/epic_cap.py`, and by the console over the GitHub contents API —
   no second copy of the number lives anywhere else.
 - **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's

@@ -9,9 +9,24 @@ The operator console reads the same file over the GitHub contents API.
 
 Three things live here and nowhere else:
 
-  * **the counting rule** — an epic counts iff it is In Progress, it has at
-    least one child, and (unless `count_rollup_parents`) at least one child is
-    not itself an epic. A roll-up holds no cards of its own and takes no slot.
+  * **the counting rule** — an epic counts iff it is In Progress and it has
+    at least one BUILDABLE child: open (not Done, Canceled or Duplicate), not
+    itself an epic (`mid_epic.is_epic`), not titled `PROOF:`
+    (`proof_and_demo.is_proof`), and not labeled `hand-built` or `no-code`
+    (DRE-5918, the CEO's "yes, I agree. Build it" of 2026-10-05). An epic
+    takes a slot only while it has a card left to build. Once only proof,
+    check or hand-done cards remain, it stops taking a slot. A parent whose
+    only open children are epics takes none either: each child epic counts
+    for itself, so a parent counts once, not again for each child epic.
+    `count_rollup_parents` keeps its meaning — when true, an open child epic
+    also holds the parent's slot. This is stricter than the Overview board's
+    `epic_column` in agent-bureau, which sets proofs aside by title only. The
+    cap also sets aside `hand-built`/`no-code` checks, such as DRE-4721's
+    seven-day check, because no agent builds them. A read that cannot see a
+    whole epic — its children page or a child's label page truncated — counts
+    the epic rather than guessing a slot free. On 10-05 the older rule, any
+    child not an epic and Done ones included, counted 17 epics where five had
+    a card left to build.
   * **the order of the line** — Linear priority (Urgent, High, Medium, Low,
     none last), then approval time (the OLDEST entry into In Progress after
     the newest entry into Planning, `createdAt` as the fallback), then the
@@ -53,6 +68,7 @@ if _HERE not in sys.path:
 
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402 — ONE rule for "a child is an epic"
+import proof_and_demo  # noqa: E402 — ONE rule for "a child is a proof"
 
 ROOT = os.path.dirname(_HERE)
 #: Resolved off this script's own directory, so a product-repo checkout finds
@@ -81,6 +97,16 @@ IN_PROGRESS = "In Progress"
 GREEN_LIGHT = "Green Light"
 PLANNING = "Planning"
 
+#: A child in one of these lanes has nothing left to build (DRE-5918).
+CLOSED_STATES = ("Done", "Canceled", "Duplicate")
+#: The same string as `reconcile.HAND_BUILT_LABEL`, restated because
+#: `reconcile` imports this module; `tests/test_epic_cap_buildable.py` holds
+#: the two equal.
+HAND_BUILT_LABEL = "hand-built"
+#: A child carrying either mark is built by a person or is not code: no agent
+#: builds it, so it holds no slot.
+UNBUILT_LABELS = (HAND_BUILT_LABEL, linear_ops.NO_CODE_LABEL)
+
 #: Linear numbers priority 0 none, 1 Urgent, 2 High, 3 Medium, 4 Low
 #: (`scripts/groomer.py` reads the same field). None ranks after Low.
 PRIORITY_NAMES = {1: "Urgent", 2: "High", 3: "Medium", 4: "Low"}
@@ -96,18 +122,29 @@ HISTORY_WINDOW = 250
 # selection's own `first:`/`last:` numbers, so a connection widened later fails
 # there rather than at Linear.
 #
-# An In Progress node can return 250 children and 250 grandchild probes: 500
-# nodes, so 8 a page is 4,000.
-IN_MOTION_PAGE = 8
+# An In Progress node reads each child's state and labels (DRE-5918), so the
+# children connection is 100 wide, not 250: the widest epic counted on
+# 2026-10-05, DRE-4721, had 50 children. One node can return 100 children,
+# 100 × 10 labels and 100 × 1 grandchild probes: 1,200 nodes, so 4 a page is
+# 4,800. Ten labels cover the widest child read that day, at eight. Neither
+# page is trusted to be whole: each selects `pageInfo { hasNextPage }`, and an
+# epic with more children than the page, or a child with more labels than
+# its page and no mark among the ones read, counts. Linear also prices each
+# `state { name }` object. The yardstick was measured the same way, by
+# connections, so the comparison stays like for like. Still one request a
+# page and no request per epic. 55 In Progress issues are 14 requests.
+IN_MOTION_PAGE = 4
 # A waiting node can return 250 history entries: 16 a page is 4,000.
 WAITING_PAGE = 16
 LABELED_PAGE = 100
 
 IN_MOTION_NODE = """
              identifier title priority createdAt state { name }
-             children(first: 250) { nodes {
-               identifier title children(first: 1) { nodes { id } }
-             } }"""
+             children(first: 100) { nodes {
+               identifier title state { name }
+               labels(first: 10) { nodes { name } pageInfo { hasNextPage } }
+               children(first: 1) { nodes { id } }
+             } pageInfo { hasNextPage } }"""
 
 WAITING_NODE = """
              identifier title priority createdAt state { name }
@@ -206,9 +243,32 @@ def _children(record: dict) -> list:
     return (((record or {}).get("children") or {}).get("nodes")) or []
 
 
+def _truncated(connection) -> bool:
+    """The page said there is more than it returned."""
+    return bool(((connection or {}).get("pageInfo") or {}).get("hasNextPage"))
+
+
 def _child_is_epic(child: dict) -> bool:
     return mid_epic.is_epic(child.get("title") or "",
-                            has_children=bool(_children(child)))
+                            has_children=bool(_children(child)),
+                            shape=child.get("shape"))
+
+
+def _is_open(child: dict) -> bool:
+    return _state(child) not in CLOSED_STATES
+
+
+def buildable(child: dict) -> bool:
+    """Open, not an epic, not a proof, and not marked for a person. A child
+    whose label page was truncated with no mark among the labels read is
+    buildable: an unread mark is not a mark."""
+    if not _is_open(child) or _child_is_epic(child):
+        return False
+    if proof_and_demo.is_proof(child.get("title") or ""):
+        return False
+    labels = {(n.get("name") or "").lower()
+              for n in (((child.get("labels") or {}).get("nodes")) or [])}
+    return not labels.intersection(UNBUILT_LABELS)
 
 
 def _rollup_flag(count_rollup_parents: bool | None) -> bool:
@@ -218,17 +278,20 @@ def _rollup_flag(count_rollup_parents: bool | None) -> bool:
 
 
 def counts_against_cap(epic: dict, *, count_rollup_parents: bool | None = None) -> bool:
-    """In Progress, at least one child, and (unless roll-up parents count) at
-    least one child that is not itself an epic. The flag defaults to the
-    file."""
+    """In Progress, and at least one `buildable` child (DRE-5918) — or, when
+    roll-up parents count, at least one open child epic. An epic whose
+    children page was truncated counts: the unread children might be cards
+    left to build. The flag defaults to the file."""
     if _state(epic) != IN_PROGRESS:
         return False
     children = _children(epic)
-    if not children:
-        return False
-    if _rollup_flag(count_rollup_parents):
+    if any(buildable(c) for c in children):
         return True
-    return any(not _child_is_epic(c) for c in children)
+    if _truncated((epic or {}).get("children")):
+        return True
+    if _rollup_flag(count_rollup_parents):
+        return any(_is_open(c) and _child_is_epic(c) for c in children)
+    return False
 
 
 def in_motion(epics, *, count_rollup_parents: bool | None = None) -> list:
@@ -413,8 +476,9 @@ def queued_receipt(place: int, total: int, in_motion: int, cap: int, *,
         )
     else:
         why = (
-            f"{in_motion} of {cap} epics are in motion, so the sweep starts "
-            "this one when one closes."
+            f"{in_motion} of {cap} epics are in motion, each with a card left "
+            "to build, so the sweep starts this one when one of them has no "
+            "card left to build."
         )
     return (
         f"⏸️ {QUEUED_TAG}: approved and waiting in line — place {place} of "
