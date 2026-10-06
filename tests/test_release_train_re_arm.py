@@ -688,3 +688,263 @@ def test_the_standard_and_the_document_say_the_train_re_arms_itself():
     assert "DRE-3559" in rendered and "re-arm" in rendered.lower()
     row = next(l for l in rendered.splitlines() if l.startswith("| 6 | `spacing`"))
     assert "re-arm" in row
+
+
+# --------------------------------------------------------------------------
+# A deferral that names a minute re-arms from the surface job (DRE-6005).
+#
+# A console release script that finds another writer mid-release — an
+# operator's `make deploy-console`, an App Runner OPERATION_IN_PROGRESS —
+# defers rather than fails. That deferral is transient: ten minutes later the
+# console is free. So the script may end its `deferred:` line with
+# ` — re-arm in <N> minutes`, and the `release` job re-arms the train for that
+# minute exactly as the plan does for a spacing or window no-op.
+# --------------------------------------------------------------------------
+
+TRANSIENT = ("deferred: console is being written by an operator deploy "
+             "— re-arm in 10 minutes")
+OWED = "deferred: the console release is owed to the operator"
+
+
+def _deferring_script(root, line):
+    script = Path(root) / "infra" / "release-demo.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"#!/usr/bin/env bash\necho '{line}'\n")
+    return "infra/release-demo.sh"
+
+
+def test_a_deferral_naming_a_minute_carries_its_re_arm(tmp_path):
+    now = pt(2026, 9, 12, 16, 0)
+    entry = surface(script=_deferring_script(tmp_path, TRANSIENT))
+    decision = release_train.run_surface(
+        entry, repo_root=tmp_path, sha="a" * 40, now=now, out=lambda _l: None)
+    assert decision.act == release_train.NO_OP
+    assert decision.code == "deferred"
+    # The line is reported verbatim, the clause and all.
+    assert decision.reason == TRANSIENT
+    assert decision.re_arm_at == pt(2026, 9, 12, 16, 10)
+
+
+@pytest.mark.parametrize("line", [
+    OWED,
+    # The clause counts only at the END of the line, in its exact words.
+    "deferred: re-arm in 10 minutes was the old plan — ask the operator",
+    "deferred: console busy — re-arm in ten minutes",
+    # A minute no clock can hold is no minute at all: the line is the reason,
+    # verbatim, and never a crash that turns a deferral into a red run.
+    "deferred: console busy — re-arm in 99999999999999 minutes",
+])
+def test_a_deferral_without_the_clause_re_arms_nothing(tmp_path, line):
+    entry = surface(script=_deferring_script(tmp_path, line))
+    decision = release_train.run_surface(
+        entry, repo_root=tmp_path, sha="a" * 40, now=pt(2026, 9, 12, 16, 0),
+        out=lambda _l: None)
+    assert decision.code == "deferred"
+    assert decision.reason == line
+    assert decision.re_arm_at is None
+
+
+def _deferring_caller(tmp_path, line=TRANSIENT):
+    """The demo caller, released at 15:06 PT and behind since — its script
+    now defers instead of cutting a tag."""
+    repo = _caller(tmp_path)
+    _deferring_script(repo, line)
+    _git(repo, "commit", "-qam", "the release script defers")
+    return repo
+
+
+def _release_cli(repo, monkeypatch, actions, now, *, re_arm=True):
+    """The `release` job's own command, with the GitHub seams faked and the
+    decision record captured where it would be posted."""
+    monkeypatch.setattr(release_train, "_now", lambda: now)
+    monkeypatch.setattr(release_train, "fetch_armed_runs", actions.runs)
+    monkeypatch.setattr(release_train, "dispatch_re_arm", actions.dispatch)
+    monkeypatch.setattr(release_train, "fetch_checks",
+                        lambda _repo, _sha: green())
+    monkeypatch.delenv(release_train.ENV_HOLD, raising=False)
+    records = []
+
+    def write(record, **_kw):
+        records.append(record)
+        return "decision recorded: deployment 1 (inactive)"
+    monkeypatch.setattr(release_train.release_decision, "write", write)
+    argv = ["--repo", REPO, "--repo-root", str(repo),
+            "--file", str(repo / ".github" / "bureau" / "release.json"),
+            "release", "--sha", _git(repo, "rev-parse", "HEAD"),
+            "--surface", "demo"]
+    if re_arm:
+        argv += ["--re-arm", "--workflow", STUB_PATH, "--default-branch", "main"]
+    return release_train.main(argv), records
+
+
+def test_the_release_job_re_arms_a_deferral_for_the_minute_it_names(
+        tmp_path, monkeypatch, capsys):
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions()
+    code, records = _release_cli(repo, monkeypatch, actions,
+                                 pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    assert actions.dispatched == [
+        (REPO, STUB_PATH, "main", "2026-09-12T23:10:00Z")]
+    line = _line(capsys.readouterr().out)
+    # The `deferred:` sentence stays first, so the console's release row reads
+    # the same code off the line; the clause rides after it.
+    assert line == (f"{release_train.TAG}: no-op {REPO} demo — {TRANSIENT} "
+                    f"— re-armed for 16:10 PT")
+    # The record carries the same sentence the receipt prints.
+    assert len(records) == 1
+    assert records[0]["reason"] == f"{TRANSIENT} — re-armed for 16:10 PT"
+
+
+def test_a_second_deferral_for_the_same_minute_collapses_onto_the_waiting_run(
+        tmp_path, monkeypatch, capsys):
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions()
+    now = pt(2026, 9, 12, 16, 0)
+    assert _release_cli(repo, monkeypatch, actions, now)[0] == 0
+    capsys.readouterr()
+    assert _release_cli(repo, monkeypatch, actions, now)[0] == 0
+    assert len(actions.dispatched) == 1
+    line = _line(capsys.readouterr().out)
+    assert "re-armed for 16:10 PT (already waiting: " in line
+    assert "/actions/runs/1" in line
+
+
+def test_without_the_re_arm_flag_the_release_job_dispatches_nothing(
+        tmp_path, monkeypatch, capsys):
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions()
+    code, records = _release_cli(repo, monkeypatch, actions,
+                                 pt(2026, 9, 12, 16, 0), re_arm=False)
+    assert code == 0
+    assert actions.dispatched == []
+    line = _line(capsys.readouterr().out)
+    assert line == f"{release_train.TAG}: no-op {REPO} demo — {TRANSIENT}"
+    assert records[0]["reason"] == TRANSIENT
+
+
+def test_a_plain_deferral_re_arms_nothing_from_the_release_job(
+        tmp_path, monkeypatch, capsys):
+    repo = _deferring_caller(tmp_path, OWED)
+    actions = _Actions()
+    code, _ = _release_cli(repo, monkeypatch, actions, pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    assert actions.dispatched == []
+    assert _line(capsys.readouterr().out).endswith(f"— {OWED}")
+
+
+def test_a_deferral_beyond_the_wait_bound_is_not_re_armed(tmp_path,
+                                                          monkeypatch, capsys):
+    """The demo's spacing is 30 minutes, so the bound is 32: a deferral asking
+    for 45 holds no runner, and the line says what wakes the train."""
+    repo = _deferring_caller(
+        tmp_path, "deferred: console is being written — re-arm in 45 minutes")
+    actions = _Actions()
+    code, _ = _release_cli(repo, monkeypatch, actions, pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    assert actions.dispatched == []
+    line = _line(capsys.readouterr().out)
+    assert "— re-arm in 45 minutes — not re-armed: 16:45 PT" in line
+    assert "32" in line
+
+
+def test_a_deferral_naming_an_impossible_minute_stays_green(tmp_path,
+                                                         monkeypatch, capsys):
+    line = "deferred: console is being written — re-arm in 99999999999999 minutes"
+    repo = _deferring_caller(tmp_path, line)
+    actions = _Actions()
+    code, records = _release_cli(repo, monkeypatch, actions,
+                                 pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    assert actions.dispatched == []
+    assert _line(capsys.readouterr().out).endswith(f"— {line}")
+    assert records[0]["reason"] == line
+
+
+def test_the_release_job_re_arms_a_deferral_and_nothing_else(tmp_path,
+                                                            monkeypatch, capsys):
+    """A job that reads the spacing when it runs — another release of the
+    surface landed at 15:06 PT — carries the spacing's minute, but the release
+    job re-arms only a deferral; the spacing is the plan's to re-arm."""
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions()
+    code, _ = _release_cli(repo, monkeypatch, actions, pt(2026, 9, 12, 15, 20))
+    assert code == 0
+    assert actions.dispatched == []
+    line = _line(capsys.readouterr().out)
+    assert "re-arm" not in line
+
+
+def test_a_refused_re_arm_dispatch_from_the_release_job_stays_green(
+        tmp_path, monkeypatch, capsys):
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions(dispatch_error=(
+        "could not create workflow dispatch event: HTTP 403: Resource not "
+        "accessible by integration"))
+    code, _ = _release_cli(repo, monkeypatch, actions, pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    line = _line(capsys.readouterr().out)
+    assert f"{TRANSIENT} — re-arm skipped: caller stub lacks actions: write" in line
+
+
+def _parsed(monkeypatch, command, extra=()):
+    seen = {}
+
+    def capture(args):
+        seen.update(vars(args))
+        return 0
+    monkeypatch.setattr(release_train, f"_cmd_{command}", capture)
+    argv = {"plan": ["plan", "--head", "abc"],
+            "release": ["release", "--sha", "abc", "--surface", "demo"]}[command]
+    assert release_train.main([*argv, *extra]) == 0
+    return {k: seen[k] for k in ("re_arm", "workflow", "default_branch")}
+
+
+@pytest.mark.parametrize("env", [
+    {},
+    {"GITHUB_WORKFLOW_REF": "dreadnought-foundry/agent-bureau/.github/"
+                            "workflows/train.yml@refs/heads/main",
+     "DEFAULT_BRANCH": "trunk"},
+])
+def test_the_release_command_takes_the_plans_re_arm_flags_and_defaults(
+        monkeypatch, env):
+    for name in ("GITHUB_WORKFLOW_REF", "DEFAULT_BRANCH", "GITHUB_REF_NAME"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert (_parsed(monkeypatch, "release")
+            == _parsed(monkeypatch, "plan")
+            == {"re_arm": False,
+                "workflow": (".github/workflows/train.yml" if env
+                             else release_train.TRAIN_WORKFLOW),
+                "default_branch": env.get("DEFAULT_BRANCH", "main")})
+    flags = ["--re-arm", "--workflow", "x.yml", "--default-branch", "dev"]
+    assert (_parsed(monkeypatch, "release", flags)
+            == _parsed(monkeypatch, "plan", flags)
+            == {"re_arm": True, "workflow": "x.yml", "default_branch": "dev"})
+
+
+def test_the_release_step_re_arms_with_the_trains_own_token():
+    """Without this every offline test above is green and the re-arm never
+    dispatches in production: the workflow is what passes the flag."""
+    release = _workflow()["jobs"]["release"]
+    step = next(s for s in release["steps"] if s.get("name") == "Run the surface")
+    assert "--re-arm" in step["run"]
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "github.event.repository.default_branch" in step["env"]["DEFAULT_BRANCH"]
+
+
+def test_the_standard_and_the_document_say_a_deferral_may_name_its_re_arm():
+    clause = "— re-arm in <N> minutes"
+    body = STANDARD.read_text()
+    item = body.split("6. **`deferred: <reason>`", 1)[1].split("\n\n", 1)[0]
+    assert clause in item
+    paragraph = body.split("**A no-op that names a minute re-arms itself", 1)[1]
+    paragraph = paragraph.split("\n\n", 1)[0]
+    assert "deferred:" in paragraph and "DRE-6005" in paragraph
+    rendered = release_train.render_markdown()
+    section = rendered.split("## A no-op that names a minute re-arms itself", 1)[1]
+    section = section.split("\n## ", 1)[0]
+    assert "deferred:" in section and "DRE-6005" in section
+    row = next(l for l in rendered.splitlines() if "| `deferred` |" in l)
+    assert clause in row

@@ -104,7 +104,10 @@ business. `refuse` exits non-zero — a red gating check, a SHA no gating
 check has reported on, a script that failed, a script that rolled out and cut
 no tag. And a script that exits 0 printing one `deferred: <reason>` line is a
 NO-OP reported verbatim, never a failure: the deployment is owed to a person,
-deploy-lag goes on reading BEHIND until they do it, and nothing alerts.
+deploy-lag goes on reading BEHIND until they do it, and nothing alerts. One
+that ends ` — re-arm in <N> minutes` is transient rather than owed — another
+writer is mid-release — and the surface job re-arms the train for that minute
+the way the plan re-arms a spacing no-op (DRE-6005).
 
 THE BRAKE. `RELEASE_HOLD` is read exactly the way `INTAKE_HOLD` is read —
 through `intake_controls.hold()`, which is why the empty string is the
@@ -327,6 +330,12 @@ _WINDOW_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d) P
 
 #: The line a surface script prints to say the deployment is owed to a person.
 DEFERRAL_PREFIX = "deferred:"
+#: The optional trailing clause by which a deferral names its own re-arm
+#: (DRE-6005) — `deferred: <reason> — re-arm in <N> minutes`. A deferral that
+#: is transient (another writer is mid-release) is over in minutes, not owed
+#: to a person, so the surface job re-arms the train for it. Only at the END of
+#: the line, in exactly these words; anything else is the reason, verbatim.
+DEFERRAL_RE_ARM = re.compile(r"\s—\sre-arm in (\d+) minutes$")
 
 #: The channel's gate (DRE-3568): the workflow whose latest run on the default
 #: branch says whether promotion is coming. `promote-channel.yml` fires on this
@@ -1981,14 +1990,16 @@ def script_env(base, *, sha: str, surface_name: str) -> dict:
 
 
 def run_surface(surface, *, repo_root, sha, before=None, env=None,
-                out=print) -> Decision:
+                out=print, now=None) -> Decision:
     """Run the surface's script and VERIFY the tag it cut.
 
     The contract is `standards/release-train.md`: `bash <script> --surface
     <name>`, non-zero on any failure, and an annotated tag in the series at
     `RELEASE_SHA` when it releases. Three outcomes, and the middle one is the
     one that is easy to get wrong: exit 0 with a `deferred:` line is a NO-OP
-    reported verbatim, not a failure and not a release.
+    reported verbatim, not a failure and not a release. A deferral that ends
+    ` — re-arm in <N> minutes` carries `re_arm_at` N minutes after `now`
+    (DRE-6005), which the `release` command re-arms the train for.
     """
     script = Path(repo_root) / surface.script
     done = subprocess.run(
@@ -2009,7 +2020,17 @@ def run_surface(surface, *, repo_root, sha, before=None, env=None,
 
     for line in (done.stdout or "").splitlines():
         if line.strip().startswith(DEFERRAL_PREFIX):
-            return Decision(NO_OP, "deferred", line.strip())
+            named = DEFERRAL_RE_ARM.search(line.strip())
+            if named is None:
+                return Decision(NO_OP, "deferred", line.strip())
+            try:
+                at = (now or datetime.now(tz=PT)) + timedelta(
+                    minutes=int(named.group(1)))
+            except OverflowError:
+                # A minute no clock can hold names nothing: the deferral is
+                # reported verbatim, never a crash that turns it red.
+                return Decision(NO_OP, "deferred", line.strip())
+            return Decision(NO_OP, "deferred", line.strip(), re_arm_at=at)
 
     after, _ = newest_tag(repo_root, surface.tag_series)
     if not after or after == before:
@@ -2036,7 +2057,7 @@ def run_surface(surface, *, repo_root, sha, before=None, env=None,
 
 def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
             dispatched=False, env=None, out=print, on_released=None,
-            on_decided=None) -> Decision:
+            on_decided=None, re_arm=None) -> Decision:
     """Decide about ONE surface with the real checks, then act — and print the
     one receipt line either way.
 
@@ -2058,6 +2079,14 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     how the decision message is written (release_decision.py), and it is
     guarded the same way: nothing it does can change the decision or fail the
     run.
+
+    `re_arm(decision)` is called only for a deferral that names a minute — a
+    line that ends ` — re-arm in <N> minutes` (DRE-6005); a spacing or window
+    no-op this job reads is the plan's to re-arm, not this job's — and returns
+    the clause for the line (`_re_arm`'s, in the CLI). A non-empty clause
+    rides after the decision's own sentence in what `on_decided` records and
+    what the receipt prints, exactly as the plan shows a spacing re-arm; the
+    decision this returns is the one made, its act and code unchanged.
     """
     tag, tag_at = newest_tag(repo_root, surface.tag_series)
     lag = lag_state(repo_root, tag, sha, surface.paths, ignore=surface.ignore)
@@ -2072,20 +2101,28 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
                           dispatched=dispatched)
     if decision.releases:
         decision = run_surface(surface, repo_root=repo_root, sha=sha,
-                               before=tag, env=env, out=out)
+                               before=tag, env=env, out=out, now=now)
     if on_released is not None and decision.act == RELEASE and decision.tag:
         try:
             on_released(tag, decision)
         except Exception as error:  # noqa: BLE001 — the surface is already live
             out(f"{TAG}: [{surface.name}] WARNING the after-release step failed "
                 f"({error}) — the release itself is unaffected")
+    shown = decision
+    if (re_arm is not None and decision.code == "deferred"
+            and decision.re_arm_at is not None):
+        clause = re_arm(decision)
+        if clause:
+            # After the `deferred:` sentence, so the console's release row
+            # still reads the same code off the line (DRE-3336).
+            shown = decision._replace(reason=f"{decision.reason} — {clause}")
     if on_decided is not None:
         try:
-            on_decided(decision)
+            on_decided(shown)
         except Exception as error:  # noqa: BLE001 — a report never fails a run
             out(f"{TAG}: [{surface.name}] WARNING the decision message failed "
                 f"({error}) — the decision itself is unaffected")
-    out(decision.receipt(repo, surface.name, sha))
+    out(shown.receipt(repo, surface.name, sha))
     return decision
 
 
@@ -2471,6 +2508,15 @@ def render_markdown() -> str:
     )
     w("")
     w(
+        "**DRE-6005.** A `deferred:` line that ends `— re-arm in <N> minutes` "
+        "names a minute too — a transient deferral, another writer "
+        "mid-release, is over in minutes rather than owed to a person — and "
+        "the surface job re-arms for it the same way: the same bound, the "
+        "same collapse onto a run already waiting, the same clauses after the "
+        "`deferred:` sentence, and never a red run."
+    )
+    w("")
+    w(
         "**Two no-ops inside one spacing window produce one re-arm.** Both "
         "name the same minute; before dispatching, the plan reads the stub's "
         "in-flight dispatched runs and finds one whose wait job is named "
@@ -2548,7 +2594,8 @@ _ORDER = (
      "hand, or raise the bound"),
     ("deferred", NO_OP, "the script exited 0 printing `deferred: …` — the "
                         "deployment is owed to a person, and that is not a "
-                        "failure"),
+                        "failure; a line that ends `— re-arm in <N> minutes` "
+                        "re-arms the train for that minute (DRE-6005)"),
     ("released", RELEASE, "the script ran and the train verified the annotated "
                           "tag it cut at the released commit"),
 )
@@ -2812,7 +2859,7 @@ def _cmd_release(args) -> int:
     if entry is None:
         print(f"{TAG}: {args.file} declares no surface {args.surface!r}")
         return 1
-    now = datetime.now(tz=PT)
+    now = _now()
     # What the surface stands at BEFORE this job decides anything — the same
     # value `release()` reads at its own first line, read here because the
     # record needs it whatever the decision turns out to be.
@@ -2851,6 +2898,12 @@ def _cmd_release(args) -> int:
             checks=lambda: fetch_checks(args.repo, args.sha),
             on_released=after_release,
             on_decided=write_decision,
+            # A deferral that names its minute re-arms the train from here
+            # (DRE-6005), through the plan's own `_re_arm`: the same bound,
+            # collapse, dispatch and clauses, and never a red run.
+            re_arm=((lambda decided: _re_arm(args, data, [(entry, decided)],
+                                             now)[0])
+                    if args.re_arm else None),
         )
     except RuntimeError as err:
         # FAIL CLOSED. An unreadable answer is not a green one — the same rule
@@ -2913,6 +2966,27 @@ def _cmd_render(args) -> int:
     return 0
 
 
+def _re_arm_arguments(subparser) -> None:
+    """The re-arm's three flags, declared once for `plan` and `release` so
+    the two cannot drift (DRE-6005): `_re_arm` reads all three, and the
+    `release` job re-arms a deferral that names its minute."""
+    subparser.add_argument("--re-arm", action="store_true",
+                           help="dispatch the caller's stub once for the "
+                                "minute a spacing or window no-op (DRE-3559) "
+                                "or a deferral (DRE-6005) names")
+    subparser.add_argument("--workflow",
+                           default=caller_workflow_path(
+                               os.environ.get("GITHUB_WORKFLOW_REF", "")),
+                           help="the caller's stub, as a repo path — from "
+                                "GITHUB_WORKFLOW_REF by default")
+    subparser.add_argument("--default-branch",
+                           default=(os.environ.get("DEFAULT_BRANCH")
+                                    or os.environ.get("GITHUB_REF_NAME")
+                                    or "main"),
+                           help="the ref the re-arm dispatches the stub on, "
+                                "and the branch a woken re-armed run re-reads")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--file", default=DATA_PATH,
@@ -2930,20 +3004,7 @@ def main(argv=None) -> int:
                          help="the default branch's head — the walk starts here")
     planner.add_argument("--surface", default="",
                          help="a hand dispatch: plan only this surface")
-    planner.add_argument("--re-arm", action="store_true",
-                         help="dispatch the caller's stub once for the minute a "
-                              "spacing or window no-op names (DRE-3559)")
-    planner.add_argument("--workflow",
-                         default=caller_workflow_path(
-                             os.environ.get("GITHUB_WORKFLOW_REF", "")),
-                         help="the caller's stub, as a repo path — from "
-                              "GITHUB_WORKFLOW_REF by default")
-    planner.add_argument("--default-branch",
-                         default=(os.environ.get("DEFAULT_BRANCH")
-                                  or os.environ.get("GITHUB_REF_NAME")
-                                  or "main"),
-                         help="the ref the re-arm dispatches the stub on, and "
-                              "the branch a woken re-armed run re-reads")
+    _re_arm_arguments(planner)
     planner.add_argument("--not-before", default="",
                          help="a re-armed run's minute (the dispatch input); "
                               "set, the run walks from the default branch's "
@@ -2959,6 +3020,7 @@ def main(argv=None) -> int:
     runner.add_argument("--sha", required=True)
     runner.add_argument("--surface", required=True)
     runner.add_argument("--dispatched", action="store_true")
+    _re_arm_arguments(runner)
 
     sub.add_parser("render", help="rewrite docs/release-train.md")
 
