@@ -390,9 +390,16 @@ Guessing wrong is cheap — the artifact update catches an amendment mislabelled
 as an addition. What is NOT cheap is adding the card by hand: a Backlog child of
 an active epic dispatches an agent within fifteen minutes, so a card added after
 the epic's green light **without a verdict is refused promotion** and said so on
-the card. The epic's own description carries the growth record — green-lit at N
-cards, running M — and names any card that joined without the plan moving with
-it. See `architecture/decisions/adr-mid-epic-discovery.md`.
+the card. Planning's routing verdict is a sign-off the gate accepts as much as
+the discovery route's `mid-epic-verdict` (DRE-5900): either one means somebody
+read the card, and where the verdict sends it is still the routing gate's call,
+so a PARKED card stays put. A card carrying neither is told so once and
+sent to `Planning` once for a routing verdict, rather than refused on every
+pass; Planning's exit lands it back in Backlog carrying one, and it promotes.
+The green light is the epic's newest `In Progress` entry, read off the epic's
+newest history. The epic's own description carries the growth record —
+green-lit at N cards, running M — and names any card that joined without the
+plan moving with it. See `architecture/decisions/adr-mid-epic-discovery.md`.
 
 ## Body
 A clear, **one-PR-scoped** description with its own `## Acceptance criteria`

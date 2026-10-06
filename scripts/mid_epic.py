@@ -137,6 +137,12 @@ GROWTH_CAPPED_TAG = "mid-epic-growth-capped"  # on the SIBLING: the epic is full
 # is the RECOMMENDATION that changed.
 AMENDMENT_STATE = "Planning"
 
+# Where the sweep sends a mid-epic card that carries neither sign-off
+# (DRE-5900): the lane whose exit stamps the routing verdict it lacks. The same
+# lane as an amendment's, for a different reason — here the CARD is unread,
+# the plan is not in question.
+SIGN_OFF_STATE = "Planning"
+
 # The planning shape (DRE-2843) that means "this card is an epic". Named here
 # rather than derived: the vocabulary carries no "which of these is the epic"
 # marker to read, and `planning_shape` would have to be imported and its config
@@ -337,9 +343,26 @@ def verdict_problem(kind: str, verdict) -> str | None:
 
 
 def carries_verdict(comment_bodies) -> bool:
-    """Does this card carry a mid-epic verdict? Reads the marker, never "some
-    human said something" — a chatty card is not an approved one."""
-    return any(VERDICT_TAG in (b or "") for b in (comment_bodies or []))
+    """Does this card carry a mid-epic sign-off? Reads the marker, never "some
+    human said something" — a chatty card is not an approved one.
+
+    Two markers sign it off (DRE-5900): the `mid-epic-verdict` this route
+    stamps, and any `🧭 routing-verdict`. Both mean a reader looked at the card
+    before an agent could be dispatched at it — Planning writes a routing
+    verdict only after the classifier and the pre-approval critic have read the
+    card, and a hand stamp is a person's deliberate act. Where that verdict
+    SENDS the card is the next gate's question (`routing_verdict.
+    promotion_refusal`), so a PARKED card still stays put. Until DRE-5900 only
+    the first counted, and DRE-5806 went round Planning three times collecting
+    routing verdicts that could never clear this refusal.
+    """
+    bodies = list(comment_bodies or [])
+    if any(VERDICT_TAG in (b or "") for b in bodies):
+        return True
+    # Imported late: routing_verdict reads this module for `is_epic`.
+    import routing_verdict
+
+    return bool(routing_verdict.verdicts_on(bodies))
 
 
 # --- the derivation: what counts as added mid-epic ---------------------------
@@ -357,31 +380,40 @@ def added_after_green_light(created_at, green_lit_at) -> bool | None:
     return _ts(created_at) > _ts(green_lit_at)
 
 
-def promotion_refusal(identifier, created_at, green_lit_at, comment_bodies) -> str | None:
+def promotion_refusal(identifier, created_at, green_lit_at, comment_bodies,
+                      epic: str | None = None) -> str | None:
     """Why `identifier` must not promote yet, or None to let it through.
 
     The whole rule: a card added to an already-green-lit epic carries a verdict
     before it joins. A card the plan anticipated is untouched, and an epic whose
     green light cannot be read abstains rather than refusing — refusing on an
     unreadable read would freeze every child of every epic.
+
+    The refusal is not a dead end (DRE-5900): the sweep sends the card to
+    Planning, which is where a card missing its verdict gets one, and the text
+    says so. It used to name `mid_epic.py discovery`, which files a NEW sibling
+    and cannot sign off a card that already exists — so DRE-5806 had to be
+    re-filed by hand to get through.
     """
     if added_after_green_light(created_at, green_lit_at) is not True:
         return None
     if carries_verdict(comment_bodies):
         return None
+    of_epic = f"epic {epic}" if epic else "its epic"
     return (
-        f"🚨 {NO_VERDICT_TAG}: {identifier} was added to this epic AFTER it was "
-        "green-lit, and carries no verdict — so the sweep is not promoting it. "
-        "A card added mid-epic dispatches an agent on the next sweep, within "
-        "fifteen minutes, whether or not anyone has read it. That is right for a "
-        "card the plan anticipated and wrong for one nobody has seen.\n\n"
-        "**To let it through:** file it the way the route intends —\n"
-        "`python3 scripts/mid_epic.py discovery <EPIC> --kind addition "
-        '--because "<one line>" --title "…" --body <file>`\n\n'
-        "That records the verdict on the card and the growth on the epic in one "
-        "motion. It does NOT need a new green light: that decision was already "
-        "made for this epic. If the plan no longer describes the work, file an "
-        f"`--kind {AMENDMENT}` instead and the epic goes back to Planning."
+        f"🚨 {NO_VERDICT_TAG}: {identifier} was added to {of_epic} AFTER it "
+        "was green-lit, and carries neither a mid-epic verdict nor a routing "
+        "verdict — so the sweep is not promoting it, and has sent it to "
+        f"`{SIGN_OFF_STATE}` for a routing verdict.\n\n"
+        "**Why:** a card added mid-epic dispatches an agent on the next sweep, "
+        "within fifteen minutes, whether or not anyone has read it. That is "
+        "right for a card the plan anticipated and wrong for one nobody has "
+        f"seen. {SIGN_OFF_STATE} reads the card and stamps the routing verdict "
+        "that says who builds it; back in Backlog with that verdict, it "
+        "promotes as any other child does.\n\n"
+        "It does NOT need a new green light: that decision was already made "
+        f"for {of_epic}. If the plan no longer describes the work, the epic "
+        f"needs an {AMENDMENT} instead."
     )
 
 
@@ -565,10 +597,17 @@ def unrecorded_additions(children, green_lit_at, recorded_ids) -> list[str]:
 # extra request, so the count costs its own pages and nothing more. The count
 # itself is NOT a field on this query: Linear's `CommentConnection` has no
 # `totalCount` — proved against the live API, see `linear_ops`.
+#
+# `history(first: 50)` is the fifty NEWEST entries (DRE-5900): Linear's
+# `last: n` is the n OLDEST (DRE-5034, tests/fixtures/dre-5034-history-
+# 2026-09-29.json), and an epic past fifty entries — DRE-3624 — had its newest
+# green light outside that read, so every card planned between its first and
+# its latest green light read as added after it. `green_light_from` takes the
+# max of what it is given, so only coverage matters, never order.
 _EPIC_QUERY = """query($id: String!) { issue(id: $id) {
      id identifier description state { name }
      children(first: 250) { nodes { identifier createdAt } }
-     history(last: 50) { nodes { createdAt toState { name } } }
+     history(first: 50) { nodes { createdAt toState { name } } }
    } }"""
 
 
@@ -658,8 +697,10 @@ def _add(linear_ops, epic, because, title, body, labels, verdict, why) -> str:
     ORDER IS LOAD-BEARING. The card is created, THEN it is stamped with its
     routing verdict, THEN the mid-epic verdict is posted, THEN the epic's
     artifact is updated. A crash between any two leaves the safe half: a card
-    with no mid-epic verdict cannot promote (promotion_refusal), and a card the
-    artifact never recorded is surfaced on the next sweep.
+    with neither verdict cannot promote (promotion_refusal), one carrying its
+    routing stamp was read by whoever filed it and is signed off by that stamp
+    (DRE-5900), and a card the artifact never recorded is surfaced on the next
+    sweep.
 
     The routing stamp sits FIRST of the three because the lane guard judges the
     create itself and reads that comment (DRE-3342): every write after it can be
