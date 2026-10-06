@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -1018,6 +1019,30 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
     # --- the flag half -----------------------------------------------------
     def test_the_planner_workflow_declares_no_skip_flag(self):
         assert planning_escalation.workflow_problems(WF.read_text(encoding="utf-8")) == []
+
+    def test_reading_the_shipped_workflow_takes_well_under_a_second(self):
+        """The routing-step search backtracked exponentially (DRE-5948).
+
+        Its body alternation offered a deeper-indented line two ways — `\\1  `
+        already admits every `\\1    ` line — so each failed start re-tried
+        every split of every step body. plan.yml grew until one search took
+        ~9 seconds and this module ~17 minutes, which sank the unit-test part
+        that holds it past its 30-minute cap (job 112103121070, 82% at the
+        cancel). Run in a child process so the old pattern fails here on the
+        clock instead of hanging the runner."""
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "import pathlib, planning_escalation; "
+            "planning_escalation.workflow_problems("
+            "pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))"
+        )
+        try:
+            subprocess.run(
+                [sys.executable, "-c", code, str(ROOT / "scripts"), str(WF)],
+                check=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("reading plan.yml for a way past Planning took over 10s")
 
     def test_an_input_that_skips_planning_is_a_problem(self):
         text = WF.read_text(encoding="utf-8").replace(
