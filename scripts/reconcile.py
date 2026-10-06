@@ -192,6 +192,7 @@ import plan_run  # noqa: E402
 import pipeline_act  # noqa: E402
 # DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
 # turn for a planner is not a dead planner, and its wait has its own bound.
+import planning_escalation  # noqa: E402 — the plain-English check for CEO-facing text
 import planner_queue  # noqa: E402
 # DRE-5435: the one repo whose sweep releases the groom queue — the repo that
 # starts waiting epics (DRE-5152), named once there. DRE-5152's two phases
@@ -4114,6 +4115,245 @@ def advance_urgent_intake() -> set[str]:
             f"{len(moved)} by this sweep)"
         )
     return moved
+
+
+# --- an Intake card that blocks work in flow, named (DRE-4152) --------------
+#
+# Point 4 of the CEO's signed console answer of 2026-09-17 09:57 PT, recorded
+# on DRE-4141. A card waiting in Intake can be the `blockedBy` of a card that is
+# already being worked, and nothing said so: the blocked card just sat, and the
+# blocker looked like any other Intake card. Measured that day, six Intake
+# cards blocked work in flow and none was a child of a running epic, so the
+# running-epic rule did not reach them.
+#
+# Whether the blocker jumps the queue is a judgement about that card, and the
+# judgement stays with a person. So this phase SAYS it, once per (blocker,
+# blocked) pair, where the CEO already reads — the blocked card's epic, or the
+# blocked card itself when it has none — names the two ways on (raise it to
+# Urgent, which the fast path above then carries to Planning, or approve it in
+# the next groom batch), and moves nothing. No lane write, no label, nothing
+# filed in Triage or Green Light: a notification is not a card.
+#
+# WHAT COUNTS AS IN FLOW: a card in Todo, In Progress or In Review, or a
+# Backlog child of an In Progress epic — the card's own list, written here
+# because it IS the rule. A Backlog card under no running epic is waiting like
+# its blocker is, and a card in Intake or Planning is not being worked at all.
+#
+# ONLY THE RELATION COUNTS. A `**Blocked by:**` line or a sentence saying
+# "blocked by" is prose (standards/card-quality.md), and prose never reaches
+# this phase: it reads the board's `blocks` relations and nothing else.
+#
+# THIS REPO'S CARDS ONLY. An Intake card carries no `repo:` label, so the
+# blocker is anybody's; the BLOCKED card carries one, and the pair belongs to
+# that repo's sweep. One owner per pair is what keeps "once" from being two
+# sweeps racing to the same epic — and it keeps this phase off the fleet-wide
+# writer list (`OFF_RAIL_SKIPPED`): it writes on its own repo's cards and their
+# epics, and nowhere else.
+#
+# COST: nothing on a pass with an empty Intake or nothing in a work lane — both
+# answered off the one board read the pass already made. Otherwise ONE paged
+# read of the cards that could be blocked, relations inline; each target's
+# thread comes off the pass's cache, read whole only when it is past the window.
+
+# Opens the notice and every run-log line, and keys "once": a notice carries
+# `<opener>: <blocker> holds up <blocked>` on its first line, and the sweep
+# reads that pair back off the target's whole thread before posting another.
+# An OPENER, not an act tag: the notice is a report — it holds nothing, hands
+# the work to nobody and leaves every card exactly where it was — and is
+# declared `not-an-act` in config/pipeline-acts.json's `unconverted` block.
+INTAKE_BLOCKER_OPENER = "intake-blocker"
+
+#: The work lanes a blocked card is in flow in, by the card's own list.
+INTAKE_BLOCKED_LANES = ("Todo", "In Progress", "In Review")
+
+_INTAKE_BLOCKER_KEY = re.compile(
+    rf"{re.escape(INTAKE_BLOCKER_OPENER)}: (DRE-\d+) holds up (DRE-\d+)(?!\d)"
+)
+
+# The cards that could be blocked, read with their relations and their epic.
+# The filter is the rule — the work lanes, or Backlog under a running epic —
+# narrowed to this repo's label the way the idle check's `IDLE_QUERY` is, so
+# the read is this repo's work and not the team's (one page, not several). The
+# sweep checks all three again on what comes back, so a looser answer never
+# widens it. Like the idle check, it does not see a card routed only by the
+# deprecated `**Repo:**` stamp.
+_INTAKE_BLOCKED_QUERY = """query($needle: String!, $states: [String!]!, $epicStates: [String!]!,
+         $after: String) {
+  issues(first: 100, after: $after, filter: {
+    team: {key: {eq: "DRE"}},
+    labels: {name: {containsIgnoreCase: $needle}},
+    or: [
+      {state: {name: {in: $states}}},
+      {state: {name: {eq: "Backlog"}}, parent: {state: {name: {in: $epicStates}}}}
+    ]
+  }) { nodes {
+    id identifier title description
+    state { name } labels { nodes { name } }
+    parent { identifier title state { name } }
+    inverseRelations(first: %d) {
+      pageInfo { hasNextPage endCursor }
+      nodes { type issue { identifier title state { name } } }
+    }
+  } pageInfo { hasNextPage endCursor } } }"""  # % INVERSE_PAGE, defined further down
+
+
+def _in_flow(card: dict) -> bool:
+    """Is this card being worked, by the rule's own reading?"""
+    lane = (card.get("state") or {}).get("name")
+    if lane in INTAKE_BLOCKED_LANES:
+        return True
+    parent = card.get("parent") or {}
+    return lane == BACKLOG_LANE and (
+        (parent.get("state") or {}).get("name") in EPIC_ACTIVE_STATES
+    )
+
+
+def intake_blocker_pairs(cards: list[dict]) -> list[tuple[dict, dict]]:
+    """Every (blocker, blocked) pair in `cards`: an Intake card on a `blocks`
+    relation of a card of this repo's that is in flow. Read off the relation
+    alone — a description is never consulted. Ordered by blocked card, then
+    blocker, so every pass lists them the same way."""
+    pairs = []
+    for blocked in cards:
+        if not _in_flow(blocked) or card_repo(blocked) != REPO_SLUG:
+            continue
+        for rel in (blocked.get("inverseRelations") or {}).get("nodes") or []:
+            blocker = rel.get("issue") or {}
+            if rel.get("type") != "blocks" or not blocker.get("identifier"):
+                continue
+            if (blocker.get("state") or {}).get("name") != INTAKE_LANE[0]:
+                continue
+            pairs.append((blocker, blocked))
+    return sorted(pairs, key=lambda p: (_card_number(p[1]["identifier"]),
+                                        _card_number(p[0]["identifier"])))
+
+
+def _intake_blocker_target(blocked: dict) -> str:
+    """The card the notice goes on: the blocked card's epic, else itself."""
+    return (blocked.get("parent") or {}).get("identifier") or blocked["identifier"]
+
+
+def intake_blocker_notice(blocker: dict, blocked: dict, *, titles: bool = True) -> str:
+    """The one comment for a pair, written to standards/comms.md: purpose in the
+    first sentence, the two ways on, one ask last. Business terms, no code.
+
+    `titles` names each card by its title as well as its number. A title is
+    somebody's text and can carry a path or a command, so the caller sends the
+    notice with numbers alone when the plain-English check refuses it.
+    """
+    def named(card: dict) -> str:
+        title = (card.get("title") or "").strip()
+        ident = card["identifier"]
+        return f"{ident} (\u201c{title}\u201d)" if titles and title else ident
+
+    stop = blocker["identifier"]
+    work = blocked["identifier"]
+    lane = (blocked.get("state") or {}).get("name")
+    if lane == BACKLOG_LANE:
+        epic = (blocked.get("parent") or {}).get("identifier")
+        where = f"waiting in Backlog under {epic}, an epic already In Progress"
+    else:
+        where = f"already {lane}"
+    return (
+        f"🧹 {INTAKE_BLOCKER_OPENER}: {stop} holds up {work}\n\n"
+        f"{named(blocker)} is still waiting in Intake, and it holds up "
+        f"{named(blocked)}, which is {where}. Nothing has been moved.\n\n"
+        f"Whether {stop} goes ahead of the queue is a person's call. "
+        "Two ways to send it on:\n"
+        f"- Raise {stop} to Urgent — the Urgent fast path then takes it to "
+        "Planning without waiting for a groom batch, and Planning still reads "
+        "it like any card.\n"
+        f"- Approve {stop} in the next groom batch.\n\n"
+        f"Until one of those happens, {work} waits. This is said once for this pair."
+    )
+
+
+def _intake_blocker_body(blocker: dict, blocked: dict) -> str:
+    """The notice with titles when it reads as plain English, else without."""
+    body = intake_blocker_notice(blocker, blocked)
+    if planning_escalation.refusal(body) is None:
+        return body
+    return intake_blocker_notice(blocker, blocked, titles=False)
+
+
+def _intake_pairs_said(target: str) -> set[tuple[str, str]]:
+    """The (blocker, blocked) pairs already said on `target`, off its WHOLE
+    thread — "never repeated" must hold on a busy epic too.
+
+    Inside a sweep the default read already is the whole thread (the pass's
+    cache never holds a partial one, DRE-3236), at no request for a card the
+    board read carried. Only an answer as long as the window — one that could
+    have been cut there — is read again whole.
+    """
+    bodies = linear_ops.comment_bodies(target)
+    if len(bodies) >= linear_ops.COMMENT_WINDOW:
+        bodies = linear_ops.comment_bodies(target, whole_thread=True)
+    return {
+        m.groups()
+        for body in bodies
+        for m in _INTAKE_BLOCKER_KEY.finditer(body or "")
+    }
+
+
+def report_intake_blockers() -> list[tuple[str, str]]:
+    """Name each Intake card that blocks this repo's work in flow, once, and
+    move nothing (DRE-4152).
+
+    Every pass lists every pair in the run log, said already or said now, and
+    ends with the count — so how many there are is visible without opening
+    Linear. Returns the pairs as (blocker, blocked) identifiers.
+
+    Raises whatever a Linear READ raises — `main` records it as a read
+    failure, never as "no pairs". A notice that could not be posted is a write
+    failure on the fail-loudly rail; the next pass finds the pair unsaid and
+    tries again.
+    """
+    tag = INTAKE_BLOCKER_OPENER
+    if _idle_pass:
+        raise BoardIdle(_idle_pass[0])  # nothing of this repo's is in flow
+    intake = [c for c in active_cards(INTAKE_LANE) if c["state"]["name"] == INTAKE_LANE[0]]
+    working = active_cards(INTAKE_BLOCKED_LANES)
+    if not intake or not working:
+        print(f"{tag}: 0 Intake cards hold up work in flow — "
+              f"{len(intake)} in Intake, {len(working)} in "
+              f"{', '.join(INTAKE_BLOCKED_LANES)}, so nothing was read")
+        return []
+    cards = linear_ops.gql_paged(
+        _INTAKE_BLOCKED_QUERY % INVERSE_PAGE,
+        {"needle": REPO_SLUG, "states": list(INTAKE_BLOCKED_LANES),
+         "epicStates": list(EPIC_ACTIVE_STATES)},
+    )
+    complete_inverse_relations(cards)
+    pairs = intake_blocker_pairs(cards)
+    said: dict[str, set[tuple[str, str]]] = {}
+    for blocker, blocked in pairs:
+        stop, work = blocker["identifier"], blocked["identifier"]
+        target = _intake_blocker_target(blocked)
+        if target not in said:
+            said[target] = _intake_pairs_said(target)
+        if (stop, work) in said[target]:
+            print(f"{tag}: {stop} (Intake) holds up {work} "
+                  f"({blocked['state']['name']}) — already said on {target}")
+            continue
+        try:
+            full = linear_ops.cmd_comment(target, _intake_blocker_body(blocker, blocked))
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{tag}: {stop} holds up {work} — notice on {target}: {e}")
+            print(f"ERROR: {tag}: could not say {stop} holds up {work} on {target}: {e}",
+                  file=sys.stderr)
+            continue
+        if full is not None:
+            # Linear refused the comment because the thread is full (DRE-3343):
+            # nothing landed, so nothing is claimed — the next pass tries again.
+            print(f"{tag}: {stop} (Intake) holds up {work} "
+                  f"({blocked['state']['name']}) — NOT said on {target}: {full}")
+            continue
+        said[target].add((stop, work))
+        print(f"{tag}: {stop} (Intake) holds up {work} "
+              f"({blocked['state']['name']}) — said on {target} now")
+    print(f"{tag}: {len(pairs)} pair(s) of an Intake card holding up work in flow "
+          f"across {len(cards)} card(s) read — nothing moved, nothing labeled")
+    return [(b["identifier"], w["identifier"]) for b, w in pairs]
 
 
 # --- branch ownership: ONE definition, three named questions (DRE-2426) ------
@@ -12002,6 +12242,21 @@ def main(
             except linear_ops.LinearError as e:
                 _read_failures.append(f"urgent fast path: {e}")
                 print(f"ERROR: advance_urgent_intake: {e}", file=sys.stderr)
+        # An Intake card that blocks this repo's work in flow, named once on
+        # the blocked card's epic (DRE-4152). After the fast path, so a card it
+        # just carried to Planning is not named as waiting. Moves nothing, so
+        # it is not on the off-rail list: it writes on this repo's cards only.
+        # Its own try: an unreadable relation set is a READ failure — never
+        # "no pairs" — and must not cost the sweep the rest of its work.
+        try:
+            with _phase("report_intake_blockers"):
+                report_intake_blockers()
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"intake blockers: {e}")
+            print(f"ERROR: report_intake_blockers: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
+            _write_failures.append(f"intake blockers: {e}")
+            print(f"ERROR: report_intake_blockers: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones

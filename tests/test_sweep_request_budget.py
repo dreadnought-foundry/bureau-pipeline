@@ -439,7 +439,13 @@ def test_the_board_is_read_once_per_sweep():
     And the idle check (CEO, 2026-10-02): `reconcile.IDLE_QUERY` asks whether
     ONE card of this repo is in motion or in Backlog — `first: 1`, ids only,
     filtered by the repo label. It is not a board read and serves no reader;
-    it is what lets an idle repo skip the board read altogether."""
+    it is what lets an idle repo skip the board read altogether.
+
+    And the Intake blocker notice (DRE-4152): `reconcile._INTAKE_BLOCKED_QUERY`
+    reads this repo's work-lane cards — and Backlog under a running epic — WITH
+    their relations, which the board read does not carry. One paged read,
+    filtered by the repo label, asked only when Intake and a work lane both
+    hold a card on the board read."""
     active, backlog = _fixed_board()
     fake = _run_sweep(FakeLinear(active=active, backlog=backlog))
     lanes = [tuple(v["states"]) for v in fake.board_variables]
@@ -449,9 +455,10 @@ def test_the_board_is_read_once_per_sweep():
         f"{len(swept)} reads of SWEPT_LANES in one sweep — active_cards() must "
         "be read once and shared"
     )
-    assert others == [tuple(reconcile.IDLE_LANES), ("Green Light",)], (
-        f"the only lane reads outside SWEPT_LANES are the idle check's and the "
-        f"planner line's Green Light: {others}"
+    assert others == [tuple(reconcile.IDLE_LANES),
+                      tuple(reconcile.INTAKE_BLOCKED_LANES), ("Green Light",)], (
+        f"the only lane reads outside SWEPT_LANES are the idle check's, the "
+        f"Intake blocker notice's and the planner line's Green Light: {others}"
     )
     assert reconcile.IDLE_QUERY in fake.queries
 
@@ -497,7 +504,16 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # fleet-wide Planning and Intake phases still run — the check plus their two
 # reads, three in all (`test_reconcile_idle_sweep.py`). With the read door on,
 # the check is asked of the door and costs no Linear request.
-SWEEP_REQUEST_BUDGET = 4
+#
+# 4 -> 5 (DRE-4152, point 4 of the CEO's signed answer of 2026-09-17): the
+# Intake blocker notice. An Intake card that blocks this repo's work in flow is
+# named once on the blocked card's epic, and which cards block which is a
+# RELATION — the board read carries none. So the phase reads this repo's cards
+# in Todo, In Progress and In Review, and Backlog under an In Progress epic,
+# with their relations inline: one paged read, filtered by the repo label, and
+# asked only when the board read already holds a card in Intake and one in a
+# work lane. A function of the lanes, never of the cards in them.
+SWEEP_REQUEST_BUDGET = 5
 
 
 def test_one_sweep_stays_within_the_request_budget():
