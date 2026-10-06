@@ -330,9 +330,11 @@ the release carrying its siblings' merges live. A card in `Green Light` whose
 park named the CEO's press is dispatched once per signed answer of his. A card
 in `In Review` whose record pull request the critic sent back
 (`REQUEST_CHANGES` at the head) is dispatched again to amend the record, when no
-receipt is newer than that verdict or the newer one's run reads `dead` — at
-most twice per pull request, then held with `🔬 proof-waiting` for an operator
-(DRE-5931). It is read after the first runs, under the same one-per-pass cap,
+receipt is newer than that verdict or the newer one's run reads `dead` or
+`never-started` — at most twice per pull request, then held with
+`🔬 proof-waiting` for an operator (DRE-5931). A newer run that reads
+`finished` while the verdict still stands at the head is held the same way at
+once, since it amended nothing the critic could read. It is read after the first runs, under the same one-per-pass cap,
 and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:

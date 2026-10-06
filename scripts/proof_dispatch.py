@@ -62,13 +62,17 @@ branch (`proof_record_branch`) and whose newest critic verdict at the head is
 `REQUEST_CHANGES` (`reconcile.critic_comments` / `standing_verdict`) is
 dispatched once more, `re-run after the critic's findings at <sha7>`, when no
 `🔬 proof-run` receipt is newer than that verdict (the findings are
-unanswered), or the newest is and its run reads `dead` (the re-run died before
-it amended the record). The run resumes its branch and amends the record, so
-the critic reads it again on the same pull request. Three things stop it, each
+unanswered), or the newest is and its run reads `dead` or `never-started` (the
+re-run died, or never began, before it amended the record). The run resumes
+its branch and amends the record, so the critic reads it again on the same
+pull request. A newer receipt whose run reads `finished` with the verdict
+still at the head amended nothing the critic could read: one hold, for an
+operator, never a guess at another run. Three things stop it, each
 named: a `🔬 proof-waiting` hold nothing discharged, a run `running` or
 `unknown`, and the budget — two re-runs per pull request, counted off the
 receipts whose count opens `re-run` posted after it opened, apart from the
-first-run budget. After two, one hold, and the card is left for an operator.
+first-run budget, so a re-run that never began still spends one. After two,
+one hold, and the card is left for an operator.
 Conditions 2, 3 and 7 are not read for it: the record is open on the release
 its first run read.
 
@@ -172,6 +176,15 @@ EXHAUSTED_NEEDS = ("an operator reading the two 🔬 proof-run receipts and the 
 RERUN_EXHAUSTED_OBSERVED = "the record was sent back twice after re-observation"
 RERUN_EXHAUSTED_NEEDS = ("an operator reading the critic's findings and the two "
                          "re-run receipts")
+#: The run states that leave a re-run newer than the verdict owed again: it
+#: died, or it never began. Either way its receipt still spends the budget.
+RERUN_AGAIN = ("dead", "never-started")
+#: The hold after a re-run that finished with the verdict still at the head:
+#: it amended nothing the critic could read, and sending it again is a guess.
+RERUN_UNANSWERED_OBSERVED = ("the re-run finished and the critic's findings "
+                             "still stand at the record's head")
+RERUN_UNANSWERED_NEEDS = ("an operator reading the critic's findings and the "
+                          "re-run's thread")
 
 #: What a hold names when only the CEO's own login can discharge it (DRE-5925).
 CEO_PRESS = "the CEO's press"
@@ -460,11 +473,7 @@ class _Pass:
         """Condition 6: the reason this dispatch spends, or the refusal."""
         ident = card["identifier"]
         if got.dispatches >= FIRST_RUN_BUDGET:
-            already = any(_first_line(v.body).startswith(
-                linear_ops.proof_waiting_line(EXHAUSTED_OBSERVED, EXHAUSTED_NEEDS))
-                for v in voices)
-            if not already:
-                self._hold(ident, EXHAUSTED_OBSERVED, EXHAUSTED_NEEDS)
+            self._hold_once(ident, voices, EXHAUSTED_OBSERVED, EXHAUSTED_NEEDS)
             raise _condition(6, "budget", f"{got.dispatches} first-run "
                                           "dispatches and none finished — "
                                           "never dispatched again by this "
@@ -487,6 +496,13 @@ class _Pass:
         except Exception as error:  # noqa: BLE001
             self.tally.failures.append(f"{ident}: the hold could not be posted: {error}")
             _say(ident, f"ERROR: the hold could not be posted: {error}")
+
+    def _hold_once(self, ident: str, voices: list, observed: str,
+                   needs: str) -> None:
+        """`_hold`, unless the thread already carries this exact hold line."""
+        line = linear_ops.proof_waiting_line(observed, needs)
+        if not any(_first_line(v.body).startswith(line) for v in voices):
+            self._hold(ident, observed, needs)
 
     def _released(self, issue: dict, ident: str) -> None:
         """Condition 7: the release carrying the siblings' merges is live."""
@@ -622,7 +638,14 @@ class _Pass:
                     if v.kind == spoken_thread.PIPELINE
                     and (r := proof_run_state.receipt(v.body or "")) is not None]
         newer = [r for when, r in receipts if when is None or when > sent_back]
-        if newer and got.state != "dead":
+        if newer and got.state == "finished":
+            self._hold_once(ident, voices, RERUN_UNANSWERED_OBSERVED,
+                            RERUN_UNANSWERED_NEEDS)
+            raise _Refused(f"re-run: the run after the proof-run receipt of "
+                           f"{newer[-1].at} reads finished, and the critic's "
+                           f"REQUEST_CHANGES still stands at {head[:7]} — held "
+                           f"for an operator: {why}", "held")
+        if newer and got.state not in RERUN_AGAIN:
             raise _Refused(f"re-run: the findings at {head[:7]} are answered — "
                            f"the proof-run receipt of {newer[-1].at} is newer "
                            f"than the verdict and its run reads {got.state}: "
@@ -632,12 +655,8 @@ class _Pass:
                     if r.count.startswith("re-run")
                     and (opened is None or when is None or when > opened))
         if spent >= RERUN_BUDGET:
-            already = any(_first_line(v.body).startswith(
-                linear_ops.proof_waiting_line(RERUN_EXHAUSTED_OBSERVED,
-                                              RERUN_EXHAUSTED_NEEDS))
-                for v in voices)
-            if not already:
-                self._hold(ident, RERUN_EXHAUSTED_OBSERVED, RERUN_EXHAUSTED_NEEDS)
+            self._hold_once(ident, voices, RERUN_EXHAUSTED_OBSERVED,
+                            RERUN_EXHAUSTED_NEEDS)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
                            "it opened and the critic sent it back again; never "
                            "a third", "held")

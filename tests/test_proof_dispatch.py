@@ -1042,14 +1042,90 @@ def test_rerun_dead_is_read_through_the_real_reader_with_the_record_open(
     assert h.posted[0][1].split("\n", 1)[0].endswith("(re-run 2 of 2)")
 
 
+def test_rerun_a_newer_receipt_that_never_started_dispatches_the_second(
+        monkeypatch, capsys):
+    """A re-run dispatched but never begun is owed again, and spent one."""
+    thread = _sent_back(rerun_receipt(50, 1))
+    h, _ = _rerun_pass(monkeypatch, thread=thread, run="never-started",
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 2 of 2)")
+
+
+def test_rerun_two_that_never_started_reach_the_hold(monkeypatch, capsys):
+    thread = _sent_back(rerun_receipt(80, 1), rerun_receipt(50, 2))
+    h, tally = _rerun_pass(monkeypatch, thread=thread, run="never-started",
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert tally.held == 1
+
+
+def test_rerun_never_started_is_read_through_the_real_reader(monkeypatch, capsys):
+    """Past the queued window with no `🧠 model-attempt`: the real reader says
+    never-started, and the re-run is sent again."""
+    thread = _sent_back(rerun_receipt(50, 1))
+    reads = {
+        f"repos/{REPO}/pulls?head=dreadnought-foundry:agent/DRE-5930-"
+        "proof-record&state=all&per_page=100": [
+            {"number": 900, "state": "open", "html_url": "u",
+             "head": {"ref": "agent/DRE-5930-proof-record"}}],
+    }
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 100))})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: reads[path],
+        find_pr=h.find_pr, run_state=proof_run_state.reading,
+        release=h.release, fire=h.fire, voices=fake_voices, now=NOW,
+        find_record=h.find_record)
+    assert [f[2] for f in h.fired] == [RERUN]
+    assert h.posted[0][1].split("\n", 1)[0].endswith("(re-run 2 of 2)")
+
+
+RERUN_UNANSWERED = ("the re-run finished and the critic's findings still stand "
+                    "at the record's head",
+                    "an operator reading the critic's findings and the re-run's "
+                    "thread")
+
+
+def test_rerun_finished_with_the_verdict_still_at_the_head_is_held_once(
+        monkeypatch, capsys):
+    """The re-run said 5/5 yet the critic's REQUEST_CHANGES is still at the
+    head: nothing it amended reached the critic. Held, never sent again."""
+    done = (rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(*done),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_UNANSWERED)]
+    assert tally.held == 1
+    assert any("reads finished" in line and SHA7 in line for line in lines), lines
+
+    # The next pass reads the hold it posted and names it; nothing is posted.
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(*done,
+                                                          hold(*RERUN_UNANSWERED, 10)),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the re-run finished" in line
+               for line in lines), lines
+
+
+def test_rerun_finished_hold_in_the_dry_run_writes_nothing(monkeypatch, capsys):
+    done = (rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, _ = _rerun_pass(monkeypatch, thread=_sent_back(*done), live=False,
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: hold DRE-5930 — {RERUN_UNANSWERED[0]}" in _lines(capsys)
+
+
 def _nothing_cases():
     rc = verdict("REQUEST_CHANGES", 100)
     return {
         "approve-at-head": (_sent_back(), record(verdict("APPROVE", 100)),
                             "finished", "APPROVE"),
-        "older-verdict-finished": (_sent_back(rerun_receipt(50, 1),
-                                              comment("⏳ 5/5 record amended", 20)),
-                                   record(rc), "finished", "finished"),
         "older-verdict-running": (_sent_back(rerun_receipt(50, 1)), record(rc),
                                   "running", "running"),
         "proof-waiting": (_sent_back(hold("being observed by hand",
