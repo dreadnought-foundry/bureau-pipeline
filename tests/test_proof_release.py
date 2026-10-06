@@ -125,7 +125,8 @@ class NoReleaseRecord(unittest.TestCase):
     """(a) No `release.json` — there is no release to wait for."""
 
     def test_a_missing_release_json_reads_ready_and_says_so(self):
-        read = Reads({RELEASE_JSON: proof_release.Missing("HTTP 404: Not Found")})
+        read = Reads({RELEASE_JSON: proof_release.Missing("HTTP 404: Not Found"),
+                      f"repos/{REPO}": {"full_name": REPO}})
         got = proof_release.reading(
             REPO, [proof_release.Merge("DRE-1", 1, SHA, ["a.py"])], read=read)
         self.assertEqual(got.state, "ready")
@@ -133,10 +134,20 @@ class NoReleaseRecord(unittest.TestCase):
             "ready — no release record at .github/bureau/release.json: "
             "nothing to wait for"])
 
+    def test_a_404_from_a_repo_the_token_cannot_see_is_unknown(self):
+        """A private repo the token cannot read answers 404 for every file:
+        that is an unreadable record, never "no release to wait for"."""
+        read = Reads({RELEASE_JSON: proof_release.Missing("HTTP 404"),
+                      f"repos/{REPO}": proof_release.Missing("HTTP 404")})
+        got = proof_release.reading(
+            REPO, [proof_release.Merge("DRE-1", 1, SHA, ["a.py"])], read=read)
+        self.assertEqual(got.state, "unknown")
+
     def test_a_404_raised_as_plain_text_is_also_no_file(self):
         """The dispatcher may hand its own `gh api` read in: a 404 is read
         off the error, not only off this module's exception type."""
-        read = Reads({RELEASE_JSON: RuntimeError("gh: Not Found (HTTP 404)")})
+        read = Reads({RELEASE_JSON: RuntimeError("gh: Not Found (HTTP 404)"),
+                      f"repos/{REPO}": {"full_name": REPO}})
         got = proof_release.reading(
             REPO, [proof_release.Merge("DRE-1", 1, SHA, ["a.py"])], read=read)
         self.assertEqual(got.state, "ready")
@@ -367,7 +378,7 @@ class TouchRule(unittest.TestCase):
                          ["anything/at/all.c"])
 
     def test_glob_semantics_match_git(self):
-        """The same files git's pathspec selects, through `_pathspec`, for
+        """The same files git's diff selects, through `_pathspec`, for
         each shape a `release.json` declares — the parity a regex can lose."""
         files = ["a.md", "top.py", "docs/a/b.py", "portals/docs/c.py",
                  "portals/x.md", "portals/src/y.ts", "src/x/y.py",
@@ -392,9 +403,11 @@ class TouchRule(unittest.TestCase):
             subprocess.run(["git", "-C", tmp, "add", "."], check=True)
             for paths, ignore in shapes:
                 spec = release_train._pathspec(paths, ignore)
+                # `git diff`, the train's own read (`lag_state`): every file
+                # is staged against the empty tree, so the diff is the list
                 listed = subprocess.run(
-                    ["git", "-C", tmp, "ls-files", "--", *spec] if spec
-                    else ["git", "-C", tmp, "ls-files"],
+                    ["git", "-C", tmp, "diff", "--cached", "--name-only",
+                     *(["--", *spec] if spec else [])],
                     capture_output=True, text=True, check=True).stdout.split()
                 ours = [f for f in files
                         if proof_release.under(f, paths)
@@ -481,7 +494,8 @@ class Cli(unittest.TestCase):
             "does not carry #866 (4b88482) for DRE-5590"])
 
     def test_ready_exits_0(self):
-        read = Reads({RELEASE_JSON: proof_release.Missing("HTTP 404")})
+        read = Reads({RELEASE_JSON: proof_release.Missing("HTTP 404"),
+                      f"repos/{REPO}": {"full_name": REPO}})
         code, printed = self._run(
             ["check", "--repo", REPO, "--merge", f"DRE-1:1:{SHA}:a.py",
              "--merge", f"DRE-2:2:{SHA}"], read)
