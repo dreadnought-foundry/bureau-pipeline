@@ -205,12 +205,32 @@ def test_a_linear_marker_a_window_old_is_parked_naming_its_time_plus_the_window(
     assert "has not brought it back" in note, note
 
 
-def test_a_marker_with_no_reset_and_no_created_at_is_skipped_as_of_unknown_age(capsys):
+def test_a_marker_with_no_reset_and_no_created_at_is_past_its_wait():
+    """No reset and no readable `createdAt` never skips forever: the age gate
+    already found the card a window still, and posting the marker bumped
+    `updatedAt`, so the marker is at least a window old and the wait is over."""
     flagged, comment, state = _run_watchdog([card((linear_marker(), None))])
+    note = _assert_parked(flagged, comment, state)
+    assert "could not be read" in note, note
+    assert "has not brought it back" in note, note
+
+
+def test_a_card_the_recovery_answered_this_pass_is_left_alone(capsys):
+    """The board snapshot predates the recovery's writes, so a card it
+    re-entered or handed off this pass still reads its old marker here. Past
+    its wait, it would be parked a moment after the recovery answered it."""
+    reconcile._limit_recovered.add(IDENT)
+    flagged, comment, state = _run_watchdog(
+        [card((claude_marker(_ago(WINDOW + 5)), _ago(WINDOW + 400)))])
     _assert_skipped(flagged, comment, state)
-    out = capsys.readouterr().out
-    assert f"watchdog: {IDENT} is waiting on a linear limit death (classify stage)" in out
-    assert "age is unknown" in out, out
+    assert (f"watchdog: {IDENT} was answered by the limit recovery this pass"
+            in capsys.readouterr().out)
+
+
+def test_the_set_of_answered_cards_is_the_passs_own():
+    reconcile._limit_recovered.add(IDENT)
+    reconcile.reset_sweep_cards()
+    assert reconcile._limit_recovered == set()
 
 
 # --------------------------------------------------------------------------
@@ -286,14 +306,9 @@ def _full_sweep_mocks(cards):
     }
 
 
-def test_a_full_sweep_reenters_the_reset_card_and_posts_no_stall_park():
-    """A Planning card a window old whose assumed reset passed a minute ago.
-    The recovery bounces it Intake → Planning under its `window reset at`
-    receipt, and the watchdog — reading the same board later in the same
-    pass — posts no stall-park note. MUTATION CHECK: run `flag_stranded`
-    before `recover_limit_deaths` in `main()` and the watchdog looks first."""
-    reset = _ago(1)
-    dead = card((claude_marker(reset), _ago(WINDOW + 1)), labels=("repo:agent-bureau",))
+def _sweep(dead):
+    """One `main()` over a board holding `dead`. Returns the state moves and,
+    in order, every comment posted and each time the watchdog ran."""
     events: list[str] = []
     real_watchdog = reconcile.flag_stalled_planning
 
@@ -311,12 +326,59 @@ def test_a_full_sweep_reenters_the_reset_card_and_posts_no_stall_park():
          patch.object(reconcile.linear_ops, "cmd_comment", side_effect=comment), \
          patch.object(reconcile.linear_ops, "add_label"):
         reconcile.main()
-    moves = [tuple(c.args) for c in cmd_state.call_args_list]
+    assert "watchdog" in events, "the sweep never ran the Planning watchdog"
+    assert reconcile._write_failures == []
+    return [tuple(c.args) for c in cmd_state.call_args_list], events
+
+
+def _assert_reentered_not_parked(moves, events, trigger):
     assert moves == [(IDENT, "Intake"), (IDENT, "Planning")], moves
     receipts = [e for e in events if e.startswith(limit_recovery.RECOVERY_MARK)]
-    assert len(receipts) == 1 and "window reset at" in receipts[0], events
+    assert len(receipts) == 1 and trigger in receipts[0], events
     assert not any(dedupe_dispatch.STALL_PARK_TAG in e for e in events), events
-    assert "watchdog" in events, "the sweep never ran the Planning watchdog"
     assert events.index(receipts[0]) < events.index("watchdog"), (
         "the watchdog looked before the recovery re-entered the card")
-    assert reconcile._write_failures == []
+
+
+def test_a_full_sweep_reenters_the_reset_card_and_posts_no_stall_park():
+    """A Planning card a window old whose assumed reset passed a minute ago.
+    The recovery bounces it Intake → Planning under its `window reset at`
+    receipt, and the watchdog — reading the same board later in the same
+    pass — posts no stall-park note. MUTATION CHECK: run `flag_stranded`
+    before `recover_limit_deaths` in `main()` and the watchdog looks first."""
+    reset = _ago(1)
+    dead = card((claude_marker(reset), _ago(WINDOW + 1)), labels=("repo:agent-bureau",))
+    _assert_reentered_not_parked(*_sweep(dead), "window reset at")
+
+
+def test_a_full_sweep_reenters_a_reset_long_past_and_does_not_park_it():
+    """THE ADVERSARIAL TIMING. The reset passed more than a window ago — the
+    sweep was down, or no pass had room — so the watchdog's own clock says
+    the wait is over. The recovery re-enters the card first, and the
+    watchdog, reading the snapshot taken before that, must not park it in
+    the same pass."""
+    dead = card((claude_marker(_ago(WINDOW + 5)), _ago(WINDOW + 400)),
+                labels=("repo:agent-bureau",), minutes_stale=WINDOW + 400)
+    _assert_reentered_not_parked(*_sweep(dead), "window reset at")
+
+
+def test_a_full_sweep_reenters_an_old_linear_marker_and_does_not_park_it():
+    """The common Linear-quota case: a `reset=unknown` marker more than a
+    window old, re-entered on the first board read that answers."""
+    dead = card((linear_marker(), _ago(WINDOW + 5)),
+                labels=("repo:agent-bureau",), minutes_stale=WINDOW + 5)
+    _assert_reentered_not_parked(*_sweep(dead), "Linear's quota answered")
+
+
+def test_a_full_sweep_hands_off_an_old_marker_and_does_not_park_it():
+    """A Claude marker with no reset and no account is handed to a person
+    by the recovery. The hand-off puts the card back on the ordinary clock;
+    the watchdog must not also park it in the pass that told them."""
+    marker = dead_run.LimitDeath(kind="claude", stage="plan", reset=None,
+                                 run_id=RUN).marker()
+    dead = card((marker, _ago(WINDOW + 5)),
+                labels=("repo:agent-bureau",), minutes_stale=WINDOW + 5)
+    moves, events = _sweep(dead)
+    assert moves == [], moves
+    assert any(e.startswith(limit_recovery.HANDOFF_MARK) for e in events), events
+    assert not any(dedupe_dispatch.STALL_PARK_TAG in e for e in events), events
