@@ -163,8 +163,8 @@ default branch that concluded `cancelled` with every non-green job carrying
 that annotation has its failed and cancelled jobs re-run (`gh run rerun <id>
 --failed`), once — its first attempt only — with one `runner-lost:` line in
 the sweep's log and step summary naming the repo, the run, the jobs and the
-reason. The re-run's completion fires the train's `workflow_run` trigger like
-any CI run. A run cancelled by a newer push, by a person or by a timeout is
+reason. The train reads the re-run's result on its next run, as it reads any
+CI result. A run cancelled by a newer push, by a person or by a timeout is
 left alone, and a re-run attempt lost the same way is reported once and never
 re-run again (`scripts/runner_lost.py`).
 
