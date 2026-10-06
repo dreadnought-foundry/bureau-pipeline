@@ -320,6 +320,7 @@ def reading(repo: str, merges: list, *, read: Callable = gh_read) -> Reading:
     """Is the release carrying `merges` live in `repo`? One `Reading`."""
     try:
         data = _release_json(repo, read)
+        declared = release_train.surfaces(data) if data is not None else {}
     except Exception as error:  # noqa: BLE001 — unreadable holds the proof
         return Reading("unknown", [f"unknown — the release record at "
                                    f"{RELEASE_JSON} could not be read: "
@@ -327,7 +328,6 @@ def reading(repo: str, merges: list, *, read: Callable = gh_read) -> Reading:
     if data is None:
         return Reading("ready", [f"ready — no release record at {RELEASE_JSON}: "
                                  "nothing to wait for"])
-    declared = release_train.surfaces(data) if isinstance(data, dict) else {}
     if not declared:
         return Reading("ready", [f"ready — the release record at {RELEASE_JSON} "
                                  "declares no surfaces: nothing to wait for"])

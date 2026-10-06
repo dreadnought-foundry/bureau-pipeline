@@ -291,6 +291,12 @@ class FailedRead(unittest.TestCase):
             REPO, [proof_release.Merge("DRE-1", 1, SHA, ["a.py"])], read=read)
         self.assertEqual(got.state, "unknown")
 
+    def test_f_a_malformed_release_json_is_unknown_never_a_crash(self):
+        read = Reads({RELEASE_JSON: _contents({"surfaces": ["portals"]})})
+        got = proof_release.reading(
+            REPO, [proof_release.Merge("DRE-1", 1, SHA, ["a.py"])], read=read)
+        self.assertEqual(got.state, "unknown")
+
     def test_f_an_unknown_compare_answer_is_unknown(self):
         read, merge = portals("something-new")
         self.assertEqual(proof_release.reading(REPO, [merge], read=read).state,

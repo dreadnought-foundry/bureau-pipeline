@@ -283,7 +283,7 @@ def reading(repo: str, identifier: str, comments: list, viewer: str | None, *,
     if status != "completed":
         return state("running", f"running — run {run} is {status}, started "
                                 f"after the proof-run receipt of {newest.at}")
-    return state("dead", f"dead — run {run} ended {answer.get('conclusion')} at "
+    return state("dead", f"dead — run {run} ended {answer.get('conclusion') or 'with no conclusion'} at "
                          f"{_clock(_when(answer.get('updated_at')))} with no "
                          f"record{_record_clause(record)}")
 
