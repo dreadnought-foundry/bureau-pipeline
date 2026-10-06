@@ -5628,6 +5628,15 @@ def epic_thread(epic: str) -> list | None:
     (standards/console-honesty.md rule 1). `None` is that unknown, and
     `plan_critic.promotion_refusal` reads it as one; an epic with no comments
     at all is a DIFFERENT fact and returns `[]`.
+
+    Where the thread comes from (DRE-5850). In `BUREAU_READ=on` the pass
+    cache already holds it: whole off the work-lane board read when the epic
+    has fifty comments or fewer, or off `_door_epic_threads`' one
+    `comments=all` door read, made before the gate's loop, when it has more.
+    Only an epic the door could not prove whole is read from Linear here —
+    the newest fifty, then older pages, exactly as in `off` and `shadow`,
+    where every thread past the window always is. The viewer is Linear's in
+    every mode: authorship is judged against THIS process's key.
     """
     try:
         return linear_ops.comment_records(epic)
@@ -5638,6 +5647,83 @@ def epic_thread(epic: str) -> list | None:
             file=sys.stderr,
         )
         return None
+
+
+#: The fields `comment_records` reads off every comment: a cached thread that
+#: lacks one is not a thread the gate can be served from.
+_EPIC_THREAD_FIELDS = ("body", "user", "createdAt")
+_IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
+
+
+def _door_epic_threads(epic_ids: Iterable[str]) -> None:
+    """Put the named epics' WHOLE threads in the pass cache from the door
+    (DRE-5850), so `epic_thread` costs no Linear request in `on`.
+
+    One `/cards?comments=all` read for every epic whose thread the pass does
+    not already hold whole. The door answers all-or-nothing, so:
+
+    * FRESH — every thread is whole and goes to the cache
+      (`linear_ops.remember_comments`).
+    * `thread-incomplete` naming some — those are left to Linear, read as
+      today when the gate asks; the rest are asked of the door ONCE more, so
+      this costs at most two door reads per pass.
+    * any other UNKNOWN, or a door that is unavailable — every epic is left
+      to Linear this pass; the client's own rules decide whether the door is
+      used again.
+    * `linear-hold` (or a 429 with the key held) — BoardHeld: the phase is
+      skipped with no Linear call (Stage 2 item 34).
+
+    The viewer is never taken from the door: its `viewer.id` is the
+    console's key, and authorship is judged against THIS process's.
+    `off` and `shadow` ask nothing and print nothing.
+    """
+    if bureau_read.mode() != "on":
+        return
+    wanted = sorted({
+        ident for ident in epic_ids
+        if ident and linear_ops._cached_thread(ident, _EPIC_THREAD_FIELDS) is None
+    })
+    if not wanted:
+        return
+    served: list[str] = []
+    to_linear: list[str] = []
+    incomplete: list[str] = []
+    other: str | None = None
+    ask = wanted
+    for attempt in (1, 2):
+        if not bureau_read.enabled():
+            other, to_linear = "door unavailable", to_linear + ask
+            break
+        try:
+            read = bureau_read.cards(ask, max_age=bureau_read.BOARD_MAX_AGE,
+                                     comments="all", relations=False)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                raise BoardHeld(e.reason) from e
+            named = sorted(set(_IDENTIFIER.findall(e.detail)) & set(ask))
+            if e.reason == "thread-incomplete" and named:
+                incomplete += named
+                to_linear += named
+                ask = [ident for ident in ask if ident not in named]
+                if ask and attempt == 1:
+                    continue
+            else:
+                other = "door unavailable" if e.unavailable else e.reason
+            # The second answer was not whole either: what is left is Linear's
+            # this pass — never a third door read.
+            to_linear += ask
+            break
+        for node in read.nodes:
+            linear_ops.remember_comments(node.get("identifier"), node.get("comments"))
+        served += ask
+        break
+    reasons = []
+    if incomplete:
+        reasons.append(f"thread-incomplete: {', '.join(incomplete)}")
+    if other:
+        reasons.append(other)
+    print(f"promotion: epic threads — {len(served)} from the door in one read, "
+          f"{len(to_linear)} read from Linear ({'; '.join(reasons) or 'none'})")
 
 
 def takes_no_slot(bodies) -> bool:
@@ -5733,13 +5819,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     # the record, so this line spends nothing at all.
     #
     # The same read serves the epic's green light below (DRE-3644).
-    epic_records({
+    gated_epics = {
         (card.get("parent") or {}).get("identifier")
         for card in candidates
         if card_repo(card) == REPO_SLUG
         and ((card.get("parent") or {}).get("state") or {}).get("name")
         in EPIC_ACTIVE_STATES
-    })
+    }
+    epic_records(gated_epics)
+    # And the same epics' whole threads, for the second critic's gate below:
+    # ONE door read in `on`, so a thread past fifty comments is not paged
+    # from Linear every pass (DRE-5850). Nothing in `off` and `shadow`.
+    _door_epic_threads(gated_epics)
     for index, card in enumerate(candidates):
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
         # per-repo over the whole team's Backlog, so speaking here would make

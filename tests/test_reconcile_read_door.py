@@ -1284,3 +1284,17 @@ def test_an_epic_thread_already_whole_in_the_pass_is_not_asked_again(monkeypatch
     assert linear.thread_reads() == ["query { viewer { id } }"]
     assert ("promotion: epic threads — 1 from the door in one read, 0 read from Linear "
             "(none)") in capsys.readouterr().out
+
+
+def test_when_every_thread_is_incomplete_the_door_is_asked_once(monkeypatch, capsys):
+    today = _today_thread_reads(monkeypatch)
+    kids, epics, threads = _epic_world()
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.incomplete_threads = {_EPIC_A, _EPIC_B}
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert len(_all_reads(door)) == 1  # nothing left to re-ask
+    assert linear.thread_reads() == today
+    assert ("promotion: epic threads — 0 from the door in one read, 2 read from Linear "
+            f"(thread-incomplete: {_EPIC_A}, {_EPIC_B})") in capsys.readouterr().out

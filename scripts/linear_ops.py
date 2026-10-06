@@ -3755,6 +3755,11 @@ def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict
     `user { id }` for exactly this reader (DRE-3236), and the viewer is read
     once per pass — so the authorship fact is the same one the dedicated
     query carried, at the cost of one request per pass instead of one per epic.
+    In `BUREAU_READ=on` a thread past the fifty-comment window is in the cache
+    too, off the read door's whole-thread (`comments=all`) answer, when the
+    sweep asked for it (`reconcile._door_epic_threads`, DRE-5850); a thread
+    the door could not prove whole is read from Linear here, as in `off`. The
+    viewer is always Linear's: the door's is the console's key, not this one.
 
     `whole_thread` pages past the fifty-comment window outside a pass too, for
     a reader whose answer a truncated thread makes WRONG rather than stale —
