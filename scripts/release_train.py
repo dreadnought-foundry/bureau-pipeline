@@ -2271,7 +2271,11 @@ def render_markdown() -> str:
         "then one release note. It uses the caller's `LINEAR_API_KEY` and never "
         "an access key. Nothing it does can fail the release: a missing key or "
         "a refusal is one warning line. A `channel` surface cuts no tag and "
-        "cannot name one."
+        "the train never writes its release, but it may name a pipeline "
+        "(DRE-4872): `promote-channel.yml` writes `stable-<short sha>` each "
+        "time it moves the channel, over the range from the old `stable` sha "
+        "to the new one, with the Integration Harness run that proved the sha "
+        "in the note. Any other tagless surface cannot name one."
     )
     w("")
     w("```json")
