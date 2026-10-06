@@ -13,6 +13,11 @@ The operator's decision (DRE-3530, 2026-09-10): wake on `failure` and
 concurrency group, which nothing is wrong with — as on `success` and
 `skipped`.
 
+One cancellation is not left to nobody (DRE-5901): a default-branch CI run
+whose jobs GitHub cancelled "not acquired by Runner" is re-run once by the
+reconcile sweep (`scripts/runner_lost.py`), which runs in every repo — the
+medic's door stays as it is.
+
 A workflow cannot import this module, so it reads it the only way it can:
 `expression()` renders the GitHub Actions expression, every medic gate
 carries the rendered text byte for byte, and `tests/test_medic_wake_set.py`

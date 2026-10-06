@@ -120,6 +120,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
 import time
+import urllib.parse
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -218,6 +219,9 @@ import rereview_watch  # noqa: E402
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
+# DRE-5901: ONE rule for a default-branch CI run GitHub never gave a machine —
+# re-run once, report a second loss once. This file reads and re-runs.
+import runner_lost  # noqa: E402
 # DRE-3433: ONE reading of "is the reviewer down across the FLEET, and what
 # should the ONE card say?" — the threshold, the two witness shapes, the
 # file/append/close decision and every line the card carries live there, pure.
@@ -10859,6 +10863,124 @@ def wip_base(active: list[dict]) -> list[dict]:
     return [c for c in mine if c["identifier"] not in epics]
 
 
+def _check_run_annotations(job_id) -> list | None:
+    """One job's annotations (a job's id IS its check run's id), or None when
+    they could not be read.
+
+    On GH_TOKEN, the main App, because it is the token proven to hold the
+    Checks permission (it writes the head-bound review check,
+    publish_review_check.py). Not GH_DISPATCH_TOKEN: the stub grants the
+    workflow's own token `actions` and `contents` and no `checks`. Not
+    GH_READ_TOKEN: the pool Apps' checks permission was never verified.
+    Read only for a cancelled default-branch CI run, so it costs nothing on a
+    pass with none.
+    """
+    args = ("api", f"repos/{REPO}/check-runs/{job_id}/annotations?per_page=100")
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", *args], capture_output=True, text=True, check=False,
+    )
+    if p.returncode != 0:
+        _degrade("runner-lost", f"job {job_id}'s annotations",
+                 f"rc={p.returncode}: {p.stderr.strip()[:400]}",
+                 then="re-running nothing for its run this sweep")
+        return None
+    try:
+        data = json.loads(p.stdout or "[]")
+    except ValueError:
+        _degrade("runner-lost", f"job {job_id}'s annotations",
+                 f"unparseable answer: {p.stdout[:200]!r}",
+                 then="re-running nothing for its run this sweep")
+        return None
+    return data if isinstance(data, list) else None
+
+
+class _RunnerLostOps:
+    """`runner_lost.Client` for this sweep (DRE-5901): the Actions reads and
+    the re-run go out on GH_DISPATCH_TOKEN, as every other Actions call here
+    does (`_actions_read`, `gh_dispatch` — the App token 403s on Actions);
+    the annotations on GH_TOKEN (`_check_run_annotations`). An unreadable
+    answer is None and a `DEGRADED:` line, never an empty list."""
+
+    def _read(self, path: str, what: str, key: str | None = None):
+        out, detail = _actions_read(("api", path))
+        if detail is not None or out is None:
+            _degrade("runner-lost", what, detail or "the Actions read answered nothing",
+                     then="re-running nothing for it this sweep")
+            return None
+        if out == "":
+            # The quiet no-token path (a local run): passed through as empty,
+            # `gh_actions_read`'s rule, rather than guessed at.
+            return [] if key else None
+        try:
+            data = json.loads(out)
+        except ValueError:
+            _degrade("runner-lost", what, f"unparseable listing: {out[:200]!r}",
+                     then="re-running nothing for it this sweep")
+            return None
+        if key is None:
+            return data if isinstance(data, dict) else None
+        found = data.get(key) if isinstance(data, dict) else None
+        return found if isinstance(found, list) else None
+
+    def runs(self):
+        branch = urllib.parse.quote(default_branch(), safe="")
+        return self._read(
+            f"repos/{REPO}/actions/runs?branch={branch}&event=push&per_page=100",
+            "the default branch's CI runs", "workflow_runs")
+
+    def jobs(self, run_id, attempt):
+        return self._read(
+            f"repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
+            f"run {run_id}'s jobs", "jobs")
+
+    def annotations(self, job_id):
+        return _check_run_annotations(job_id)
+
+    def rerun(self, run_id) -> None:
+        gh_dispatch("run", "rerun", str(run_id), "--failed", "--repo", REPO)
+
+    def report_window(self):
+        """This pass's report window, off GitHub's record of this sweep's own
+        runs (`runner_lost.window_from`), or None when it could not be read."""
+        own_id = os.environ.get("GITHUB_RUN_ID") or ""
+        if not own_id.isdigit():
+            return runner_lost.Window(defer="this pass is not an Actions run")
+        own = self._read(f"repos/{REPO}/actions/runs/{own_id}", "this sweep's own run")
+        if own is None:
+            return None
+        if own.get("event") != "schedule":
+            return runner_lost.window_from(own, [])
+        previous = self._read(
+            f"repos/{REPO}/actions/workflows/{own.get('workflow_id')}/runs"
+            "?event=schedule&status=completed&per_page=20",
+            "this sweep's earlier scheduled runs", "workflow_runs")
+        if previous is None:
+            return None
+        return runner_lost.window_from(own, previous)
+
+
+def rerun_runner_lost_ci() -> None:
+    """DRE-5901: re-run, once, a default-branch CI run whose every non-green
+    job GitHub cancelled "not acquired by Runner" — and report, once, a re-run
+    attempt lost the same way. The rule is `runner_lost`'s; this is the wiring.
+
+    The medic never sees such a run (its door wakes on failure and timed_out,
+    in every repo's stub), and nothing else re-runs a main CI run, so the
+    release train had nothing to ship until the next merge (2026-10-05, run
+    37362862791, more than two hours). This sweep runs in every repo that
+    consumes the pipeline, so the rule does too. Not a Linear writer, so not
+    behind the off-rail fence; and not behind the idle check, because an idle
+    board is exactly when a stranded train goes unnoticed. A refused re-run is
+    a write failure and turns the run red.
+    """
+    for line in runner_lost.sweep(REPO, default_branch(), _RunnerLostOps()):
+        if line.startswith("ERROR:"):
+            _write_failures.append(line)
+            print(line, file=sys.stderr)
+        else:
+            print(line)
+
+
 def recover_limit_deaths() -> None:
     """DRE-3171: re-enter the stage a limit death left, once the window has
     reset or the account has switched. The decision lives in limit_recovery;
@@ -11694,6 +11816,10 @@ def main(
             # DRE-3171: a run that hit a usage or request limit comes back on
             # its own once the wall is down — the stage it died in, re-entered.
             recover_limit_deaths,
+            # DRE-5901, beside it because it answers the same question for
+            # the default branch's CI: a run that GitHub never gave a machine
+            # is re-run once, so the release train is not stranded on it.
+            rerun_runner_lost_ci,
             restart_answered_blockers,
             # DRE-3665, beside the review dispatch because they read the same
             # pull requests: this one gets a dependabot PR its card — and
