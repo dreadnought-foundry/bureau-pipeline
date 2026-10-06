@@ -78,7 +78,7 @@ concurrency:
 jobs:
   read:
     name: Read the board
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     outputs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
@@ -131,7 +131,7 @@ jobs:
     name: Keep ${{ matrix.owner }}
     needs: read
     if: needs.read.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -184,7 +184,7 @@ jobs:
     name: Summarize
     needs: [read, keep]
     if: always() && needs.read.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

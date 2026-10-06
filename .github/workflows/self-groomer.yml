@@ -215,11 +215,10 @@ jobs:
   # and the `schedule` job that needs it is skipped with it.
   gate:
     if: github.event_name == 'schedule'
-    # GitHub-hosted, like every job this repo runs for itself: bureau-pipeline
-    # is public and bills $0, and the runner variables are the reusables'
-    # business (DRE-3350, tests/test_runs_on_switchable.py). A sub-minute
-    # script, no Claude call, no suite.
-    runs-on: ubuntu-latest
+    # The short lane, like every chore this repo runs for itself (DRE-5948,
+    # tests/test_own_runs_on_lane.py): a sub-minute script, no Claude call,
+    # no suite.
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       go: ${{ steps.gate.outputs.go }}

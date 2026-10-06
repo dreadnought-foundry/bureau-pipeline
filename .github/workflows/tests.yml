@@ -45,7 +45,7 @@ jobs:
   # them, because each part is told the total by `strategy.job-total`.
   unit:
     name: scripts unit tests (part ${{ matrix.part }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     strategy:
       # One red part must not cancel the others: a canceled part hides its
       # own failures behind somebody else's.
@@ -182,7 +182,7 @@ jobs:
     name: scripts unit tests
     needs: unit
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -312,7 +312,7 @@ jobs:
     # executes and the run concludes `skipped`, which the merge gate's
     # GREEN_CONCLUSIONS admits (the harness.yml pattern).
     if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -409,7 +409,7 @@ jobs:
     name: TDD commit discipline
     # push runs (main) have no PR commit list to judge — PR events only.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

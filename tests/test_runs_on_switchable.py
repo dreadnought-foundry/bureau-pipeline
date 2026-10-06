@@ -50,10 +50,11 @@ The rule this file pins:
   merge gate and the medic's `diagnose` keep their chains unchanged, and a repo
   that sets neither variable renders exactly what it renders today —
   `tests/test_build_runs_on_lane.py` is where that lane is pinned.
-* Every job in a workflow that runs only in THIS repo stays on the literal
-  `ubuntu-latest`. bureau-pipeline is public, its minutes bill at $0, and the
-  org's Default runner group refuses public repos — a public-repo job pointed
-  at the pool would queue forever, so the literal is the second guard.
+* A workflow that runs only in THIS repo is not a reusable and is not pinned
+  here. Until DRE-5948 its jobs stayed on the literal `ubuntu-latest`; since
+  the CEO moved bureau-pipeline to RunsOn (2026-10-05) they read the same
+  three chains from this repo's own variables —
+  `tests/test_own_runs_on_lane.py` is where that is pinned.
 
 The expression is one exact string so a grep finds every site and a future
 edit cannot drift one file from the others.
@@ -175,24 +176,6 @@ def test_reusable_jobs_read_the_callers_runner_variable(path: Path) -> None:
         f"caller's runner variable on one of the three lanes: the long chain, "
         f"the short lane with {SHORT_VAR_HINT} in front, or the build lane "
         f"with {BUILD_VAR_HINT} in front. Not switchable: {wrong}"
-    )
-
-
-@pytest.mark.parametrize(
-    "path",
-    [p for p in _workflow_files() if not _is_reusable(_load(p))],
-    ids=lambda p: p.name,
-)
-def test_this_repos_own_jobs_stay_hosted(path: Path) -> None:
-    doc = _load(path)
-    wrong = [
-        f"{job_id}: {runs_on!r}"
-        for job_id, runs_on in _runner_jobs(doc)
-        if runs_on != HOSTED
-    ]
-    assert not wrong, (
-        f"{path.name} runs only in bureau-pipeline, which is public and bills "
-        f"$0; its jobs stay on {HOSTED!r}. Wrong: {wrong}"
     )
 
 

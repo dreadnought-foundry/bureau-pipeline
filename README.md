@@ -631,8 +631,7 @@ repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.
 agent-bureau and portico already carry `BUREAU_SHORT_RUNS_ON`, so their sweeps
 — and, since DRE-4606, their trains' `wait` and `plan` — move the moment this
-reaches `stable`; bureau-pipeline's own workflows run
-hosted already. **That move costs money**: a sweep on the mini bills nothing
+reaches `stable`. **That move costs money**: a sweep on the mini bills nothing
 per minute and the same sweep on `ubuntu-latest` bills GitHub-hosted minutes,
 on the meter DRE-3350 was created to shut off. `reconcile` is the
 highest-frequency job in the fleet, so it is the bulk of that spend — the trade
@@ -655,6 +654,20 @@ review can queue behind CI (Portico ran 63 reviews and agent-bureau 40 over
 that; the lighter path for the critic is a separate card — have it cite CI's own
 run instead of re-running the suite, which would let it return to the light
 class.
+
+**This repo's own workflows read the same three chains (DRE-5948).** Until
+2026-10-05 every job bureau-pipeline runs for itself was pinned to
+`ubuntu-latest`: the repo is public and its GitHub minutes are free. The CEO
+moved it to RunsOn that evening — it was the fleet's largest GitHub user — and
+its own variables point there. The test suites (`tests.yml` and the two
+`smoke-setup-*-cached` workflows) read the build chain, the integration
+harness reads the long chain, and every other job — the sweeps, the watches,
+the channel and release gates, the model and ledger chores — reads the short
+chain. With the variables unset every one of them renders `ubuntu-latest`. A
+job that must stay GitHub-hosted keeps the literal with
+`# github-hosted: <reason>` on the same line; none does today, and a bare
+`runs-on: ubuntu-latest` anywhere under `.github/workflows/` fails
+`tests/test_own_runs_on_lane.py`.
 
 ## A dependabot pull request gets a card of its own (DRE-3665)
 

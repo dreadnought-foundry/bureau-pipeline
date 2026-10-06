@@ -915,9 +915,12 @@ def workflow_problems(text: str) -> list:
                 "as a way past Planning — hand-planning is an escalation, and "
                 "there is no flag that skips the lane"
             )
+    # One alternative per kind of body line, never two that admit the same
+    # line: `\1  ` already covers deeper indents, and a second branch for them
+    # made every failed start backtrack exponentially (DRE-5948).
     match = re.search(
         r"\n( +)- name: [^\n]*\n(?:\1  [^\n]*\n)*?\1  if: ([^\n]*)\n"
-        r"(?:\1  [^\n]*\n|\1    [^\n]*\n| *\n)*?[^\n]*planning_route\.py decide",
+        r"(?:\1  [^\n]*\n| *\n)*?[^\n]*planning_route\.py decide",
         text or "",
     )
     if match is None:

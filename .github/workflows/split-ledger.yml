@@ -84,7 +84,7 @@ permissions:
 
 jobs:
   derive:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The Linear budget this job draws: `derive` reads ~3 requests per card in
     # the population (the card, its comment thread, its successor search)
     # against the workspace's shared 2,500/hour, serially through the one fleet

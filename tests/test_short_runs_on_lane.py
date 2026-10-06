@@ -64,6 +64,7 @@ from test_runs_on_switchable import (  # noqa: E402
     SHORT_LANE,
     SHORT_SWITCHABLE,
     SWITCHABLE,
+    _is_reusable,
     _load,
     _runner_jobs,
     expected_runs_on,
@@ -202,10 +203,13 @@ def test_the_short_lane_is_exactly_five_files() -> None:
         "medic.yml",
         "release-train.yml",
     }
+    # Among the reusables only: this repo's own workflows read the same
+    # chains from its own variables (DRE-5948), pinned in
+    # tests/test_own_runs_on_lane.py.
     mentions = {
         path.name
         for path in sorted(WORKFLOWS.glob("*.yml"))
-        if SHORT_VAR in path.read_text()
+        if _is_reusable(_load(path)) and SHORT_VAR in path.read_text()
     }
     assert mentions == SHORT_LANE, (
         f"only {sorted(SHORT_LANE)} may name {SHORT_VAR}; found {sorted(mentions)}"
