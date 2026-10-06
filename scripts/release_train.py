@@ -2023,8 +2023,13 @@ def run_surface(surface, *, repo_root, sha, before=None, env=None,
             named = DEFERRAL_RE_ARM.search(line.strip())
             if named is None:
                 return Decision(NO_OP, "deferred", line.strip())
-            at = (now or datetime.now(tz=PT)) + timedelta(
-                minutes=int(named.group(1)))
+            try:
+                at = (now or datetime.now(tz=PT)) + timedelta(
+                    minutes=int(named.group(1)))
+            except OverflowError:
+                # A minute no clock can hold names nothing: the deferral is
+                # reported verbatim, never a crash that turns it red.
+                return Decision(NO_OP, "deferred", line.strip())
             return Decision(NO_OP, "deferred", line.strip(), re_arm_at=at)
 
     after, _ = newest_tag(repo_root, surface.tag_series)
@@ -2075,8 +2080,9 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     guarded the same way: nothing it does can change the decision or fail the
     run.
 
-    `re_arm(decision)` is called only when the decision names a minute — a
-    deferral that ends ` — re-arm in <N> minutes` (DRE-6005) — and returns
+    `re_arm(decision)` is called only for a deferral that names a minute — a
+    line that ends ` — re-arm in <N> minutes` (DRE-6005); a spacing or window
+    no-op this job reads is the plan's to re-arm, not this job's — and returns
     the clause for the line (`_re_arm`'s, in the CLI). A non-empty clause
     rides after the decision's own sentence in what `on_decided` records and
     what the receipt prints, exactly as the plan shows a spacing re-arm; the
@@ -2103,7 +2109,8 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
             out(f"{TAG}: [{surface.name}] WARNING the after-release step failed "
                 f"({error}) — the release itself is unaffected")
     shown = decision
-    if re_arm is not None and decision.re_arm_at is not None:
+    if (re_arm is not None and decision.code == "deferred"
+            and decision.re_arm_at is not None):
         clause = re_arm(decision)
         if clause:
             # After the `deferred:` sentence, so the console's release row
