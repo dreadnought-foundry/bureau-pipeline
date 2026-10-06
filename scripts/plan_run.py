@@ -2,7 +2,7 @@
 """The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
 callers that genuinely make one.
 
-Four of them remain:
+Five of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
     the failure kept in its write ledger so the run goes red;
@@ -11,7 +11,9 @@ Four of them remain:
   * `planner_queue.py dispatch` and `reconcile.serve_planner_line` — the
     planner line serving the card whose turn has come (DRE-5180, DRE-5178).
     Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is
-    waiting to be planned, whatever its labels (DRE-5366).
+    waiting to be planned, whatever its labels (DRE-5366);
+  * `proof_dispatch.sweep` — the proof run at an epic's PROOF card, passing
+    `event=PROOF_EVENT` and a `reason` (DRE-5926).
 
 This module began as the ONE place that asked for an epic's planner run when
 its turn came in a wave (DRE-2846, `note`), on the belief that nothing
