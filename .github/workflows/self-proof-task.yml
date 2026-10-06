@@ -1,0 +1,45 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo. The stub
+# owns the trigger, concurrency, and permissions; everything else is central.
+#
+# @main on purpose: bureau-pipeline IS the canary channel. The fleet consumes
+# human-promoted tags (@v1), so an agent merge to main here changes nothing
+# live — it only stages the next release. The fully qualified form (never a
+# local ./ ref) pins the logic to the already-merged version, not the PR's.
+#
+# The proof run (DRE-5924): the sweep's `proof-execute` dispatch
+# (`plan_run.PROOF_EVENT`, DRE-5921) for a PROOF card in `Hand-work`. A
+# product repo's copy of this stub is named `proof-task.yml`, the
+# `fix_workflow()` naming family in scripts/reconcile.py. No
+# `PROOF_ROLE_ARN` here: this repo's proofs read GitHub and Linear, so the
+# run assumes no AWS role.
+name: Proof Task
+
+on:
+  repository_dispatch:
+    types: [proof-execute]
+
+# Per card, and a second dispatch for the same card queues behind the first —
+# never cancels it (agent-task's DRE-2032 reasoning: a cancelled run is a
+# record half written).
+concurrency:
+  group: proof-${{ github.event.client_payload.identifier }}
+  cancel-in-progress: false
+
+# agent-task's stub grants, for agent-task's reasons: `id-token: write` for the
+# scrubbed log's AWS login (DRE-4269), `contents`/`pull-requests` for the
+# record branch and its pull request, and `actions: write` so a refused rescue
+# push can be delivered (DRE-3262). A reusable workflow can hold no more
+# permission than the stub that calls it.
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/proof-task.yml@main
+    with:
+      pipeline_ref: main
+    secrets: inherit

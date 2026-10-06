@@ -340,6 +340,9 @@ agents:
   fixer: workhorse
   # The red-main repair agent is an engineer-tier fixer.
   repairer: workhorse
+  # The proof runner (DRE-5921, DRE-5924) observes and writes a record on a
+  # branch — a run per proof card, so the hot path's ladder, not a judge's.
+  proof: workhorse
   # The one judgement role (DRE-3015). Once per epic, at a decision point, and
   # the plan it writes is what every child card is built from.
   planner: judgement

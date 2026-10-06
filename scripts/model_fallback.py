@@ -209,6 +209,7 @@ _FALLBACK_MODEL_CONFIG = {
         "devops": "workhorse",
         "fixer": "workhorse",
         "repairer": "workhorse",
+        "proof": "workhorse",
         "planner": "judgement",
         "critic": "advisory",
         "verifier": "advisory",
