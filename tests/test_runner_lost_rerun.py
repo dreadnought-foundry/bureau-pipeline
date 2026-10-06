@@ -483,6 +483,28 @@ def test_a_refused_re_run_turns_the_sweep_red(monkeypatch):
         reconcile._write_failures.clear()
 
 
+@pytest.mark.parametrize("answer", [
+    '{\n  "message": "Bad credentials",\n  "status": "401"\n}',
+    "main\nfeature", "has space", "../main", "",
+])
+def test_a_default_branch_that_is_not_a_ref_name_reads_nothing(monkeypatch, capsys, answer):
+    """`default_branch()` is the silent `gh()`, which hands back a failed
+    call's JSON error body on stdout. That body is not a branch: no CI listing
+    is asked for, and the sweep says it could not read the branch."""
+    actions = _Actions({})
+    monkeypatch.setattr(reconcile, "REPO", REPO)
+    monkeypatch.setattr(reconcile, "_default_branch", answer)
+    monkeypatch.setattr(reconcile, "_actions_read", actions)
+    monkeypatch.setattr(reconcile, "_degraded", [])
+    reconcile._write_failures.clear()
+
+    reconcile.rerun_runner_lost_ci()
+
+    assert actions.calls == []
+    assert "DEGRADED: runner-lost:" in capsys.readouterr().out
+    assert reconcile._write_failures == []
+
+
 def test_the_sweep_reads_its_window_off_its_own_scheduled_runs(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", REPO)
     monkeypatch.setenv("GITHUB_RUN_ID", "900")
