@@ -355,6 +355,15 @@ ALLOWED_TOOLS = ""
 # already carries for this job.
 CLI_TIMEOUT_SECONDS = 300
 
+# DRE-5979. Why a rung was left when it was not out of capacity: its one-turn,
+# no-tool call ended at the turn limit with nothing written. Read by
+# `model_receipt`, which says it in place of "out of capacity".
+NO_ANSWER = "gave no answer within its one turn"
+
+# The bound on the `stream:` summary a failed call's message carries, so it
+# stays one readable line in the run log.
+STREAM_SUMMARY_CHARS = 900
+
 
 class ClassifyError(RuntimeError):
     """The prompt cannot be composed — the brief, the standard or the
@@ -445,8 +454,11 @@ class Decision:
     # the heartbeat naming a model is gated on it, and a heartbeat for a call
     # that 429'd would be the console lying about the ladder.
     answered: bool = False
-    # DRE-3970. The rung this call FELL from because it was out of capacity, and
-    # the signature that said so. None on every call that did not fall.
+    # DRE-3970. `fell_from` is the rung this call FELL from because it was out
+    # of capacity — set only for a capacity fall, since plan.yml's Select model
+    # reads it. `fell_because` is the signature that said so, or NO_ANSWER for
+    # the DRE-5979 fall from a no-answer turn-limit end (`fell_from` stays None
+    # there). Both None on every call that did not fall.
     fell_from: str | None = None
     fell_because: str | None = None
 
@@ -1280,7 +1292,10 @@ def model_receipt(asked: str | None, answered: str | None, *,
     answered = " ".join((answered or "").split()) or "unknown"
     head = "DEGRADED " if answered != asked else ""
     line = f"{head}{asked} (asked) / {answered} (answered)"
-    if because:
+    if because == NO_ANSWER:
+        # DRE-5979: the rung answered nothing; it was not refused for capacity.
+        line += f" — {asked} {NO_ANSWER}"
+    elif because:
         # DRE-3970: a fall the run MADE says why, in words that are not a death
         # marker — this line rides a `model-attempt:` heartbeat.
         line += f" — {asked} out of capacity ({' '.join(str(because).split())})"
@@ -1390,10 +1405,13 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
                       model=answered_model(envelope, model), truncated=True,
                       continuations=continued)
     if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
+        # DRE-5979: the message also says what the CLI streamed, because the run
+        # log is the only place a failure like `error_max_turns` can be read.
         raise TransportError(
             f"the classification call reported subtype "
             f"{envelope.get('subtype')!r}, is_error "
-            f"{envelope.get('is_error')!r}: {str(envelope.get('result'))[:400]}",
+            f"{envelope.get('is_error')!r}: {str(envelope.get('result'))[:400]}"
+            f" | stream: {stream_summary(events, stderr)}",
             str(envelope.get("subtype") or "no answer"),
             record=envelope,
         )
@@ -1425,32 +1443,105 @@ def _call_real(model: str, prompt: str, *, max_tokens: int | None = None,
                      timeout_seconds=timeout_seconds)
 
 
+def stream_summary(events: list, stderr: str = "") -> str:
+    """What a failed CLI call streamed, as one bounded line (DRE-5979).
+
+    The event types, the init line's model, permission mode and tool and MCP
+    counts, any tool the turn reached for, the stop reasons, the result's
+    `num_turns` and permission denials, and the head of stderr. A one-turn,
+    no-tool call that ends at the turn limit says WHY only here.
+    """
+    kinds: dict = {}
+    init: dict = {}
+    tool_uses: list = []
+    stops: list = []
+    result: dict = {}
+    for event in events:
+        kind = str(event.get("type") or "?")
+        if event.get("subtype"):
+            kind += f"/{event['subtype']}"
+        kinds[kind] = kinds.get(kind, 0) + 1
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            init = event
+        elif event.get("type") == "assistant":
+            message = event.get("message") or {}
+            if message.get("stop_reason"):
+                stops.append(message["stop_reason"])
+            for block in message.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_uses.append(block.get("name"))
+        elif event.get("type") == "result":
+            result = event
+    parts = ["events=" + ",".join(f"{k}x{n}" for k, n in kinds.items())]
+    if init:
+        parts.append(f"model={init.get('model')} permissionMode={init.get('permissionMode')} "
+                     f"tools={len(init.get('tools') or [])} "
+                     f"mcp={len(init.get('mcp_servers') or [])}")
+    parts.append(f"tool_use={tool_uses}")
+    parts.append(f"stops={stops}")
+    if result:
+        parts.append(f"num_turns={result.get('num_turns')} "
+                     f"denials={len(result.get('permission_denials') or [])}")
+    head = " ".join((stderr or "").split())[:200]
+    if head:
+        parts.append(f"stderr={head}")
+    return "; ".join(parts)[:STREAM_SUMMARY_CHARS]
+
+
+def turn_limit_without_answer(error: TransportError) -> bool:
+    """Whether this failure is a call that ended at the turn limit having
+    written nothing (DRE-5979).
+
+    The classifier's call has no tools, so one that stops at the cap within two
+    turns did no work and gave no answer: asking the next rung costs one call
+    and loses nothing. A run with text in `result`, or one that ran longer, is
+    not this, and `model_fallback.capacity_refusal` still vetoes the turn cap,
+    because for an agent the cap means real work.
+    """
+    record = getattr(error, "record", None)
+    if not isinstance(record, dict) or record.get("subtype") != "error_max_turns":
+        return False
+    if str(record.get("result") or "").strip():
+        return False
+    turns = record.get("num_turns")
+    return turns is None or (isinstance(turns, int) and turns <= 2)
+
+
 def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
     """Make one call; if `model` refuses for CAPACITY, make the same call once on
-    the next rung of the planner's ladder (DRE-3970).
+    the next rung of the planner's ladder (DRE-3970). A call that ended at the
+    turn limit with no answer falls the same way (DRE-5979).
 
     Returns `(answer, answered_on, fell_from, because, calls)`. Only a refusal
-    `model_fallback.capacity_refusal` recognises opens the second call — and it
-    reads the CLI record, so a run that did real work never does. One fall, not
-    a walk: a second refusal is raised, and the caller's own failure path (the
-    DRE-3074 requeue for the classifier) takes it from there, carrying
-    `fell_from` so the receipt still says what was tried.
+    `model_fallback.capacity_refusal` recognises, or a no-answer turn-limit end,
+    opens the second call — and both read the CLI record, so a run that did real
+    work never does. One fall, not a walk: a second failure is raised, and the
+    caller's own failure path (the DRE-3074 requeue for the classifier) takes it
+    from there, carrying `fell_because` so the receipt still says what was tried.
+
+    `fell_from` is set ONLY for capacity: plan.yml's Select model reads it to
+    skip that rung for the planner, and a model that gave the classifier no
+    answer has not been shown to be out of capacity for planning.
     """
     try:
         return _answer_of(call(model, prompt, **kwargs)), model, None, None, 1
     except TransportError as e:
         because = model_fallback.capacity_refusal(str(e), record=e.record)
+        fell_from = model if because else None
+        if not because and turn_limit_without_answer(e):
+            because = NO_ANSWER
         below = model_fallback.fallback_for(ROLE, model) if because else None
         if not below:
             raise
-        print(f"planning: {model} is out of capacity ({because}) — asking {below} "
-              f"in the same step", file=sys.stderr)
+        why = NO_ANSWER if because == NO_ANSWER else f"is out of capacity ({because})"
+        print(f"planning: {model} {why} — asking {below} in the same step",
+              file=sys.stderr)
         try:
             answer = _answer_of(call(below, prompt, **kwargs))
         except TransportError as again:
-            again.fell_from, again.fell_because, again.calls = model, because, 2
+            again.fell_from, again.fell_because, again.calls = fell_from, because, 2
             raise
-        return answer, below, model, because, 2
+        return answer, below, fell_from, because, 2
 
 
 def _pick_model() -> str:
@@ -1482,7 +1573,8 @@ def _answer_of(result) -> Answer:
 def classify(card: dict, *, call=None, model: str | None = None,
              doc: dict | None = None) -> Decision:
     """Classify one card. One call per rung, a second rung only when the first
-    is out of capacity (DRE-3970), and never a silent stamp."""
+    is out of capacity (DRE-3970) or ends its one turn with no answer
+    (DRE-5979), and never a silent stamp."""
     if not model:
         try:
             model = _pick_model()
@@ -1494,7 +1586,8 @@ def classify(card: dict, *, call=None, model: str | None = None,
         return Decision(model=model, asked=model, refusal=_unreachable(e))
     try:
         # DRE-3970: a capacity refusal on this rung is asked again, once, on the
-        # next — the same call, in this step, rather than a failed run.
+        # next — the same call, in this step, rather than a failed run. DRE-5979:
+        # so is a turn-limit end with no answer.
         answer, answered_on, fell_from, because, _calls = \
             call_with_capacity_fallback(call or _call_real, model, prompt)
     except TransportError as e:
