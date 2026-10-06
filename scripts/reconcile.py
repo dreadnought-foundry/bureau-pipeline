@@ -11429,24 +11429,28 @@ def main(
                 # later what linear-sync deliberately left open. The marker
                 # comment posts at most once (card-done normally already did);
                 # the card then sits here, correctly open, until the operator
-                # closes it by hand.
-                skip = linear_ops.auto_done_skip_reason(
+                # closes it by hand. The same ruling card-done makes, so a
+                # `PROOF:` card whose record merged with the critic's APPROVE
+                # at the merged head closes here too (DRE-5919) — and one whose
+                # GitHub read failed at card-done gets another ask each sweep.
+                merged_url = f"https://github.com/{REPO}/pull/{pr['number']}"
+                skip, proof_note = linear_ops.merge_close_ruling(
+                    ident,
                     card.get("title") or "",
                     [l["name"] for l in (card.get("labels") or {}).get("nodes", [])],
+                    merged_url,
                 )
                 if skip is not None:
                     print(
                         f"AUTO-DONE SKIPPED for {ident}: {skip} — the operator "
-                        "closes this card by hand (see linear_ops.auto_done_skip_reason)."
+                        "closes this card by hand (see linear_ops.merge_close_ruling)."
                     )
                     if not linear_ops.count_comments(
                         ident, linear_ops.MERGED_NOT_CLOSED_MARKER
                     ):
                         linear_ops.cmd_comment(
                             ident,
-                            linear_ops.merged_not_closed_comment(
-                                f"https://github.com/{REPO}/pull/{pr['number']}", skip
-                            ),
+                            linear_ops.merged_not_closed_comment(merged_url, skip),
                         )
                     continue
                 # Break-glass debt (DRE-2737): the same call linear-sync's
@@ -11472,7 +11476,10 @@ def main(
                 # ground truth and Done is terminal — the same close the cron
                 # makes on Linear's read, which also re-reads nothing first.
                 linear_ops.cmd_state(ident, "Done")
-                linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
+                linear_ops.cmd_comment(
+                    ident,
+                    proof_note or "🧹 Reconcile: PR was already merged — moved to Done.",
+                )
             elif state == "Todo" and not is_open:
                 # LIVENESS FIRST, exactly as the In Progress branch below does it
                 # (DRE-4830). A card whose first run is still QUEUED has posted

@@ -276,6 +276,15 @@ himself, so the record IS how he sees it. Every epic planned before that date
 still carries a second closing child; the gate reads past one rather than
 bouncing the plan, and no plan adds one back.
 
+**A proof card closes itself on its approved record (DRE-5919).** The CEO
+decided on 2026-10-05 that nobody should have to chase a proof down. When the
+record merges on the card's own branch with the critic's APPROVE at the merged
+head, the merge closes the card — the critic already holds the record to its
+criteria, so the approved, merged record is the evidence. The close comment
+names the pull request, the merge time in PT and the approved commit. Without
+that APPROVE the card stays open for a person, as every other `no-code` card
+does.
+
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that the operator runs a proof as soon as its build cards finish,
 and the card closes on the evidence that run records. The CEO is needed only

@@ -873,6 +873,10 @@ There is no second closing card. The CEO decided on 2026-09-12 that there are
 no demo sittings — he reads the proof record and closes the proof card himself
 — so the record IS how he sees it. Epics planned before that date carry a
 second closing child and the gate reads past one rather than bouncing the plan.
+Since DRE-5919 the proof card closes itself when its record merges on the
+card's own branch with the critic's APPROVE at the merged head
+(`linear_ops.merge_close_ruling`, asked by both `card-done` and the reconcile
+backstop); without that APPROVE it stays open for a person.
 
 The card is blocked by every other child — the Linear `blocks` relation, never
 the ordering and never a `**Blocked by:**` body line — it **may not carry
