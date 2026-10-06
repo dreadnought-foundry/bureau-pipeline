@@ -53,12 +53,16 @@ fail a run, and an unreadable thread says UNKNOWN rather than "nobody said
 anything".
 
 ONE ANSWER, FOR THE PROOF RUN'S RETURN (DRE-5925). `answer <CARD>` prints the
-newest answer that verifies as `<signed time, PT>\t<the first line of his
-words>` — the console's "Answer from" heading is not his words — and exits 1,
-printing nothing, when the thread holds none or cannot be read. The proof run
-writes that line into the discharge record it posts before it carries a card
-the CEO answered back out of Green Light, so unlike the two renders a missing
-answer is a failure there, never an empty one.
+newest answer that verifies AND was posted after the proof run's newest park
+as `<signed time, PT>\t<the first line of his words>` — the console's "Answer
+from" heading is not his words. The park is the newest `🔬 proof-waiting` hold
+or the `🙋` question that follows it, whichever is later, so an answer he gave
+to an earlier question is never read as this one's. It exits 1, printing
+nothing, when no answer follows a park, and 3 when the thread cannot be read —
+never "no answer" for a thread nobody read. The proof run writes that line into
+the discharge record it posts before it carries a card the CEO answered back
+out of Green Light, so unlike the two renders a missing answer is a failure
+there, never an empty one.
 
 WHAT IT DOES NOT CHANGE. The groom drain's decisions (`groomer.vouch`, the
 groom receipt) are untouched — a groom marker with an answer receipt under it
@@ -356,11 +360,26 @@ def render_unknown(mode: str, reason: str) -> str:
         "reader can say that, and it could not run.", ""])
 
 
+#: Where the proof run's park begins, as proof-task.yml posts it: the hold
+#: (`linear_ops.proof_waiting_line`), then the question. Either one marks it —
+#: the question still parks when the hold is refused. Who posted it is not
+#: read: a copy of one can only move the park later, which hides an answer and
+#: never admits one.
+PROOF_PARK_MARKS = (f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_WAITING_TAG}:",
+                    "🙋 The proof run met a press only the CEO can make")
+
+
 def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:
     """(his signed time in PT, the first line of his words) for the newest
-    answer that verified, or None."""
+    answer that verified and follows the newest proof park, or None — None
+    too when the thread holds no park."""
+    found = None
     for voice in reversed(all_voices):
         if voice.kind != CEO_VIA_CONSOLE:
+            if (voice.body or "").lstrip().startswith(PROOF_PARK_MARKS):
+                return found
+            continue
+        if found is not None:
             continue
         receipt = console_receipt.parse_answer(voice.body)
         words = [line.strip() for line in
@@ -369,7 +388,7 @@ def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:
             words = words[1:]
         first = next((line for line in words if line), "")
         if receipt is not None and first:
-            return pacific_label(receipt.at), first
+            found = pacific_label(receipt.at), first
     return None
 
 
@@ -377,20 +396,24 @@ def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:
 _ANSWER_HEAD = re.compile(r"^Answer from .* PT:$")
 
 
+#: `answer`'s exit when the thread could not be read — never 1, "none".
+ANSWER_UNREADABLE = 3
+
+
 def _main_answer(card: str) -> int:
     if not card or not os.environ.get("LINEAR_API_KEY"):
         print("spoken-thread: answer needs a card and a Linear key",
               file=sys.stderr)
-        return 1
+        return ANSWER_UNREADABLE
     try:
         found = newest_answer(read(card))
     except Exception as exc:  # noqa: BLE001 — said, and never read as an answer
         print(f"spoken-thread: could not read {card}'s comments — "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        return ANSWER_UNREADABLE
     if found is None:
-        print(f"spoken-thread: no answer of the CEO's on {card} verifies",
-              file=sys.stderr)
+        print(f"spoken-thread: no answer of the CEO's on {card} verifies "
+              "after the proof run's park", file=sys.stderr)
         return 1
     print(f"{found[0]}\t{found[1]}")
     return 0

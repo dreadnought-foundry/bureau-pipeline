@@ -415,21 +415,30 @@ jobs:
       # ---- THE RETURN FROM GREEN LIGHT, ON THE CEO'S ANSWER (DRE-5925) ----
       # A run that met a press only the CEO can make parked the card in Green
       # Light under a `🔬 proof-waiting` hold (the result step below). His
-      # signed answer, posted after the hold, is the ONLY discharge: the
+      # signed answer, posted after the park, is the ONLY discharge: the
       # dispatcher (DRE-5926) reads it through `spoken_thread.voices` and
       # dispatches this run with the reason `re-run after the CEO's answer at
-      # <PT>`. This step acts on that reason and that lane and nothing else:
-      # it posts the discharge record through `proof-observed` — the existing
-      # record, so the console renders the hold as ended — and only then
-      # carries the card to `Hand-work`, the proof lane, before the agent runs.
+      # <PT>`. This step acts on the lane and the answer, not on that reason:
+      # a card in Green Light with an answer of his after the park
+      # (`spoken_thread.py answer`, which reads only what follows the newest
+      # hold or question) gets the discharge record through `proof-observed` —
+      # the existing record, so the console renders the hold as ended — and
+      # only then the move to `Hand-work`, the proof lane, before the agent
+      # runs. Whatever the reason, so a return that died between its two
+      # writes is finished by the next dispatch rather than left parked; that
+      # one posts the record twice, and a second record ends no second hold.
       # The agent reads his answer as the observation for that row
       # (briefs/proof.md) and amends the record on the same pull request; the
       # result step carries the card on to `In Review`.
       #
-      # Any other reason, or any other lane, and the step does nothing and says
-      # so. A lane or an answer it cannot read FAILS the step, before any write:
-      # an unread lane is never read as "not Green Light", and a discharge
-      # record must quote words this step verified, never the reason's say-so.
+      # Any other lane, or a park he has not answered on any other reason, and
+      # the step does nothing and says so. A lane or a thread it cannot read
+      # FAILS the step, before any write — an unread lane is never read as "not
+      # Green Light" — and so does a return reason with no answer behind it: a
+      # discharge record must quote words this step verified, never the
+      # reason's say-so. His words the record refuses (a console hold marker,
+      # `linear_ops.proof_text_refusal`) are left on his answer and the record
+      # names it instead, so they never keep the card parked.
       # No `continue-on-error` — the agent does not run on a card still parked.
       # No `${{ }}` in the script: tests/test_proof_task_workflow.py executes
       # it as written.
@@ -441,26 +450,32 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           REASON: ${{ steps.card.outputs.reason }}
         run: |
-          case "$REASON" in
-            "re-run after the CEO's answer"*) ;;
-            *)
-              echo "return from Green Light: nothing to return — the dispatch reason does not open \"re-run after the CEO's answer\""
-              exit 0
-              ;;
-          esac
           LANE=$(python3 .bureau-pipeline/scripts/linear_ops.py state-of "$CARD")
           if [ "$LANE" != "Green Light" ]; then
             echo "return from Green Light: nothing to return — $CARD is in '${LANE}', not Green Light"
             exit 0
           fi
-          if ! ANSWER=$(python3 .bureau-pipeline/scripts/spoken_thread.py answer "$CARD"); then
-            echo "::error::$CARD was dispatched on the CEO's answer and sits in Green Light, and no answer of his on it verifies here — no discharge is posted and the card stays parked."
+          READ=0
+          ANSWER=$(python3 .bureau-pipeline/scripts/spoken_thread.py answer "$CARD") || READ=$?
+          if [ "$READ" = 1 ]; then
+            case "$REASON" in
+              "re-run after the CEO's answer"*)
+                echo "::error::$CARD was dispatched on the CEO's answer and sits in Green Light, and no answer of his after the park verifies here — no discharge is posted and the card stays parked."
+                exit 1
+                ;;
+            esac
+            echo "return from Green Light: nothing to return — $CARD waits in Green Light and no answer of his after the park verifies"
+            exit 0
+          elif [ "$READ" != 0 ]; then
+            echo "::error::$CARD sits in Green Light and its thread could not be read for the CEO's answer — no discharge is posted and the card stays parked."
             exit 1
           fi
           AT=$(printf '%s' "$ANSWER" | cut -f1)
           FIRST=$(printf '%s' "$ANSWER" | cut -f2-)
           python3 .bureau-pipeline/scripts/linear_ops.py proof-observed "$CARD" \
-            "the CEO answered via the console at $AT: $FIRST"
+            "the CEO answered via the console at $AT: $FIRST" \
+            || python3 .bureau-pipeline/scripts/linear_ops.py proof-observed "$CARD" \
+                 "the CEO answered via the console at $AT — his words are in that answer on this card"
           python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Hand-work" "Green Light"
           echo "return from Green Light: $CARD returned to Hand-work on the CEO's answer at $AT" \
             | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1369,9 +1384,10 @@ jobs:
           # hour old by now on a long run (DRE-3043).
           GH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
-          # Read for the criterion and the press the hold names. Through env,
-          # never interpolated into the script.
-          CARD_DESCRIPTION: ${{ github.event.client_payload.description }}
+          # Read for the criterion and the press the hold names: the sanitized
+          # description the rest of the workflow reads. Through env, never
+          # interpolated into the script.
+          CARD_DESCRIPTION: ${{ steps.card.outputs.description }}
           RECORD_BRANCH: agent/${{ github.event.client_payload.identifier }}-proof-record
           ESCALATION_FILE: /tmp/agent-escalation.txt
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
@@ -1466,8 +1482,15 @@ jobs:
             # Out of either lane: the record's pull request opened before the
             # escalation file was written, and qa-review.yml may already have
             # carried the card to `In Review`. Never Triage — the card is not
-            # broken, it waits on his decision.
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "Hand-work,In Review"
+            # broken, it waits on his decision. A card in neither lane is
+            # refused quietly, with the hold and the question already posted,
+            # so the summary says it did not move.
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "Hand-work,In Review" \
+              > "${RUNNER_TEMP:-/tmp}/proof-park-move.txt"
+            cat "${RUNNER_TEMP:-/tmp}/proof-park-move.txt"
+            if grep -qF "not advancing" "${RUNNER_TEMP:-/tmp}/proof-park-move.txt"; then
+              echo "proof park: the hold and the question are posted, and the park did not move $CARD to Green Light" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           if [ -z "$TOOK" ]; then
             TOOK="no record"
