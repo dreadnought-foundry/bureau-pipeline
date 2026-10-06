@@ -40,7 +40,7 @@ import ast
 import inspect
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -805,3 +805,214 @@ def test_planning_cards_do_not_spend_the_wip_room(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "WIP room is spent" not in out, out
     assert dispatched == ["DRE-4811"]
+
+
+# --------------------------------------------------------------------------
+# the assumed clock is bounded, and a dead second-critic review is the
+# re-review watcher's (DRE-5640)
+# --------------------------------------------------------------------------
+# DRE-5455 gives every Claude marker with no stated reset an assumed one,
+# five hours on. Under a cap nothing here has the wording of (a weekly cap, a
+# monthly spend limit) that would bring a card back into the same wall every
+# five hours for days, so three assumed-clock deaths in a day hand the card to
+# a person. And a `stage=review` death on a Planning card is the second
+# critic's: a re-run keeps its run id and the medic marks a run id once, so
+# the re-review watcher's fresh run is its re-entry, never a re-run here.
+NOW = datetime(2026, 10, 4, 22, 0, tzinfo=UTC)
+
+
+def _iso(hours_ago: float) -> str:
+    return (NOW - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def assumed_marker(stage="plan", reset=None, run=RUN) -> str:
+    """An assumed-clock Claude marker as dead_run writes it (DRE-5455)."""
+    return dead_run.decide(
+        0, limit=dead_run.LimitDeath(kind="claude", stage=stage,
+                                     reset=reset or NOW + timedelta(hours=4),
+                                     run_id=run, reset_assumed=True),
+    ).comments[0]
+
+
+def dated_card(ident="DRE-5640", lane="Planning", nodes=(), labels=()):
+    """A card whose comment nodes carry `createdAt`, as the board read selects
+    it (`linear_ops.COMMENT_FIELDS`). `nodes` is (body, hours_ago) oldest→newest;
+    hours_ago None leaves the node with no `createdAt`."""
+    c = card(ident=ident, lane=lane, labels=labels)
+    built = []
+    for body, hours_ago in nodes:
+        node = {"body": body}
+        if hours_ago is not None:
+            node["createdAt"] = _iso(hours_ago)
+        built.append(node)
+    c["comments"] = {"nodes": list(reversed(built))}
+    return c
+
+
+def _reentered(stage="plan") -> str:
+    return (f"{limit_recovery.RECOVERY_MARK} re-entered {stage} — window reset at "
+            f"2026-10-04 10:00 PT. Bounced Planning → Intake → Planning.")
+
+
+def _three_deaths(ages=(11, 6, 1), *, between=None, stage="plan", newest=None):
+    """Three assumed deaths with the recovery's own 🔁 receipt after the first
+    and the second — the card came back twice and died a third time."""
+    first, second, third = ages
+    nodes = [(assumed_marker(stage), first), (between or _reentered(), first - 0.5),
+             (assumed_marker(stage), second), (_reentered(), second - 0.5),
+             (newest or assumed_marker(stage), third)]
+    return nodes
+
+
+def test_the_contract_constants():
+    assert limit_recovery.CLAUDE_ASSUMED_DEATHS_MAX == 3
+    assert limit_recovery.CLAUDE_ASSUMED_SPAN_HOURS == 24
+    assert limit_recovery.HANDOFF_MARK == "⚠️ limit-recovery:"
+    assert limit_recovery.RECOVERY_MARK == "🔁 limit-recovery:"
+
+
+def test_three_assumed_deaths_in_a_day_hand_the_card_to_a_person_once():
+    s = Seams()
+    c = dated_card(nodes=_three_deaths())
+    lines = s.recover([c], now=NOW)
+    assert s.moves == [] and s.reruns == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-5640"
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert limit_recovery.is_receipt(body), "the hand-off must close the marker"
+    assert "three times in a day" in body
+    assert "named no reset time" in body and "assumed five-hour clock" in body
+    assert "not the five-hour usage window" in body
+    for way_back in ("Intake then Planning", "Todo for a build", "Re-run failed jobs"):
+        assert way_back in body, way_back
+    assert any("DRE-5640 handed to a human" in line for line in lines)
+    assert not any(line.startswith("ERROR:") for line in lines)
+    again = Seams()
+    again.recover([dated_card(nodes=[*_three_deaths(), (body, 0.5)])], now=NOW)
+    assert again.comments == [] and again.moves == [] and again.reruns == []
+
+
+def test_two_assumed_deaths_wait_and_say_the_clock_was_assumed():
+    s = Seams()
+    nodes = [(assumed_marker(), 6), (_reentered(), 5.5), (assumed_marker(), 1)]
+    lines = s.recover([dated_card(nodes=nodes)], now=NOW)
+    assert s.comments == [] and s.moves == [] and s.reruns == []
+    assert any("DRE-5640 is waiting until" in line
+               and "(assumed — the run named no reset) (claude limit, plan stage)" in line
+               for line in lines), lines
+
+
+def test_a_stated_reset_says_nothing_about_an_assumption():
+    s = Seams()
+    lines = s.recover([card(bodies=[marker()])], now=BEFORE)
+    assert not any("assumed" in line for line in lines), lines
+
+
+def test_a_death_older_than_a_day_is_not_counted():
+    s = Seams()
+    s.recover([dated_card(nodes=_three_deaths(ages=(25, 6, 1)))], now=NOW)
+    assert s.comments == [] and s.moves == []
+
+
+def test_the_count_starts_over_behind_a_handoff_receipt():
+    handoff = f"{limit_recovery.HANDOFF_MARK} cannot bring this card back on its own — earlier."
+    s = Seams()
+    s.recover([dated_card(nodes=_three_deaths(between=handoff))], now=NOW)
+    assert s.comments == [] and s.moves == []
+
+
+def test_a_marker_with_no_assumed_field_is_not_counted():
+    stated = marker(stage="plan", reset=NOW + timedelta(hours=4))
+    assert dead_run.parse_limit_marker(stated)["assumed"] is False
+    s = Seams()
+    nodes = _three_deaths()
+    nodes[2] = (stated, 6)
+    s.recover([dated_card(nodes=nodes)], now=NOW)
+    assert s.comments == [] and s.moves == []
+
+
+def test_a_node_with_no_created_at_is_never_counted():
+    s = Seams()
+    nodes = _three_deaths()
+    nodes[0] = (nodes[0][0], None)
+    s.recover([dated_card(nodes=nodes)], now=NOW)
+    assert s.comments == [] and s.moves == []
+
+
+def test_an_assumed_reset_that_has_passed_bounces_the_card_like_a_stated_one():
+    s = Seams()
+    due = assumed_marker(reset=NOW - timedelta(minutes=1))
+    s.recover([dated_card(nodes=[(due, 5)])], now=NOW)
+    assert s.moves == [("DRE-5640", "Intake"), ("DRE-5640", "Planning")]
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.RECOVERY_MARK)
+    assert f"window reset at {dead_run.pacific(NOW - timedelta(minutes=1))}" in body
+
+
+def test_handoff_reason_keeps_its_two_argument_shape():
+    m = dead_run.parse_limit_marker(assumed_marker())
+    assert limit_recovery.handoff_reason({}, m) is None
+    assert limit_recovery.handoff_reason({}, m, assumed_deaths=2) is None
+    assert "three times in a day" in limit_recovery.handoff_reason({}, m, assumed_deaths=3)
+
+
+def _review_death(minutes_ago=1) -> str:
+    reset = (NOW - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"🪦 limit-death: kind=claude stage=review reset={reset} run=777 assumed=yes"
+
+
+def test_a_review_death_on_a_planning_card_is_the_rereview_watchers():
+    s = Seams()
+    lines = s.recover([dated_card(nodes=[(_review_death(), 5)])], now=NOW)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert s.comments == []
+    assert ("limit-recovery: DRE-5640 review death (claude limit) is the re-review "
+            "watcher's — it asks for the review again after its own grace and does "
+            "not read the Claude wall") in lines
+    assert not any("once the wall is down" in line for line in lines), lines
+
+
+def test_a_review_death_on_a_planning_card_spends_no_wip_room():
+    s = Seams()
+    lines = s.recover([dated_card(nodes=[(_review_death(), 5)])], now=NOW, wip_room=0)
+    assert not any("WIP room" in line for line in lines), lines
+    assert any("re-review watcher's" in line for line in lines)
+
+
+def test_a_review_death_in_review_is_rerun_as_today():
+    s = Seams()
+    s.recover([dated_card(lane="In Review", nodes=[(_review_death(), 5)])], now=NOW)
+    assert s.reruns == ["777"]
+    assert len(s.comments) == 1
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_a_third_assumed_review_death_on_a_planning_card_is_handed_off():
+    s = Seams()
+    nodes = _three_deaths(stage="review", newest=_review_death())
+    s.recover([dated_card(nodes=nodes)], now=NOW)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "three times in a day" in body
+    # The way back is a fresh review, never a re-run of the dead one.
+    assert "re-review watcher" in body
+    import review_rerun
+    assert f"`{review_rerun.RERUN_REVIEW_ACT}` on the epic" in body
+    assert "Not Re-run failed jobs" in body
+    for other in ("Intake then Planning", "Todo for a build"):
+        assert other not in body, other
+
+
+def test_a_third_assumed_review_death_in_review_keeps_the_rerun_way_back():
+    s = Seams()
+    nodes = _three_deaths(stage="review", newest=_review_death())
+    s.recover([dated_card(lane="In Review", nodes=nodes)], now=NOW)
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "Re-run failed jobs for a fix, review or sync run" in body
+    assert "re-review watcher" not in body

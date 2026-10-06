@@ -327,7 +327,8 @@ _STAGE_BY_WORKFLOW = (
 )
 # A death in the plan workflow's second-critic review re-enters `review`, not
 # `plan` (DRE-5455): the epic already has its cards, and the re-review watcher
-# (DRE-5640, DRE-5842) is what brings a dead review back. Anchored at the START
+# (DRE-5640, DRE-5842) is what brings a dead review back — on its own grace,
+# not on the marker's reset, which it does not read. Anchored at the START
 # of the failed step's name, never a substring, so "Re-plan after the second
 # critic sent it back" and "Re-mint bot token — second critic" stay `plan`. The
 # review step itself is continue-on-error; the step that fails the job on its

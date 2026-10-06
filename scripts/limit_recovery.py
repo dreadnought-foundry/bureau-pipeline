@@ -23,7 +23,10 @@ EITHER
     hourly and its reset header is rarely in the error text; the sweep running
     this has just READ the board through that same quota, which is the
     evidence it refilled. A Claude limit with no reset time waits for the
-    account switch, because nothing here has evidence about it.
+    account switch, because nothing here has evidence about it. Since
+    DRE-5455 a Claude marker always carries a reset — an `assumed=yes` one,
+    five hours after the run, when the run named none — so that wait is now
+    only for markers written before it.
 
 ## Re-entry is the stage's own front door
 
@@ -59,6 +62,30 @@ is not red on every pass for a card nobody was told about.
     re-run, failed jobs only. Never a workflow_dispatch: the rerun keeps the
     run's own event, PR and head, which is what the fix loop, the critic and
     linear-sync all read.
+  * `review` on a card in Planning (DRE-5640) is the second critic's review,
+    and nothing here re-enters it. A re-run keeps its run id, and the medic
+    marks a run id once, so a re-run dying on the same wall would leave no
+    marker and nothing would bring it back. The re-review watcher asks for the
+    review again as a fresh run (`rereview_watch`, DRE-5842), and it does NOT
+    read the Claude wall: it asks once its own grace
+    (`REREVIEW_GRACE_MINUTES`) has passed behind the review's tombstone,
+    whether or not the marker's reset has (waiting for the reset is DRE-5842's,
+    not yet in the watcher). A review that dies again on the
+    same wall is marked again, so the bound below still counts it; this pass
+    says so on its line and makes no write. The hand-off checks still come
+    first, so a review death a person must see is told.
+
+## The assumed clock is bounded (DRE-5640)
+
+An assumed reset is a guess that the wall is the five-hour usage window.
+Claude has caps nothing here has the wording of — a weekly cap, a monthly
+spend limit — and under one of those a card would die, wait five hours and
+come back, for days. So when the newest marker is an assumed Claude one and
+the window holds CLAUDE_ASSUMED_DEATHS_MAX of them created within the last
+CLAUDE_ASSUMED_SPAN_HOURS, after the newest hand-off receipt, the card is
+handed to a person. The hand-off closes the marker and the count starts over
+behind it; a comment with no `createdAt` is not counted, so an unknown age
+never hands a card off.
 
 ## The writes are injected, and why
 
@@ -101,13 +128,14 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
 import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
+import review_rerun  # noqa: E402 — the re-run-the-review act's one spelling
 
 RECOVERY_TAG = "limit-recovery"
 RECOVERY_MARK = f"🔁 {RECOVERY_TAG}:"
@@ -124,6 +152,12 @@ BOUNCE_LANE = "Intake"   # before Planning exit: not policed, and Planning entry
 # plan death there is re-run in place — never re-planned.
 REPLAN_FROM = ("Intake", "Backlog", "Triage")
 BUILD_LANE = "Todo"
+# The bound on DRE-5455's assumed Claude clock (DRE-5640): this many assumed
+# deaths inside this many hours is a wall that is not the five-hour window.
+CLAUDE_ASSUMED_DEATHS_MAX = 3
+CLAUDE_ASSUMED_SPAN_HOURS = 24
+_COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine")
 
 
 class RecoveryFailed(RuntimeError):
@@ -184,7 +218,8 @@ def trigger(marker: dict, now: datetime, active_account: str | None) -> str | No
 def _until(marker: dict) -> str:
     reset = marker.get("reset")
     if reset is not None:
-        return f"until {dead_run.pacific(reset)}"
+        assumed = " (assumed — the run named no reset)" if marker.get("assumed") else ""
+        return f"until {dead_run.pacific(reset)}{assumed}"
     if marker.get("account"):
         return f"until the account switches away from {marker['account']}"
     return "for an account switch, and the marker recorded no account"
@@ -195,6 +230,34 @@ def _bodies(card: dict) -> list[str]:
     marker and the receipts that supersede it, so the order and WHICH fifty
     both matter (`linear_ops.window_nodes`, DRE-3250)."""
     return [n.get("body") or "" for n in linear_ops.window_nodes(card.get("comments"))]
+
+
+def _created(node: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat((node.get("createdAt") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def count_assumed_deaths(card: dict, now: datetime) -> int:
+    """How many assumed-clock Claude deaths the card's window holds that were
+    created within the last CLAUDE_ASSUMED_SPAN_HOURS and after the newest
+    hand-off receipt (DRE-5640). A node with no readable `createdAt` is not
+    counted: an unknown age never hands a card off."""
+    span = timedelta(hours=CLAUDE_ASSUMED_SPAN_HOURS)
+    count = 0
+    for node in linear_ops.window_nodes(card.get("comments")):
+        body = node.get("body") or ""
+        if body.lstrip().startswith(HANDOFF_MARK):
+            count = 0
+            continue
+        parsed = dead_run.parse_limit_marker(body)
+        if parsed is None or parsed.get("kind") != "claude" or not parsed.get("assumed"):
+            continue
+        created = _created(node)
+        if created is not None and now - created <= span:
+            count += 1
+    return count
 
 
 def _held(card: dict) -> bool:
@@ -236,12 +299,36 @@ def _needs_rerun(card: dict, marker: dict) -> bool:
     return stage in PLANNING_STAGES and _lane(card) not in (PLANNING_LANE, *REPLAN_FROM)
 
 
-def handoff_reason(card: dict, marker: dict) -> str | None:
+def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str | None:
     """Why nothing here can ever bring this card back — the ONE sentence a
-    person is told — or None when a trigger and a re-entry both exist."""
+    person is told — or None when a trigger and a re-entry both exist.
+
+    `assumed_deaths` is `count_assumed_deaths(card, now)`, read by `recover()`; the
+    bound only applies when the marker itself is an assumed Claude one."""
     stage = marker.get("stage")
     if stage not in PLANNING_STAGES and stage != "build" and stage not in RERUN_STAGES:
         return f"the marker names a stage this sweep does not know ({stage!r})"
+    if (marker.get("kind") == "claude" and marker.get("assumed")
+            and assumed_deaths >= CLAUDE_ASSUMED_DEATHS_MAX):
+        times = (_COUNT_WORDS[assumed_deaths] if assumed_deaths < len(_COUNT_WORDS)
+                 else str(assumed_deaths))
+        if stage == "review" and _lane(card) == PLANNING_LANE:
+            # The second critic's review: a re-run keeps its run id, which the
+            # medic has already marked, so a re-run is the one way NOT back.
+            way_back = (f"the second critic's review comes back as a fresh run: "
+                        f"the re-review watcher asks for it on its own, or a "
+                        f"person posts `{review_rerun.RERUN_REVIEW_ACT}` on the "
+                        f"epic. Not Re-run failed jobs: a re-run keeps the dead "
+                        f"run's id, and a second death on it is never marked")
+        else:
+            way_back = ("a person re-enters the card by hand: Intake then "
+                        "Planning for a classify or plan stage, Todo for a build, "
+                        "and Re-run failed jobs for a fix, review or sync run")
+        return (f"the run has died {times} times in a day on a Claude limit that "
+                f"named no reset time, each time brought back on an assumed "
+                f"five-hour clock, and a wall still standing after that is not the "
+                f"five-hour usage window. Once the account can run again, "
+                f"{way_back}")
     if _needs_rerun(card, marker) and not (marker.get("run") or "").isdigit():
         return (f"the marker names no GitHub run to re-run, so the failed {stage} "
                 f"run has to be re-run by hand (Actions → Re-run failed jobs), or "
@@ -334,12 +421,19 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # after the marker is read because the answer depends on its stage.
         if _held(card) and hold_blocks_stage(marker.get("stage") or ""):
             continue
-        reason = handoff_reason(card, marker)
+        reason = handoff_reason(card, marker, assumed_deaths=count_assumed_deaths(card, now))
         if reason is not None:
             # Told once, and the receipt closes the marker — no WIP spent, no
             # ERROR line, and the card is the sweep's again next pass.
             lops.cmd_comment(ident, handoff_receipt(marker, reason))
             lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('.')[0]}")
+            continue
+        # DRE-5640: the second critic's review is re-entered by the re-review
+        # watcher as a fresh run, never re-run here (see the module docstring).
+        if marker.get("stage") == "review" and _lane(card) == PLANNING_LANE:
+            lines.append(f"{RECOVERY_TAG}: {ident} review death ({marker['kind']} limit) "
+                         f"is the re-review watcher's — it asks for the review again "
+                         f"after its own grace and does not read the Claude wall")
             continue
         why = trigger(marker, now, active_account)
         if why is None:
