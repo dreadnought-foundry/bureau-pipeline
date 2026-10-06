@@ -163,7 +163,7 @@ def test_the_record_carries_exactly_the_contracted_fields():
     for field in (
         "identifier", "description", "state { name }",
         "children(first: 250) { nodes { identifier createdAt state { name } } }",
-        "history(last: 50) { nodes { createdAt toState { name } } }",
+        "history(first: 50) { nodes { createdAt toState { name } } }",
         "inverseRelations(first: 20)",
     ):
         assert field in selection, selection

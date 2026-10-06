@@ -639,8 +639,8 @@ def test_no_epic_is_read_alone_for_its_growth_or_its_green_light(replay):
     """
     alone = [
         v.get("id") for q, v in replay.fake.queries
-        if "issue(id: $id)" in q and "history(last: 50)" in q
-        and "inverseRelations" not in q
+        if "issue(id: $id)" in q and "history(first: 50)" in q
+        and "children(first: 250)" in q and "inverseRelations" not in q
     ]
     assert not alone, (
         f"{len(alone)} epic(s) read alone for their growth or green light: "

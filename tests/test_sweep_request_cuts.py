@@ -354,11 +354,11 @@ class FakeLinear:
             }
             return {"issue": {"identifier": card["identifier"], "state": card["state"],
                               "relations": relations, "parent": parent}}
-        if "inverseRelations" in q and "history(last: 50)" in q:
+        if "inverseRelations" in q and "history(first: 50)" in q:
             # The per-epic fallback of the read above: same selection, one
             # epic, taken only when the batch itself failed.
             return {"issue": self._epic_record(card)}
-        if "history(last: 50)" in q and "children(first: 250)" in q:
+        if "history(first: 50)" in q and "children(first: 250)" in q:
             # mid_epic._EPIC_QUERY — the epic's green light.
             kids = [
                 {"identifier": c["identifier"], "createdAt": c["createdAt"]}
