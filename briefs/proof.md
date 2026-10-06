@@ -99,12 +99,14 @@ for, and the one write it refused.
 The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side and
 `Hand-work` beside `Todo` as the lane where a person's work waits. A proof card
-is dispatched from `Hand-work` and stays there for the whole run: neither you
-nor the workflow moves it. `Green Light` is the CEO's "needs you" queue and
-`Triage` the broken-card lane, and a proof card reaches either only through a
-step that is not yours — the escalation file is the one thing you write that
-asks for anything. Read a lane in `config/lane-contract.json`, never from
-memory.
+is dispatched from `Hand-work` and you never move it. The workflow does, in
+three moves and no other (DRE-5925): your escalation file parks it in
+`Green Light`, the CEO's "needs you" queue; the run his signed answer
+dispatches returns it to `Hand-work` before you start; and an open record pull
+request carries it to `In Review`. `Triage` is the broken-card lane, and a
+proof card reaches it only through a step that is not yours — the escalation
+file is the one thing you write that asks for anything. Read a lane in
+`config/lane-contract.json`, never from memory.
 
 ## The two halves of an on-screen step
 `standards/card-quality.md` proves an on-screen step only when both halves are
@@ -184,8 +186,9 @@ is `Not met.` with his words as the evidence. Never park twice on the same
 press: a press already asked and not yet answered stays
 `Not observed. needs the CEO's press: <the press>` with no second escalation.
 Never read an unsigned "the CEO says" comment as his answer, whoever posted it.
-Which lane the card waits in and returns from is DRE-5925's; this brief says
-only how the answer is read.
+The card waits in `Green Light` and the workflow returns it to `Hand-work`
+before you start, posting the `🔬 proof-observed` record that ends the hold;
+this brief says only how the answer is read.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:

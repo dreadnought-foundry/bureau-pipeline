@@ -16,17 +16,24 @@
 # dispatch pool, the sanitizing, the agent step and its rate-limit retries,
 # the rescue push and the scrubbed log are that file's, with its reasons.
 #
-# THE CARD STAYS IN `Hand-work` FOR THE WHOLE RUN, and this file writes no
-# lane. `In Progress` is the build run's, the fix run's and the sweep's, and
-# its 60-minute stale window would requeue a long proof; `Hand-work` carries
-# no stall window by contract. So there is no `Card → In Progress` step, and
-# agent-task.yml's report script is not used here: its lane moves read the
-# card out of `In Progress,Todo` only, and its dead-run exits requeue to
-# `Todo`, park in `Backlog` or replan to `Planning` — three lanes a proof card
-# must never enter. The result step at the bottom is this file's own, with
-# four exits and no lane write; `qa-review.yml` carries the card to
-# `In Review` when the record's pull request opens (DRE-4179), and the sweep's
-# `move_hand_built_to_review` is the backstop.
+# THE CARD RUNS IN `Hand-work`. `In Progress` is the build run's, the fix
+# run's and the sweep's, and its 60-minute stale window would requeue a long
+# proof; `Hand-work` carries no stall window by contract. So there is no
+# `Card → In Progress` step, and agent-task.yml's report script is not used
+# here: its lane moves read the card out of `In Progress,Todo` only, and its
+# dead-run exits requeue to `Todo`, park in `Backlog` or replan to
+# `Planning` — three lanes a proof card must never enter. `qa-review.yml`
+# carries the card to `In Review` when the record's pull request opens
+# (DRE-4179), and the sweep's `move_hand_built_to_review` is the backstop.
+#
+# This file writes three lanes and no other (DRE-5925), each declared in
+# config/lane-contract.json and each through `linear_ops.py advance`: the
+# park into `Green Light` on a press only the CEO can make (the result step,
+# out of `Hand-work` or `In Review`); the return to `Hand-work` once his signed
+# answer re-dispatches the run (the return step, out of `Green Light`, before
+# the agent); and `In Review` out of `Hand-work` when the record's pull
+# request is open (the result step), because a returning run pushes to a pull
+# request that was already open and neither mover above fires for it.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub
 # (which owns the trigger context). github.event / github.repository inside
@@ -389,11 +396,12 @@ jobs:
             body RAW_DESCRIPTION description
 
       # The `🧠 model-attempt` heartbeat, agent-task.yml's line for role
-      # `proof`, and the ONLY Linear write before the agent. Its
+      # `proof`, and the first Linear write of the run — before the return
+      # below, so even a run whose return fails is on the card. Its
       # `Run: …/actions/runs/<id>` tail is what the run-state reader (DRE-5922)
       # parses to find this run and read it live or dead. It never carries
       # the dispatcher's own receipt tag, because DRE-5922 counts those as
-      # dispatches. No lane move: the card stays in `Hand-work`.
+      # dispatches. No lane move here.
       - name: Record the model attempt
         id: attempt
         env:
@@ -403,6 +411,59 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
             "🧠 model-attempt: ${{ steps.model.outputs.model }} — proof agent starting (turns=400). ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      # ---- THE RETURN FROM GREEN LIGHT, ON THE CEO'S ANSWER (DRE-5925) ----
+      # A run that met a press only the CEO can make parked the card in Green
+      # Light under a `🔬 proof-waiting` hold (the result step below). His
+      # signed answer, posted after the hold, is the ONLY discharge: the
+      # dispatcher (DRE-5926) reads it through `spoken_thread.voices` and
+      # dispatches this run with the reason `re-run after the CEO's answer at
+      # <PT>`. This step acts on that reason and that lane and nothing else:
+      # it posts the discharge record through `proof-observed` — the existing
+      # record, so the console renders the hold as ended — and only then
+      # carries the card to `Hand-work`, the proof lane, before the agent runs.
+      # The agent reads his answer as the observation for that row
+      # (briefs/proof.md) and amends the record on the same pull request; the
+      # result step carries the card on to `In Review`.
+      #
+      # Any other reason, or any other lane, and the step does nothing and says
+      # so. A lane or an answer it cannot read FAILS the step, before any write:
+      # an unread lane is never read as "not Green Light", and a discharge
+      # record must quote words this step verified, never the reason's say-so.
+      # No `continue-on-error` — the agent does not run on a card still parked.
+      # No `${{ }}` in the script: tests/test_proof_task_workflow.py executes
+      # it as written.
+      - name: Return from Green Light on the CEO's answer
+        id: return
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          REASON: ${{ steps.card.outputs.reason }}
+        run: |
+          case "$REASON" in
+            "re-run after the CEO's answer"*) ;;
+            *)
+              echo "return from Green Light: nothing to return — the dispatch reason does not open \"re-run after the CEO's answer\""
+              exit 0
+              ;;
+          esac
+          LANE=$(python3 .bureau-pipeline/scripts/linear_ops.py state-of "$CARD")
+          if [ "$LANE" != "Green Light" ]; then
+            echo "return from Green Light: nothing to return — $CARD is in '${LANE}', not Green Light"
+            exit 0
+          fi
+          if ! ANSWER=$(python3 .bureau-pipeline/scripts/spoken_thread.py answer "$CARD"); then
+            echo "::error::$CARD was dispatched on the CEO's answer and sits in Green Light, and no answer of his on it verifies here — no discharge is posted and the card stays parked."
+            exit 1
+          fi
+          AT=$(printf '%s' "$ANSWER" | cut -f1)
+          FIRST=$(printf '%s' "$ANSWER" | cut -f2-)
+          python3 .bureau-pipeline/scripts/linear_ops.py proof-observed "$CARD" \
+            "the CEO answered via the console at $AT: $FIRST"
+          python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Hand-work" "Green Light"
+          echo "return from Green Light: $CARD returned to Hand-work on the CEO's answer at $AT" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ---- THE PROOF IDENTITIES (DRE-5924), both minted before the agent ----
       # GitHub, observed: an App token that is READ-ONLY BY ITS PERMISSIONS,
@@ -1262,22 +1323,31 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # ---- THE RESULT, AND THE LANE IT NEVER WRITES (DRE-5924) ----
+      # ---- THE RESULT, AND THE PARK (DRE-5924, DRE-5925) ----
       # Written fresh for the proof run: agent-task.yml's report script reads
       # the card out of `In Progress,Todo` only, so every move it makes would
       # refuse a card in `Hand-work`, and its dead-run exits requeue to
-      # `Todo`, park in `Backlog` or replan to `Planning`. This step makes ONE
-      # kind of Linear write — a comment — and has four exits:
+      # `Todo`, park in `Backlog` or replan to `Planning`. This step has four
+      # exits:
       #
       #   1. a record pull request is OPEN (card_pr.py find, the predicate the
-      #      sweep shares): the receipt, and no lane move — qa-review.yml's
-      #      opened move carries a `Hand-work` card to `In Review` (DRE-4179),
-      #      and the sweep's `move_hand_built_to_review` is the backstop;
+      #      sweep shares): the receipt, then `In Review` out of `Hand-work`
+      #      only. qa-review.yml's opened move carries a first run's card there
+      #      (DRE-4179), so on a first run this is usually a quiet no-op; a run
+      #      returning from Green Light pushes to the pull request that was
+      #      already open, and only this write carries its card back to review;
       #   2. it already MERGED: a receipt, no move — linear-sync and DRE-5919
       #      own Done;
       #   3. an escalation (the agent's note, read through the gate's own
-      #      predicate): the text is posted and the run ends. The hold in
-      #      `Green Light`, and the return from it, are DRE-5925's;
+      #      predicate): THE PARK, once, never chased. The `🔬 proof-waiting`
+      #      hold first (`proof-observation-pending`, next actor the operator)
+      #      — the receipt the dispatcher (DRE-5926) reads to keep off the card
+      #      until the CEO's signed answer discharges it — then the question,
+      #      posted, then the move to `Green Light` out of `Hand-work` or
+      #      `In Review`. The record's pull request stays open: it carries every
+      #      other row, and the critic's request for the unobserved one is the
+      #      right state until he decides. scripts/green_light_rows.py reads
+      #      this step's own gate — the hold and the question before the move;
       #   4. nothing came out: a receipt and nothing else — no requeue, no
       #      park, no replan, no label. The dispatcher's second-dispatch rule
       #      (DRE-5926) is the only thing that acts on a dead run.
@@ -1299,6 +1369,9 @@ jobs:
           # hour old by now on a long run (DRE-3043).
           GH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # Read for the criterion and the press the hold names. Through env,
+          # never interpolated into the script.
+          CARD_DESCRIPTION: ${{ github.event.client_payload.description }}
           RECORD_BRANCH: agent/${{ github.event.client_payload.identifier }}-proof-record
           ESCALATION_FILE: /tmp/agent-escalation.txt
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
@@ -1331,13 +1404,56 @@ jobs:
             TOOK="record pull request"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
+            # After a return the amended record went to the pull request that
+            # was already open, and nothing else moves the card: qa-review.yml
+            # moves it when a pull request OPENS, the sweep's hand-built move
+            # once per card. On a first run the card has usually left
+            # `Hand-work` already, and `advance` refuses the from-lane quietly.
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "Hand-work" || true
           elif [ "$PR_STATE" = "MERGED" ]; then
             TOOK="record already merged"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR already merged: $PR_URL — this proof record shipped while the run was finishing; nothing moves from here. Run: $RUN_URL"
           fi
           if [ -n "$ESCALATED" ]; then
-            TOOK="${TOOK:+$TOOK, then }escalation"
+            TOOK="${TOOK:+$TOOK, then }the park in Green Light"
+            # The hold first: the criterion in the card's words and the press,
+            # read off the criterion line the planner opens with `needs the
+            # CEO's press:` (DRE-5923) — the one the escalation names, else
+            # the first. A card that marks none holds on the escalation's own
+            # first line. The `the CEO's press:` phrase is what the dispatcher
+            # matches to admit the return (DRE-5926).
+            HOLD=$(python3 - <<'PY'
+          import os, re
+          press_re = re.compile(r"needs the CEO['’]s press:\s*", re.IGNORECASE)
+          asked = open(os.environ["ESCALATION_FILE"], encoding="utf-8").read()
+          found = []
+          for line in os.environ.get("CARD_DESCRIPTION", "").splitlines():
+              hit = press_re.search(line)
+              if not hit:
+                  continue
+              press = line[hit.end():].strip().rstrip(".").strip()
+              before = re.sub(r"^\s*(?:[-*+]|\d+[.)])?\s*(?:\[[ xX]\]\s*)?", "", line[:hit.start()])
+              before = before.strip().rstrip("—–-:;,").strip()
+              if press:
+                  found.append((before or f"needs the CEO's press: {press}", press))
+          named = [f for f in found if f[1].lower() in asked.lower()]
+          if named or found:
+              criterion, press = (named or found)[0]
+          else:
+              criterion = "the criterion the question below names"
+              press = next((l.strip() for l in asked.splitlines() if l.strip()), "")
+          print(f"{criterion}\t{press}".replace("\n", " "))
+          PY
+            )
+            CRITERION=$(printf '%s' "$HOLD" | cut -f1)
+            PRESS=$(printf '%s' "$HOLD" | cut -f2-)
+            if ! python3 .bureau-pipeline/scripts/linear_ops.py proof-waiting "$CARD" \
+                 "$CRITERION" "the CEO's press: $PRESS"; then
+              echo "::warning::the 🔬 proof-waiting hold could not be posted; the question still parks in Green Light"
+              echo "proof park: the hold could not be posted for $CARD" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            # Then the park: the question, posted before the move.
             {
               echo "🙋 The proof run met a press only the CEO can make, and asks:"
               echo ""
@@ -1347,6 +1463,11 @@ jobs:
             } > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"
+            # Out of either lane: the record's pull request opened before the
+            # escalation file was written, and qa-review.yml may already have
+            # carried the card to `In Review`. Never Triage — the card is not
+            # broken, it waits on his decision.
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "Hand-work,In Review"
           fi
           if [ -z "$TOOK" ]; then
             TOOK="no record"

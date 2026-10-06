@@ -343,7 +343,8 @@ class WritesOnlyItsThreeLanesTest(unittest.TestCase):
         self.assertNotIn("dead_run.py", src)
 
     def test_never_a_state_write(self):
-        self.assertNotRegex(_runs(), r"linear_ops\.py\s+state\b")
+        # `state-of` is a read.
+        self.assertNotRegex(_runs(), r"linear_ops\.py\s+state(?![\w-])")
 
     def test_the_only_lane_writes_are_the_three_declared(self):
         runs = _runs()
@@ -557,9 +558,10 @@ class ResultStepTest(_StepHarness):
         [hold] = [c for c in posted if c[1] == "proof-waiting"]
         self.assertEqual(["needs the CEO's press: Rotate the console key",
                           "the CEO's press: Rotate the console key"], hold[3:])
+        self.calls.unlink()
         posted = self._run(escalation="Publish v3, or drop the row?\n",
                            description=description)
-        hold = [c for c in posted if c[1] == "proof-waiting"][-1]
+        [hold] = [c for c in posted if c[1] == "proof-waiting"]
         self.assertEqual(["The release is published",
                           "the CEO's press: Publish v3 in the console"], hold[3:])
 

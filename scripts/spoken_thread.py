@@ -52,6 +52,14 @@ exit 0 and print a `SPOKEN STATUS:` line: a thread read for CONTEXT must never
 fail a run, and an unreadable thread says UNKNOWN rather than "nobody said
 anything".
 
+ONE ANSWER, FOR THE PROOF RUN'S RETURN (DRE-5925). `answer <CARD>` prints the
+newest answer that verifies as `<signed time, PT>\t<the first line of his
+words>` — the console's "Answer from" heading is not his words — and exits 1,
+printing nothing, when the thread holds none or cannot be read. The proof run
+writes that line into the discharge record it posts before it carries a card
+the CEO answered back out of Green Light, so unlike the two renders a missing
+answer is a failure there, never an empty one.
+
 WHAT IT DOES NOT CHANGE. The groom drain's decisions (`groomer.vouch`, the
 groom receipt) are untouched — a groom marker with an answer receipt under it
 is still a fleet marker with no groom receipt, and refused. The plan-critic
@@ -348,13 +356,56 @@ def render_unknown(mode: str, reason: str) -> str:
         "reader can say that, and it could not run.", ""])
 
 
+def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:
+    """(his signed time in PT, the first line of his words) for the newest
+    answer that verified, or None."""
+    for voice in reversed(all_voices):
+        if voice.kind != CEO_VIA_CONSOLE:
+            continue
+        receipt = console_receipt.parse_answer(voice.body)
+        words = [line.strip() for line in
+                 console_receipt.answer_text(voice.body).split("\n")]
+        if words and _ANSWER_HEAD.match(words[0]):
+            words = words[1:]
+        first = next((line for line in words if line), "")
+        if receipt is not None and first:
+            return pacific_label(receipt.at), first
+    return None
+
+
+#: The console's heading above the CEO's words (`console_receipt.ANSWER_SPEC`).
+_ANSWER_HEAD = re.compile(r"^Answer from .* PT:$")
+
+
+def _main_answer(card: str) -> int:
+    if not card or not os.environ.get("LINEAR_API_KEY"):
+        print("spoken-thread: answer needs a card and a Linear key",
+              file=sys.stderr)
+        return 1
+    try:
+        found = newest_answer(read(card))
+    except Exception as exc:  # noqa: BLE001 — said, and never read as an answer
+        print(f"spoken-thread: could not read {card}'s comments — "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    if found is None:
+        print(f"spoken-thread: no answer of the CEO's on {card} verifies",
+              file=sys.stderr)
+        return 1
+    print(f"{found[0]}\t{found[1]}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     mode = args[0] if args else ""
-    if mode not in ("people", "thread"):
-        print("usage: spoken_thread.py (people|thread) <CARD>", file=sys.stderr)
+    if mode not in ("people", "thread", "answer"):
+        print("usage: spoken_thread.py (people|thread|answer) <CARD>",
+              file=sys.stderr)
         return 2
     card = (args[1] if len(args) > 1 else "").strip()
+    if mode == "answer":
+        return _main_answer(card)
     if not card:
         print(render_unknown(mode, "no card was named to read"))
         return 0
