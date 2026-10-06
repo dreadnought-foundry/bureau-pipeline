@@ -295,7 +295,12 @@ def _world(cards, slug, closed=None):
             "waiting": waiting,
         }),
     }
-    result = SimpleNamespace(red=False, epic_cap_reads=epic_cap_reads)
+    card_reads = {
+        "get_issue": mock.MagicMock(side_effect=get_issue),
+        "comment_records": mock.MagicMock(return_value=[]),
+    }
+    result = SimpleNamespace(red=False, epic_cap_reads=epic_cap_reads,
+                             card_reads=card_reads)
     lops = reconcile.linear_ops
     with contextlib.ExitStack() as stack:
         enter = stack.enter_context
@@ -321,10 +326,10 @@ def _world(cards, slug, closed=None):
         # Linear's reads.
         enter(mock.patch.object(lops, "gql_paged", side_effect=urgent.gql_paged))
         enter(mock.patch.object(lops, "gql", return_value={}))
-        enter(mock.patch.object(lops, "comment_records", return_value=[]))
+        enter(mock.patch.object(lops, "comment_records", card_reads["comment_records"]))
         enter(mock.patch.object(lops, "comment_bodies", return_value=[]))
         enter(mock.patch.object(lops, "count_comments", return_value=0))
-        enter(mock.patch.object(lops, "get_issue", side_effect=get_issue))
+        enter(mock.patch.object(lops, "get_issue", card_reads["get_issue"]))
         # The epic queue's reads (DRE-5152). Only the owner starts the line,
         # so on the rail the owner is this sweep.
         for name, fake in epic_cap_reads.items():
@@ -358,6 +363,7 @@ def _sweep(cards, slug, capsys, *, reads=None, close_only=False, closed=None):
             result.red = True
     if reads is not None:
         reads.update(result.epic_cap_reads)
+        reads.update(result.card_reads)
     return writes, capsys.readouterr().out.splitlines(), result.red
 
 
