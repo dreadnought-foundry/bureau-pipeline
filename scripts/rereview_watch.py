@@ -34,6 +34,26 @@ then `plan_critic.BOUND_PARK_LANE`, then a note ending with
 dispatches a plan run the moment an `agent:planner` card enters Triage, and
 the plan-gate refuses that run only when the card already carries the label.
 
+A LIMIT DEATH IS A WAIT, NOT SILENCE (DRE-5842). When a review or a re-plan
+dies on a Claude limit the medic writes a `🪦 limit-death:` marker with a
+reset (DRE-5455), and DRE-5640 leaves a `stage=review` death on a Planning
+epic to this watcher. Three rules, read once a promise is found and before
+its grace, off the pipeline's own comments in the attempt after the
+promise's record (so a comment anyone else posts can neither silence nor
+fire one):
+
+  * a marker `limit_recovery.waiting` still holds, whose reset is ahead, is
+    quiet until the reset. After it the rules above decide, and the grace
+    has long run out, so a review death gets its first firing at once — a
+    fresh run with a fresh run id, which the medic can mark if it dies
+    again. A marker with no reset changes nothing.
+  * a `limit_recovery.RECOVERY_MARK` receipt younger than the grace is
+    quiet: the recovery re-entered the stage, and that run owns it.
+  * a `limit_recovery.HANDOFF_MARK` receipt that is the newest limit record
+    makes the second firing due at once. A person has been told this epic
+    cannot come back on its own, and a review asked for into that wall
+    would only die again, so the park note quotes the hand-off's reason.
+
 THE PLANNER LINE IS NOT SILENCE (DRE-5167). A review asked for claims a planner
 slot like any plan run; with none free it posts a `waiting` receipt and the
 line's backstop (DRE-5178) dispatches it in order. An epic in line inside
@@ -92,6 +112,7 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import dead_run  # noqa: E402
+import limit_recovery  # noqa: E402
 import linear_ops  # noqa: E402
 import plan_critic  # noqa: E402
 import planner_queue  # noqa: E402
@@ -460,6 +481,68 @@ def _own_notices(entries, after: int) -> list[tuple[int, str, str | None]]:
     return out
 
 
+def _limit_records(entries, after: int) -> list[tuple[str, dict]]:
+    """The limit records after `entries[after]`, oldest→newest, as
+    `(kind, entry)` with `kind` one of `marker`, `recovery` or `handoff`.
+
+    `entries` is already the pipeline's own comments, so a marker or a
+    receipt anyone else posts is not here.
+    """
+    out = []
+    for entry in entries[after + 1:]:
+        text = _body(entry).lstrip()
+        if dead_run.parse_limit_marker(text) is not None:
+            out.append(("marker", entry))
+        elif text.startswith(limit_recovery.RECOVERY_MARK):
+            out.append(("recovery", entry))
+        elif text.startswith(limit_recovery.HANDOFF_MARK):
+            out.append(("handoff", entry))
+    return out
+
+
+def _handoff_reason(body: str) -> str:
+    """The reason a `limit_recovery.handoff_receipt` gives, without its mark,
+    its opening clause or its closing `(Limit death: …)` parenthesis."""
+    text = " ".join((body or "").split())
+    text = text[len(limit_recovery.HANDOFF_MARK):].strip()
+    _head, dash, rest = text.partition(" — ")
+    reason = rest if dash else text
+    before, paren, _tail = reason.rpartition(" (Limit death:")
+    reason = before if paren else reason
+    return reason.strip().rstrip(".").strip() or "no reason recorded"
+
+
+def _the_wall(promise: dict, entries, now: str | None, grace: int):
+    """DRE-5842's three rules, as `("quiet", why)`, `("handoff", reason)` or
+    None when none of them applies and the rules after decide."""
+    after = promise["index"]
+    records = _limit_records(entries, after)
+    marker = limit_recovery.waiting([_body(e) for e in entries[after + 1:]])
+    at = _instant(now) if now else datetime.now(UTC)
+    reset = (marker or {}).get("reset")
+    if reset is not None and at is not None and reset > at:
+        assumed = " (assumed)" if marker.get("assumed") else ""
+        return "quiet", (
+            f"waiting on a {marker['kind']} limit death ({marker['stage']} "
+            f"stage) until {dead_run.pacific(reset)}{assumed} — asks for the "
+            "review again after that")
+    if records and records[-1][0] == "handoff":
+        return "handoff", _handoff_reason(_body(records[-1][1]))
+    recoveries = [e for kind, e in records if kind == "recovery"]
+    if recoveries:
+        # A receipt Linear named no readable time for is not known to be
+        # young, so it silences nothing: the rules after decide, as they do
+        # for every other comment.
+        try:
+            minutes = _minutes_since(_created_at(recoveries[-1]) or "", now)
+        except ValueError:
+            minutes = None
+        if minutes is not None and minutes < grace:
+            return "quiet", (f"the limit recovery re-entered it {int(minutes)} "
+                             "min ago — that run owns it")
+    return None
+
+
 def _receipts_after(entries, after: int) -> list:
     """Planner-slot receipts the pipeline posted after `entries[after]`."""
     return [r for r in (_receipt(e) for e in entries[after + 1:]) if r]
@@ -483,6 +566,9 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
       * a record Linear gave no `created_at` for. There is no arithmetic to do
         on an unknown stamp, and the whole content of a firing is how long it
         has been (standards/console-honesty.md rule 2).
+      * a limit death still behind its wall, or a stage the limit recovery
+        re-entered inside the grace (DRE-5842, `_the_wall`). A hand-off
+        from the recovery is the opposite: the park is due at once.
       * a planner run that claimed a slot after the promise: the review is
         running. For a dead review, any receipt behind the tombstone but the
         dead run's own release: a retry reached the planner behind it.
@@ -513,6 +599,19 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
             f"{_what(promise)} at {since!r}, which is not a time this can "
             "read — how long it has been is unknown"
         ))
+    wall = _the_wall(promise, entries, now, grace)
+    if wall is not None and wall[0] == "quiet":
+        return Reading(None, False, wall[1],
+                       log=f"rereview-missing: {epic} quiet — {wall[1]}")
+    if wall is not None:
+        found = dict(promise, minutes=minutes, lane=lane, firing=2,
+                     handoff=wall[1])
+        why = (f"{_because(promise, minutes)} — the limit recovery handed it "
+               f"to a person: {wall[1]}")
+        parked = any(kind == "park" for _i, kind, _at
+                     in _own_notices(entries, promise["index"]))
+        return Reading(found, parked, why + (
+            " — parked once already for this record" if parked else ""))
     if minutes < grace:
         return Reading(None, False, (
             f"{_what(promise)} {int(minutes)} min ago and the review it "
@@ -597,7 +696,9 @@ def log_line(epic: str, found: dict) -> str:
     else:
         line = (f"rereview-missing: {epic} review died {m} min ago — no retry "
                 "and no round")
-    if found.get("firing") == 2:
+    if found.get("handoff") is not None:
+        line += " — the limit recovery handed it to a person"
+    elif found.get("firing") == 2:
         line += " — asked for once already"
     return line
 
@@ -670,6 +771,16 @@ def _park_note(epic: str, found: dict) -> str:
                "get to run twice needs a person to look at why, not a third "
                "ask.")
     back = f"**The way back:** {plan_critic.REAPPROVE_HOW}."
+    if found.get("handoff") is not None:
+        return (
+            f"{head} The limit recovery handed this epic to a person: "
+            f"{_what(found)} at {at}, and the recovery said it cannot bring it "
+            f"back on its own — \"{found['handoff']}\".\n\n"
+            "Nothing has been found wrong with the plan. A review asked for "
+            "into that wall would only die again, so the pipeline asked for "
+            "none.\n\n"
+            f"{back}"
+        )
     if found["silence"] == HANDED_OFF:
         return (
             f"{head} The first critic passed this plan at {at}, and the "
