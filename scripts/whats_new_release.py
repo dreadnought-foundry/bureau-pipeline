@@ -29,6 +29,11 @@ existed is ordinary. A pull request GitHub will not read — a 404, a 502, a
 release's other sentences still publish. A first release collects nothing, as
 the Linear release attaches nothing.
 
+Each collected entry records the card that delivered it as `cards` (DRE-6015):
+the `DRE-<n>` its head branch names, read with `usage_reading.card_from_ref` —
+the one `agent/DRE-<n>-<slug>` pattern. A branch naming no card writes no
+`cards` key, never an empty guess.
+
 THE RULE'S SWITCH IS NOT ASKED
 ------------------------------
 Unlike the gate, this module never asks whether the What's New rule is
@@ -74,6 +79,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -82,6 +88,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gh_read_retry import is_rate_limit_refusal  # noqa: E402
 from release_linear import changes_since, surface_filter  # noqa: E402
+from usage_reading import card_from_ref  # noqa: E402 — the one `agent/DRE-<n>-…` pattern
 from whats_new import (  # noqa: E402
     Entry, WhatsNewError, check_wording, parse_line, required_for, validate)
 
@@ -190,6 +197,9 @@ def collect(changes, *, repo: str, run, env, out) -> tuple:
             skipped.append((number, reason))
             out(f"{TAG}: #{number} skipped — {reason}")
             continue
+        card = card_from_ref(pull["head"])
+        if card is not None:
+            entry = replace(entry, cards=(card,))
         entries.append(entry)
         out(f"{TAG}: #{number} collected — {entry.kind}, {entry.audience}: {entry.title}")
     return entries, skipped

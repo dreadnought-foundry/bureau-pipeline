@@ -26,9 +26,8 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 
 ## The wording
 
-- Write for the person who uses the product: what they can now do or no longer
-  hits. No card numbers (`DRE-123`), no pull request numbers (`#123`), no
-  backticks.
+- Write for the person who uses the product: what they can now do or no longer hits.
+  No card numbers (`DRE-123`), no pull request numbers (`#123`), no backticks.
 - No commit-speak or internal words: PR, pull request, merge, merged, commit,
   refactor, CI, workflow, endpoint, schema, migration, card, branch.
 - List a fix only if a person could have hit the bug. Internal work is `none`.
@@ -81,7 +80,7 @@ The train collects a release's lines into one `whats-new.json`:
   "items": [
     {"kind": "improved", "audience": "everyone",
      "title": "Searching a document now finds words inside tables.",
-     "body": "", "open": "/documents"},
+     "body": "", "open": "/documents", "cards": ["DRE-5893"]},
     {"kind": "fixed", "audience": "moderators",
      "title": "Approving a flagged post no longer hides the next one in the queue.",
      "body": ""}
@@ -92,7 +91,8 @@ The train collects a release's lines into one `whats-new.json`:
 - `product` is the repository name after the owner, `release` the train's
   verified tag, `shipped` the Pacific time it was published, with its offset.
   One release per file, no other keys, never an empty `items` — a release with
-  nothing to say publishes no file.
+  nothing to say publishes no file. `cards`, when present, lists the card that
+  delivered the entry, read off the pull request's branch and never written by hand.
 - The train publishes it as the `whats-new.json` asset of a GitHub Release on
   the product's tag: it creates the release when the tag has none and replaces
   the asset when it does.

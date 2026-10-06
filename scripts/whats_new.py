@@ -92,12 +92,17 @@ class Entry:
     title: str
     body: str = ""
     open: str | None = None
+    #: The cards that delivered it, read off the pull request's branch by the
+    #: collector (DRE-6015) — never parsed from the line, never in the title.
+    cards: tuple[str, ...] = ()
 
     def as_item(self) -> dict:
         item = {"kind": self.kind, "audience": self.audience,
                 "title": self.title, "body": self.body}
         if self.open is not None:
             item["open"] = self.open
+        if self.cards:
+            item["cards"] = list(self.cards)
         return item
 
 
@@ -280,7 +285,10 @@ def enforced_for(created_at: str | None, *, cutover=_UNSET) -> bool:
 # --- the file ----------------------------------------------------------------
 
 _DOCUMENT_KEYS = ("product", "release", "shipped", "items")
-_ITEM_KEYS = ("kind", "audience", "title", "body", "open")
+_ITEM_KEYS = ("kind", "audience", "title", "body", "open", "cards")
+
+#: One card number in an item's `cards`.
+_CARD = re.compile(r"DRE-[0-9]+")
 
 
 def _item_problems(index: int, item: object) -> list[str]:
@@ -306,6 +314,13 @@ def _item_problems(index: int, item: object) -> list[str]:
         problems.append(
             f"{at}.open: {item['open']!r} must be a page in the product: one leading `/`, "
             "never `//` or `/\\`, no spaces.")
+    if "cards" in item:
+        cards = item["cards"]
+        if (not isinstance(cards, list) or not cards
+                or not all(isinstance(card, str) and _CARD.fullmatch(card) for card in cards)):
+            problems.append(
+                f"{at}.cards: {cards!r} must be a non-empty list of card numbers like "
+                "\"DRE-123\" — leave the key out when no card is known.")
     return problems
 
 
