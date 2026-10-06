@@ -210,6 +210,21 @@ def test_fire_with_no_event_follows_the_labels():
     assert fake.events == ["agent-execute", "agent-plan"]
 
 
+def test_the_proof_event_is_a_known_event():
+    # DRE-5921: the proof runner's dispatch event, shared byte for byte with
+    # the `repository_dispatch` type of the stub that runs it.
+    assert plan_run.PROOF_EVENT == "proof-execute"
+    assert plan_run.PROOF_EVENT in plan_run.EVENTS
+
+
+def test_fire_sends_the_proof_event_when_named():
+    with _fake_dispatch() as fake:
+        assert plan_run.fire(_record("DRE-9012", ONE_OFF_LABELS), REPO,
+                             event=plan_run.PROOF_EVENT) == (True, "")
+    assert fake.events == ["proof-execute"]
+    assert fake.sent[0]["client_payload"]["identifier"] == "DRE-9012"
+
+
 def test_fire_refuses_an_event_it_does_not_know():
     with _fake_dispatch() as fake:
         try:

@@ -85,6 +85,9 @@ class MappingTest(unittest.TestCase):
             "plan-critic-post": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "plan-artifact.md", "plan-critic.md"],
             "fix": ["comms.md", "untrusted-content.md", "engineering.md", "whats-new.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
+            # The proof runner (DRE-5921) writes a record against a proof
+            # card's criteria (card-quality) to the engineering floor.
+            "proof": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md"],
         }
         self.assertEqual(set(expected), set(ac.ROLE_STANDARDS))
         for role, want in expected.items():
@@ -317,6 +320,95 @@ class RealFilesTest(unittest.TestCase):
 def _read_repo(*parts):
     with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
         return f.read()
+
+
+class ProofRoleTest(unittest.TestCase):
+    """DRE-5921: the proof runner is a role the assembler knows, so the
+    workflow that dispatches it can `assemble proof` and get its brief last."""
+
+    def _cli(self, *args):
+        import subprocess
+
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "assemble_context.py"), *args],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+    def test_roles_lists_proof(self):
+        self.assertIn("proof", self._cli("roles").split())
+
+    def test_standards_are_comms_untrusted_card_quality_engineering(self):
+        self.assertEqual(
+            ac.standards_for("proof"),
+            ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md"],
+        )
+
+    def test_context_paths_end_with_the_proof_brief(self):
+        paths = ac.context_paths("proof", root="R")
+        self.assertEqual(paths[-1], os.path.join("R", "briefs", "proof.md"))
+
+    def test_cli_assemble_proof_ends_in_the_brief(self):
+        blob = self._cli("assemble", "proof", "--root", REPO)
+        sections = [line for line in blob.splitlines()
+                    if line.startswith("===== BEGIN ")]
+        self.assertEqual(sections[-1], "===== BEGIN briefs/proof.md =====")
+        self.assertTrue(blob.rstrip("\n").endswith("===== END briefs/proof.md ====="))
+        self.assertIn("# Proof runner", blob)
+
+
+class ProofBriefTest(unittest.TestCase):
+    """DRE-5921: briefs/proof.md carries the contract its siblings build to —
+    the workflow (proof-task.yml), the sweep that dispatches it, the run-state
+    reader and the return of the CEO's answer read these exact strings."""
+
+    def setUp(self):
+        self.text = _read_repo("briefs", "proof.md")
+        self.flat = " ".join(self.text.split())
+
+    def test_the_identities_and_what_each_may_do(self):
+        for name in ("GH_READ_TOKEN", "GH_TOKEN", "LINEAR_API_KEY"):
+            self.assertIn(f"`{name}`", self.text, name)
+        self.assertIn("GH_TOKEN=$GH_READ_TOKEN gh api", self.text)
+        self.assertIn("aws: none", self.text)
+        self.assertIn("## Identities", self.text)
+        self.assertIn("no card yet", self.flat)
+        self.assertIn("a dispatched run that signs in is outside this epic and "
+                      "has no card yet", self.flat.lower())
+
+    def test_the_branch_title_and_first_line(self):
+        for needle in ("agent/DRE-<n>-proof-record", "PROOF record: <card title>",
+                       "Proof record for DRE-<n>"):
+            self.assertIn(needle, self.text, needle)
+
+    def test_the_result_vocabulary(self):
+        for needle in ("`Met.`", "`Not met.`", "`Not observed.`",
+                       "Not observed. needs the CEO's press: <the press>",
+                       'Met. by the CEO\'s press, his words at <PT>: "',
+                       "Dropped by the CEO at <PT>",
+                       "Not observed. needs a browser on a local run of the "
+                       "released commit",
+                       "The CEO closes this card after reading the record | "
+                       "Open: the CEO's step",
+                       "**Status: PASS | PARTIAL | FAIL.**",
+                       "| Criterion | Result |"):
+            self.assertIn(needle, self.text, needle)
+
+    def test_the_escalation_resume_and_answer(self):
+        for needle in ("/tmp/agent-escalation.txt", "spoken_thread.py",
+                       "re-run after the CEO's answer", "second dispatch",
+                       "merges the default branch", "any dispatch"):
+            self.assertIn(needle, self.flat, needle)
+
+    def test_the_heartbeats(self):
+        for line in ("⏳ 1/5 read", "⏳ 2/5 observing", "⏳ 3/5 record written",
+                     "⏳ 4/5 local checks", "⏳ 5/5 PR opened"):
+            self.assertIn(line, self.text, line)
+
+    def test_it_emits_no_verdict_marker(self):
+        # The brief names the rule; it never spells a marker an agent could
+        # copy into a record (standards/untrusted-content.md).
+        for marker in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(marker, self.text, marker)
 
 
 def _bullets(text):
