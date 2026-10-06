@@ -177,7 +177,7 @@ jobs:
     # EMPTY Dependabot secrets store (DRE-2047/2067). Dependabot neither pushes
     # to main nor dispatches, so with the pull_request trigger gone the guard
     # could only ever be true.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # Scenario budget for the whole default sweep: each verdict wait is bounded
     # by the critic job's own timeout — 65m since DRE-2466, not the 25m this
     # comment and the driver's default were both written against —

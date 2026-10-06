@@ -97,7 +97,7 @@ jobs:
   # than typed.
   owners:
     name: Read the roster
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       owners: ${{ steps.read.outputs.owners }}
@@ -110,7 +110,7 @@ jobs:
   watch:
     name: Watch ${{ matrix.owner }}
     needs: owners
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     strategy:
       # One owner's missing or under-permissioned installation must not stop

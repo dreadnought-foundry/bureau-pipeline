@@ -114,7 +114,7 @@ jobs:
   # One catalog read, one classification, one summary table. The questions for
   # the CEO are filed here; the one adoption candidate is handed on.
   classify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     outputs:
       candidate: ${{ steps.pick.outputs.candidate }}
@@ -327,7 +327,7 @@ jobs:
     if: >-
       !cancelled() && (needs.trial.outputs.outcome == 'failed'
       || (needs.pin-trial.outputs.outcome != '' && needs.pin-trial.outputs.outcome != 'passed'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,7 +397,7 @@ jobs:
   adopt:
     needs: [classify, trial]
     if: ${{ !cancelled() && needs.trial.outputs.outcome == 'passed' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     steps:
       # Minted FIRST: the checkout's push credential and `gh pr create` both
@@ -588,7 +588,7 @@ jobs:
     if: >-
       !cancelled() && needs.classify.result == 'success'
       && (needs.classify.outputs.route == 'pin' || needs.trial.outputs.outcome == 'degraded')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     outputs:
       branch: ${{ steps.push.outputs.branch }}
@@ -733,7 +733,7 @@ jobs:
   pin-pr:
     needs: [classify, pin-raise, pin-trial]
     if: ${{ !cancelled() && needs.pin-trial.outputs.outcome == 'passed' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     steps:
       - name: Mint bot token
