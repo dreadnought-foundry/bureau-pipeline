@@ -22,6 +22,7 @@ Pinned here, over a fixture board:
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import stat
 import subprocess
@@ -883,3 +884,34 @@ def test_a_stub_runs_the_phase_and_lifts_its_spend(tmp_path, stub):
 def test_the_stub_names_are_the_fix_workflow_family():
     assert proof_dispatch.STUBS == (".github/workflows/self-proof-task.yml",
                                     ".github/workflows/proof-task.yml")
+
+
+# --------------------------------------------------------------------------- #
+# an answer the console's key could not check                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _unchecked_voices(nodes, viewer, *, card):
+    """`fake_voices`, with the CEO's comments read as UNCHECKED: the key was
+    unreadable, so the signature check never ran (DRE-4153)."""
+    return [dataclasses.replace(v, kind=spoken_thread.UNCHECKED, body=None)
+            if v.kind == spoken_thread.CEO_VIA_CONSOLE else v
+            for v in fake_voices(nodes, viewer, card=card)]
+
+
+def test_an_unchecked_console_answer_neither_returns_nor_discharges_and_says_why(
+        monkeypatch, capsys):
+    nodes = _parked()
+    board = Board(green=[_green("DRE-5930", nodes)], threads={"DRE-5930": nodes},
+                  hand=[lane_card("DRE-5931")])
+    board.threads["DRE-5931"] = [promoted(600), ceo_press_hold(300), answer(60)]
+    h = Harness(monkeypatch, board, states={"DRE-5930": state("finished")})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: None,
+        find_pr=h.find_pr, run_state=h.run_state, release=h.release,
+        fire=h.fire, voices=_unchecked_voices, now=NOW)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == []
+    assert any("COULD NOT BE CHECKED" in l for l in _about(lines, "DRE-5930"))
+    assert any("condition 4" in l and "COULD NOT BE CHECKED" in l
+               for l in _about(lines, "DRE-5931"))

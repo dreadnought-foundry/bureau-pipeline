@@ -566,6 +566,43 @@ def _drive_epic_start_redispatched(mp):
     reconcile.tend_epic_queue(now)
 
 
+@site("proof-run-dispatched", "proof-run-dispatched")
+def _drive_proof_run_dispatched(mp):
+    """The sweep's proof-run dispatch (DRE-5926): one eligible PROOF card, a
+    confirmed dispatch, and the receipt it posts after it — at a fixed clock."""
+    import proof_dispatch  # noqa: PLC0415 — only this driver needs it
+    import proof_release  # noqa: PLC0415
+    import proof_run_state  # noqa: PLC0415
+
+    card = {"id": "uuid-1", "identifier": "DRE-1", "title": "PROOF: it works",
+            "description": "", "updatedAt": "2026-10-06T16:00:00Z",
+            "state": {"name": "Hand-work"},
+            "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
+            "comments": {"nodes": []}}
+
+    class Board:
+        def lane(self, state):
+            return [card] if state == "Hand-work" else []
+
+        def card(self, _identifier):
+            return {"inverseRelations": {"nodes": []},
+                    "parent": {"identifier": "DRE-2", "state": {"name": "In Progress"},
+                               "children": {"nodes": []}}}
+
+        def thread(self, _identifier):
+            return [], "viewer"
+
+    _card_recorder(mp)
+    proof_dispatch.sweep(
+        "dreadnought-foundry/bureau-pipeline", "bureau-pipeline", live=True,
+        linear=Board(), read=lambda _path: None, find_pr=lambda _ident: None,
+        run_state=lambda *_a, **_k: proof_run_state.State(
+            "none", ["none"], 0, None, [], None),
+        release=lambda *_a, **_k: proof_release.Reading("ready", ["ready"]),
+        fire=lambda *_a, **_k: (True, ""), voices=lambda *_a, **_k: [],
+        now=datetime(2026, 10, 6, 17, 0, tzinfo=UTC))
+
+
 #: The hygiene agent's twelve acts (DRE-5368). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the

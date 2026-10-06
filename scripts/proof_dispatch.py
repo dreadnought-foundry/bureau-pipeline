@@ -315,6 +315,22 @@ def _answered_after_park(voices: list) -> tuple | None:
     return answers[-1] if answers else None
 
 
+def _unchecked_after_hold(voices: list) -> bool:
+    """Does a console answer the check could not RUN on follow the newest
+    hold? `spoken_thread.UNCHECKED` is neither his answer nor a refused one
+    (DRE-4153): it discharges nothing and returns nothing, and the line says
+    so, rather than reading as a thread with no answer at all."""
+    holds = [i for i, v in enumerate(voices)
+             if (v.body or "").lstrip().startswith(HOLD_MARK)]
+    return bool(holds) and any(v.kind == spoken_thread.UNCHECKED
+                               for v in voices[holds[-1] + 1:])
+
+
+UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
+                  "console's key could not be read) — it counts for nothing "
+                  "until a pass that can check it")
+
+
 class _Pass:
     def __init__(self, repo, slug, *, live, linear, read, find_pr, run_state,
                  release, fire, voices, now):
@@ -372,7 +388,8 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         holds = _open_holds(voices)
         if holds:
-            raise _condition(4, "hold", f"held by {holds[-1]}", "held")
+            note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
+            raise _condition(4, "hold", f"held by {holds[-1]}{note}", "held")
 
         got = self.run_state(self.repo, ident, comments, viewer,
                              read=self.read, now=self.now)
@@ -467,7 +484,8 @@ class _Pass:
             _say(card["identifier"], f"return: its comments could not be read "
                                      f"for his answer: {error}")
             return False
-        if _answered_after_park(voices) is not None:
+        if (_answered_after_park(voices) is not None
+                or _unchecked_after_hold(voices)):
             return True
         return (linear_ops.window_is_partial(card.get("comments"))
                 and any(v.kind == spoken_thread.CEO_VIA_CONSOLE for v in voices))
@@ -477,6 +495,8 @@ class _Pass:
         self._epic_and_blockers(card)
         comments, viewer, voices = self._thread(card)
         found = _answered_after_park(voices)
+        if found is None and _unchecked_after_hold(voices):
+            raise _Refused(f"return: the park has {UNCHECKED_NOTE}", "held")
         if found is None:
             raise _Refused("return: no signed answer of the CEO's follows a "
                            "park naming his press")
