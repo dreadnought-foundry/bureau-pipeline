@@ -238,7 +238,7 @@ _STOOD_DOWN = (
     "retrigger_dead_heads", "flag_no_checks_prs", "flag_unowned_prs",
     "flag_unlanded_work", "flag_stranded_fixes", "fix_approved_but_red",
     "retry_dead_fix_runs", "redispatch_standing_verdicts", "recover_limit_deaths",
-    "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
+    "rerun_runner_lost_ci", "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
     "recover_crashed_reviews", "report_fleet_reviewer_outage",
     "check_dependabot_capacity", "settle_repair_cards", "report_intake_depth",
     "close_finished_epics", "promote_ready", "move_hand_built_to_review",

@@ -378,12 +378,17 @@ jobs:
           # The read door's own lines: the mode this pass ran in, any phase it
           # skipped on a hold, and its exit line (served/unknown/unavailable).
           DOOR=$(grep '^read-door' sweep.log || true)
+          # A default-branch CI run GitHub never gave a machine (DRE-5901):
+          # each re-run, each second loss reported, each refusal — one
+          # `runner-lost:` line apiece, lifted here so they are read.
+          LOST=$(grep -E '^(ERROR: )?runner-lost:' sweep.log || true)
           {
             echo "### Reconcile sweep — spend"
             echo
             echo '```'
             if [ -n "$SPEND" ]; then printf '%s\n' "$SPEND"; fi
             if [ -n "$DOOR" ]; then printf '%s\n' "$DOOR"; fi
+            if [ -n "$LOST" ]; then printf '%s\n' "$LOST"; fi
             if [ -n "$BUDGET" ]; then
               printf '%s\n' "$BUDGET"
             else

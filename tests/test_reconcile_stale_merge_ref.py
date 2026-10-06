@@ -454,7 +454,7 @@ def test_a_failed_put_makes_main_exit_non_zero():
         "recover_crashed_reviews", "check_dependabot_capacity",
         "report_intake_depth", "close_finished_epics", "promote_ready",
         "report_break_glass", "report_epic_growth", "report_fix_concurrency",
-        "report_evicted_fix_runs",
+        "report_evicted_fix_runs", "rerun_runner_lost_ci",
     )}
     mocks["flag_stranded"] = MagicMock(return_value=set())
     mocks["active_cards"] = MagicMock(return_value=[])

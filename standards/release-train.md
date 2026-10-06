@@ -156,6 +156,20 @@ and what was ignored. `checks: read` is the permission green-at-SHA reads
 record that says which of those runs gate, and the re-arm below dispatches
 the stub with it.
 
+**A CI run GitHub never gave a machine is re-run once (DRE-5901).** A run
+whose jobs were cancelled "not acquired by Runner" concluded `cancelled`, so
+the train reads it as red and leaves without the commit, and the medic, which
+wakes on `failure` and `timed_out` only, never sees it. The reconcile sweep
+does: in every repo, every pass, the newest CI run of each workflow on the
+default branch that concluded `cancelled` with every non-green job carrying
+that annotation has its failed and cancelled jobs re-run (`gh run rerun <id>
+--failed`), once — its first attempt only — with one `runner-lost:` line in
+the sweep's log and step summary naming the repo, the run, the jobs and the
+reason. The train reads the re-run's result on its next run, as it reads any
+CI result. A run cancelled by a newer push, by a person or by a timeout is
+left alone, and a re-run attempt lost the same way is reported once and never
+re-run again (`scripts/runner_lost.py`).
+
 **`deployments: write` is what the train records its decision with**
 (DRE-4771): every run writes one deployment plus one status per surface it
 decides about — the decision as the payload,

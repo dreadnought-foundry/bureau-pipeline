@@ -190,6 +190,10 @@ def _sweep_mocks(extra=None):
         # partner report_fix_concurrency() reads local YAML and makes no gh
         # call, so it runs here for real.
         "report_evicted_fix_runs": MagicMock(),
+        # DRE-5901 added the runner-lost re-run, which reads the default
+        # branch and its CI runs on every full sweep; same treatment (its own
+        # coverage lives in test_runner_lost_rerun.py).
+        "rerun_runner_lost_ci": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
