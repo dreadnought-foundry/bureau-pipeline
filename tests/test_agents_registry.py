@@ -81,6 +81,14 @@ _TOOLS_RE = re.compile(r'--allowedTools\s+"([^"]*)"')
 # arrives through `env:` or through the action's own inputs.
 _SECRET_RE = re.compile(r"secrets\.([A-Za-z_][A-Za-z0-9_]*)")
 
+# ...or as a token an earlier step MINTED, handed to the agent step under an
+# env name (DRE-5924: the proof runner's `GH_READ_TOKEN`, the read-only App
+# token). It is no secret, so the expression names none — the credential's
+# name is the env key it arrives under. Env only: the action's own
+# `github_token:` input is the worker token every agent holds, and it is not
+# a name the agent's shell sees.
+_MINTED_RE = re.compile(r"\$\{\{\s*steps\.[A-Za-z_][\w-]*\.outputs\.token\s*\}\}")
+
 ACTION = "anthropics/claude-code-action"
 
 # The implicit `actions/checkout` — no `repository:` — is whichever product
@@ -120,8 +128,10 @@ def step_credentials(doc, job, step):
     answer at all (DRE-2696)."""
     names = set()
     for block in (doc.get("env"), job.get("env"), step.get("env")):
-        for value in (block or {}).values():
+        for key, value in (block or {}).items():
             names |= set(_SECRET_RE.findall(str(value)))
+            if _MINTED_RE.search(str(value)):
+                names.add(key)
     for value in (step.get("with") or {}).values():
         names |= set(_SECRET_RE.findall(str(value)))
     return names
@@ -297,8 +307,32 @@ class AgentsRegistryTest(unittest.TestCase):
     def test_every_agent_workflow_has_an_entry(self):
         covered = {a["workflow"].split("/")[-1] for a in load()}
         agent_workflows = {"agent-task.yml", "agent-fix.yml", "qa-review.yml",
-                           "plan.yml", "medic.yml"}
+                           "plan.yml", "medic.yml", "proof-task.yml"}
         self.assertEqual(agent_workflows, covered & agent_workflows)
+
+    def test_the_proof_runner_holds_the_engineers_credentials_and_the_read_token(self):
+        """DRE-5924: the proof run holds the worker App token, the read-only
+        App token, the Linear keys and the model credential — never a
+        person's key, and nothing the build agent does not already hold
+        beyond `GH_READ_TOKEN`. Read off the agent step, like every
+        credential check here."""
+        roster = {a["name"]: a for a in load()}
+        self.assertIn("proof", roster)
+        proof = roster["proof"]
+        self.assertEqual(".github/workflows/proof-task.yml", proof["workflow"])
+        self.assertEqual("briefs/proof.md", proof["briefPath"])
+        self.assertEqual(400, proof["maxTurns"])
+        self.assertEqual([CALLER, "dreadnought-foundry/bureau-pipeline"], proof["repoScope"])
+        allowed = set(roster["engineer"]["credentials"]) | {"GH_READ_TOKEN"}
+        doc = yaml.safe_load(open(os.path.join(ROOT, proof["workflow"])).read())
+        steps = agent_steps(doc)
+        self.assertTrue(steps, "proof-task.yml runs no agent step")
+        for _job_id, job, step, name in steps:
+            creds = step_credentials(doc, job, step)
+            self.assertLessEqual(creds, allowed,
+                                 f"agent step {name!r} is handed {sorted(creds - allowed)}")
+            self.assertIn("GH_READ_TOKEN", creds)
+        self.assertEqual(allowed, set(proof["credentials"]))
 
     def test_turns_match_workflow_text(self):
         """The roster's budget must be one the workflow actually runs with.
@@ -453,8 +487,10 @@ class AgentsRegistryTest(unittest.TestCase):
         with_linear, with_pool, declares_linear = set(), set(), set()
         # The seven are the workflows that run a MODEL. A scripted agent
         # (DRE-5369) has no agent step for this surface to describe.
+        # DRE-5924 made it eight: the proof runner's proof-task.yml, which
+        # holds the key and the pool exactly as the build agent does.
         workflows = {a["workflow"] for a in load() if not is_scripted(a)}
-        self.assertEqual(7, len(workflows), "the fleet is no longer seven "
+        self.assertEqual(8, len(workflows), "the fleet is no longer eight "
                                             "agent workflows — re-read the "
                                             "surface before editing this")
         for wf in sorted(workflows):
@@ -478,10 +514,11 @@ class AgentsRegistryTest(unittest.TestCase):
                          declares_linear)
         self.assertEqual(
             {"agent-task.yml", "agent-fix.yml", "plan.yml",
-             "verify.yml", "red-main-repair.yml"}, with_linear)
+             "verify.yml", "red-main-repair.yml", "proof-task.yml"}, with_linear)
         self.assertEqual(
             {"agent-task.yml", "red-main-repair.yml", "verify.yml",
-             "qa-review.yml", "agent-fix.yml", "plan.yml"}, with_pool)
+             "qa-review.yml", "agent-fix.yml", "plan.yml",
+             "proof-task.yml"}, with_pool)
 
     def test_header_says_which_fields_are_enforced_and_by_what(self):
         """The next person must not have to discover the enforcement the way
@@ -678,6 +715,23 @@ class DriftFixtureTest(unittest.TestCase):
         problems = credential_drift(_ENTRY, self._write(widened))
         self.assertTrue(problems, "an undeclared credential passed")
         self.assertIn("BUREAU_APP_ID_2", problems[0])
+
+    def test_a_minted_token_is_a_credential_under_its_env_name(self):
+        """DRE-5924: `GH_READ_TOKEN` is an App token a step minted, not a
+        secret, so no `secrets.` expression names it. It is still reach the
+        agent holds, and the roster must declare it — or fail."""
+        minted = _FIXTURE.replace(
+            "          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}\n"
+            "        with:",
+            "          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}\n"
+            "          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}\n"
+            "        with:",
+        )
+        path = self._write(minted)
+        problems = credential_drift(_ENTRY, path)
+        self.assertTrue(problems and "GH_READ_TOKEN" in problems[0], problems)
+        declared = dict(_ENTRY, credentials=["LINEAR_API_KEY", "GH_READ_TOKEN"])
+        self.assertEqual([], credential_drift(declared, path))
 
     def test_an_undeclared_repo_fails(self):
         """A third repo checked out into the agent's workspace is reach the
