@@ -75,7 +75,9 @@ rendered from the same items as the file, so the two never disagree. The
 script should not write a release of its own, or the surface gets two. A script
 that already writes its own Linear release (agent-bureau's three, from before
 this seam) declares no pipeline here and is untouched: it gets the file and no
-`## What's new` section in its note.
+`## What's new` section in its note. A `channel` surface may declare one too
+(DRE-4872): the train still never runs it, and `promote-channel.yml` writes
+`stable-<short sha>` each time the channel moves.
 
 ## The rollback
 

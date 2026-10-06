@@ -375,6 +375,50 @@ jobs:
           python3 scripts/channel_record.py --repo "$GITHUB_REPOSITORY" \
             release --from-sha "$FROM_SHA" --to-sha "$TO_SHA"
 
+      # The tag moved, so Linear gets its release (DRE-4872) — the
+      # `bureau-pipeline-channel` pipeline release.json declares. The version
+      # is `stable-<short sha>`, the range is where `stable` was to where it
+      # is now, and the note names the Integration Harness run that proved
+      # the sha: the gating run on the automatic path, the commit's own stamp
+      # on a by-hand one. Only after the move, and VERIFIED: the ref is read
+      # back, and a read-back that is not the candidate writes nothing. A held
+      # channel never reaches here (`promote` is false), and the script
+      # refuses that case too.
+      #
+      # The checkout is shallow, and the range needs main's history, so it is
+      # unshallowed here — only on a run that moved the tag. Like the train,
+      # Linear never fails a promotion: the script exits 0 on any refusal, a
+      # missing key is one WARNING line, and `continue-on-error` covers the
+      # rest. Premortem: the key is this repo's own `LINEAR_API_KEY`, read
+      # in the same store as the App key above (a `workflow_run` and a
+      # dispatch both read the repo's normal store). A re-run finds `stable`
+      # already at the candidate, decides no-op, and never reaches this step,
+      # so it writes no second release.
+      - name: Write the Linear release
+        if: steps.decide.outputs.promote == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PROMOTED: ${{ steps.decide.outputs.promote }}
+          FROM_SHA: ${{ steps.ancestry.outputs.head }}
+          TO_SHA: ${{ steps.resolve.outputs.candidate }}
+          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          HARNESS_AT: ${{ github.event.workflow_run.updated_at }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          STABLE_NOW="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          git fetch --quiet --no-tags --unshallow origin "$DEFAULT_BRANCH" \
+            || echo "linear-release: could not unshallow ${DEFAULT_BRANCH}"
+          python3 scripts/release_linear.py --repo "$GITHUB_REPOSITORY" \
+            channel --surface pipeline-channel --promoted "$PROMOTED" \
+            --from-sha "$FROM_SHA" --to-sha "$TO_SHA" \
+            --stable-now "$STABLE_NOW" \
+            --harness-run "$HARNESS_RUN" --harness-at "$HARNESS_AT" \
+            --statuses-file combined_status.json
+
       # Where the channel stands, as the ONE receipt line the release train
       # also prints (DRE-3568) — through release_train.py, so the console
       # parses one format from either run. Main runs only: a PR-head run is

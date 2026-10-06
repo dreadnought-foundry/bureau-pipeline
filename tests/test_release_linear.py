@@ -140,11 +140,12 @@ def test_a_malformed_declaration_is_refused_with_the_key_named(declared, needle)
     assert any(needle in p for p in problems), problems
 
 
-def test_a_channel_surface_cannot_name_a_pipeline():
+def test_a_channel_surface_may_name_a_pipeline():
+    # DRE-4872 reversed DRE-3855 for the channel: its release is the move of
+    # the channel ref, written by promote-channel, not by the train.
     data = {"surfaces": {"pipeline-channel": _surface_entry([], record="channel")},
             "linear_pipelines": {"pipeline-channel": PIPELINE}}
-    problems = release_train.check_schema(data)
-    assert any("cuts no version tag" in p for p in problems), problems
+    assert release_train.check_schema(data) == []
 
 
 def test_the_declaration_is_top_level_so_an_old_schema_never_reads_it():

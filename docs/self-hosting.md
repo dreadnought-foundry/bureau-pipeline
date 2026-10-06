@@ -76,6 +76,15 @@ agent-bureau repo; the third clause added by DRE-2103).
     exactly that. The watcher holds `contents: read` and cannot move the
     ref it watches.
 
+  - **Every move is a Linear release (DRE-4872).** Once it has moved
+    `stable` and read the ref back, `promote-channel.yml` writes release
+    `stable-<short sha>` to the `bureau-pipeline-channel` pipeline that
+    `.github/bureau/release.json` declares (`scripts/release_linear.py`). It
+    carries the cards the merges since the previous `stable` name, and its
+    note names the Integration Harness run that proved the sha. A held
+    channel writes nothing, and a Linear failure is one warning line that
+    never fails or reverses the promotion.
+
   So what `stable` buys today is the pre-tag question above, answered
   continuously instead of by a hand-run dispatch: it is always the newest
   proven sha on `main`, so once a candidate has soaked on the canary the
