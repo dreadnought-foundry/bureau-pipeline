@@ -8,7 +8,7 @@ verification on top of the sweeps, the gates, the relay and the console. The
 busiest hour measured before this change: agent tasks 275-330, agent fix
 60-90, QA 56, plus most of an untraceable 600-950 — against a 2,500 limit.
 
-WHAT THIS PINS, read off the workflow files themselves, for exactly the four
+WHAT THIS PINS, read off the workflow files themselves, for exactly the agent
 workflows below — plan.yml's pattern copied, not reinvented
 (tests/test_planner_linear_key.py pins the original):
 
@@ -60,10 +60,10 @@ FALLBACK_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 HOME = "planner-oauth"
 HOME_EXPR = "${{ " + OPT_IN + " && 'planner-oauth' || '' }}"
 
-# The four agent workflows this change moves, and the job in each that holds
-# the key. A floor of key-holding steps per workflow, so a renamed key cannot
-# make this pass by finding nothing (counted 2026-10-02: 10, 7, 4, 5). The
-# critic and the verifier each hold one fewer since Stage 2 fix #14: their two
+# The four agent workflows this change moved, DRE-5924's proof run since, and
+# the job in each that holds the key. A floor of key-holding steps per
+# workflow, so a renamed key cannot make this pass by finding nothing
+# (counted 2026-10-02: 10, 7, 4, 5). The critic and the verifier each hold one fewer since Stage 2 fix #14: their two
 # card reads became one snapshot step, and the steps that read the snapshot
 # hold no key (tests/test_review_card_snapshot_wiring.py).
 AGENT_WORKFLOWS = {
@@ -71,6 +71,9 @@ AGENT_WORKFLOWS = {
     "agent-fix.yml": ("fix", 7),
     "qa-review.yml": ("review", 3),
     "verify.yml": ("verify", 4),
+    # DRE-5924: the proof run is copied from agent-task.yml, so it holds the
+    # build agent's keys on the same opt-in (counted 2026-10-06: 6).
+    "proof-task.yml": ("execute", 6),
 }
 
 # Every workflow that may read the planner's token. plan.yml is the original.
@@ -291,7 +294,7 @@ def test_the_opt_in_is_the_callers_variable_and_read_nowhere_else(name):
 # ── a token known to be dead is never sent (review item 30) ─────────────────
 EXPIRES_EXPR = "${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}"
 
-# Every job in the fleet that can hold the planner's token: the four agent
+# Every job in the fleet that can hold the planner's token: the agent
 # jobs, and the planner's own two — the gate lives in linear_ops, which every
 # one of them runs, and a planner sending a dead token is the same 401 storm.
 TOKEN_JOBS = {
@@ -331,7 +334,7 @@ def test_no_other_workflow_reads_the_planners_token():
     assert readers == PLANNER_KEY_READERS, sorted(readers ^ PLANNER_KEY_READERS)
 
 
-def test_only_the_four_agent_workflows_ask_for_the_opt_in():
+def test_only_the_agent_workflows_ask_for_the_opt_in():
     """The planner's own plan.yml has spent its bucket since DRE-5589 without
     asking; the opt-in is for the agents that joined it, and only them."""
     askers = {path.name for path in WORKFLOWS.glob("*.yml")

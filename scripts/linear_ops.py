@@ -440,8 +440,8 @@ def declared_identity() -> str:
 # first (Stage 2 review item 50 — measure `X-Complexity` before a repo opts its
 # agents in). plan.yml hands its steps that token
 # as `LINEAR_API_KEY` when the console has published one — and agent-task,
-# agent-fix, qa-review and verify do the same in a repo whose variable
-# `LINEAR_AGENT_BUCKET` is `planner` — the fleet key in
+# agent-fix, qa-review, verify and proof-task do the same in a repo whose
+# variable `LINEAR_AGENT_BUCKET` is `planner` — the fleet key in
 # `LINEAR_API_KEY_FALLBACK` beside it, and the token's home in
 # `LINEAR_KEY_HOME`. The line names the home only while the process is really
 # spending it: the two keys differ (a token was published) and no 401 has

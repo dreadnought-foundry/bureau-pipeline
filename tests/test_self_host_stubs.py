@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import medic_wake  # noqa: E402
+import plan_run  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 PIPELINE = "dreadnought-foundry/bureau-pipeline"
@@ -107,6 +108,11 @@ EXPECTED_STUBS = {
     # DRE-3016. Manual dispatch only, following the same D5 reasoning — the
     # trigger shape is asserted in tests/test_planner_score.py.
     "self-planner-replay.yml": ("planner-replay.yml", "Planner Replay"),
+    # DRE-5924. The proof run's own stub: a `proof-execute` dispatch from the
+    # sweep (DRE-5926) and nothing else. Its own workflow, never agent-task.yml,
+    # so the proof runner is never a build role (DRE-3039). The trigger shape
+    # is asserted below.
+    "self-proof-task.yml": ("proof-task.yml", "Proof Task"),
     # verify.yml deliberately has NO stub: its scope gate targets UI cards
     # (**Design:** lines) / multi-system app diffs, and bureau-pipeline has no
     # runnable app surface to verify behaviorally.
@@ -175,6 +181,31 @@ class TriggerShapeTest(unittest.TestCase):
     def test_plan_listens_for_agent_plan_dispatch(self):
         on = _on(_load("self-plan.yml"))
         self.assertEqual(on.get("repository_dispatch", {}).get("types"), ["agent-plan"])
+
+    def test_proof_task_listens_for_proof_execute_dispatch(self):
+        """DRE-5924: the event string is the one plan_run names (DRE-5921),
+        and it is the stub's ONLY trigger — no pull_request, so the merge
+        gate's watch list does not change."""
+        on = _on(_load("self-proof-task.yml"))
+        self.assertEqual({"repository_dispatch": {"types": [plan_run.PROOF_EVENT]}}, on)
+        self.assertEqual("proof-execute", plan_run.PROOF_EVENT)
+
+    def test_proof_task_queues_per_card_and_never_cancels(self):
+        """A second dispatch for the same card queues behind the first."""
+        doc = _load("self-proof-task.yml")
+        self.assertEqual(
+            {"group": "proof-${{ github.event.client_payload.identifier }}",
+             "cancel-in-progress": False},
+            doc.get("concurrency"))
+
+    def test_proof_task_grants_the_four_permissions(self):
+        doc = _load("self-proof-task.yml")
+        self.assertEqual(
+            {"id-token": "write", "contents": "write",
+             "pull-requests": "write", "actions": "write"},
+            doc.get("permissions"))
+        (job,) = _call_jobs(doc, "self-proof-task.yml")
+        self.assertEqual({"pipeline_ref": "main"}, job.get("with"))
 
     def test_reconcile_runs_on_schedule(self):
         on = _on(_load("self-reconcile.yml"))

@@ -485,6 +485,41 @@ agents:
     briefPath: null
     workflow: .github/workflows/red-main-repair.yml
 
+  - name: proof
+    role: Proof runner
+    category: operations
+    # DRE-5924. Observes a PROOF card's criteria and writes the record — it
+    # never builds. Its OWN workflow, never agent-task.yml: the build roles
+    # are derived from the entries running on agent-task.yml
+    # (scripts/proof_and_demo.py), and a role there is one the fleet picks up
+    # for a PROOF card (DRE-3039). The workhorse ladder (config/models.yaml).
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "PROOF card in Hand-work with every blocker closed and its release live → sweep repository_dispatch (proof-execute)"
+    # Web tools since DRE-2785, held from its first day like every agent's —
+    # a criterion can name a vendor's status page or a released action's
+    # changelog. The turn budget was sized with them: the default ceiling
+    # every build card gets (DRE-4361), with no rung selection, because a
+    # proof card carries no `turns:`/`size:` label to read.
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    # The engineer's credentials plus GH_READ_TOKEN — the read-only App token
+    # the workflow mints (contents, actions, pull requests, metadata: read)
+    # and every GitHub observation is made as. The worker token reaches the
+    # step as the action's `github_token` input, as it does for every agent.
+    # The caller's AWS proof session, when one is assumed, reaches the agent
+    # as the configure-aws-credentials action's EXPORTED environment, so it is
+    # not an env-block name this roster's check can see; PROOF_ROLE_ARN itself
+    # is held by one probe step and never reaches the agent step.
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, GH_READ_TOKEN]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/proof.md
+    workflow: .github/workflows/proof-task.yml
+
   # The first SCRIPTED agent (DRE-5369): its workflow runs scripts/hygiene.py
   # and never a model, so it has no generated model region — `model: null` is
   # written out, because an entry with no `model` key is drift and an entry

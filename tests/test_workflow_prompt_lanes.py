@@ -46,6 +46,9 @@ EXPECTED_PROMPT_FILES = {
     # 8 → 12 with DRE-3970: the four planner steps' re-runs on the next rung.
     # 12 → 13 with DRE-5376: the planner's revision of a sent-back one-off.
     "plan.yml": 13,
+    # DRE-5924: the proof run's agent step and its two rate-limit retries,
+    # copied from agent-task.yml's three.
+    "proof-task.yml": 3,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,

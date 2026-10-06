@@ -35,6 +35,7 @@ never pinned to the channel it is proving.
 | `qa-review.yml` | calls this repo's `qa-review.yml` — the adversarial critic | `bot_pr_flow`, `dependabot_flow`, `gate_paths` |
 | `merge-gate.yml` | calls this repo's `merge-gate.yml` — CI green + APPROVE ⇒ qa-bot merges | `bot_pr_flow`, `gate_paths` |
 | `reconcile.yml` | calls this repo's `reconcile.yml` — the ~15-minute sweep, and the `workflow_dispatch` review route | `dependabot_flow` |
+| `proof-task.yml` | would call this repo's `proof-task.yml` — the proof run on a PROOF card (DRE-5924). **No sandbox stub is installed and no rehearsal fires it; both are outside this epic and have no card yet.** | none |
 | `ci.yml` | the sandbox's OWN product CI — no counterpart here. The merge gate fail-closes to `wait` when a head carries no non-review checks, so the sandbox needs at least one workflow reporting a check run | `bot_pr_flow`, `gate_paths` (indirectly) |
 
 `linear-sync.yml` is deliberately absent: harness branches carry no `DRE-n`
