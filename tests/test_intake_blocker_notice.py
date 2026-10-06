@@ -510,6 +510,7 @@ def test_the_read_asks_for_the_lanes_the_rule_names():
     (_query, variables), = board.queries
     assert set(variables["states"]) == {"Todo", "In Progress", "In Review"}
     assert variables["epicStates"] == ["In Progress"]
+    assert variables["needle"] == reconcile.REPO_SLUG, "the read is this repo's work"
 
 
 def test_an_unreadable_board_is_raised_never_read_as_no_pairs():

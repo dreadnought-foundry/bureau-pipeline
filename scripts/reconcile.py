@@ -4110,8 +4110,8 @@ def advance_urgent_intake() -> set[str]:
 #
 # COST: nothing on a pass with an empty Intake or nothing in a work lane — both
 # answered off the one board read the pass already made. Otherwise ONE paged
-# read of the cards that could be blocked, relations inline, and a whole-thread
-# read only for a pair whose notice is not in the target's window.
+# read of the cards that could be blocked, relations inline; each target's
+# thread comes off the pass's cache, read whole only when it is past the window.
 
 # Opens the notice and every run-log line, and keys "once": a notice carries
 # `<opener>: <blocker> holds up <blocked>` on its first line, and the sweep
@@ -4130,11 +4130,16 @@ _INTAKE_BLOCKER_KEY = re.compile(
 
 # The cards that could be blocked, read with their relations and their epic.
 # The filter is the rule — the work lanes, or Backlog under a running epic —
-# and the sweep checks both again on what comes back, so a looser answer never
-# widens it.
-_INTAKE_BLOCKED_QUERY = """query($states: [String!]!, $epicStates: [String!]!, $after: String) {
-  issues(first: 50, after: $after, filter: {
+# narrowed to this repo's label the way the idle check's `IDLE_QUERY` is, so
+# the read is this repo's work and not the team's (one page, not several). The
+# sweep checks all three again on what comes back, so a looser answer never
+# widens it. Like the idle check, it does not see a card routed only by the
+# deprecated `**Repo:**` stamp.
+_INTAKE_BLOCKED_QUERY = """query($needle: String!, $states: [String!]!, $epicStates: [String!]!,
+         $after: String) {
+  issues(first: 100, after: $after, filter: {
     team: {key: {eq: "DRE"}},
+    labels: {name: {containsIgnoreCase: $needle}},
     or: [
       {state: {name: {in: $states}}},
       {state: {name: {eq: "Backlog"}}, parent: {state: {name: {in: $epicStates}}}}
@@ -4229,10 +4234,21 @@ def _intake_blocker_body(blocker: dict, blocked: dict) -> str:
     return intake_blocker_notice(blocker, blocked, titles=False)
 
 
-def _intake_pairs_said(target: str, *, whole_thread: bool) -> set[tuple[str, str]]:
+def _intake_pairs_said(target: str) -> set[tuple[str, str]]:
+    """The (blocker, blocked) pairs already said on `target`, off its WHOLE
+    thread — "never repeated" must hold on a busy epic too.
+
+    Inside a sweep the default read already is the whole thread (the pass's
+    cache never holds a partial one, DRE-3236), at no request for a card the
+    board read carried. Only an answer as long as the window — one that could
+    have been cut there — is read again whole.
+    """
+    bodies = linear_ops.comment_bodies(target)
+    if len(bodies) >= linear_ops.COMMENT_WINDOW:
+        bodies = linear_ops.comment_bodies(target, whole_thread=True)
     return {
         m.groups()
-        for body in linear_ops.comment_bodies(target, whole_thread=whole_thread)
+        for body in bodies
         for m in _INTAKE_BLOCKER_KEY.finditer(body or "")
     }
 
@@ -4262,7 +4278,8 @@ def report_intake_blockers() -> list[tuple[str, str]]:
         return []
     cards = linear_ops.gql_paged(
         _INTAKE_BLOCKED_QUERY % INVERSE_PAGE,
-        {"states": list(INTAKE_BLOCKED_LANES), "epicStates": list(EPIC_ACTIVE_STATES)},
+        {"needle": REPO_SLUG, "states": list(INTAKE_BLOCKED_LANES),
+         "epicStates": list(EPIC_ACTIVE_STATES)},
     )
     complete_inverse_relations(cards)
     pairs = intake_blocker_pairs(cards)
@@ -4271,11 +4288,7 @@ def report_intake_blockers() -> list[tuple[str, str]]:
         stop, work = blocker["identifier"], blocked["identifier"]
         target = _intake_blocker_target(blocked)
         if target not in said:
-            said[target] = _intake_pairs_said(target, whole_thread=False)
-        if (stop, work) not in said[target]:
-            # Not in the window: read the whole thread before saying it, so a
-            # busy epic never hears the same pair twice.
-            said[target] |= _intake_pairs_said(target, whole_thread=True)
+            said[target] = _intake_pairs_said(target)
         if (stop, work) in said[target]:
             print(f"{tag}: {stop} (Intake) holds up {work} "
                   f"({blocked['state']['name']}) — already said on {target}")

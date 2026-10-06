@@ -154,9 +154,18 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: line (one request). This board labels nobody, so neither reads further —
 #: no per-epic read and no `fleet_state`. 43 + 2 = 45.
 #:
+#: It was 45 until DRE-4152 (measured 2026-10-06: 47) named an Intake card
+#: that blocks work in flow. Which card blocks which is a RELATION, and the
+#: board read carries none, so `report_intake_blockers` reads this repo's cards
+#: in Todo, In Progress and In Review — and Backlog under an In Progress epic —
+#: with their relations: one paged read, filtered by the repo label. This board
+#: puts 197 of this repo's cards there, two pages at a hundred; a live repo
+#: under its WIP cap has far fewer. Each target's thread comes off the pass's
+#: cache, so no per-card read. 45 + 2 = 47.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 45
+REAL_BOARD_SWEEP_BUDGET = 47
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -259,6 +268,26 @@ class ReplayLinear(FakeLinear):
             ]
             return {"issues": {"nodes": nodes,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "$epicStates" in q:
+            # The Intake blocker notice's read (DRE-4152): this repo's cards in
+            # the work lanes, or in Backlog under an epic in `epicStates`, with
+            # their relations. Answered with the filter Linear applies — the
+            # repo label, the lanes and the parent's lane — so the replay
+            # measures the pages a live board would cost.
+            self.queries.append((query, v))
+            needle = (v.get("needle") or "").lower()
+            nodes = []
+            for card in self.cards.values():
+                labels = [l["name"].lower()
+                          for l in (card.get("labels") or {}).get("nodes") or []]
+                if not any(needle in name for name in labels):
+                    continue
+                lane = card["state"]["name"]
+                parent_lane = ((card.get("parent") or {}).get("state") or {}).get("name")
+                if lane in v.get("states", ()) or (
+                        lane == "Backlog" and parent_lane in v.get("epicStates", ())):
+                    nodes.append(card)
+            return self._page(nodes, v.get("after"))
         return super().gql(query, variables)
 
 

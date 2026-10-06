@@ -484,10 +484,12 @@ def test_the_board_read_is_its_own_phase(capsys):
     third of them: it runs on the same board read, so it pays for the snapshot
     whenever the two before it do not. `serve_planner_line` (DRE-5178) is the
     fourth, for the same reason, and `advance_urgent_intake` (DRE-4150) — the
-    Urgent fast path, beside the Intake count on the same read — the fifth."""
+    Urgent fast path, beside the Intake count on the same read — the fifth.
+    `report_intake_blockers` (DRE-4152), right after it on the same read, is
+    the sixth."""
     fake = FakeLinear(*_busy_board())
     _run_sweep(fake, mocks=("flag_stranded", "report_intake_depth",
-                            "advance_urgent_intake",
+                            "advance_urgent_intake", "report_intake_blockers",
                             "repair_frozen_planning_holds",
                             "serve_planner_line"))
     printed = _phase_lines(_spend_lines(capsys))
