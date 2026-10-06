@@ -184,7 +184,8 @@ def test_a_release_collects_its_sentences_newest_first_and_drops_the_nones(tmp_p
         "Approving a flagged post no longer hides the next one in the queue.",
         "Searching a document now finds words inside tables."]
     assert result["items"][0] == {"kind": "fixed", "audience": "moderators",
-                                  "title": result["items"][0]["title"], "body": ""}
+                                  "title": result["items"][0]["title"], "body": "",
+                                  "cards": ["DRE-17"]}
     assert (15, "none") in result["skipped"]
     # Each pull request is read once, with the documented `gh api` call.
     assert sorted(gh.api_reads()) == [f"repos/{REPO}/pulls/{n}" for n in (12, 15, 17)]
@@ -208,6 +209,55 @@ def test_assemble_is_the_document_the_standard_describes():
                         "shipped": "2026-10-01T14:05:30-07:00",
                         "items": [entries[0].as_item()]}
     assert whats_new.validate(document) == []
+
+
+def _one_pull(tmp_path, head):
+    """One squash since the previous tag, #21, on `head`, saying TABLES."""
+    repo = _repo(tmp_path)
+    sha = _squash(repo, "Show every portal on one panel (#21)", "client/panel.ts")
+    return repo, sha, FakeGh({21: (head, f"{TABLES}\n")})
+
+
+def test_an_entry_records_the_card_its_branch_names(tmp_path):
+    repo, sha, gh = _one_pull(tmp_path, "agent/DRE-5893-one-panel")
+    entries, skipped = whats_new_release.collect(
+        [(sha, "Show every portal on one panel (#21)")],
+        repo=REPO, run=gh, env={"GH_TOKEN": "t"}, out=lambda line: None)
+    assert skipped == []
+    [entry] = entries
+    assert entry.cards == ("DRE-5893",)
+    assert entry.as_item()["cards"] == ["DRE-5893"]
+
+
+def test_a_branch_naming_no_card_writes_no_cards_key(tmp_path):
+    repo, sha, gh = _one_pull(tmp_path, "fix/queue")
+    result = _write(repo, sha, gh)
+    assert result["problem"] is None
+    [item] = result["items"]
+    assert item["title"] == "Searching a document now finds words inside tables."
+    assert "cards" not in item
+    [(_, document)] = gh.published
+    assert "cards" not in document["items"][0]
+
+
+def test_a_published_file_carrying_cards_passes_the_checker(tmp_path):
+    repo, sha, gh = _one_pull(tmp_path, "agent/DRE-5893-one-panel")
+    result = _write(repo, sha, gh)
+    assert result["problem"] is None
+    [(name, document)] = gh.published
+    assert name == "whats-new.json"
+    assert document["items"] == [{
+        "kind": "improved", "audience": "everyone",
+        "title": "Searching a document now finds words inside tables.",
+        "body": "", "cards": ["DRE-5893"]}]
+    assert whats_new.validate(document) == []
+
+
+def test_the_card_is_read_with_the_one_branch_pattern():
+    import usage_reading
+    assert whats_new_release.card_from_ref is usage_reading.card_from_ref
+    source = Path(whats_new_release.__file__).read_text()
+    assert "agent/(DRE-" not in source
 
 
 # ── 2. the collector never asks whether the rule is switched on ────────────
