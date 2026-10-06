@@ -40,11 +40,14 @@ import os
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import tempfile
 
-# The two events a dispatch can carry. Without an `event` from its caller,
-# `fire` picks off the labels: `agent:planner` plans, anything else builds.
+# The events a dispatch can carry. Without an `event` from its caller, `fire`
+# picks off the labels: `agent:planner` plans, anything else builds.
+# PROOF_EVENT is never picked by the label rule — only a caller that names it
+# sends it, and the proof runner's stub listens for it byte for byte (DRE-5921).
 PLAN_EVENT = "agent-plan"
 EXECUTE_EVENT = "agent-execute"
-EVENTS = (PLAN_EVENT, EXECUTE_EVENT)
+PROOF_EVENT = "proof-execute"
+EVENTS = (PLAN_EVENT, EXECUTE_EVENT, PROOF_EVENT)
 
 # The epic a dispatch is about, read fresh: the payload is built from it.
 # `review_rerun.py dispatch` reads the card with this query before it fires.
