@@ -70,8 +70,8 @@ sys.path.insert(0, str(SCRIPTS))
 import check_death_receipts as receipts  # noqa: E402
 from model_fallback import EFFORT_LEVELS  # noqa: E402
 
-#: The seven reusable workflow jobs that run an agent for a card and so keep a
-#: working log. The same seven as `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
+#: The reusable workflow jobs that run an agent for a card and so keep a
+#: working log. The first seven are the seven in `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
 #: agent-bureau's `infra/lib/agent-log-stack.ts` — the upload roles trust
 #: exactly these `job_workflow_ref`s (DRE-4343), so a workflow added here and
 #: not there is refused at AssumeRoleWithWebIdentity and shows up only as gaps.
@@ -86,6 +86,10 @@ UPLOADS = {
     ("plan.yml", "plan"),
     ("medic.yml", "diagnose"),
     ("red-main-repair.yml", "repair"),
+    # The proof run (DRE-5924) keeps its log the way agent-task.yml does. Until
+    # agent-bureau's BUREAU_PIPELINE_AGENT_WORKFLOWS trusts proof-task.yml the
+    # store refuses the role, and each run records a gap rather than a log.
+    ("proof-task.yml", "execute"),
 }
 
 #: Jobs that run a model and deliberately keep no working log, each with the

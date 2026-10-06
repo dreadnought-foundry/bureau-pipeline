@@ -130,10 +130,17 @@ class ProofTaskContractTest(unittest.TestCase):
             self.assertEqual(spec, mine[name], f"{name} is declared differently")
         self.assertIs(mine["PROOF_ROLE_ARN"].get("required"), False)
 
-    def test_runner_and_timeout_are_agent_tasks(self):
+    def test_timeout_is_agent_tasks_and_the_runner_is_the_long_chain(self):
+        # The timeout is agent-task.yml's; the runner is NOT. Its build lane
+        # (DRE-4846) is for the jobs that run a product's suite, and a proof
+        # run runs none — so this job reads the long chain every other reusable
+        # job reads (tests/test_runs_on_switchable.py).
         theirs = next(iter(yaml.safe_load(AGENT_TASK.read_text())["jobs"].values()))
-        self.assertEqual(theirs["runs-on"], _job()["runs-on"])
         self.assertEqual(theirs["timeout-minutes"], _job()["timeout-minutes"])
+        self.assertNotIn("BUREAU_CI_RUNS_ON", _job()["runs-on"])
+        self.assertEqual(
+            "${{ fromJSON(vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}",
+            _job()["runs-on"])
 
     def test_both_repositories_are_checked_out(self):
         checkouts = [s for s in _steps()
