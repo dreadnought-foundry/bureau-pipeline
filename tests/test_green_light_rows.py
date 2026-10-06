@@ -587,6 +587,51 @@ class TestTheAgentEscalationGate:
         assert _named(found, "zz-esc.yml#Escalate", "agent-escalation"), found
 
 
+@pytest.mark.usefixtures("declared_callers")
+class TestTheProofRunPark:
+    """The proof run's park (DRE-5925): a press only the CEO can make parks the
+    card in Green Light, from the result step of `proof-task.yml`. It is an
+    `agent-escalation` row like the build run's, and its own gate is read off
+    the step: the `🔬 proof-waiting` hold and the 🙋 escalation comment, both
+    posted before the lane moves."""
+
+    WORKFLOW = Path(".github") / "workflows" / "proof-task.yml"
+    UNIT = "proof-task.yml#Report proof result to Linear"
+
+    def test_the_park_is_discovered_and_declared(self):
+        units = {unit for _, unit in grl.green_light_writes()}
+        assert self.UNIT in units
+        records = [r for r in grl.arrivals() if r["where"] == self.UNIT]
+        assert [(r["kind"], r["writer"], r["card"]) for r in records] == [
+            ("agent-escalation", "proof-task.yml", "DRE-5925")]
+        assert grl.problems() == []
+
+    def test_its_gate_is_the_proof_run_s_own(self):
+        assert self.UNIT in grl.AGENT_ESCALATION_STEPS
+        assert grl.AGENT_ESCALATION_STEPS[self.UNIT].startswith("🙋 The proof run")
+
+    def test_an_undeclared_park_fails_by_location(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        contract = _contract()
+        _entrance(contract)["arrivals"] = [
+            r for r in _entrance(contract)["arrivals"] if r["where"] != self.UNIT]
+        found = grl.problems(str(root), contract)
+        assert _named(found, self.UNIT, "no arrival on its entrance declares it"), found
+
+    def test_a_park_without_the_hold_fails(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / self.WORKFLOW, "linear_ops.py proof-waiting", "linear_ops.py comment")
+        found = grl.problems(str(root))
+        assert _named(found, self.UNIT, "agent-escalation", "proof-waiting"), found
+
+    def test_a_park_without_the_question_fails(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        _edit(root / self.WORKFLOW, grl.AGENT_ESCALATION_STEPS[self.UNIT],
+              "The proof run stopped")
+        found = grl.problems(str(root))
+        assert _named(found, self.UNIT, "agent-escalation"), found
+
+
 # --------------------------------------------------------------------------- #
 # the records themselves                                                       #
 # --------------------------------------------------------------------------- #

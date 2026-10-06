@@ -13,13 +13,18 @@ rather than a build run:
     four `permission-*: read` inputs and nothing else — and an AWS session
     only when the caller provides a role, both minted before the agent runs,
     and both written to the step summary in the line the record copies;
-  * it writes no lane: the card stays in `Hand-work` for the whole run, so
-    there is no `Card → In Progress` step, no `report_agent_result.sh` (whose
-    every move reads the card out of `In Progress,Todo` and whose dead-run
-    exits requeue, park or replan), no `dead_run.py`, and no state write;
+  * it writes three lanes and no other (DRE-5925): the park into
+    `Green Light` on a press only the CEO can make, out of `Hand-work` or
+    `In Review`, after the `🔬 proof-waiting` hold and the question; the
+    return to `Hand-work` out of `Green Light` on his signed answer, after the
+    `🔬 proof-observed` discharge record and before the agent; and `In Review`
+    out of `Hand-work` when the record's pull request is open. There is no
+    `Card → In Progress` step, no `report_agent_result.sh` (whose every move
+    reads the card out of `In Progress,Todo` and whose dead-run exits requeue,
+    park or replan), no `dead_run.py`, and no `state` write;
   * its result step has exactly four exits, the pull request read before the
-    escalation — and that is EXECUTED here, against stub scripts, rather than
-    grepped, because the order is the contract.
+    escalation — and that, and the return step, are EXECUTED here, against
+    stub scripts, rather than grepped, because the order is the contract.
 """
 
 from __future__ import annotations
@@ -62,7 +67,10 @@ AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
 
 RESULT_STEP = "Report proof result to Linear"
+RETURN_STEP = "Return from Green Light on the CEO's answer"
 NO_RECORD = "🤖 proof run ended with no record"
+PARK_RECEIPT = "🙋 The proof run met a press only the CEO can make, and asks:"
+RETURN_REASON = "re-run after the CEO's answer"
 
 
 def _doc() -> dict:
@@ -316,8 +324,14 @@ class CallerAwsIdentityTest(unittest.TestCase):
         self.assertIn(AWS_ASSUMED + "$CARD", runs)
 
 
-class WritesNoLaneTest(unittest.TestCase):
-    """The card stays in `Hand-work` while it waits and while the run runs."""
+#: `linear_ops.py advance <card> "<to>" "<from>"`, as a run step writes it.
+_ADVANCE = re.compile(
+    r'linear_ops\.py\s+advance\s+"\$CARD"\s+"([^"]+)"\s+"([^"]+)"')
+
+
+class WritesOnlyItsThreeLanesTest(unittest.TestCase):
+    """The card waits in `Hand-work` and runs there; the run itself writes
+    only the park, the return and the move to review (DRE-5925)."""
 
     def test_no_in_progress_step(self):
         names = {s.get("name") for s in _steps()}
@@ -328,12 +342,29 @@ class WritesNoLaneTest(unittest.TestCase):
         self.assertNotIn("report_agent_result.sh", src)
         self.assertNotIn("dead_run.py", src)
 
-    def test_no_state_write_at_all(self):
+    def test_never_a_state_write(self):
+        # `state-of` is a read.
+        self.assertNotRegex(_runs(), r"linear_ops\.py\s+state(?![\w-])")
+
+    def test_the_only_lane_writes_are_the_three_declared(self):
         runs = _runs()
-        self.assertNotRegex(runs, r"linear_ops\.py\s+(state|advance)\b")
-        for lane in ("Todo", "In Progress", "Backlog", "Planning", "Triage", "Green Light"):
+        writes = re.findall(r"linear_ops\.py\s+advance\b[^\n]*", runs)
+        self.assertEqual(3, len(writes), writes)
+        self.assertEqual(
+            {("Green Light", "Hand-work,In Review"),
+             ("Hand-work", "Green Light"),
+             ("In Review", "Hand-work")},
+            set(_ADVANCE.findall(runs)))
+        for lane in ("Todo", "In Progress", "Backlog", "Planning", "Triage"):
             self.assertNotRegex(runs, rf"linear_ops\.py[^\n]*['\"]{lane}['\"]",
                                 f"a run step names {lane!r} to linear_ops")
+
+    def test_each_write_sits_in_its_own_step(self):
+        def advances(name):
+            return set(_ADVANCE.findall(str(_step(name).get("run") or "")))
+        self.assertEqual({("Hand-work", "Green Light")}, advances(RETURN_STEP))
+        self.assertEqual({("Green Light", "Hand-work,In Review"),
+                          ("In Review", "Hand-work")}, advances(RESULT_STEP))
 
     def test_never_the_dispatch_receipts_tag(self):
         self.assertNotIn("🔬 proof-run", PROOF_TASK.read_text())
@@ -354,15 +385,49 @@ if answer:
 _LINEAR_OPS_STUB = """\
 import json, os, sys
 open(os.environ["CALLS"], "a").write(json.dumps(["linear_ops"] + sys.argv[1:]) + "\\n")
+if sys.argv[1] == "state-of":
+    if os.environ.get("FAKE_LANE") == "unreadable":
+        sys.exit("HTTP 400")
+    print(os.environ.get("FAKE_LANE", ""))
+if sys.argv[1] == "proof-waiting" and os.environ.get("FAKE_REFUSE_HOLD"):
+    sys.exit("proof: refused")
+# linear_ops.proof_text_refusal's console hold markers, refused the same way.
+if sys.argv[1] == "proof-observed" and any(
+        m in sys.argv[3].lower() for m in ("budget exhausted", "holding for a human")):
+    sys.exit("proof: refused")
+if sys.argv[1] == "advance" and os.environ.get("FAKE_NOT_ADVANCING"):
+    print(f"{sys.argv[2]} is in 'Done', not in {sys.argv[4]!r} — not advancing")
+"""
+
+_SPOKEN_THREAD_STUB = """\
+import json, os, sys
+open(os.environ["CALLS"], "a").write(json.dumps(["spoken_thread"] + sys.argv[1:]) + "\\n")
+answer = os.environ.get("FAKE_ANSWER", "")
+if answer == "unreadable":
+    sys.exit(3)
+if not answer:
+    sys.exit(1)
+print(answer)
 """
 
 RUN_URL = "https://github.example/acme/widgets/actions/runs/42"
 
 
-class ResultStepTest(unittest.TestCase):
-    """The four exits, the first that holds taking it — except that a record
-    pull request AND an escalation both act, the pull request first (a run
-    that meets a CEO-only press opens its record before it asks)."""
+DESCRIPTION = """\
+Observe the release.
+
+## Acceptance criteria
+
+- [ ] The release page names v3, read as the proof-reader identity
+- [ ] needs the CEO's press: Approve the release in the console
+- [ ] The CEO closes this card after reading the record
+"""
+
+
+class _StepHarness(unittest.TestCase):
+    """One step's script, executed as written against stub scripts."""
+
+    STEP = ""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -371,6 +436,7 @@ class ResultStepTest(unittest.TestCase):
         scripts.mkdir(parents=True)
         (scripts / "card_pr.py").write_text(_CARD_PR_STUB)
         (scripts / "linear_ops.py").write_text(_LINEAR_OPS_STUB)
+        (scripts / "spoken_thread.py").write_text(_SPOKEN_THREAD_STUB)
         # The escalation is read through the real gate, not a stub.
         for real in ("check_agent_result.py", "execution_result.py"):
             shutil.copy(ROOT / "scripts" / real, scripts / real)
@@ -378,91 +444,276 @@ class ResultStepTest(unittest.TestCase):
         self.escalation = self.tmp / "agent-escalation.txt"
         self.summary = self.tmp / "summary.md"
 
-    def _run(self, *, pr: str = "", escalation: str | None = None) -> list:
-        step = _step(RESULT_STEP)
+    #: Harness-only names, never the step's own env.
+    _HARNESS = ("PATH", "CALLS", "FAKE_PR", "FAKE_LANE", "FAKE_ANSWER",
+                "FAKE_REFUSE_HOLD", "FAKE_NOT_ADVANCING", "RUNNER_TEMP",
+                "GITHUB_STEP_SUMMARY")
+
+    def _exec(self, env: dict) -> tuple:
+        step = _step(self.STEP)
         script = step["run"]
-        self.assertNotIn("${{", script, "the result step reads env, never interpolates")
+        self.assertNotIn("${{", script, "the step reads env, never interpolates")
+        env = {"PATH": os.environ["PATH"], "CALLS": str(self.calls),
+               "RUNNER_TEMP": str(self.tmp),
+               "GITHUB_STEP_SUMMARY": str(self.summary), **env}
+        for name in env:
+            if name not in self._HARNESS:
+                self.assertIn(name, step["env"], f"{self.STEP!r} does not declare {name}")
+        done = subprocess.run(["bash", "-e", "-c", script], cwd=self.tmp, env=env,
+                              capture_output=True, text=True, timeout=60)
+        lines = self.calls.read_text().splitlines() if self.calls.exists() else []
+        return done, [json.loads(l) for l in lines if l.startswith("[")], lines
+
+
+class ResultStepTest(_StepHarness):
+    """The four exits, the first that holds taking it — except that a record
+    pull request AND an escalation both act, the pull request first (a run
+    that meets a CEO-only press opens its record before it asks)."""
+
+    STEP = RESULT_STEP
+
+    def _run(self, *, pr: str = "", escalation: str | None = None,
+             description: str = DESCRIPTION, refuse_hold: bool = False,
+             not_advancing: bool = False) -> list:
         if escalation is not None:
             self.escalation.write_text(escalation)
         env = {
-            "PATH": os.environ["PATH"],
-            "CALLS": str(self.calls),
             "FAKE_PR": pr,
             "CARD": "DRE-77",
+            "CARD_DESCRIPTION": description,
             "RECORD_BRANCH": "agent/DRE-77-proof-record",
             "ESCALATION_FILE": str(self.escalation),
             "BUREAU_SERVER_URL": "https://github.example",
             "BUREAU_REPOSITORY": "acme/widgets",
             "BUREAU_RUN_ID": "42",
             "CLAUDE_EXECUTION_FILE": "",
-            "RUNNER_TEMP": str(self.tmp),
-            "GITHUB_STEP_SUMMARY": str(self.summary),
         }
-        for name in env:
-            if name in ("PATH", "CALLS", "FAKE_PR", "RUNNER_TEMP", "GITHUB_STEP_SUMMARY"):
-                continue
-            self.assertIn(name, step["env"], f"the result step's env does not declare {name}")
-        done = subprocess.run(["bash", "-e", "-c", script], cwd=self.tmp, env=env,
-                              capture_output=True, text=True, timeout=60)
+        if refuse_hold:
+            env["FAKE_REFUSE_HOLD"] = "1"
+        if not_advancing:
+            env["FAKE_NOT_ADVANCING"] = "1"
+        done, posted, lines = self._exec(env)
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        lines = self.calls.read_text().splitlines() if self.calls.exists() else []
         card_pr = [l for l in lines if l.startswith("card_pr ")]
         self.assertEqual(["card_pr find DRE-77 --branch agent/DRE-77-proof-record"], card_pr)
-        posted = [json.loads(l) for l in lines if l.startswith("[")]
         for call in posted:
-            self.assertEqual(["linear_ops", "comment", "DRE-77"], call[:3],
-                             f"the result step makes one kind of Linear write: {call}")
-            self.assertNotIn("🔬 proof-run", call[3])
-            self.assertTrue(call[3].rstrip().endswith(f"Run: {RUN_URL}"), call[3])
-        return [c[3] for c in posted]
+            self.assertEqual(["linear_ops", "DRE-77"], [call[0], call[2]], call)
+            self.assertIn(call[1], ("comment", "proof-waiting", "advance"), call)
+            if call[1] == "comment":
+                self.assertNotIn("🔬 proof-run", call[3])
+                self.assertTrue(call[3].rstrip().endswith(f"Run: {RUN_URL}"), call[3])
+        return posted
+
+    @staticmethod
+    def _comments(posted: list) -> list:
+        return [c[3] for c in posted if c[1] == "comment"]
+
+    @staticmethod
+    def _moves(posted: list) -> list:
+        return [tuple(c[3:]) for c in posted if c[1] == "advance"]
 
     def test_the_env_names_the_real_paths(self):
         env = _step(RESULT_STEP)["env"]
         self.assertEqual("/tmp/agent-escalation.txt", env["ESCALATION_FILE"])
         self.assertEqual("agent/${{ github.event.client_payload.identifier }}-proof-record",
                          env["RECORD_BRANCH"])
+        # The sanitized description, the one the rest of the workflow reads.
+        self.assertEqual("${{ steps.card.outputs.description }}",
+                         env["CARD_DESCRIPTION"])
 
-    def test_exit_1_an_open_record_pull_request(self):
+    def test_exit_1_an_open_record_pull_request_carries_the_card_to_review(self):
         posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9")
         self.assertEqual(
             [f"🤖 PR opened: https://github.example/acme/widgets/pull/9 — CI + critic review running. Run: {RUN_URL}"],
-            posted)
+            self._comments(posted))
+        # After a return the amended record is pushed to a pull request that
+        # was already open, and neither qa-review.yml nor the sweep moves it.
+        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
+        self.assertEqual("comment", posted[0][1])
 
     def test_exit_2_the_record_already_merged(self):
         posted = self._run(pr="MERGED\thttps://github.example/acme/widgets/pull/9")
         self.assertEqual(1, len(posted))
-        self.assertTrue(posted[0].startswith("🤖 PR already merged: https://github.example/acme/widgets/pull/9"),
+        self.assertTrue(posted[0][3].startswith("🤖 PR already merged: https://github.example/acme/widgets/pull/9"),
                         posted[0])
 
-    def test_exit_3_an_escalation_with_no_pull_request(self):
-        posted = self._run(escalation="Press the publish button, or drop the row?\n")
-        self.assertEqual(1, len(posted))
-        self.assertIn("Press the publish button, or drop the row?", posted[0])
-        self.assertNotIn(NO_RECORD, posted[0])
+    def test_exit_3_an_escalation_holds_then_asks_then_parks(self):
+        posted = self._run(escalation="Approve the release in the console and say what "
+                                      "you saw, or drop the criterion?\n")
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        hold, ask, park = posted
+        self.assertEqual(["needs the CEO's press: Approve the release in the console",
+                          "the CEO's press: Approve the release in the console"], hold[3:])
+        self.assertTrue(ask[3].startswith(PARK_RECEIPT), ask[3])
+        self.assertIn("Approve the release in the console and say what you saw", ask[3])
+        self.assertNotIn(NO_RECORD, ask[3])
+        self.assertEqual(("Green Light", "Hand-work,In Review"), tuple(park[3:]))
 
     def test_a_pull_request_and_an_escalation_both_act_the_pull_request_first(self):
         posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation="Press the publish button?\n")
-        self.assertEqual(2, len(posted), posted)
-        self.assertTrue(posted[0].startswith("🤖 PR opened:"))
-        self.assertIn("Press the publish button?", posted[1])
+                           escalation="Approve the release in the console?\n")
+        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
+                         [c[1] for c in posted])
+        self.assertTrue(posted[0][3].startswith("🤖 PR opened:"))
+        self.assertTrue(posted[3][3].startswith(PARK_RECEIPT))
+        self.assertIn("Approve the release in the console?", posted[3][3])
+        # Review first, then the park out of either lane.
+        self.assertEqual([("In Review", "Hand-work"), ("Green Light", "Hand-work,In Review")],
+                         self._moves(posted))
+
+    def test_the_press_is_read_off_the_criterion_the_escalation_names(self):
+        description = (
+            "- [ ] The page names v3\n"
+            "- [ ] The release is published — needs the CEO’s press: Publish v3 in the console.\n"
+            "* [ ] needs the CEO's press: Rotate the console key\n")
+        posted = self._run(escalation="Rotate the console key, or drop it?\n",
+                           description=description)
+        [hold] = [c for c in posted if c[1] == "proof-waiting"]
+        self.assertEqual(["needs the CEO's press: Rotate the console key",
+                          "the CEO's press: Rotate the console key"], hold[3:])
+        self.calls.unlink()
+        posted = self._run(escalation="Publish v3, or drop the row?\n",
+                           description=description)
+        [hold] = [c for c in posted if c[1] == "proof-waiting"]
+        self.assertEqual(["The release is published",
+                          "the CEO's press: Publish v3 in the console"], hold[3:])
+
+    def test_a_card_that_names_no_press_holds_on_the_escalation_s_words(self):
+        posted = self._run(escalation="Press publish in the console, or drop the row?\nmore\n",
+                           description="- [ ] The page names v3\n")
+        [hold] = [c for c in posted if c[1] == "proof-waiting"]
+        self.assertEqual("the CEO's press: Press publish in the console, or drop the row?",
+                         hold[4])
+        self.assertTrue(hold[3].strip())
+        self.assertEqual([("Green Light", "Hand-work,In Review")], self._moves(posted))
+
+    def test_a_refused_hold_still_parks_the_question_and_says_so(self):
+        posted = self._run(escalation="Approve the release in the console?\n",
+                           refuse_hold=True)
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        self.assertIn("hold could not be posted", self.summary.read_text())
+
+    def test_a_park_the_card_refused_says_so_in_the_summary(self):
+        posted = self._run(escalation="Approve the release in the console?\n",
+                           not_advancing=True)
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        self.assertIn("did not move DRE-77 to Green Light", self.summary.read_text())
+
+    def test_a_park_that_moved_says_nothing_of_a_refusal(self):
+        self._run(escalation="Approve the release in the console?\n")
+        self.assertNotIn("did not move", self.summary.read_text())
 
     def test_exit_4_nothing_came_out(self):
         posted = self._run()
         self.assertEqual(
             [f"{NO_RECORD} — the dispatcher reads this run off the card and decides whether to dispatch again. Run: {RUN_URL}"],
-            posted)
+            self._comments(posted))
+        self.assertEqual([], self._moves(posted))
 
     def test_an_empty_escalation_file_is_not_an_escalation(self):
         posted = self._run(escalation="")
         self.assertEqual(1, len(posted))
-        self.assertTrue(posted[0].startswith(NO_RECORD))
+        self.assertTrue(posted[0][3].startswith(NO_RECORD))
 
     def test_an_unreadable_pull_request_is_never_reported_as_opened(self):
         posted = self._run(pr="unreadable")
         self.assertEqual(1, len(posted))
-        self.assertTrue(posted[0].startswith(NO_RECORD), posted[0])
-        self.assertIn("could not be read", posted[0])
+        self.assertTrue(posted[0][3].startswith(NO_RECORD), posted[0])
+        self.assertIn("could not be read", posted[0][3])
+
+
+class ReturnStepTest(_StepHarness):
+    """The return from Green Light (DRE-5925): a card in Green Light with an
+    answer of his posted after the park returns, whatever the dispatch reason
+    — so a return that died between its two writes is finished by the next
+    dispatch. The discharge record before the move, and only into
+    `Hand-work` — all before the agent step."""
+
+    STEP = RETURN_STEP
+    REASON = f"{RETURN_REASON} at 2026-10-06 09:12 PT"
+    ANSWER = "2026-10-06 09:12 PT\tPressed it; the release shows v3."
+    DISCHARGE = ["linear_ops", "proof-observed", "DRE-77",
+                 "the CEO answered via the console at 2026-10-06 09:12 PT: "
+                 "Pressed it; the release shows v3."]
+    RETURN = ["linear_ops", "advance", "DRE-77", "Hand-work", "Green Light"]
+
+    def _run(self, *, reason: str = REASON, lane: str = "Green Light",
+             answer: str = ANSWER) -> tuple:
+        return self._exec({"CARD": "DRE-77", "REASON": reason,
+                           "FAKE_LANE": lane, "FAKE_ANSWER": answer})
+
+    def test_it_runs_before_every_agent_attempt_and_after_the_reason_is_sanitized(self):
+        here = _index(RETURN_STEP)
+        self.assertLess(here, min(i for i, _ in _agent_steps()))
+        self.assertGreater(here, _index("Sanitize untrusted card text"))
+        step = _step(RETURN_STEP)
+        self.assertEqual("${{ steps.card.outputs.reason }}", step["env"]["REASON"])
+        self.assertNotIn("continue-on-error", step)
+
+    def test_the_return_posts_the_discharge_then_moves_to_hand_work(self):
+        done, posted, _ = self._run()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([
+            ["linear_ops", "state-of", "DRE-77"],
+            ["spoken_thread", "answer", "DRE-77"],
+            self.DISCHARGE,
+            self.RETURN,
+        ], posted)
+
+    def test_an_answered_card_still_in_green_light_returns_on_any_reason(self):
+        # The return that died after its discharge record: the card is still
+        # in Green Light, his answer still follows the park, and the next
+        # dispatch carries some other reason. It finishes the return.
+        for reason in ("second dispatch after a dead run",
+                       "first run: the release carrying the epic is live", ""):
+            done, posted, _ = self._run(reason=reason)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual([self.DISCHARGE, self.RETURN],
+                             [c for c in posted if c[1] in ("proof-observed", "advance")],
+                             reason)
+            self.calls.unlink(missing_ok=True)
+
+    def test_an_unanswered_park_on_any_other_reason_does_nothing_and_says_so(self):
+        for reason in ("", "second dispatch after a dead run",
+                       f"not a {RETURN_REASON}"):
+            done, posted, _ = self._run(reason=reason, answer="")
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertEqual([["linear_ops", "state-of", "DRE-77"],
+                              ["spoken_thread", "answer", "DRE-77"]], posted, reason)
+            self.assertIn("nothing to return", done.stdout)
+            self.calls.unlink(missing_ok=True)
+
+    def test_any_other_lane_does_nothing_and_says_so(self):
+        for lane in ("Hand-work", "In Review", "Triage", ""):
+            for reason in (self.REASON, "second dispatch after a dead run"):
+                done, posted, _ = self._run(lane=lane, reason=reason)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual([["linear_ops", "state-of", "DRE-77"]], posted, lane)
+                self.assertIn("nothing to return", done.stdout)
+                self.calls.unlink(missing_ok=True)
+
+    def test_an_unreadable_lane_or_answer_fails_before_any_write(self):
+        for kwargs in ({"lane": "unreadable"}, {"answer": ""},
+                       {"answer": "unreadable"},
+                       {"answer": "unreadable", "reason": "second dispatch after a dead run"}):
+            done, posted, _ = self._run(**kwargs)
+            self.assertNotEqual(0, done.returncode, kwargs)
+            self.assertEqual([], [c for c in posted if c[1] in ("proof-observed", "advance")],
+                             kwargs)
+            self.calls.unlink(missing_ok=True)
+
+    def test_words_the_record_refuses_still_discharge_and_return(self):
+        # `proof-observed` refuses the console's fix-budget hold markers; his
+        # words carrying one must not leave the card parked.
+        done, posted, _ = self._run(
+            answer="2026-10-06 09:12 PT\tStop holding for a human and ship it.")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        writes = [c for c in posted if c[1] in ("proof-observed", "advance")]
+        self.assertEqual(["proof-observed", "proof-observed", "advance"],
+                         [c[1] for c in writes])
+        self.assertEqual("the CEO answered via the console at 2026-10-06 09:12 PT "
+                         "— his words are in that answer on this card", writes[1][3])
+        self.assertEqual(self.RETURN, writes[2])
 
 
 if __name__ == "__main__":

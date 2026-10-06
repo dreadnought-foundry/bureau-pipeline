@@ -141,8 +141,11 @@ class TestTheHandWorkEntry:
     def test_its_writers_are_the_sweep_the_write_layer_the_migration_and_a_person(self):
         # DRE-5323 added the one-time migration that moved the person cards
         # already in Todo when the sweep started carrying them here.
+        # DRE-5925 added the proof run, returning a card the CEO answered from
+        # Green Light.
         who = raw_lane(shipped(), HAND_WORK)["clauses"]["writers"]["who"]
-        assert who == ["reconcile.py", "linear_ops.py", "hand_work_migration.py", "operator"]
+        assert who == ["reconcile.py", "linear_ops.py", "hand_work_migration.py",
+                       "proof-task.yml", "operator"]
 
     def test_its_entrance_and_evidence_ask_for_the_verdict(self):
         # planning_escalation.bypass_problems asks this of every work lane a
@@ -393,3 +396,61 @@ class TestTheDocument:
 
     def test_the_section_is_absent_when_nothing_is_arriving(self):
         assert "## Arriving" not in lane_contract.render_markdown(shipped())
+
+
+# --------------------------------------------------------------------------- #
+# the proof run's three lane writes are declared (DRE-5925)                   #
+# --------------------------------------------------------------------------- #
+
+PROOF_RUN = "proof-task.yml"
+PROOF_CARD = "DRE-5925"
+PROOF_PARK_STEP = "proof-task.yml#Report proof result to Linear"
+
+
+class TestTheProofRunsLaneWrites:
+    """A proof run that meets a press only the CEO can make parks the card in
+    Green Light, the run his answer re-dispatches returns it to Hand-work, and
+    that run carries it to In Review when it pushes the amended record. Each of
+    the three writes is one the lane it lands in declares."""
+
+    def test_the_glossary_points_at_the_workflow(self):
+        entry = shipped()["writers"][PROOF_RUN]
+        assert entry["path"] == ".github/workflows/proof-task.yml"
+        assert os.path.exists(os.path.join(ROOT, entry["path"]))
+
+    @pytest.mark.parametrize("lane", ["Green Light", HAND_WORK, "In Review"])
+    def test_each_lane_it_writes_names_it_as_a_writer(self, lane):
+        clause = raw_lane(shipped(), lane)["clauses"]["writers"]
+        assert PROOF_RUN in clause["who"], clause["who"]
+        assert PROOF_CARD in clause["text"]
+        assert PROOF_RUN in lane_contract.lane_writers(lane)
+
+    def test_green_light_declares_the_park_as_an_agent_escalation(self):
+        entrance = raw_lane(shipped(), "Green Light")["clauses"]["entrance"]
+        records = [r for r in entrance["arrivals"] if r["writer"] == PROOF_RUN]
+        assert records == [{
+            "kind": "agent-escalation",
+            "writer": PROOF_RUN,
+            "where": PROOF_PARK_STEP,
+            "evidence": (
+                "the proof run's escalation text, naming the press, posted "
+                "before the move, beside a 🔬 proof-waiting hold"
+            ),
+            "card": PROOF_CARD,
+        }]
+        # Kind (d) says a proof run's CEO-only press is the same kind.
+        assert "press" in entrance["text"] and PROOF_CARD in entrance["text"]
+
+    def test_green_light_exit_says_how_a_parked_proof_leaves(self):
+        text = raw_lane(shipped(), "Green Light")["clauses"]["exit"]["text"]
+        assert "signed answer" in text and HAND_WORK in text and PROOF_CARD in text
+
+    def test_hand_work_exit_says_the_returning_run_carries_it_to_review(self):
+        text = raw_lane(shipped(), HAND_WORK)["clauses"]["exit"]["text"]
+        assert "proof run" in text and "already-open" in text and PROOF_CARD in text
+
+    def test_the_rendered_document_carries_the_new_clauses(self):
+        with open(lane_contract.DOC_PATH, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text == lane_contract.render_markdown(shipped())
+        assert "| `proof-task.yml` |" in text

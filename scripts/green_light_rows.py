@@ -61,7 +61,10 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      posts the 🙋 escalation comment before the write — an argument opening
      with the receipt, then a `linear_ops.py comment` on a later line, both
      read as the shell reads them, so a receipt left in a comment is not one —
-     or `code_owner_hold.py#park`.
+     or `proof-task.yml#Report proof result to Linear`, the proof run's park on
+     a press only the CEO can make (DRE-5925), whose shell posts its own 🙋
+     question the same way AND runs `linear_ops.py proof-waiting` first, the
+     hold that keeps the dispatcher off the card — or `code_owner_hold.py#park`.
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -131,10 +134,23 @@ PASSED_PLAN_GATES = (
 #: label no longer matches goes red — rather than pass a row unlabeled.
 QUEUED_LABEL = "epic-queued"
 
-#: The one workflow unit an `agent-escalation` row may be written from, and
-#: what its shell must post before the write: DRE-1655's escalate-by-exception
-#: park. The step name is the unit `where` declares.
+#: The workflow units an `agent-escalation` row may be written from, each with
+#: the receipt its shell must post before the write: DRE-1655's
+#: escalate-by-exception park, and the proof run's park on a press only the
+#: CEO can make (DRE-5925). The step name is the unit `where` declares. The
+#: proof run's receipt is a literal: no Python module posts it, the workflow
+#: does, and a reworded receipt there fails this rule closed.
 AGENT_ESCALATION_STEP = "agent-task.yml#Report result to Linear"
+PROOF_PARK_STEP = "proof-task.yml#Report proof result to Linear"
+AGENT_ESCALATION_STEPS = {
+    AGENT_ESCALATION_STEP: planner_score.ESCALATION_RECEIPT_PREFIX,
+    PROOF_PARK_STEP: "🙋 The proof run met a press only the CEO can make",
+}
+
+#: What the proof run's park must run before it writes the lane, besides its
+#: question: the hold the dispatcher reads (`linear_ops.cmd_proof_waiting`).
+#: Without it a parked proof card is one a sweep could chase.
+PROOF_HOLD_COMMAND = "proof-waiting"
 
 def _unit_of_function(fn) -> str:
     """`<file>#<function>` for a module-level function, named off the module."""
@@ -402,6 +418,14 @@ def _labels_queued(text: str) -> bool:
     return False
 
 
+def _runs_linear_ops(text: str, command: str) -> bool:
+    """Whether `text`, read as the shell reads it, runs `linear_ops.py
+    <command>` — the command run, not merely named or left in a comment."""
+    return any(
+        os.path.basename(a) == "linear_ops.py" and args[i + 1:i + 2] == [command]
+        for args in _shell_lines(text) for i, a in enumerate(args))
+
+
 def _posts_receipt(text: str, receipt: str) -> bool:
     """Whether `text`, read as the shell reads it, writes an argument opening
     with `receipt` and then, on a later line, runs `linear_ops.py comment` —
@@ -456,10 +480,11 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
             "belongs on that record's `callers`"
         )
     elif kind == "agent-escalation":
-        if where == AGENT_ESCALATION_STEP:
-            receipt = planner_score.ESCALATION_RECEIPT_PREFIX
+        if where in AGENT_ESCALATION_STEPS:
+            receipt = AGENT_ESCALATION_STEPS[where]
             for write in writes_here:
-                if not _posts_receipt(_before_write(root, write), receipt):
+                before = _before_write(root, write)
+                if not _posts_receipt(before, receipt):
                     out.append(
                         f"{where} ({write.where}) is an agent-escalation arrival, "
                         f"and its step does not post the escalation comment "
@@ -467,11 +492,20 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
                         f"writes {lane} — a receipt left in a comment, or written "
                         "and never posted, leaves a row with no question on it"
                     )
+                if where == PROOF_PARK_STEP and not _runs_linear_ops(
+                        before, PROOF_HOLD_COMMAND):
+                    out.append(
+                        f"{where} ({write.where}) is an agent-escalation arrival, "
+                        f"and its step does not run `linear_ops.py "
+                        f"{PROOF_HOLD_COMMAND}` before it writes {lane} — a "
+                        "parked proof card with no hold on it is one the "
+                        "dispatcher could chase"
+                    )
         elif where != CODE_OWNER_SITE:
             out.append(
                 f"{where} is declared an 'agent-escalation' arrival, and the "
-                f"only agent-escalation sites are {AGENT_ESCALATION_STEP} and "
-                f"{CODE_OWNER_SITE}"
+                f"only agent-escalation sites are "
+                f"{', '.join(AGENT_ESCALATION_STEPS)} and {CODE_OWNER_SITE}"
             )
     return out
 
