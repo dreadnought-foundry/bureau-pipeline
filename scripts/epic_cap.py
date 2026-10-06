@@ -410,17 +410,20 @@ def _rule(fleet: dict, identifier: str, epic: dict) -> tuple[str, int, str]:
             f"{others} of {cap} epics are in motion besides {identifier}, at or "
             "above the cap"
         )
-    head = _line_with(fleet, identifier, epic)[0]
-    if head.get("identifier") != identifier:
-        return "queue", 3, (
-            f"{others} of {cap} epics are in motion besides {identifier} and a "
-            f"slot is free, but {head.get('identifier')} is ahead in line and "
-            "takes it"
-        )
-    return "start", 4, (
-        f"{others} of {cap} epics are in motion besides {identifier}, a slot "
-        "is free and nobody waiting is ahead of it"
+    line = _line_with(fleet, identifier, epic)
+    ahead = [e.get("identifier") for e in line[:place(identifier, line)[0] - 1]]
+    free = cap - others
+    counts = (
+        f"{others} of {cap} epics in motion besides {identifier}, "
+        f"{len(ahead)} waiting ahead, {free} slot{'' if free == 1 else 's'} free"
     )
+    # The epics ahead keep their claim on the first free slots (DRE-5934).
+    if len(ahead) >= free:
+        return "queue", 3, (
+            f"{counts}: every free slot is owed to the epics ahead "
+            f"({', '.join(ahead)})"
+        )
+    return "start", 4, f"{counts}: room for this one{' too' if ahead else ''}"
 
 
 def decision(fleet: dict, identifier: str, epic: dict) -> str:
@@ -429,8 +432,11 @@ def decision(fleet: dict, identifier: str, epic: dict) -> str:
     1. start — the epic has already run (`activated_before`): an epic in motion
        is never frozen by its own amendment.
     2. queue — the epics in motion OTHER than this one are at or above the cap.
-    3. queue — a slot is free but a waiting epic ranks ahead of this one.
-    4. start — otherwise.
+    3. queue — the waiting epics that rank ahead of this one are as many as
+       the free slots, or more: each free slot is owed to an epic ahead.
+    4. start — otherwise: more slots are free than are owed to the epics
+       ahead (DRE-5934 — 8 slots were free and one epic ahead, and rule 3
+       used to yield every free slot to the head of the line).
 
     Two approvals in the same minute at cap − 1 may both queue (healed by the
     sweep's next pass) or both start (healed when the next epic closes). Both
