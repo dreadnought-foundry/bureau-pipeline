@@ -445,8 +445,10 @@ class TestDeclared:
         assert entry["path"] == "scripts/hand_work_migration.py"
 
     def test_it_is_a_permitted_writer_of_hand_work(self):
+        # DRE-5925 added the proof run, returning a card the CEO answered.
         assert lane_contract.lane_writers(HAND_WORK) == (
-            "reconcile.py", "linear_ops.py", "hand_work_migration.py", "operator")
+            "reconcile.py", "linear_ops.py", "hand_work_migration.py",
+            "proof-task.yml", "operator")
 
     def test_the_ready_lane_check_attributes_its_write(self):
         mine = [w for w in ready_lane_writers.writes()
