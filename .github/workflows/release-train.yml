@@ -519,9 +519,15 @@ jobs:
           SURFACE: ${{ matrix.surface }}
           PLAN_SHA: ${{ matrix.sha }}
           DISPATCHED: ${{ inputs.surface }}
+          # The re-arm (DRE-3559): the ref the caller's stub is dispatched on.
+          # Empty on a schedule's thin payload, where the script falls back to
+          # GITHUB_REF_NAME — which on a schedule IS the default branch. The
+          # stub itself is named by GITHUB_WORKFLOW_REF, the caller's. Here it
+          # serves a deferral that names its own minute (DRE-6005).
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           args=()
           if [ -n "$DISPATCHED" ]; then args+=(--dispatched); fi
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" release \
-            --sha "$PLAN_SHA" --surface "$SURFACE" "${args[@]}"
+            --sha "$PLAN_SHA" --surface "$SURFACE" --re-arm "${args[@]}"

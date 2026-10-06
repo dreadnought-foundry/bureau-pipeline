@@ -48,7 +48,11 @@ repository checked out at `RELEASE_SHA`. In return:
    print one line beginning `deferred:`, and cut no tag. The train reports the
    line verbatim as a no-op, the job concludes success, nothing alerts, and
    deploy-lag goes on reading BEHIND until whoever the reason names has acted.
-   A deferral is not a failure and must never be dressed as one.
+   A deferral is not a failure and must never be dressed as one. A deferral
+   that is transient — another writer is mid-release, and the surface is free
+   in minutes — may end its line with `— re-arm in <N> minutes`, exactly
+   `deferred: <reason> — re-arm in <N> minutes`, and the train re-arms itself
+   for that minute (DRE-6005). Without the clause the line behaves as above.
 
 Anything else the surface needs — a smoke test, a cache invalidation — stays
 inside the script, where it already is.
@@ -197,7 +201,10 @@ already waiting. A hold, the brake, `auto: false`, a surface that reads
 current and a commit still checking re-arm nothing — a person, or the next CI
 completion, owns those. A stub without `not_before` or with `actions: read`
 still works: its line says `re-arm skipped: caller stub lacks not_before` (or
-`lacks actions: write`), and the run is as green as it was.
+`lacks actions: write`), and the run is as green as it was. A `deferred:` line
+that ends `— re-arm in <N> minutes` names a minute too, and the surface job
+re-arms for it the same way (DRE-6005): the same bound, the same collapse onto
+a run already waiting, the same clauses after the `deferred:` sentence.
 
 **A re-armed run releases what is green when it wakes (DRE-3791).** A
 dispatched run's commit is fixed when it is dispatched, so a run that slept
