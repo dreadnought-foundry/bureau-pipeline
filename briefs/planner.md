@@ -550,6 +550,18 @@ commit, and the request it makes, live:
 The step counts as proven only when both are checked; either alone proves
 nothing. `standards/card-quality.md` states the rule.
 
+**The pipeline dispatches the proof run itself (DRE-5920)** once the last
+build card is Done and its release is live, so write the card for that run.
+The record path on the `**Files:**` line is where the proof run writes — it is
+already the card's footprint, and the run opens it as a pull request on
+`agent/DRE-<n>-proof-record`. Live facts name the scripted identity they are
+read as ("as the proof-reader identity"), because that is the identity the run
+holds. A step only the CEO's login can make is written as its own criterion
+opening `needs the CEO's press:` and naming the press, so the run can name it
+back; everything else in the card is written so a run with read access can
+observe it. The card closes on the approved merge of the record (DRE-5919, the
+hygiene agent), and the closing line the check reads stays verbatim.
+
 Five conditions, all checked on the cards you create:
 
 1. **Last.** It is the epic's last child.

@@ -305,6 +305,25 @@ a request the live system refuses, and a request seen live says nothing about
 the screen that sends it. The five conditions below do not change, and the
 proof still routes `WORKBENCH` or `OPERATOR`, never `FLEET`.
 
+**The pipeline starts the proof run itself (DRE-5920).** When an epic's last
+build card is Done and the release carrying those merges is live — read off
+the release record (the tags, `scripts/proof_release.py`) and never assumed,
+because `main` is not released — the sweep dispatches a proof run at the PROOF
+card: a dedicated run on its own workflow (`proof-task.yml`, role `proof`,
+`briefs/proof.md`), holding only scripted read-only identities and never a
+person's account, which observes the criteria and opens the record as a pull
+request on `agent/DRE-<n>-proof-record`. The card closes on the approved merge
+of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
+agent's `hyg-proof-closed` receipt (DRE-5365), so the CEO reads the merged
+record and nothing waits on him. The closing line on the card (condition 5)
+names who reads the record, not who moves the card, and stays verbatim. The
+card still routes `WORKBENCH` or `OPERATOR` and the five conditions do not
+change: the run does the operator's observing, and the operator and the CEO
+stay the accountable readers. A criterion only the CEO's own login can satisfy
+is written on the card in the words `needs the CEO's press: <the press>`; a run
+that meets one records everything else, parks the card once in Green Light
+naming the press, and nobody chases it.
+
 Five conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
 convention that drifts:
