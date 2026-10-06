@@ -545,11 +545,16 @@ def test_the_wrapper_hands_recovery_this_repos_cards_and_the_seams(monkeypatch):
     with patch.object(reconcile, "active_cards", return_value=[mine, theirs, unlabelled]), \
          patch.object(reconcile.limit_recovery, "recover", side_effect=fake_recover), \
          patch.object(reconcile, "gh_dispatch") as gh_dispatch, \
-         patch.object(reconcile.linear_ops, "cmd_state") as cmd_state:
+         patch.object(reconcile.linear_ops, "cmd_state") as cmd_state, \
+         patch.object(reconcile.linear_ops, "cmd_comment") as cmd_comment:
         reconcile.recover_limit_deaths()
         seen["rerun"]("123")
         seen["move"]("DRE-1", "Todo")
-    assert seen["lops"] is reconcile.linear_ops
+        seen["lops"].cmd_comment("DRE-3", "receipt")
+    # The receipt is posted through linear_ops, and every card the recovery
+    # wrote to is recorded for the Planning watchdog (DRE-5841).
+    cmd_comment.assert_called_once_with("DRE-3", "receipt")
+    assert reconcile._limit_recovered == {"DRE-1", "DRE-3"}
     assert seen["now"].tzinfo is not None
     assert seen["active_account"] is None
     assert [c["identifier"] for c in seen["cards"]] == ["DRE-1", "DRE-3"], (

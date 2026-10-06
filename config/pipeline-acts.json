@@ -1439,6 +1439,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(ident, receipt)",
+      "kind": "seam",
+      "means": "The limit recovery's comment write, handed to limit_recovery.recover, recording each card it answers so the Planning watchdog leaves that card alone this pass (DRE-5841).",
+      "why": "A SEAM, not a site with a body of its own: it takes a body its callers own and decides only whether to post it, exactly as `_post_pr_note` does. `_post_pr_note` is excluded in code because the card named it; excluding this one is a change to the guard's model of what a seam is, and the card that makes that call also has to convert the callers. Named here so the shape is countable rather than invisible. Its one caller is limit_recovery.recover, whose recovery and hand-off receipts are declared above against scripts/limit_recovery.py; this wrapper adds only the record of which card was answered."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "linear_ops.merged_not_closed_comment(",
       "kind": "undeclared-act",
       "means": "The sweep's backstop for a merged PR whose card the operator closes by hand: it says so instead of closing.",

@@ -122,6 +122,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1700,6 +1701,10 @@ _fleet_hold: dict[tuple[str, ...], str] = {}
 # the planner line act on every repo's cards, and an idle sweep must not
 # leave them to nobody (coordinator's decision, 2026-10-02 ~19:10 PT).
 _idle_pass: list[str] = []
+# The cards `recover_limit_deaths` wrote to this pass — a re-entry's moves and
+# receipt, or a hand-off receipt (DRE-5841). The board snapshot still shows
+# their old marker, so the Planning watchdog reads this set, not the thread.
+_limit_recovered: set[str] = set()
 
 
 class BoardNotRead(Exception):
@@ -1741,6 +1746,7 @@ def reset_sweep_cards() -> None:
     _door_hold.clear()
     _shadow_door.clear()
     _idle_pass.clear()
+    _limit_recovered.clear()
     _pr_listing = None
     _workflows_listing = None
     _build_runs = None
@@ -2591,6 +2597,26 @@ def flag_stalled_planning() -> set[str]:
     no candidates at all — and the cutover (DRE-2728) put every new card
     through this lane, inflating the single most expensive term in the sweep's
     budget on the day it landed.
+
+    A CARD WAITING ON A LIMIT DEATH IS THE RECOVERY'S (DRE-5841). A classify
+    or plan death leaves its card here, and `recover_limit_deaths` brings it
+    back once the marker's reset passes — five hours after the run when the
+    run named none (DRE-5455). Measured by `updatedAt` alone, that card was
+    parked two hours into its wait, and the park note (`🧹`, a receipt glyph)
+    closed the marker, so the recovery never brought it back. So after the
+    under-review skip, a card whose newest receipt is a limit marker is
+    skipped with one line until the wait's end (`limit_wait_ends`). At or past
+    it, the recovery has failed to bring it back, and it goes through the
+    stall exit as it stands, under `limit_wait_overran_reason`. A marker whose
+    age cannot be read is past its wait too: the age gate above has already
+    found the card a window still, and posting the marker bumped `updatedAt`.
+
+    The recovery runs among the backstops BEFORE `flag_stranded` on every
+    pass, but this rule does NOT see what it wrote: `active_cards()` serves
+    the one board snapshot, so a card the recovery re-entered or handed off
+    a moment ago still reads its old marker and its old `updatedAt` here. A
+    card in `_limit_recovered` — one the recovery wrote to this pass — is
+    therefore skipped with one line, and the next pass reads its receipt.
     """
     flagged: set[str] = set()
     for card in active_cards(PLANNING_LANE):
@@ -2659,6 +2685,24 @@ def flag_stalled_planning() -> set[str]:
             print(f"watchdog: {ident} is with the critics — the re-review "
                   "watcher owns it")
             continue
+        # A limit death is a wait, and the recovery owns it (DRE-5841) until
+        # a window past its reset. Past that, the recovery failed to bring it
+        # back, and the stall exit below parks it with a reason of its own.
+        reason = stalled_planning_reason()
+        marker = limit_recovery.waiting(bodies)
+        if marker is not None:
+            if ident in _limit_recovered:
+                # Re-entered or handed off earlier in this pass: the snapshot
+                # predates the receipt, so the next pass judges it.
+                print(f"watchdog: {ident} was answered by the limit recovery "
+                      "this pass — the next pass reads its receipt")
+                continue
+            created_at = _limit_marker_created_at(card)
+            ends = limit_wait_ends(marker, created_at)
+            if ends is not None and datetime.now(UTC) < ends:
+                print(_limit_wait_line(ident, marker, ends))
+                continue
+            reason = limit_wait_overran_reason(marker, created_at)
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -2670,10 +2714,11 @@ def flag_stalled_planning() -> set[str]:
             continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
-        if escalate_out_of_planning(card, stalled_planning_reason(), bodies):
+        if escalate_out_of_planning(card, reason, bodies):
             flagged.add(ident)
             print(
-                f"watchdog: {ident} stalled in Planning (no-classification) — "
+                f"watchdog: {ident} stalled in Planning "
+                f"({'limit-wait-overran' if marker else 'no-classification'}) — "
                 f"parked in {PARKED_STATE}"
             )
     return flagged
@@ -2742,6 +2787,85 @@ def stalled_planning_reason() -> str:
         "card in Planning owes a decision about what it is and where it goes, "
         "and none has been recorded. No planner run and no critic has read it, "
         "and why is not known from here."
+    )
+
+
+def _limit_marker_created_at(card: dict) -> datetime | None:
+    """When the card's newest limit marker was posted, off the board read's
+    own comment nodes (no request), or None when the node carries no
+    readable `createdAt` (DRE-5841). The newest marker is the one
+    `limit_recovery.waiting` answers with."""
+    for node in reversed(linear_ops.window_nodes(card.get("comments"))):
+        if dead_run.parse_limit_marker(node.get("body") or "") is None:
+            continue
+        try:
+            return datetime.fromisoformat((node.get("createdAt") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def limit_wait_ends(marker: dict, created_at: datetime | None) -> datetime | None:
+    """When a limit-dead Planning card's wait ends and the stall clock may
+    judge it again (DRE-5841): the marker's reset, stated or assumed, plus
+    PLANNING_MINUTES. A marker with no reset is re-entered (Linear) or handed
+    off (a Claude marker from before DRE-5455) on the recovery's next pass
+    with room, so its wait ends PLANNING_MINUTES after the marker was posted.
+    None when neither is known."""
+    window = timedelta(minutes=PLANNING_MINUTES)
+    if marker.get("reset") is not None:
+        return marker["reset"] + window
+    if created_at is not None:
+        return created_at + window
+    return None
+
+
+def _limit_wall(marker: dict) -> str:
+    return ("the Claude account's usage limit" if marker.get("kind") == "claude"
+            else f"the {marker.get('kind')} request limit")
+
+
+def _limit_wait_line(ident: str, marker: dict, ends: datetime) -> str:
+    """The one log line for a card the watchdog leaves to the recovery."""
+    death = (f"watchdog: {ident} is waiting on a {marker.get('kind')} limit "
+             f"death ({marker.get('stage')} stage)")
+    owner = "the limit recovery owns it, not a strand"
+    reset = marker.get("reset")
+    if reset is None:
+        return f"{death} until {dead_run.pacific(ends)} — {owner}"
+    return (f"{death} until {dead_run.pacific(reset)} — {owner} (the stall "
+            f"clock resumes at {dead_run.pacific(ends)})")
+
+
+def limit_wait_overran_reason(marker: dict, created_at: datetime | None) -> str:
+    """What the operator reads on a limit-dead card the recovery never
+    brought back (DRE-5841): when its wait should have ended, and that the
+    sweep has not brought it back since. Like `stalled_planning_reason`, for
+    the operator, not the CEO."""
+    death = (f"this card hit {_limit_wall(marker)} during its "
+             f"{marker.get('stage')} stage, and the limit recovery was to bring "
+             "it back on its own.")
+    reset = marker.get("reset")
+    ends = limit_wait_ends(marker, created_at)
+    if reset is not None:
+        how = (" (assumed, five hours after the run, which named no reset time)"
+               if marker.get("assumed") else "")
+        when = (f" The window reset at {dead_run.pacific(reset)}{how}, so the "
+                f"wait should have ended by {dead_run.pacific(ends)}, "
+                f"{PLANNING_MINUTES} minutes later.")
+    elif ends is not None:
+        when = (f" The marker named no reset time and was posted at "
+                f"{dead_run.pacific(created_at)}, so the wait should have ended "
+                f"by {dead_run.pacific(ends)}, the marker's time plus the "
+                f"{PLANNING_MINUTES}-minute Planning window.")
+    else:
+        when = (" The marker named no reset time and its time could not be "
+                "read, but nothing has happened to the card for more than the "
+                f"{PLANNING_MINUTES}-minute Planning window since it was posted.")
+    return (
+        f"{death}{when} The sweep has not brought it back since: either no "
+        "pass found room to re-enter it, or every re-entry failed. Why is not "
+        "known from here."
     )
 
 
@@ -10673,7 +10797,16 @@ def recover_limit_deaths() -> None:
     carries its marker before the recovery reads the board.
 
     A pass that re-enters nothing says so in one line (DRE-5519).
+
+    Every card it moves or posts a receipt on is recorded in
+    `_limit_recovered` (DRE-5841), so the Planning watchdog later in this pass,
+    reading the same snapshot and its old marker, leaves the card alone.
     """
+    def move(ident: str, lane: str) -> None:
+        _limit_recovered.add(ident)
+        _moved_or_raise(ident, lane, lanes_now, linear_ops.cmd_state(
+            ident, lane, **_door_guard(lanes_now.get(ident))))
+
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
         backfill_limit_records(cards)
@@ -10684,14 +10817,12 @@ def recover_limit_deaths() -> None:
         lanes_now = {c["identifier"]: c for c in cards}
         acted = False
         for line in limit_recovery.recover(
-            linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
+            SimpleNamespace(cmd_comment=_post_limit_receipt), datetime.now(UTC),
+            os.environ.get("CLAUDE_ACCOUNT") or None,
             MAX_WIP - wip_count(wip_base(active_cards())),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
-            move=lambda ident, lane: _moved_or_raise(
-                ident, lane, lanes_now,
-                linear_ops.cmd_state(ident, lane, **_door_guard(lanes_now.get(ident)))),
-            dispatch=redispatch, cards=cards,
+            move=move, dispatch=redispatch, cards=cards,
         ):
             acted = True
             print(line)
@@ -10704,6 +10835,13 @@ def recover_limit_deaths() -> None:
         raise  # skipped by its phase (Stage 2 item 34; an idle pass)
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
+def _post_limit_receipt(ident: str, receipt: str):
+    """The limit recovery's comment write: `receipt` is the recovery's own,
+    and the card is recorded as answered this pass (DRE-5841)."""
+    _limit_recovered.add(ident)
+    return linear_ops.cmd_comment(ident, receipt)
 
 
 def _limit_record(run_id: str) -> str | None:
