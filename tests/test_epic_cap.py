@@ -457,7 +457,7 @@ def test_the_queued_receipt_says_everything_a_reader_needs():
     assert body.startswith("⏸️ epic-queued:")
     assert "place 3 of 4" in body
     assert "15 of 15 epics" in body
-    assert "when one closes" in body
+    assert "when one of them has no card left to build" in body
     assert "Urgent, High, Medium, Low" in body and "oldest approval first" in body
     assert "Change its Priority to move it up the line" in body
     assert "In Progress again neither starts it nor changes its place" in body
@@ -498,7 +498,7 @@ def test_the_contract_constants():
     assert epic_cap.QUEUED_ACT == "epic-approval-queued"
     assert epic_cap.STARTED_ACT == "epic-queue-started"
     assert epic_cap.REDISPATCHED_ACT == "epic-start-redispatched"
-    assert epic_cap.IN_MOTION_PAGE == 8
+    assert epic_cap.IN_MOTION_PAGE == 4
     assert epic_cap.WAITING_PAGE == 16
     assert epic_cap.START_OWNER_SLUG == "bureau-pipeline"
 
@@ -509,14 +509,28 @@ def test_the_contract_constants():
 def _node_weight(selection: str) -> int:
     """One node's weight off the selection's OWN `first:`/`last:` numbers.
 
-    The selections nest one connection inside the last, so each number
-    multiplies the ones before it: `children(first: 250) { … children(first: 1)
-    … }` is 250 children plus 250 × 1 grandchild probes."""
-    weight, width = 0, 1
-    for n in re.findall(r"\b(?:first|last):\s*(\d+)", selection):
-        width *= int(n)
-        weight += width
+    A connection's number multiplies every connection it sits inside, and
+    sibling connections add: `children(first: 100) { nodes { labels(first: 10)
+    … children(first: 1) … } }` is 100 children plus 100 × 10 labels plus
+    100 × 1 grandchild probes (DRE-5918)."""
+    weight, stack, pending = 0, [1], None
+    for token in re.findall(r"\b(?:first|last):\s*\d+|[{}]", selection):
+        if token == "{":
+            width = stack[-1] * (pending or 1)
+            if pending:
+                weight += width
+            stack.append(width)
+            pending = None
+        elif token == "}":
+            stack.pop()
+        else:
+            pending = int(token.split(":")[1])
     return weight
+
+
+def test_the_weight_helper_adds_siblings_and_multiplies_nesting():
+    assert _node_weight("a(first: 3) { nodes { b(first: 2) { x } c(last: 5) { y } } }") == 3 + 6 + 15
+    assert _node_weight("a(first: 250) { nodes { b(first: 1) { nodes { id } } } }") == 500
 
 
 @pytest.mark.parametrize("query", ["IN_MOTION_QUERY", "WAITING_QUERY", "LABELED_QUERY"])
@@ -532,8 +546,9 @@ def test_the_in_motion_query_asks_for_its_page_and_its_fields():
     assert 'state: {name: {eq: "In Progress"}}' in q
     assert 'team: {key: {eq: "DRE"}}' in q
     for field in ("identifier title priority createdAt state { name }",
-                  "children(first: 250) { nodes { identifier title "
-                  "children(first: 1) { nodes { id } } } }"):
+                  "children(first: 100) { nodes { identifier title state { name } "
+                  "labels(first: 10) { nodes { name } pageInfo { hasNextPage } } "
+                  "children(first: 1) { nodes { id } } } pageInfo { hasNextPage } }"):
         assert field in q, field
 
 
@@ -547,7 +562,7 @@ def test_the_waiting_query_asks_for_its_page_and_its_fields():
 
 def test_an_in_motion_page_weighs_no_more_than_linear_answers():
     weight = _node_weight(epic_cap.IN_MOTION_NODE)
-    assert weight == 500
+    assert weight == 100 + 100 * 10 + 100 * 1
     assert epic_cap.IN_MOTION_PAGE * weight <= KNOWN_ANSWERED_WEIGHT, (
         f"{epic_cap.IN_MOTION_PAGE} × {weight} = {epic_cap.IN_MOTION_PAGE * weight}"
     )
@@ -632,9 +647,12 @@ def board(monkeypatch):
 
 
 def _board_of_2026_09_28():
-    """45 In Progress epics — 14 builds, 16 close-outs (whose children are all
-    delivered and still count), 15 roll-ups — plus 10 cards being built."""
-    epics = [_epic(f"DRE-{2000 + n}") for n in range(30)]
+    """45 In Progress epics — 14 builds, 16 close-outs (every child delivered,
+    so none takes a slot since DRE-5918), 15 roll-ups — plus 10 cards being
+    built."""
+    epics = [_epic(f"DRE-{2000 + n}") for n in range(14)]
+    epics += [_epic(f"DRE-{2050 + n}", children=[_child(state="Done")])
+              for n in range(16)]
     epics += [_epic(f"DRE-{2100 + n}", children=[_child("DRE-1", "[EPIC] x")])
               for n in range(15)]
     cards = [_epic(f"DRE-{3000 + n}", children=[], title="bureau-pipeline: a card")
@@ -642,7 +660,7 @@ def _board_of_2026_09_28():
     return epics + cards
 
 
-def test_fleet_state_pages_55_in_progress_issues_in_7_requests(board, capsys):
+def test_fleet_state_pages_55_in_progress_issues_in_14_requests(board, capsys):
     waiting = [
         _approved("DRE-60", "2026-09-20T10:00:00.000Z", priority=3),
         _approved("DRE-61", "2026-09-21T10:00:00.000Z", priority=1),
@@ -650,14 +668,14 @@ def test_fleet_state_pages_55_in_progress_issues_in_7_requests(board, capsys):
     ]
     fake = board(in_progress=_board_of_2026_09_28(), waiting=waiting)
     fleet = epic_cap.fleet_state()
-    assert fake.count("in_motion") == 7
+    assert fake.count("in_motion") == 14
     assert fake.count("waiting") == 1
     assert fleet["cap"] == 15 and fleet["count_rollup_parents"] is False
-    assert len(fleet["in_motion"]) == 30
+    assert len(fleet["in_motion"]) == 14
     assert [e["identifier"] for e in fleet["waiting"]] == ["DRE-61", "DRE-62", "DRE-60"]
     err = capsys.readouterr().err
-    assert "8 Linear request" in err
-    assert "7" in err and "1" in err
+    assert "15 Linear request" in err
+    assert "14 for 55 In Progress" in err and "1 for 3 waiting" in err
 
 
 def test_waiting_line_is_one_request_in_queue_order(board):
