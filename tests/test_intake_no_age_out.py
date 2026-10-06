@@ -175,6 +175,9 @@ def _main_mocks():
             "promote_ready", "close_finished_epics", "report_break_glass",
             "report_fix_concurrency", "report_evicted_fix_runs",
             "report_epic_growth",
+            # DRE-4152's notice reads relations off Linear directly; its own
+            # suite (test_intake_blocker_notice.py) runs it unstubbed.
+            "report_intake_blockers",
         )
     ] + [
         mock.patch.object(reconcile, "flag_stranded", return_value=set()),
