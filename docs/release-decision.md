@@ -7,7 +7,7 @@ The train decides something about every declared surface on every run. This page
 
 ## Why a deployment
 
-GitHub delivers a deployment as `deployment` and `deployment_status` webhook messages — the two messages the Record keeps (DRE-4761), so this shape rides a subscription and an App permission that are already planned. It also keeps the train's own verdict OUT of the check-run population the green-at-SHA classifier and the merge gate read (`merge_gate.gating_check_runs`): DRE-3263 spent a card excluding self-authored checks on the commit being judged, and a check run here would hand that problem straight back.
+GitHub delivers a deployment as `deployment` and `deployment_status` webhook messages — the two messages the Record keeps (DRE-4761), so this shape rides a subscription and an App permission that are already planned. Not every status is delivered: GitHub never delivers an `inactive` one (see below). It also keeps the train's own verdict OUT of the check-run population the green-at-SHA classifier and the merge gate read (`merge_gate.gating_check_runs`): DRE-3263 spent a card excluding self-authored checks on the commit being judged, and a check run here would hand that problem straight back.
 
 A deployment created with the run's own `GITHUB_TOKEN` **does not start any workflow** — GitHub does not fire a workflow from an event that token created, `workflow_dispatch` and `repository_dispatch` excepted. That is the rule that keeps the train from triggering itself, and it is why the decision can be written on every run.
 
@@ -50,7 +50,7 @@ Every key is present in every record; a null is explicit.
 | `schema` | always `release-train-decision/1`, and the first token of every description too, so a consumer can filter on the line as well as on the payload |
 | `repo` | `owner/name` — the caller the train ran in |
 | `surface` | the declared surface's name, as the caller's `release.json` spells it |
-| `act` | one of `release`, `no-op`, `held`, `refuse` — `Decision.act`, and what the status's `state` follows from |
+| `act` | one of `release`, `no-op`, `held`, `refuse` — `Decision.act`, and what the status's `state` follows from. GitHub never delivers an `inactive` status, so a `held` or `no-op` decision is read from the `deployment` message |
 | `code` | `Decision.code`, the train's own vocabulary, never restated here — the closed set is `CODES` |
 | `reason` | `Decision.reason` — the sentence the run's log line carries, verbatim and never reworded |
 | `phase` | `plan` or `release`, whichever of the train's two passes decided this |
@@ -59,7 +59,7 @@ Every key is present in every record; a null is explicit.
 | `deployed` | the surface's newest tag BEFORE the decision — what it stands at; `null` when its series holds none |
 | `version` | the tag cut, or `null` when nothing was cut; the train cannot know the next number before the surface script chooses it |
 | `hand_act` | the one command a person's hand clears this decision with, or `null` when nobody's hand clears it |
-| `re_arm_at` | the UTC minute the run re-armed itself for (`Decision.re_arm_at`), or `null` |
+| `re_arm_at` | the next releasable minute, UTC (`Decision.re_arm_at`) — set whether or not a re-arm was dispatched, so it never says a re-armed run is waiting; `null` when no timer ends the decision |
 | `run_id` | the Actions run that decided, as a number |
 | `run_attempt` | which attempt of that run, as a number |
 | `run_url` | that run's URL, and the status's `log_url` |
@@ -76,6 +76,8 @@ Every key is present in every record; a null is explicit.
 | `no-op` | `inactive` |
 
 A hold and a no-op are the train working, so both are `inactive` — reported, not failed. Only a refusal is `failure`.
+
+**GitHub never delivers an `inactive` status.** On 2026-09-26 the Record's App was delivered 39 statuses and not one was `inactive`, while agent-bureau's train alone wrote 98 `inactive` decision statuses in the same hours (`docs/release-decision-proof-2026-09.md`, DRE-4773). So a hold and a no-op reach the Record only as the `deployment` message, whose payload carries the whole decision — `act`, `code`, `reason`, `hand_act`, `decided_at`. Read every decision from the `deployment` message; there is no status message to wait for on these two.
 
 ## What a person's hand clears
 
@@ -117,7 +119,7 @@ The brake is the repository variable `RELEASE_HOLD`, which resolves against the 
 
 ## What a consumer filters on
 
-**`task`**, which is always `release-train-decision`. The Record's App receives every `deployment` and `deployment_status` message the repository produces, the surface scripts' own rollouts among them; the task is what tells a train decision apart from a rollout, and it is on the deployment where every status carries it too. `environment` is `release-train` and `payload.schema` is `release-train-decision/1` — the second is the one to version against, and the description's first token repeats it so a log line answers the same question.
+**`task`**, which is always `release-train-decision`. The Record's App receives the repository's `deployment` messages and its delivered `deployment_status` messages, the surface scripts' own rollouts among them; the task is what tells a train decision apart from a rollout, and it is on the deployment where every status carries it too. GitHub never delivers an `inactive` status, so a held or no-op decision arrives as the `deployment` message alone, and the decision is read from that message. `environment` is `release-train` and `payload.schema` is `release-train-decision/1` — the second is the one to version against, and the description's first token repeats it so a log line answers the same question.
 
 `check_record` is what a consumer checks a delivered message with: hand it the payload, or the payload plus the `state` and `description` the messages carry beside it, and it names every problem.
 

@@ -15,6 +15,9 @@ already exists rather than about the shape being prettier.
     webhook messages — exactly the two messages the sibling epic DRE-4761
     teaches the Record to keep. Choosing this shape rides the subscription and
     the App permission already planned there; a check run would need its own.
+    GitHub never delivers an `inactive` status (DRE-4773's proof, DRE-5119),
+    so a hold and a no-op reach the Record as the `deployment` message alone,
+    whose payload is the whole decision.
   * It keeps the train's decision OUT of the check-run population the train's
     own green-at-SHA classifier and the merge gate read
     (`merge_gate.gating_check_runs`). DRE-3263 spent a whole card excluding
@@ -128,7 +131,9 @@ FIELDS = (
     Field("surface", "the declared surface's name, as the caller's "
                      "`release.json` spells it"),
     Field("act", "one of `release`, `no-op`, `held`, `refuse` — `Decision.act`, "
-                 "and what the status's `state` follows from"),
+                 "and what the status's `state` follows from. GitHub never "
+                 "delivers an `inactive` status, so a `held` or `no-op` "
+                 "decision is read from the `deployment` message"),
     Field("code", "`Decision.code`, the train's own vocabulary, never restated "
                   "here — the closed set is `CODES`"),
     Field("reason", "`Decision.reason` — the sentence the run's log line "
@@ -144,8 +149,10 @@ FIELDS = (
                      "chooses it"),
     Field("hand_act", "the one command a person's hand clears this decision "
                       "with, or `null` when nobody's hand clears it"),
-    Field("re_arm_at", "the UTC minute the run re-armed itself for "
-                       "(`Decision.re_arm_at`), or `null`"),
+    Field("re_arm_at", "the next releasable minute, UTC "
+                       "(`Decision.re_arm_at`) — set whether or not a re-arm "
+                       "was dispatched, so it never says a re-armed run is "
+                       "waiting; `null` when no timer ends the decision"),
     Field("run_id", "the Actions run that decided, as a number"),
     Field("run_attempt", "which attempt of that run, as a number"),
     Field("run_url", "that run's URL, and the status's `log_url`"),
@@ -158,6 +165,9 @@ FIELDS = (
 #: `deployment_status` has both in hand, so `check_record` accepts them
 #: alongside the record and checks that they follow from it. They are never
 #: keys of the payload itself — the payload would only be restating them.
+#: GitHub never delivers an `inactive` status, so for a hold or a no-op the
+#: consumer has only the `deployment` message: its `description`, and no
+#: `state` beyond the one `STATES` derives from the payload's `act`.
 DELIVERED = ("state", "description")
 
 #: Which codes a person's hand clears, and with what. A template, so the
@@ -484,7 +494,8 @@ def render() -> str:
         "GitHub delivers a deployment as `deployment` and `deployment_status` "
         "webhook messages — the two messages the Record keeps (DRE-4761), so "
         "this shape rides a subscription and an App permission that are "
-        "already planned. It also keeps the train's own verdict OUT of the "
+        "already planned. Not every status is delivered: GitHub never "
+        "delivers an `inactive` one (see below). It also keeps the train's own verdict OUT of the "
         "check-run population the green-at-SHA classifier and the merge gate "
         "read (`merge_gate.gating_check_runs`): DRE-3263 spent a card "
         "excluding self-authored checks on the commit being judged, and a "
@@ -544,6 +555,18 @@ def render() -> str:
         "reported, not failed. Only a refusal is `failure`."
     )
     w("")
+    w(
+        "**GitHub never delivers an `inactive` status.** On 2026-09-26 the "
+        "Record's App was delivered 39 statuses and not one was `inactive`, "
+        "while agent-bureau's train alone wrote 98 `inactive` decision "
+        "statuses in the same hours "
+        "(`docs/release-decision-proof-2026-09.md`, DRE-4773). So a hold and "
+        "a no-op reach the Record only as the `deployment` message, whose "
+        "payload carries the whole decision — `act`, `code`, `reason`, "
+        "`hand_act`, `decided_at`. Read every decision from the `deployment` "
+        "message; there is no status message to wait for on these two."
+    )
+    w("")
     w("## What a person's hand clears")
     w("")
     w(
@@ -599,10 +622,13 @@ def render() -> str:
     w("")
     w(
         f"**`task`**, which is always `{TASK}`. The Record's App receives "
-        f"every `deployment` and `deployment_status` message the repository "
-        f"produces, the surface scripts' own rollouts among them; the task is "
-        f"what tells a train decision apart from a rollout, and it is on the "
-        f"deployment where every status carries it too. `environment` is "
+        f"the repository's `deployment` messages and its delivered "
+        f"`deployment_status` messages, the surface scripts' own rollouts "
+        f"among them; the task is what tells a train decision apart from a "
+        f"rollout, and it is on the deployment where every status carries it "
+        f"too. GitHub never delivers an `inactive` status, so a held or no-op "
+        f"decision arrives as the `deployment` message alone, and the "
+        f"decision is read from that message. `environment` is "
         f"`{ENVIRONMENT}` and `payload.schema` is `{SCHEMA}` — the second is "
         f"the one to version against, and the description's first token "
         f"repeats it so a log line answers the same question."
