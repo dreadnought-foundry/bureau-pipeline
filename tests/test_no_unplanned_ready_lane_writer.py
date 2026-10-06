@@ -38,7 +38,9 @@ otherwise is worse than none
   `default_problems()` with the value directly — including the `Backlog` the
   setting actually carried when this card was written, and the unreadable case,
   which is reported rather than passed. `observed_default()` reads the real one
-  when a checkout or an API key provides it.
+  when a checkout or an API key provides it — at `team.defaultIssueState`, where
+  the file has kept it since DRE-2751, and `TheTeamDefaultIsReadWhereTheWorkspaceKeepsIt`
+  pins that shape (DRE-5744).
 * **A destination computed at run time from data.** Resolution is static. A
   writer whose destination no rule here can read is REPORTED as unread rather
   than assumed innocent — `test_a_new_writer_whose_destination_cannot_be_read_is_reported`
