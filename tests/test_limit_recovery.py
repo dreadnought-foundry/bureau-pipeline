@@ -974,8 +974,8 @@ def test_a_review_death_on_a_planning_card_is_the_rereview_watchers():
     assert s.reruns == [] and s.moves == [] and s.dispatched == []
     assert s.comments == []
     assert ("limit-recovery: DRE-5640 review death (claude limit) is the re-review "
-            "watcher's — it asks for the review again after its own grace and does "
-            "not read the Claude wall") in lines
+            "watcher's — it waits out the marker's reset, then asks for the review "
+            "again") in lines
     assert not any("once the wall is down" in line for line in lines), lines
 
 

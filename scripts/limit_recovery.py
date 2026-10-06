@@ -66,11 +66,11 @@ is not red on every pass for a card nobody was told about.
     and nothing here re-enters it. A re-run keeps its run id, and the medic
     marks a run id once, so a re-run dying on the same wall would leave no
     marker and nothing would bring it back. The re-review watcher asks for the
-    review again as a fresh run (`rereview_watch`, DRE-5842), and it does NOT
-    read the Claude wall: it asks once its own grace
-    (`REREVIEW_GRACE_MINUTES`) has passed behind the review's tombstone,
-    whether or not the marker's reset has (waiting for the reset is DRE-5842's,
-    not yet in the watcher). A review that dies again on the
+    review again as a fresh run (`rereview_watch`, DRE-5842), and it reads
+    the Claude wall: while the marker's reset is ahead it waits, and once the
+    reset has passed it asks at once, its own grace (`REREVIEW_GRACE_MINUTES`)
+    behind the tombstone long run out. A hand-off receipt from this pass
+    parks the epic for a person instead. A review that dies again on the
     same wall is marked again, so the bound below still counts it; this pass
     says so on its line and makes no write. The hand-off checks still come
     first, so a review death a person must see is told.
@@ -432,8 +432,8 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # watcher as a fresh run, never re-run here (see the module docstring).
         if marker.get("stage") == "review" and _lane(card) == PLANNING_LANE:
             lines.append(f"{RECOVERY_TAG}: {ident} review death ({marker['kind']} limit) "
-                         f"is the re-review watcher's — it asks for the review again "
-                         f"after its own grace and does not read the Claude wall")
+                         f"is the re-review watcher's — it waits out the marker's reset, "
+                         f"then asks for the review again")
             continue
         why = trigger(marker, now, active_account)
         if why is None:
