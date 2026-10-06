@@ -179,6 +179,12 @@ class FakeDoor(_Server):
     `fleet` is how a `/board?scope=fleet` read is answered (DRE-5848): None
     serves it from `world` like any board read; `decline_fleet` sets the
     answer a door gives a caller it does not serve that scope to.
+
+    Comments are served the way AB-1 serves them (DRE-5850): `comments=<n>`
+    is the newest `n`, `hasNextPage` true when the card holds more, and
+    `comments=all` is every stored comment, whole (`hasNextPage: false`)
+    unless the card is in `incomplete_threads` — a thread the door cannot
+    prove it holds whole, which the client reads as `thread-incomplete`.
     """
 
     def __init__(self, world: dict | None = None, *, as_of: str = "2026-10-02T20:00:00.000Z",
@@ -193,6 +199,7 @@ class FakeDoor(_Server):
         self.held_lanes = set(held_lanes) if held_lanes is not None else None
         self.routes: dict = {}
         self.fleet: tuple | None = None
+        self.incomplete_threads: set[str] = set()
         self.requests: list[dict] = []
 
     def decline_fleet(self, reason: str | None = None, *, status: int | None = None) -> None:
@@ -261,9 +268,9 @@ class FakeDoor(_Server):
                 nodes_key="workflowStates")
         return 404, {"error": {"code": "NOT_FOUND"}}
 
-    @staticmethod
-    def _shaped(node: dict, query: dict) -> dict:
+    def _shaped(self, node: dict, query: dict) -> dict:
         out = dict(node)
+        out["comments"] = self._comments(node, query.get("comments"))
         if query.get("relations") == "0":
             out.pop("inverseRelations", None)
         else:
@@ -271,6 +278,19 @@ class FakeDoor(_Server):
                            {"pageInfo": {"hasNextPage": False, "endCursor": None},
                             "nodes": []})
         return out
+
+    def _comments(self, node: dict, asked: str | None) -> dict:
+        """The node's comment connection as `comments=<asked>` serves it."""
+        stored = node.get("comments") or {"pageInfo": {}, "nodes": []}
+        nodes = list(stored.get("nodes") or [])  # newest first
+        more = bool((stored.get("pageInfo") or {}).get("hasNextPage"))
+        if asked == "all":
+            more = more or node.get("identifier") in self.incomplete_threads
+        elif asked and asked.isdigit() and len(nodes) > int(asked):
+            nodes, more = nodes[:int(asked)], True
+        return {"pageInfo": {"hasNextPage": more,
+                             "endCursor": "door-cursor" if more else None},
+                "nodes": nodes}
 
     def dependents_node(self, ident: str) -> dict | None:
         card = self.world.get(ident)

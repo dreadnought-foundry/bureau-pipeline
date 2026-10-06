@@ -1020,3 +1020,281 @@ def test_with_the_door_on_another_routable_repos_card_is_not_this_sweeps(monkeyp
     with door_at(monkeypatch, ours), wired(linear):
         flagged = reconcile.flag_stranded()
     assert "DRE-315" not in flagged
+
+
+# ── DRE-5850: the promotion gate's epic threads, whole, from the door ──────
+# `promote_ready` reads each In Progress epic's whole thread WITH authorship
+# (`epic_thread` → `comment_records`) for the second critic's PASS marker. A
+# thread past fifty comments missed the pass cache and was paged from Linear
+# every pass. In `on` it is asked of the door in ONE `comments=all` read for
+# every epic the gate names; only what the door cannot prove whole goes to
+# Linear, and the viewer — this process's own key — is still Linear's.
+
+_EPIC_A, _EPIC_B = "DRE-900", "DRE-950"
+
+
+def _epic_thread_nodes(ident, count):
+    """`count` comments, oldest first, every third one somebody else's."""
+    return [{"body": f"{ident} comment {i}",
+             "createdAt": f"2026-09-{1 + i // 60:02d}T{(i // 60) % 24:02d}:{i % 60:02d}:00.000Z",
+             "user": {"id": "fleet-user" if i % 3 else "a-person"}}
+            for i in range(count)]
+
+
+def _epic(ident, count):
+    node = _c(ident, "In Progress", title=f"[EPIC] {ident}", children=True, comments=())
+    node["comments"] = {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": list(reversed(_epic_thread_nodes(ident, count)))}
+    return node
+
+
+class ThreadLinear(Linear):
+    """Linear with the epics' threads behind it: the newest fifty plus the
+    viewer in one read, then 100-comment pages toward the oldest — exactly
+    what `linear_ops._fetch_thread` asks for."""
+
+    def __init__(self, *cards, threads, viewer="fleet-user"):
+        super().__init__(*cards)
+        self.threads = threads  # identifier -> nodes, oldest first
+        self.viewer = viewer
+
+    def _page(self, ident, start, size):
+        newest_first = list(reversed(self.threads[ident]))
+        nodes = newest_first[start:start + size]
+        more = start + size < len(newest_first)
+        return {"pageInfo": {"hasNextPage": more,
+                             "endCursor": f"{ident}@{start + size}" if more else None},
+                "nodes": copy.deepcopy(nodes)}
+
+    def gql(self, query, variables=None):
+        q = " ".join(query.split())
+        v = variables or {}
+        if q == "query { viewer { id } }":
+            self.queries.append(query)
+            self.variables.append({})
+            return {"viewer": {"id": self.viewer}}
+        if "viewer { id }" in q and "issue(id: $id)" in q:
+            self.queries.append(query)
+            self.variables.append(dict(v))
+            return {"viewer": {"id": self.viewer},
+                    "issue": {"comments": self._page(v["id"], 0, linear_ops.COMMENT_WINDOW)}}
+        if "comments(first: 100, after: $after)" in q:
+            self.queries.append(query)
+            self.variables.append(dict(v))
+            start = int(v["after"].split("@")[1])
+            return {"issue": {"comments": self._page(v["id"], start, 100)}}
+        return super().gql(query, variables)
+
+    def thread_reads(self, ident=None):
+        """The Linear requests spent on epic threads: the viewer, the window,
+        the older pages — of `ident` alone when named (the viewer excluded)."""
+        out = []
+        for q, v in zip(self.queries, self.variables):
+            q = " ".join(q.split())
+            if "viewer { id }" not in q and "comments(first: 100, after" not in q:
+                continue
+            if ident is None or v.get("id") == ident:
+                out.append(q)
+        return out
+
+
+def _epic_world():
+    kids = [_c("DRE-901", "Backlog", parent=_EPIC_A), _c("DRE-951", "Backlog", parent=_EPIC_B)]
+    epics = [_epic(_EPIC_A, 60), _epic(_EPIC_B, 120)]
+    threads = {_EPIC_A: _epic_thread_nodes(_EPIC_A, 60),
+               _EPIC_B: _epic_thread_nodes(_EPIC_B, 120)}
+    return kids, epics, threads
+
+
+def _gate_stubs(monkeypatch):
+    """Everything the gate reads about an epic EXCEPT its thread, stood in:
+    what is under test is where the thread comes from. The second critic's
+    gate is recorded and passes, so every child reaches it."""
+    seen: dict[str, list] = {}
+    monkeypatch.setattr(reconcile, "epic_records", lambda ids: {})
+    monkeypatch.setattr(reconcile, "epic_blockers_unmet", lambda epic: False)
+    monkeypatch.setattr(mid_epic, "last_green_light",
+                        lambda *a, **k: "2026-08-01T00:00:00.000Z")
+    monkeypatch.setattr(mid_epic, "promotion_refusal", lambda *a, **k: None)
+
+    def refusal(ident, epic, green_lit_at, records, **kw):
+        seen[epic] = copy.deepcopy(records)
+        return None
+
+    monkeypatch.setattr(plan_critic, "promotion_refusal", refusal)
+    return seen
+
+
+def _all_reads(door):
+    return [r["query"] for r in door.asked("/cards") if r["query"].get("comments") == "all"]
+
+
+def _linear_rows(monkeypatch):
+    """What `comment_records` handed the gate when Linear served both threads
+    — the sweep before this card, in `off`."""
+    kids, epics, threads = _epic_world()
+    seen = _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    bureau_read.reset_for_tests()
+    reconcile.reset_sweep_cards()
+    with door_at(monkeypatch, *kids, *epics, mode="off"), wired(linear):
+        assert reconcile.promote_ready(active_count=0) == 2
+    bureau_read.reset_for_tests()
+    reconcile.reset_sweep_cards()
+    return seen, linear
+
+
+def test_whole_epic_threads_come_from_the_door_and_only_the_viewer_from_linear(monkeypatch,
+                                                                                capsys):
+    expected, _ = _linear_rows(monkeypatch)
+    kids, epics, threads = _epic_world()
+    seen = _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        assert reconcile.promote_ready(active_count=0) == 2
+        # One Linear request on epic threads, pinned on the sweep's own meter:
+        # the viewer. The rest of the pass is the Backlog children's live
+        # re-checks, one each.
+        assert linear.thread_reads() == ["query { viewer { id } }"]
+        assert linear_ops.requests_made() == 1 + len(_backlog_reads(linear))
+    assert len(_backlog_reads(linear)) == 2
+    assert _all_reads(door) == [{"ids": f"{_EPIC_A},{_EPIC_B}", "comments": "all",
+                                 "relations": "0"}]
+    # The same rows the gate got from Linear: bodies, authorship, stamps.
+    assert seen == expected
+    assert len(seen[_EPIC_B]) == 120
+    assert {r["authored_by_pipeline"] for r in seen[_EPIC_A]} == {True, False}
+    assert capsys.readouterr().out.count(
+        "promotion: epic threads — 2 from the door in one read, 0 read from Linear "
+        "(none)") == 1
+
+
+def test_a_thread_the_door_cannot_prove_whole_is_read_from_linear_and_the_rest_reasked(
+        monkeypatch, capsys):
+    expected, _ = _linear_rows(monkeypatch)
+    kids, epics, threads = _epic_world()
+    seen = _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.incomplete_threads = {_EPIC_A}
+        assert reconcile.promote_ready(active_count=0) == 2
+    # Asked twice at most: everything, then what the first answer did not name.
+    assert [r["ids"] for r in _all_reads(door)] == [f"{_EPIC_A},{_EPIC_B}", _EPIC_B]
+    # The incomplete epic from Linear exactly as today: the newest fifty (with
+    # the viewer), then one older page for the other ten.
+    reads_a = linear.thread_reads(_EPIC_A)
+    assert len(reads_a) == 2
+    assert "comments(first: 50)" in reads_a[0] and "after: $after" in reads_a[1]
+    assert linear.thread_reads(_EPIC_B) == []
+    assert seen == expected
+    assert bureau_read.enabled()
+    assert capsys.readouterr().out.count(
+        "promotion: epic threads — 1 from the door in one read, 1 read from Linear "
+        f"(thread-incomplete: {_EPIC_A})") == 1
+
+
+def _today_thread_reads(monkeypatch):
+    _seen, linear = _linear_rows(monkeypatch)
+    return linear.thread_reads()
+
+
+@pytest.mark.parametrize("answer,reason", [
+    ("stale", "stale"),
+    ("missing-field", "missing-field"),
+    (404, "not-found"),
+    (503, "door unavailable"),
+])
+def test_any_other_door_answer_reads_every_epic_thread_from_linear_as_today(
+        monkeypatch, capsys, answer, reason):
+    today = _today_thread_reads(monkeypatch)
+    expected, _ = _linear_rows(monkeypatch)
+    kids, epics, threads = _epic_world()
+    seen = _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.routes["/cards"] = (door.unknown(answer) if isinstance(answer, str)
+                                 else (answer, {"error": {"code": "X"}}))
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert len(_all_reads(door)) == 1  # one ask, no second read
+    assert linear.thread_reads() == today
+    assert len(today) == 4  # each epic: the newest fifty with the viewer, one older page
+    assert seen == expected
+    assert capsys.readouterr().out.count(
+        f"promotion: epic threads — 0 from the door in one read, 2 read from Linear "
+        f"({reason})") == 1
+
+
+def test_a_door_already_stopped_this_run_is_not_asked_for_epic_threads(monkeypatch, capsys):
+    today = _today_thread_reads(monkeypatch)
+    kids, epics, threads = _epic_world()
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.routes["/board"] = (503, {"error": {"code": "CLOSED"}})
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert _all_reads(door) == []
+    assert linear.thread_reads() == today
+    assert ("promotion: epic threads — 0 from the door in one read, 2 read from Linear "
+            "(door unavailable)") in capsys.readouterr().out
+
+
+def test_linear_hold_on_the_thread_read_skips_the_promotion_with_no_linear_call(monkeypatch,
+                                                                                 capsys):
+    kids, epics, threads = _epic_world()
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.routes["/cards"] = door.unknown("linear-hold")
+        reconcile.main(promote_only=True)  # returns normally: not a red run
+    assert linear.queries == []
+    assert _advanced(linear) == []
+    assert len(_all_reads(door)) == 1
+    assert "read-door: skipped promote_ready this pass — the door says linear-hold" in (
+        capsys.readouterr().err)
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_off_and_shadow_make_no_thread_read_and_spend_what_they_spent(monkeypatch, capsys,
+                                                                     mode):
+    today = _today_thread_reads(monkeypatch)
+    kids, epics, threads = _epic_world()
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics, mode=mode) as door, wired(linear):
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert _all_reads(door) == []
+    assert door.asked("/cards") == []
+    assert linear.thread_reads() == today
+    assert "promotion: epic threads" not in capsys.readouterr().out
+
+
+def test_an_epic_thread_already_whole_in_the_pass_is_not_asked_again(monkeypatch, capsys):
+    """An epic under fifty comments came whole with the work-lane board read:
+    the door is asked only for the one past the window."""
+    kids, _epics, threads = _epic_world()
+    small = _epic(_EPIC_A, 12)
+    threads[_EPIC_A] = _epic_thread_nodes(_EPIC_A, 12)
+    big = _epic(_EPIC_B, 120)
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, small, big, threads=threads)
+    with door_at(monkeypatch, *kids, small, big) as door, wired(linear):
+        reconcile.active_cards()  # the work-lane board: the epics' newest fifty
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert [r["ids"] for r in _all_reads(door)] == [_EPIC_B]
+    assert linear.thread_reads() == ["query { viewer { id } }"]
+    assert ("promotion: epic threads — 1 from the door in one read, 0 read from Linear "
+            "(none)") in capsys.readouterr().out
+
+
+def test_when_every_thread_is_incomplete_the_door_is_asked_once(monkeypatch, capsys):
+    today = _today_thread_reads(monkeypatch)
+    kids, epics, threads = _epic_world()
+    _gate_stubs(monkeypatch)
+    linear = ThreadLinear(*kids, *epics, threads=threads)
+    with door_at(monkeypatch, *kids, *epics) as door, wired(linear):
+        door.incomplete_threads = {_EPIC_A, _EPIC_B}
+        assert reconcile.promote_ready(active_count=0) == 2
+    assert len(_all_reads(door)) == 1  # nothing left to re-ask
+    assert linear.thread_reads() == today
+    assert ("promotion: epic threads — 0 from the door in one read, 2 read from Linear "
+            f"(thread-incomplete: {_EPIC_A}, {_EPIC_B})") in capsys.readouterr().out
