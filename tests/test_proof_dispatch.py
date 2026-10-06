@@ -14,6 +14,9 @@ Pinned here, over a fixture board:
   * one dispatch per pass, oldest first; the second dispatch on
     `never-started` and on `dead`; the hold after two;
   * the return after the CEO's signed answer, served before a first run;
+  * the re-run after the critic's findings (DRE-5931): its trigger, its
+    budget of two counted apart from the first run's, its three stops, the
+    hold after two, and its place behind the first runs under one cap;
   * the dry run, which writes nothing;
   * the read bound: five candidates cost at most eight Linear requests;
   * the step in `reconcile.yml`: gated on a full pass, the stub tested before
@@ -139,8 +142,9 @@ def detail(*, epic_state="In Progress", blockers=None, siblings=None,
 class Board:
     """The injected Linear reads, counted."""
 
-    def __init__(self, hand=(), green=(), details=None, threads=None):
-        self.lanes = {"Hand-work": list(hand), "Green Light": list(green)}
+    def __init__(self, hand=(), green=(), details=None, threads=None, review=()):
+        self.lanes = {"Hand-work": list(hand), "Green Light": list(green),
+                      "In Review": list(review)}
         self.details = details or {}
         self.threads = threads or {}
         self.reads: list = []
@@ -181,7 +185,7 @@ class Harness:
     """One pass: the board, the stubbed readings, and the recorded writes."""
 
     def __init__(self, monkeypatch, board, *, states=None, release="ready",
-                 release_lines=None, fire_ok=True, prs=None):
+                 release_lines=None, fire_ok=True, prs=None, records=None):
         self.board = board
         self.states = states or {}
         self.release_state = release
@@ -190,6 +194,8 @@ class Harness:
         self.fired: list = []
         self.fire_ok = fire_ok
         self.prs = prs
+        self.records = records or {}
+        self.record_reads: list = []
         self.posted: list = []
         self.holds: list = []
         self.order: list = []
@@ -221,6 +227,13 @@ class Harness:
                 "headRefName": f"agent/{ident}-build",
                 "mergeCommit": {"oid": f"{ident[-4:]}abcdef0123456789"}}
 
+    def find_record(self, ident):
+        self.record_reads.append(ident)
+        got = self.records.get(ident)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
     def fire(self, card, repo, *, reason=None, event=None):
         self.order.append(("fire", card["identifier"]))
         self.fired.append((card["identifier"], repo, reason, event))
@@ -230,7 +243,8 @@ class Harness:
         return proof_dispatch.sweep(
             REPO, SLUG, live=live, linear=self.board, read=lambda path: None,
             find_pr=self.find_pr, run_state=self.run_state,
-            release=self.release, fire=self.fire, voices=fake_voices, now=NOW)
+            release=self.release, fire=self.fire, voices=fake_voices, now=NOW,
+            find_record=self.find_record)
 
 
 def _lines(capsys) -> list:
@@ -723,7 +737,9 @@ def test_main_runs_the_dry_run_when_the_variable_is_unset(monkeypatch, capsys):
 
 def test_five_candidates_cost_at_most_eight_linear_reads(monkeypatch, capsys):
     """The real readers — `reconcile.active_cards`, the card read, the thread
-    read — over a faked transport that counts every request."""
+    read — over a faked transport that counts every request. `In Review`
+    (DRE-5931) costs nothing more: the sweep's one board read serves it with
+    `Hand-work`, and `Green Light` is the other read."""
     import reconcile
 
     monkeypatch.delenv("BUREAU_READ", raising=False)
@@ -915,3 +931,328 @@ def test_an_unchecked_console_answer_neither_returns_nor_discharges_and_says_why
     assert any("COULD NOT BE CHECKED" in l for l in _about(lines, "DRE-5930"))
     assert any("condition 4" in l and "COULD NOT BE CHECKED" in l
                for l in _about(lines, "DRE-5931"))
+
+
+# --------------------------------------------------------------------------- #
+# the re-run after the critic's findings (DRE-5931)                            #
+# --------------------------------------------------------------------------- #
+
+HEAD = "c0ffee1" + "0" * 33
+SHA7 = HEAD[:7]
+OLD_HEAD = "abc1234" + "f" * 33
+QA_BOT = "agent-bureau-qa-bot"
+RERUN = f"re-run after the critic's findings at {SHA7}"
+RERUN_HELD = ("the record was sent back twice after re-observation",
+              "an operator reading the critic's findings and the two re-run "
+              "receipts")
+
+
+def verdict(token: str, minutes_ago: float, *, sha: str = HEAD,
+            login: str = QA_BOT) -> dict:
+    return {"author": {"login": login}, "createdAt": _at(minutes_ago),
+            "body": f"🔎 QA Critic — VERDICT: {token} @{sha}\n\nThe findings."}
+
+
+def record(*verdicts, ident="DRE-5930", opened: float = 2400, head: str = HEAD,
+           branch: str | None = None, pr_state: str = "OPEN") -> dict:
+    return {"number": 900, "url": f"https://github.com/{REPO}/pull/900",
+            "headRefName": branch or f"agent/{ident}-proof-record",
+            "state": pr_state, "headRefOid": head, "createdAt": _at(opened),
+            "comments": [{"author": {"login": "agent-bureau-bot"},
+                          "createdAt": _at(opened), "body": "opened"},
+                         *verdicts]}
+
+
+def rerun_receipt(minutes_ago: float, n: int) -> dict:
+    return receipt(minutes_ago, reason=f"re-run after the critic's findings "
+                                       f"at {OLD_HEAD[:7]}", count=f"re-run {n} of 2")
+
+
+def _sent_back(*extra) -> list:
+    """A first run that opened the record, then whatever `extra` adds."""
+    nodes = [receipt(3000), comment("⏳ 5/5 PR opened", 2500), *extra]
+    return sorted(nodes, key=lambda c: c["createdAt"])
+
+
+def _review(ident="DRE-5930", **kw) -> dict:
+    return lane_card(ident, state="In Review", **kw)
+
+
+def _rerun_pass(monkeypatch, *, thread, pr, run="finished", live=True,
+                extra_hand=()):
+    board = Board(review=[_review()], hand=list(extra_hand),
+                  threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr},
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally
+
+
+def test_rerun_request_changes_at_head_with_no_newer_receipt_dispatches_once(
+        monkeypatch, capsys):
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    ident, body = h.posted[0]
+    first = body.split("\n", 1)[0]
+    assert first.startswith("🔬 proof-run: dispatched a proof run at ")
+    assert first.endswith(f" — {RERUN} (re-run 1 of 2)")
+    parsed = proof_run_state.receipt(body)
+    assert parsed.reason == RERUN and parsed.count == "re-run 1 of 2"
+    assert pipeline_act.read_trailer(body)["act"] == "proof-run-dispatched"
+    # The release and the epic are not this branch's to read.
+    assert h.release_calls == []
+
+
+def test_rerun_a_newer_receipt_whose_run_died_dispatches_the_second(monkeypatch, capsys):
+    thread = _sent_back(rerun_receipt(50, 1))
+    h, _ = _rerun_pass(monkeypatch, thread=thread, run="dead",
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 2 of 2)")
+
+
+def test_rerun_dead_is_read_through_the_real_reader_with_the_record_open(
+        monkeypatch, capsys):
+    run = "35700000001"
+    thread = _sent_back(
+        rerun_receipt(50, 1),
+        comment("🧠 model-attempt: claude-opus-5-5 — proof agent starting. Run: "
+                f"https://github.com/{REPO}/actions/runs/{run}", 45))
+    reads = {
+        f"repos/{REPO}/pulls?head=dreadnought-foundry:agent/DRE-5930-"
+        "proof-record&state=all&per_page=100": [
+            {"number": 900, "state": "open", "html_url": "u",
+             "head": {"ref": "agent/DRE-5930-proof-record"}}],
+        f"repos/{REPO}/actions/runs/{run}": {
+            "status": "completed", "conclusion": "failure",
+            "updated_at": _at(30)},
+    }
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 100))})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: reads[path],
+        find_pr=h.find_pr, run_state=proof_run_state.reading,
+        release=h.release, fire=h.fire, voices=fake_voices, now=NOW,
+        find_record=h.find_record)
+    assert [f[2] for f in h.fired] == [RERUN]
+    assert h.posted[0][1].split("\n", 1)[0].endswith("(re-run 2 of 2)")
+
+
+def test_rerun_a_newer_receipt_that_never_started_dispatches_the_second(
+        monkeypatch, capsys):
+    """A re-run dispatched but never begun is owed again, and spent one."""
+    thread = _sent_back(rerun_receipt(50, 1))
+    h, _ = _rerun_pass(monkeypatch, thread=thread, run="never-started",
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 2 of 2)")
+
+
+def test_rerun_two_that_never_started_reach_the_hold(monkeypatch, capsys):
+    thread = _sent_back(rerun_receipt(80, 1), rerun_receipt(50, 2))
+    h, tally = _rerun_pass(monkeypatch, thread=thread, run="never-started",
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert tally.held == 1
+
+
+def test_rerun_never_started_is_read_through_the_real_reader(monkeypatch, capsys):
+    """Past the queued window with no `🧠 model-attempt`: the real reader says
+    never-started, and the re-run is sent again."""
+    thread = _sent_back(rerun_receipt(50, 1))
+    reads = {
+        f"repos/{REPO}/pulls?head=dreadnought-foundry:agent/DRE-5930-"
+        "proof-record&state=all&per_page=100": [
+            {"number": 900, "state": "open", "html_url": "u",
+             "head": {"ref": "agent/DRE-5930-proof-record"}}],
+    }
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 100))})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: reads[path],
+        find_pr=h.find_pr, run_state=proof_run_state.reading,
+        release=h.release, fire=h.fire, voices=fake_voices, now=NOW,
+        find_record=h.find_record)
+    assert [f[2] for f in h.fired] == [RERUN]
+    assert h.posted[0][1].split("\n", 1)[0].endswith("(re-run 2 of 2)")
+
+
+RERUN_UNANSWERED = ("the re-run finished and the critic's findings still stand "
+                    "at the record's head",
+                    "an operator reading the critic's findings and the re-run's "
+                    "thread")
+
+
+def test_rerun_finished_with_the_verdict_still_at_the_head_is_held_once(
+        monkeypatch, capsys):
+    """The re-run said 5/5 yet the critic's REQUEST_CHANGES is still at the
+    head: nothing it amended reached the critic. Held, never sent again."""
+    done = (rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(*done),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_UNANSWERED)]
+    assert tally.held == 1
+    assert any("reads finished" in line and SHA7 in line for line in lines), lines
+
+    # The next pass reads the hold it posted and names it; nothing is posted.
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(*done,
+                                                          hold(*RERUN_UNANSWERED, 10)),
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the re-run finished" in line
+               for line in lines), lines
+
+
+def test_rerun_finished_hold_in_the_dry_run_writes_nothing(monkeypatch, capsys):
+    done = (rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, _ = _rerun_pass(monkeypatch, thread=_sent_back(*done), live=False,
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: hold DRE-5930 — {RERUN_UNANSWERED[0]}" in _lines(capsys)
+
+
+def _nothing_cases():
+    rc = verdict("REQUEST_CHANGES", 100)
+    return {
+        "approve-at-head": (_sent_back(), record(verdict("APPROVE", 100)),
+                            "finished", "APPROVE"),
+        "older-verdict-running": (_sent_back(rerun_receipt(50, 1)), record(rc),
+                                  "running", "running"),
+        "proof-waiting": (_sent_back(hold("being observed by hand",
+                                          "the operator's record pull request", 60)),
+                          record(rc), "finished",
+                          "held by 🔬 proof-waiting: being observed by hand"),
+        "unknown": (_sent_back(), record(rc), "unknown", "unknown"),
+        "two-reruns-spent": (_sent_back(rerun_receipt(1500, 1),
+                                        comment("⏳ 5/5 record amended", 1400),
+                                        rerun_receipt(800, 2),
+                                        comment("⏳ 5/5 record amended", 700)),
+                             record(rc), "finished", "never a third"),
+        "forged-verdict": (_sent_back(),
+                           record(verdict("REQUEST_CHANGES", 100, login="mallory")),
+                           "finished", "none"),
+        "verdict-on-an-earlier-head": (_sent_back(),
+                                       record(verdict("REQUEST_CHANGES", 100,
+                                                      sha=OLD_HEAD)),
+                                       "finished", f"earlier head {OLD_HEAD[:7]}"),
+        "not-a-record-branch": (_sent_back(),
+                                record(rc, branch="agent/DRE-5930-build"),
+                                "finished", "proof-record"),
+        "record-merged": (_sent_back(), record(rc, pr_state="MERGED"),
+                          "finished", "no open record pull request"),
+        "no-pull-request": (_sent_back(), None, "finished",
+                            "no open record pull request"),
+        "unreadable-pull-request": (_sent_back(), RuntimeError("HTTP 502"),
+                                    "finished", "HTTP 502"),
+    }
+
+
+@pytest.mark.parametrize("case", list(_nothing_cases()))
+def test_rerun_dispatches_nothing_and_says_why(monkeypatch, capsys, case):
+    thread, pr, run, why = _nothing_cases()[case]
+    h, _ = _rerun_pass(monkeypatch, thread=thread, pr=pr, run=run)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert any("re-run" in line and why in line for line in lines), lines
+
+
+def test_rerun_budget_is_counted_from_rerun_receipts_only(monkeypatch, capsys):
+    # Two first-run receipts and no re-run: the first re-run is still owed.
+    thread = sorted([receipt(3000), receipt(2800, reason="second dispatch — run 1 "
+                                                          "ended failure at 08:00 PT "
+                                                          "with no record",
+                                            count="dispatch 2 of 2"),
+                     comment("⏳ 5/5 PR opened", 2500)],
+                    key=lambda c: c["createdAt"])
+    h, _ = _rerun_pass(monkeypatch, thread=thread,
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 1 of 2)")
+
+    # One first-run receipt and two re-runs: held, never `3 of 2`.
+    capsys.readouterr()
+    thread = _sent_back(rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+                        rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally = _rerun_pass(monkeypatch, thread=thread,
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    out = capsys.readouterr().out
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert "3 of 2" not in out and tally.held == 1
+
+
+def test_rerun_budget_is_this_pull_requests(monkeypatch, capsys):
+    """Re-runs spent before this record pull request opened are not its own."""
+    thread = _sent_back(rerun_receipt(2300, 1), rerun_receipt(2200, 2),
+                        comment("⏳ 5/5 a new record", 2100))
+    h, _ = _rerun_pass(monkeypatch, thread=thread,
+                       pr=record(verdict("REQUEST_CHANGES", 100), opened=2000))
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {RERUN} (re-run 1 of 2)")
+
+
+def test_rerun_the_hold_after_two_and_the_next_pass_skips_by_name(monkeypatch, capsys):
+    spent = (rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, _ = _rerun_pass(monkeypatch, thread=_sent_back(*spent),
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    assert h.holds == [("DRE-5930", "the record was sent back twice after "
+                                    "re-observation",
+                        "an operator reading the critic's findings and the two "
+                        "re-run receipts")]
+    capsys.readouterr()
+
+    # The next pass reads the hold it posted and names it; nothing is posted.
+    held = _sent_back(*spent, hold(*RERUN_HELD, 50))
+    h, tally = _rerun_pass(monkeypatch, thread=held,
+                           pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the record was sent back twice after "
+               "re-observation" in line for line in lines), lines
+    assert tally.held == 1
+
+
+def test_rerun_shares_the_one_dispatch_cap_behind_a_first_run(monkeypatch, capsys):
+    h, tally = _rerun_pass(monkeypatch, thread=_sent_back(),
+                           pr=record(verdict("REQUEST_CHANGES", 100)),
+                           extra_hand=[lane_card("DRE-5941")])
+    assert [(f[0], f[2]) for f in h.fired] == [("DRE-5941", "first proof run")]
+    assert tally.dispatched == 1
+    assert any("deferred — one dispatch per pass" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+    # A deferred candidate costs nothing.
+    assert h.record_reads == []
+
+
+def test_rerun_dry_run_prints_would_and_writes_nothing(monkeypatch, capsys):
+    h, _ = _rerun_pass(monkeypatch, thread=_sent_back(), live=False,
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: dispatch DRE-5930 — {RERUN}" in lines
+
+    spent = _sent_back(rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+                       rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, _ = _rerun_pass(monkeypatch, thread=spent, live=False,
+                       pr=record(verdict("REQUEST_CHANGES", 100)))
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert f"would: hold DRE-5930 — {RERUN_HELD[0]}" in lines
+
+
+def test_an_in_review_card_that_is_not_ours_costs_nothing(monkeypatch, capsys):
+    board = Board(review=[_review("DRE-5932", repo="portico"),
+                          _review("DRE-5933", title="bureau-pipeline: a build")])
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
