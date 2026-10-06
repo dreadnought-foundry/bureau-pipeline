@@ -78,14 +78,36 @@ is live the moment its tag is verified; a Linear outage, a missing key or a
 refused mutation is a `WARNING` line and the receipt the train prints is the
 one it would have printed anyway. A repo that declares no pipeline for a
 surface is not touched and prints nothing.
+
+THE CHANNEL (DRE-4872)
+----------------------
+bureau-pipeline's one release is its `stable` channel moving: that move is
+what carries every change to the fleet. DRE-3855 left it out of Linear on
+purpose, because a `record: channel` surface cuts no version tag and the train
+never runs it. The CEO reversed that on 2026-09-25, so a `channel` surface may
+now name a pipeline, and its release is defined here rather than by a tag:
+
+    version   `stable-<first 7 characters of the new stable sha>`
+    range     the `stable` sha before the move .. the sha it moved to
+
+The train still never writes it. `promote-channel.yml` does, through the
+`channel` CLI below, once it has moved `stable` and read the ref back. A held
+channel, or a move the read-back does not confirm, writes nothing. The note
+also names the Integration Harness run that proved the promoted sha — the
+harness deploys nothing and has no release of its own, so its proof rides on
+this one. Every other tagless surface is still refused.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -118,6 +140,22 @@ WHY_SECTION = re.compile(r"^#{2,}\s*Why\s*$(.*?)(?=^#{1,6}\s|\Z)", re.M | re.S)
 #: What Linear answers when the version is already in the pipeline.
 ALREADY_EXISTS = "already exists"
 
+#: The surface records that have a release to write: a verified tag, written
+#: by the train, and a channel move, written by promote-channel (DRE-4872).
+RELEASED_RECORDS = ("tag", "channel")
+
+#: A channel release's version is `<series>-<short sha>` (DRE-4872) — the
+#: shape of the first one, `stable-7a517bd`, written by hand on 2026-09-25.
+CHANNEL_SERIES = "stable"
+SHORT_SHA = 7
+
+#: The commit status the harness stamps on the sha it proved, and the name the
+#: note gives the run behind it (`promote_channel.STATUS_CONTEXT`).
+HARNESS_CONTEXT = "integration-harness"
+HARNESS_NAME = "Integration Harness"
+
+PT = ZoneInfo("America/Los_Angeles")
+
 
 class ReleaseLinearError(RuntimeError):
     """Anything that stops the Linear release being written. Never fatal."""
@@ -148,10 +186,10 @@ def check(data) -> list:
             problems.append(f"{where}: names no declared surface")
             continue
         entry = surfaces[name] if isinstance(surfaces[name], dict) else {}
-        if entry.get("record", "tag") != "tag":
+        if entry.get("record", "tag") not in RELEASED_RECORDS:
             problems.append(
                 f"{where}: a `{entry.get('record')}` surface cuts no version tag "
-                f"and the train never runs it, so it has no release to write")
+                f"and moves no channel, so it has no release to write")
         if not isinstance(pipeline_id, str) or not PIPELINE_ID.match(pipeline_id):
             problems.append(
                 f"{where}: must be the Linear release pipeline's id (a UUID), "
@@ -303,13 +341,16 @@ def whats_new_bullet(item: dict) -> str:
 
 
 def assemble_note(*, label: str, version: str, cards, unnamed, first: bool,
-                  whats_new=()) -> str:
+                  whats_new=(), proof: str | None = None) -> str:
     """A headline, one bullet per card (newest card first), and one line about
     everything else. `unnamed` of `None` is UNKNOWN, rendered as UNKNOWN.
 
     `whats_new` is the release's published `whats-new.json` items (DRE-5516):
     a `## What's new` section above the card bullets, one bullet per item in
-    the file's order. Empty, the note is byte for byte what it was before."""
+    the file's order. Empty, the note is byte for byte what it was before.
+
+    `proof` is one closing line naming what proved the release (`proof_line`,
+    DRE-4872). The train passes none, so its notes are unchanged."""
     short = version[len(label) + 1:] if version.startswith(f"{label}-") else version
     lines = [f"## {label} {short}", ""]
     if whats_new:
@@ -335,6 +376,8 @@ def assemble_note(*, label: str, version: str, cards, unnamed, first: bool,
                      f"{', '.join(unnamed)}")
     else:
         lines.append("Every change in this release names a card.")
+    if proof:
+        lines.extend(["", proof])
     return "\n".join(lines)
 
 
@@ -398,7 +441,7 @@ def repository_input(repo: str) -> dict:
 
 def write(*, data, surface_name: str, repo: str, repo_root, version: str,
           sha: str, previous_tag: str | None, call=None, env=None,
-          out=print, whats_new=()) -> dict | None:
+          out=print, whats_new=(), proof: str | None = None) -> dict | None:
     """Write this release to the surface's Linear pipeline. NEVER raises.
 
     Returns `None` when the surface declares no pipeline (and prints nothing),
@@ -406,7 +449,9 @@ def write(*, data, surface_name: str, repo: str, repo_root, version: str,
     `problem` is `None` on success and the first thing that went wrong
     otherwise. `whats_new` is the release's published `whats-new.json` items,
     rendered in the note (`assemble_note`); a surface with no pipeline drops
-    them by design.
+    them by design. `previous_tag` is any revision git can read — a channel
+    release passes the sha `stable` moved from — and `proof` is the note's
+    closing line (`write_channel`).
     """
     pipeline_id = pipeline_for(data, surface_name)
     if not pipeline_id:
@@ -464,7 +509,7 @@ def write(*, data, surface_name: str, repo: str, repo_root, version: str,
         label = f"{repo.partition('/')[2] or repo}-{surface_name}"
         note = assemble_note(label=label, version=version, cards=cards,
                              unnamed=uncarded(changes), first=not previous_tag,
-                             whats_new=whats_new)
+                             whats_new=whats_new, proof=proof)
         existing = [entry["id"] for entry in read.get("releaseNotes") or []]
         try:
             if existing:
@@ -490,3 +535,146 @@ def write(*, data, surface_name: str, repo: str, repo_root, version: str,
     except Exception as error:  # noqa: BLE001 — never fail a release on Linear
         return warn(f"{version} was not fully written to Linear pipeline "
                     f"{pipeline_id}: {error}")
+
+
+# --------------------------------------------------------------------------- #
+# The channel's release (DRE-4872)                                             #
+# --------------------------------------------------------------------------- #
+
+
+def channel_version(sha: str, series: str = CHANNEL_SERIES) -> str:
+    """`stable-<first 7 characters of the sha>`."""
+    return f"{series}-{(sha or '').strip()[:SHORT_SHA]}"
+
+
+def _series(data, surface_name: str) -> str:
+    entry = ((data or {}).get("surfaces") or {}).get(surface_name) or {}
+    series = entry.get("tag_series") if isinstance(entry, dict) else None
+    first = series[0] if isinstance(series, list) and series else None
+    return first if isinstance(first, str) and first else CHANNEL_SERIES
+
+
+def pacific(stamp: str | None) -> str | None:
+    """`2026-09-25 09:23 PT` from one of GitHub's ISO times, or `None` when
+    there is no time to read — never a guessed one."""
+    try:
+        when = datetime.fromisoformat((stamp or "").strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        return None
+    return when.astimezone(PT).strftime("%Y-%m-%d %H:%M PT")
+
+
+def harness_proof(*, run_url: str | None = None, completed_at: str | None = None,
+                  combined: dict | None = None) -> tuple | None:
+    """`(url, time in PT)` of the Integration Harness run that proved the sha.
+
+    The gating run promote-channel was triggered by, when there is one; a
+    by-hand promote has none, so it is the run behind the commit's own green
+    `integration-harness` stamp — the proof the decision read. A forced
+    promote past a red or absent stamp has no proof, and gets `None`.
+    """
+    if (run_url or "").strip():
+        return run_url.strip(), pacific(completed_at)
+    for status in (combined or {}).get("statuses") or []:
+        if (status.get("context") == HARNESS_CONTEXT
+                and status.get("state") == "success" and status.get("target_url")):
+            return status["target_url"], pacific(status.get("updated_at"))
+    return None
+
+
+def proof_line(proof: tuple | None) -> str:
+    """The note's closing line: which harness run proved this release."""
+    if not proof:
+        return f"No {HARNESS_NAME} run is on record as proving this commit."
+    url, when = proof
+    return f"Proved by the {HARNESS_NAME} run {url}" + (f", finished {when}." if when
+                                                         else ".")
+
+
+def write_channel(*, data, surface_name: str, repo: str, repo_root, promoted: bool,
+                  from_sha: str | None, to_sha: str, stable_now: str | None,
+                  proof: tuple | None = None, call=None, env=None,
+                  out=print) -> dict | None:
+    """Write the release for one move of a channel. NEVER raises.
+
+    Nothing is written unless the channel moved: `promoted` is the decision's
+    own answer (a held channel says `false`), and `stable_now` — the ref read
+    back after the move — must be the sha it moved to. Then it is `write()`
+    with the channel's version and range (the module docstring).
+    """
+    if not pipeline_for(data, surface_name):
+        return None
+    to_sha = (to_sha or "").strip()
+    if not promoted:
+        out(f"{TAG}: {CHANNEL_SERIES} did not move — no release written")
+        return None
+    if not to_sha or (stable_now or "").strip() != to_sha:
+        problem = (f"{CHANNEL_SERIES} reads {(stable_now or '').strip() or 'nothing'} "
+                   f"after the move, not {to_sha or 'a candidate'}, so no release "
+                   f"was written")
+        out(f"{TAG}: WARNING {problem} — the promotion itself is unaffected")
+        return {"pipeline": pipeline_for(data, surface_name), "cards": None,
+                "note": None, "problem": problem}
+    return write(data=data, surface_name=surface_name, repo=repo, repo_root=repo_root,
+                 version=channel_version(to_sha, _series(data, surface_name)),
+                 sha=to_sha, previous_tag=(from_sha or "").strip() or None,
+                 call=call, env=env, out=out, proof=proof_line(proof))
+
+
+# --------------------------------------------------------------------------- #
+# CLI — promote-channel's one call                                             #
+# --------------------------------------------------------------------------- #
+
+
+def _read_json(path: str | None):
+    if not path:
+        return None
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def main(argv=None) -> int:
+    """`release_linear.py --repo R channel --promoted true --from-sha A
+    --to-sha B --stable-now B [--harness-run URL --harness-at T]
+    [--statuses-file F]`. Exit 0, always: a promotion is never failed by
+    Linear."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--file", default=".github/bureau/release.json")
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--repo", required=True)
+    sub = parser.add_subparsers(dest="command", required=True)
+    channel = sub.add_parser("channel", help="write the release for a channel move")
+    channel.add_argument("--surface", default="pipeline-channel")
+    channel.add_argument("--promoted", default="false")
+    channel.add_argument("--from-sha", default="")
+    channel.add_argument("--to-sha", default="")
+    channel.add_argument("--stable-now", default="")
+    channel.add_argument("--harness-run", default="")
+    channel.add_argument("--harness-at", default="")
+    channel.add_argument("--statuses-file", default="")
+    args = parser.parse_args(argv)
+    try:
+        data = _read_json(args.file)
+        if not isinstance(data, dict):
+            print(f"{TAG}: WARNING {args.file} could not be read, so no release "
+                  f"was written — the promotion itself is unaffected")
+            return 0
+        write_channel(
+            data=data, surface_name=args.surface, repo=args.repo,
+            repo_root=args.repo_root, promoted=args.promoted == "true",
+            from_sha=args.from_sha, to_sha=args.to_sha, stable_now=args.stable_now,
+            proof=harness_proof(run_url=args.harness_run, completed_at=args.harness_at,
+                                combined=_read_json(args.statuses_file)))
+    except Exception as error:  # noqa: BLE001 — never fail a promotion on Linear
+        print(f"{TAG}: WARNING the channel release was not written: {error} — "
+              f"the promotion itself is unaffected")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

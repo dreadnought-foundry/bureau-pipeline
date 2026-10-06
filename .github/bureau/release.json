@@ -11,5 +11,8 @@
       "identity": "promote-channel.yml",
       "record": "channel"
     }
+  },
+  "linear_pipelines": {
+    "pipeline-channel": "65541905-7345-48a4-bfc4-c83aae296f0c"
   }
 }
