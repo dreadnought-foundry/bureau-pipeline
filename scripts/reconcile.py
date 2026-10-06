@@ -3416,10 +3416,10 @@ def release_groom_queue(free: int) -> list[str]:
         moved_note` — the batch, its position off the proposal record on the
         same thread, this release and its queue place (DRE-3326) — then moves
         to Planning and its label comes off. A note that will not post is a
-        write failure and moves nothing. Entering Planning starts its plan run the way any
-        Intake-to-Planning move does, and the card joins the planner line
-        there with a fresh wait (DRE-5378). A move that fails is a write
-        failure and ends the releases for this pass.
+        write failure and moves nothing. Entering Planning starts its plan
+        run the way any Intake-to-Planning move does, and the card joins the
+        planner line there with a fresh wait (DRE-5378). A move that fails
+        is a write failure and ends the releases for this pass.
 
     ONE `🧺 groom-released` comment per pass that changed the queue, a line
     per batch it touched — never one per card.
@@ -3500,8 +3500,8 @@ def release_groom_queue(free: int) -> list[str]:
                     batch_card=card, to=GROOM_RELEASE_TO))
         except linear_ops.LinearError as e:
             _write_failures.append(f"{ident} groom queue note: {e}")
-            print(f"ERROR: groom queue: {ident}'s batch note did not post, "
-                  f"so it was not released: {e}", file=sys.stderr)
+            print(f"ERROR: groom queue: {ident}'s batch note could not be read "
+                  f"or posted, so it was not released: {e}", file=sys.stderr)
             halted = True
             remaining.append(entry)
             continue
