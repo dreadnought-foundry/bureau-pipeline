@@ -730,6 +730,9 @@ def test_a_deferral_naming_a_minute_carries_its_re_arm(tmp_path):
     # The clause counts only at the END of the line, in its exact words.
     "deferred: re-arm in 10 minutes was the old plan — ask the operator",
     "deferred: console busy — re-arm in ten minutes",
+    # A minute no clock can hold is no minute at all: the line is the reason,
+    # verbatim, and never a crash that turns a deferral into a red run.
+    "deferred: console busy — re-arm in 99999999999999 minutes",
 ])
 def test_a_deferral_without_the_clause_re_arms_nothing(tmp_path, line):
     entry = surface(script=_deferring_script(tmp_path, line))
@@ -843,6 +846,33 @@ def test_a_deferral_beyond_the_wait_bound_is_not_re_armed(tmp_path,
     line = _line(capsys.readouterr().out)
     assert "— re-arm in 45 minutes — not re-armed: 16:45 PT" in line
     assert "32" in line
+
+
+def test_a_deferral_naming_an_impossible_minute_stays_green(tmp_path,
+                                                         monkeypatch, capsys):
+    line = "deferred: console is being written — re-arm in 99999999999999 minutes"
+    repo = _deferring_caller(tmp_path, line)
+    actions = _Actions()
+    code, records = _release_cli(repo, monkeypatch, actions,
+                                 pt(2026, 9, 12, 16, 0))
+    assert code == 0
+    assert actions.dispatched == []
+    assert _line(capsys.readouterr().out).endswith(f"— {line}")
+    assert records[0]["reason"] == line
+
+
+def test_the_release_job_re_arms_a_deferral_and_nothing_else(tmp_path,
+                                                            monkeypatch, capsys):
+    """A job that reads the spacing when it runs — another release of the
+    surface landed at 15:06 PT — carries the spacing's minute, but the release
+    job re-arms only a deferral; the spacing is the plan's to re-arm."""
+    repo = _deferring_caller(tmp_path)
+    actions = _Actions()
+    code, _ = _release_cli(repo, monkeypatch, actions, pt(2026, 9, 12, 15, 20))
+    assert code == 0
+    assert actions.dispatched == []
+    line = _line(capsys.readouterr().out)
+    assert "re-arm" not in line
 
 
 def test_a_refused_re_arm_dispatch_from_the_release_job_stays_green(
