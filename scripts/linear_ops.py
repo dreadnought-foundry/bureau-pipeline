@@ -44,7 +44,10 @@ Subcommands:
                                        label) or closes-on-evidence (`DEMO:`
                                        title), in which case the merge is
                                        commented but the state is left alone
-                                       (the six portico false closes)
+                                       (the six portico false closes). A
+                                       `PROOF:` card closes when its record
+                                       merged with the critic's APPROVE at the
+                                       merged head (DRE-5919)
   subissue <DRE-N(parent)> <title> <description-file>
                                        create a child issue (Backlog) under an epic.
                                        Inlines the file's CONTENTS (never a path),
@@ -2156,6 +2159,12 @@ def cmd_proof_observed(identifier: str, text: str) -> None:
 # header's promise ("hand-named branches auto-Done NOTHING: the operator closes
 # those cards by hand") was defeated whenever an agent branch pointed at an
 # operator card; this restores it for the card classes where it matters.
+#
+# One `no-code` class is let back through (DRE-5919): a `PROOF:` card, whose
+# deliverable IS the merged record, closes when that record merged on its own
+# branch with the critic's APPROVE at the merged head. `merge_close_ruling`
+# below is where both paths ask, so the exception cannot reach one and not the
+# other.
 
 NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
 
@@ -2178,6 +2187,19 @@ NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
 # exists to prevent (DRE-2253, DRE-2252) is exactly what a retired guard would
 # let happen to one of them.
 _DEMO_TITLE_RE = re.compile(r"^\s*demo:", re.IGNORECASE)
+
+# Title must START with `PROOF:` — the same anchored, case-insensitive shape as
+# `_DEMO_TITLE_RE`, for the same reason: "Record the PROOF: phase 3" is not a
+# proof card. A PROOF card wears `no-code`, so the guard above refuses it like
+# any operator card; `merge_close_ruling` is the one place it is let through,
+# and only on the evidence there (DRE-5919).
+_PROOF_TITLE_RE = re.compile(r"^\s*proof:", re.IGNORECASE)
+
+# The critic's login as `gh pr view --json comments` renders it: GraphQL, so an
+# App's login carries no `[bot]` suffix. The same literal `reconcile.QA_BOT_LOGIN`
+# reads, and a test holds the two equal; reconcile imports this module, so the
+# one cannot import the other.
+QA_BOT_LOGIN = "agent-bureau-qa-bot"
 
 # Shared marker for the "merged but deliberately left open" card comment:
 # card-done posts it at merge time; reconcile's backstop greps for it
@@ -2295,13 +2317,164 @@ def merged_not_closed_comment(
     )
 
 
+# --- A PROOF card closes on its approved record (DRE-5919) -------------------
+#
+# A PROOF card's deliverable IS the merged record, unlike the operator card the
+# `no-code` arm above exists for, whose deliverable is a deploy or a secret the
+# runbook does not perform. The critic holds a proof record to its criteria and
+# requests changes for unobserved rows, so a record that merged on the card's
+# own branch with the critic's APPROVE at the merged head is the evidence. On
+# 2026-10-05 the operator closed DRE-3447, DRE-5095, DRE-5591 and DRE-4402 by
+# hand, each hours after its record merged approved — and each open proof held
+# its epic open, and a slot under the epic cap, while it waited.
+#
+# Both auto-Done paths ask `merge_close_ruling`, so linear-sync's `card-done`
+# and reconcile's merged-PR backstop close or skip the same cards. Anything
+# short of the evidence — no APPROVE, one at an earlier sha, a later verdict
+# that is not APPROVE, a branch that is not the card's own, a GitHub read that
+# failed — leaves the card open with today's comment.
+
+#: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
+MERGED_PR_FIELDS = "headRefName,headRefOid,mergedAt,state,comments"
+
+
+def read_merged_pr(pr_url: str) -> dict | None:
+    """The merged pull request as `gh pr view` renders it, or None.
+
+    `gh pr view` pages through every comment, so the critic's latest word is
+    never cut off a window. Fails CLOSED: a read that errors or will not parse
+    is None, which is never evidence — the card stays open, and the next
+    reconcile sweep asks again.
+    """
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "pr", "view", pr_url, "--json", MERGED_PR_FIELDS],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if p.returncode != 0:
+        print(
+            f"proof-close: could not read {pr_url} (rc={p.returncode}): "
+            f"{(p.stderr or '').strip()[:400]}",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        pr = json.loads(p.stdout or "")
+    except ValueError:
+        print(f"proof-close: {pr_url} answered unparseable JSON", file=sys.stderr)
+        return None
+    return pr if isinstance(pr, dict) else None
+
+
+def _is_qa_bot(comment: dict) -> bool:
+    # Either payload shape: GraphQL `author.login` or REST `user.login` with
+    # the App's `[bot]` suffix.
+    who = comment.get("author") or comment.get("user") or {}
+    return (who.get("login") or "").removesuffix("[bot]") == QA_BOT_LOGIN
+
+
+def proof_evidence_gap(identifier: str, pr: dict | None) -> str | None:
+    """Why this merged pull request does NOT close a PROOF card, or None when
+    it does. Pure: `pr` is `read_merged_pr`'s answer.
+
+    The critic's word is read the way the merge gate reads it — the latest
+    comment by the qa-bot App whose first line opens with the critic marker
+    (a quote is inert), its token APPROVE and its sha the merged head exactly.
+    No content carry: an APPROVE at an earlier sha is not one at the head.
+    """
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+    if not pr:
+        return "the merged pull request could not be read from GitHub"
+    if not pr.get("mergedAt"):
+        return "the pull request has not merged"
+    head_ref = pr.get("headRefName") or ""
+    if not re.match(rf"(agent|repair)/{re.escape(identifier)}-", head_ref, re.IGNORECASE):
+        return f"it merged from '{head_ref}', which is not this card's own branch"
+    head = pr.get("headRefOid") or ""
+    marker = merge_gate.CRITIC_MARKER
+    latest = None
+    for c in pr.get("comments") or []:
+        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), marker):
+            latest = merge_gate.first_line(c.get("body"))
+    if latest is None:
+        return "the critic left no verdict on it"
+    token = merge_gate.verdict_token(latest, marker)
+    if token != "APPROVE":
+        return f"the critic's latest verdict is {token or 'unreadable'}, not APPROVE"
+    sha = merge_gate.verdict_sha(latest)
+    if not head or sha != head:
+        return f"the critic approved {sha or 'no named commit'}, not the merged head {head or '(unknown)'}"
+    return None
+
+
+def proof_close_note(
+    identifier: str, title: str, pr_url: str, pr: dict | None
+) -> str | None:
+    """The Done comment for a `PROOF:` card whose record merged approved, or
+    None when the card is not one or the evidence falls short.
+
+    Opens `✅ Merged: <url>` like every merge receipt, so the readers that key
+    on it (`hand_work_migration.MERGED_RECEIPT`) still find it; then the PT
+    merge time and the sha the critic approved. It never wears a verdict
+    marker itself (standards/untrusted-content.md).
+    """
+    if not _PROOF_TITLE_RE.match(title or ""):
+        return None
+    if proof_evidence_gap(identifier, pr) is not None:
+        return None
+    merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
+    return (
+        f"✅ Merged: {pr_url}\n\n"
+        f"This proof record merged {dead_run.pacific(merged)} with the critic's "
+        f"APPROVE at the merged head `{pr['headRefOid']}`. A PROOF card's "
+        "deliverable is its merged record, so the card closes itself (DRE-5919)."
+    )
+
+
+def merge_close_ruling(
+    identifier: str,
+    title: str,
+    labels: list[str],
+    pr_url: str,
+    has_children: bool = False,
+) -> tuple[str | None, str | None]:
+    """`(skip reason, Done comment)` for a merged card's own pull request —
+    the ONE ruling both auto-Done paths make.
+
+    `(reason, None)`: leave the card open, with today's comment. `(None,
+    note)`: close it with `note` — a PROOF card on its evidence. `(None,
+    None)`: close it with the caller's ordinary receipt. GitHub is asked
+    only for a `PROOF:` card the guard refused, and never for an epic.
+    """
+    reason = auto_done_skip_reason(title, labels, has_children)
+    if (
+        reason is None
+        or not _PROOF_TITLE_RE.match(title or "")
+        or epic_branch_refusal(title, labels, has_children) is not None
+    ):
+        return reason, None
+    pr = read_merged_pr(pr_url)
+    note = proof_close_note(identifier, title, pr_url, pr)
+    if note is None:
+        print(
+            f"PROOF card {identifier} stays open: "
+            f"{proof_evidence_gap(identifier, pr)}."
+        )
+        return reason, None
+    return None, note
+
+
 def cmd_card_done(identifier: str, pr_url: str) -> None:
     """linear-sync's merge→Done seam, guard included (see block comment above).
 
     Ordinary code cards: → Done + "✅ Merged" comment, byte-identical to the
     old inline `state`/`comment` pair. `no-code` / `DEMO:` cards and EPICS
     (DRE-3119): comment the merge, leave the state alone, and say so LOUDLY in
-    the job log.
+    the job log. A `PROOF:` card is the one `no-code` card a merge may close
+    (DRE-5919): → Done when its record merged on its own branch with the
+    critic's APPROVE at the merged head (`merge_close_ruling`).
 
     Break-glass cards (DRE-2737) are a class of their own: the fix has shipped, so
     the debt comes due — the card returns to Planning for the classification
@@ -2322,7 +2495,9 @@ def _card_done(identifier: str, pr_url: str, issue: dict, break_glass) -> None:
     title = issue.get("title") or ""
     # The fact the epic arm needs, off the query above — no second request.
     has_children = bool(((issue.get("children") or {}).get("nodes")) or [])
-    reason = auto_done_skip_reason(title, labels, has_children)
+    reason, proof_note = merge_close_ruling(
+        identifier, title, labels, pr_url, has_children
+    )
     if reason is not None:
         # The operator/demo/epic guard wins on the STATE (it is never moved
         # here), but a break-glass debt on the same card is still recorded, not
@@ -2359,7 +2534,7 @@ def _card_done(identifier: str, pr_url: str, issue: dict, break_glass) -> None:
         cmd_state(identifier, break_glass.REVIEW_STATE)
         return
     cmd_state(identifier, "Done")
-    cmd_comment(identifier, f"✅ Merged: {pr_url}")
+    cmd_comment(identifier, proof_note or f"✅ Merged: {pr_url}")
 
 
 # --- Sub-issue body / dependency guards (DRE-1715) ---------------------------
