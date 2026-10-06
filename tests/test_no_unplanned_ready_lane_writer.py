@@ -38,7 +38,9 @@ otherwise is worse than none
   `default_problems()` with the value directly — including the `Backlog` the
   setting actually carried when this card was written, and the unreadable case,
   which is reported rather than passed. `observed_default()` reads the real one
-  when a checkout or an API key provides it.
+  when a checkout or an API key provides it — at `team.defaultIssueState`, where
+  the file has kept it since DRE-2751, and `TheTeamDefaultIsReadWhereTheWorkspaceKeepsIt`
+  pins that shape (DRE-5744).
 * **A destination computed at run time from data.** Resolution is static. A
   writer whose destination no rule here can read is REPORTED as unread rather
   than assumed innocent — `test_a_new_writer_whose_destination_cannot_be_read_is_reported`
@@ -46,10 +48,14 @@ otherwise is worse than none
 """
 
 import copy
+import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -311,6 +317,96 @@ class LinearsOwnTeamDefaultIsCovered(unittest.TestCase):
         # No workspace file in this checkout and no API key that answers — and
         # that is reported by `default_problems`, never treated as agreement.
         self.assertIsNone(rlw.observed_default(gql=lambda *a, **k: None))
+
+
+#: agent-bureau's `config/linear-workspace.json` as it stands today, cut to the
+#: keys this check reads. Since DRE-2751 the team default is nested under
+#: `team`; the proof record for DRE-5386
+#: (`docs/shell-extraction-proof-2026-10.md`) quotes the shape and the value.
+TODAYS_WORKSPACE = {"team": {"key": "DRE", "defaultIssueState": "Planning"}}
+
+
+class _Workspace:
+    """A workspace declaration handed to the check the way an operator does —
+    through `LINEAR_WORKSPACE_CONFIG` — with no Linear credential in reach."""
+
+    def __init__(self, declaration: dict):
+        self.declaration = declaration
+
+    def __enter__(self):
+        self._dir = tempfile.TemporaryDirectory()
+        path = Path(self._dir.name) / "linear-workspace.json"
+        path.write_text(json.dumps(self.declaration), encoding="utf-8")
+        self._env = mock.patch.dict(os.environ, {rlw.WORKSPACE_ENV: str(path)})
+        self._env.start()
+        os.environ.pop("LINEAR_API_KEY", None)
+        return path
+
+    def __exit__(self, *exc):
+        self._env.stop()
+        self._dir.cleanup()
+        return False
+
+
+def _offline_check(workspace: Path) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k != "LINEAR_API_KEY"}
+    env[rlw.WORKSPACE_ENV] = str(workspace)
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "ready_lane_writers.py"), "check"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=300,
+    )
+
+
+class TheTeamDefaultIsReadWhereTheWorkspaceKeepsIt(unittest.TestCase):
+    """DRE-5744: the declaration nests the team default under `team`, and a
+    reader that only looked at the top level FAILed every offline run."""
+
+    def test_todays_workspace_shape_yields_the_team_default(self):
+        with _Workspace(TODAYS_WORKSPACE):
+            self.assertEqual(
+                rlw.observed_default(gql=lambda *a, **k: None), "Planning"
+            )
+
+    def test_a_top_level_default_is_still_read(self):
+        with _Workspace({"defaultIssueState": "Intake"}):
+            self.assertEqual(
+                rlw.observed_default(gql=lambda *a, **k: None), "Intake"
+            )
+
+    def test_a_declaration_holding_neither_key_is_unknown(self):
+        with _Workspace({"team": {"key": "DRE"}}):
+            self.assertIsNone(rlw.observed_default(gql=lambda *a, **k: None))
+
+    def test_an_unknown_default_is_reported_as_unknown_naming_both_paths(self):
+        problems = rlw.default_problems(None)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("UNKNOWN", problems[0])
+        self.assertIn("`team.defaultIssueState`", problems[0])
+        self.assertIn("top-level `defaultIssueState`", problems[0])
+
+    def test_the_check_passes_offline_on_todays_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "linear-workspace.json"
+            workspace.write_text(json.dumps(TODAYS_WORKSPACE), encoding="utf-8")
+            result = _offline_check(workspace)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(rlw.LINEAR_DEFAULT_WRITER, result.stdout)
+        self.assertIn("0 problem(s)", result.stdout)
+
+    def test_the_check_never_passes_silently_when_neither_path_holds_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "linear-workspace.json"
+            workspace.write_text(json.dumps({"team": {"key": "DRE"}}),
+                                 encoding="utf-8")
+            result = _offline_check(workspace)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        line = next(
+            (ln for ln in result.stdout.splitlines()
+             if rlw.LINEAR_DEFAULT_WRITER in ln), ""
+        )
+        self.assertTrue(line.strip().startswith("[UNKNOWN]"), result.stdout)
+        self.assertIn("`team.defaultIssueState`", line)
+        self.assertIn("top-level `defaultIssueState`", line)
 
 
 class TheWritersThisCannotSeeAreNamed(unittest.TestCase):

@@ -77,11 +77,14 @@ otherwise is worse than none:
     read. It is reported by `unseen_writers()` for the same reason — the day it
     is declared a writer of a ready-work lane is a day this says so.
   * **Linear's team-level default.** `defaultIssueState` is a setting on the
-    Linear team, mirrored in agent-bureau's `config/linear-workspace.json`. It is
-    a writer no code path touches and the highest-leverage one — it carried
-    `Backlog` when this was written. `observed_default()` reads it from a
-    workspace declaration in reach or from Linear itself; with neither, it
-    returns None and `default_problems(None)` REPORTS that rather than passing.
+    Linear team, mirrored in agent-bureau's `config/linear-workspace.json`
+    (nested, as `team.defaultIssueState`, since DRE-2751). It is a writer no
+    code path touches and the highest-leverage one — it carried `Backlog` when
+    this was written. `observed_default()` reads it from a workspace
+    declaration in reach, at `team.defaultIssueState` or a top-level
+    `defaultIssueState`, or from Linear itself; with neither, it returns None
+    and `default_problems(None)` REPORTS it as UNKNOWN, naming both paths,
+    rather than passing.
   * **A destination computed at run time from data.** Resolution is static.
   * **Anything past the door.** Once a write reaches Linear this module is not
     in the loop; it is a check on the source, not a run-time refusal.
@@ -153,6 +156,16 @@ WORKSPACE_PATHS = (
     os.path.join("config", "linear-workspace.json"),
     os.path.join("..", "agent-bureau", "config", "linear-workspace.json"),
 )
+
+#: The key a workspace declaration carries the team default under, and the two
+#: places it is read from: nested under `team`, where agent-bureau has kept it
+#: since DRE-2751, then at the top level. Both are named when neither holds it.
+DEFAULT_KEY = "defaultIssueState"
+DEFAULT_PATHS = (f"team.{DEFAULT_KEY}", DEFAULT_KEY)
+
+#: How a team default nobody could read is reported — not a pass, and not a
+#: wrong value either: the check cannot say which lane it is (DRE-5744).
+DEFAULT_UNKNOWN = "UNKNOWN"
 
 #: A module publishes this to say which lanes it can write when its call sites
 #: compute the destination. The one general escape from "unread": a writer that
@@ -756,6 +769,23 @@ def _shell_args(rest: str) -> list:
 # --------------------------------------------------------------------------- #
 
 
+def _declared_default(declaration) -> str | None:
+    """The team default a workspace declaration carries, at either path.
+
+    agent-bureau's file has nested it under `team` since DRE-2751; the
+    top-level key is the shape this was first written against. A declaration
+    holding neither answers None, which `default_problems` reports as UNKNOWN.
+    """
+    if not isinstance(declaration, dict):
+        return None
+    team = declaration.get("team")
+    for holder in ((team if isinstance(team, dict) else {}), declaration):
+        declared = holder.get(DEFAULT_KEY)
+        if isinstance(declared, str) and declared:
+            return declared
+    return None
+
+
 def observed_default(root: str = ROOT, gql=None) -> str | None:
     """The lane a card lands in when whatever created it named none, or None.
 
@@ -768,10 +798,11 @@ def observed_default(root: str = ROOT, gql=None) -> str | None:
                       else []) + [os.path.join(root, p) for p in WORKSPACE_PATHS]:
         try:
             with open(candidate, encoding="utf-8") as fh:
-                declared = (json.load(fh) or {}).get("defaultIssueState")
+                declaration = json.load(fh) or {}
         except (OSError, ValueError):
             continue
-        if isinstance(declared, str) and declared:
+        declared = _declared_default(declaration)
+        if declared:
             return declared
     if gql is None:
         if not os.environ.get("LINEAR_API_KEY"):
@@ -804,11 +835,14 @@ def default_problems(default: str | None, *, contract: dict | None = None,
     """
     ready = ready_lanes(contract, doc)
     if default is None:
+        nested, top = DEFAULT_PATHS
         return [
-            f"{LINEAR_DEFAULT_WRITER}: the lane a card lands in when nobody "
-            "names one could not be read — no workspace declaration in reach "
-            "and no answer from Linear. Unknown is not a pass: a default of "
-            f"{ready[0]!r} would put unplanned work straight into ready work, "
+            f"{LINEAR_DEFAULT_WRITER}: {DEFAULT_UNKNOWN} — the lane a card "
+            "lands in when nobody names one could not be read: no workspace "
+            f"declaration in reach holds it at `{nested}` or at a top-level "
+            f"`{top}`, and Linear gave no answer. Unknown is not a pass: a "
+            f"default of {ready[0]!r} would put unplanned work straight into "
+            "ready work, "
             "and this is the writer no code path touches"
         ]
     if default not in lane_contract.lane_names(status="live", contract=contract):
@@ -1075,8 +1109,9 @@ def main(argv=None) -> int:
         return 2
 
     found = problems()
+    unknown = f"{LINEAR_DEFAULT_WRITER}: {DEFAULT_UNKNOWN} "
     for problem in found:
-        print(f"  [FAIL] {problem}")
+        print(f"  [{DEFAULT_UNKNOWN if problem.startswith(unknown) else 'FAIL'}] {problem}")
     discovered = writes()
     print(
         f"{len(discovered)} write(s) into {len(set(w.lane for w in discovered))} "
