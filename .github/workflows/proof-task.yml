@@ -433,8 +433,14 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
 
+      # continue-on-error: GitHub refuses the whole mint when the installation
+      # lacks any one permission asked for (a 422, not a narrower token). That
+      # costs the GitHub rows — `Not observed.`, with the cause in the summary
+      # line below — and never the run, and the agent is told never to observe
+      # with the worker token instead.
       - name: Mint the read-only proof identity
         id: reader
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
@@ -456,8 +462,14 @@ jobs:
       - name: Record the read-only proof identity
         env:
           APP_SLUG: ${{ steps.reader.outputs.app-slug }}
+          MINTED: ${{ steps.reader.outcome }}
         run: |
-          echo "proof identity: github read — app $APP_SLUG, permissions contents:read actions:read pull-requests:read metadata:read" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$MINTED" = "success" ]; then
+            LINE="proof identity: github read — app $APP_SLUG, permissions contents:read actions:read pull-requests:read metadata:read"
+          else
+            LINE="proof identity: github read — none, the read-only mint was refused"
+          fi
+          echo "$LINE" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # AWS: the caller's own proof role, only when it provides one. The
       # secrets context cannot be read in an `if:`, and the usual job-level
@@ -587,7 +599,9 @@ jobs:
             - GH_READ_TOKEN — a GitHub App token that can only read. Make
               EVERY GitHub read as it: `GH_TOKEN=$GH_READ_TOKEN gh api …`.
               Make the one refused write the brief describes, and record the
-              command and GitHub's answer.
+              command and GitHub's answer. If GH_READ_TOKEN is empty, the
+              read-only mint was refused: every GitHub row is `Not observed.`
+              with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
               push the record branch and open the pull request; never to
               observe.
@@ -748,7 +762,9 @@ jobs:
             - GH_READ_TOKEN — a GitHub App token that can only read. Make
               EVERY GitHub read as it: `GH_TOKEN=$GH_READ_TOKEN gh api …`.
               Make the one refused write the brief describes, and record the
-              command and GitHub's answer.
+              command and GitHub's answer. If GH_READ_TOKEN is empty, the
+              read-only mint was refused: every GitHub row is `Not observed.`
+              with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
               push the record branch and open the pull request; never to
               observe.
@@ -907,7 +923,9 @@ jobs:
             - GH_READ_TOKEN — a GitHub App token that can only read. Make
               EVERY GitHub read as it: `GH_TOKEN=$GH_READ_TOKEN gh api …`.
               Make the one refused write the brief describes, and record the
-              command and GitHub's answer.
+              command and GitHub's answer. If GH_READ_TOKEN is empty, the
+              read-only mint was refused: every GitHub row is `Not observed.`
+              with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
               push the record branch and open the pull request; never to
               observe.

@@ -1706,6 +1706,46 @@
       "why": "The same receipt family as `dead_run.py decide` above and undeclared for the same reason: giving it a row is a REGISTRY change, not an emission change. Its body is written by scripts/dead_run.py, which owns the `turn-exhaustion-requeue` tag the turn-cap count and the split ledger read — that tag, on the first line, is the whole point of the receipt — so composing it through pipeline_act would move a seam this card does not own."
     },
     {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — proof agent starting (turns=400).",
+      "step": "Record the model attempt",
+      "kind": "not-an-act",
+      "means": "Which model the proof run started on and why — and, in its `Run: …/actions/runs/<id>` tail, the run the run-state reader (DRE-5922) reads to call a proof run live or dead (DRE-5924).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes an AGENT's run rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py and read back by the medic's rerun."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🤖 PR opened:",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run opened its record's pull request; CI and the critic are running. No lane moves from here — qa-review.yml carries the card to In Review (DRE-5924).",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🤖 PR already merged:",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof record shipped while the run was finishing, so nothing moves from here (DRE-5924).",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "proof-escalation-comment.md",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof runner's question for the CEO — a press only his own login can make, asked after the record's pull request is open (DRE-5924). The hold in Green Light is DRE-5925's.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. A question is the opposite of an act: the pipeline did nothing precisely because it would not guess."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🤖 proof run ended with no record",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run produced no record and asked nothing; the dispatcher reads the run off the card and decides whether to dispatch again (DRE-5924, DRE-5926).",
+      "why": "A REPORT about the run, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the card stays in Hand-work, and the dispatcher's second-dispatch rule (DRE-5926) is the only thing that acts on a dead proof run. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
+    },
+    {
       "file": ".github/workflows/channel-watch.yml",
       "anchor": "🔔 Still true today:",
       "step": "Raise the alarm where a human will see it",

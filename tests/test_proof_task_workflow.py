@@ -253,6 +253,15 @@ class ReadOnlyIdentityTest(unittest.TestCase):
         self.assertIn(GITHUB_SUMMARY.format(slug="$APP_SLUG"), runs)
         self.assertIn("$GITHUB_STEP_SUMMARY", runs)
 
+    def test_a_refused_mint_costs_the_rows_never_the_run(self):
+        """GitHub refuses the whole mint when the installation lacks one of
+        the four permissions. The run goes on, the summary says why the
+        GitHub rows are `Not observed.`, and the prompt forbids falling back
+        to the worker token."""
+        self.assertIs(_step(self.MINT).get("continue-on-error"), True)
+        self.assertIn("proof identity: github read — none, the read-only mint was refused", _runs())
+        self.assertIn("never observe with GH_TOKEN instead", _agent_steps()[0][1]["with"]["prompt"])
+
 
 class CallerAwsIdentityTest(unittest.TestCase):
     ASSUME = "Assume the caller's proof identity"
