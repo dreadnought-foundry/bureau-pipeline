@@ -2507,6 +2507,13 @@
       "why": "Act-shaped — the pipeline moved the work on by itself and the planner run the relay starts on Planning entry is what follows — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the fast path ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog and DRE-4647's stacked-merge refusal did. Named here so the debt is countable rather than invisible. Its opener `urgent-fast-path:` is a live key three ways, owned by reconcile.URGENT_FAST_PATH_OPENER: the card carries one per attempt, posted before the move, and a card whose move did not land is tried again until it carries max_attempts of them (config/urgent-fast-path.json), and the sweep counts the openers posted anywhere on the board inside the rule's window so the three-per-sweep cap holds across every repo's sweep. A trailer after the body would not touch the opener."
     },
     {
+      "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(target, _intake_blocker_body(blocker, blocked))",
+      "kind": "not-an-act",
+      "means": "An Intake card is a blockedBy relation of this repo's work in flow, said once per pair on the blocked card's epic (or the card itself): it names both cards and the two ways a person can send the blocker on — raise it to Urgent, or approve it in the next groom batch (DRE-4152).",
+      "why": "A report, by point 4 of the CEO's signed console answer of 2026-09-17 recorded on DRE-4141: whether the blocker jumps the queue is a judgement that stays with a person, so the sweep says it and moves nothing — no lane, no label, nothing filed in Triage or Green Light. It holds nothing, hands the work to no actor and leaves every card where it was, so a trailer would announce a state and a next actor it does not have. Its opener `🧹 intake-blocker: <blocker> holds up <blocked>` is the once-per-pair key the sweep reads back off the target's whole thread before posting again, owned by reconcile.INTAKE_BLOCKER_OPENER."
+    },
+    {
       "file": "scripts/epic_todo_gate.py",
       "anchor": "ops.cmd_comment(identifier, body)",
       "kind": "undeclared-act",
