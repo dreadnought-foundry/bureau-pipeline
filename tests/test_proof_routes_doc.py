@@ -15,6 +15,13 @@ goes red if the sentence it names is removed from the section it belongs in.
 The five conditions the gate enforces are not restated here; their own tests
 (`test_proof_and_demo*.py`) pin them, and one assertion below pins only that
 this change left the numbered list at five.
+
+DRE-5923 adds the paragraph that follows once DRE-5920's siblings land: the
+pipeline starts the proof run itself, on its own workflow and with scripted
+read-only identities, and the run opens the record as a pull request on
+`agent/DRE-<n>-proof-record`. The card closes on the approved merge of that
+record. A step only the CEO's own login can make is written
+`needs the CEO's press: <the press>`, so the run can name it back.
 """
 
 from __future__ import annotations
@@ -85,6 +92,41 @@ class StandardTest(unittest.TestCase):
         self.assertEqual(numbered, ["1", "2", "3", "4", "5"],
                          "the proof section carries exactly the five conditions")
 
+    def test_the_pipeline_starts_the_proof_run_itself(self):
+        self.assertSays("The pipeline starts the proof run itself (DRE-5920)")
+        self.assertSays("the sweep dispatches a proof run at the PROOF card")
+
+    def test_the_trigger_is_read_off_the_release_record(self):
+        self.assertSays("the release carrying those merges is live")
+        self.assertSays("read off the release record")
+        self.assertSays("never assumed")
+
+    def test_the_run_is_its_own_workflow_with_read_only_identities(self):
+        self.assertSays("`proof-task.yml`")
+        self.assertSays("role `proof`")
+        self.assertSays("`briefs/proof.md`")
+        self.assertSays("scripted read-only identities")
+        self.assertSays("never a person's account")
+
+    def test_the_record_is_a_pull_request_on_the_record_branch(self):
+        self.assertSays("opens the record as a pull request")
+        self.assertSays("`agent/DRE-<n>-proof-record`")
+
+    def test_the_card_closes_on_the_approved_merge_of_the_record(self):
+        self.assertSays("The card closes on the approved merge of that record")
+        self.assertSays("`card-done` under DRE-5919's PROOF rule")
+        self.assertSays("`hyg-proof-closed`")
+        self.assertSays("nothing waits on him")
+
+    def test_a_ceo_only_press_is_named_and_parked_once(self):
+        self.assertSays("needs the CEO's press:")
+        self.assertSays("parks the card once in Green Light")
+        self.assertSays("nobody chases it")
+
+    def test_the_proof_still_routes_workbench_or_operator(self):
+        self.assertSays("The card still routes `WORKBENCH` or `OPERATOR`")
+        self.assertSays("the five conditions do not change")
+
 
 class PlannerBriefTest(unittest.TestCase):
     """`briefs/planner.md` — how the planner writes the proof card."""
@@ -106,6 +148,24 @@ class PlannerBriefTest(unittest.TestCase):
 
     def test_live_facts_are_written_against_the_proof_reader_identity(self):
         self.assertSays("proof-reader identity")
+
+    def test_it_says_the_pipeline_dispatches_the_proof_run(self):
+        self.assertSays("The pipeline dispatches the proof run itself")
+
+    def test_the_record_path_is_where_the_run_writes(self):
+        self.assertSays("where the proof run writes")
+        self.assertSays("`agent/DRE-<n>-proof-record`")
+
+    def test_live_facts_name_the_identity_they_are_read_as(self):
+        self.assertSays("as the proof-reader identity")
+
+    def test_a_ceo_only_step_is_its_own_criterion(self):
+        self.assertSays("its own criterion opening `needs the CEO's press:`")
+        self.assertSays("a run with read access can observe")
+
+    def test_the_card_closes_on_the_approved_merge_of_the_record(self):
+        self.assertSays("closes on the approved merge of the record")
+        self.assertSays("the closing line the check reads stays verbatim")
 
 
 if __name__ == "__main__":
