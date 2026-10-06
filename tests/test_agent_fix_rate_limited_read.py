@@ -165,6 +165,9 @@ class Harness:
         # into `.bureau-pipeline/`, and that must land here, not in the tree.
         os.makedirs(os.path.join(td, ".bureau-pipeline"))
         os.symlink(ROOT / "scripts", os.path.join(td, ".bureau-pipeline", "scripts"))
+        # The proof-record check (DRE-5927) imports proof_dispatch, whose
+        # imports read the lane contract — the job's checkout carries it.
+        os.symlink(ROOT / "config", os.path.join(td, ".bureau-pipeline", "config"))
         self.info = os.path.join(td, "pr-info.json")
         with open(self.info, "w") as f:
             json.dump({"state": "OPEN", "headRefName": "agent/DRE-4157-x",
