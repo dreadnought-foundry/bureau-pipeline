@@ -493,8 +493,10 @@ def _drain_fixture(*, holds=(), by_pipeline=False):
 
 
 def _record_body(ops):
-    assert len(ops.written) == 1, f"the drain wrote {len(ops.written)} records"
-    return ops.written[0][1]
+    # Less each moved card's own `groom-moved` note (DRE-3326).
+    written = [b for _, b in ops.written if not groomer.parse_moved_note(b)]
+    assert len(written) == 1, f"the drain wrote {len(written)} records"
+    return written[0]
 
 
 def test_the_drain_holds_back_a_batch_card_whose_repo_is_held():

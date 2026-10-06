@@ -561,6 +561,7 @@ batch that was right apart from two rows.
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
 | `🧺 groom-cancelled: <id> — <reason>` | the drain, on the card it cancels | one per cancelled card, written before the card moves to `Canceled` |
+| `🧺 groom-moved: <id> — <verdict> · <from> → <to> · by <writer> · record on <batch card>` | the drain, and the reconcile sweep's queue release, on the card each moves | one per card moved into `Planning`, written before its lane changes; `<verdict>` is `position <n> of <m> on the approved Planning list` or `added by the CEO, no position`, `<writer>` is `the drain` or `the sweep's queue release, place <p>`, and `<batch card>` is the card the proposal record stands on (DRE-3326) |
 | `🧺 groom-queued: <id>` + `\| place \| card \| repo \|` table | the drain | one per drain that queued a card, written just before the drained record — the cards past the free planner slots, in place order (DRE-5435) |
 | `🧺 groom-released: <id> — released: DRE-A, DRE-B · left the lane: DRE-C[ · taken out by hand: DRE-D]` | the reconcile sweep | one comment per pass that changed the queue, a line per batch it touched; pipeline-authored only, like `groom-queued` |
 | `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
@@ -704,13 +705,22 @@ batch and says so only in a workflow log is a stall with an alibi.
 `propose` is deliberately not held: it writes nothing but a comment, and a held
 pen still wants a batch prepared for the day it opens.
 
-**What moves where.** Each agreed Planning card is assigned its cycle and moved
-to `Planning`, which is where the classification happens (DRE-2719). Each
+**What moves where.** Each agreed Planning card gets
+`🧺 groom-moved: <id> — <verdict> · Intake → Planning · by the drain · record on <batch card>`
+written on it, then is assigned its cycle and moved to `Planning`, which is
+where the classification happens (DRE-2719). Each
 agreed Cancel card gets `🧺 groom-cancelled: <id> — <reason>` written on it —
 the reason from its Cancel row — and then moves to `Canceled`, never `Done`,
 and is given no cycle. Planning cards move first, in the record's order, then
 the Cancel cards. A card excluded on either list stays in Intake with nothing
 written on it.
+
+**Reversal is the record, not a tool** (DRE-3326). Every card moved into
+`Planning` — by the drain or by the queue release below — carries its
+`groom-moved` note, so undoing a batch is a search for `groom-moved: <id>`
+across the board and a move of each hit back to the lane its note names. There
+is no undo command, and the batch-card records are not needed to find the
+cards.
 
 **No more cards go to Planning than there are free planner slots** (DRE-5326).
 On 2026-09-30 one drain moved nineteen cards at once, and the planners they
@@ -741,7 +751,9 @@ it and a second approval is `already drained`.
 The reconcile sweep releases the queue (`release_groom_queue`, right after the
 planner line's backstop, on full sweeps of bureau-pipeline only): one card per
 slot the line has left, oldest batch first and place order within a batch,
-moved to `Planning` with its label removed — and Planning entry starts its plan
+given its `🧺 groom-moved` note — by `the sweep's queue release, place <p>`,
+its position read off the proposal record on the same thread — then moved to
+`Planning` with its label removed — and Planning entry starts its plan
 run the way any Intake-to-Planning move does. A queued card that has left
 Intake is dropped with no state write; one whose label a person removed has
 been taken out of the queue by that person, and may be proposed again. Each

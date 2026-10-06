@@ -367,6 +367,60 @@ def test_a_failed_release_state_write_still_leaves_the_note():
     assert queue.of("state") == []
 
 
+class _Cards(Queue):
+    """The queue fake, with each card's own thread served back: the standing
+    card's is the queue's, any other card's is what the pass wrote on it."""
+
+    def comment_records(self, identifier, *, whole_thread=False):
+        if identifier == STANDING:
+            return super().comment_records(identifier, whole_thread=whole_thread)
+        self.thread_reads.append((identifier, whole_thread))
+        return [{"body": b, "authored_by_pipeline": True}
+                for i, b in self.of("comment") if i == identifier]
+
+
+def test_a_stalled_release_retried_pass_after_pass_writes_one_note():
+    """The note posts, the lane write fails, the next pass tries again: the
+    card already carries its note, so the retry writes no second one."""
+    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
+                                          "repo": "portico"}])
+    queue = _Cards([{"body": queued, "authored_by_pipeline": True,
+                     "created_at": "2026-10-06T12:00:00Z"}],
+                   [_card("DRE-11")], fail_state={"DRE-11"})
+    for _ in range(3):
+        reconcile.reset_sweep_cards()
+        assert _release(queue, 1) == []
+    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
+    queue.fail_state.clear()
+    reconcile.reset_sweep_cards()
+    assert _release(queue, 1) == ["DRE-11"]
+    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
+    assert queue.of("state") == [("DRE-11", "Planning")]
+
+
+def test_another_batchs_note_or_a_persons_copy_does_not_count():
+    """Only the pipeline's note for THIS batch stands in for the write."""
+    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
+                                          "repo": "portico"}])
+
+    class _Seeded(Queue):
+        def comment_records(self, identifier, *, whole_thread=False):
+            if identifier == STANDING:
+                return super().comment_records(identifier,
+                                               whole_thread=whole_thread)
+            return [{"body": groomer.moved_note("fedcba987654", position=1,
+                                                of=1, batch_card="DRE-1"),
+                     "authored_by_pipeline": True},
+                    {"body": groomer.moved_note(PID, position=1, of=1,
+                                                batch_card=STANDING),
+                     "authored_by_pipeline": False}]
+
+    queue = _Seeded([{"body": queued, "authored_by_pipeline": True,
+                      "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
+    assert _release(queue, 1) == ["DRE-11"]
+    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
+
+
 def test_a_note_that_will_not_post_moves_nothing_and_stops_the_pass():
     """A card is never in Planning without its note: a note Linear refused is
     a write failure, the card stays queued, and the pass releases no more."""

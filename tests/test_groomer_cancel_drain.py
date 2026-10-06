@@ -266,7 +266,9 @@ def test_the_agreed_cards_move_to_planning_and_canceled_and_nothing_to_done():
     assert ops.state_writes == ([(i, "Planning") for i in planning]
                                 + [(i, "Canceled") for i in cancel])
     assert "Done" not in {lane for _, lane in ops.state_writes}
-    notes = [(t, b) for t, b in ops.written if t != PROPOSAL_CARD]
+    # Less each moved card's own `groom-moved` note (DRE-3326).
+    notes = [(t, b) for t, b in ops.written if t != PROPOSAL_CARD
+             and not groomer.parse_moved_note(b)]
     assert notes == [(i, groomer.cancelled_note(proposal["id"],
                                                 _reasons(proposal)[i]))
                      for i in cancel]
@@ -288,15 +290,20 @@ def test_the_excluded_card_on_either_list_gets_no_write_of_any_kind():
 
 
 def test_the_writes_happen_in_the_stated_order():
-    """Planning cards first — cycle, then lane, per card, in the record's
-    order — then each Cancel card: its note, then its lane, and no cycle.
-    The drained record is the last write of all."""
+    """Planning cards first — its groom-moved note (DRE-3326), cycle, then
+    lane, per card, in the record's order — then each Cancel card: its note,
+    then its lane, and no cycle. The drained record is the last write of all."""
     proposal, ops = _fifteen_and_five()
     groomer.drain(ops, card=PROPOSAL_CARD)
     expected = []
+    positions = {r["identifier"]: r["position"]
+                 for r in proposal["outcomes"]["now"]}
     for i in _planning(proposal):
         if i != KEEP_PLANNING:
-            expected += [("cycle", f"uuid-{i}"), ("state", i, "Planning")]
+            expected += [("comment", i, groomer.moved_note(
+                             proposal["id"], position=positions[i],
+                             of=len(positions), batch_card=PROPOSAL_CARD)),
+                         ("cycle", f"uuid-{i}"), ("state", i, "Planning")]
     for i in _cancel(proposal):
         if i != KEEP_CANCEL:
             expected += [("comment", i, groomer.cancelled_note(
@@ -431,7 +438,10 @@ def test_an_addition_only_ever_reaches_the_planning_list():
     assert (target, "Canceled") not in ops.state_writes
     assert (target, "Planning") in ops.state_writes
     assert result["added"] == [target]
-    assert not [b for t, b in ops.written if t == target]
+    # Its one note is the addition's groom-moved note (DRE-3326) — never a
+    # cancel note.
+    assert [groomer.parse_moved_note(b)["added"]
+            for t, b in ops.written if t == target] == [True]
 
 
 def test_an_exclusion_naming_a_card_on_neither_list_is_refused():
