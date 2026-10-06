@@ -126,6 +126,14 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # sends a pull request back, and it reads no brief (DRE-5510).
     "fix": ["engineering.md", "whats-new.md"],
     "medic": ["engineering.md"],
+    # The proof runner (DRE-5921) observes a `PROOF:` card's acceptance
+    # criteria against real state and writes the record. card-quality.md
+    # first, because its proof-card section is what the record answers to;
+    # then the engineering floor it reports state honestly against. It
+    # builds nothing and opens only a docs pull request, so it carries no
+    # system shape — and that body's What's New line is always `none`, which
+    # its brief names, so it carries no whats-new either.
+    "proof": ["card-quality.md", "engineering.md"],
 }
 
 # Every agent reads this first — the CEO-facing voice for any message it posts.
@@ -162,6 +170,7 @@ ROLE_BRIEF: dict[str, str | None] = {
     "critic": "critic.md",
     "fix": None,
     "medic": None,
+    "proof": "proof.md",
 }
 
 

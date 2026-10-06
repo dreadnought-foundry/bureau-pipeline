@@ -50,6 +50,7 @@ commit (the channel note above). The per-role mapping:
 | plan-critic-post | card-quality, engineering, architecture, vendor-boundaries, plan-artifact, plan-critic |
 | fix | engineering, whats-new |
 | medic | engineering |
+| proof | card-quality, engineering |
 
 ## The standards
 
