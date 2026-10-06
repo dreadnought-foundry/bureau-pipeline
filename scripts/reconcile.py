@@ -76,9 +76,13 @@ builds nothing on any path (DRE-3994; see `cap_and_source`).
 Mid-epic discovery (DRE-2739): a Backlog child created AFTER its epic's most
 recent green light is a card the approved plan never described, and promoting it
 dispatches an agent within fifteen minutes whether or not anyone has read it. So
-it promotes only once it carries a verdict (`mid-epic-verdict`), which the
-mid-epic route records for it — the green light is waived, Layer 1 is not. An
-epic whose green light Linear cannot report abstains rather than refusing. Every
+it promotes only once it carries a verdict — the `mid-epic-verdict` the
+mid-epic route records for it, or the `🧭 routing-verdict` Planning's exit
+stamps (DRE-5900) — the green light is waived, Layer 1 is not. A card carrying
+neither is told so once and sent to Planning for a routing verdict, never
+refused on every pass. The green light is the epic's newest `In Progress`
+entry, read off its newest history. An epic whose green light Linear cannot
+report abstains rather than refusing. Every
 full sweep also refreshes each active epic's growth record on the epic itself:
 green-lit at N cards, running M, plus any card that joined without the plan
 moving with it (scripts/mid_epic.py owns the whole mechanism).
@@ -5212,10 +5216,15 @@ def card_state(identifier: str) -> str:
 #: is also the last answers the count with no request at all — every epic
 #: under 250 comments. An epic past it is the one near the cap, and its count
 #: is paged exactly as DRE-3343 built it.
+#:
+#: `history(first: 50)` is the fifty NEWEST entries, and `last: 50` was the
+#: fifty OLDEST (DRE-5034): an epic past fifty entries had its latest green
+#: light outside the read, and the gate refused planned children as added
+#: after an older one (DRE-3624's, DRE-5900).
 EPIC_RECORD_GQL = """
              id identifier description state { name }
              children(first: 250) { nodes { identifier createdAt state { name } } }
-             history(last: 50) { nodes { createdAt toState { name } } }
+             history(first: 50) { nodes { createdAt toState { name } } }
              %s
              comments(first: 250) { nodes { id } pageInfo { hasNextPage endCursor } }""" % (
     INVERSE_RELATIONS_GQL,
@@ -5664,6 +5673,32 @@ def _route_to_defect_lane(identifier: str) -> None:
         )
 
 
+def _send_to_planning(identifier: str) -> None:
+    """Move a mid-epic card nobody has signed off to Planning (DRE-5900).
+
+    Planning is where a card missing its verdict gets one (DRE-2858): it reads
+    the card and its exit stamps the routing verdict and lands it back in
+    Backlog, where `mid_epic.carries_verdict` now lets it through. Not Triage —
+    the card is not malformed; not Green Light — no decision is owed, the epic
+    was already approved. Refusing it on every pass instead left DRE-5806 in
+    Backlog for a day with nothing able to clear it.
+
+    The same from-lane-guarded move `_route_to_defect_lane` makes, for the same
+    reasons: a card a person moved mid-sweep is left alone, a card still in
+    Backlog is moved again rather than left sitting, and a write failure lands
+    on the ledger and never blocks the rest of the sweep.
+    """
+    try:
+        linear_ops.cmd_advance(identifier, mid_epic.SIGN_OFF_STATE, "Backlog")
+    except linear_ops.LinearError as e:
+        _write_failures.append(f"{identifier} mid-epic Planning move: {e}")
+        print(
+            f"ERROR: failed to move {identifier} to "
+            f"{mid_epic.SIGN_OFF_STATE}: {e}",
+            file=sys.stderr,
+        )
+
+
 #: How long an approved epic may carry no post-critic round before the sweep
 #: says so ON THE CARDS as well as in its own log (DRE-3059).
 #:
@@ -6080,6 +6115,10 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # second critic's review still being IN FLIGHT (DRE-3059) — see
         # POST_CRITIC_GRACE_MINUTES.
         surface_refusal = True
+        # Whether the refusal is the mid-epic one, which is the only refusal
+        # here that also MOVES the card — to Planning, for the routing verdict
+        # it lacks (DRE-5900).
+        to_planning = False
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -6180,7 +6219,9 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                         card.get("createdAt"),
                         green_light[epic_id],
                         bodies,
+                        epic=epic_id,
                     )
+                    to_planning = refusal is not None
             # Routing verdict (DRE-2724): the verdict answers WHO builds this
             # card and WHERE it goes, and the sweep refuses only a card bound
             # somewhere it does not go. PARKED is deliberately not built and
@@ -6223,6 +6264,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             # and guarded itself, because reporting never blocks the sweep.
             if surface_refusal:
                 _surface_once(card["identifier"], refusal_tag, refusal)
+            # Told once, then sent to Planning (DRE-5900): a card carrying
+            # neither verdict is not refused forever — Planning is the lane
+            # that gives it one. Both are writes, outside the read-guard.
+            if to_planning:
+                _send_to_planning(card["identifier"])
             continue
         # Stale verdict (DRE-4962), asked LAST: it is the one gate that buys a
         # read per card — the lane history, on the quota every sweep shares —

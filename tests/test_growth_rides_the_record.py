@@ -75,7 +75,7 @@ def _is_single_epic_read(query: str) -> bool:
     only the record selects."""
     q = _norm(query)
     return (
-        "issue(id: $id)" in q and "history(last: 50)" in q
+        "issue(id: $id)" in q and "history(first: 50)" in q
         and "children(first: 250)" in q and "inverseRelations" not in q
     )
 
@@ -187,7 +187,7 @@ def test_the_record_selects_the_uuid_and_the_first_comment_page():
     # the superset, not a replacement: every existing reader's fields remain
     for field in ("description", "state { name }",
                   "children(first: 250) { nodes { identifier createdAt state { name } } }",
-                  "history(last: 50) { nodes { createdAt toState { name } } }",
+                  "history(first: 50) { nodes { createdAt toState { name } } }",
                   "inverseRelations(first: 20)"):
         assert field in q, field
 

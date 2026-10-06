@@ -149,7 +149,7 @@ class FakeLinear:
                         "identifier": f"DRE-{5000 + n}", "state": {"name": "Todo"}}}],
                     "pageInfo": {"hasNextPage": True, "endCursor": f"cursor-{n + 1}"}}}}
             return {"issue": {"inverseRelations": _page(self.relations, first, v.get("after"))}}
-        if "issues(" in q and "$numbers" in q and "history(last: 50)" in q:
+        if "issues(" in q and "$numbers" in q and "history(first: 50)" in q:
             return {"issues": {"nodes": self.epics,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         if "issues(" in q and "Backlog" in q:

@@ -56,12 +56,44 @@ light** — the human decision — because that was already made for this epic, 
 re-asking on every second call site is how the queue becomes the bottleneck
 again.
 
+**Planning's routing verdict is a sign-off the gate accepts (DRE-5900).** The
+`🧭 routing-verdict` Planning's exit stamps counts exactly as the
+`mid-epic-verdict` comment does: Planning writes one only after the classifier
+and the pre-approval critic have read the card, and a hand stamp is a person's
+deliberate act — either way a reader looked at the card before an agent could be
+dispatched at it. Where that verdict sends the card is still the routing gate's
+question, so a PARKED card stays in Backlog and is never moved. Until DRE-5900
+only the mid-epic tag counted: DRE-5806, created as a child after its epic's
+green light without the discovery route, went through Planning three times,
+collected a routing verdict each time, and was refused on every sweep for about
+a day, until it was re-filed by hand.
+
+**A card with neither verdict is sent to `Planning` once, not refused on every
+pass.** The sweep says so on the card once (`mid-epic-no-verdict`, naming the
+card and its epic) and moves it from Backlog to Planning through the same
+from-lane-guarded move its broken-card route makes, so a card a person moved
+mid-sweep is left alone. Planning is the lane that gives a card its verdict;
+its exit lands the card back in Backlog carrying one, and it promotes. No new
+green light is asked for and nothing goes to the CEO. The refusal no longer
+points at `mid_epic.py discovery`, which files a new sibling and cannot sign
+off a card that already exists. Growth stays visible all the same: the epic's
+growth record still names every child added after the green light that no
+discovery recorded.
+
 ## Decision — "added mid-epic" is derived, never marked
 
 A child is a mid-epic addition when its `createdAt` is later than the epic's most
 recent entry into an active lane, both read live from Linear. Nothing has to
 remember to stamp anything, which is the point: the hazard IS the card nobody
 stamped — the hand-add straight into Linear.
+
+The green light is the epic's newest `In Progress` entry, read off the epic's
+NEWEST fifty history entries — `history(first: 50)`, because Linear's
+`history(last: n)` is the n oldest (DRE-5034). Until DRE-5900 both reads asked
+for `last: 50`, and an epic past fifty entries had its latest green light
+outside the read: DRE-3624's planned children DRE-5640 and DRE-5841 existed
+before its re-green-light, read as added after an older one, and were refused
+until the operator promoted them by hand.
 
 Two consequences, both deliberate:
 
