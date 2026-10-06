@@ -432,8 +432,8 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # watcher as a fresh run, never re-run here (see the module docstring).
         if marker.get("stage") == "review" and _lane(card) == PLANNING_LANE:
             lines.append(f"{RECOVERY_TAG}: {ident} review death ({marker['kind']} limit) "
-                         f"is the re-review watcher's — it asks for the review again "
-                         f"after its own grace and does not read the Claude wall")
+                         f"is the re-review watcher's — it waits out the marker's reset, "
+                         f"then asks for the review again")
             continue
         why = trigger(marker, now, active_account)
         if why is None:
