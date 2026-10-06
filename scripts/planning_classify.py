@@ -454,8 +454,11 @@ class Decision:
     # the heartbeat naming a model is gated on it, and a heartbeat for a call
     # that 429'd would be the console lying about the ladder.
     answered: bool = False
-    # DRE-3970. The rung this call FELL from because it was out of capacity, and
-    # the signature that said so. None on every call that did not fall.
+    # DRE-3970. `fell_from` is the rung this call FELL from because it was out
+    # of capacity — set only for a capacity fall, since plan.yml's Select model
+    # reads it. `fell_because` is the signature that said so, or NO_ANSWER for
+    # the DRE-5979 fall from a no-answer turn-limit end (`fell_from` stays None
+    # there). Both None on every call that did not fall.
     fell_from: str | None = None
     fell_because: str | None = None
 
@@ -1570,7 +1573,8 @@ def _answer_of(result) -> Answer:
 def classify(card: dict, *, call=None, model: str | None = None,
              doc: dict | None = None) -> Decision:
     """Classify one card. One call per rung, a second rung only when the first
-    is out of capacity (DRE-3970), and never a silent stamp."""
+    is out of capacity (DRE-3970) or ends its one turn with no answer
+    (DRE-5979), and never a silent stamp."""
     if not model:
         try:
             model = _pick_model()
@@ -1582,7 +1586,8 @@ def classify(card: dict, *, call=None, model: str | None = None,
         return Decision(model=model, asked=model, refusal=_unreachable(e))
     try:
         # DRE-3970: a capacity refusal on this rung is asked again, once, on the
-        # next — the same call, in this step, rather than a failed run.
+        # next — the same call, in this step, rather than a failed run. DRE-5979:
+        # so is a turn-limit end with no answer.
         answer, answered_on, fell_from, because, _calls = \
             call_with_capacity_fallback(call or _call_real, model, prompt)
     except TransportError as e:
