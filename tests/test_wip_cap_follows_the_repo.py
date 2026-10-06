@@ -159,9 +159,14 @@ class TestTheCapIsReadFromTheRepo:
 
     def test_this_repo_resolves_through_its_own_self_stub(self):
         """bureau-pipeline self-hosts through self-reconcile.yml, and an empty
-        input resolves to the cap that stub writes (DRE-5733's restart cap)."""
+        input resolves to the cap that stub writes. The expected number is
+        read from the stub itself, so raising the restart cap (3 under
+        DRE-5733, 8 under DRE-5954) changes the stub, not this test."""
+        stub = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / "self-reconcile.yml").read_text())
+        written = int(next(iter(stub["jobs"].values()))["with"]["max_wip"])
         cap, source = reconcile.cap_and_source("", str(ROOT))
-        assert cap == 3
+        assert cap == written
         assert "self-reconcile.yml" in source
 
     def test_the_module_names_where_its_cap_came_from(self):

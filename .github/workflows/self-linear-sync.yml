@@ -29,5 +29,5 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/linear-sync.yml@main
     with:
       pipeline_ref: main
-      max_wip: "3"
+      max_wip: "8"
     secrets: inherit

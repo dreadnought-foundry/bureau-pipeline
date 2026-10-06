@@ -2,8 +2,8 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
-# max_wip "3" for the slow restart after the 2026-10-02 pause (DRE-5733),
-# below reconcile.DEFAULT_MAX_WIP ("8") that this repo otherwise inherits;
+# max_wip for the slow restart after the 2026-10-02 pause (DRE-5733): "3",
+# then "8" since 2026-10-05 (DRE-5954), equal to reconcile.DEFAULT_MAX_WIP;
 # raised step by step as the fleet stays healthy. All THREE of this repo's
 # promotion stubs (this one, self-plan, self-linear-sync) pass the same
 # value (DRE-2529, enforced by scripts/check_wip_cap.py).
@@ -26,7 +26,7 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@main
     with:
       pipeline_ref: main
-      max_wip: "3"
+      max_wip: "8"
       # THE PEN'S SWITCH IS NOT PASSED HERE ANY MORE (DRE-4141). This sweep
       # moves no card out of Intake because it is old, so there is nothing
       # here for a hold to hold. The one card it does move out of Intake — one
