@@ -1011,6 +1011,24 @@
         "file": "scripts/reviewer_down.py",
         "anchor": "def outage_receipt("
       }
+    },
+    {
+      "name": "proof-run-dispatched",
+      "tag": "proof-run",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An epic's build cards are Done and the release carrying their merges is live, so the sweep dispatched a proof run at the epic's PROOF card — no person had to start it. Also posted when the run is sent a second time because the first never started or died with no record, and when the CEO's signed answer returns a card parked on his press.",
+      "state": "dispatched",
+      "next_actor": "proof-task.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 7200,
+      "cadence_why": "The dispatched proof run's own bound: .github/workflows/proof-task.yml gives its proof job timeout-minutes: 120.",
+      "why": "DRE-5926. A PROOF card routes OPERATOR and waits in Hand-work, which the sweep's nudge loop never reads, so on 2026-10-05 thirteen of the seventeen epics counted against the epic cap were waiting on a person to start a proof. The sweep's `Dispatch proof runs` step (scripts/proof_dispatch.py, its own process after the Sweep step, full passes only, and only in a repo carrying a proof-run stub) fires `plan_run.PROOF_EVENT` and posts this receipt ONLY on a confirmed dispatch: `🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)`. The tag is a live key: `proof_run_state.reading` (DRE-5922) anchors on the newest receipt to say whether the run is running, never started, dead or finished, and counts the first-run budget off the receipts whose reason opens `first proof run` or `second dispatch` — two at most. The count phrases are `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through this same composer) and `after the CEO's answer`. Nothing is discharged: the run it starts reports through its own heartbeats and the record's pull request. Until the repository variable PROOF_DISPATCH_LIVE is exactly `true` the phase prints `would:` lines and posts none of these.",
+      "emits": {
+        "file": "scripts/proof_dispatch.py",
+        "anchor": "pipeline_act.receipt(\"proof-run-dispatched\""
+      }
     }
   ],
   "console": {

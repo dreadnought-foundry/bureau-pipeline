@@ -392,3 +392,63 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+
+      # ---- The proof run's dispatch (DRE-5926) ----
+      # An epic whose build cards are Done and whose release is live gets its
+      # PROOF card's run started here, the way the sweep starts builds — a
+      # proof card waits in Hand-work, which the sweep's nudge loop never
+      # reads. Its own process (`scripts/proof_dispatch.py`), so its
+      # `linear-budget:` trailer is its own and `reconcile.py` is not edited.
+      #
+      # Two gates, neither of which costs a Linear read. FULL PASSES ONLY: the
+      # same reading of `sweep_reason` the sweep makes (DRE-3640), so a
+      # relay-scoped `card-done` or `epic-activated` pass never runs it. And
+      # THE STUB FIRST, as a file test on the caller's checkout (the first
+      # `actions/checkout` above): `self-proof-task.yml` or `proof-task.yml`,
+      # the `fix_workflow()` naming family. A repo with no stub prints one line
+      # and reads nothing, every pass, until its stub lands.
+      #
+      # `PROOF_DISPATCH_LIVE` is the caller's variable. Anything but `true` is
+      # the dry run: `would:` lines, no dispatch, no receipt, no hold.
+      - name: Dispatch proof runs
+        if: inputs.sweep_reason == ''
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The dispatch (`plan_run.fire`, contents:write) and the receipt go
+          # out as the bot token; the reads ride the pool App, as the sweep's do.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-dispatch: no proof-run stub in this repository — nothing read, nothing dispatched"
+            exit 0
+          fi
+          # The Sweep step's shape: every line to the run log, a copy kept so
+          # the spend and the pass's summary line can be lifted into the step
+          # summary, and the phase's own status carried past the summary.
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
+          BUDGET=$(grep '^linear-budget:' proof-dispatch.log || true)
+          SUMMARY=$(grep -E '^(proof-dispatch: eligible|would:)' proof-dispatch.log || true)
+          {
+            echo "### Proof-run dispatch — spend"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then printf '%s\n' "$SUMMARY"; fi
+            if [ -n "$BUDGET" ]; then
+              printf '%s\n' "$BUDGET"
+            else
+              echo "no linear-budget: line — the phase exited before its trailer, so its spend is unknown"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"

@@ -1,0 +1,608 @@
+#!/usr/bin/env python3
+"""The sweep dispatches a proof run at a PROOF card (DRE-5926).
+
+When an epic's last build card is Done and the release carrying its merges is
+live, this phase starts the proof run at the epic's `PROOF:` card, the way the
+sweep starts builds. Nothing did before: a PROOF card routes OPERATOR, lands in
+`Hand-work` marked `hand-built` and `no-code`, and `Hand-work` is not a lane
+the sweep's nudge loop reads (`reconcile.SWEEP_STATES`), so the card waited
+for a person. On 2026-10-05, 13 of the 17 epics counted against the epic cap
+were waiting on exactly that.
+
+Its own module and its own step in `reconcile.yml` (`Dispatch proof runs`,
+after `Sweep`), because `reconcile.py` is past eleven thousand lines and an
+edit to a file that size is what killed DRE-3088 three times. The step runs on
+full passes only and only where the repo carries a proof-run stub (`STUBS`) —
+both gates are in the workflow and cost no Linear read.
+
+THIS PHASE DECIDES; IT DOES NOT READ. Whether the release is live is
+`proof_release.reading`, what became of a run is `proof_run_state.reading`
+(both DRE-5922), the event is `plan_run.PROOF_EVENT` (DRE-5921), and whose
+comment is the CEO's signed answer is `spoken_thread.voices`. None of them is
+re-derived here.
+
+## The lanes
+
+A first-run candidate is in `Hand-work`, and it stays there for the whole run
+(DRE-5924): what keeps this phase from dispatching twice at a running card is
+the run-state reading (condition 5), not a lane. A card in `Green Light` is
+read only by the return branch. A card in `In Review` has an open record pull
+request and is DRE-5931's.
+
+## A first run — every condition read, in order; the first that fails is named
+
+  1. A `PROOF:` title, a `repo:` label naming this repo, in `Hand-work`.
+  2. Its parent epic is `In Progress`.
+  3. Every `blocks` relation on it is terminal (`prose_blockers`).
+  4. It is not held: no `needs-human`, and no `🔬 proof-waiting` hold the
+     thread has not discharged — by a later `🔬 proof-observed` line, or, for
+     a hold naming `the CEO's press`, by his signed answer after it.
+  5. Nobody else is on it and its run is not alive: only `none`,
+     `never-started` and `dead` go on.
+  6. The first-run budget: two dispatches. The second names why the first
+     did not finish; after two, one hold, and never again.
+  7. The release carrying the siblings' merges is `ready` — `waiting` and
+     `unknown` both wait.
+
+## The return after the CEO's answer
+
+A `Green Light` PROOF card whose newest hold names `the CEO's press`, with a
+signed answer after it and no `🔬 proof-run` receipt after the answer, is
+dispatched again: once per signed answer. Conditions 2 and 3 are read for it;
+5, 6 and 7 are not — its record is open by design, the first-run budget is not
+its budget, and the release held at its first dispatch. Only a run in flight
+(`running`, or `unknown`, which is never read as free) holds it. Its lane
+moves are DRE-5925's, in `proof-task.yml`; this phase moves nothing.
+
+## The bound
+
+At most one dispatch per pass — the return first, then first runs oldest
+first — and at most `PROOF_CANDIDATES_PER_PASS` candidates read: the two lanes
+once each, then two Linear reads per candidate (the card's epic and relations,
+and its thread). Three candidates is 2 + 2 × 3 = 8 requests however many proofs
+wait. Its `linear-budget:` trailer is its own, lifted into the step summary.
+
+## The dry run
+
+Unless `PROOF_DISPATCH_LIVE` is exactly `true`, the phase prints `would:`
+lines and writes nothing — no dispatch, no receipt, no hold.
+
+CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`):
+
+    proof_dispatch.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Callable
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import card_pr  # noqa: E402
+import linear_ops  # noqa: E402
+import pipeline_act  # noqa: E402
+import plan_run  # noqa: E402
+import proof_and_demo  # noqa: E402
+import proof_release  # noqa: E402
+import proof_run_state  # noqa: E402
+import prose_blockers  # noqa: E402
+import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
+import spoken_thread  # noqa: E402
+
+#: Opens every line this phase prints.
+PREFIX = "proof-dispatch:"
+
+#: The receipt's tag — the registry's `proof-run-dispatched` row adopts it
+#: off this line, and `proof_run_state.RECEIPT_MARKER` reads it back.
+PROOF_RUN_TAG = "proof-run"
+
+#: How many candidates one pass reads, oldest first; the rest wait a pass.
+PROOF_CANDIDATES_PER_PASS = 3
+
+#: The repository variable that turns the dry run off — `true` and nothing else.
+LIVE_VARIABLE = "PROOF_DISPATCH_LIVE"
+
+#: The proof-run stubs the step tests for before it runs this file, in
+#: `reconcile.fix_workflow()`'s naming family: bureau-pipeline's own stub is
+#: `self-proof-task.yml`, a product repo's is `proof-task.yml`.
+STUBS = (".github/workflows/self-proof-task.yml", ".github/workflows/proof-task.yml")
+
+#: What the step prints when neither stub is there, with no Python run.
+NO_STUB = ("proof-dispatch: no proof-run stub in this repository — nothing "
+           "read, nothing dispatched")
+
+FIRST_RUN_LANE = "Hand-work"
+RETURN_LANE = "Green Light"
+EPIC_ACTIVE = "In Progress"
+
+#: The first-run budget, and the run states that leave a card free for it.
+FIRST_RUN_BUDGET = 2
+FREE = ("none", "never-started", "dead")
+#: The run states that hold the return: a run in flight, or one unreadable.
+IN_FLIGHT = ("running", "unknown")
+
+FIRST_REASON = "first proof run"
+NEVER_STARTED_REASON = "second dispatch — no run started after {at}"
+DEAD_REASON = "second dispatch — {run}"
+RETURN_REASON = "re-run after the CEO's answer at {at}"
+FIRST_COUNT = "dispatch {n} of 2"
+RETURN_COUNT = "after the CEO's answer"
+
+#: The hold after two first-run dispatches that did not finish.
+EXHAUSTED_OBSERVED = "the proof run did not finish after two dispatches"
+EXHAUSTED_NEEDS = ("an operator reading the two 🔬 proof-run receipts and the "
+                   "Actions runs they name")
+
+#: What a hold names when only the CEO's own login can discharge it (DRE-5925).
+CEO_PRESS = "the CEO's press"
+HOLD_MARK = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_WAITING_TAG}:"
+OBSERVED_MARK = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}:"
+#: What the sweep's promotion posts as a card lands in `Hand-work` — the one
+#: time on the lane read that says when the card entered the lane.
+PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
+
+#: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha.
+PR_FIELDS = "number,url,headRefName,state,mergeCommit"
+
+#: The card's epic, its siblings and its blocking relations, in one read.
+CARD_QUERY = """query($id: String!) { issue(id: $id) {
+             %s
+             parent { identifier state { name }
+               children(first: 100) { nodes {
+                 identifier title state { name } labels { nodes { name } } } } }
+           } }""" % reconcile.INVERSE_RELATIONS_GQL
+
+_RECORD_BRANCH = re.compile(r"agent/DRE-\d+-proof-record")
+_DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
+
+
+def proof_record_branch(head_ref) -> bool:
+    """Is `head_ref` a proof run's record branch, `agent/DRE-<n>-proof-record`?
+    The fix-agent card and the re-run card read it; nothing here does."""
+    return bool(_RECORD_BRANCH.fullmatch(head_ref or ""))
+
+
+def is_live() -> bool:
+    return os.environ.get(LIVE_VARIABLE) == "true"
+
+
+# --------------------------------------------------------------------------- #
+# The reads — injected in the tests, these in production                       #
+# --------------------------------------------------------------------------- #
+
+
+class LinearReads:
+    """The three Linear reads this phase makes, and nothing else."""
+
+    def lane(self, state: str) -> list:
+        """A lane through the sweep's own read: the read door serves it where
+        it is on, Linear where it is not."""
+        return reconcile.active_cards((state,))
+
+    def card(self, identifier: str) -> dict:
+        issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
+        if not issue:
+            raise LookupError(f"Linear answered no card for {identifier}")
+        return issue
+
+    def thread(self, identifier: str):
+        return linear_ops._thread_and_viewer(identifier, "body", "user",
+                                             "createdAt", whole=True)
+
+
+def github_read(path: str):
+    """`gh api <path>` as JSON through the sweep's read seam — the pool App's
+    hour (`GH_READ_TOKEN`), retried on a brief refusal, raising on failure."""
+    text = reconcile.gh_read("api", path)
+    return json.loads(text) if text else None
+
+
+def merged_pr(identifier: str, repo: str) -> dict | None:
+    """The card's newest counting pull request on `repo`, as `hygiene_done`
+    reads it."""
+    return card_pr.find(identifier, repo=repo, fields=PR_FIELDS,
+                        run=lambda args: reconcile.gh_read(*args))
+
+
+# --------------------------------------------------------------------------- #
+# The pass                                                                     #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Tally:
+    eligible: int = 0
+    dispatched: int = 0
+    waiting: int = 0
+    held: int = 0
+    someone_else: int = 0
+    running: int = 0
+    deferred: int = 0
+    refused: int = 0
+    failures: list = field(default_factory=list)
+
+    def line(self, live: bool) -> str:
+        return (f"{PREFIX} eligible {self.eligible}, dispatched "
+                f"{self.dispatched}, waiting on release {self.waiting}, held "
+                f"{self.held}, someone else's {self.someone_else}, running "
+                f"{self.running}, deferred {self.deferred}, refused "
+                f"{self.refused} ({'live' if live else 'dry run'})")
+
+
+class _Refused(Exception):
+    """A condition failed: `bucket` is the tally it counts in."""
+
+    def __init__(self, line: str, bucket: str = "refused"):
+        super().__init__(line)
+        self.line, self.bucket = line, bucket
+
+
+def _say(identifier: str, text: str) -> None:
+    print(f"{PREFIX} {identifier} — {text}")
+
+
+def _condition(n: int, name: str, why: str, bucket: str = "refused") -> _Refused:
+    return _Refused(f"condition {n} ({name}): {why}", bucket)
+
+
+def _pt(when: datetime) -> str:
+    return spoken_thread.pacific_label(when.isoformat())
+
+
+def _labels(card: dict) -> list:
+    return [(lbl.get("name") or "").lower()
+            for lbl in (card.get("labels") or {}).get("nodes") or []]
+
+
+def _first_line(text: str | None) -> str:
+    return (text or "").strip().split("\n", 1)[0].strip()
+
+
+def _ours(card: dict, slug: str) -> bool:
+    return (proof_and_demo.is_proof(card.get("title") or "")
+            and reconcile.card_repo(card) == slug)
+
+
+def _entered(card: dict) -> str:
+    """When the card entered `Hand-work`, off the lane read: the promotion's
+    own receipt, else the card's last update. ISO strings sort as times."""
+    window = linear_ops.window_nodes(card.get("comments"))
+    stamps = [c.get("createdAt") or "" for c in window
+              if (c.get("body") or "").startswith(PROMOTED_MARK)]
+    return (stamps[-1] if stamps else "") or card.get("updatedAt") or ""
+
+
+def _number(card: dict) -> int:
+    digits = (card.get("identifier") or "").rsplit("-", 1)[-1]
+    return int(digits) if digits.isdigit() else 0
+
+
+def _open_holds(voices: list) -> list:
+    """The `🔬 proof-waiting` holds nothing later on the thread discharged.
+
+    Anyone's hold holds — a copy can only keep a card waiting. A later
+    `🔬 proof-observed` from the pipeline's key or a person discharges the
+    operator's holds; only his signed answer discharges one naming the CEO's
+    press. An unsigned claim to be his answer discharges nothing."""
+    held: list = []
+    for voice in voices:
+        body = (voice.body or "").lstrip()
+        if body.startswith(HOLD_MARK):
+            held.append(_first_line(body))
+        elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
+            held = [h for h in held if CEO_PRESS not in h]
+        elif (body.startswith(OBSERVED_MARK)
+              and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
+            held = [h for h in held if CEO_PRESS in h]
+    return held
+
+
+def _answered_after_park(voices: list) -> tuple | None:
+    """`(index, voice)` of his newest signed answer after the newest
+    `🔬 proof-waiting` hold, when that hold names the CEO's press — else None."""
+    holds = [i for i, v in enumerate(voices)
+             if (v.body or "").lstrip().startswith(HOLD_MARK)]
+    if not holds or CEO_PRESS not in _first_line(voices[holds[-1]].body):
+        return None
+    answers = [(i, v) for i, v in enumerate(voices)
+               if i > holds[-1] and v.kind == spoken_thread.CEO_VIA_CONSOLE]
+    return answers[-1] if answers else None
+
+
+class _Pass:
+    def __init__(self, repo, slug, *, live, linear, read, find_pr, run_state,
+                 release, fire, voices, now):
+        self.repo, self.slug, self.live = repo, slug, live
+        self.linear, self.read, self.find_pr = linear, read, find_pr
+        self.run_state, self.release, self.fire = run_state, release, fire
+        self.voices, self.now = voices, now
+        self.tally = Tally()
+
+    # -- the reads every candidate shares (conditions 2 and 3) ------------- #
+
+    def _epic_and_blockers(self, card: dict) -> dict:
+        ident = card["identifier"]
+        try:
+            issue = self.linear.card(ident)
+        except Exception as error:  # noqa: BLE001 — unread is never eligible
+            raise _condition(2, "epic", f"the card's epic and relations could "
+                                        f"not be read: {error}")
+        parent = issue.get("parent") or {}
+        epic_state = (parent.get("state") or {}).get("name")
+        if not parent:
+            raise _condition(2, "epic", "the card has no parent epic")
+        if epic_state != EPIC_ACTIVE:
+            raise _condition(2, "epic", f"its epic {parent.get('identifier')} "
+                                        f"is {epic_state}, not {EPIC_ACTIVE}")
+        if prose_blockers.relations_unknown(issue):
+            raise _condition(3, "blockers", "its blocking relations could not "
+                                            "be read to the end")
+        open_ = prose_blockers.relation_blockers(issue)
+        if open_:
+            states = prose_blockers.blocker_states(issue)
+            named = ", ".join(f"{b} is {states[b]}" for b in sorted(open_))
+            raise _condition(3, "blockers", f"not every blocker is terminal — {named}")
+        return issue
+
+    def _thread(self, card: dict):
+        ident = card["identifier"]
+        try:
+            comments, viewer = self.linear.thread(ident)
+            voices = self.voices(comments, viewer, card=ident)
+        except Exception as error:  # noqa: BLE001
+            raise _condition(4, "hold", f"the thread could not be read, so no "
+                                        f"hold can be ruled out: {error}")
+        return comments, viewer, voices
+
+    # -- a first run -------------------------------------------------------- #
+
+    def first_run(self, card: dict) -> tuple:
+        """`(reason, count)` for an eligible first-run candidate, or raises
+        `_Refused` naming the first condition that fails."""
+        ident = card["identifier"]
+        issue = self._epic_and_blockers(card)
+        if "needs-human" in _labels(card):
+            raise _condition(4, "hold", "it carries needs-human", "held")
+        comments, viewer, voices = self._thread(card)
+        holds = _open_holds(voices)
+        if holds:
+            raise _condition(4, "hold", f"held by {holds[-1]}", "held")
+
+        got = self.run_state(self.repo, ident, comments, viewer,
+                             read=self.read, now=self.now)
+        why = "; ".join(got.lines)
+        if got.state == "someone-else":
+            raise _condition(5, "run", why, "someone_else")
+        if got.state not in FREE:
+            raise _condition(5, "run", why, "running")
+
+        reason = self._budget(card, got, voices)
+        self._released(issue, ident)
+        return reason, FIRST_COUNT.format(n=got.dispatches + 1)
+
+    def _budget(self, card: dict, got, voices: list) -> str:
+        """Condition 6: the reason this dispatch spends, or the refusal."""
+        ident = card["identifier"]
+        if got.dispatches >= FIRST_RUN_BUDGET:
+            already = any(_first_line(v.body).startswith(
+                linear_ops.proof_waiting_line(EXHAUSTED_OBSERVED, EXHAUSTED_NEEDS))
+                for v in voices)
+            if not already:
+                self._hold_exhausted(ident)
+            raise _condition(6, "budget", f"{got.dispatches} first-run "
+                                          "dispatches and none finished — "
+                                          "never dispatched again by this "
+                                          "phase", "held")
+        if got.dispatches == 0 or got.state == "none":
+            return FIRST_REASON
+        if got.state == "never-started":
+            at = got.receipts[-1].at if got.receipts else "an unknown time"
+            return NEVER_STARTED_REASON.format(at=at)
+        found = next((m for line in got.lines if (m := _DEAD.match(line))), None)
+        run = found.group(1) if found else f"run {got.run_id} ended with no record"
+        return DEAD_REASON.format(run=run)
+
+    def _hold_exhausted(self, ident: str) -> None:
+        if not self.live:
+            print(f"would: hold {ident} — {EXHAUSTED_OBSERVED}")
+            return
+        try:
+            linear_ops.cmd_proof_waiting(ident, EXHAUSTED_OBSERVED, EXHAUSTED_NEEDS)
+        except Exception as error:  # noqa: BLE001
+            self.tally.failures.append(f"{ident}: the hold could not be posted: {error}")
+            _say(ident, f"ERROR: the hold could not be posted: {error}")
+
+    def _released(self, issue: dict, ident: str) -> None:
+        """Condition 7: the release carrying the siblings' merges is live."""
+        siblings = [c for c in ((issue.get("parent") or {}).get("children")
+                                or {}).get("nodes") or []
+                    if c.get("identifier") != ident
+                    and not proof_and_demo.is_proof(c.get("title") or "")]
+        merges = []
+        for sibling in siblings:
+            other = sibling["identifier"]
+            if (sibling.get("state") or {}).get("name") not in prose_blockers.TERMINAL:
+                continue
+            slug = reconcile.card_repo(sibling)
+            if slug != self.slug:
+                _say(other, f"unchecked — its repo: label names {slug or 'no repo'}, "
+                            f"not {self.slug}; its release is not this repo's to read")
+                continue
+            try:
+                pr = self.find_pr(other)
+            except Exception as error:  # noqa: BLE001 — unread is never ready
+                raise _condition(7, "release", f"unknown — the pull request "
+                                               f"for {other} could not be read: "
+                                               f"{error}")
+            if card_pr.pr_state(pr) != card_pr.MERGED:
+                continue
+            sha = (pr.get("mergeCommit") or {}).get("oid")
+            if not sha:
+                raise _condition(7, "release", f"unknown — #{pr.get('number')} "
+                                               f"for {other} names no merge commit")
+            merges.append(proof_release.Merge(other, pr["number"], sha, []))
+        got = self.release(self.repo, merges, read=self.read)
+        if got.state != "ready":
+            raise _condition(7, "release", "; ".join(got.lines),
+                             "waiting" if got.state == "waiting" else "refused")
+
+    # -- the return after the CEO's answer ---------------------------------- #
+
+    def is_return(self, card: dict) -> bool:
+        """Off the lane read's own comment window, at no request: a PROOF card
+        of this repo whose window holds his signed answer after a park naming
+        his press. The thread read decides; this only spares the read."""
+        if not _ours(card, self.slug):
+            return False
+        window = linear_ops.window_nodes(card.get("comments"))
+        try:
+            voices = self.voices(window, None, card=card["identifier"])
+        except Exception as error:  # noqa: BLE001 — unread is no answer
+            _say(card["identifier"], f"return: its comments could not be read "
+                                     f"for his answer: {error}")
+            return False
+        if _answered_after_park(voices) is not None:
+            return True
+        return (linear_ops.window_is_partial(card.get("comments"))
+                and any(v.kind == spoken_thread.CEO_VIA_CONSOLE for v in voices))
+
+    def returning(self, card: dict) -> tuple:
+        ident = card["identifier"]
+        self._epic_and_blockers(card)
+        comments, viewer, voices = self._thread(card)
+        found = _answered_after_park(voices)
+        if found is None:
+            raise _Refused("return: no signed answer of the CEO's follows a "
+                           "park naming his press")
+        index, voice = found
+        later = [v for v in voices[index + 1:]
+                 if v.kind == spoken_thread.PIPELINE
+                 and proof_run_state.receipt(v.body or "") is not None]
+        if later:
+            raise _Refused("return: a proof-run receipt already follows his "
+                           f"answer posted {spoken_thread.pacific_label(voice.created_at)} "
+                           "— one dispatch per signed answer")
+        got = self.run_state(self.repo, ident, comments, viewer,
+                             read=self.read, now=self.now)
+        if got.state in IN_FLIGHT:
+            raise _Refused(f"return: a run is in flight — {'; '.join(got.lines)}",
+                           "running")
+        at = spoken_thread.pacific_label(voice.created_at)
+        return RETURN_REASON.format(at=at), RETURN_COUNT
+
+    # -- the dispatch --------------------------------------------------------- #
+
+    def dispatch(self, card: dict, reason: str, count: str) -> None:
+        ident = card["identifier"]
+        self.tally.eligible += 1
+        if not self.live:
+            print(f"would: dispatch {ident} — {reason}")
+            self.tally.dispatched += 1
+            return
+        ok, error = self.fire(card, self.repo, reason=reason,
+                              event=plan_run.PROOF_EVENT)
+        if not ok:
+            self.tally.failures.append(error)
+            _say(ident, f"ERROR: the dispatch was not confirmed: {error}")
+            return
+        self.tally.dispatched += 1
+        _say(ident, f"dispatched: {reason} ({count})")
+        line = (f"{linear_ops.PROOF_MARK} {PROOF_RUN_TAG}: dispatched a proof "
+                f"run at {_pt(self.now)} — {reason} ({count})")
+        body = pipeline_act.receipt("proof-run-dispatched", line)
+        try:
+            linear_ops.cmd_comment(ident, body)
+        except Exception as error:  # noqa: BLE001
+            self.tally.failures.append(f"{ident}: receipt not posted: {error}")
+            _say(ident, f"ERROR: dispatched, and the receipt could not be "
+                        f"posted: {error}")
+
+
+def sweep(repo: str, slug: str, *, live: bool, linear=None,
+          read: Callable | None = None, find_pr: Callable | None = None,
+          run_state: Callable | None = None, release: Callable | None = None,
+          fire: Callable | None = None, voices: Callable | None = None,
+          now: datetime | None = None) -> Tally:
+    """One pass: the return first, then first runs oldest first; at most
+    `PROOF_CANDIDATES_PER_PASS` candidates read and one dispatch."""
+    one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
+                read=read or github_read,
+                find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
+                run_state=run_state or proof_run_state.reading,
+                release=release or proof_release.reading,
+                fire=fire or plan_run.fire,
+                voices=voices or spoken_thread.voices,
+                now=now or datetime.now(timezone.utc))
+    tally = one.tally
+
+    returns = [c for c in one.linear.lane(RETURN_LANE) if one.is_return(c)]
+    first = []
+    for card in one.linear.lane(FIRST_RUN_LANE):
+        if not proof_and_demo.is_proof(card.get("title") or ""):
+            continue
+        slug_on_card = reconcile.card_repo(card)
+        if slug_on_card != slug or (card.get("state") or {}).get("name") != FIRST_RUN_LANE:
+            _say(card["identifier"], f"condition 1 (card): its repo: label names "
+                                     f"{slug_on_card or 'no repo'}, not {slug}")
+            tally.refused += 1
+            continue
+        first.append(card)
+    first.sort(key=lambda c: (_entered(c), _number(c)))
+
+    queue = ([(c, one.returning) for c in returns]
+             + [(c, one.first_run) for c in first])
+    read, tried = 0, False
+    for card, decide in queue:
+        ident = card["identifier"]
+        if tried:
+            _say(ident, "deferred — one dispatch per pass, read next pass")
+            tally.deferred += 1
+            continue
+        if read >= PROOF_CANDIDATES_PER_PASS:
+            _say(ident, "deferred — candidate cap, read next pass")
+            tally.deferred += 1
+            continue
+        read += 1
+        try:
+            reason, count = decide(card)
+        except _Refused as refusal:
+            _say(ident, refusal.line)
+            setattr(tally, refusal.bucket, getattr(tally, refusal.bucket) + 1)
+            continue
+        _say(ident, f"eligible: {reason} ({count})")
+        # One try per pass, confirmed or not: a refused dispatch is a red
+        # run, and the next card waits for a pass that is not failing.
+        one.dispatch(card, reason, count)
+        tried = True
+    print(tally.line(live))
+    return tally
+
+
+def main(argv=None) -> int:
+    repo, slug = os.environ.get("REPO"), os.environ.get("REPO_SLUG")
+    if not repo or not slug:
+        print(f"{PREFIX} REPO and REPO_SLUG must both be set — nothing read",
+              file=sys.stderr)
+        return 2
+    live = is_live()
+    try:
+        tally = sweep(repo, slug, live=live)
+    except reconcile.BoardHeld as held:
+        print(f"{PREFIX} the read door holds the board — nothing read, nothing "
+              f"dispatched: {held}")
+        return 0
+    finally:
+        print(linear_ops.budget_line())
+    for failure in tally.failures:
+        print(f"{PREFIX} ERROR: {failure}", file=sys.stderr)
+    return 1 if tally.failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

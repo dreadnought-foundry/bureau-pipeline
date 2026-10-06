@@ -306,6 +306,48 @@ The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
 block, the way Nightly Watch's report is.
 
+## The row that starts a proof — `🔬 proof-run` (DRE-5926)
+
+| Field | Value |
+| -- | -- |
+| tag | `proof-run` |
+| act name | `proof-run-dispatched` |
+| kind · state · next actor | `recovery` · `dispatched` · `proof-task.yml` |
+| discharges | nothing |
+| cadence | `7200` — `proof-task.yml`'s proof job, `timeout-minutes: 120` |
+| emitted by | `scripts/proof_dispatch.py`, at the `pipeline_act.receipt("proof-run-dispatched", …)` call |
+
+A PROOF card routes OPERATOR and waits in `Hand-work`, a lane the sweep's nudge
+loop never reads, so every finished epic's proof waited for a person to start
+it — on 2026-10-05, thirteen of the seventeen epics counted against the epic cap.
+The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`, on
+full passes only and only in a repo that carries a proof-run stub
+(`self-proof-task.yml` or `proof-task.yml`), and starts one proof run a pass
+when the card's seven conditions hold: a `PROOF:` card of this repo in
+`Hand-work`, its epic `In Progress`, its blockers terminal, no hold standing,
+nobody else on it and no run alive, a dispatch left in its budget of two, and
+the release carrying its siblings' merges live. A card in `Green Light` whose
+park named the CEO's press is dispatched once per signed answer of his.
+
+The receipt is posted only after `plan_run.fire` confirms the dispatch:
+
+    🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)
+
+The reasons open `first proof run`, `second dispatch — no run started after`,
+`second dispatch — run` and `re-run after the CEO's answer at`; the counts are
+`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
+`after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
+(DRE-5922) anchors on the newest receipt to read what became of the run, and
+counts the first-run budget off the receipts whose reason opens `first proof
+run` or `second dispatch`.
+
+**The first live pass is never the first pass.** Until the repository variable
+`PROOF_DISPATCH_LIVE` is exactly `true`, the phase prints `would: dispatch
+<card> — <reason>` and writes nothing. Before flipping it, the operator holds
+each proof a person is already working with `linear_ops.py proof-waiting
+<card> "being observed by hand" "the operator's record pull request"`, and the
+phase leaves it alone by name.
+
 ## Why this exists
 
 The console has always checked this. Its
