@@ -161,9 +161,11 @@ class TestVerdictBeforePromotion:
 
     # --- the wiring: the sweep itself refuses ------------------------------
     def test_the_sweep_does_not_promote_a_verdictless_mid_epic_card(self):
-        board = _PromotionBoard(created_at=AFTER, comments=[])
+        """Neither the mid-epic tag nor a routing verdict: not promoted, said
+        once, and sent to Planning for a verdict (DRE-5900)."""
+        board = _PromotionBoard(created_at=AFTER, comments=[], routing=())
         assert board.promote() == 0
-        assert board.advanced == []
+        assert board.advanced == [("DRE-2740", "Planning", "Backlog")]
         assert board.surfaced_once(mid_epic.NO_VERDICT_TAG)
 
     def test_the_sweep_promotes_it_once_the_verdict_is_there(self):
@@ -188,6 +190,128 @@ class TestVerdictBeforePromotion:
         import inspect
 
         assert "createdAt" in inspect.getsource(reconcile.backlog_children)
+
+
+# ===========================================================================
+# DRE-5900: Planning's routing verdict is the mid-epic sign-off, a card with
+# neither verdict is sent to Planning once, and the green light is read off the
+# epic's NEWEST history
+# ===========================================================================
+ROUTING_PARKED = routing_verdict.verdict_comment("PARKED", "we decided not to build this")
+
+
+def _linear_history(query: str, ascending: list[dict]) -> list[dict]:
+    """The history nodes Linear hands back for the `history(...)` selection in
+    `query`: `first: n` is the n NEWEST entries, newest first, and `last: n` the
+    n OLDEST, ascending (DRE-5034, tests/fixtures/dre-5034-history-2026-09-29.json)."""
+    import re
+
+    match = re.search(r"history\((first|last):\s*(\d+)\)", query)
+    assert match, "the query selects no paged history"
+    end, n = match.group(1), int(match.group(2))
+    return list(reversed(ascending))[:n] if end == "first" else ascending[:n]
+
+
+def _dre_3624_history() -> list[dict]:
+    """Sixty entries, ascending: the first green light, fifty-seven moves in
+    between, and the re-green-light at the very end, past the oldest fifty."""
+    stamps = [f"2026-09-{1 + n // 24:02d}T{n % 24:02d}:00:00.000Z" for n in range(60)]
+    lanes = ["In Progress"] + ["In Review", "Todo", "Planning"] * 19 + ["Green Light", "In Progress"]
+    return [{"createdAt": at, "toState": {"name": lane}} for at, lane in zip(stamps, lanes)]
+
+
+class TestPlanningsVerdictIsTheSignOff:
+    """DRE-5806: a child created after its epic's green light, carrying a FLEET
+    routing verdict from three Planning passes and no `mid-epic-verdict`, was
+    refused on every sweep for a day, because only the mid-epic tag counted."""
+
+    def test_a_routing_verdict_is_a_mid_epic_sign_off(self):
+        assert mid_epic.carries_verdict([ROUTING_FLEET])
+        assert mid_epic.promotion_refusal("DRE-2740", AFTER, GREEN_LIGHT, [ROUTING_FLEET]) is None
+
+    def test_a_comment_merely_quoting_a_routing_verdict_is_no_sign_off(self):
+        """The marker must OPEN the comment, as `routing_verdict.verdicts_on`
+        reads it — a refusal that quotes one is not a verdict."""
+        quoted = "the planner said 🧭 routing-verdict: **FLEET** earlier"
+        assert not mid_epic.carries_verdict([quoted])
+
+    def test_the_dre_5806_shape_promotes_after_one_planning_pass(self):
+        board = _PromotionBoard(created_at=AFTER, comments=[])
+        assert board.promote() == 1
+        assert board.advanced == [("DRE-2740", "Todo", "Backlog")]
+        assert not any(mid_epic.NO_VERDICT_TAG in b for _, b in board.posted)
+
+
+class TestNeitherVerdictGoesToPlanningOnce:
+    def test_it_is_refused_said_once_and_sent_to_planning(self):
+        board = _PromotionBoard(created_at=AFTER, comments=[], routing=())
+        assert board.promote() == 0
+        assert board.advanced == [("DRE-2740", "Planning", "Backlog")]
+        notices = [b for _, b in board.posted if mid_epic.NO_VERDICT_TAG in b]
+        assert len(notices) == 1
+        notice = notices[0]
+        assert "DRE-2740" in notice and "DRE-2700" in notice
+        assert "Planning" in notice and "routing verdict" in notice
+        assert "mid_epic.py discovery" not in notice
+
+    def test_a_second_sweep_adds_no_second_comment(self):
+        board = _PromotionBoard(created_at=AFTER, comments=[], routing=())
+        board.promote()
+        board.promote()
+        assert board.surfaced_once(mid_epic.NO_VERDICT_TAG)
+
+    def test_the_refusal_names_the_epic_and_the_route(self):
+        refusal = mid_epic.promotion_refusal("DRE-2740", AFTER, GREEN_LIGHT, [], epic="DRE-2700")
+        assert refusal.startswith(f"🚨 {mid_epic.NO_VERDICT_TAG}: DRE-2740")
+        assert "DRE-2700" in refusal and "Planning" in refusal
+        assert "mid_epic.py discovery" not in refusal
+
+    def test_a_parked_card_is_refused_by_its_destination_and_not_moved(self):
+        board = _PromotionBoard(created_at=AFTER, comments=[], routing=(ROUTING_PARKED,))
+        assert board.promote() == 0
+        assert board.advanced == []
+        assert not any(mid_epic.NO_VERDICT_TAG in b for _, b in board.posted)
+
+    def test_a_planned_card_with_no_verdict_is_not_sent_to_planning(self):
+        """The move is the mid-epic refusal's, and only its: a card the plan
+        anticipated that lacks a routing verdict is refused as it always was."""
+        board = _PromotionBoard(created_at=BEFORE, comments=[], routing=())
+        assert board.promote() == 0
+        assert board.advanced == []
+
+
+class TestTheGreenLightIsTheNewest:
+    """DRE-3624: an epic with more than fifty history entries had its newest
+    green light outside `history(last: 50)` — the OLDEST fifty — so the gate
+    read an older one, and two planned children read as added after it."""
+
+    @pytest.mark.parametrize("query", [reconcile.EPIC_RECORD_GQL, mid_epic._EPIC_QUERY],
+                             ids=["EPIC_RECORD_GQL", "_EPIC_QUERY"])
+    def test_both_reads_select_the_newest_history(self, query):
+        q = " ".join(query.split())
+        assert "history(first: 50)" in q
+        assert "history(last: 50)" not in q
+
+    def test_green_light_from_returns_the_newest_entry_given_last(self):
+        history = _dre_3624_history()
+        assert mid_epic.green_light_from(history) == history[-1]["createdAt"]
+
+    def test_the_epic_read_finds_the_re_green_light(self):
+        history = _dre_3624_history()
+        newest, oldest = history[-1]["createdAt"], history[0]["createdAt"]
+
+        class _Ops:
+            def gql(self, query, variables=None):
+                return {"issue": {"history": {"nodes": _linear_history(query, history)}}}
+
+        assert mid_epic.last_green_light(_Ops(), "DRE-3624") == newest
+        record = {"history": {"nodes": _linear_history(reconcile.EPIC_RECORD_GQL, history)}}
+        assert mid_epic.last_green_light(None, "DRE-3624", issue=record) == newest
+        planned = "2026-09-02T12:00:00.000Z"  # after the first green light, before the newest
+        added = "2026-09-03T13:00:00.000Z"
+        assert oldest < planned < newest < added
+        assert mid_epic.promotion_refusal("DRE-5640", planned, newest, []) is None
+        assert mid_epic.promotion_refusal("DRE-5841", added, newest, []) is not None
 
 
 # ===========================================================================
@@ -866,6 +990,16 @@ class TestTheRouteIsWrittenDown:
         assert "sibling" in text
         assert mid_epic.ADDITION in text and mid_epic.AMENDMENT in text
 
+    def test_the_docs_record_planning_as_the_sign_off(self):
+        """DRE-5900: the ADR and the card standard say Planning's routing
+        verdict is a sign-off the gate accepts, that a card with neither is
+        sent to Planning once, and that the green light is the newest entry."""
+        for doc in (self.ADR, self.STANDARD):
+            text = " ".join(doc.read_text().split())
+            assert "DRE-5900" in text, doc.name
+            for fact in ("routing verdict", "sent to `Planning` once", "newest `In Progress` entry"):
+                assert fact in text, f"{doc.name} does not say: {fact}"
+
     def test_the_sweep_documents_the_promotion_condition_it_gained(self):
         """reconcile's header is the sweep's contract. A promotion condition
         that is not in it is a rule the next reader will not know about."""
@@ -984,7 +1118,7 @@ class _PromotionBoard:
     with every other gate (WIP, epic blockers, card blockers) open — so the only
     thing that can hold the card is the mid-epic verdict rule."""
 
-    def __init__(self, created_at, comments=()):
+    def __init__(self, created_at, comments=(), routing=(ROUTING_FLEET,)):
         self.card = {
             "id": "uuid-2740",
             "identifier": "DRE-2740",
@@ -996,8 +1130,10 @@ class _PromotionBoard:
                                  {"name": "agent:engineer"}]},
             # The ROUTING verdict is always present, and is not what this
             # board is about: since DRE-3385 a card without one is refused for
-            # THAT reason, which would mask the mid-epic rule under test.
-            "comments": {"nodes": [{"body": b} for b in (*comments, ROUTING_FLEET)]},
+            # THAT reason, which would mask the mid-epic rule under test. Since
+            # DRE-5900 it is also a mid-epic sign-off, so a board about a card
+            # carrying neither verdict passes `routing=()`.
+            "comments": {"nodes": [{"body": b} for b in (*comments, *routing)]},
             "inverseRelations": {"nodes": []},
         }
         self.advanced: list[tuple[str, str, str]] = []
