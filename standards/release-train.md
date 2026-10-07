@@ -104,8 +104,8 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "0 15 * * *"
-    - cron: "0 14 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       surface:
@@ -252,9 +252,13 @@ decides whether a lap runs, never what the script ships.
 **The stub's own cron lines are its morning wake-up (DRE-6052).** GitHub
 runs a `schedule:` only from a workflow file on the default branch of the repo
 that holds it, and this train is `workflow_call`, so a cron inside the train
-never fires for a caller — the stub is where it lives. agent-bureau's and
-Portico's stubs carry `0 13 * * *` and `0 12 * * *`, 05:00 PT in standard and
-daylight time. The rest of the day a train is woken by every CI completion on
+never fires for a caller — the stub is where it lives. The block above
+carries `0 13 * * *` and `0 12 * * *`, 05:00 PT in standard and daylight
+time, and a repo onboarded from today copies those two lines as they stand.
+They are the lines agent-bureau's own stub and its
+`scaffold/customer-repo/.github/workflows/release-train.yml` carried when
+DRE-6052 read them on 2026-10-06; Portico's stub is the only other one on the
+roster. The rest of the day a train is woken by every CI completion on
 the default branch and by its own re-arm. DRE-4450 also built a fleet wake-up
 in bureau-pipeline that dispatched every roster repo's stub at 05:00 PT; it
 only ever duplicated these crons, and the CEO retired it on 2026-10-06 because

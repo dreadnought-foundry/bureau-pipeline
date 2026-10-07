@@ -113,8 +113,8 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "0 15 * * *"
-    - cron: "0 14 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       surface:

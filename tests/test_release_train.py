@@ -1164,7 +1164,7 @@ def test_the_stub_fires_on_ci_completion_the_schedule_and_a_dispatch():
         "workflows": ["CI"], "types": ["completed"], "branches": ["main"],
     }
     crons = [entry["cron"] for entry in on["schedule"]]
-    assert crons == ["0 15 * * *", "0 14 * * *"]
+    assert crons == ["0 13 * * *", "0 12 * * *"]
     assert "surface" in on["workflow_dispatch"]["inputs"]
     assert set(on) == {"workflow_run", "schedule", "workflow_dispatch"}
 

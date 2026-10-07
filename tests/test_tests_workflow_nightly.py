@@ -34,6 +34,8 @@ remembered:
 
 from __future__ import annotations
 
+import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,10 +43,15 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+STANDARD = ROOT / "standards" / "release-train.md"
 WF_DIR = ROOT / ".github" / "workflows"
 TESTS = WF_DIR / "tests.yml"
 REPAIR_STUB = WF_DIR / "self-red-main-repair.yml"
 REPAIR_STAGE = WF_DIR / "red-main-repair.yml"
+
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import release_train  # noqa: E402
 
 UTC = timezone.utc
 
@@ -54,7 +61,10 @@ UTC = timezone.utc
 #: (read 2026-10-06), which agent-bureau's and Portico's stubs both carry.
 #: The fleet wake-up that once dispatched every stub at the same minute is
 #: retired (DRE-6052); the stubs' own crons still fire there, so they are the
-#: minute to stay clear of.
+#: minute to stay clear of. It must move with the stub block a new repo copies
+#: — `release_train.render_markdown()` and `standards/release-train.md` — and
+#: `test_the_stub_crons_are_the_ones_the_published_stub_carries` fails if it
+#: drifts from either.
 STUB_TRAIN_CRONS = ("0 13 * * *", "0 12 * * *")
 
 #: How far the nightly must fire from either of the stubs' two cron lines
@@ -294,6 +304,27 @@ def test_the_nightly_stays_clear_of_the_stubs_morning_crons(wake):
         f"the nightly {_tests_crons()[0]!r} fires {gap} minutes from the "
         f"train stubs' {wake!r} (05:00 PT) — keep it at least "
         f"{WAKE_MARGIN_MINUTES} minutes clear"
+    )
+
+
+def _stub_crons(text: str) -> tuple[str, ...]:
+    return tuple(re.findall(r'^\s*- cron: "([^"]+)"', text, re.M))
+
+
+@pytest.mark.parametrize("source", ["render_markdown", "standard"])
+def test_the_stub_crons_are_the_ones_the_published_stub_carries(source):
+    # STUB_TRAIN_CRONS is a copy, so it is tied to the two places a new repo
+    # copies its stub from: the rendered `docs/release-train.md` and the
+    # stub block in `standards/release-train.md`. Move one and this fails
+    # until the other two follow (DRE-6052).
+    if source == "render_markdown":
+        text = release_train.render_markdown()
+    else:
+        blocks = re.findall(r"```yaml\n(.*?)```", STANDARD.read_text(), re.S)
+        text = next(b for b in blocks if "release-train.yml@stable" in b)
+    assert _stub_crons(text) == STUB_TRAIN_CRONS, (
+        f"the stub {source} publishes {_stub_crons(text)!r}, not the "
+        f"{STUB_TRAIN_CRONS!r} the nightly stays clear of"
     )
 
 
