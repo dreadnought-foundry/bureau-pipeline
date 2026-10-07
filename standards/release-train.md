@@ -104,8 +104,8 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: "0 15 * * *"
-    - cron: "0 14 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       surface:
@@ -249,15 +249,20 @@ replaces the default; `"ignore": []` counts every file again. Your script's own
 change check (rule 2 above) is yours to keep in step: the train's exclusion
 decides whether a lap runs, never what the script ships.
 
-**The stub's own cron lines are legacy (DRE-4450).** They are still in the
-block above, and they still work, but the schedule that matters is now the
-fleet wake-up below — one workflow, in bureau-pipeline, for every train.
-Removing these two lines (and the surface's `window`, where it only restates
-the fleet default) is one follow-up card per repo, blocked on DRE-4450. Until
-then a train may be woken twice at the opening; the second wake-up is a no-op,
-because the per-surface concurrency lane holds it behind the first and it then
-reads `current` — or names the spacing. A repo onboarded from today copies the
-block with the `schedule:` omitted.
+**The stub's own cron lines are its morning wake-up (DRE-6052).** GitHub
+runs a `schedule:` only from a workflow file on the default branch of the repo
+that holds it, and this train is `workflow_call`, so a cron inside the train
+never fires for a caller — the stub is where it lives. The block above
+carries `0 13 * * *` and `0 12 * * *`, 05:00 PT in standard and daylight
+time, and a repo onboarded from today copies those two lines as they stand.
+They are the lines agent-bureau's own stub and its
+`scaffold/customer-repo/.github/workflows/release-train.yml` carried when
+DRE-6052 read them on 2026-10-06; Portico's stub is the only other one on the
+roster. The rest of the day a train is woken by every CI completion on
+the default branch and by its own re-arm. DRE-4450 also built a fleet wake-up
+in bureau-pipeline that dispatched every roster repo's stub at 05:00 PT; it
+only ever duplicated these crons, and the CEO retired it on 2026-10-06 because
+the fleet runs round the clock.
 
 `RELEASE_ROLE_ARN` is the one required secret — the caller's own OIDC role, so
 a repo can only ever deploy itself. The two Linear keys are optional and pass
@@ -285,7 +290,7 @@ The stub above triggers on no tag ref, so the train does not wake itself; a
 caller workflow declared `on: push: tags:` now runs on the release tag, which
 is what such a workflow asks for.
 
-## The fleet's hours, and the wake-up that reads them
+## The fleet's hours
 
 **The opening time is written once, in the train (DRE-4450).** The CEO, on
 2026-09-21: *"The schedule should be integrated into the train so it's in one
@@ -309,37 +314,9 @@ should default to round the clock."*
 * **A surface that declares `always` anyway is on the fleet default**, and its
   lines say so. Declaring the default overrides nothing.
 
-The wake-up's sweep is a second declaration, `FLEET_WAKE` in the same file, at
-`05:00 PT` — the CEO's 2026-09-20 *"the train should start at 5 am"*. It was the
-opening of `FLEET_WINDOW` until that window became `always`, which has no
-opening to derive a cron from.
-
-**The wake-up is a workflow in bureau-pipeline, not a cron in the train.**
-GitHub runs a `schedule:` trigger only from a workflow file on the default
-branch of the repo that HOLDS it, and this train is `workflow_call` — a cron
-inside it never fires for a caller. So `.github/workflows/fleet-wake.yml` in
-bureau-pipeline carries the schedule for the whole fleet. Its two cron lines
-are derived from `FLEET_WAKE` with `zoneinfo` (`python3
-scripts/release_train.py wake-owners` / `wake`), never typed: UTC has no
-timezone field, so one line is standard time and the other daylight time, and
-`tests/test_fleet_wake.py` fails if either moves alone or if the sweep moves
-without them.
-
-At the sweep it reads `config/repo-map.json` and dispatches
-`release-train.yml` in every roster repo that carries a caller stub —
-`gh workflow run release-train.yml -R <repo>`, the DRE-3559 re-arm's own
-primitive, here cross-repo under a bot App token minted per owner (an
-installation token is scoped to one installation, and this fleet spans three).
-A repo with no stub is **skipped and named**, never failed; so is this repo,
-whose `release-train.yml` IS the `workflow_call` reusable. A repo it could not
-wake — an unreadable stub, a refused dispatch — is named, warned about, and
-turns the run red, because a wake-up that silently did not happen is the fault
-this replaces. The App installation needs **`Actions: write`** on each owner or
-the dispatch answers `HTTP 403: Resource not accessible by integration`
-(DRE-1254); the run says exactly that, per repo.
-
-The woken train then decides as it always does: the brake, `auto`, current,
-the spacing, the window, green-at-SHA. The wake-up decides nothing.
+The train decides when a surface MAY release; it never decides when a train
+wakes. That is the stub's — its CI trigger, its own crons and the re-arm
+above.
 
 ## The supervised first release
 

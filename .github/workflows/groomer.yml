@@ -185,8 +185,8 @@ jobs:
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
-      # THE LOOKUP LEGS' OWNERS (DRE-5429). The reader `fleet-wake.yml` builds
-      # its matrix with, over the pipeline's own `config/repo-map.json`, so a
+      # THE LOOKUP LEGS' OWNERS (DRE-5429). The roster reader Nightly Watch's
+      # owners share, over the pipeline's own `config/repo-map.json`, so a
       # repo onboarded into the map is looked up with no second edit. Skipped
       # on `drain`, which runs no lookup.
       - name: Owners in the roster
@@ -366,7 +366,7 @@ jobs:
   # under three owners. An App installation token is scoped to ONE
   # installation, so the groom job's token — minted with no `owner:` — is
   # refused for every repo outside its own owner. Each leg here mints for its
-  # own owner, the shape `fleet-wake.yml` uses for the same reason, runs
+  # own owner in its "Mint a read-only token for this owner" step, runs
   # `groom_lookups.py owner` and uploads one document; the verify legs fold
   # them into the targets.
   #

@@ -23,8 +23,8 @@
 #       types: [completed]
 #       branches: [main]
 #     schedule:                  # the two cron lines, unchanged
-#       - cron: "0 15 * * *"
-#       - cron: "0 14 * * *"
+#       - cron: "0 13 * * *"
+#       - cron: "0 12 * * *"
 #     workflow_dispatch:         # the `surface` input, unchanged
 #
 # On that event this workflow proceeds only when

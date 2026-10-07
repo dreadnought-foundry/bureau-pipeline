@@ -1340,8 +1340,9 @@ class LookupJobTest(unittest.TestCase):
     on that owner's own App token. An installation token is scoped to one
     installation and the roster spans three owners, so the groom job's one
     token — minted with no `owner:` — was refused for every repo outside
-    dreadnought-foundry every morning. `fleet-wake.yml` mints per owner for
-    the same reason, and the matrix reads the same roster reader."""
+    dreadnought-foundry every morning. Each leg's "Mint a read-only token for
+    this owner" step mints for its own owner, and the matrix comes from the
+    roster reader Nightly Watch's owners share."""
 
     def setUp(self):
         self.doc = _load("groomer.yml")

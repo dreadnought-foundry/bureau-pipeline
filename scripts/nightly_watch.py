@@ -105,7 +105,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # than a second copy of either: `hours_since` renders an unreadable timestamp
 # as None (unknown), which is the whole of this module's honesty rule, and
 # `fleet_roster` is the same `config/repo-map.json` the relay routes on and the
-# fleet wake-up dispatches from.
+# groomer's lookup legs read.
 from channel_watch import _days as elapsed, hours_since  # noqa: E402
 from check_workflow_watchers import on_block  # noqa: E402
 from gh_read_retry import GhReadError, read as gh_read  # noqa: E402
@@ -623,7 +623,8 @@ def _gh_api(path: str):
 
 def _cmd_owners(args) -> int:
     """The matrix: every owner in the roster, so the token is minted once per
-    App installation (fleet-wake.yml's shape — one installation, one token)."""
+    App installation (the groomer's per-owner token step keeps the same
+    shape — one installation, one token)."""
     owners = fleet_owners(roster(args.map or None))
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

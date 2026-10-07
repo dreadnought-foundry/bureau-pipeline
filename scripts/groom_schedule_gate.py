@@ -17,9 +17,8 @@ LOCAL hour all year needs two cron lines — `0 13 * * *` and `0 14 * * *`.
 Every day both fire, exactly one of them is 06:00 on the
 `America/Los_Angeles` wall clock, and WHICH one flips at each DST change.
 The reading is therefore done with `zoneinfo` on the PT clock and never from
-a restated offset, the way `release_train.in_window` reads a release window
-and `release_train.wake_crons` derives the fleet's own pair of cron lines. An
-offset written down here would be right for half the year and silently an
+a restated offset, the way `release_train.in_window` reads a release window.
+An offset written down here would be right for half the year and silently an
 hour wrong for the other half — which is exactly how Portico's train came to
 sleep until 07:03 PT on 2026-09-21 (DRE-4450).
 

@@ -20,7 +20,7 @@
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions`, the same actor the
-#      Reconcile, Nightly Watch and Fleet Wake schedules already run as. Each
+#      Reconcile and Nightly Watch schedules already run as. Each
 #      write goes out on the App installation token minted per owner, so a
 #      dispatch it makes starts as the App, the actor the fleet's stubs admit.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal

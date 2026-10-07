@@ -270,8 +270,8 @@ def test_a_malformed_release_json_is_refused_with_the_field_named():
                 "auto": True,
                 # `identity` missing. It used to be `window` — since DRE-4450
                 # that one is OPTIONAL and inherits the fleet default
-                # (tests/test_fleet_wake.py), so the missing-field rule is
-                # pinned here on a field that is still required.
+                # (tests/test_fleet_default_window.py), so the missing-field
+                # rule is pinned here on a field that is still required.
             }
         }
     }
@@ -1164,7 +1164,7 @@ def test_the_stub_fires_on_ci_completion_the_schedule_and_a_dispatch():
         "workflows": ["CI"], "types": ["completed"], "branches": ["main"],
     }
     crons = [entry["cron"] for entry in on["schedule"]]
-    assert crons == ["0 15 * * *", "0 14 * * *"]
+    assert crons == ["0 13 * * *", "0 12 * * *"]
     assert "surface" in on["workflow_dispatch"]["inputs"]
     assert set(on) == {"workflow_run", "schedule", "workflow_dispatch"}
 
