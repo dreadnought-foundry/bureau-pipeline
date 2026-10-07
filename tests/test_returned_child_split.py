@@ -508,6 +508,9 @@ class TestTheStepProvesTheSplitBeforeStandingDown:
         assert escalation == {
             "args": ["escalate", CARD, "--reason-file",
                      str(tmp_path / "runner-temp" / "planner-escalation.txt"),
+                     # DRE-6168: the planner's choices, beside its reason.
+                     "--choices-file",
+                     str(tmp_path / "runner-temp" / "planner-escalation-choices.json"),
                      # DRE-5564: quoted when no reason was written.
                      "--execution-file",
                      str(tmp_path / "runner-temp" / "claude-execution-output.json")],

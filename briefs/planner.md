@@ -726,6 +726,22 @@ A-vs-B question reaches the CEO with your pick in front of him. No code, no
 diffs, no file paths, no commands — a reason written in technical terms is not
 shown to the CEO at all, and the card parks with the reason missing instead.
 
+Then write the choices as JSON with the `Write` tool to EXACTLY this path,
+beside the reason:
+
+    $RUNNER_TEMP/planner-escalation-choices.json
+
+One object, with exactly these keys and no others: `question` — one sentence.
+`context` — one short paragraph. `choices` — 2 to 4 of them, each carrying
+`id` (a lowercase slug, unique), `label` (a few words), `effect` (one line on
+what happens), an optional `preview` (a few lines of plain text showing the
+result) and `outcome` (`proceed`, `replan` or `close`: build it, plan it
+again, or cancel the card). `recommended` — the `id` of the choice you
+recommend. `why` — one sentence saying why. No card numbers in a label or an
+effect. The reason itself still carries no code and still names your
+recommendation; a choices file that breaks these rules is dropped and the
+reason is posted alone.
+
 **Your last message is the fallback reason (DRE-5564).** A run that ends with
 no cards and no reason file is escalated all the same, and the note quotes your
 closing message — under the same plain-English rule — so make it say why you

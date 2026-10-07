@@ -115,6 +115,17 @@ accretion turns an approved scope into an unapproved one with no single decision
 being wrong. A card added without the artifact changing is named on the epic,
 once.
 
+**Two writers refresh that region, so the write is guarded (DRE-6162).** A
+discovery and the sweep both rewrite the whole description, and the sweep works
+from a record read at the top of its pass. On 2026-10-07 reconcile read
+DRE-6059 between two filings and wrote back a region that predated both,
+erasing DRE-6159's and DRE-6160's records and raising two false
+`mid-epic-unrecorded` alarms. So `refresh_epic_growth` reads the epic again
+just before it writes, and writes only if the description is still the one it
+built from; if it moved, the region is rebuilt from the fresh read, up to three
+times. After that it writes nothing and names the card it could not record on
+the epic (`mid-epic-growth-contended`) — never a region built from a stale read.
+
 ## Decision — a card has no children
 
 `validate_card.infer_agent_label` decides what a card *is* from whether it has

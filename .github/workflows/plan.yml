@@ -1558,7 +1558,8 @@ jobs:
           # be left over from anything that ran before it.
           rm -f "${{ runner.temp }}/one-off-revised-card.md" \
                 "${{ runner.temp }}/one-off-revision-summary.md" \
-                "${{ runner.temp }}/one-off-question.md"
+                "${{ runner.temp }}/one-off-question.md" \
+                "${{ runner.temp }}/one-off-question-choices.json"
 
       # Fresh App token for the revision (DRE-3940): the one-off critic above
       # is a model run of its own.
@@ -1657,6 +1658,23 @@ jobs:
             English (no file paths, no code) to
             ${{ runner.temp }}/one-off-question.md and write neither file
             above; the card then goes to the CEO with your question.
+            Then write the choices as JSON with the `Write` tool
+            to EXACTLY this path, beside the reason:
+              ${{ runner.temp }}/one-off-question-choices.json
+            One object, with exactly these keys and no others:
+            `question` — one sentence. `context` — one short
+            paragraph. `choices` — 2 to 4 of them, each carrying
+            `id` (a lowercase slug, unique), `label` (a few
+            words), `effect` (one line on what happens), an
+            optional `preview` (a few lines of plain text showing
+            the result) and `outcome` (`proceed`, `replan` or
+            `close`: build it, plan it again, or cancel the card).
+            `recommended` — the `id` of the choice you recommend.
+            `why` — one sentence saying why. No card numbers in a
+            label or an effect. The reason itself still carries no
+            code and still names your recommendation; a choices
+            file that breaks these rules is dropped and the reason
+            is posted alone.
 
             If a finding says the card is really more than one pull request,
             narrow this card to the first of them and say in your summary what
@@ -1755,10 +1773,18 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REVISION: ${{ steps.oorevised.outputs.outcome }}
         run: |
+          # DRE-6168: only the planner's own question carries choices — the
+          # critic's is one line of its own grammar, so it stays prose only.
+          CHOICES=()
+          if [ "$REVISION" = "asked" ]; then
+            CHOICES=(--choices-file "${{ runner.temp }}/one-off-question-choices.json")
+          fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
-            --reason-file "${{ runner.temp }}/one-off-escalation.txt"
+            --reason-file "${{ runner.temp }}/one-off-escalation.txt" \
+            "${CHOICES[@]}"
 
       # THE BOUND parks in Triage, the operator's defect queue — never in Green
       # Light (DRE-5376, the lane contract DRE-5275 landed for plans). The
@@ -2044,6 +2070,25 @@ jobs:
                costs. No code, no diffs, no file paths, no commands — a reason
                written in technical terms is not put in front of the CEO at
                all, so the card parks with the reason missing.
+               Then write the choices as JSON with the `Write`
+               tool to EXACTLY this path, beside the reason:
+                 ${{ runner.temp }}/planner-escalation-choices.json
+               One object, with exactly these keys and no
+               others: `question` — one sentence. `context` —
+               one short paragraph. `choices` — 2 to 4 of them,
+               each carrying `id` (a lowercase slug, unique),
+               `label` (a few words), `effect` (one line on
+               what happens), an optional `preview` (a few
+               lines of plain text showing the result) and
+               `outcome` (`proceed`, `replan` or `close`: build
+               it, plan it again, or cancel the card).
+               `recommended` — the `id` of the choice you
+               recommend. `why` — one sentence saying why. No
+               card numbers in a label or an effect. The reason
+               itself still carries no code and still names
+               your recommendation; a choices file that breaks
+               these rules is dropped and the reason is posted
+               alone.
                The run posts it to the card and parks the card in Green Light,
                the CEO's decision queue — the same lane a plan waits in. Never
                Triage: an escalated card is not broken, it is waiting on a
@@ -2272,6 +2317,25 @@ jobs:
                costs. No code, no diffs, no file paths, no commands — a reason
                written in technical terms is not put in front of the CEO at
                all, so the card parks with the reason missing.
+               Then write the choices as JSON with the `Write`
+               tool to EXACTLY this path, beside the reason:
+                 ${{ runner.temp }}/planner-escalation-choices.json
+               One object, with exactly these keys and no
+               others: `question` — one sentence. `context` —
+               one short paragraph. `choices` — 2 to 4 of them,
+               each carrying `id` (a lowercase slug, unique),
+               `label` (a few words), `effect` (one line on
+               what happens), an optional `preview` (a few
+               lines of plain text showing the result) and
+               `outcome` (`proceed`, `replan` or `close`: build
+               it, plan it again, or cancel the card).
+               `recommended` — the `id` of the choice you
+               recommend. `why` — one sentence saying why. No
+               card numbers in a label or an effect. The reason
+               itself still carries no code and still names
+               your recommendation; a choices file that breaks
+               these rules is dropped and the reason is posted
+               alone.
                The run posts it to the card and parks the card in Green Light,
                the CEO's decision queue — the same lane a plan waits in. Never
                Triage: an escalated card is not broken, it is waiting on a
@@ -2475,6 +2539,8 @@ jobs:
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           REASON="${{ runner.temp }}/planner-escalation.txt"
+          # DRE-6168: the planner's question as buttons, beside its reason.
+          CHOICES="${{ runner.temp }}/planner-escalation-choices.json"
           EXEC_FILE="$EXEC_FILE_USED"
           [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           if [ "$RETURNED_CHILD" = "true" ] && [ ! -s "$REASON" ]; then
@@ -2484,10 +2550,13 @@ jobs:
               exit 0
             fi
             echo "returned child was not split or canceled: it is a child of $PARENT, no escalation reason was written, and it reads '${STATE:-unreadable}' in Linear rather than Canceled" > "$REASON"
+            # This step wrote the reason, not the planner, so it is prose only.
+            rm -f "$CHOICES"
           fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "$CARD" \
             --reason-file "$REASON" \
+            --choices-file "$CHOICES" \
             --execution-file "$EXEC_FILE"
       # --- The plan artifact (DRE-2720) ------------------------------------
       #
@@ -3682,6 +3751,11 @@ jobs:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
               Cards: python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
               Thread: python3 .bureau-pipeline/scripts/spoken_thread.py thread "${{ github.event.client_payload.identifier }}"
+              A comment in the CEO's voice newer than the plan's newest
+              revision is a finding this round must answer, either by changing
+              the plan as he asked or by a plain-English answer to his question
+              in the revision note. A PASS that leaves his comment unanswered
+              is not a pass.
 
             EVERY CARD RECORD CARRIES ITS `state`, and by the time you read a
             re-planned epic some children have already shipped. A child in
@@ -5047,6 +5121,25 @@ jobs:
                decision is, why it needs a person, and what getting it wrong
                costs. No code, no diffs, no file paths, no commands. The run
                posts it to the card and parks the card for the CEO's decision.
+               Then write the choices as JSON with the `Write`
+               tool to EXACTLY this path, beside the reason:
+                 ${{ runner.temp }}/planner-escalation-choices.json
+               One object, with exactly these keys and no
+               others: `question` — one sentence. `context` —
+               one short paragraph. `choices` — 2 to 4 of them,
+               each carrying `id` (a lowercase slug, unique),
+               `label` (a few words), `effect` (one line on
+               what happens), an optional `preview` (a few
+               lines of plain text showing the result) and
+               `outcome` (`proceed`, `replan` or `close`: build
+               it, plan it again, or cancel the card).
+               `recommended` — the `id` of the choice you
+               recommend. `why` — one sentence saying why. No
+               card numbers in a label or an effect. The reason
+               itself still carries no code and still names
+               your recommendation; a choices file that breaks
+               these rules is dropped and the reason is posted
+               alone.
 
       # DRE-3970 — Roll-up route — split into child epics: refused for
       # capacity? The step above is continue-on-error so a refusal is READ
@@ -5176,6 +5269,25 @@ jobs:
                decision is, why it needs a person, and what getting it wrong
                costs. No code, no diffs, no file paths, no commands. The run
                posts it to the card and parks the card for the CEO's decision.
+               Then write the choices as JSON with the `Write`
+               tool to EXACTLY this path, beside the reason:
+                 ${{ runner.temp }}/planner-escalation-choices.json
+               One object, with exactly these keys and no
+               others: `question` — one sentence. `context` —
+               one short paragraph. `choices` — 2 to 4 of them,
+               each carrying `id` (a lowercase slug, unique),
+               `label` (a few words), `effect` (one line on
+               what happens), an optional `preview` (a few
+               lines of plain text showing the result) and
+               `outcome` (`proceed`, `replan` or `close`: build
+               it, plan it again, or cancel the card).
+               `recommended` — the `id` of the choice you
+               recommend. `why` — one sentence saying why. No
+               card numbers in a label or an effect. The reason
+               itself still carries no code and still names
+               your recommendation; a choices file that breaks
+               these rules is dropped and the reason is posted
+               alone.
 
       - name: Roll-up route — split into child epics — finished?
         id: rollup_done
@@ -5234,10 +5346,11 @@ jobs:
           CHILDREN="${{ runner.temp }}/roll-up-children.json"
           BOUNCE_FILE="${{ runner.temp }}/roll-up-bounce.md"
           REASON="${{ runner.temp }}/planner-escalation.txt"
+          CHOICES="${{ runner.temp }}/planner-escalation-choices.json"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
           if [ -s "$REASON" ] && [ "$KIDS" -eq 0 ]; then
             python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
-              "$EPIC" --reason-file "$REASON"
+              "$EPIC" --reason-file "$REASON" --choices-file "$CHOICES"
             echo "escalated=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
