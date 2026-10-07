@@ -136,7 +136,6 @@
     "tests/test_fix_thread_context.py": 0.38,
     "tests/test_fix_turn_budget.py": 0.77,
     "tests/test_fix_worker_on_the_pool.py": 7.66,
-    "tests/test_fleet_wake.py": 0.42,
     "tests/test_gate_pool_and_backoff.py": 1.77,
     "tests/test_gh_read_rate_limit_retry.py": 0.09,
     "tests/test_gh_read_retry.py": 0.44,

@@ -5251,8 +5251,8 @@ jobs:
       #
       # Q1 (actor): the dispatch goes out as the bureau App installation for
       # the waiting card's OWNER — an installation token is scoped to one
-      # owner and the card may live in another, the per-owner mint
-      # `fleet-wake.yml` already makes — and the started run initiates in its
+      # owner and the card may live in another, the per-owner mint the
+      # groomer's lookup legs already make — and the started run initiates in its
       # repo as `github-actions`, the actor every stub already admits. Q2
       # (store): the reusable's declared `BUREAU_APP_ID` /
       # `BUREAU_APP_PRIVATE_KEY`, no new store; Linear through the key this

@@ -54,7 +54,7 @@
 #      other one — that would report the whole fleet UNKNOWN. An App
 #      installation token is scoped to ONE installation and this fleet spans
 #      three owners, so the watch job is a matrix over the roster's owners with
-#      a token minted per owner, exactly as fleet-wake.yml dispatches.
+#      a token minted per owner, exactly as the groomer's lookup legs read.
 #   Q3 re-run — idempotent by construction: the card lookup is by exact title
 #      and the titles are constants per owner, so a re-run comments on the open
 #      card instead of minting a second. A card CANCELED while the condition
@@ -92,7 +92,7 @@ concurrency:
 
 jobs:
   # The roster is `config/repo-map.json` — the same snapshot the relay routes
-  # on and the fleet wake-up dispatches from. A repo onboarded into the map is
+  # on and the groomer's lookup legs read. A repo onboarded into the map is
   # watched with no second edit, which is why the owner list is computed rather
   # than typed.
   owners:

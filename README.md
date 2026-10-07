@@ -34,13 +34,12 @@ advances (below) changes.
 `release_train.FLEET_WINDOW`, and the default is `always` — round the clock
 (DRE-5266). A surface that omits `window` inherits it; one that declares a
 different window keeps it and the train says on that surface's line that it
-overrides the default. A second constant, `release_train.FLEET_WAKE` (05:00
-PT), derives the two cron lines of `.github/workflows/fleet-wake.yml`, the ONE
-schedule the fleet has: GitHub fires a `schedule:` only from the repo holding
-the file and the train is `workflow_call`, so at that sweep the workflow reads `config/repo-map.json`
-and dispatches each roster repo's own train stub, naming every repo it skipped
-and why. Callers' stubs keep their own crons until one follow-up card per repo
-removes them; a train woken twice collapses to one release.
+overrides the default. What wakes a train is its own stub: every CI
+completion on the default branch, the train's re-arm, and the stub's own
+05:00 PT crons — GitHub fires a `schedule:` only from the repo holding the
+file and the train is `workflow_call`, so no cron can live in the train. The
+fleet wake-up that once dispatched every stub at 05:00 PT from here only
+duplicated those crons and is retired (DRE-6052).
 
 ## The lane contract (DRE-2726)
 
@@ -1484,8 +1483,8 @@ deduplicated Linear card through the same `linear_ops.py` mechanism
   actionable one, but the unknown is still named in the body.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
-  over the roster's owners with a token minted per owner — `fleet-wake.yml`'s
-  shape — and each owner gets its own card title, so three concurrent jobs
+  over the roster's owners with a token minted per owner — the shape the
+  groomer's lookup legs use — and each owner gets its own card title, so three concurrent jobs
   cannot race for one card.
 - **It holds no write anywhere**, and a test fails if one appears. A red run is
   diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
