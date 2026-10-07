@@ -81,8 +81,10 @@ set -e
 #     per base tip, `wait` stops, `proceed` goes on.
 #  7. Moves the card to In Review if it is still In Progress, merges pinned to
 #     the evaluated head, and comments the merge on the card. A merge refused
-#     because the head moved exits 0; one refused with the head unmoved is a
-#     real failure, explained and red.
+#     because the head moved exits 0. One refused with the head unmoved is a
+#     real failure, explained and red, unless GitHub's text says the head
+#     branch is out of date: then the branch is updated from the base once per
+#     base tip, one note says so, and the step exits 0 without merging.
 # No note carries verdict-shaped text, so none passes for an approval or wakes
 # the gate's own comment trigger.
 #
@@ -107,7 +109,8 @@ set -e
 #   requests, merge here on the same terms as agent/*.
 # DRE-2037 (2026-07-11). An update-branch by the qa-bot fires `synchronize` as
 #   the qa-bot, which qa-review.yml and verify.yml admit; the workflow's own
-#   token would fire nothing. That is why the fork refresh runs on GH_TOKEN.
+#   token would fire nothing. That is why both branch updates, the fork
+#   refresh and the out-of-date update (DRE-6195), run on GH_TOKEN.
 # DRE-2039 (2026-07-11). Dependabot pull requests (dependabot/*) merge here,
 #   minor and patch bumps only. The author is compared in REST's spelling,
 #   the literal `dependabot[bot]`; since Stage 2 #19 it comes from the one
@@ -157,8 +160,8 @@ set -e
 #   merge moves the head, so a fresh review follows. The shell used to branch
 #   on mergeability itself. A branch only behind its base is no longer
 #   refreshed or held: the compare record's status is a behind/ahead note and
-#   gates nothing. The one branch write the gate still makes is the fork
-#   refresh (DRE-4912).
+#   gates nothing. The gate still makes two branch writes: the fork refresh
+#   (DRE-4912) and the update on GitHub's out-of-date refusal (DRE-6195).
 # DRE-2777 (2026-08-27). bot/standards-sync, the nightly dreadnought-standards
 #   regeneration, merges here card-less like dependabot/*: a nightly job has no
 #   card of its own, and a fixed id would have linear-sync re-close a long-done
@@ -223,8 +226,8 @@ set -e
 #   from facts.
 # DRE-4912, DRE-5070 (2026-09-29). Merging a branch that is behind can fork
 #   `main` when both added a file under the same order-sensitive path. The fork
-#   refresh is the gate's one branch write, and not the freshness rule DRE-2416
-#   retired. What `main` gained since the merge base is read only when the
+#   refresh is one of the gate's two branch writes (DRE-6195 is the other), and
+#   not the freshness rule DRE-2416 retired. What `main` gained since the merge base is read only when the
 #   branch is behind and the repo declares .github/bureau/merge-recheck.json,
 #   so a current head or an undeclared repo costs no call; a failed read is
 #   `{}`, answered `wait`. The refresh module rules on that, the compare
@@ -298,6 +301,26 @@ set -e
 #   rows are not all met, posted as an ordinary decline note once per head.
 #   Off a proof-record branch it reads nothing, so the path to a merge is
 #   still nine reads.
+# DRE-6195 (2026-10-07). The gate decided `merge` on #785, green and approved,
+#   and GitHub refused it: "Head branch is out of date". The head had not
+#   moved, so the run went red, and the medic's retry hit the same refusal.
+#   That is a rule on the base branch this gate deliberately does not enforce
+#   (DRE-2416), and whether it is a strict status check or a ruleset cannot be
+#   read with the pipeline's token, so the arm keys on GitHub's text, not the
+#   cause. The merge's stderr goes to a file, still echoed to the log, and on
+#   that text with the head unmoved the gate updates the branch from the base
+#   under the qa-bot token with `expected_head_sha`, posts one
+#   `Merge gate: updated onto <base tip>` note and exits 0. Not a merge: the
+#   new head's CI wakes the gate, which evaluates it from the start, and the
+#   review carries if the content id holds (DRE-2340). At most one update per
+#   base tip, the fork refresh's discipline: the gate's own note for this tip
+#   (read from the receipts, gate_note.matching_notes) means GitHub refuses
+#   with nothing moved to explain it, and that is a real failure. So is a
+#   compare record with no base tip (`{}`), unreadable receipts, and a refused
+#   update, whose text goes to the log for the medic. Any other refusal text
+#   with the head unmoved is a real failure as before, and a branch that is
+#   behind but accepted still merges as it stands: the compare status is
+#   never the trigger.
 
 set -euo pipefail
 
@@ -501,7 +524,7 @@ if [ "$DECISION" = "hold" ] && [ -z "$STACKED" ] && [ -z "$OWNER_HOLD" ]; then
 fi
 [ "$DECISION" = "merge" ] || exit 0
 
-# The fork refresh, the gate's one branch write (DRE-4912, DRE-5070).
+# The fork refresh, the first of the gate's two branch writes (DRE-4912, DRE-5070).
 BEHIND=$(python3 -c 'import json, sys; b = json.load(open(sys.argv[1])).get("behind_by"); print(b if type(b) is int and b > 0 else 0)' /tmp/compare.json 2>/dev/null || echo 0)
 echo '{}' > /tmp/base-advance.json
 if [ "$BEHIND" -gt 0 ] && [ -f .github/bureau/merge-recheck.json ]; then
@@ -555,9 +578,39 @@ fi
 # Both gates green: advance card, merge as qa-bot.
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress" || true
 # Pinned to the evaluated head; a moved head is benign (DRE-2117, DRE-1990).
-if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA"; then
+# GitHub's refusal text is kept for the out-of-date arm and still logged (DRE-6195).
+if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt; then
+  cat /tmp/merge-error.txt >&2
   NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
   if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
+    # GitHub's up-to-date rule, which this gate does not enforce: one update
+    # per base tip, pinned to the evaluated head, as the qa-bot (DRE-6195).
+    if grep -qF 'Head branch is out of date' /tmp/merge-error.txt; then
+      TIP=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("base_commit") or {}).get("sha") or "")' /tmp/compare.json 2>/dev/null || true)
+      UPDATE_MARK="Merge gate: updated onto $TIP"
+      UPDATED=$(python3 -c 'import json, sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import gate_note; print("yes" if gate_note.matching_notes(json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]) else "no")' /tmp/receipts.json "$UPDATE_MARK" "$QA_LOGIN" 2>/dev/null || echo unreadable)
+      if [ -z "$TIP" ]; then
+        echo "GitHub says the head branch is out of date, and the compare record names no $BASE tip — an update could not be bounded, so none was made"
+      elif [ "$UPDATED" = "yes" ]; then
+        echo "GitHub still refuses the merge as out of date at $BASE $TIP, a tip the gate already updated onto — not updating again"
+      elif [ "$UPDATED" != "no" ]; then
+        echo "GitHub says the head branch is out of date, and the comments could not be read to tell whether the gate already updated onto $TIP — not updating"
+      elif gh api -X PUT "repos/$REPO_FULL/pulls/$PR/update-branch" -f expected_head_sha="$SHA" >/dev/null 2>/tmp/update-error.txt; then
+        printf '♻️ %s — GitHub refused the merge because the head branch is out of date.\n\n%s\n' "$UPDATE_MARK" \
+          "Not merged: GitHub answered \"Head branch is out of date\" and the head was still $SHA, so the branch was updated from $BASE (DRE-6195). CI re-runs on the result. The standing review carries if this pull request's own changes are unchanged (DRE-2340). The gate looks again on the next CI completion." \
+          > /tmp/update-note.md
+        python3 .bureau-pipeline/scripts/gate_note.py \
+          --repo "$REPO_FULL" \
+          --pr "$PR" \
+          --author "$QA_LOGIN" \
+          --marker "$UPDATE_MARK" \
+          --body-file /tmp/update-note.md \
+          || echo "the update note did not post — the branch update stands"
+        exit 0
+      else
+        echo "update-branch refused for $SHA: $(cat /tmp/update-error.txt)"
+      fi
+    fi
     echo "merge failed with the head still at $SHA — real failure"
     # Name what the base branch requires and what is met, for the medic (DRE-4341).
     python3 .bureau-pipeline/scripts/code_owner_hold.py explain \
@@ -568,6 +621,7 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA"; then
   echo "head moved since evaluation (was $SHA, now ${NOW:-unverifiable}) — not merging; the gate re-runs on the new head's events"
   exit 0
 fi
+cat /tmp/merge-error.txt >&2
 echo "merged PR #$PR"
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
   "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $PR_URL" || true
