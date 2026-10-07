@@ -306,7 +306,7 @@ _FULL_SWEEP_PHASES = (
     "retrigger_dead_heads", "flag_no_checks_prs", "flag_unowned_prs",
     "flag_unlanded_work", "flag_stranded_fixes", "fix_approved_but_red",
     "retry_dead_fix_runs", "redispatch_standing_verdicts", "recover_limit_deaths",
-    "rerun_runner_lost_ci", "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
+    "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
     "recover_crashed_reviews", "report_fleet_reviewer_outage",
     "check_dependabot_capacity", "settle_repair_cards", "report_intake_depth",
     "advance_urgent_intake", "serve_planner_line", "close_finished_epics",
