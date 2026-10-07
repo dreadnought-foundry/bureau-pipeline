@@ -194,12 +194,15 @@ def open_holds(voices: list) -> list:
     Anyone's hold holds — a copy can only keep a card waiting. A later
     `🔬 proof-observed` from the pipeline's key or a person discharges the
     operator's holds; only his signed answer discharges one naming the CEO's
-    press. An unsigned claim to be his answer discharges nothing."""
+    press. An unsigned claim to be his answer discharges nothing, and nor does
+    one whose signature could not be checked (DRE-4153)."""
     held: list = []
     for voice in voices:
         body = (voice.body or "").lstrip()
         if body.startswith(HOLD_MARK):
             held.append(_first_line(body))
+        elif voice.kind == spoken_thread.UNCHECKED:
+            continue  # neither his answer nor a refused one: it discharges nothing
         elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
             held = [h for h in held if CEO_PRESS not in h]
         elif (body.startswith(OBSERVED_MARK)
