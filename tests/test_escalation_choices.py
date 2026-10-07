@@ -370,10 +370,10 @@ def _brief_section() -> str:
 def _choices_paragraph(text: str) -> str:
     """The choices instruction, path replaced and whitespace collapsed, so the
     six copies can be compared word for word."""
-    start = text.index("Then write the choices as JSON")
-    end = text.index("is dropped and the reason is posted alone.", start)
-    words = text[start:end + len("is dropped and the reason is posted alone.")]
-    return " ".join(_PATH.sub("PATH", words).split())
+    flat = " ".join(_PATH.sub("PATH", text).split())
+    last = "is dropped and the reason is posted alone."
+    start = flat.index("Then write the choices as JSON")
+    return flat[start:flat.index(last, start) + len(last)]
 
 
 def _copies() -> dict:
