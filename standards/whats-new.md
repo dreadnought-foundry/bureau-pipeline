@@ -51,10 +51,10 @@ What's new: <kind>, <audience>: <sentence> [<second sentence>] [(open: </path>)]
 
 Add the line to the body (`gh pr edit <n> --body-file <file>`), then push ONE
 empty commit to the same branch (`git commit --allow-empty`) — never a diff
-change. The critic reviews only a new head and a body edit alone re-runs
-nothing (the fix agent's one exception, DRE-5632). A gate hold with an approval
-already standing is answered the same way: the approval carries across the
-unchanged diff.
+change (the fix agent's one exception, DRE-5632): a bot's body edit re-runs
+nothing. Where the review stub lists `edited` (DRE-6192), a person's edit to the
+description of a sent-back pull request re-runs the review by itself. A held
+one with an approval standing is answered the same way: the approval carries.
 
 ## When the rule bites
 

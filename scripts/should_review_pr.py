@@ -57,6 +57,18 @@ to move back to Hand-work. Marking the PR ready for review fires the review
 dispatched re-review too (`--requested`), the second way a critic reaches a
 draft. An unreadable flag reviews — this step's fail-soft direction.
 
+DRE-6192 adds the one event that reviews only by exception: `edited`. On
+agent-bureau #3323 (2026-10-07) the critic sent a proof record back for a
+missing `What's new:` line, a person fixed the description by hand, and the
+pull request sat until someone re-ran the review — nobody pushed, so nothing
+fired. An `edited` event (`--event-action edited`) reviews when all three
+hold: the body changed (`--body-changed`, the payload's `changes.body`), the
+newest qa-bot verdict is REQUEST_CHANGES bound to the current head
+(`--head-sha`), and the editor is not a Bot (`--sender-is-bot`). Every other
+edit skips, and a standing APPROVE still prints its carry. Only a person's
+edit counts because the critic never edits a body and the fix agent always
+pushes after its own (DRE-5632), so the path cannot loop.
+
 Exit 0 → review (run the critic). Exit 1 → skip. Prints `review=true|false`
 on stdout for the workflow to capture as a step output, plus `carried_sha=`
 and `content_id=` on a carry skip so the workflow can re-publish the
@@ -151,6 +163,43 @@ def carried_approve(
     ):
         return None
     return sha
+
+
+def edit_rereviews(
+    comments,
+    qa_login: str,
+    head_sha: str | None,
+    body_changed: bool,
+    sender_is_bot: bool,
+) -> bool:
+    """True when a pull request's `edited` event deserves a review
+    (DRE-6192): a person changed the body while the critic's REQUEST_CHANGES
+    stands on the unchanged head.
+
+    The verdict is read through merge_gate exactly as carried_approve reads
+    it — same authorship filter, same anchored parse — so a forged or quoted
+    REQUEST_CHANGES is invisible and can never start a review. The NEWEST
+    verdict decides: one already answered by an APPROVE starts nothing.
+
+    A verdict on an older sha is a skip, not a review: the push that moved
+    the head already started the review of it. No condition reads WHAT the
+    findings were about — no machine-readable signal for "a body finding"
+    exists — so a person's edit after a code finding costs one review that
+    repeats the finding, bounded by needing a person's edit each time.
+    """
+    if not body_changed or sender_is_bot or not head_sha or not qa_login:
+        return False
+    line = merge_gate.first_line(
+        merge_gate.latest_verdict_comment(
+            comments or [], qa_login, merge_gate.CRITIC_MARKER
+        )
+    )
+    if not line:
+        return False
+    if (merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER)
+            != "REQUEST_CHANGES"):
+        return False
+    return merge_gate.verdict_sha(line) == head_sha
 
 
 def should_review(
@@ -270,6 +319,18 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--requested", action="store_true",
                     help="a dispatched re-review: reviewed on request unless "
                          "the PR is a draft — no carry is consulted")
+    ap.add_argument("--event-action", default="",
+                    help="the pull_request event's `action`; only `edited` "
+                         "changes the decision (DRE-6192)")
+    ap.add_argument("--body-changed", default="",
+                    help="`true` when an `edited` payload carries "
+                         "changes.body; anything else is a title-only edit")
+    ap.add_argument("--sender-is-bot", default="",
+                    help="`false` when the editor is a person; anything "
+                         "else, unreadable included, is not a person's edit")
+    ap.add_argument("--head-sha", default="",
+                    help="the PR's current head, which the REQUEST_CHANGES "
+                         "must be bound to for an edit to review")
     return ap
 
 
@@ -278,6 +339,38 @@ def _draft(raw: str) -> bool:
     is an unreadable flag, and an unreadable flag reviews: skipping on a
     guess is the expensive mistake here, not reviewing."""
     return (raw or "").strip().lower() == "true"
+
+
+def _decide_edit(args, comments, carried, head_content_id) -> int:
+    """Print the `edited` event's decision (DRE-6192). Its fail direction is
+    the opposite of every other path's: an edit added a review that did not
+    exist before, so an unreadable fact SKIPS — only a literal `true` body
+    change and a literal `false` bot flag admit the edit."""
+    branch = args.branch
+    if edit_rereviews(
+        comments, args.qa_login, args.head_sha,
+        body_changed=_draft(args.body_changed),
+        sender_is_bot=(args.sender_is_bot or "").strip().lower() != "false",
+    ):
+        print("review=true")
+        print(
+            f"will re-review {branch!r} — a person edited the description "
+            f"while the critic's REQUEST_CHANGES stands on {args.head_sha} "
+            "(DRE-6192)"
+        )
+        return 0
+    print("review=false")
+    if carried:
+        # A standing APPROVE takes today's carry path: the workflow
+        # re-publishes the head-bound check exactly as on a push.
+        print(f"carried_sha={carried}")
+        print(f"content_id={head_content_id}")
+    print(
+        f"skipping {branch!r} — an edit reviews only when a person changes "
+        "the description while the critic's REQUEST_CHANGES stands on the "
+        "unchanged head (DRE-6192)"
+    )
+    return 1
 
 
 def main(argv: list[str]) -> int:
@@ -309,6 +402,8 @@ def main(argv: list[str]) -> int:
     carried = carried_approve(
         comments, args.qa_login, head_content_id, pr_commit_shas
     )
+    if args.event_action == "edited":
+        return _decide_edit(args, comments, carried, head_content_id)
     review = should_review(
         branch, comments=comments, qa_login=args.qa_login,
         head_content_id=head_content_id, pr_commit_shas=pr_commit_shas,

@@ -23,15 +23,31 @@ on:
     # ready is the event that starts its review. A product-repo stub needs the
     # same type: one that does not list it reviews a PR marked ready only on
     # its next push, because no sweep dispatches a review that never ran.
-    types: [opened, reopened, synchronize, ready_for_review]
+    # `edited` (DRE-6192): a person's fix to the description of a pull
+    # request the critic sent back re-reviews it with no push. The reusable
+    # decides which edits review — only a person's body edit while the
+    # critic's REQUEST_CHANGES stands on the unchanged head — so every other
+    # edit is a skip. A product-repo stub opts in with the same type and the
+    # same concurrency group below.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
   workflow_dispatch:
     inputs:
       pr_number:
         description: PR number to review
         required: true
 
+# An `edited` run gets a group of its OWN (DRE-6192). A run joins its group
+# when it is created, before any `if:` or step runs, so an edit sharing the
+# push group would cancel a review in progress and then decide to skip — the
+# review lost, with nothing to re-ask for it. The pipeline edits bodies near
+# reviews (on agent-bureau #3323 the bot edited the body 9 seconds before the
+# review run was created). The same hole would survive inside one edited
+# group, so an edit that can review — a body change by a sender typed and not
+# a Bot, the script's own admission rule — takes `-edited`, and every other
+# edit, which always skips, takes `-edited-other`. A skip then cancels only a
+# skip, and a person's newer body edit replaces the review of the older one.
 concurrency:
-  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}${{ github.event.action == 'edited' && (github.event.changes.body && github.event.sender.type && github.event.sender.type != 'Bot' && '-edited' || '-edited-other') || '' }}
   cancel-in-progress: true
 
 permissions:
