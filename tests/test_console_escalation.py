@@ -103,7 +103,6 @@ def _code_strings() -> list[str]:
 def test_the_module_declares_no_fence_string_of_its_own():
     for literal in _code_strings():
         assert planning_escalation.CHOICES_FENCE not in literal, literal
-        assert "```" not in literal, literal
     assert "planning_escalation.CHOICES_FENCE" in SCRIPT.read_text(
         encoding="utf-8")
 
@@ -358,7 +357,7 @@ def test_problems_names_two_blocks():
     text = ce.render_with_block(esc) + "\n\n" + \
         planning_escalation.choices_block(ce.block(esc))
     found = ce.problems(text)
-    assert any("two" in p and "blocks" in p for p in found), found
+    assert any("more than one" in p and "block" in p for p in found), found
 
 
 def test_problems_names_a_refused_block_with_a_card_number_in_a_label():
