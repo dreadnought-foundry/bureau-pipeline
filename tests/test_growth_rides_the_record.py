@@ -82,10 +82,19 @@ def _is_single_epic_read(query: str) -> bool:
 
 def _record(identifier: str, *, comments: int = 3, uuid: bool = True,
             children=(("DRE-2701", BEFORE),)) -> dict:
-    """One epic in `EPIC_RECORD_GQL`'s shape, first comment page included."""
+    """One epic in `EPIC_RECORD_GQL`'s shape, first comment page included.
+
+    Its description already holds the growth record its children imply — the
+    steady state these read counts are about. An epic that owes a write is
+    read once more before it is written (DRE-6162's guard), and that read is
+    the guard's price, not a read the growth report takes for its record.
+    """
+    planned = sum(1 for _, at in children if at < GREEN_LIGHT)
     record = {
         "identifier": identifier,
-        "description": "",
+        "description": mid_epic.merge_artifact(
+            "", mid_epic.render_artifact(planned, len(children), [], [])
+        ),
         "state": {"name": "In Progress"},
         "children": {"nodes": [
             {"identifier": i, "createdAt": at, "state": {"name": "Todo"}}

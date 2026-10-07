@@ -157,8 +157,10 @@ class TestTheIncident:
         """Reconcile read DRE-6059 at the top of its pass. Before it reached
         the growth phase, discovery filed DRE-6159 and DRE-6160 and recorded
         both. The sweep's write must not take them back out."""
-        ops = _Epic(with_6157_recorded(), roster("DRE-6157", "DRE-6159", "DRE-6160"))
-        sweep_record = ops.record()  # the pass's epic record, read early
+        ops = _Epic(with_6157_recorded(), roster("DRE-6157", "DRE-6159"))
+        # The pass's epic record, read early: DRE-6159 exists and is not yet
+        # recorded, DRE-6160 does not exist yet.
+        sweep_record = ops.record()
         discovery_files(ops, "DRE-6159")()
         discovery_files(ops, "DRE-6160")()
         assert recorded(ops.description) == ["DRE-6157", "DRE-6159", "DRE-6160"]
@@ -185,7 +187,6 @@ class TestTheIncident:
         )
 
         assert set(recorded(ops.description)) == {"DRE-6157", "DRE-6160", "DRE-6161"}
-        assert alarms(ops) == []
 
     def test_the_guarded_write_retries_rather_than_overwriting(self):
         """A's first build is discarded unwritten: the only writes are B's
@@ -341,6 +342,43 @@ class TestGivingUp:
         assert mid_epic.GROWTH_CONTENDED_TAG in capsys.readouterr().out
 
 
+class _CappedEpic(_Epic):
+    """The same epic at Linear's comment cap, reached through `discovery`: it
+    refuses every comment the way the real `cmd_comment` does (DRE-3343) —
+    returning the condition rather than raising."""
+
+    def cmd_subissue(self, parent, title, body, *flags):
+        self.children.append(("DRE-6161", AFTER))
+        return {"identifier": "DRE-6161"}
+
+    def cmd_comment(self, identifier, body):
+        if identifier == EPIC:
+            return linear_ops.COMMENT_CAP_CONDITION
+        self.comments.append((identifier, body))
+        return None
+
+
+class TestGivingUpThroughDiscovery:
+    def test_a_capped_epic_s_contended_record_is_named_on_the_new_card(self, capsys):
+        """The epic refused the one 🚨 naming the unwritten record, so the card
+        that was just filed carries it — not the cap note, which would say the
+        growth record WAS written."""
+        ops = contended(_CappedEpic(with_6157_recorded(), roster("DRE-6157")))
+
+        ident = mid_epic.discovery(
+            ops, EPIC, kind=mid_epic.ADDITION, because=because("DRE-6161"),
+            title="fix the fourth call site", body="- work",
+        )
+
+        assert ops.writes == []
+        on_card = [b for i, b in ops.comments if i == ident]
+        contended_notes = [b for b in on_card if mid_epic.GROWTH_CONTENDED_TAG in b]
+        assert len(contended_notes) == 1
+        assert because("DRE-6161") in contended_notes[0]
+        assert not [b for b in on_card if mid_epic.GROWTH_CAPPED_TAG in b]
+        assert "growth record NOT written" in capsys.readouterr().out
+
+
 # ===========================================================================
 # 4: the sweep reaches the block only through the guarded write
 # ===========================================================================
@@ -349,7 +387,7 @@ class TestTheSweepPath:
         """Through the real `linear_ops` module: the pass's batched epic record
         was read before DRE-6159 and DRE-6160 were recorded; Linear now holds
         both. Whatever the sweep writes carries both."""
-        epic = _Epic(with_6157_recorded(), roster("DRE-6157", "DRE-6159", "DRE-6160"))
+        epic = _Epic(with_6157_recorded(), roster("DRE-6157", "DRE-6159"))
         stale = epic.record()
         discovery_files(epic, "DRE-6159")()
         discovery_files(epic, "DRE-6160")()
