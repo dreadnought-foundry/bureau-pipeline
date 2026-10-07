@@ -1531,6 +1531,13 @@ jobs:
                judgement only a person can make, do NOT push anything: write
                your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
                a HUMAN, and the card is parked until one answers.
+               NOTHING TO FIX is not that (DRE-6018). When no blocking finding
+               is open on the current head — the critic has approved it since,
+               or the review of a newer head is still running — push nothing
+               and write one line to that same file whose first words are
+               exactly "Nothing to fix", then why. The pipeline checks the
+               thread itself: with nothing open it posts one quiet line and
+               parks nothing; with a finding still open it escalates as usual.
             6b. REFUTED is different, and it is the file to choose when you can
                SETTLE the disagreement rather than escalate it (DRE-3084).
                Write ${{ steps.handoff.outputs.refutation }} — and nothing to
