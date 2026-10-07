@@ -58,22 +58,9 @@ excluded ones are.
 `render_report` always prints Agreement AND Disagreement. An audit that prints
 only its hits is a marketing document.
 
-## The replay harness — what must not happen
-
-A replay freezes an already-planned epic at its **pre-plan text**, files it as a
-throwaway `PROOF-PL-<n>` epic labelled `repo:agent-bureau-demo` so nothing ships,
-lets `plan.yml` plan it, and scores the new plan against the same history. Two
-rules bound it, both enforced here rather than remembered:
-
-  * `replay_problems` refuses a replay card that is not labelled for the demo
-    repo, or whose title is not a throwaway.
-  * `plan_leaks` refuses a replay whose context contains the historical plan. A
-    replay that was shown the answer is not a replay; it is DISCARDED and the
-    leak is recorded (`leak_record`), never silently scored.
-
 Pure functions over records with one thin CLI seam — no Linear client and no
-GitHub calls inside the scoring — so the workflow, the tests and a hand run all
-exercise the same code.
+GitHub calls inside the scoring — so the split ledger, the tests and a hand run
+all exercise the same code.
 
 CLI:
 
@@ -81,8 +68,6 @@ CLI:
     python3 scripts/planner_score.py score --epic DRE-N [--out J] [--report M]
     python3 scripts/planner_score.py collect-month --month 2026-09
     python3 scripts/planner_score.py split-rate [--month 2026-09] [--report M]
-    python3 scripts/planner_score.py replay-card --epic DRE-N --n 1 [--out J]
-    python3 scripts/planner_score.py leak-check --plan P --context C
 
 ## The split rate (DRE-3079)
 
@@ -219,15 +204,6 @@ class AuditError(RuntimeError):
     """The reference file is malformed. Raised rather than defaulted: a
     reference that silently loses a dimension reports a smaller audit in the
     same shape of number."""
-
-
-class LeakedPlan(RuntimeError):
-    """The replay was shown the plan it is being scored against.
-
-    Refused rather than scored. A replay that can read the historical plan is
-    not "a review it has never seen" — it is a transcription exercise, and its
-    agreement means nothing.
-    """
 
 
 # --------------------------------------------------------------------------- #
@@ -395,13 +371,6 @@ def reference_problems(doc: dict | None = None) -> list:
             f"{CONTAMINATED_DIMENSION!r} is scored — plan.yml bounces the epic "
             "until the proof card exists, so every row it produces was handed over "
             "face-up (DRE-2685)"
-        )
-
-    if REPLAY_REPO not in validate_card.VALID_SLUGS:
-        problems.append(
-            f"the replay files its epics in {REPLAY_REPO!r}, which the rail "
-            "does not route — a throwaway card nothing picks up is a card "
-            "nobody notices, in the wrong place"
         )
     return problems
 
@@ -1016,7 +985,7 @@ def _proof_and_demo_rows(epic, children) -> list:
 
 
 def score(epic: dict, children: list, *, doc: dict | None = None,
-          replay: dict | None = None, ledger=None) -> dict:
+          ledger=None) -> dict:
     """Score one epic's plan against what its children actually did.
 
     Every row comes out carrying exactly one outcome — agree, disagree,
@@ -1024,21 +993,10 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
     population is the same failure as a silent zero: a smaller set reported in
     the same shape.
 
-    `replay`, when given, is `{"epic", "context", "plan"}` from a replay run.
-    A replay whose context contains the historical plan is DISCARDED: `score`
-    raises `LeakedPlan` rather than reporting a number it cannot stand behind.
-
     `ledger` is the split ledger `split-rate` reads; `None` reads the shipped
     `config/split-ledger.json` (DRE-5314).
     """
     doc = doc if doc is not None else load()
-    leaks: list[str] = []
-    if replay is not None:
-        leaks = plan_leaks(replay.get("context") or "", replay.get("plan") or "")
-        if leaks:
-            raise LeakedPlan(leak_record(replay.get("epic") or epic["identifier"],
-                                         leaks))
-
     rows = (_footprint_rows(children) + _collision_rows(children)
             + _size_rows(children) + _readiness_rows(children)
             + _routing_rows(children) + _approval_rows(epic, children)
@@ -1073,273 +1031,7 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
         "rows": final,
         "counts": counts,
         "scored": counts["agree"] + counts["disagree"],
-        "replay": {"leaks": leaks, **({"epic": replay.get("epic")}
-                                      if replay else {})} if replay else None,
     }
-
-
-# --------------------------------------------------------------------------- #
-# the replay harness                                                           #
-# --------------------------------------------------------------------------- #
-
-#: The one repo a replay may file a card in. Nothing ships from it and no
-#: product sweep sees it.
-REPLAY_REPO = "agent-bureau-demo"
-
-#: The throwaway title prefix, so a replay epic is recognisable at a glance and
-#: cannot be mistaken for real work.
-REPLAY_PREFIX = "PROOF-PL-"
-
-#: The labels a replay epic carries. `agent:planner` because the point is to
-#: make `plan.yml` plan it; the repo label is the routing source of truth.
-REPLAY_LABELS = (f"repo:{REPLAY_REPO}", "agent:planner")
-
-
-def replay_title(source_epic: str, n: int) -> str:
-    return f"{REPLAY_PREFIX}{int(n)}: replay of {source_epic} (throwaway)"
-
-
-def replay_card(source_epic: str, n: int, body: str) -> dict:
-    """The throwaway epic a replay files: the source epic frozen at its
-    pre-plan text, in the demo repo, under a throwaway title."""
-    return {
-        "title": replay_title(source_epic, n),
-        "body": pre_plan_text(body),
-        "labels": list(REPLAY_LABELS),
-        "source_epic": source_epic,
-    }
-
-
-def replay_problems(card: dict) -> list:
-    """Everything that would let a replay escape the demo repo, or an empty list.
-
-    The card's one hard rule: the harness never writes to a product repo and
-    never files a card outside `repo:agent-bureau-demo`. Checked here, before
-    anything is created, because the cheapest place to stop a card being filed
-    in the wrong repo is before it exists.
-    """
-    problems: list[str] = []
-    labels = list(card.get("labels") or ())
-    slugs = [label.split(":", 1)[1] for label in labels
-             if label.startswith("repo:") and ":" in label]
-    if not slugs:
-        problems.append(
-            "the replay card carries no repo: label, so the relay would route "
-            f"it by inference — it must name {REPLAY_REPO} explicitly"
-        )
-    for slug in slugs:
-        if slug != REPLAY_REPO:
-            problems.append(
-                f"the replay card is labelled repo:{slug} — a replay may only "
-                f"file cards in {REPLAY_REPO}, and never in a product repo"
-            )
-    if not (card.get("title") or "").startswith(REPLAY_PREFIX):
-        problems.append(
-            f"the replay card's title does not open with {REPLAY_PREFIX} — a "
-            "throwaway epic that does not say so is a real epic to everyone "
-            "who reads the board"
-        )
-    if not (card.get("body") or "").strip():
-        problems.append("the replay card has no body — there is nothing to plan")
-    return problems
-
-
-def pre_plan_text(description: str) -> str:
-    """The epic as the CEO wrote it: the description with the planner's own
-    managed region taken out.
-
-    `mid_epic` splices the epic's growth record into the description, and that
-    record is planner output — how many cards the plan was green-lit at, which
-    ones joined later. Handing it to a replay is handing back a piece of the
-    plan the replay is supposed to reproduce.
-    """
-    text = description or ""
-    begin, end = mid_epic.ARTIFACT_BEGIN, mid_epic.ARTIFACT_END
-    while begin in text and end in text:
-        head, _, rest = text.partition(begin)
-        _, _, tail = rest.partition(end)
-        text = head.rstrip() + "\n" + tail.lstrip("\n")
-    return text.strip() + "\n"
-
-
-#: Lines short enough, or common enough, that finding them in a replay's
-#: context says nothing. `## The cards` is in every plan artifact AND in the
-#: planner's brief; reporting it would make every replay a leak, which is
-#: exactly as useful as reporting none.
-_LEAK_MIN_WORDS = 6
-
-
-def _leak_candidates(plan: str) -> list:
-    out = []
-    for line in (plan or "").splitlines():
-        stripped = line.strip().lstrip("#-*+ ").strip()
-        if len(stripped.split()) < _LEAK_MIN_WORDS:
-            continue
-        out.append(stripped)
-    return out
-
-
-def _normalise(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip().lower()
-
-
-def plan_leaks(context: str, plan: str) -> list:
-    """Lines of the historical plan that appear in the replay's context.
-
-    A replay is "a review it has never seen" only while the planner cannot read
-    the answer. This is the mechanical check on that claim: distinctive lines of
-    the historical plan, looked for in whatever the replay run was handed.
-
-    Deliberately conservative in one direction and not the other. Short and
-    boilerplate lines are ignored, because a check that fires on `## The cards`
-    fires on every replay and gets switched off. Anything longer is reported,
-    because a false leak costs one discarded replay and a missed one costs the
-    whole result.
-    """
-    haystack = _normalise(context)
-    if not haystack:
-        return []
-    return [line for line in _leak_candidates(plan)
-            if _normalise(line) in haystack]
-
-
-def historical_plan(children: list) -> str:
-    """The plan a replay must not see, rendered from the cards it produced.
-
-    The plan is not a document filed somewhere — it is the decomposition, and
-    the decomposition IS the children: their titles, what each one says to
-    build, the footprint each declares. Rendering them here means `leak-check`
-    compares the frozen epic text against the real answer rather than against a
-    write-up that may or may not still exist.
-    """
-    out = []
-    for child in children:
-        # The title goes on a line of its OWN, never inside the heading with
-        # the identifier: `plan_leaks` compares whole lines, and a title glued
-        # to `DRE-1 —` matches nothing an epic description would ever contain.
-        out.append(f"## {child.get('identifier')}")
-        out.append("")
-        out.append(child.get("title") or "")
-        out.append("")
-        out.append((child.get("body") or "").strip())
-        out.append("")
-    return "\n".join(out)
-
-
-def leak_record(source_epic: str, leaks: list) -> str:
-    """The record of a discarded replay. The leak is written down, not just
-    refused — a replay quietly re-run until it comes out clean is the same
-    failure as an audit that prints only its hits."""
-    lines = [
-        f"🧪 planner-replay-leak: the replay of {source_epic} was DISCARDED — "
-        "the historical plan reached the planner's context, so this run was "
-        "not a plan it had never seen.",
-        "",
-        "**What leaked:**",
-        "",
-    ]
-    lines += [f"- `{line}`" for line in leaks]
-    lines += [
-        "",
-        "Nothing from this replay is scored. Fix the context the replay is "
-        "handed, then run it again — a replay that saw the answer cannot be "
-        "salvaged by scoring it more carefully.",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-# --------------------------------------------------------------------------- #
-# diffing a replay's plan against the historical one                           #
-# --------------------------------------------------------------------------- #
-
-#: The columns of a plan's shape, in the order the diff prints them, each with
-#: the one sentence that says how to read it.
-SHAPE_COLUMNS = (
-    ("cards", "how many cards the epic was cut into"),
-    ("with-footprint", "cards declaring a `**Files:**` line"),
-    ("footprint-collisions", "pairs whose DECLARED footprints intersect"),
-    ("serialized-pairs", "pairs wired with a real `blockedBy` relation"),
-    ("with-verdict", "cards carrying a routing verdict"),
-    ("proof-and-demo", "the epic ends with its proof card"),
-)
-
-
-def plan_shape(children: list) -> dict:
-    """What a plan DECLARED, counted — with no reference to what happened next.
-
-    This is the half of a replay that can be compared without inventing
-    anything. A per-card diff would need a correspondence between the replay's
-    new cards and the historical children; nothing can establish that
-    mechanically, and with the footprint line missing from the population there
-    is not even a file list to match on.
-
-    Every count reads the planner's OUTPUT the way `proof_and_demo` does — the
-    cards themselves, out of Linear. `serialized-pairs` counts formal
-    `blockedBy` relations only: a `**Blocked by:**` prose line documents a
-    relation and cannot create one (DRE-2670, DRE-2676), so counting the
-    sentence would report a plan as serialized that the board never was.
-    """
-    footprints = {c["identifier"]: set(declared_files(c.get("body") or ""))
-                  for c in children}
-    titles = [c.get("title") or "" for c in children]
-    edges = 0
-    intersecting = 0
-    for a, b in itertools.combinations(sorted(footprints), 2):
-        by_id = {c["identifier"]: c for c in children}
-        if (b in (by_id[a].get("blocked_by") or [])
-                or a in (by_id[b].get("blocked_by") or [])):
-            edges += 1
-        if footprints[a] & footprints[b]:
-            intersecting += 1
-    return {
-        "cards": len(children),
-        "with-footprint": sum(1 for f in footprints.values() if f),
-        "footprint-collisions": intersecting,
-        "serialized-pairs": edges,
-        "with-verdict": sum(1 for c in children
-                            if claimed_verdict(c.get("comments") or ())),
-        "proof-and-demo": any(proof_and_demo.is_proof(t) for t in titles),
-    }
-
-
-def render_diff(before_epic: str, before: dict,
-                after_epic: str, after: dict) -> str:
-    """The replay's plan beside the plan it is replaying.
-
-    Deliberately says what it is NOT, in the document itself: a shape diff is
-    not a per-card comparison, and reading it as one would turn "the replay cut
-    five cards where the original cut three" into a claim about which cards.
-    """
-    out = [
-        f"# {after_epic} replaying {before_epic} — the two plans, side by side",
-        "",
-        f"**{before_epic}** is the plan that ran; **{after_epic}** is the "
-        "replay, planned from the same pre-plan text with the historical plan "
-        "held out.",
-        "",
-        "This is **not a per-card comparison.** Nothing can mechanically say "
-        "which replay card corresponds to which historical child, so what is "
-        "diffed is the SHAPE of the decomposition. Read a moved number as a "
-        "question to go and look at, never as a verdict on a card.",
-        "",
-        "| | " + before_epic + " | " + after_epic + " | how to read it |",
-        "| --- | --- | --- | --- |",
-    ]
-    for key, blurb in SHAPE_COLUMNS:
-        out.append(f"| `{key}` | {before.get(key)} | {after.get(key)} | {blurb} |")
-    out += [
-        "",
-        f"`{CONTAMINATED_DIMENSION}` is on this table for completeness and is "
-        "still excluded from every score: plan.yml bounces an epic until the "
-        "proof card exists, so both columns are the gate's answer rather than either "
-        "planner's.",
-        "",
-        f"What each plan then did is the other half — run `score` on "
-        f"{before_epic}. A replay's own children never merge (nothing ships "
-        "from the demo repo), so scoring the replay reports UNKNOWN on every "
-        "history row, which is correct and is why the shape is what moves.",
-    ]
-    return "\n".join(out) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -1393,9 +1085,6 @@ def render_report(result: dict, doc: dict | None = None) -> str:
       f"read, {counts['unclaimed']} were never claimed, {counts['excluded']} "
       "excluded as contaminated.")
     w("")
-    if (result.get("replay") or {}).get("leaks"):
-        w("**This replay leaked and is not a result.**")
-        w("")
 
     for heading, outcome, blurb in SECTIONS:
         rows = [r for r in result["rows"] if r["outcome"] == outcome]
@@ -1706,34 +1395,6 @@ def main(argv=None) -> int:
     rate.add_argument("--report", help="write the markdown report")
     rate.add_argument("--ledger", help=LEDGER_HELP)
 
-    card = sub.add_parser("replay-card",
-                          help="build and CHECK the throwaway replay epic")
-    card.add_argument("--epic", required=True)
-    card.add_argument("--n", type=int, required=True)
-    card.add_argument("--body-file", required=True,
-                      help="the source epic's description")
-    card.add_argument("--out", help="write the card as JSON")
-    card.add_argument("--body-out", help="write the frozen pre-plan text")
-
-    diffing = sub.add_parser(
-        "diff", help="the replay's plan beside the plan it is replaying")
-    diffing.add_argument("--before", required=True,
-                         help="the historical epic's collect JSON")
-    diffing.add_argument("--after", required=True,
-                         help="the replay epic's collect JSON")
-    diffing.add_argument("--out", help="write the markdown diff")
-
-    rendering = sub.add_parser(
-        "historical-plan", help="the cards the plan cut, as the leak reference")
-    rendering.add_argument("--from", dest="source", required=True,
-                           help="the epic's collect JSON")
-
-    leak = sub.add_parser("leak-check")
-    leak.add_argument("--plan", required=True, help="the historical plan")
-    leak.add_argument("--context", required=True, help="what the replay was handed")
-    leak.add_argument("--epic", required=True)
-    leak.add_argument("--record", help="write the leak record here")
-
     args = parser.parse_args(argv)
     command = args.command or "check"
 
@@ -1753,7 +1414,6 @@ def main(argv=None) -> int:
         payload = _stdin_json({})
         result = score(payload.get("epic") or {"identifier": args.epic},
                        payload.get("children") or [],
-                       replay=payload.get("replay"),
                        ledger=_ledger_arg(args.ledger))
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
@@ -1785,60 +1445,6 @@ def main(argv=None) -> int:
                 fh.write(report)
         print(report)
         return 0
-
-    if command == "replay-card":
-        with open(args.body_file, encoding="utf-8") as fh:
-            body = fh.read()
-        built = replay_card(args.epic, args.n, body)
-        problems = replay_problems(built)
-        for problem in problems:
-            print(f"  [FAIL] {problem}", file=sys.stderr)
-        if problems:
-            return 1
-        if args.out:
-            with open(args.out, "w", encoding="utf-8") as fh:
-                json.dump(built, fh, indent=2)
-        if args.body_out:
-            with open(args.body_out, "w", encoding="utf-8") as fh:
-                fh.write(built["body"])
-        print(built["title"])
-        return 0
-
-    if command == "diff":
-        with open(args.before, encoding="utf-8") as fh:
-            before = json.load(fh)
-        with open(args.after, encoding="utf-8") as fh:
-            after = json.load(fh)
-        report = render_diff(
-            before["epic"]["identifier"], plan_shape(before["children"]),
-            after["epic"]["identifier"], plan_shape(after["children"]),
-        )
-        if args.out:
-            with open(args.out, "w", encoding="utf-8") as fh:
-                fh.write(report)
-        print(report)
-        return 0
-
-    if command == "historical-plan":
-        with open(args.source, encoding="utf-8") as fh:
-            print(historical_plan(json.load(fh)["children"]))
-        return 0
-
-    if command == "leak-check":
-        with open(args.plan, encoding="utf-8") as fh:
-            plan = fh.read()
-        with open(args.context, encoding="utf-8") as fh:
-            context = fh.read()
-        leaks = plan_leaks(context, plan)
-        if not leaks:
-            print(f"no leak: the replay of {args.epic} never saw the plan")
-            return 0
-        record = leak_record(args.epic, leaks)
-        if args.record:
-            with open(args.record, "w", encoding="utf-8") as fh:
-                fh.write(record)
-        print(record, file=sys.stderr)
-        return 1
 
     parser.print_usage(sys.stderr)
     return 2
