@@ -67,7 +67,8 @@ Env (harness.yml sets all of these):
                         minutes, optional — how often a wait stops to ask
                         whether the SANDBOX is still alive (DRE-3076). The
                         deadline is not a shorter budget: a healthy-but-slow
-                        sandbox keeps its full one. `0` switches the check off.
+                        sandbox keeps its full one. `0` switches the check off,
+                        and the queue-stall re-kick with it (DRE-6147).
 
 Exit 0 iff every selected scenario passed; 1 if one failed; 2 on a bad
 invocation; `framework.BLOCKED_EXIT` (3) when the SANDBOX blocked the run —
@@ -473,6 +474,14 @@ def main(argv=None) -> int:
     sandbox_probe = (
         sandbox_health.probe((gh_qa, gh), args.repo) if deadline > 0 else None
     )
+    # A sandbox run GitHub left queued with no jobs is re-kicked rather than
+    # waited out (DRE-6147). One watch for the whole run, so a run re-kicked
+    # in one scenario's wait is not given fresh re-kicks by the next. It
+    # cancels and re-runs, which is the worker's write — and a write into the
+    # sandbox, so the operator's off switch turns it off with the probe.
+    queue_watch = (
+        sandbox_health.QueueWatch(gh, args.repo) if deadline > 0 else None
+    )
     if deadline > 0:
         print(
             f"note: each wait checks the sandbox's own sweep/gate/linear-sync "
@@ -481,6 +490,12 @@ def main(argv=None) -> int:
             f"{framework.IDLE_PROBE_LIMIT} consecutive checks finding the "
             f"sandbox has started nothing end the wait as "
             f"'the sandbox will not do this'"
+        )
+        print(
+            f"note: a sandbox run queued with no jobs for "
+            f"{framework.QUEUE_STALL_SECONDS / 60:.0f} min is cancelled and "
+            f"re-run, up to {framework.QUEUE_REKICK_LIMIT} times, then the "
+            f"run ends blocked by a GitHub queue stall"
         )
     else:
         print(
@@ -531,6 +546,7 @@ def main(argv=None) -> int:
             ),
             wait_deadline=deadline,
             sandbox_probe=sandbox_probe,
+            queue_watch=queue_watch,
         )
         result = framework.run_scenario(available[name], ctx)
         results.append(result)

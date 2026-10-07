@@ -209,6 +209,7 @@ strings instead of the same silence:
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
 | `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
+| `harness-blocked-by-github-queue` | GitHub left a sandbox run queued with no jobs, and it stayed stuck through the harness's two re-runs (DRE-6147) | nothing proven either way; GitHub's queue, not the code — the next run re-proves this trunk |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 | `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |
