@@ -452,7 +452,7 @@
       "tag": "fix-attempt-blocked",
       "adopted": false,
       "kind": "hold",
-      "means": "The fix agent hit a blocker — it disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong.",
+      "means": "The fix agent hit a blocker and stopped without pushing — it disagrees with the reviewer's blocking finding, or the commit is approved and a check it could not fix is red. The PR comment and the card receipt name the same cause, from scripts/fix_exit.py blocked_cause (DRE-5745).",
       "state": "escalated",
       "next_actor": "operator",
       "discharges": null,
@@ -1633,11 +1633,11 @@
     },
     {
       "file": ".github/workflows/agent-fix.yml",
-      "anchor": "🙋 The fix agent disagrees with the reviewer's blocking finding",
+      "anchor": "🙋 $CAUSE This needs your call.",
       "step": "Report",
       "kind": "undeclared-act",
-      "means": "The card-side half of `fix-attempt-disputed`: the fixer refused the finding, pushed nothing, and the card goes to a human.",
-      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act. Admitting a second surface for it is a REGISTRY change — not an emission change, and this card converts what the registry declares. Named here so the pair stays countable rather than invisible. Its PR-side half composes `fix-attempt-disputed` eleven lines above it in this same step."
+      "means": "The card-side half of `fix-attempt-disputed`: the fixer stopped without pushing, the card opens with the same cause the PR comment names (DRE-5745), and the card goes to a human.",
+      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act. Admitting a second surface for it is a REGISTRY change — not an emission change, and this card converts what the registry declares. Named here so the pair stays countable rather than invisible. Its PR-side half composes `fix-attempt-disputed` ten lines above it in this same step, and both halves carry the one cause `fix_exit.py cause` gives."
     },
     {
       "file": ".github/workflows/agent-fix.yml",

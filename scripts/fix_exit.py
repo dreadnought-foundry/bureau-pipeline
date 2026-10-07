@@ -48,7 +48,18 @@ cannot dispatch quiet runs forever.
 Verdicts are read with the merge gate's own grammar (`merge_gate`), from the
 critic's identity only, so a quoted or planted verdict is not one.
 
-Tests: tests/test_fix_exit_classified.py.
+THE CAUSE (DRE-5745). A round that does escalate as a blocker names its cause
+once, in `blocked_cause`, and the Report step says that same sentence on the
+PR (after `CAUSE_LABEL`) and at the head of the card receipt. On portico #883
+(2026-10-02) the critic had approved the head and the only red check was a CI
+time limit, yet the card said "The fix agent disagrees with the reviewer's
+blocking finding" — a fixed template beside a PR comment that had it right.
+The disagreement (`DISPUTE_CAUSE`) is named only while a blocking finding is
+open at the head. An APPROVE at the head names the red checks instead, read
+from the head's check runs with unfixable_checks.py's conclusions. A thread or
+head that cannot be read claims neither (`UNKNOWN_CAUSE`).
+
+Tests: tests/test_fix_exit_classified.py, tests/test_fix_blocked_cause.py.
 
 CLI (the seam scripts/report_fix_result.sh uses):
 
@@ -57,6 +68,10 @@ CLI (the seam scripts/report_fix_result.sh uses):
         prints the word on stdout's first line; writes the quiet line to
         --out only when the word is not `escalate`. Never exits non-zero on
         an unreadable input — that is an answer (`escalate`), not an error.
+
+    fix_exit.py cause --comments-json F --head SHA [--checks-json F]
+        prints the blocked attempt's one cause on one line. An unreadable
+        input is an answer here too: it claims less, never more.
 """
 
 from __future__ import annotations
@@ -78,6 +93,7 @@ from merge_gate import (
     verdict_sha,
     verdict_token,
 )
+from unfixable_checks import FAILED_CONCLUSIONS, _check_runs
 
 ESCALATE = "escalate"
 APPROVED = "approved"
@@ -85,6 +101,14 @@ NOTHING = "nothing-to-fix"
 
 #: What the quiet line opens with. Not 🛑 (a blocker) and not 🔧 (a push).
 QUIET_PREFIX = "🔕"
+
+#: A blocked attempt's cause (DRE-5745): one sentence, said on the PR after
+#: CAUSE_LABEL and opening the card receipt, from `blocked_cause` only.
+CAUSE_LABEL = "Why it stopped:"
+DISPUTE_CAUSE = ("The fix agent disagrees with the reviewer's blocking finding "
+                 "and stopped rather than force a change it believes is wrong.")
+UNKNOWN_CAUSE = ("The fix agent stopped without changing anything — its reason "
+                 "is on the pull request.")
 
 #: The fixer's own "nothing to fix", read from the opening words of its
 #: handoff only. The second form is DRE-5659's wording on portico #883.
@@ -121,6 +145,75 @@ def says_nothing_to_fix(text: str) -> bool:
     return bool(_NOTHING_RE.match(text or ""))
 
 
+def _open_finding(comments, head: str, qa_login: str) -> Optional[str]:
+    """Why a blocking finding is open at `head`, or None when none is."""
+    critic = _latest_structured(comments, CRITIC_MARKER, qa_login)
+    if critic and verdict_token(critic, CRITIC_MARKER) == "REQUEST_CHANGES" \
+            and verdict_sha(critic) in (head, None):
+        return "the critic's blocking finding is open at the head"
+    verifier = _latest_structured(comments, VERIFIER_MARKER, qa_login)
+    if verifier and verdict_token(verifier, VERIFIER_MARKER) == "FAIL" \
+            and verdict_sha(verifier) == head:
+        return "the Verifier's failure is open at the head"
+    return None
+
+
+def _red_checks(payload) -> Optional[list]:
+    """The head's failed check runs as "`name`" phrases, each name once, or
+    None when the payload is not check runs. Same conclusions as
+    unfixable_checks.py, so "failed" means one thing in the fix loop."""
+    try:
+        runs = _check_runs(payload)
+    except ValueError:
+        return None
+    named = []
+    for run in runs:
+        name = run.get("name") or ""
+        conclusion = run.get("conclusion") or ""
+        if not name or conclusion not in FAILED_CONCLUSIONS:
+            continue
+        phrase = f"`{name}`" + (" (timed out)" if conclusion == "timed_out" else "")
+        if not any(p.startswith(f"`{name}`") for p in named):
+            named.append(phrase)
+    return named
+
+
+def _listed(phrases: list) -> str:
+    if len(phrases) == 1:
+        return phrases[0]
+    return ", ".join(phrases[:-1]) + " and " + phrases[-1]
+
+
+def blocked_cause(comments, head: str, checks, qa_login: str = QA_BOT_LOGIN) -> str:
+    """The one sentence a blocked attempt's PR comment and card receipt both
+    carry (DRE-5745). `comments` is the thread now (None when unreadable),
+    `head` the pull request's head now, and `checks` the head's check-runs
+    payload (anything unreadable is no evidence of a red check).
+
+    A disagreement is named only when a blocking finding is open at the head.
+    An APPROVE at the head with a red check names the check, and nothing that
+    could not be read is claimed."""
+    if comments is None or not _SHA_RE.match(head or ""):
+        return UNKNOWN_CAUSE
+    if _open_finding(comments, head, qa_login):
+        return DISPUTE_CAUSE
+    critic = _latest_structured(comments, CRITIC_MARKER, qa_login)
+    approved = bool(critic) and verdict_token(critic, CRITIC_MARKER) == "APPROVE" \
+        and verdict_sha(critic) == head
+    red = _red_checks(checks) or []
+    if approved and red:
+        which = f"the failing check{'s' if len(red) > 1 else ''} {_listed(red)}"
+        return (f"The reviewer approved this commit — what blocks it is {which}, "
+                "and the fix agent stopped without changing anything.")
+    if approved:
+        return ("The reviewer approved this commit, and the fix agent stopped "
+                "without changing anything — its reason is on the pull request.")
+    if red:
+        return ("The fix agent stopped without changing anything. Failing on "
+                f"this commit: {_listed(red)}.")
+    return UNKNOWN_CAUSE
+
+
 def classify(comments, head: str, fetched_verdict: str = "", text: str = "",
              qa_login: str = QA_BOT_LOGIN) -> Exit:
     """How this round ended. `comments` is the thread as it stands now (None
@@ -135,13 +228,10 @@ def classify(comments, head: str, fetched_verdict: str = "", text: str = "",
     critic = _latest_structured(comments, CRITIC_MARKER, qa_login)
     critic_token = verdict_token(critic, CRITIC_MARKER) if critic else None
     critic_sha = verdict_sha(critic) if critic else None
-    verifier = _latest_structured(comments, VERIFIER_MARKER, qa_login)
 
-    if critic_token == "REQUEST_CHANGES" and critic_sha in (head, None):
-        return Exit(ESCALATE, "the critic's blocking finding is open at the head")
-    if verifier and verdict_token(verifier, VERIFIER_MARKER) == "FAIL" \
-            and verdict_sha(verifier) == head:
-        return Exit(ESCALATE, "the Verifier's failure is open at the head")
+    open_finding = _open_finding(comments, head, qa_login)
+    if open_finding:
+        return Exit(ESCALATE, open_finding)
 
     if critic_token == "APPROVE" and critic_sha == head:
         sent_with = first_line(fetched_verdict or "")
@@ -196,7 +286,21 @@ def main(argv=None) -> int:
     cl.add_argument("--attempt", required=True)
     cl.add_argument("--out", required=True)
     cl.add_argument("--qa-login", default=QA_BOT_LOGIN)
+    ca = sub.add_parser("cause", help="the one cause a blocked attempt names")
+    ca.add_argument("--comments-json", required=True)
+    ca.add_argument("--head", required=True)
+    ca.add_argument("--checks-json", default="")
+    ca.add_argument("--qa-login", default=QA_BOT_LOGIN)
     args = parser.parse_args(argv)
+
+    if args.cmd == "cause":
+        try:
+            checks = json.loads(_read(args.checks_json))
+        except ValueError:
+            checks = None
+        sys.stdout.write(blocked_cause(_thread(args.comments_json), args.head,
+                                       checks, args.qa_login) + "\n")
+        return 0
 
     result = classify(_thread(args.comments_json), args.head,
                       _read(args.verdict_file), _read(args.text_file),
