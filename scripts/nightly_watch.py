@@ -19,9 +19,10 @@ therefore does not alarm here — two alarms on one fact is how both get ignored
 What nothing watches is the run that **never happens**: a schedule GitHub
 disabled after 60 days of repo inactivity, a cron typo, a workflow that errors
 before any job starts, runs stuck in the queue. Nothing fails, because nothing
-ran. This is the `channel_watch.py` shape (DRE-2552) pointed at a different
-silence, and it raises its alarm through the same mechanism, so no new surface
-is added.
+ran. It is the shape of the retired channel-staleness alarm (DRE-2552,
+retired by DRE-6053) pointed at a different silence, and it raises its alarm
+through the same mechanism every pipeline alarm uses — one deduplicated Linear
+card — so no new surface is added.
 
 WHO IS WATCHED — COMPUTED, NEVER LISTED
 ---------------------------------------
@@ -81,7 +82,7 @@ This alarm reaches exactly as far as the mechanism it rides — one deduplicated
 Linear card — and no further. It does not fix delivery.
 
 The decision here is pure: no network, no clock of its own, the
-`channel_watch.py` shape. `collect()` takes the GitHub reader as an argument so
+`promote_channel.py` shape. `collect()` takes the GitHub reader as an argument so
 the whole gathering path is exercised in tests against a declared fleet.
 """
 
@@ -106,7 +107,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # as None (unknown), which is the whole of this module's honesty rule, and
 # `fleet_roster` is the same `config/repo-map.json` the relay routes on and the
 # groomer's lookup legs read.
-from channel_watch import _days as elapsed, hours_since  # noqa: E402
+from cron_clock import elapsed_days as elapsed, hours_since  # noqa: E402
 from check_workflow_watchers import on_block  # noqa: E402
 from gh_read_retry import GhReadError, read as gh_read  # noqa: E402
 from release_train import fleet_owners, fleet_roster as roster  # noqa: E402
@@ -126,14 +127,15 @@ INTERVAL_HOURS = 1.0
 #: How often a STANDING alarm says it again. Deliberately not the interval
 #: above: running hourly is how a missing nightly is FOUND within the hour, and
 #: re-confirming hourly is how the card becomes 24 comments a day that nobody
-#: reads. `channel-watch.yml` re-confirms daily and that is the rate that reads
-#: as deliberate rather than as a stuck process. Only the re-confirmation waits
+#: reads. Daily is the rate the pipeline's standing alarms have always
+#: re-confirmed at, and it reads as deliberate rather than as a stuck process. Only the re-confirmation waits
 #: — the card itself is filed on whichever hour the alarm first fires.
 RECONFIRM_AFTER_HOURS = 24.0
 
-#: …and the hour it speaks on, in UTC. 07:00 UTC, beside Channel Watch's 07:41,
-#: so the two standing alarms land in one morning rather than at two unrelated
-#: times of night.
+#: …and the hour it speaks on, in UTC. 07:00 UTC — a morning hour, chosen
+#: beside the channel-staleness alarm's 07:41 run while that job lived (it was
+#: retired by DRE-6053), so a standing alarm lands in the morning rather than
+#: at an unrelated time of night.
 RECONFIRM_HOUR_UTC = 7
 
 #: Per-nightly readings.
@@ -661,8 +663,8 @@ def _cmd_watch(args) -> int:
                 f"reconfirm={'true' if should_reconfirm(args.now or None) else 'false'}\n"
             )
     # A fleet whose nightlies all ran is the ordinary outcome, not a failure:
-    # the caller branches on `alarm`, never on an exit code (channel_watch's
-    # rule, and promote_channel's before it).
+    # the caller branches on `alarm`, never on an exit code (promote_channel's
+    # rule).
     return 0
 
 

@@ -1167,7 +1167,7 @@ def _channel_decision(surface, now, channel: Channel | None) -> Decision:
 
 def _for(elapsed: timedelta) -> str:
     """`11 hours` / `3 days` — the unit a human would have used, the
-    `channel_watch._days` reading."""
+    `cron_clock.elapsed_days` reading."""
     hours = max(0.0, elapsed.total_seconds() / 3600)
     if hours >= 48:
         value, unit = hours / 24, "day"

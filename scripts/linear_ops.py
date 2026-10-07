@@ -3141,7 +3141,7 @@ def validated_repo_slug(slug: str) -> str:
 
 def cmd_create(title: str, description_file: str, *flags: str) -> None:
     """Create a standalone card in Planning — the seam the medic, red-main-repair,
-    channel-watch and model-adoption mint a card through.
+    model-adoption and nightly-watch mint a card through.
 
     `--repo <slug>` is REQUIRED and becomes the card's `repo:<slug>` label; see
     `required_repo_slug` for why it is required rather than defaulted. The

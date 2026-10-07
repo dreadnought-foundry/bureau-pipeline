@@ -159,9 +159,8 @@ on:
 # `run_started_at == created_at` and was cancelled one to two seconds after
 # the next run in the group was created. Nothing in progress was ever killed.
 # Skipping an intermediate head is the intended trade; the skip is now
-# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), and the
-# staleness alarm counts those records to say "merge train" instead of
-# "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
+# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), so the
+# records can be counted to say "merge train" instead of "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
 concurrency:
   group: integration-harness-main
   cancel-in-progress: false

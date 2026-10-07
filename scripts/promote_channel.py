@@ -44,8 +44,9 @@ names which of four things happened:
     harness-failed                  a red trunk
     harness-passed-promoting        the channel moved
 
-machine-readably, so `channel_watch.py` can count merge trains instead of
-reporting the cause as unknown. Three more names cover the refusals that
+machine-readably, so a watcher can count merge trains instead of reporting
+the cause as unknown (the channel-staleness alarm did, until DRE-6053 retired
+it). Three more names cover the refusals that
 already existed and were equally silent: `channel-held`, `no-harness-stamp`,
 `not-ahead-of-channel`.
 
@@ -135,9 +136,8 @@ SUCCESS = "success"
 #: proved a commit that is not on the trunk.
 TRUNK = "main"
 
-#: The receipt vocabulary (DRE-3070). Stable strings: the staleness alarm and
-#: docs/self-hosting.md both name them, so they are constants here and nowhere
-#: else. The first three are the card's three reasons; the rest are the
+#: The receipt vocabulary (DRE-3070). Stable strings: docs/self-hosting.md
+#: names them, so they are constants here and nowhere else. The first three are the card's three reasons; the rest are the
 #: refusals that already existed and were equally unnamed. `docs/self-hosting.md`
 #: carries the same table, pinned by a test.
 OUTCOME_PROMOTING = "harness-passed-promoting"
@@ -442,8 +442,9 @@ def evaluate(
     # 2. The hold switch. Approved as a switch (D2), and the distinction is the
     #    whole lesson: a hold that is a switch is a control, a hold that is a
     #    habit is the July failure wearing a different hat. So it must be
-    #    explicit and it must say who stopped it and why — DRE-2552 alarms if
-    #    it persists.
+    #    explicit and it must say who stopped it and why — a held channel stops
+    #    advancing, and the console's channel-health monitor alarms on that
+    #    (DRE-6050).
     if hold and hold.strip():
         return Decision(False, (
             f"channel HELD — not promoting {sha}. Reason on record: "

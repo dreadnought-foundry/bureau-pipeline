@@ -1243,10 +1243,10 @@ the bot App identity, never `github.token`, precisely so `release-gate.yml`
 (whose trigger now reads `["v*", "stable"]`) actually fires and validates
 it; a repository variable, `CHANNEL_HOLD`, pauses promotion when set to a
 reason, and unset means run. **Write that reason as
-`who=<name> since=<ISO date> <why>`** — the staleness alarm below reports a
-held channel back to the CEO, and GitHub will not tell it who set a variable
-or when (that API needs an admin token the workflows do not carry), so a hold
-that skips the convention is reported as a hold nobody will own.
+`who=<name> since=<ISO date> <why>`** — GitHub will not say who set a
+variable or when (that API needs an admin token the workflows do not carry),
+so the reason is the only record of who owns the hold, and a hold that skips
+the convention is a hold nobody will own.
 
 **The fleet pins `@stable`, and has since 2026-08-23 (DRE-2553).** This
 section used to say the opposite — *"no product repo pins `@stable`;
@@ -1349,89 +1349,17 @@ Repair watches the harness on `main` (DRE-2820) and files the repair card.
 With several merges between two `main` runs, the failing run names a range of
 commits, not one.
 
-## Channel staleness alarm (DRE-2552)
+## Channel staleness alarm — retired (DRE-6053)
 
-Every other backstop in this repo watches for something **going wrong**.
-`channel-watch.yml` watches for something **ceasing to happen** — because
-that is the shape of the failure that hid July: the tag move did not break
-and the gate did not fail, the mechanism simply stopped being invoked, and no
-signal existed for "stopped". `main` ran 174 commits past `v5` over 29 days
-and nothing said so.
-
-The watcher runs daily, reads how far `main` is ahead of `stable` and how old
-the channel head is, and raises **one** deduplicated Linear card (the
-`red-main-repair.yml` pattern) — commenting on it daily
-while the condition lasts rather than minting a new one. It holds
-`contents: read` and cannot move the ref it watches. The decision, with the
-full derivation, is `scripts/channel_watch.py`.
-
-**The threshold, and where it came from.** Measured over `git log
-origin/main` from the first commit (2026-06-11) to 2026-08-20 — 522 commits
-across 70 days, 7.4/day:
-
-| Fact | Value |
-|---|---|
-| gap between commits | p50 0.06h · p90 3.3h · p95 15.2h · p99 62.4h |
-| longest quiet stretch ever | 257.9h = **10.7 days** |
-| commits in a 72h window | median 32, tenth percentile 8 |
-
-- **72 hours + 8 commits, both required.** 99.0% of observed gaps between
-  commits are shorter than 72h, so ordinary quiet never reaches it; a rounder
-  24h sits at the 96.9% mark and would fire most weekends. The **8 commits**
-  is the tenth-percentile count for a 72h window: below it the trunk was
-  unusually quiet and one slow harness run explains the lag, at or above it
-  promotion has *stopped* rather than lagged.
-- **14 days with a single unpromoted commit** — the backstop for a near-idle
-  trunk, which the pair above would miss. Longer than any quiet stretch main
-  has ever had (10.7 days above), so it cannot be ordinary.
-- **A channel with nothing to promote is silent by construction** (`ahead ==
-  0` never alarms). A noisy alarm gets muted, and a muted alarm on the thing
-  protecting the fleet is how we get back to July.
-- **24 hours for a hold.** A hold is true by construction, so this is a noise
-  threshold, not a false-positive one: a switch flipped and cleared inside a
-  working day stays private; one that outlives a day has blocked ~7 commits at
-  this cadence and is a habit forming. A held channel is reported as **held —
-  with who and when** — never as broken; unknown parts are printed as unknown
-  rather than guessed.
-- **A stale channel now names the commonest cause** (DRE-3070). The alarm
-  fires on *not moving*, which is what a merge train produces, and it used to
-  point at a promote-channel run log that in exactly that case held nothing:
-  a displaced harness run triggered no promotion attempt at all. Every
-  completed harness run now leaves a receipt naming one of
-  `harness-passed-promoting` · `harness-run-not-on-main` ·
-  `harness-cancelled-by-newer-push` · `harness-failed` · `channel-held` ·
-  `harness-blocked-by-sandbox` · `no-harness-stamp` · `not-ahead-of-channel`,
-  and the watcher counts the
-  harness runs on `main` that concluded `cancelled` since the channel head.
-  **Two or more and it says MERGE TRAIN**, not unknown — one skipped head is
-  the queue-behind rule working (GitHub keeps a single pending run per
-  concurrency group), two is merges arriving faster than the harness can prove
-  them — and it adds whether a run is proving main right now. The alarm's
-  *title* does not move with the diagnosis, so the card still dedups. See
-  `docs/self-hosting.md`, "Queue behind, never cancel".
-- **Where the hold's age comes from** (DRE-2603). The repository-variables API
-  needs admin scope and answers 403 to the workflow's token, so its answer is
-  used only when it *is* a timestamp — an error body is a failed read, never a
-  value, and is never rendered as a date. Failing that, the age is measured
-  from the `since=` the operator wrote into `CHANNEL_HOLD`. With neither, the
-  age is unknown and an unknown-age hold still alarms: failing loud is right,
-  it just must not be the only path, or the 24h above never applies.
-
-**So what if the watcher stops?** Two answers, and only one of them is
-mechanical:
-
-- **A red run is diagnosed.** `Channel Watch` is in the medic's watch list
-  (`self-medic.yml`), like every other runnable workflow here.
-- **A skipped run is reported by the next one.** Each run reads its own last
-  completed run and alarms if it missed more than two ticks.
-- **A watcher that stops for good is not detected by anything in this repo.**
-  Nothing polls for its absence. That is stated rather than papered over —
-  adding a sixth mechanism nobody checks would be Wave 0's mistake at one
-  more level of indirection.
+The console's channel-health monitor (agent-bureau,
+`console/backend/monitors/pipeline_channel_health.py`) raises the alarm when
+`stable` stops advancing, around the clock since DRE-6050. The daily job this
+repo ran for the same silence (DRE-2552) was retired on 2026-10-06; promotion,
+`CHANNEL_HOLD` and the receipts `promote_channel.py` writes are unchanged.
 
 ## Missing-nightly alarm (DRE-4805)
 
-The same shape of watcher, pointed at a different silence. PR CI now runs only
+A watcher for something ceasing to happen rather than going wrong. PR CI now runs only
 the suites a change can reach and a nightly `schedule:` run on `main` runs
 everything (`standards/engineering.md`, "CI: narrow per change, whole every
 night"), which makes the nightly **the only thing that runs the suites a pull
@@ -1440,8 +1368,8 @@ nobody knows.
 
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
-deduplicated Linear card through the same `linear_ops.py` mechanism
-`channel-watch.yml` uses. The decision is `scripts/nightly_watch.py`.
+deduplicated Linear card through `linear_ops.py`, the shape `red-main-repair.yml`
+files its card in. The decision is `scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
   in `config/repo-map.json`, whose file on the default branch triggers on
