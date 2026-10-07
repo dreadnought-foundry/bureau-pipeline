@@ -41,8 +41,10 @@ set -e
 #      in this repo, qa-review.yml elsewhere). If the dispatch fails, the
 #      card is parked. A second one on the same head posts
 #      `fix-attempt-disputed` with both quoted and parks the card.
-#    - Blocker: the agent disputes the finding and pushed nothing. It
-#      posts `fix-attempt-disputed` with the answer format and parks.
+#    - Blocker: the agent stopped and pushed nothing. `fix_exit.py cause`
+#      reads the thread and the head's check runs for the one cause, and
+#      it posts `fix-attempt-disputed` with the answer format and that
+#      cause, then parks with the same cause opening the card receipt.
 #    - The head did not move: `fix_dead_run.py decide` reads every page
 #      of the thread and answers retry (an outage), retry-turns (out of
 #      turns, retried once), hold-turns, hold, or anything else, which
@@ -194,6 +196,13 @@ set -e
 #   commit" and the head, so the convergence halt still bounds a loop of
 #   them. A conflict round is never classified: an APPROVE says nothing
 #   about a merge conflict.
+# 2026-10-07, DRE-5745, DRE-5659. A blocked attempt names one cause, on
+#   the PR and on the card. On portico #883 (2026-10-02) the critic had
+#   approved the head and the only red check was a CI time limit, yet the
+#   card got a fixed disagreement template while the PR comment had the
+#   real reason. `fix_exit.py cause` gives
+#   the sentence; the PR carries it after the act's trailer, so the body
+#   the registry froze is untouched, and the card receipt opens with it.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -356,6 +365,19 @@ $REFUTE_KEY"
     park_for_human
   fi
 elif [ "$BLOCKED_RC" -eq 0 ]; then
+  # One cause, said on the PR and on the card alike (DRE-5745).
+  if [ -z "${EXIT_THREAD:-}" ]; then
+    EXIT_THREAD=$(mktemp)
+    gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" \
+      > "$EXIT_THREAD" 2>/dev/null || : > "$EXIT_THREAD"
+  fi
+  CAUSE_CHECKS=$(mktemp)
+  [ -n "$HEAD_NOW" ] && gh api --paginate --slurp \
+    "repos/$REPO/commits/$HEAD_NOW/check-runs?per_page=100" \
+    > "$CAUSE_CHECKS" 2>/dev/null || : > "$CAUSE_CHECKS"
+  CAUSE=$(python3 .bureau-pipeline/scripts/fix_exit.py cause \
+    --comments-json "$EXIT_THREAD" --head "$HEAD_NOW" --checks-json "$CAUSE_CHECKS") || CAUSE=""
+  [ -n "$CAUSE" ] || CAUSE="The fix agent stopped without changing anything — its reason is on the pull request."
   # One receipt writer, and `|| printf` keeps the comment if it fails (DRE-2826).
   BLOCKED_BODY="🛑 Fix attempt $ATTEMPT blocked: $BLOCKER
 
@@ -363,13 +385,14 @@ $FORMAT"
   python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
     --body "$BLOCKED_BODY" --out /tmp/act-fix-blocked.md \
     || printf '%s' "$BLOCKED_BODY" > /tmp/act-fix-blocked.md
-  printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-blocked.md
+  # The cause rides after the trailer, so the body the registry froze is untouched.
+  printf '\n\nWhy it stopped: %s\n\n%s\n' "$CAUSE" "$ANSWERS" >> /tmp/act-fix-blocked.md
   gh pr comment "$PR" --repo $REPO \
     --body-file /tmp/act-fix-blocked.md
   # The fixer pushed nothing, so the card parks rather than stall in review.
   if [ -n "$CARD" ]; then
     python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-      "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
+      "🙋 $CAUSE This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
   fi
   park_for_human
 else

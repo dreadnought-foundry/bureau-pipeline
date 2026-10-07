@@ -259,6 +259,9 @@ if argv[:2] == ["workflow", "run"]:
     record("dispatch")
     sys.exit(0)
 if argv[:1] == ["api"]:
+    if os.environ.get("GH_CHECKS") and any("/check-runs" in a for a in argv):
+        print(open(os.environ["GH_CHECKS"]).read())
+        sys.exit(0)
     if os.environ.get("GH_THREAD_FAILS") == "1":
         sys.stderr.write("HTTP 502\n")
         sys.exit(1)
@@ -273,8 +276,9 @@ RECEIPT_PATHS = ("/tmp/act-fix-blocked.md", "/tmp/act-fix-pushed.md",
 
 
 def report(thread, *, blocker=None, refutation=None, fetched="", head=PRE_SHA,
-           mode="fix", thread_fails=False):
-    """Run the real report_fix_result.sh. Returns (proc, gh writes, linear calls, td-answers)."""
+           mode="fix", thread_fails=False, checks=None):
+    """Run the real report_fix_result.sh. Returns (proc, gh writes, linear calls, td-answers).
+    `checks`, when given, is the head's check-runs payload `gh api` answers."""
     for path in RECEIPT_PATHS:
         if os.path.exists(path):
             os.remove(path)
@@ -294,6 +298,11 @@ def report(thread, *, blocker=None, refutation=None, fetched="", head=PRE_SHA,
         thread_file = os.path.join(td, "thread.json")
         with open(thread_file, "w", encoding="utf-8") as fh:
             json.dump([thread], fh)
+        checks_file = ""
+        if checks is not None:
+            checks_file = os.path.join(td, "checks.json")
+            with open(checks_file, "w", encoding="utf-8") as fh:
+                json.dump(checks, fh)
         paths = fix_handoff.open_handoff(td, REPO, PR, PRE_SHA,
                                          legacy_dir=os.path.join(td, "legacy"))
         for kind, text in (("blocker", blocker), ("refutation", refutation)):
@@ -305,6 +314,7 @@ def report(thread, *, blocker=None, refutation=None, fetched="", head=PRE_SHA,
                    CLASSIFICATION="", DISPATCH_TOKEN="test",
                    GH_LOG=gh_log, GH_HEAD=head, GH_THREAD=thread_file,
                    GH_THREAD_FAILS="1" if thread_fails else "0",
+                   GH_CHECKS=checks_file,
                    **_report_env(td, mode))
         proc = subprocess.run(["bash", SCRIPT], cwd=td, env=env,
                               capture_output=True, text=True, timeout=120)
@@ -392,8 +402,11 @@ class ARealDisagreementStillEscalatesTest(unittest.TestCase):
                 + subprocess.run([sys.executable, os.path.join(SCRIPTS, "fix_context.py"),
                                   "--answer-format"],
                                  capture_output=True, text=True).stdout.rstrip("\n"))
+        # The cause rides after the act's trailer, as the attribution line
+        # does, so the body the registry froze is untouched (DRE-5745).
         self.assertEqual(
-            [body + f"\n\n{pipeline_act.trailer('fix-attempt-disputed')}\n\n{trailer}\n"],
+            [body + f"\n\n{pipeline_act.trailer('fix-attempt-disputed')}"
+             f"\n\n{fix_exit.CAUSE_LABEL} {fix_exit.DISPUTE_CAUSE}\n\n{trailer}\n"],
             pr_comments(writes))
         said = card_comments(calls)
         self.assertEqual(1, len(said), said)

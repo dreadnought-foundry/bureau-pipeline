@@ -39,6 +39,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import fix_exit  # noqa: E402
 import fix_handoff  # noqa: E402
 import pipeline_act  # noqa: E402
 
@@ -213,9 +214,12 @@ class FixLoopReceiptsCarryTheirTrailer(unittest.TestCase):
         # attribution line is appended to the posted comment after it, so the
         # body the registry froze is untouched and every comment still names
         # the pull request it answers (DRE-3951).
+        # The cause the card is told rides after the trailer too (DRE-5745).
+        # This thread is empty, so the cause is the one that claims nothing.
         self.assertEqual(
             posted[0]["body"],
             f"{expected_body}\n\n{pipeline_act.trailer('fix-attempt-disputed')}"
+            f"\n\n{fix_exit.CAUSE_LABEL} {fix_exit.UNKNOWN_CAUSE}"
             f"\n\n{trailing}\n",
         )
 
