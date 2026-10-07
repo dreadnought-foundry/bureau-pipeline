@@ -22,7 +22,7 @@
 # watched because it is the alarm for a repo's nightly full CI run that
 # stopped happening — the safety net under narrowed PR CI — so a red one is a
 # watchdog nobody is watching. Retrying it
-# is safe on the same two grounds: it holds no write anywhere (read-only
+# is safe on two grounds: it holds no write anywhere (read-only
 # permissions, no dispatch, nothing posted to GitHub) and its card is looked up
 # by exact title per owner, so a second run comments where the first one would
 # have. The Groomer (DRE-2683) is watched on

@@ -21,8 +21,8 @@ disabled after 60 days of repo inactivity, a cron typo, a workflow that errors
 before any job starts, runs stuck in the queue. Nothing fails, because nothing
 ran. It is the shape of the retired channel-staleness alarm (DRE-2552,
 retired by DRE-6053) pointed at a different silence, and it raises its alarm
-through the same mechanism every pipeline alarm uses — one deduplicated Linear
-card — so no new surface is added.
+through the mechanism `red-main-repair.yml` already uses — one deduplicated
+Linear card — so no new surface is added.
 
 WHO IS WATCHED — COMPUTED, NEVER LISTED
 ---------------------------------------
@@ -127,9 +127,8 @@ INTERVAL_HOURS = 1.0
 #: How often a STANDING alarm says it again. Deliberately not the interval
 #: above: running hourly is how a missing nightly is FOUND within the hour, and
 #: re-confirming hourly is how the card becomes 24 comments a day that nobody
-#: reads. Daily is the rate the pipeline's standing alarms have always
-#: re-confirmed at, and it reads as deliberate rather than as a stuck process. Only the re-confirmation waits
-#: — the card itself is filed on whichever hour the alarm first fires.
+#: reads. Daily reads as deliberate rather than as a stuck process. Only the
+#: re-confirmation waits — the card itself is filed on whichever hour the alarm first fires.
 RECONFIRM_AFTER_HOURS = 24.0
 
 #: …and the hour it speaks on, in UTC. 07:00 UTC — a morning hour, chosen
