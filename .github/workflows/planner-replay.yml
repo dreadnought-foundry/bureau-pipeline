@@ -158,8 +158,8 @@ jobs:
       # dedupes nothing and Linear enforces nothing on titles, so a crashed run
       # re-dispatched at the same epic and number would file a SECOND throwaway
       # epic — both labelled agent:planner, both of which the plan rail then
-      # plans. Same `find-open` guard red-main-repair.yml and model-drift.yml
-      # mint their cards behind.
+      # plans. Same `find-open` guard red-main-repair.yml mints its cards
+      # behind.
       - name: File the throwaway replay epic
         if: inputs.mode == 'replay'
         env:

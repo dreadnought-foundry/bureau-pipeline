@@ -1,9 +1,9 @@
 """Every card `linear_ops.cmd_create` mints carries a `repo:<slug>` label (DRE-2680).
 
-`cmd_create` is the seam the medic, red-main-repair, channel-watch and
-model-drift (until DRE-3899) filed a failure report through, and it issued
-`issueCreate` with `teamId`, `title`, `description` and `stateId` — no
-`labelIds` at all. Under the
+`cmd_create` is the seam the medic, red-main-repair, channel-watch and the
+since-retired Model drift job (until DRE-3899) filed a failure report
+through, and it issued `issueCreate` with `teamId`, `title`, `description`
+and `stateId` — no `labelIds` at all. Under the
 front door a card's `repo:` label is the only product key and the readiness gate
 refuses a card without one, so every one of those cards landed in Planning and
 could not leave it: the pipeline filed a report about itself that the pipeline
@@ -162,7 +162,7 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
         # Guards the guard: if the match stops firing, everything below passes
         # over an empty list and proves nothing. Six are live: medic,
         # red-main-repair x2, channel-watch, model-adoption and nightly-watch.
-        # model-drift's two left with DRE-3899.
+        # The retired Model drift job's two left with DRE-3899.
         self.assertGreaterEqual(len(_create_call_sites()), 6)
 
     def test_every_call_site_passes_a_repo(self):

@@ -23,7 +23,7 @@ a watcher can be worse than useless:
   4. **The alarm cannot become the thing it watches.** The watcher reports its
      own missed ticks, its name is in the medic's watch list so a red run is
      diagnosed, and it holds NO write on the channel — structurally incapable
-     of promoting anything, the model-drift guarantee.
+     of promoting anything, the read-only-watcher guarantee.
   5. **One condition, one card.** The titles are stable while the condition
      is, so `find-open` matches yesterday's card instead of minting a daily
      duplicate — the alarm must not become the inbox we are escaping.
@@ -448,8 +448,8 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("--harness-in-flight", self.text)
 
     def test_it_cannot_move_the_channel(self):
-        """Structurally incapable, the model-drift guarantee: an alarm that
-        can write the ref it watches is a promoter nobody reviewed."""
+        """Structurally incapable, the read-only-watcher guarantee: an alarm
+        that can write the ref it watches is a promoter nobody reviewed."""
         self.assertEqual((self.wf.get("permissions") or {}).get("contents"), "read")
         self.assertNotIn("git/refs", self.text)
         self.assertNotIn("--method PATCH", self.text)
