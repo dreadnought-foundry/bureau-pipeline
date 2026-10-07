@@ -105,9 +105,6 @@ EXPECTED_STUBS = {
     # and only `propose`, behind the `gate` job declared in STEP_JOBS. The
     # trigger shape is asserted in tests/test_groomer_wiring.py.
     "self-groomer.yml": ("groomer.yml", "Groomer"),
-    # DRE-3016. Manual dispatch only, following the same D5 reasoning — the
-    # trigger shape is asserted in tests/test_planner_score.py.
-    "self-planner-replay.yml": ("planner-replay.yml", "Planner Replay"),
     # DRE-5924. The proof run's own stub: a `proof-execute` dispatch from the
     # sweep (DRE-5926) and nothing else. Its own workflow, never agent-task.yml,
     # so the proof runner is never a build role (DRE-3039). The trigger shape

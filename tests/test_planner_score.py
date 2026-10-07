@@ -23,7 +23,7 @@ before and after the split ledger reached the planner. Its population is the
 ledger's own (`split_ledger.reasons`) rather than a second definition of "did
 not fit one run", and a month nothing could be read for reports UNKNOWN.
 
-And the rule the replay adds: a row nobody could read reports **UNKNOWN**,
+And one more rule: a row nobody could read reports **UNKNOWN**,
 never `0` and never "clean". A missing PR is the absence of evidence; scoring
 it as agreement is the audit lying in its own favour.
 
@@ -47,7 +47,6 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 import planner_score  # noqa: E402
 import routing_verdict  # noqa: E402
 import step_shell  # noqa: E402
-import validate_card  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -939,141 +938,6 @@ class ReportTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# the replay harness — what must not happen
-# --------------------------------------------------------------------------
-class ReplaySafetyTest(unittest.TestCase):
-    def test_the_replay_files_its_epic_in_the_demo_repo_and_nowhere_else(self):
-        card = planner_score.replay_card("DRE-1000", 3, "the epic as written")
-        self.assertIn(f"repo:{planner_score.REPLAY_REPO}", card["labels"])
-        self.assertEqual(planner_score.REPLAY_REPO, "agent-bureau-demo")
-        self.assertEqual(planner_score.replay_problems(card), [])
-
-    def test_the_replay_title_marks_it_as_a_throwaway(self):
-        card = planner_score.replay_card("DRE-1000", 3, "the epic as written")
-        self.assertTrue(card["title"].startswith(f"{planner_score.REPLAY_PREFIX}3"))
-        self.assertIn("DRE-1000", card["title"])
-
-    def test_a_replay_pointed_at_a_product_repo_is_refused(self):
-        """The single hard rule: the harness never writes to a product repo and
-        never files a card outside the demo repo."""
-        for slug in ("portico", "atlas", "bureau-pipeline"):
-            card = planner_score.replay_card("DRE-1000", 1, "text")
-            card["labels"] = [f"repo:{slug}", "agent:planner"]
-            problems = planner_score.replay_problems(card)
-            self.assertTrue(any(slug in p for p in problems), (slug, problems))
-
-    def test_a_replay_with_no_repo_label_at_all_is_refused(self):
-        card = planner_score.replay_card("DRE-1000", 1, "text")
-        card["labels"] = ["agent:planner"]
-        self.assertTrue(planner_score.replay_problems(card))
-
-    def test_the_demo_repo_is_a_slug_the_rail_actually_routes(self):
-        self.assertIn(planner_score.REPLAY_REPO, validate_card.VALID_SLUGS)
-
-    def test_a_replay_that_is_not_a_throwaway_title_is_refused(self):
-        card = planner_score.replay_card("DRE-1000", 1, "text")
-        card["title"] = "[EPIC] ship the real thing"
-        self.assertTrue(any(planner_score.REPLAY_PREFIX in p
-                            for p in planner_score.replay_problems(card)))
-
-
-class FreezeTest(unittest.TestCase):
-    def test_the_frozen_text_drops_the_planner_written_region(self):
-        """The replay gets the epic as the CEO wrote it. The growth record is
-        the planner's own output spliced into the description — handing it back
-        is handing the plan back."""
-        import mid_epic
-
-        description = (
-            "Do the thing.\n\n"
-            f"{mid_epic.ARTIFACT_BEGIN}\n"
-            "Green-lit at 4 cards, running 6.\n"
-            f"{mid_epic.ARTIFACT_END}\n"
-            "\nAnd nothing else.\n"
-        )
-        frozen = planner_score.pre_plan_text(description)
-        self.assertIn("Do the thing.", frozen)
-        self.assertIn("And nothing else.", frozen)
-        self.assertNotIn("Green-lit at 4 cards", frozen)
-        self.assertNotIn(mid_epic.ARTIFACT_BEGIN, frozen)
-
-
-class LeakTest(unittest.TestCase):
-    """If the historical plan text leaks into the replay's context, that replay
-    is discarded and the leak recorded. A replay that can see the answer is not
-    a replay."""
-
-    PLAN = (
-        "## The cards\n\n"
-        "DRE-1001 — extract the tenant-scoped response store behind a façade\n"
-        "DRE-1002 — teach the poll to return every group, not one\n"
-    )
-
-    def test_a_leaked_plan_line_is_found_in_the_replay_context(self):
-        context = (
-            "Plan this epic.\n\n"
-            "DRE-1001 — extract the tenant-scoped response store behind a façade\n"
-        )
-        leaks = planner_score.plan_leaks(context, self.PLAN)
-        self.assertTrue(leaks)
-        self.assertIn("tenant-scoped response store", leaks[0])
-
-    def test_a_clean_context_leaks_nothing(self):
-        context = "Plan this epic. Here is the epic as the CEO wrote it: do the thing."
-        self.assertEqual(planner_score.plan_leaks(context, self.PLAN), [])
-
-    def test_boilerplate_the_plan_shares_with_every_plan_is_not_a_leak(self):
-        """`## The cards` is in every plan artifact and in the planner's brief.
-        Reporting it would make every replay a leak, which is the same as
-        reporting none."""
-        leaks = planner_score.plan_leaks("Write a section called ## The cards.",
-                                         self.PLAN)
-        self.assertEqual(leaks, [])
-
-    def test_a_leaked_replay_is_discarded_rather_than_scored(self):
-        doc = reference()
-        replay = {"epic": "DRE-1000", "context": self.PLAN, "plan": self.PLAN}
-        with self.assertRaises(planner_score.LeakedPlan):
-            planner_score.score(epic(), [child("DRE-1")], doc=doc, replay=replay, ledger=NO_SPLITS)
-
-    def test_the_leak_is_recorded_not_just_refused(self):
-        record = planner_score.leak_record("DRE-1000", ["a leaked line"])
-        self.assertIn("DRE-1000", record)
-        self.assertIn("a leaked line", record)
-        self.assertIn("discarded", record.lower())
-
-    def test_the_historical_plan_is_the_cards_the_planner_produced(self):
-        """What the replay must not see is not a document somewhere — it is the
-        cards the plan cut. `historical_plan` renders them so `leak-check` has
-        something real to compare the frozen epic text against."""
-        plan = planner_score.historical_plan([
-            child("DRE-1", title="extract the tenant-scoped response store"),
-            child("DRE-2", title="teach the poll to return every group"),
-        ])
-        self.assertIn("extract the tenant-scoped response store", plan)
-        self.assertIn("teach the poll to return every group", plan)
-
-    def test_a_frozen_epic_still_carrying_its_own_plan_is_caught(self):
-        """The case the harness exists to stop: an epic description that names
-        the children the plan produced hands the replay its answer."""
-        children = [child("DRE-1", title="extract the tenant-scoped response "
-                                         "store behind a facade")]
-        frozen = ("Do the thing.\n\nThe cards were: extract the tenant-scoped "
-                  "response store behind a facade.\n")
-        leaks = planner_score.plan_leaks(
-            frozen, planner_score.historical_plan(children))
-        self.assertTrue(leaks)
-
-    def test_a_clean_replay_scores(self):
-        doc = reference()
-        replay = {"epic": "DRE-1000", "context": "the epic as the CEO wrote it",
-                  "plan": self.PLAN}
-        result = planner_score.score(epic(), [child("DRE-1")], doc=doc,
-                                     replay=replay, ledger=NO_SPLITS)
-        self.assertEqual(result["replay"]["leaks"], [])
-
-
-# --------------------------------------------------------------------------
 # collecting the history — an unreadable repo is never a clean sheet
 # --------------------------------------------------------------------------
 class FakeLinear:
@@ -1170,77 +1034,6 @@ class CollectTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# diffing a replay's plan against the historical one
-# --------------------------------------------------------------------------
-class PlanDiffTest(unittest.TestCase):
-    """The replay's other half. A per-card diff would need a correspondence
-    between the replay's new cards and the historical children, and nothing can
-    make that mechanically — so the diff is taken at the level where both plans
-    really are comparable: the SHAPE of the decomposition."""
-
-    HISTORICAL = [
-        child("DRE-1", files=("a.py",)),
-        child("DRE-2", files=("a.py",)),
-        child("DRE-3", files=("b.py",), verdict="WORKBENCH"),
-    ]
-
-    def test_the_shape_counts_what_a_plan_declared(self):
-        shape = planner_score.plan_shape(self.HISTORICAL)
-        self.assertEqual(shape["cards"], 3)
-        self.assertEqual(shape["with-footprint"], 3)
-        self.assertEqual(shape["serialized-pairs"], 0)
-        self.assertEqual(shape["footprint-collisions"], 1)
-        self.assertEqual(shape["with-verdict"], 3)
-        self.assertFalse(shape["proof-and-demo"])
-
-    def test_the_shape_counts_a_proof_card_alone_as_the_closing_child(self):
-        """INVERTED (DRE-3669): the column needed BOTH a `PROOF:` and a `DEMO:`
-        child to count. One closing child is the shape now."""
-        shape = planner_score.plan_shape(
-            self.HISTORICAL + [child("DRE-4", title="PROOF: watch it run")])
-        self.assertTrue(shape["proof-and-demo"])
-
-    def test_a_plan_that_declared_nothing_is_not_counted_as_declaring_it(self):
-        naked = [dict(c, body="just prose") for c in self.HISTORICAL]
-        shape = planner_score.plan_shape(naked)
-        self.assertEqual(shape["with-footprint"], 0)
-        self.assertEqual(shape["footprint-collisions"], 0)
-
-    def test_the_serialized_pair_count_reads_the_relation_not_the_prose(self):
-        """`**Blocked by:**` prose is documentation and cannot create a
-        relation (DRE-2670/2676). Counting the sentence would report a plan as
-        collision-free that the board never serialized."""
-        prose = [
-            child("DRE-1", files=("a.py",)),
-            dict(child("DRE-2", files=("a.py",)),
-                 body="**Files:** a.py\n\n**Blocked by:** DRE-1\n"),
-        ]
-        self.assertEqual(planner_score.plan_shape(prose)["serialized-pairs"], 0)
-        wired = [prose[0], dict(prose[1], blocked_by=["DRE-1"])]
-        self.assertEqual(planner_score.plan_shape(wired)["serialized-pairs"], 1)
-
-    def test_the_diff_names_both_plans_and_every_line_that_moved(self):
-        after = self.HISTORICAL + [child("DRE-4", title="PROOF: watch it run"),
-                                   child("DRE-5", title="DEMO: show the CEO")]
-        report = planner_score.render_diff(
-            "DRE-1000", planner_score.plan_shape(self.HISTORICAL),
-            "PROOF-PL-1", planner_score.plan_shape(after),
-        )
-        self.assertIn("DRE-1000", report)
-        self.assertIn("PROOF-PL-1", report)
-        self.assertIn("cards", report)
-        self.assertIn("3", report)
-        self.assertIn("5", report)
-
-    def test_the_diff_says_plainly_that_it_is_not_a_per_card_comparison(self):
-        report = planner_score.render_diff(
-            "DRE-1000", planner_score.plan_shape(self.HISTORICAL),
-            "PROOF-PL-1", planner_score.plan_shape(self.HISTORICAL),
-        )
-        self.assertIn("not a per-card", report.lower())
-
-
-# --------------------------------------------------------------------------
 # the reference file checks itself
 # --------------------------------------------------------------------------
 class ReferenceTest(unittest.TestCase):
@@ -1324,189 +1117,59 @@ class ReceiptWiringTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# the harness workflow
+# the replay harness is retired (DRE-6051)
 # --------------------------------------------------------------------------
-class WorkflowWiringTest(unittest.TestCase):
-    def setUp(self):
-        import yaml
+class TheReplayIsRetiredTest(unittest.TestCase):
+    """DRE-6051, the CEO's decision of 2026-10-06. The on-demand replay job
+    never ran once, so it is gone from the code rather than left startable:
+    both of its workflows, and the half of this module only they used. The
+    scorer and the split rate stay. Each absence is proved by an exact set or
+    a word, so nothing here spells the retired names."""
 
-        self.workflows = ROOT / ".github" / "workflows"
-        self.reusable = yaml.safe_load(
-            step_shell.workflow_source(self.workflows / "planner-replay.yml"))
-        self.stub = yaml.safe_load(
-            step_shell.workflow_source(self.workflows / "self-planner-replay.yml"))
+    #: The commands the scorer keeps — the reference check, the two readers
+    #: and the two reports the split ledger and a hand run use.
+    COMMANDS = {"check", "collect", "score", "collect-month", "split-rate"}
 
-    @staticmethod
-    def _on(doc):
-        on = doc.get("on", doc.get(True))
-        return on if isinstance(on, dict) else {}
+    def test_the_cli_offers_exactly_the_scoring_commands(self):
+        import contextlib
+        import io
 
-    def test_the_harness_runs_on_demand_and_never_on_a_schedule(self):
-        """Same decision as the groomer's D5: a replay files cards and spends a
-        planner run, so it runs when someone asks for it."""
-        self.assertIn("workflow_dispatch", self._on(self.stub))
-        self.assertNotIn("schedule", self._on(self.stub))
-        self.assertNotIn("schedule", self._on(self.reusable))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            planner_score.main(["--help"])
+        offered = re.search(r"\{([^}]*)\}", out.getvalue())
+        self.assertIsNotNone(offered, out.getvalue())
+        self.assertEqual(set(offered.group(1).split(",")), self.COMMANDS)
 
-    def test_the_stub_calls_the_reusable_at_the_qualified_main_ref(self):
-        job = next(iter(self.stub["jobs"].values()))
-        self.assertEqual(
-            job.get("uses"),
-            "dreadnought-foundry/bureau-pipeline/.github/workflows/"
-            "planner-replay.yml@main",
-        )
-        self.assertEqual(job.get("secrets"), "inherit")
+    def test_score_takes_no_replay_payload(self):
+        import inspect
 
-    def test_the_harness_asks_for_no_write_access_to_any_repo(self):
-        for doc, name in ((self.stub, "stub"), (self.reusable, "reusable")):
-            for value in (doc.get("permissions") or {}).values():
-                self.assertEqual(value, "read", f"{name} asks for write access")
+        self.assertNotIn("replay",
+                         inspect.signature(planner_score.score).parameters)
+        result = planner_score.score(epic(), [child("DRE-1")], doc=reference(),
+                                     ledger=NO_SPLITS)
+        self.assertNotIn("replay", result)
 
-    def test_the_harness_names_the_demo_repo_and_no_other(self):
-        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
-        self.assertIn(planner_score.REPLAY_REPO, body)
-        for slug in validate_card.VALID_SLUGS - {planner_score.REPLAY_REPO}:
-            # \b-anchored: `repo:agent-bureau-demo` is not a mention of
-            # `agent-bureau`, the same substring trap DRE-2025 fixed for card
-            # identifiers in head refs.
-            self.assertIsNone(
-                re.search(rf"repo:{re.escape(slug)}\b(?!-)", body),
-                f"the replay workflow names {slug} — it may only file cards in "
-                f"{planner_score.REPLAY_REPO}",
-            )
+    def test_nothing_in_the_module_is_named_for_the_replay(self):
+        retired = ("replay", "leak", "shape", "historical", "pre_plan",
+                   "diff", "normalise")
+        named = sorted(name for name in vars(planner_score)
+                       if any(word in name.lower() for word in retired))
+        self.assertEqual(named, [])
 
-    def test_the_harness_runs_this_modules_guard_before_it_files_anything(self):
-        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
-        self.assertIn("planner_score.py", body)
-        self.assertIn("replay-card", body)
+    def test_the_module_no_longer_mentions_a_replay(self):
+        source = (ROOT / "scripts" / "planner_score.py").read_text(
+            encoding="utf-8")
+        mentions = [line.strip() for line in source.splitlines()
+                    if "replay" in line.lower()]
+        self.assertEqual(mentions, [])
 
-    def test_the_harness_looks_the_epic_up_before_it_files_it(self):
-        """Nothing in Linear enforces unique titles, so the dedupe is ours to
-        write — the same `find-open` guard red-main-repair.yml mints its
-        cards behind."""
-        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
-        self.assertIn("linear_ops.py find-open", body)
-        self.assertLess(
-            body.index("linear_ops.py find-open"),
-            body.index("linear_ops.py oneoff"),
-            "the existing-card lookup must precede the oneoff, or a re-dispatch "
-            "at the same --epic/--replay_number files a second throwaway epic",
-        )
-
-    def test_the_harness_answers_the_crash_question_where_it_is_read(self):
-        """standards/vendor-boundaries.md Q5, answered in the file that has to
-        survive the crash. This PR adds a trigger and secrets wiring, which
-        makes the harness boundary-touching and the answer mandatory."""
-        body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
-        self.assertIn("Q5", body)
-        self.assertIn("vendor-boundaries", body)
-
-
-# --------------------------------------------------------------------------
-# the crash the guard exists for — the workflow's OWN shell, run twice
-# --------------------------------------------------------------------------
-class ReplayCrashRecoveryTest(unittest.TestCase):
-    """Q5 walked, not asserted: the run dies after filing the epic and an
-    operator re-dispatches it at the same `--epic`/`--replay_number`.
-
-    Unit-green is not live-working — the guard lives in workflow shell, so this
-    executes the step's actual `run:` block against a stub `linear_ops.py` that
-    records its argv. World one is the first dispatch (nothing filed yet, the
-    epic must be filed); world two is the re-dispatch (the epic is already
-    there, and a second one must NOT be filed).
-    """
-
-    STEP = "File the throwaway replay epic"
-
-    def setUp(self):
-        import shutil
-        import tempfile
-
-        import yaml
-
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-
-        doc = yaml.safe_load(
-            step_shell.workflow_source(
-                ROOT / ".github" / "workflows" / "planner-replay.yml"))
-        self.run_block = next(
-            step_shell.step_shell(step)
-            for job in doc["jobs"].values()
-            for step in job.get("steps") or []
-            if self.STEP.lower() in (step.get("name") or "").lower()
-        )
-        leftover = re.findall(r"\$\{\{(?!\s*secrets)[^}]*\}\}", self.run_block)
-        self.assertEqual(leftover, [], "unmodelled expressions in the step")
-
-        # The artifacts the earlier steps leave behind, exactly as
-        # `planner_score.py replay-card --out/--body-out` writes them.
-        card = planner_score.replay_card("DRE-1000", 2, "the epic as written")
-        (self.tmp / "replay-card.json").write_text(
-            json.dumps(card), encoding="utf-8")
-        (self.tmp / "replay-body.md").write_text(card["body"], encoding="utf-8")
-        self.title = card["title"]
-
-        self.ops = self.tmp / ".bureau-pipeline" / "scripts" / "linear_ops.py"
-        self.ops.parent.mkdir(parents=True)
-
-    def _stub_ops(self, find_open_prints: str) -> None:
-        """A linear_ops.py that answers `find-open` with `find_open_prints` and
-        appends every invocation to argv.log."""
-        self.ops.write_text(
-            "import json, sys\n"
-            "open('argv.log', 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            f"if sys.argv[1] == 'find-open': print({find_open_prints!r})\n",
-            encoding="utf-8",
-        )
-
-    def _run(self):
-        import subprocess
-
-        summary = self.tmp / "summary.md"
-        summary.touch()
-        proc = subprocess.run(
-            ["bash", "-c", self.run_block], cwd=self.tmp,
-            capture_output=True, text=True,
-            env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
-        )
-        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
-        log = self.tmp / "argv.log"
-        calls = [json.loads(line)
-                 for line in log.read_text(encoding="utf-8").splitlines()] \
-            if log.exists() else []
-        return calls, summary.read_text(encoding="utf-8")
-
-    def test_the_first_dispatch_files_the_epic(self):
-        self._stub_ops("")
-        calls, summary = self._run()
-        oneoff = [c for c in calls if c[0] == "oneoff"]
-        self.assertEqual(len(oneoff), 1, calls)
-        self.assertEqual(oneoff[0][1], self.title)
-        self.assertIn(f"repo:{planner_score.REPLAY_REPO}", oneoff[0])
-        self.assertIn(self.title, summary)
-
-    def test_a_re_dispatch_after_a_crash_files_no_second_epic(self):
-        """The crash's real cost: two throwaway epics for one replay, both
-        labelled agent:planner, both of which the plan rail then plans."""
-        self._stub_ops("DRE-9999")
-        calls, summary = self._run()
-        self.assertEqual([c for c in calls if c[0] == "oneoff"], [], calls)
-        self.assertIn("DRE-9999", summary)
-
-    def test_the_lookup_asks_for_the_title_the_guarded_card_carries(self):
-        """The dedupe key is the title `replay-card` already refused every
-        alternative to — not one this step rebuilds and could drift from."""
-        self._stub_ops("")
-        calls, _ = self._run()
-        find_open = [c for c in calls if c[0] == "find-open"]
-        self.assertEqual(len(find_open), 1, calls)
-        self.assertEqual(find_open[0][1], self.title)
-        self.assertEqual(
-            find_open[0][1], planner_score.replay_title("DRE-1000", 2),
-            "the guard only dedupes while the title stays deterministic in "
-            "(--epic, --replay_number)",
-        )
+    def test_only_the_split_ledger_workflow_runs_the_scorer(self):
+        workflows = ROOT / ".github" / "workflows"
+        callers = sorted(
+            path.name for path in workflows.glob("*.yml")
+            if "planner_score" in step_shell.workflow_source(path))
+        self.assertEqual(callers, ["split-ledger.yml"])
 
 
 # --------------------------------------------------------------------------
@@ -1530,6 +1193,13 @@ class DocumentationTest(unittest.TestCase):
     def test_the_document_names_the_epics_the_audit_ran_on(self):
         for identifier in planner_score.source()["epics"]:
             self.assertIn(identifier, self.doc)
+
+    def test_the_document_no_longer_describes_a_replay_harness(self):
+        """DRE-6051 retired the harness, so the page stops telling a reader
+        how to run it."""
+        mentions = [line for line in self.doc.splitlines()
+                    if "replay harness" in line.lower()]
+        self.assertEqual(mentions, [])
 
 
 if __name__ == "__main__":                      # pragma: no cover

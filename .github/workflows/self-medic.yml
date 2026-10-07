@@ -76,7 +76,7 @@ name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Planner Replay, Deliver Rescue, Split ledger, Fleet Wake, Model adoption, Hygiene, Proof Task]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Nightly Watch, Groomer, Deliver Rescue, Split ledger, Fleet Wake, Model adoption, Hygiene, Proof Task]
     types: [completed]
 
 permissions:

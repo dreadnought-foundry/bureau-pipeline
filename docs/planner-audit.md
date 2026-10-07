@@ -8,8 +8,7 @@ python3 scripts/planner_score.py score  --epic DRE-N --report score.md < history
 ```
 
 Nothing was moved and nothing was written. `collect` and `score` read Linear
-and GitHub; the only writer in this module is the replay harness's one
-`oneoff` call, and that files into `repo:agent-bureau-demo` or it refuses.
+and GitHub, and nothing in this module writes to either.
 
 ## What the planner is scored against
 
@@ -239,71 +238,6 @@ with a verdict, 37 without — is the convention's rollout, visible in the data.
    shared file, not a merge that went DIRTY. Narrowing it to files that cannot
    be made append-only — or corroborating against the merge-gate's own conflict
    receipts — is the next thing that makes the count quotable.
-
-## The replay harness
-
-The second half of DRE-3016. `planner-replay.yml` (dispatched from
-`self-planner-replay.yml`, on demand and never on a schedule) freezes an
-already-planned epic at its **pre-plan text**, files it as a throwaway
-`PROOF-PL-<n>` epic labelled `repo:agent-bureau-demo`, and lets the normal plan
-rail plan it. The historical plan and the history above are the held-out answer.
-
-Four rules bound it, all in code rather than in this document:
-
-* **It files cards in `agent-bureau-demo` and nowhere else.**
-  `planner_score.replay_problems()` refuses the card before it is created if the
-  repo label names anything else or the title is not a throwaway, and the
-  workflow holds `contents: read` and checks out no product repo.
-* **A replay that was shown the answer is discarded.** `plan_leaks()` looks for
-  distinctive lines of the historical plan in whatever the replay was handed;
-  finding any raises `LeakedPlan`, and `leak_record()` writes the leak down.
-  Boilerplate every plan shares — `## The cards` — is deliberately not a leak,
-  because a check that fires on every replay is a check nobody leaves on.
-* **The frozen text is the epic as the CEO wrote it.** `pre_plan_text()` strips
-  the `mid_epic` growth record, which is planner output spliced into the epic's
-  own description.
-* **One dispatch, one epic — a re-dispatch files nothing.** The title is
-  derived from `epic` and `replay_number` alone, and the workflow asks
-  `linear_ops.py find-open` for it before it files, so a run that crashed
-  part-way is repaired by dispatching it again at the same inputs. Bumping
-  `replay_number` is how you ask for a second, independent replay — never how
-  you recover a crashed one. `find-open` ignores completed and cancelled
-  cards, so a finished replay does not hold its number hostage.
-
-The leak check runs **before** the card is filed, not after. A replay that saw
-the answer cannot be salvaged by scoring it more carefully, and discarding one
-after the fact has already spent a planner run. Its reference is
-`historical_plan()` — the cards the plan actually cut, because the
-decomposition *is* the plan.
-
-### What the diff compares, and what it deliberately does not
-
-`planner_score.py diff --before <historical> --after <replay>` puts the two
-decompositions side by side:
-
-| | DRE-2514 | DRE-2668 | how to read it |
-| --- | --- | --- | --- |
-| `cards` | 47 | 50 | how many cards the epic was cut into |
-| `with-footprint` | 0 | 0 | cards declaring a `**Files:**` line |
-| `footprint-collisions` | 0 | 0 | pairs whose DECLARED footprints intersect |
-| `serialized-pairs` | 11 | 41 | pairs wired with a real `blockedBy` relation |
-| `with-verdict` | 0 | 13 | cards carrying a routing verdict |
-
-*(Two historical epics, run as a smoke test of the command — DRE-2668 is not a
-replay of DRE-2514.)*
-
-**It is not a per-card comparison, and it does not pretend to be.** Nothing can
-mechanically say which replay card corresponds to which historical child;
-matching on the declared footprint would be the obvious way and 0 of 147 cards
-declare one. So what is diffed is the SHAPE of the decomposition, and a moved
-number is a question to go and look at rather than a verdict on a card. A
-replay's own children never merge — nothing ships from the demo repo — so
-scoring the replay reports UNKNOWN on every history row, correctly, which is
-why the shape is the half that moves.
-
-No replay has been run yet. The harness ships with this card; the first replay
-belongs to the model comparison DRE-3016 links to, which needs the new ladder to
-exist.
 
 ## Reproducing this
 
