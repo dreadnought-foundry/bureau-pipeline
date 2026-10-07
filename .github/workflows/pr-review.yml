@@ -23,15 +23,27 @@ on:
     # ready is the event that starts its review. A product-repo stub needs the
     # same type: one that does not list it reviews a PR marked ready only on
     # its next push, because no sweep dispatches a review that never ran.
-    types: [opened, reopened, synchronize, ready_for_review]
+    # `edited` (DRE-6192): a person's fix to the description of a pull
+    # request the critic sent back re-reviews it with no push. The reusable
+    # decides which edits review — only a person's body edit while the
+    # critic's REQUEST_CHANGES stands on the unchanged head — so every other
+    # edit is a skip. A product-repo stub opts in with the same type and the
+    # same concurrency group below.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
   workflow_dispatch:
     inputs:
       pr_number:
         description: PR number to review
         required: true
 
+# An `edited` run gets a group of its OWN (DRE-6192). A run joins its group
+# when it is created, before any `if:` or step runs, so an edit sharing the
+# push group would cancel a review in progress and then decide to skip — the
+# review lost, with nothing to re-ask for it. The pipeline edits bodies near
+# reviews (on agent-bureau #3323 the bot edited the body 9 seconds before the
+# review run was created). Apart, edited runs collapse only each other.
 concurrency:
-  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}${{ github.event.action == 'edited' && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

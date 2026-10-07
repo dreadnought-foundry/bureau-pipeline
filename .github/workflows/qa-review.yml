@@ -144,8 +144,15 @@ jobs:
     # (DRE-2047) is the real review route for dependabot PRs and passes the
     # event_name disjunct untouched. NOT pull_request_target — full secrets
     # are never attached to a dependabot-triggered event.
+    #
+    # TITLE-ONLY EDIT (DRE-6192, trailing conjunct) — mechanical: an `edited`
+    # event reviews only when the body changed, and a payload with no
+    # `changes.body` is a title edit, so the job stops before any token is
+    # minted. Whether a BODY edit reviews is policy, and is decided in
+    # should_review_pr.py like every other case.
     if: >
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
+      && (github.event.action != 'edited' || github.event.changes.body)
     # The BUILD lane (DRE-4846): the caller's own CI variable in front of the
     # long chain. The critic was called "API-bound" until a read of 129 QA
     # Review runs over 09-23 → 09-25 showed it SIGKILLed (exit 137) on a
@@ -360,6 +367,16 @@ jobs:
           # The same App identity the verdict is posted under, so the
           # authorship filter here is the one merge-gate enforces.
           QA_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          # DRE-6192: a person's description edit re-reviews a head the
+          # critic sent back. The three facts the script decides it on, as
+          # env and never interpolated into the shell. SENDER_IS_BOT is
+          # empty when the payload names no sender type, which the script
+          # reads as "not a person's edit" — the skip. PR_HEAD_SHA is the
+          # fallback for a record read that failed.
+          PR_ACTION: ${{ github.event.action }}
+          BODY_CHANGED: ${{ github.event.changes.body && 'true' || 'false' }}
+          SENDER_IS_BOT: ${{ github.event.sender.type && (github.event.sender.type == 'Bot' && 'true' || 'false') || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # A draft is skipped whatever started the run (DRE-5801). An
           # unreadable flag reads as not a draft — the review runs.
@@ -413,7 +430,11 @@ jobs:
             --compare-file /tmp/decide-compare.json \
             --pr-commits-file /tmp/decide-commits.json \
             --qa-login "$QA_LOGIN" \
-            --is-draft "$DRAFT")
+            --is-draft "$DRAFT" \
+            --event-action "${PR_ACTION:-}" \
+            --body-changed "${BODY_CHANGED:-}" \
+            --sender-is-bot "${SENDER_IS_BOT:-}" \
+            --head-sha "${SHA:-${PR_HEAD_SHA:-}}")
           set -e
           echo "$OUT"
           echo "$OUT" | grep -E '^(review|carried_sha|content_id|draft)=' >> "$GITHUB_OUTPUT" || true
