@@ -62,8 +62,8 @@ def _status(state, context=CONTEXT):
 
 def _decide(combined=None, *, hold=None, ancestry="ahead"):
     # `[:2]` because the decision grew a third member in DRE-3070 (the
-    # machine-readable outcome the staleness alarm counts); these tests are
-    # about the first two.
+    # machine-readable outcome the since-retired staleness alarm counted,
+    # DRE-6053); these tests are about the first two.
     return promote_channel.evaluate(
         _combined(_status("success")) if combined is None else combined,
         SHA,
@@ -153,8 +153,9 @@ class SkipReceiptTest(unittest.TestCase):
     """DRE-3070. A no-op promotion is ordinary — but "nothing happened" and
     "the run proving this commit was killed by the next merge" are different
     facts, and on 2026-09-03 the channel reported neither. The receipt names
-    which of THREE things happened, machine-readably, so the staleness alarm
-    can count merge trains instead of saying `unknown`."""
+    which of THREE things happened, machine-readably, so a watcher can count
+    merge trains instead of saying `unknown` (the staleness alarm did until
+    DRE-6053 retired it)."""
 
     def _decide(self, conclusion, combined=None, **kw):
         return promote_channel.evaluate(

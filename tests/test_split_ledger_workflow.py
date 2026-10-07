@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 import bot_branch_harness as H  # noqa: E402
 import bot_branch_pr  # noqa: E402
-import channel_watch  # noqa: E402
+import cron_clock  # noqa: E402
 import ledger_context  # noqa: E402
 import split_ledger  # noqa: E402
 
@@ -136,7 +136,7 @@ class TheCadenceTest(unittest.TestCase):
     def test_the_schedule_is_daily(self):
         crons = [entry["cron"] for entry in self.on["schedule"]]
         self.assertTrue(
-            any(channel_watch.cron_interval_hours(c) == 24.0 for c in crons),
+            any(cron_clock.cron_interval_hours(c) == 24.0 for c in crons),
             f"{crons} is not a daily schedule",
         )
 
@@ -147,7 +147,7 @@ class TheCadenceTest(unittest.TestCase):
         does not retry them. Two missed days is the margin this cadence buys;
         anything slower spends it."""
         interval = min(
-            h for h in (channel_watch.cron_interval_hours(e["cron"])
+            h for h in (cron_clock.cron_interval_hours(e["cron"])
                         for e in self.on["schedule"]) if h
         )
         missed_days_of_margin = ledger_context.LEDGER_MAX_AGE_HOURS / interval - 1

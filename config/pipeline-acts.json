@@ -1792,20 +1792,12 @@
       "why": "A REPORT about the run, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the card stays in Hand-work, and the dispatcher's second-dispatch rule (DRE-5926) is the only thing that acts on a dead proof run. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
     },
     {
-      "file": ".github/workflows/channel-watch.yml",
-      "anchor": "🔔 Still true today:",
-      "step": "Raise the alarm where a human will see it",
-      "kind": "not-an-act",
-      "means": "A standing alarm is re-confirmed on its existing card rather than filed again.",
-      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
-    },
-    {
       "file": ".github/workflows/nightly-watch.yml",
       "anchor": "🌙 Still true today:",
       "step": "Raise the alarm where a human will see it",
       "kind": "not-an-act",
       "means": "A standing alarm — a repo's nightly full CI run on main did not run — is re-confirmed on its existing card rather than filed again.",
-      "why": "A REPORT about the world, not something the pipeline did to a piece of work. The fact it carries is that a nightly did not run in somebody else's repository: it creates no obligation, hands the work to nobody and has nothing to discharge, so the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Declared exactly as the channel-staleness alarm above it is (DRE-2552) — the same shape of watcher, the same mechanism, the same reason it is not an act."
+      "why": "A REPORT about the world, not something the pipeline did to a piece of work. The fact it carries is that a nightly did not run in somebody else's repository: it creates no obligation, hands the work to nobody and has nothing to discharge, so the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Declared exactly as the retired channel-staleness alarm's row was (DRE-2552, retired by DRE-6053) — the same shape of watcher, the same mechanism, the same reason it is not an act."
     },
     {
       "file": ".github/workflows/groomer.yml",

@@ -65,16 +65,13 @@ agent-bureau repo; the third clause added by DRE-2103).
     anything the fleet runs — the "agents author; a human promotes" fact
     above holds in full.
 
-  - **A quiet channel now says so (DRE-2552).** `channel-watch.yml` runs
-    daily and raises one deduplicated Linear card when `stable` has stopped
-    advancing while `main` moves — 8+ commits behind for 72h, or anything
-    unpromoted for 14 days, thresholds derived from this repo's measured
-    commit cadence (README, "Channel staleness alarm"). A **held** channel
-    is reported as held rather than as broken, so set `CHANNEL_HOLD` to
-    `who=<name> since=<ISO date> <why>`: GitHub will not tell the watcher
-    who set a variable or when, and a hold nobody owns is reported as
-    exactly that. The watcher holds `contents: read` and cannot move the
-    ref it watches.
+  - **A quiet channel says so.** The console's channel-health monitor
+    (agent-bureau, `pipeline_channel_health`) raises the alarm when `stable`
+    has stopped advancing, around the clock since DRE-6050. It replaced the
+    daily job this repo ran for the same silence (DRE-2552), retired by
+    DRE-6053. Still set `CHANNEL_HOLD` to `who=<name> since=<ISO date>
+    <why>`: GitHub will not say who set a variable or when, so the reason is
+    the only record of who owns a hold.
 
   - **Every move is a Linear release (DRE-4872).** Once it has moved
     `stable` and read the ref back, `promote-channel.yml` writes release
@@ -316,13 +313,13 @@ which is the root cause of that particular instance. The two are independent —
 "the proof passed an hour ago and the channel is still behind" has other
 causes. Re-pointing `vN` is untouched and stays operator-only.
 
-`channel-watch.yml` counts the `cancelled` harness runs on `main` since the
-channel head and, at two or more, names a **merge train** in the staleness
-alarm instead of reporting the cause as unknown — and says whether a run is
-proving main right now, because a train with a run working on it needs nothing
-and a train that has stopped with the trunk still unproven does. One skipped
-head is the rule above working; two is merges arriving faster than the harness
-can prove them. The lever is the harness's duration or the merge rate — never
+Every skipped head leaves a `harness-cancelled-by-newer-push` receipt, so a
+stalled channel can be read for a **merge train** — two or more `cancelled`
+harness runs on `main` since the channel head — rather than reported with an
+unknown cause. The console's channel-health monitor raises the stall alarm now
+(DRE-6050); the daily job that counted those receipts was retired by DRE-6053.
+One skipped head is the rule above working; two is merges arriving faster than
+the harness can prove them. The lever is the harness's duration or the merge rate — never
 cancelling the run in progress.
 
 ### How long a run is allowed to take

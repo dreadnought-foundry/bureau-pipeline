@@ -1,13 +1,13 @@
 """Every card `linear_ops.cmd_create` mints carries a `repo:<slug>` label (DRE-2680).
 
-`cmd_create` is the seam the medic, red-main-repair, channel-watch and the
-since-retired Model drift job (until DRE-3899) filed a failure report
-through, and it issued `issueCreate` with `teamId`, `title`, `description`
-and `stateId` — no `labelIds` at all. Under the
-front door a card's `repo:` label is the only product key and the readiness gate
-refuses a card without one, so every one of those cards landed in Planning and
-could not leave it: the pipeline filed a report about itself that the pipeline
-could not act on.
+`cmd_create` is the seam the medic, red-main-repair, the since-retired
+channel-staleness alarm (until DRE-6053) and the since-retired Model drift job
+(until DRE-3899) filed a failure report through, and it issued `issueCreate`
+with `teamId`, `title`, `description` and `stateId` — no `labelIds` at all.
+Under the front door a card's `repo:` label is the only product key and the
+readiness gate refuses a card without one, so every one of those cards landed
+in Planning and could not leave it: the pipeline filed a report about itself
+that the pipeline could not act on.
 
 Two halves, and both are needed:
 
@@ -160,10 +160,11 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
 
     def test_the_call_sites_are_found(self):
         # Guards the guard: if the match stops firing, everything below passes
-        # over an empty list and proves nothing. Six are live: medic,
-        # red-main-repair x2, channel-watch, model-adoption and nightly-watch.
-        # The retired Model drift job's two left with DRE-3899.
-        self.assertGreaterEqual(len(_create_call_sites()), 6)
+        # over an empty list and proves nothing. Five are live: medic,
+        # red-main-repair x2, model-adoption and nightly-watch. The retired
+        # Model drift job's two left with DRE-3899, the channel-staleness
+        # alarm's one with DRE-6053.
+        self.assertGreaterEqual(len(_create_call_sites()), 5)
 
     def test_every_call_site_passes_a_repo(self):
         for name, line, _ in _create_call_sites():

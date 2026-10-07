@@ -227,9 +227,13 @@ class NewWorkflowCannotSlipThroughTest(unittest.TestCase):
         )
         (self.dir / REPAIR_STUB).write_text(stub)
         # The medic must also see it — a red commit AND a crashed run.
-        medic = (self.dir / "self-medic.yml").read_text().replace(
-            "Channel Watch]", "Channel Watch, Brand New Gate]"
-        )
+        before = (self.dir / "self-medic.yml").read_text()
+        medic = before.replace("Proof Task]", "Proof Task, Brand New Gate]")
+        # Guards the fixture: a replace that matches nothing leaves the medic
+        # blind to the new gate, and the test then passes on the repair rail
+        # alone (it did, silently, from the day the list stopped ending in the
+        # retired channel alarm until DRE-6053).
+        self.assertNotEqual(before, medic, "the medic's watch list did not take the new gate")
         (self.dir / "self-medic.yml").write_text(medic)
         violations, _ = cww.check_dir(self.dir)
         self.assertEqual([], violations, f"unexpected: {violations}")

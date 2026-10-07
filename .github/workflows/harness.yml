@@ -109,12 +109,12 @@ on:
   # fleet merges with merge commits, so a stamp on any other commit never
   # transfers to main's tip — the proof has to be made HERE, on the push.
   #
-  # Deliberately NO paths filter. Consumers pin
-  # the whole repo, so every commit on main changes what they get — a channel
-  # that only advances for pipeline-path commits would sit stale on a docs
-  # merge and trip its own staleness alarm. This is the cheap default sweep
-  # (the scenarios that spend no build-agent run — `agent_task_parses` among
-  # them since DRE-3486, because this sweep IS the channel gate and an opt-in
+  # Deliberately NO paths filter. Consumers pin the whole repo, so every commit
+  # on main changes what they get — a channel that only advances for
+  # pipeline-path commits would sit stale on a docs merge and trip the
+  # console's channel-health alarm. This is the cheap default sweep (the
+  # scenarios that spend no build-agent run — `agent_task_parses` among them
+  # since DRE-3486, because this sweep IS the channel gate and an opt-in
   # rehearsal would leave agent-task.yml exactly as uncovered as it was on
   # 2026-09-09), and it is affordable because Step 1 cut the CI burn first —
   # decision D4, in this order, for this reason.
@@ -159,9 +159,9 @@ on:
 # `run_started_at == created_at` and was cancelled one to two seconds after
 # the next run in the group was created. Nothing in progress was ever killed.
 # Skipping an intermediate head is the intended trade; the skip is now
-# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), and the
-# staleness alarm counts those records to say "merge train" instead of
-# "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
+# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), so the
+# records can be counted to say "merge train" instead of "unknown". See
+# docs/self-hosting.md, "Queue behind, never cancel".
 concurrency:
   group: integration-harness-main
   cancel-in-progress: false

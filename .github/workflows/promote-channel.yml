@@ -299,8 +299,9 @@ jobs:
           CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           # The hold switch (D2). A repository variable: explicit, auditable,
           # and flippable without a release. UNSET MEANS RUN — autonomy by
-          # default. DRE-2552 alarms if a hold persists, because an un-alarmed
-          # hold recreates the very condition this wave removes.
+          # default. A hold that persists stops the channel, and the console's
+          # channel-health monitor alarms on that (DRE-6050), because an
+          # un-alarmed hold recreates the very condition this wave removes.
           HOLD: ${{ vars.CHANNEL_HOLD }}
           ANCESTRY: ${{ steps.ancestry.outputs.status }}
           # What THIS harness run did, as GitHub concluded it. Distinct from

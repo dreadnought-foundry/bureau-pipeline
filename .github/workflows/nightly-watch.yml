@@ -17,12 +17,12 @@
 #
 # This file only gathers GitHub's records and acts on the verdict; the
 # decision, the thresholds and where they came from live in
-# scripts/nightly_watch.py, unit-tested in tests/test_nightly_watch.py. It is
-# `channel-watch.yml` pointed at a different silence, and it raises its alarm
-# through the same mechanism — ONE deduplicated Linear card, commented on
-# rather than duplicated while the condition lasts — so no new surface is
-# added. tests/test_nightly_watch.py asserts that against channel-watch.yml
-# rather than restating it, so the two cannot drift.
+# scripts/nightly_watch.py, unit-tested in tests/test_nightly_watch.py. It
+# raises its alarm through the mechanism the retired channel-staleness alarm
+# used (DRE-2552, retired by DRE-6053) — ONE deduplicated Linear card,
+# commented on rather than duplicated while the condition lasts — so no new
+# surface is added. tests/test_nightly_watch.py pins that mechanism with the
+# values it read off the channel alarm's step before that job was removed.
 #
 # WHO IS WATCHED: computed, never listed. Every workflow, in every repo in
 # config/repo-map.json, whose file on the default branch triggers on BOTH
@@ -38,15 +38,15 @@
 # WHAT IF THE WATCHER ITSELF STOPS: "Nightly Watch" is in the medic's watch
 # list (self-medic.yml), so a red run is diagnosed — and
 # scripts/check_workflow_watchers.py fails the build if it ever leaves that
-# list. A run that never fires at all is the same gap channel-watch.yml's
-# header states about itself, and it is written down here rather than papered
-# over: nothing in this repo detects a scheduled workflow that stops for good.
+# list. A run that never fires at all is a gap, and it is written down here
+# rather than papered over: nothing in this repo detects a scheduled workflow
+# that stops for good.
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions`, the same actor the
-#      Reconcile and Channel Watch schedules already run as; the
-#      medic admits those today. Nothing is pushed or dispatched, so no
-#      downstream trigger depends on the identity.
+#      Reconcile schedule already runs as; the medic admits it today.
+#      Nothing is pushed or dispatched, so no downstream trigger depends on
+#      the identity.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
 #      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
 #      and the App keys resolve. The CROSS-REPO reads cannot use
@@ -167,9 +167,10 @@ jobs:
       # Two cadences, and the difference is the whole reason this runs hourly.
       # The card is FILED on whichever hour the alarm first fires, so a nightly
       # that stopped is found within the hour. RE-CONFIRMING it is daily
-      # (`nightly_watch.RECONFIRM_AFTER_HOURS`, beside Channel Watch's own
-      # morning tick): twenty-four "still true" comments a day on one standing
-      # card is the same noise as a card a day, arriving somewhere else.
+      # (`nightly_watch.RECONFIRM_AFTER_HOURS`, on one morning hour,
+      # `RECONFIRM_HOUR_UTC`): twenty-four "still true" comments a day on one
+      # standing card is the same noise as a card a day, arriving somewhere
+      # else.
       - name: Raise the alarm where a human will see it
         if: steps.decide.outputs.alarm == 'true'
         env:

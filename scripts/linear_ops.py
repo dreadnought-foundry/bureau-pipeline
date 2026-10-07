@@ -3097,12 +3097,13 @@ def required_repo_slug(flags) -> str:
 
     Required, never defaulted, and that is the whole point. Every card this
     seam minted arrived with no labels whatsoever, so the medic's, the repair
-    rail's, the channel watcher's and the drift sweep's own failure reports
-    carried nothing that told the pipeline what to do with them — and under the
-    front door a card's `repo:` label is the only product key, so they landed in
-    Planning and could not leave it. A default would read to a caller exactly
-    like the defect it replaces: everything looks fine and the label is silently
-    absent. A required argument makes an unlabelled call impossible to write.
+    rail's, the since-retired channel watcher's and drift sweep's own failure
+    reports carried nothing that told the pipeline what to do with them — and
+    under the front door a card's `repo:` label is the only product key, so
+    they landed in Planning and could not leave it. A default would read to a
+    caller exactly like the defect it replaces: everything looks fine and the
+    label is silently absent. A required argument makes an unlabelled call
+    impossible to write.
 
     An unrecognised slug is refused HERE, before the card exists. The relay does
     catch one later — it comments with the bad value and parks the card — but a
@@ -3141,7 +3142,7 @@ def validated_repo_slug(slug: str) -> str:
 
 def cmd_create(title: str, description_file: str, *flags: str) -> None:
     """Create a standalone card in Planning — the seam the medic, red-main-repair,
-    channel-watch and model-adoption mint a card through.
+    model-adoption and nightly-watch mint a card through.
 
     `--repo <slug>` is REQUIRED and becomes the card's `repo:<slug>` label; see
     `required_repo_slug` for why it is required rather than defaulted. The
