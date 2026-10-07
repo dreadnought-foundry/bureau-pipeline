@@ -194,25 +194,64 @@ jobs:
         if: ${{ inputs.mode != 'drain' }}
         run: python3 .bureau-pipeline/scripts/release_train.py wake-owners
 
-      # THE MERGED-PR READ'S TOKEN (DRE-4964). The Groom step had no
-      # `GH_TOKEN`, so its `gh` read exited rc=4 on every run and the proposal
-      # judged every card without knowing what had already shipped.
-      # `github.token` is not the answer: it cannot see the fleet's private
-      # repositories. The Bureau App's installation token can, for the owners
-      # the App is installed on; `groom_context.read_merged_prs` asks the token
-      # which those are and names every other owner unread.
+      # THE MERGED-PR READS' TOKENS (DRE-4964, one per owner since DRE-5746).
+      # The Groom step had no `GH_TOKEN`, so its `gh` read exited rc=4 on
+      # every run and the proposal judged every card without knowing what had
+      # already shipped. `github.token` is not the answer: it cannot see the
+      # fleet's private repositories. The Bureau App's installation token
+      # can — but one installation's: minted with no `owner:` it saw
+      # dreadnought-foundry alone, EveryBite and DeltaSolv were unread every
+      # morning, and the per-card check, which refuses to call a card clean on
+      # a search that could not look everywhere, marked every card unread.
       #
-      # `continue-on-error`: a mint that fails renders an empty token, the read
-      # names the section unread with the reason, and the proposal still
+      # So one read-only mint per owner in config/repo-map.json, from the two
+      # secrets the lookup legs below already mint from. A job cannot loop
+      # steps, so each owner is its own step; `tests/test_groomer_wiring.py`
+      # reads the map and fails when an owner has no mint here or no env name
+      # in the Groom step, so a fourth owner onboarded into the map is minted
+      # for rather than silently unread. `groom_context.token_env` names each
+      # env var: `GH_TOKEN` for the pipeline's own owner — the name nothing
+      # else in the step moves off — and `GH_TOKEN_<OWNER>` for the others.
+      # Both reads ask each token's `installation/repositories` what it sees.
+      #
+      # `continue-on-error`: a mint that fails renders an empty token, the
+      # reads name that owner unread with the reason, and the proposal still
       # posts. Skipped on `drain`, which builds no context pack.
-      - name: Mint the Bureau App token (merged-PR read)
-        id: app
+      - name: Mint a read-only token for dreadnought-foundry (merged-PR reads)
+        id: app_dreadnought_foundry
         if: ${{ inputs.mode != 'drain' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Mint a read-only token for EveryBite (merged-PR reads)
+        id: app_everybite
+        if: ${{ inputs.mode != 'drain' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: EveryBite
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Mint a read-only token for DeltaSolv (merged-PR reads)
+        id: app_deltasolv
+        if: ${{ inputs.mode != 'drain' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: DeltaSolv
+          permission-contents: read
+          permission-pull-requests: read
 
       - name: Groom
         # Identified for the death-cause receipt at the foot of this job
@@ -236,9 +275,13 @@ jobs:
           # credential at all.
           ANTHROPIC_API_KEY: ${{ inputs.mode != 'drain' && (vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '') || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.mode != 'drain' && (vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '') || '' }}
-          # The merged-PR read's credential (DRE-4964) — the name is the
-          # contract `groom_context.TOKEN_ENV` reads, and the per-card read too.
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The merged-PR reads' credentials (DRE-4964, DRE-5746): one per
+          # owner, each under the name `groom_context.token_env` gives it.
+          # `GH_TOKEN` is the pipeline's own owner's — the contract
+          # `groom_context.TOKEN_ENV` reads, and the per-card read too.
+          GH_TOKEN: ${{ steps.app_dreadnought_foundry.outputs.token }}
+          GH_TOKEN_EVERYBITE: ${{ steps.app_everybite.outputs.token }}
+          GH_TOKEN_DELTASOLV: ${{ steps.app_deltasolv.outputs.token }}
           REPO: ${{ github.repository }}
           MODE: ${{ inputs.mode }}
           LANE: ${{ inputs.lane }}
@@ -364,8 +407,9 @@ jobs:
   # THE LOOKUPS, ONE LEG PER OWNER (DRE-5429). The GitHub half of DRE-5308's
   # lookups reaches every repo in config/repo-map.json, and those repos sit
   # under three owners. An App installation token is scoped to ONE
-  # installation, so the groom job's token — minted with no `owner:` — is
-  # refused for every repo outside its own owner. Each leg here mints for its
+  # installation, so a token minted for one owner is refused for every repo
+  # outside it (the groom job mints one per owner for its two merged-PR
+  # reads, DRE-5746, and hands this job none of them). Each leg here mints for its
   # own owner in its "Mint a read-only token for this owner" step, runs
   # `groom_lookups.py owner` and uploads one document; the verify legs fold
   # them into the targets.

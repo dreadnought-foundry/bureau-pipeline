@@ -20,9 +20,10 @@ The morning's Planning list plus `SPARE` cards after it, in proposal order:
 
   * **its comments** — one that DECLARES the card superseded, done, or not to
     be built (`_DECLARES`) is evidence, quoted;
-  * **merged pull requests** — searched for the quoted `"DRE-N"` with the
-    Bureau App token the Groom step carries as `GH_TOKEN` (DRE-4964's
-    contract), per fleet owner. A merged PR that is FOR the card is evidence,
+  * **merged pull requests** — searched for the quoted `"DRE-N"` per fleet
+    owner, each on that owner's own Bureau App token, which the Groom step
+    carries under `groom_context.token_env(owner)` — `GH_TOKEN` for the
+    pipeline's own owner, DRE-4964's contract (DRE-5746). A merged PR that is FOR the card is evidence,
     and only three things make it so (`_pr_is_for`, DRE-5857): a closing line
     in its body (`Closes`/`Fixes`/`Resolves DRE-N`), its branch
     `agent/DRE-N-…`, or the card carrying it as its own pull request
@@ -274,14 +275,14 @@ def read_card(lops, identifier: str) -> dict:
             "search": ((data.get("searchIssues") or {}).get("nodes") or [])}
 
 
-def _search(run, query: str) -> list[dict]:
+def _search(run, query: str, token: str | None = None) -> list[dict]:
     items: list[dict] = []
     page = 1
     while True:
         doc = groom_context._api(
             run, ["-X", "GET", "search/issues", "-f", f"q={query}",
                   "-f", f"per_page={groom_context.PR_SEARCH_PER_PAGE}",
-                  "-f", f"page={page}"], "search/issues")
+                  "-f", f"page={page}"], "search/issues", token=token)
         found = doc.get("items") or []
         items.extend(found)
         read = page * groom_context.PR_SEARCH_PER_PAGE
@@ -292,15 +293,27 @@ def _search(run, query: str) -> list[dict]:
         page += 1
 
 
-def _head_ref(run, url: str) -> str:
+def _owner_token(owner: str, tokens: dict[str, str] | None = None) -> str | None:
+    """The token to read a pull request under `owner` with: the one the
+    owner was searched on, else the one the Groom step handed it, else None
+    — `gh` then reads the environment as it is (DRE-5746)."""
+    for name, token in (tokens or {}).items():
+        if name.lower() == owner.lower():
+            return token
+    return groom_context.owner_token(owner) or None
+
+
+def _head_ref(run, url: str, tokens: dict[str, str] | None = None) -> str:
     """The head branch of one pull request — the one thing `_pr_is_for`
-    needs that a search result does not carry."""
+    needs that a search result does not carry — read on the token of the
+    owner it lives under."""
     parts = _PR_URL.match(url or "")
     if not parts:
         raise ValueError(f"{url!r} is not a pull request URL")
     owner, repo, number = parts.groups()
     doc = groom_context._api(run, [f"repos/{owner}/{repo}/pulls/{number}"],
-                             "the pull request")
+                             "the pull request",
+                             token=_owner_token(owner, tokens))
     return ((doc.get("head") or {}).get("ref")) or ""
 
 
@@ -314,10 +327,12 @@ def merged_mentions(identifiers: list[str], *, run=None, owners=None,
     branch read, once per PR; a branch that could not be read leaves the card
     unread on this source rather than clean.
 
-    One search per owner per `SEARCH_CHUNK` cards, each card quoted. An owner
-    the token's installation cannot see leaves every card unread — a search
-    that could not look everywhere cannot say "nothing merged" — and the
-    owners it could see are still searched, so evidence found there counts.
+    One search per owner per `SEARCH_CHUNK` cards, each card quoted, on that
+    owner's own token (`groom_context.owner_tokens`, DRE-5746). An owner with
+    no token, or one its token's installation cannot see, leaves every card
+    unread, named with the reason — a search that could not look everywhere
+    cannot say "nothing merged" — and the owners that could be read are
+    still searched, so evidence found there counts.
 
     The third value is the owners for which at least one search chunk
     answered (DRE-5317): `[]` when nothing was searched — no token, an
@@ -331,32 +346,27 @@ def merged_mentions(identifiers: list[str], *, run=None, owners=None,
     heads: dict[str, str | Exception] = {}
     if not identifiers:
         return found, gaps, searched
-    if not (os.environ.get(groom_context.TOKEN_ENV) or "").strip():
-        why = (f"no {groom_context.TOKEN_ENV} in the environment — the Groom "
-               f"step hands the check the Bureau App token under that name")
-        return found, {i: why for i in identifiers}, searched
     run = run or groom_context._gh_json
     try:
         owners = (list(owners) if owners is not None
                   else groom_context.fleet_owners())
-        visible = groom_context.installed_owners(run)
     except Exception as e:  # noqa: BLE001 — an unread source is named, not fatal
-        return found, {i: f"the installation could not be read: {e}"
+        return found, {i: f"the fleet's owners could not be read: {e}"
                        for i in identifiers}, searched
-    blind = [o for o in owners if o.lower() not in visible]
+    tokens, blind = groom_context.owner_tokens(run, owners)
     if blind:
-        why = ("the Bureau App token's installation cannot see "
-               + ", ".join(blind))
+        why = "; ".join(f"{owner}: {reason}"
+                        for owner, reason in sorted(blind.items()))
         gaps.update({i: why for i in identifiers})
     for owner in owners:
-        if owner in blind:
+        if owner not in tokens:
             continue
         for start in range(0, len(identifiers), SEARCH_CHUNK):
             chunk = identifiers[start:start + SEARCH_CHUNK]
             query = (" OR ".join(f'"{i}"' for i in chunk)
                      + f" is:pr is:merged user:{owner}")
             try:
-                items = _search(run, query)
+                items = _search(run, query, tokens[owner])
             except Exception as e:  # noqa: BLE001
                 for i in chunk:
                     gaps.setdefault(i, f"the search of {owner} failed: {e}")
@@ -374,7 +384,7 @@ def merged_mentions(identifiers: list[str], *, run=None, owners=None,
                         url = item.get("html_url") or ""
                         if url not in heads:
                             try:
-                                heads[url] = _head_ref(run, url)
+                                heads[url] = _head_ref(run, url, tokens)
                             except Exception as e:  # noqa: BLE001
                                 heads[url] = e
                         if isinstance(heads[url], Exception):
@@ -439,7 +449,8 @@ class _Replacements:
         try:
             doc = groom_context._api(
                 self.run or groom_context._gh_json,
-                [f"repos/{owner}/{repo}/pulls/{number}"], "the pull request")
+                [f"repos/{owner}/{repo}/pulls/{number}"], "the pull request",
+                token=_owner_token(owner))
         except Exception:  # noqa: BLE001 — unread, and so not a replacement
             return False, f"the pull request {url} could not be read this run"
         if doc.get("merged_at"):

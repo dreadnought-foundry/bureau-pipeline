@@ -77,10 +77,10 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      the reason `no proof`. `done-elsewhere`, `obsolete` and `not-worth-it`
      put the card on the Cancel list; `partly-solved` keeps it in the batch.
      `excluded` is the runner's word, never the agent's. A
-     card whose repo is not in `config/repo-map.json` is reported
-     `unverified`, naming the slug, and on its leg no code is read and no
-     model is called. A leg that dies is `unverified` too, never
-     `still-needed`, and one dead leg never cancels the others.
+     card whose repo is not in `config/repo-map.json` is `excluded`, naming
+     the slug (DRE-5746), and on its leg no code is read and no model is
+     called. A leg that dies is `unverified`, never `still-needed`, and one
+     dead leg never cancels the others.
    - **`post`** writes the verdicts onto the record
      (`groom_verify_agent.py apply`) and runs
      `post --card DRE-N --proposal proposal-verified.json`, which posts it —
@@ -356,7 +356,7 @@ to ten cards behind it, in proposal order:
 | Source | Counts as evidence |
 | -- | -- |
 | **The card's comments** (the newest fifty) | A comment that *declares* it finished: a line opening with "Superseded", or "do not build from", "not to be built", "nothing left to build", "this card was already done / fixed / shipped". The comment is quoted as the reason. A comment that says "superseded by X" counts only when X is a real replacement (below). |
-| **Merged pull requests** | A search for the quoted `"DRE-N"`, `is:pr is:merged`, per fleet owner, with the Bureau App token the Groom step carries as `GH_TOKEN` (DRE-4964). A merged PR counts when it is **for** the card, and only three things make it so (DRE-5857): a closing line in its body (`Closes`, `Fixes` or `Resolves DRE-N`), its branch `agent/DRE-N-…` (read per pull request, since a search result does not carry it), or the card carrying it as its own pull request attachment. Anything else — the title, a Linear link, `Card: DRE-N` — is a mention, and a mention never counts: a PR body lists the cards it read or was motivated by. DRE-4966's own names four it did not deliver, and bureau-pipeline #415, which closes DRE-4058, says "the sibling card DRE-4059 covers…" — on that sentence the 2026-10-05 proposal offered to cancel DRE-4059, live and unbuilt. A pull request whose branch could not be read leaves the card unread on this source, not clean. |
+| **Merged pull requests** | A search for the quoted `"DRE-N"`, `is:pr is:merged`, per fleet owner, each on that owner's own read-only Bureau App token — the Groom step carries one per owner under the name `groom_context.token_env` gives it, `GH_TOKEN` for the pipeline's own owner (DRE-4964, DRE-5746). A merged PR counts when it is **for** the card, and only three things make it so (DRE-5857): a closing line in its body (`Closes`, `Fixes` or `Resolves DRE-N`), its branch `agent/DRE-N-…` (read per pull request, since a search result does not carry it), or the card carrying it as its own pull request attachment. Anything else — the title, a Linear link, `Card: DRE-N` — is a mention, and a mention never counts: a PR body lists the cards it read or was motivated by. DRE-4966's own names four it did not deliver, and bureau-pipeline #415, which closes DRE-4058, says "the sibling card DRE-4059 covers…" — on that sentence the 2026-10-05 proposal offered to cancel DRE-4059, live and unbuilt. A pull request whose branch could not be read leaves the card unread on this source, not clean. |
 | **Other cards** | A card a Linear search for the number finds, a `related` card, or a sibling under the same parent, whose text says it **supersedes, replaces, absorbs or covers** DRE-N, and which is itself a real replacement. Naming DRE-N is not enough: a Done investigation card lists the follow-ups it filed. The reason names the card and quotes the sentence that matched — `DRE-X (Done) says: "Supersedes DRE-N."` — so a real "Supersedes" can be told from a looser "covers" without opening the other card (DRE-5305). A sentence carrying code is replaced, as a comment quote is, by one saying its words are in the proposal record. |
 
 **A Cancel needs a real replacement.** A Cancel row that says "superseded by X"
@@ -381,8 +381,10 @@ record names the sources that were unread for it; a card with no evidence and
 an unread source is `unread`, never `clean`; a Planning card past the cards the
 check read is `not checked`. The page says all three under
 `## What the check read`, after the Cancel list. The merged-PR search is unread
-for every card when there is no `GH_TOKEN`, when the installation cannot see a
-fleet owner, or when a search fails; a card Linear would not answer for is
+for every card when any fleet owner has no token, when an owner's token's
+installation cannot see it, or when a search fails — each named with the
+reason, and the owners that were read still searched, so evidence found there
+counts; a card Linear would not answer for is
 unread on both of the Linear sources. A check that fails outright does not cost
 the morning its proposal: the proposal posts as it would have unchecked, with
 every card unread on every source.
@@ -434,7 +436,21 @@ card excluded without judgement by id with its reason, one line `Verify step: <N
 <S> s wall clock`, and each unverified card by id with its reason. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
 proof whole in the Reason cell, and a batch card's verdict is under its entry
-in `## Why each card is in the batch`. A cost or clock the step could not read
+in `## Why each card is in the batch`.
+
+**The proof line (DRE-5746).** That verdict is one plain line —
+`Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
+every proof the agent gave is on it, in the form the Cancel reason already
+uses: `path:line — quote` for a `file:line` item, `source — quote` for any
+other (`groomer.proof_line`, the one formatter both read). Not a new
+`- **Label:**` line and not a column of the batch table: the console and the
+drain parse both, and they render byte for byte as before. A Planning card
+with no proof is one whose verdict is `unverified`, and its line carries the
+reason instead, one of exactly `agent step failed`, `agent step skipped`,
+`no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact` or
+`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+document naming any other reason is read as `unreadable answer`. An
+`excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
 byte as before. The drain still reads the posted comment, never the artifact,
 and reads a verify-agent Cancel row exactly like any other.
@@ -442,22 +458,31 @@ and reads a verify-agent Cancel row exactly like any other.
 **What verify excludes without judging (DRE-5306).** `groom_verify_agent.py
 targets` reads each card with its board context — age, labels, parent,
 children, the last move and every comment with who said it — in one Linear
-request per card, and excludes four kinds before any agent runs, never by the
+request per card, and excludes five kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
 `hand-built`, `moved into Intake on YYYY-MM-DD` (a move from another lane in
 the last seven days; it reads the move, not its author, since a move carries
 no signature and the console's move for the CEO looks like any workflow's),
-and `board context unread: <why>` (the card's read failed, or the pipeline's
+`board context unread: <why>` (the card's read failed, or the pipeline's
 own Linear identity could not be read, in which case every card is excluded
-and none is read). An excluded card gets no agent and no token, and its
+and none is read), and — the fifth exclusion, DRE-5746 — `repo not in
+config/repo-map.json: <slug>`, a card whose `repo:` slug is not a key of the
+map (`none` for a card with no slug), decided off the map rather than the
+card. On the 2026-10-02 morning DRE-5270, still wearing the retired
+`repo:vericorr`, sat on the Planning list `unverified` as work the fleet
+cannot build; `apply` believes this reason off a verdict document as it does
+the other four. The groomer cancels nothing and changes no label for it —
+whether such a card is canceled or relabeled is a person's call on the card,
+and the Todo gate already bounces a retired slug. An excluded card gets no agent and no token, and its
 verdict is `excluded` with the reason. It is dropped from the batch and stays
 where it is on the board: off the Planning list, the next still-needed spare
 joins the Planning list, which is re-ordered by the rules' order and
 renumbered from 1 (DRE-5858) — so the spare follows every card the rules
 placed — it goes on no Cancel list and nothing moves it, and the page
-names it under `## Verified against main` with its reason. It is judged again
-on a morning none of the four holds.
+names it under `## Verified against main` with its reason, and it waits in
+`not-now` with the reason `excluded without judgement: <reason>`. It is judged
+again on a morning none of the five holds.
 
 **The lookups before the agent runs (DRE-5308, DRE-5458).** On 2026-09-29 the
 merged pull request search failed for every card and every card was judged on
@@ -474,7 +499,9 @@ repo, the commits that touched each path since the card was filed, and the
 merged pull requests they belong to. In the verify leg `groom_lookups.py fold`
 reads every owner's document and decides each card on its own: a mapped
 card's lookup is judged by whether its own repo answered, and an unmapped
-card's by whether any repo did. Another owner being unread — no token, its
+card's by whether any repo did — a rule only a targets file written before
+DRE-5746 still reaches, since an unmapped card is now excluded before any
+lookup. Another owner being unread — no token, its
 clock spent, rate limited — is named on the card and does not fail it; it
 appears as `the lookup did not cover <owner>: <why>`, and so does a single
 repo that refused. A card's lookup counts as failed when its own repo did not
@@ -1074,16 +1101,29 @@ The ranked read has its own stated limits, and they are on the page too:
   held nothing is still `0`: "nothing merged" and "we could not ask" are
   different facts and get different renderings (`standards/console-honesty.md`
   rule 2);
-- **the merged PRs are read with the Bureau App token, by real merge date**
-  (DRE-4964). `groomer.yml` mints the App's installation token and hands it to
-  the Groom step as `GH_TOKEN`. The read searches `is:pr is:merged` per owner
-  in `config/repo-map.json`, dates each row by `pull_request.merged_at` —
+- **the merged PRs are read with the Bureau App's tokens, one per owner, by
+  real merge date** (DRE-4964, DRE-5746). An App installation token sees one
+  installation, and the one token the groom job used to mint — with no
+  `owner:` — saw dreadnought-foundry alone: the 2026-10-05 header's 940
+  merged PRs were that one owner's, and EveryBite and DeltaSolv were unread
+  every morning. So `groomer.yml` mints one read-only token per owner in
+  `config/repo-map.json` (contents and pull requests, read), from the two
+  secrets the lookup legs mint from, one step per owner because a job cannot
+  loop steps, and hands each to the Groom step under the name
+  `groom_context.token_env` derives: `GH_TOKEN` for the pipeline's own owner,
+  so nothing else that reads it moves, and `GH_TOKEN_<OWNER>` for the others
+  (`GH_TOKEN_EVERYBITE`, `GH_TOKEN_DELTASOLV`). `tests/test_groomer_wiring.py`
+  reads the map and fails when an owner has no mint step or no env name, so a
+  fourth owner onboarded into the map is minted for rather than silently
+  unread. The read searches `is:pr is:merged` per owner, on that owner's
+  token, dates each row by `pull_request.merged_at` —
   never by when the PR was opened — follows every page, and reports the
   search's own `total_count`, so the count holds past the 40 rows the model
-  reads and past the search's 1,000-result ceiling. An owner the token's
-  installation cannot see is named unread (`merged_prs:<owner>` in the
-  proposal JSON, and by name in the prompt) and adds nothing to the count —
-  it is never searched and counted as 0;
+  reads and past the search's 1,000-result ceiling. An owner with no token, a
+  mint that failed, or an installation that cannot see it is named unread
+  with the reason (`merged_prs:<owner>` in the proposal JSON, and by name in
+  the prompt) and adds nothing to the count — it is never searched and
+  counted as 0;
 - **a cut answer is said out loud.** The one call is sized off the census, and
   when the answer comes back at that ceiling the receipt line says so, names
   the budget, and counts the cards the cut cost — they appear under "Could not
