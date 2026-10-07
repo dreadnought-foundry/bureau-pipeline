@@ -463,7 +463,9 @@ def _run_escalation_step(tmp_path, *, returned: bool, state: str = "",
     log = tmp_path / "escalation.json"
     env = {**os.environ, "RETURNED_CHILD": "true" if returned else "false",
            "PARENT": PARENT, "EXPECT_CARD": CARD, "FAKE_STATE": state,
-           "FAKE_EXIT": "1" if lookup_fails else "0", "ESCALATION_LOG": str(log)}
+           "FAKE_EXIT": "1" if lookup_fails else "0", "ESCALATION_LOG": str(log),
+           # DRE-5564: the planner's execution file, read for its last words.
+           "EXEC_FILE_USED": str(temp / "claude-execution-output.json")}
     # GitHub runs a `run:` block as `bash -e {0}`.
     done = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=60)
@@ -505,7 +507,10 @@ class TestTheStepProvesTheSplitBeforeStandingDown:
             tmp_path, returned=False, reason="a question for the CEO")
         assert escalation == {
             "args": ["escalate", CARD, "--reason-file",
-                     str(tmp_path / "runner-temp" / "planner-escalation.txt")],
+                     str(tmp_path / "runner-temp" / "planner-escalation.txt"),
+                     # DRE-5564: quoted when no reason was written.
+                     "--execution-file",
+                     str(tmp_path / "runner-temp" / "claude-execution-output.json")],
             "reason": "a question for the CEO",
         }
 
