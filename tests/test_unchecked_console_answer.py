@@ -411,7 +411,12 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: keeps the card's band rather than demoting it (DRE-5307).
 #: `proof_dispatch.py` reads an answer after a proof's park, and an unchecked
 #: one neither returns the card nor discharges its hold, and says so (DRE-5926).
+#: `green_light_reply.py` sends a Green Light plan back on the CEO's comment,
+#: and an unchecked answer after his newest counted one holds the dispatch
+#: and says so (DRE-6138).
 OTHER_READERS = {
+    "green_light_reply.py": "tests/test_green_light_reply.py::"
+    "test_an_unchecked_answer_after_his_holds_the_dispatch_and_says_why",
     "groom_verify_agent.py": "tests/test_groom_verify_agent.py::"
     "test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text",
     "groom_priority.py": "tests/test_groom_priority.py::"

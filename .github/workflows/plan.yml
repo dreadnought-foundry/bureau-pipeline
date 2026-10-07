@@ -3682,6 +3682,11 @@ jobs:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
               Cards: python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
               Thread: python3 .bureau-pipeline/scripts/spoken_thread.py thread "${{ github.event.client_payload.identifier }}"
+              A comment in the CEO's voice newer than the plan's newest
+              revision is a finding this round must answer, either by changing
+              the plan as he asked or by a plain-English answer to his question
+              in the revision note. A PASS that leaves his comment unanswered
+              is not a pass.
 
             EVERY CARD RECORD CARRIES ITS `state`, and by the time you read a
             re-planned epic some children have already shipped. A child in
