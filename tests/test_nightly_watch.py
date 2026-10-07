@@ -29,12 +29,14 @@ tests hold this watcher to the same rules:
      2-3). A repo the token cannot read and a workflow file that will not
      fetch are reported as unknown and alarm; neither is ever reported as
      "nightly ok".
-  4. **The alarm reaches a human the way the existing one does.** One
-     deduplicated Linear card through `linear_ops.py`, asserted against
-     `channel-watch.yml` rather than restated here, so the two cannot drift.
+  4. **The alarm reaches a human the way the channel alarm did.** One
+     deduplicated Linear card through `linear_ops.py`. It was asserted against
+     the channel-staleness workflow until that job was retired (DRE-6053); the
+     values it read there are now literals in `AlarmMechanismTest`.
   5. **It is a report, not an act.** One `unconverted` / `not-an-act` row in
-     `config/pipeline-acts.json`, copied from the row `channel-watch.yml`
-     already carries, and nothing added to `acts`.
+     `config/pipeline-acts.json`, declared the way the channel alarm's row was
+     (that row is now a literal in `ActRegistryTest`), and nothing added to
+     `acts`.
 """
 
 import base64
@@ -52,9 +54,9 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-import channel_watch  # noqa: E402
 import check_act_receipts  # noqa: E402
 import check_workflow_watchers  # noqa: E402
+import cron_clock  # noqa: E402
 import nightly_watch  # noqa: E402
 from gh_read_retry import GhReadError  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -62,7 +64,6 @@ import release_train  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WATCH_WORKFLOW = ROOT / ".github" / "workflows" / "nightly-watch.yml"
-CHANNEL_WORKFLOW = ROOT / ".github" / "workflows" / "channel-watch.yml"
 MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 
@@ -967,30 +968,37 @@ def _linear_commands(step: dict) -> set:
     return set(re.findall(r"linear_ops\.py\s+([a-z-]+)", step.get("run") or ""))
 
 
-class AlarmMechanismTest(unittest.TestCase):
-    """The criterion: asserted AGAINST channel-watch.yml, never restated."""
+#: The channel-staleness alarm's own alarm step, read once off its workflow on
+#: `main` at f6b6813a (2026-10-07) just before DRE-6053 retired it. This test
+#: used to compare against that file; with the file gone, these are the values
+#: it compared against, so the nightly alarm still reaches a human exactly the
+#: way the channel alarm did.
+CHANNEL_ALARM_LINEAR_COMMANDS = {"find-open", "comment", "create"}
+CHANNEL_ALARM_IF = "steps.decide.outputs.alarm == 'true'"
 
-    def test_the_alarm_uses_the_same_linear_seam_as_the_channel_watcher(self):
+
+class AlarmMechanismTest(unittest.TestCase):
+    """The criterion: the channel alarm's mechanism, carried as literals."""
+
+    def test_the_alarm_uses_the_same_linear_seam_as_the_channel_alarm(self):
         self.assertEqual(
             _linear_commands(_alarm_step(WATCH_WORKFLOW)),
-            _linear_commands(_alarm_step(CHANNEL_WORKFLOW)),
+            CHANNEL_ALARM_LINEAR_COMMANDS,
             "the nightly alarm must reach a human through the same "
-            "linear_ops.py seam the channel alarm already uses — a second "
+            "linear_ops.py seam the channel alarm used — a second "
             "notification path is a second thing to keep working",
         )
 
     def test_the_alarm_is_gated_on_the_decision_the_same_way(self):
-        self.assertEqual(
-            _alarm_step(WATCH_WORKFLOW).get("if"),
-            _alarm_step(CHANNEL_WORKFLOW).get("if"),
-        )
+        self.assertEqual(_alarm_step(WATCH_WORKFLOW).get("if"), CHANNEL_ALARM_IF)
 
     def test_the_card_carries_a_repo_label_the_same_way(self):
         """A card with no `repo:<slug>` label cannot be routed out of Planning
-        (DRE-2680). Derived from the run's own repository, as the sibling does."""
-        for workflow in (WATCH_WORKFLOW, CHANNEL_WORKFLOW):
-            self.assertIn("--repo", _alarm_step(workflow)["run"])
-            self.assertIn("GITHUB_REPOSITORY", _alarm_step(workflow)["run"])
+        (DRE-2680). Derived from the run's own repository, as the channel
+        alarm's step did (it carried both strings below)."""
+        run = _alarm_step(WATCH_WORKFLOW)["run"]
+        self.assertIn("--repo", run)
+        self.assertIn("GITHUB_REPOSITORY", run)
 
     def test_one_condition_one_title_so_the_card_dedups(self):
         """`find-open` matches on equality, so a title that moved with the
@@ -1049,8 +1057,9 @@ class AlarmMechanismTest(unittest.TestCase):
         self.assertNotIn("\n", verdict.headline)
 
     def test_the_elapsed_time_is_phrased_by_the_one_formatter(self):
-        """Same sentence shape as the channel alarm, from the same code."""
-        self.assertIs(nightly_watch.hours_since, channel_watch.hours_since)
+        """Same sentence shape as the channel alarm had, from the same code."""
+        self.assertIs(nightly_watch.hours_since, cron_clock.hours_since)
+        self.assertIs(nightly_watch.elapsed, cron_clock.elapsed_days)
 
 
 class WiringTest(unittest.TestCase):
@@ -1071,7 +1080,7 @@ class WiringTest(unittest.TestCase):
 
     def test_the_cron_and_the_declared_interval_agree(self):
         self.assertEqual(
-            channel_watch.cron_interval_hours(self.on["schedule"][0]["cron"]),
+            cron_clock.cron_interval_hours(self.on["schedule"][0]["cron"]),
             nightly_watch.INTERVAL_HOURS,
         )
 
@@ -1109,14 +1118,32 @@ class WiringTest(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 
 
+#: The channel-staleness alarm's `unconverted` row in `config/pipeline-acts.json`,
+#: copied verbatim off `main` at f6b6813a (2026-10-07) before DRE-6053 removed
+#: the job and the row with it. The nightly alarm's row is declared the way this
+#: one was; `file` is left out because it named the retired workflow.
+CHANNEL_ALARM_ROW = {
+    "anchor": "\U0001f514 Still true today:",
+    "step": "Raise the alarm where a human will see it",
+    "kind": "not-an-act",
+    "means": "A standing alarm is re-confirmed on its existing card rather "
+             "than filed again.",
+    "why": "A REPORT about the work, not something the pipeline did on its own. "
+           "It creates no obligation, hands the work to nobody and has nothing "
+           "to discharge \u2014 the three questions a trailer answers all read "
+           "'not applicable'. An act is a refusal, a recovery, a hold or a "
+           "progress act; this is a fact. Its subject is the world outside the "
+           "pipeline, not a piece of work the pipeline moved.",
+}
+
+
 class ActRegistryTest(unittest.TestCase):
-    """One `unconverted` row, copied from the one channel-watch.yml carries."""
+    """One `unconverted` row, declared the way the channel alarm's was."""
 
     def setUp(self):
         self.doc = pipeline_act.load()
         self.rows = self.doc.get("unconverted") or []
-        self.sibling = [r for r in self.rows
-                        if r.get("file") == ".github/workflows/channel-watch.yml"]
+        self.sibling = [CHANNEL_ALARM_ROW]
         self.mine = [r for r in self.rows
                      if r.get("file") == ".github/workflows/nightly-watch.yml"]
 
