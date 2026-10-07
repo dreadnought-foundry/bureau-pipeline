@@ -266,8 +266,13 @@ def test_the_reason_is_read_off_review_rerun_never_spelled():
 def test_the_next_pass_reads_the_receipt_and_does_not_dispatch_again(monkeypatch, capsys):
     said_it = answer(30)
     card = lane_card("DRE-7001", window=[said_it, receipt_for(said_it, 15)])
-    h = Harness(monkeypatch, Board([card]))
+    # Partial, so the thread is read and the receipt is found THERE — the
+    # window alone spares the read (the test below).
+    card["comments"]["pageInfo"]["hasNextPage"] = True
+    board = Board([card])
+    h = Harness(monkeypatch, board)
     tally = h.sweep()
+    assert ("thread", "DRE-7001") in board.reads
     assert h.fired == [] and h.posted == []
     assert tally.dispatched == 0
     out, _ = _out(capsys)
@@ -370,8 +375,9 @@ def test_a_person_comment_from_a_declared_ceo_id_qualifies(monkeypatch):
 
 
 def test_a_person_comment_from_anyone_else_does_not(monkeypatch, capsys):
-    h = Harness(monkeypatch, Board([lane_card("DRE-7001",
-                                              window=[said(20, SOMEONE)])]))
+    card = lane_card("DRE-7001", window=[said(20, SOMEONE)])
+    card["comments"]["pageInfo"]["hasNextPage"] = True   # read, whatever it holds
+    h = Harness(monkeypatch, Board([card]))
     h.sweep()
     assert h.fired == [] and h.posted == []
     _, err = _out(capsys)
