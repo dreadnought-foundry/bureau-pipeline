@@ -199,8 +199,8 @@ set -e
 # 2026-10-07, DRE-5745, DRE-5659. A blocked attempt names one cause, on
 #   the PR and on the card. On portico #883 (2026-10-02) the critic had
 #   approved the head and the only red check was a CI time limit, yet the
-#   card got the fixed "disagrees with the reviewer's blocking finding"
-#   while the PR comment had the real reason. `fix_exit.py cause` gives
+#   card got a fixed disagreement template while the PR comment had the
+#   real reason. `fix_exit.py cause` gives
 #   the sentence; the PR carries it after the act's trailer, so the body
 #   the registry froze is untouched, and the card receipt opens with it.
 
