@@ -144,15 +144,8 @@ jobs:
     # (DRE-2047) is the real review route for dependabot PRs and passes the
     # event_name disjunct untouched. NOT pull_request_target — full secrets
     # are never attached to a dependabot-triggered event.
-    #
-    # TITLE-ONLY EDIT (DRE-6192, trailing conjunct) — mechanical: an `edited`
-    # event reviews only when the body changed, and a payload with no
-    # `changes.body` is a title edit, so the job stops before any token is
-    # minted. Whether a BODY edit reviews is policy, and is decided in
-    # should_review_pr.py like every other case.
     if: >
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
-      && (github.event.action != 'edited' || github.event.changes.body)
     # The BUILD lane (DRE-4846): the caller's own CI variable in front of the
     # long chain. The critic was called "API-bound" until a read of 129 QA
     # Review runs over 09-23 → 09-25 showed it SIGKILLed (exit 137) on a

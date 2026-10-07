@@ -486,11 +486,6 @@ class DecideStepWiringTest(unittest.TestCase):
                      "--head-sha"):
             self.assertIn(flag, run)
 
-    def test_the_job_skips_a_title_only_edit_before_any_mint(self):
-        cond = " ".join(_review_job()["if"].split())
-        self.assertIn("github.event.action != 'edited'", cond)
-        self.assertIn("github.event.changes.body", cond)
-
 
 DECIDE_GH_STUB = r"""#!/bin/sh
 case "$*" in
