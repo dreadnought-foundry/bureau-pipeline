@@ -125,6 +125,8 @@ class _GitHub:
             tip = self.ref.get(name)
             if isinstance(tip, Exception):
                 raise tip
+            if isinstance(tip, list):  # partial matches, not this branch
+                return json.dumps(tip)
             return json.dumps({"ref": f"refs/heads/{name}",
                                "object": {"sha": tip, "type": "commit"}})
         if "/git/commits/" in path:
@@ -296,6 +298,11 @@ class UnknownTest(unittest.TestCase):
         self._assert_unknown(gh)
         self.assertTrue(gh.degraded)
         self.assertEqual(gh.read_failures, [])
+
+    def test_a_ref_read_that_answers_partial_matches_is_unknown(self):
+        partial = [{"ref": f"refs/heads/{BRANCH}-2", "object": {"sha": TIP}}]
+        gh = _GitHub([_pr()], ref={BRANCH: partial}).run()
+        self._assert_unknown(gh)
 
     def test_an_unreadable_branch_commit_is_unknown(self):
         err = reconcile.ReconcileReadError("gh api failed rc=1: HTTP 500")
