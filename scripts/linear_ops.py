@@ -2333,9 +2333,21 @@ def merged_not_closed_comment(
 # short of the evidence — no APPROVE, one at an earlier sha, a later verdict
 # that is not APPROVE, a branch that is not the card's own, a GitHub read that
 # failed — leaves the card open with today's comment.
+#
+# An APPROVE is not the evidence on its own (DRE-6141). On 2026-10-07 the
+# critic approved three records whose rows read `Not observed.` — they were
+# honest about what they had not seen — and this ruling closed all three; one,
+# DRE-5798, four minutes after its run posted a `🔬 proof-waiting` hold naming
+# the CEO's press. So the ruling also opens the record the pull request ADDED,
+# at the merged head, through `proof_record` (the reader the merge gate and the
+# hygiene lane share), and refuses unless every judged row is met. Only then
+# does it read the card's thread, and it refuses while a hold stands that
+# nothing discharged (`proof_record.open_holds`). A read that fails is a
+# refusal, never a pass.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
-MERGED_PR_FIELDS = "headRefName,headRefOid,mergedAt,state,comments"
+#: `files` names the record the pull request added (DRE-6141).
+MERGED_PR_FIELDS = "headRefName,headRefOid,mergedAt,state,comments,files"
 
 
 def read_merged_pr(pr_url: str) -> dict | None:
@@ -2374,15 +2386,60 @@ def _is_qa_bot(comment: dict) -> bool:
     return (who.get("login") or "").removesuffix("[bot]") == QA_BOT_LOGIN
 
 
-def proof_evidence_gap(identifier: str, pr: dict | None) -> str | None:
+def proof_evidence_gap(
+    identifier: str, pr: dict | None, record=None, voices: list | None = None
+) -> str | None:
     """Why this merged pull request does NOT close a PROOF card, or None when
-    it does. Pure: `pr` is `read_merged_pr`'s answer.
+    it does. Pure: `pr` is `read_merged_pr`'s answer, `record` the
+    `proof_record.Record` it added, read at the merged head
+    (`read_proof_record`), and `voices` the card's thread as
+    `spoken_thread.voices` reads it (`read_card_voices`). A record or a thread
+    not passed was not read, and is a refusal (DRE-6141).
 
     The critic's word is read the way the merge gate reads it — the latest
     comment by the qa-bot App whose first line opens with the critic marker
     (a quote is inert), its token APPROVE and its sha the merged head exactly.
     No content carry: an APPROVE at an earlier sha is not one at the head.
+    Then the record — every judged row met — and then the thread: no
+    `🔬 proof-waiting` hold that nothing discharged.
     """
+    gap = _merge_evidence_gap(identifier, pr)
+    if gap is not None:
+        return gap
+    gap = _record_gap(record)
+    if gap is not None:
+        return gap
+    return _holds_gap(voices)
+
+
+def _record_gap(record) -> str | None:
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    why = proof_record.shortfall(record)
+    if why is None:
+        return None
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+    # The record is untrusted text, and this reason is posted on the card.
+    return f"its proof record is not proven: {merge_gate.without_verdict_markers(why)}"
+
+
+def _holds_gap(voices: list | None) -> str | None:
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    if voices is None:
+        return ("the card's thread could not be read, so an open "
+                f"{PROOF_MARK} {PROOF_WAITING_TAG} hold cannot be ruled out")
+    held = proof_record.open_holds(voices)
+    if not held:
+        return None
+    return (f"the card carries {len(held)} {PROOF_MARK} {PROOF_WAITING_TAG} "
+            f"hold(s) nothing discharged, the newest: {held[-1]}")
+
+
+def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
+    """The merge, the branch and the critic's APPROVE at the merged head —
+    the four refusals DRE-5919 made."""
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
 
     if not pr:
@@ -2410,10 +2467,12 @@ def proof_evidence_gap(identifier: str, pr: dict | None) -> str | None:
 
 
 def proof_close_note(
-    identifier: str, title: str, pr_url: str, pr: dict | None
+    identifier: str, title: str, pr_url: str, pr: dict | None,
+    record=None, voices: list | None = None,
 ) -> str | None:
     """The Done comment for a `PROOF:` card whose record merged approved, or
-    None when the card is not one or the evidence falls short.
+    None when the card is not one or the evidence falls short
+    (`proof_evidence_gap`, over the same `record` and `voices`).
 
     Opens `✅ Merged: <url>` like every merge receipt, so the readers that key
     on it (`hand_work_migration.MERGED_RECEIPT`) still find it; then the PT
@@ -2422,7 +2481,7 @@ def proof_close_note(
     """
     if not _PROOF_TITLE_RE.match(title or ""):
         return None
-    if proof_evidence_gap(identifier, pr) is not None:
+    if proof_evidence_gap(identifier, pr, record, voices) is not None:
         return None
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
     return (
@@ -2456,14 +2515,54 @@ def merge_close_ruling(
     ):
         return reason, None
     pr = read_merged_pr(pr_url)
-    note = proof_close_note(identifier, title, pr_url, pr)
+    # Each read only once the one before it has passed (DRE-6141): a record
+    # not met never costs a Linear read, however often reconcile asks.
+    gap = _merge_evidence_gap(identifier, pr)
+    record = voices = None
+    if gap is None:
+        record = read_proof_record(pr_url, pr)
+        gap = _record_gap(record)
+    if gap is None:
+        voices = read_card_voices(identifier)
+    note = proof_close_note(identifier, title, pr_url, pr, record, voices)
     if note is None:
         print(
             f"PROOF card {identifier} stays open: "
-            f"{proof_evidence_gap(identifier, pr)}."
+            f"{proof_evidence_gap(identifier, pr, record, voices)}."
         )
         return reason, None
     return None, note
+
+
+_PR_REPO_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/\d+")
+
+
+def read_proof_record(pr_url: str, pr: dict):
+    """The record the merged pull request added, read at its merged head —
+    a `proof_record.Record`, whose text is None when it was not found or not
+    read. Never raises: a failed read is a refusal, never evidence."""
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    found = _PR_REPO_RE.search(pr_url or "")
+    if found is None:
+        return proof_record.Record(None, None, f"no repository in {pr_url!r}")
+    return proof_record.fetch(found.group(1), pr.get("files"), pr.get("headRefOid") or "")
+
+
+def read_card_voices(identifier: str) -> list | None:
+    """The card's whole thread as `spoken_thread.voices` reads it — the CEO's
+    console answer signature-checked against the console's public key — or
+    None when Linear could not be read."""
+    import spoken_thread  # lazy: it imports this module
+
+    try:
+        nodes, viewer = _thread_and_viewer(
+            identifier, "body", "user", "createdAt", whole=True
+        )
+    except Exception as exc:  # noqa: BLE001 — any failed read is a refusal, never a pass
+        print(f"proof-close: could not read {identifier}'s thread: {exc}", file=sys.stderr)
+        return None
+    return spoken_thread.voices(nodes, viewer, card=identifier)
 
 
 def cmd_card_done(identifier: str, pr_url: str) -> None:
@@ -2474,7 +2573,8 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     (DRE-3119): comment the merge, leave the state alone, and say so LOUDLY in
     the job log. A `PROOF:` card is the one `no-code` card a merge may close
     (DRE-5919): → Done when its record merged on its own branch with the
-    critic's APPROVE at the merged head (`merge_close_ruling`).
+    critic's APPROVE at the merged head, every judged row of the record met
+    and no `🔬 proof-waiting` hold standing (`merge_close_ruling`, DRE-6141).
 
     Break-glass cards (DRE-2737) are a class of their own: the fix has shipped, so
     the debt comes due — the card returns to Planning for the classification

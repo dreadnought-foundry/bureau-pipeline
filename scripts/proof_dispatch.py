@@ -115,6 +115,15 @@ import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_and_demo  # noqa: E402
 import proof_release  # noqa: E402
+# The branch rule and the hold reader live once, in the leaf the merge gate and
+# the PROOF close read too (DRE-6141) — moved, not copied.
+from proof_record import (  # noqa: E402,F401 — the names this phase and its callers read
+    CEO_PRESS,
+    HOLD_MARK,
+    OBSERVED_MARK,
+    proof_record_branch,
+)
+from proof_record import open_holds as _open_holds  # noqa: E402
 import proof_run_state  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
@@ -186,10 +195,6 @@ RERUN_UNANSWERED_OBSERVED = ("the re-run finished and the critic's findings "
 RERUN_UNANSWERED_NEEDS = ("an operator reading the critic's findings and the "
                           "re-run's thread")
 
-#: What a hold names when only the CEO's own login can discharge it (DRE-5925).
-CEO_PRESS = "the CEO's press"
-HOLD_MARK = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_WAITING_TAG}:"
-OBSERVED_MARK = f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_OBSERVED_MARK}:"
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
 #: time on the lane read that says when the card entered the lane.
 PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
@@ -208,14 +213,7 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
                  identifier title state { name } labels { nodes { name } } } } }
            } }""" % reconcile.INVERSE_RELATIONS_GQL
 
-_RECORD_BRANCH = re.compile(r"agent/DRE-\d+-proof-record")
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
-
-
-def proof_record_branch(head_ref) -> bool:
-    """Is `head_ref` a proof run's record branch, `agent/DRE-<n>-proof-record`?
-    The fix-agent card and the re-run card read it; nothing here does."""
-    return bool(_RECORD_BRANCH.fullmatch(head_ref or ""))
 
 
 def _when(stamp) -> datetime | None:
@@ -346,26 +344,6 @@ def _entered(card: dict) -> str:
 def _number(card: dict) -> int:
     digits = (card.get("identifier") or "").rsplit("-", 1)[-1]
     return int(digits) if digits.isdigit() else 0
-
-
-def _open_holds(voices: list) -> list:
-    """The `🔬 proof-waiting` holds nothing later on the thread discharged.
-
-    Anyone's hold holds — a copy can only keep a card waiting. A later
-    `🔬 proof-observed` from the pipeline's key or a person discharges the
-    operator's holds; only his signed answer discharges one naming the CEO's
-    press. An unsigned claim to be his answer discharges nothing."""
-    held: list = []
-    for voice in voices:
-        body = (voice.body or "").lstrip()
-        if body.startswith(HOLD_MARK):
-            held.append(_first_line(body))
-        elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
-            held = [h for h in held if CEO_PRESS not in h]
-        elif (body.startswith(OBSERVED_MARK)
-              and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
-            held = [h for h in held if CEO_PRESS in h]
-    return held
 
 
 def _answered_after_park(voices: list) -> tuple | None:
