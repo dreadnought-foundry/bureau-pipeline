@@ -177,8 +177,13 @@ class FakeRepo:
         self.listed_only = dict(listed_only or {})
 
 
-def run_record(*, status="completed", conclusion="success", hours_ago=2.0):
-    return {"status": status, "conclusion": conclusion, "created_at": _ago(hours_ago)}
+def run_record(*, status="completed", conclusion="success", hours_ago=2.0,
+               head_branch=None):
+    record = {"status": status, "conclusion": conclusion,
+              "created_at": _ago(hours_ago)}
+    if head_branch is not None:
+        record["head_branch"] = head_branch
+    return record
 
 
 class FakeGitHub:
@@ -224,8 +229,15 @@ class FakeGitHub:
             }
         runs = re.match(r"^/actions/workflows/(?P<file>[^/]+)/runs\?", rest)
         if runs:
-            record = repo.runs.get(runs.group("file"))
-            return {"workflow_runs": [record] if record else []}
+            # One record, or a list of them newest first. A record that names
+            # no branch ran on the default branch, where a schedule runs.
+            listed = repo.runs.get(runs.group("file")) or []
+            if isinstance(listed, dict):
+                listed = [listed]
+            return {"workflow_runs": [
+                {"head_branch": repo.default_branch, **record}
+                for record in listed
+            ]}
         commits = re.match(r"^/commits\?path=(?P<file>[^&]+)&sha=(?P<sha>[^&]+)"
                            r"&per_page=1$", rest)
         if commits:
@@ -508,7 +520,70 @@ class ReadingTest(unittest.TestCase):
         reads = [p for p in api.paths if "/runs?" in p]
         self.assertEqual(len(reads), 1)
         self.assertIn("event=schedule", reads[0])
-        self.assertIn("branch=trunk", reads[0])
+        # DRE-6124: the branch is filtered here, on `head_branch`, never by
+        # GitHub's `branch=` filter — see BranchFilterTest.
+        self.assertNotIn("branch=", reads[0])
+        self.assertIn("per_page=20", reads[0])
+
+
+class BranchFilterTest(unittest.TestCase):
+    """DRE-6124: GitHub's `branch=` filter on a workflow's run list answered
+    Portico's working nightly with no runs (operator token) and a day-stale
+    run (bot token) in the same minute, while the same query without it
+    listed all 13 schedule runs, the newest that morning. The watcher read the
+    empty answer as never ran and filed a card. So it asks without `branch=`
+    and keeps the newest run whose `head_branch` is the default branch."""
+
+    PORTICO = "dreadnought-foundry/portico"
+
+    def test_a_fresh_run_the_branch_filter_hides_reads_ok(self):
+        class BranchFilterLies(FakeGitHub):
+            def __call__(self, path):
+                if "/runs?" in path and "branch=" in path:
+                    self.paths.append(path)
+                    return {"total_count": 0, "workflow_runs": []}
+                return super().__call__(path)
+
+        api = BranchFilterLies({
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=4)}),
+        })
+        readings = nightly_watch.collect(
+            api, roster={"portico": self.PORTICO}, now=NOW)
+        self.assertEqual(_states(readings),
+                         {f"{self.PORTICO} · CI": nightly_watch.OK})
+        self.assertFalse(nightly_watch.evaluate(readings).alarm)
+
+    def test_a_newer_run_on_another_branch_is_skipped(self):
+        """The newest entry is on another branch and has sat queued for four
+        hours — read, it would be STUCK. The newest default-branch run, six
+        hours old and finished, is the one that answers."""
+        readings, _ = _collect({
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": [
+                    run_record(status="queued", conclusion=None, hours_ago=4,
+                               head_branch="agent/DRE-1-probe"),
+                    run_record(hours_ago=6),
+                    run_record(hours_ago=30),
+                ]}),
+        })
+        self.assertEqual(_states(readings),
+                         {f"{self.PORTICO} · CI": nightly_watch.OK})
+        self.assertIn(f"{nightly_watch.elapsed(6)} old", readings[0].detail)
+
+    def test_no_run_on_the_default_branch_is_the_no_run_yet_path(self):
+        """Runs only on other branches are not a nightly on main: the
+        first-night reading decides, exactly as for an empty list."""
+        readings, api = _collect({
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": [run_record(hours_ago=1, head_branch="probe")]}),
+        })
+        self.assertEqual(_states(readings),
+                         {f"{self.PORTICO} · CI": nightly_watch.NEVER})
+        self.assertTrue(any("/commits?" in p for p in api.paths))
 
 
 # --------------------------------------------------------------------------- #

@@ -119,6 +119,11 @@ STALE_AFTER_HOURS = 26.0
 #: Hours a schedule run may sit queued or in progress before it is stuck.
 STUCK_AFTER_HOURS = 3.0
 
+#: Schedule runs read per workflow, newest first, to find the newest on the
+#: default branch. One page: a schedule runs only on the default branch, so
+#: the newest entry is almost always it (DRE-6124).
+RUNS_PAGE = 20
+
 #: The cron cadence in nightly-watch.yml. The wiring test pins the two
 #: together. Hourly, on a schedule of its own: this must not depend on the
 #: repos it watches running anything.
@@ -399,9 +404,13 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
         return []
     filename = path.rsplit("/", 1)[-1]
     try:
+        # No `branch=`: GitHub's branch filter on this list answered Portico's
+        # working nightly with no runs on one token and a day-stale run on
+        # another, in the same minute the unfiltered list held all of them
+        # (DRE-6124). The branch is filtered below, on `head_branch`.
         runs = api(
             f"repos/{repo}/actions/workflows/{filename}/runs"
-            f"?branch={branch}&event=schedule&per_page=1"
+            f"?event=schedule&per_page={RUNS_PAGE}"
         )
     except Unreadable as refusal:
         return [Reading(subject, UNKNOWN, _unanswered_runs(subject, refusal))]
@@ -413,7 +422,11 @@ def _read_workflow(api, repo: str, branch: str, workflow: dict,
         # (DRE-4867).
         return [Reading(subject, UNKNOWN, _unanswered_runs(
             subject, "the answer carried no list of runs"))]
-    record = (listed or [None])[0] or {}
+    # Newest first. A schedule only ever runs on the default branch, so
+    # filtering here loses nothing; none of the page on it is "no schedule run
+    # yet", the first-night path below.
+    record = next((run for run in listed if isinstance(run, dict)
+                   and run.get("head_branch") == branch), {})
     status = record.get("status")
     conclusion = record.get("conclusion")
     age = hours_since(record.get("created_at"), now=now)
