@@ -24,9 +24,9 @@
 # together; the push-to-main run going red plus medic.yml's repair card
 # catches that in minutes.
 #
-# The one exception is a FORK, not currency (DRE-4912, DRE-5070). What
-# DRE-2416 retired was updating any branch that had fallen behind. What the
-# gate does now is refresh a branch only where merging it would fork `main`:
+# There are two exceptions, and neither is currency. The first is a FORK
+# (DRE-4912, DRE-5070). What DRE-2416 retired was updating any branch that
+# had fallen behind. What the gate does now is refresh a branch only where merging it would fork `main`:
 # the pull request adds a file under a path the repo declares order-sensitive
 # (`.github/bureau/merge-recheck.json` — alembic's versions directory), AND
 # `main` has added one there since the branch's merge base. On 2026-09-25 the
@@ -41,6 +41,17 @@
 # nothing there, and each refresh buys the CI run the fork would otherwise
 # have cost every open PR after the merge. A repo with no declaration pays
 # nothing, and a behind head with no such addition merges as it stands.
+#
+# The second is GitHub's own refusal (DRE-6195). When the merge is refused
+# with "Head branch is out of date" and the head has not moved, GitHub is
+# enforcing an up-to-date rule on the base that this gate does not, and the
+# remedy is mechanical: the gate updates the branch from its base once,
+# pinned to the evaluated head, says so in one note, and stops without
+# merging. CI re-runs on the new head and the gate evaluates it from the
+# start. It is bounded at one update per base tip, so a second refusal at a
+# tip already updated onto goes red instead of looping. Only that refusal
+# triggers it: a branch that is behind but accepted still merges as it
+# stands, and every other refusal with the head unmoved is a real failure.
 #
 # The DECISION itself lives in scripts/merge_gate.py (DRE-1992) with the
 # full rules and their history (DRE-1987 authorship, DRE-1990 SHA binding,

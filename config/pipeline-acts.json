@@ -1863,6 +1863,14 @@
       "why": "A status note, not an act: it records a decline the gate already made, and has the same standing as the gate's waiting-for-human, stack and refresh notes beside it, none of which shipped as a registry row. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; here the marker is the head and the reason, so a trailer is a change to that idempotence key, and the card that converts the human note owns this one with it."
     },
     {
+      "file": ".github/workflows/merge-gate.yml",
+      "anchor": "--body-file /tmp/update-note.md",
+      "step": "Evaluate and merge",
+      "kind": "undeclared-act",
+      "means": "GitHub refused the merge because the head branch is out of date and the head had not moved, so the gate updated the branch from its base and says so once per base tip; CI re-runs and the gate evaluates the new head (DRE-6195).",
+      "why": "Act-shaped — it is a recovery — and the registry has no row for it, the same standing as the gate's refresh note beside it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; here the marker is also what bounds the gate to one update per base tip, read back from the comments before the next update, so a trailer is a change to both contracts, and the card that converts the human note owns this one with it."
+    },
+    {
       "file": "scripts/code_owner_hold.py",
       "anchor": "linear_ops.cmd_comment(card, card_comment(pr, sentence))",
       "kind": "undeclared-act",

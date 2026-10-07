@@ -134,6 +134,12 @@ if args[:2] == ["workflow", "run"]:
 if args[0] == "api":
     method = opt("--method") or opt("-X") or "GET"
     path = [a for a in args[1:] if "/" in a and not a.startswith("-")][0]
+    if method == "PUT" and path.endswith("/update-branch"):
+        # The out-of-date refusal's one update (DRE-6195).
+        if fx.get("update_branch_error"):
+            fail(fx["update_branch_error"])
+        emit({"message": "Updating pull request branch.",
+              "url": "https://github.com/" + os.environ["REPO_FULL"]})
     if method == "POST":
         rows = comments()
         body = json.loads(sys.stdin.read())["body"]
@@ -234,11 +240,36 @@ class Run:
         return lines[0].split("=", 1)[1] if lines else ""
 
 
-def run_gate(fixture: dict, seed=(APPROVE,)) -> Run:
+# A stand-in for linear_ops.py that logs every card write and touches no
+# network, for the runs whose branch names a card (DRE-6195).
+LINEAR_STUB = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["LINEAR_LOG"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
+'''
+
+
+def _shadow_pipeline(td: Path) -> None:
+    """`.bureau-pipeline` as the real checkout, entry by entry, with only
+    scripts/linear_ops.py swapped for LINEAR_STUB."""
+    pipeline = td / ".bureau-pipeline"
+    pipeline.mkdir()
+    for entry in ROOT.iterdir():
+        if entry.name != "scripts":
+            os.symlink(entry, pipeline / entry.name)
+    (pipeline / "scripts").mkdir()
+    for entry in (ROOT / "scripts").iterdir():
+        if entry.name != "linear_ops.py":
+            os.symlink(entry, pipeline / "scripts" / entry.name)
+    (pipeline / "scripts" / "linear_ops.py").write_text(LINEAR_STUB)
+
+
+def run_gate(fixture: dict, seed=(APPROVE,), linear_stub=False) -> Run:
     """Run scripts/evaluate_and_merge.sh against the stub — the file's own
     text, with its fixed `/tmp/` records moved into this run's directory, so
     two suites running at once on one machine cannot read each other's
-    records."""
+    records. `linear_stub` swaps linear_ops.py for a logger, so a branch
+    naming a card can run here; its calls land in `Run.linear`."""
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         (td / "scratch").mkdir()
@@ -248,10 +279,15 @@ def run_gate(fixture: dict, seed=(APPROVE,)) -> Run:
         stub = td / "bin" / "gh"
         stub.write_text(GH_STUB)
         stub.chmod(0o755)  # nosec B103 — a test stub on PATH
-        os.symlink(ROOT, td / ".bureau-pipeline")
+        if linear_stub:
+            _shadow_pipeline(td)
+        else:
+            os.symlink(ROOT, td / ".bureau-pipeline")
+        (td / "linear.log").write_text("")
         (td / "fixture.json").write_text(json.dumps(fixture))
         (td / "comments.json").write_text(json.dumps([
             {"id": i + 1, "user": {"login": QA_LOGIN}, "body": body}
+            if isinstance(body, str) else {"id": i + 1, **body}
             for i, body in enumerate(seed)
         ]))
         (td / "gh.log").write_text("")
@@ -270,11 +306,15 @@ def run_gate(fixture: dict, seed=(APPROVE,)) -> Run:
                 "FIXTURE": str(td / "fixture.json"),
                 "COMMENTS": str(td / "comments.json"),
                 "GH_LOG": str(td / "gh.log"),
+                "LINEAR_LOG": str(td / "linear.log"),
             },
         )
         calls = [json.loads(ln) for ln in (td / "gh.log").read_text().splitlines() if ln]
         comments = json.loads((td / "comments.json").read_text())
-    return Run(proc, calls, comments)
+        linear = [json.loads(ln) for ln in (td / "linear.log").read_text().splitlines() if ln]
+    run = Run(proc, calls, comments)
+    run.linear = linear
+    return run
 
 
 def green_fixture(**view_overrides) -> dict:
@@ -341,6 +381,177 @@ class TheMergeRefusalStillRereadsTheHeadTest(unittest.TestCase):
         run = run_gate(fx)
         self.assertEqual(run.proc.returncode, 0, run.explain())
         self.assertIn("head moved since evaluation", run.proc.stdout)
+        self.assertEqual(update_branch_puts(run), [], run.explain())
+
+
+# --------------------------------------------------------------------------
+# 1a. GitHub's out-of-date refusal: one update per base tip (DRE-6195)
+# --------------------------------------------------------------------------
+# GitHub's own words, run 37691164107 on bureau-pipeline #785.
+OUT_OF_DATE = ("GraphQL: Head branch is out of date. Review and try the merge "
+               "again. (mergePullRequest)")
+BASE_TIP = "3c" * 20
+# #785's compare record: 39 behind, 4 ahead. A note, never a trigger.
+DIVERGED = {
+    "status": "diverged", "behind_by": 39, "ahead_by": 4,
+    "files": [{"filename": "a.py", "status": "modified"}],
+    "commits": [{"sha": HEAD}],
+    "base_commit": {"sha": BASE_TIP},
+    "merge_base_commit": {"sha": "4d" * 20},
+}
+UPDATE_MARK = f"Merge gate: updated onto {BASE_TIP}"
+CARD_BRANCH = "agent/DRE-5746-groomer-owner-tokens-proofs"
+VERDICT_SHAPES = ("VERDICT:", "QA Critic", "QA Verifier")
+
+
+def update_branch_puts(run: Run) -> list:
+    return [c for c in run.calls
+            if c[:1] == ["api"] and "PUT" in c
+            and any(a.endswith("/update-branch") for a in c)]
+
+
+def update_notes(run: Run, tip: str = BASE_TIP) -> list:
+    return [c["body"] for c in run.comments
+            if merge_gate.opens_with_marker(c["body"],
+                                            f"Merge gate: updated onto {tip}")]
+
+
+def refused_fixture(merge_error: str = OUT_OF_DATE, compare=None,
+                    branch: str = BRANCH, **extra) -> dict:
+    fx = {"view": view(headRefName=branch), "check_runs": GREEN_CI,
+          "workflow_runs": [CI_RUN_DONE],
+          "compare": DIVERGED if compare is None else compare,
+          "merge_error": merge_error}
+    fx.update(extra)
+    return fx
+
+
+class TheOutOfDateRefusalUpdatesTheBranchOnceTest(unittest.TestCase):
+    """`gh pr merge` refused with `Head branch is out of date`, the head
+    unmoved: the gate updates the branch from its base once per base tip,
+    pinned to the evaluated head, says so once, and exits 0. Not a merge."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.gate = run_gate(refused_fixture(branch=CARD_BRANCH), linear_stub=True)
+
+    def test_it_exits_clean(self):
+        self.assertEqual(self.gate.proc.returncode, 0, self.gate.explain())
+        self.assertEqual(self.gate.decision(), "merge", self.gate.explain())
+        self.assertEqual(len(self.gate.merges), 1, self.gate.explain())
+        self.assertNotIn("real failure", self.gate.proc.stdout)
+
+    def test_exactly_one_update_pinned_to_the_evaluated_head(self):
+        puts = update_branch_puts(self.gate)
+        self.assertEqual(len(puts), 1, self.gate.explain())
+        self.assertIn(f"repos/{REPO}/pulls/{PR}/update-branch", puts[0])
+        self.assertIn(f"expected_head_sha={HEAD}", puts[0])
+
+    def test_the_update_comes_after_the_refusal_and_the_head_reread(self):
+        calls = self.gate.calls
+        put = calls.index(update_branch_puts(self.gate)[0])
+        self.assertLess(calls.index(self.gate.merges[0]), put)
+        self.assertLess(calls.index(self.gate.views[1]), put)
+
+    def test_exactly_one_note_naming_the_tip(self):
+        notes = update_notes(self.gate)
+        self.assertEqual(len(notes), 1, self.gate.comments)
+        first = notes[0].splitlines()[0]
+        self.assertIn(UPDATE_MARK, first)
+        self.assertIn("Head branch is out of date", notes[0])
+        self.assertIn("main", notes[0])
+        for shape in VERDICT_SHAPES:
+            self.assertNotIn(shape, notes[0])
+
+    def test_it_is_not_a_merge(self):
+        self.assertNotIn("merged PR", self.gate.proc.stdout)
+        comments = [c for c in self.gate.linear if c[:1] == ["comment"]]
+        self.assertEqual(comments, [], self.gate.linear)
+        self.assertFalse(any("Auto-merged" in " ".join(c) for c in self.gate.linear))
+
+    def test_the_card_stub_is_live(self):
+        """The no-card-comment assertion above is not vacuous: the same
+        branch, merged, comments the card through the same stub."""
+        fx = refused_fixture(branch=CARD_BRANCH)
+        del fx["merge_error"]
+        run = run_gate(fx, linear_stub=True)
+        self.assertIn("merged PR", run.proc.stdout, run.explain())
+        self.assertTrue(any(c[:1] == ["comment"] and "Auto-merged" in " ".join(c)
+                            for c in run.linear), run.linear)
+        self.assertEqual(update_branch_puts(run), [])
+
+
+class TheOutOfDateUpdateIsBoundedTest(unittest.TestCase):
+    def test_a_tip_already_updated_onto_is_a_real_failure(self):
+        note = f"♻️ {UPDATE_MARK} — GitHub refused the merge earlier"
+        run = run_gate(refused_fixture(), seed=(APPROVE, note))
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertEqual(update_branch_puts(run), [], run.explain())
+        self.assertEqual(len(update_notes(run)), 1, run.comments)
+        self.assertIn("already updated onto", run.proc.stdout)
+        self.assertIn("real failure", run.proc.stdout)
+
+    def test_a_note_for_another_tip_does_not_bound_this_one(self):
+        """The bound is per tip: `main` moved, so the gate updates again."""
+        old = f"♻️ Merge gate: updated onto {'5e' * 20} — earlier"
+        run = run_gate(refused_fixture(), seed=(APPROVE, old))
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(len(update_branch_puts(run)), 1, run.explain())
+        self.assertEqual(len(update_notes(run)), 1, run.comments)
+
+    def test_a_person_quoting_the_marker_is_not_the_gates_note(self):
+        """Only the gate's own note bounds it (gate_note.matching_notes)."""
+        quoted = {"user": {"login": "octocat"}, "body": f"♻️ {UPDATE_MARK} — quoted"}
+        run = run_gate(refused_fixture(), seed=(APPROVE, quoted))
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(len(update_branch_puts(run)), 1, run.explain())
+
+    def test_no_base_tip_is_a_real_failure(self):
+        """The `{}` blip: without the tip the loop cannot be bounded."""
+        run = run_gate(refused_fixture(compare={}))
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertEqual(update_branch_puts(run), [], run.explain())
+        self.assertEqual([c for c in run.comments if "updated onto" in c["body"]], [])
+        self.assertIn("real failure", run.proc.stdout)
+
+    def test_a_refused_update_is_a_real_failure(self):
+        refusal = "HTTP 422: expected_head_sha does not match the pull request head"
+        run = run_gate(refused_fixture(update_branch_error=refusal))
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertEqual(len(update_branch_puts(run)), 1, run.explain())
+        self.assertEqual(update_notes(run), [], run.comments)
+        self.assertEqual(len(run.merges), 1, run.explain())
+        self.assertNotIn("merged PR", run.proc.stdout)
+        self.assertIn(refusal, run.proc.stdout + run.proc.stderr)
+        self.assertIn("real failure", run.proc.stdout)
+
+    def test_the_out_of_date_text_with_a_moved_head_is_the_moved_head_case(self):
+        run = run_gate(refused_fixture(head_after_merge="2e" * 20))
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertIn("head moved since evaluation", run.proc.stdout)
+        self.assertEqual(update_branch_puts(run), [], run.explain())
+
+
+class EveryOtherRefusalIsStillARealFailureTest(unittest.TestCase):
+    def test_other_refusal_text_never_updates(self):
+        for refusal in ("GraphQL: Base branch was modified (mergePullRequest)",
+                        "GraphQL: Pull Request is still a draft (mergePullRequest)",
+                        "HTTP 403: Resource not accessible by integration"):
+            with self.subTest(refusal=refusal):
+                run = run_gate(refused_fixture(merge_error=refusal))
+                self.assertEqual(run.proc.returncode, 1, run.explain())
+                self.assertIn("real failure", run.proc.stdout)
+                self.assertEqual(update_branch_puts(run), [], run.explain())
+                self.assertEqual(update_notes(run), [], run.comments)
+
+    def test_a_diverged_branch_github_accepts_merges_as_it_stands(self):
+        """The compare status is a note, never the trigger (DRE-2416)."""
+        fx = refused_fixture()
+        del fx["merge_error"]
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertIn("merged PR", run.proc.stdout)
+        self.assertEqual(update_branch_puts(run), [], run.explain())
 
 
 class EveryReadFailsTheWayItDidTest(unittest.TestCase):

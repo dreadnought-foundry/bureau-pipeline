@@ -18,11 +18,13 @@ PR:
   RETIRED LIVE COVERAGE, named rather than quietly dropped: this leg
   used to prove DRE-2037 — that the qa-bot's own update-branch push
   fired `synchronize` with an actor the review allowlists admit. The
-  gate's one push left is the DRE-4912 order-sensitive refresh
-  (DRE-5070), which the harness repo never triggers — it declares no
-  order-sensitive paths, so this leg still merges as it stands and that
-  path has no live exercise here. The allowlist entries are load-bearing
-  for it and pinned by tests/test_worker_pool_allowed_bots.py.
+  gate's two pushes left are the DRE-4912 order-sensitive refresh
+  (DRE-5070) and the DRE-6195 update on GitHub's "Head branch is out of
+  date" refusal, and the harness repo triggers neither — it declares no
+  order-sensitive paths, and this leg's behind-base PR merging as it
+  stands shows GitHub does not refuse it as out of date, so neither path
+  has a live exercise here. The allowlist entries are load-bearing for
+  both and pinned by tests/test_worker_pool_allowed_bots.py.
 
   NAMED leg (dependabot/harness-…-gate_paths-named): a worker-authored PR
   on a dependabot-NAMED branch, also behind base. Condition D (DRE-2039)

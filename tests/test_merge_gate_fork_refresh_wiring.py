@@ -52,8 +52,10 @@ GUARD = '[ "$DECISION" = "merge" ] || exit 0'
 ADVANCE_LINE = ('[ -n "$CARD" ] && python3 .bureau-pipeline/scripts/'
                 'linear_ops.py advance "$CARD" "In Review" "In Progress" '
                 '|| true')
+# The merge line gained its stderr capture under DRE-6195, which reads
+# GitHub's refusal text.
 MERGE_LINE = ('if ! gh pr merge "$PR" --merge --delete-branch '
-              '--match-head-commit "$SHA"; then')
+              '--match-head-commit "$SHA" 2>/tmp/merge-error.txt; then')
 DECIDE_CALL = "order_sensitive_refresh.py decide"
 REFRESH_READ = "grep -m1 '^decision=' /tmp/refresh-decision"
 REFRESH_BRANCH = 'if [ "$REFRESH" = "refresh" ]; then'
