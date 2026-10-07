@@ -88,6 +88,11 @@ ONE_LINE_LIMIT = 300
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s")
 
+#: What an em dash inside a free answer becomes, because the first em dash on
+#: the Recommendation line is where its why begins. A choice's label keeps its
+#: em dash: the block names the label, so the reader finds where it ends.
+_ANSWER_DASH = "–"
+
 
 @dataclass(frozen=True)
 class Choice:
@@ -125,41 +130,55 @@ def _recommended_choice(esc: Escalation) -> Choice | None:
     return next((c for c in esc.choices if c.id == wanted), None)
 
 
+def _flat(text: str) -> str:
+    """`text` on one line: every run of whitespace, newlines included, is one
+    space, so no value can split a line or open one of its own."""
+    return " ".join(str(text).split())
+
+
 def render(esc: Escalation) -> str:
     """The three lines. With choices the answer is the recommended choice's
-    label and `esc.recommendation` is not used for it."""
+    label and `esc.recommendation` is not used for it. Every value is flattened
+    onto its line, and an em dash in a free answer becomes an en dash, so what
+    this writes `problems` accepts and `parse` reads back."""
     choice = _recommended_choice(esc)
-    answer = choice.label if choice else esc.recommendation
-    if answer is None:
+    if choice:
+        answer = _flat(choice.label)
+    elif esc.recommendation is None:
         answer = NONE_GIVEN
+    else:
+        answer = _flat(esc.recommendation).replace(SEPARATOR.strip(),
+                                                   _ANSWER_DASH)
     return "\n".join((
-        f"{FINDING_PREFIX} {esc.finding}",
-        f"{QUESTION_PREFIX} {esc.question}",
-        f"{RECOMMENDATION_PREFIX} {answer}{SEPARATOR}{esc.why}",
+        f"{FINDING_PREFIX} {_flat(esc.finding)}",
+        f"{QUESTION_PREFIX} {_flat(esc.question)}",
+        f"{RECOMMENDATION_PREFIX} {answer}{SEPARATOR}{_flat(esc.why)}",
     ))
 
 
 def block(esc: Escalation) -> dict | None:
     """The `escalation-choices` block for `esc`, or None when it has no
     choices or the block's validator refuses it — logged to stderr in the
-    words `planning_escalation.read_choices` uses."""
+    words `planning_escalation.read_choices` uses. The question, context, why
+    and labels are flattened exactly as `render` flattens them, so the block
+    and the lines say the same words."""
     if not esc.choices:
         return None
     import planning_escalation
 
     choices = []
     for c in esc.choices:
-        item = {"id": c.id, "label": c.label, "effect": c.effect}
+        item = {"id": c.id, "label": _flat(c.label), "effect": c.effect}
         if c.preview:
             item["preview"] = c.preview
         item["outcome"] = c.outcome
         choices.append(item)
     built = {
-        "question": esc.question,
-        "context": esc.finding,
+        "question": _flat(esc.question),
+        "context": _flat(esc.finding),
         "choices": choices,
         "recommended": esc.recommended or esc.choices[0].id,
-        "why": esc.why,
+        "why": _flat(esc.why),
     }
     problem = planning_escalation.choices_problem(built)
     if problem:
@@ -200,9 +219,15 @@ def _value(line: str, prefix: str) -> str:
     return line.lstrip()[len(prefix):].strip()
 
 
-def _recommendation(value: str) -> tuple[str | None, str, bool]:
+def _recommendation(value: str,
+                    label: str | None = None) -> tuple[str | None, str, bool]:
     """`(answer, why, has_separator)` from a Recommendation line's value;
-    the answer is None for `none given`."""
+    the answer is None for `none given`. Given the recommended choice's
+    `label`, a value that opens with it is read as that answer even when the
+    label carries an em dash; otherwise the answer ends at the first one."""
+    if label and (value == label or value.startswith(label + SEPARATOR)):
+        why = value[len(label):]
+        return label, why.strip()[len(SEPARATOR.strip()):].strip(), bool(why)
     head, sep, why = value.partition(SEPARATOR.strip())
     answer = head.strip()
     return (None if answer == NONE_GIVEN else answer), why.strip(), bool(sep)
@@ -238,6 +263,15 @@ def _accepted(blocks: list):
     return None
 
 
+def _recommended_label(accepted) -> str | None:
+    """The recommended choice's label in an accepted block, or None."""
+    if not accepted:
+        return None
+    data = accepted[1]
+    return next(c["label"] for c in data["choices"]
+                if c["id"] == data["recommended"])
+
+
 def _choices_from(data: dict) -> tuple:
     return tuple(Choice(c["id"], c["label"], c["effect"], c["outcome"],
                         c.get("preview", "")) for c in data["choices"])
@@ -250,9 +284,10 @@ def parse(text: str) -> Escalation | None:
     at = _first_lines(lines)
     if len(at) < len(_LINES):
         return None
-    answer, why, _ = _recommendation(
-        _value(lines[at[RECOMMENDATION_PREFIX]], RECOMMENDATION_PREFIX))
     accepted = _accepted(_blocks(text))
+    answer, why, _ = _recommendation(
+        _value(lines[at[RECOMMENDATION_PREFIX]], RECOMMENDATION_PREFIX),
+        _recommended_label(accepted))
     choices, recommended = (), ""
     if accepted:
         choices = _choices_from(accepted[1])
@@ -320,10 +355,13 @@ def problems(text: str) -> list[str]:
     for name, prefix in _LINES:
         if prefix in at and not _value(lines[at[prefix]], prefix):
             found.append(f"the {name} line is empty")
+    blocks = _blocks(text)
+    accepted = _accepted(blocks)
+    label = _recommended_label(accepted)
     answer = None
     if RECOMMENDATION_PREFIX in at:
         value = _value(lines[at[RECOMMENDATION_PREFIX]], RECOMMENDATION_PREFIX)
-        answer, why, has_sep = _recommendation(value)
+        answer, why, has_sep = _recommendation(value, label)
         if value and answer is None and not why:
             found.append(f"the Recommendation says {NONE_GIVEN} with no why "
                          f"({NONE_GIVEN}{SEPARATOR}<why not>)")
@@ -331,7 +369,6 @@ def problems(text: str) -> list[str]:
             found.append(f"the Recommendation has no{SEPARATOR}<why> clause")
         elif value and has_sep and answer == "":
             found.append("the Recommendation line gives a why and no answer")
-    blocks = _blocks(text)
     if blocks:
         import planning_escalation
 
@@ -342,11 +379,8 @@ def problems(text: str) -> list[str]:
         for _, _, problem in blocks:
             if problem:
                 found.append(f"the {fence} block is refused: {problem}")
-    accepted = _accepted(blocks)
     if accepted:
         data = accepted[1]
-        label = next(c["label"] for c in data["choices"]
-                     if c["id"] == data["recommended"])
         if RECOMMENDATION_PREFIX in at and answer != label:
             found.append(f"the Recommendation answer {answer!r} is not the "
                          f"recommended choice's label {label!r}")
@@ -364,7 +398,7 @@ def problems(text: str) -> list[str]:
 def _one_line(text: str, limit: int = ONE_LINE_LIMIT) -> str:
     """`plan_critic.one_line`'s rule, kept here so the CLI imports nothing
     beyond the standard library."""
-    flat = " ".join(str(text).split())
+    flat = _flat(text)
     return flat[: limit - 1] + "…" if len(flat) > limit else flat
 
 
