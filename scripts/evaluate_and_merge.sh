@@ -37,9 +37,8 @@ set -e
 #     decision is made on that comes back absent or null.
 #  1. Stops at a pull request that is not open, or whose branch is not one of
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
-#     dependabot/* (dependency bumps), and the three scheduled branches
-#     bot/standards-sync, bot/split-ledger and bot/model-drift, matched as
-#     literals. The dependabot and bot branches carry no card. The set is
+#     dependabot/* (dependency bumps), and the two scheduled branches
+#     bot/standards-sync and bot/split-ledger, matched as literals. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -171,13 +170,14 @@ set -e
 #   draft flag is read from GitHub and handed to condition 4, with no
 #   `|| true`: an unreadable draft state kills the step, because defaulting to
 #   "not a draft" would re-arm the failure.
-# DRE-3879 (2026-09-15). bot/split-ledger and bot/model-drift are this repo's
-#   two scheduled derivations. Both pushed to `main` and both failed every run
-#   on branch protection (GH006), so each commits to its own fixed branch and
-#   rides one pull request, card-less. The CEO added exactly these two names
-#   on 2026-09-15 (signed console answer). They are matched as literals, never
-#   `bot/*`, which would hand auto-merge to any branch later named that way.
-#   CI green and a SHA-bound critic APPROVE still decide.
+# DRE-3879 (2026-09-15). bot/split-ledger is this repo's scheduled
+#   derivation. It pushed to `main` and failed every run on branch protection
+#   (GH006), so it commits to its own fixed branch and rides one pull request,
+#   card-less. The CEO added it on 2026-09-15 (signed console answer), with
+#   the weekly catalog snapshot's branch, which left with that job (DRE-6049,
+#   2026-10-07). It is matched as a literal, never `bot/*`, which would hand
+#   auto-merge to any branch later named that way. CI green and a SHA-bound
+#   critic APPROVE still decide.
 # DRE-4139 (2026-09-17). The comments are read on every page, with
 #   `--paginate --slurp`, and merge_gate.py flattens the per-page arrays.
 #   Unpaginated, the read saw only the OLDEST 30, so past thirty comments no
@@ -302,7 +302,7 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/split-ledger|bot/model-drift) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/split-ledger) ;; *) echo "not an agent branch — skip"; exit 0;; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi

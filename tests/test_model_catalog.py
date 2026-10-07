@@ -48,24 +48,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import bot_branch_pr  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 
 SNAPSHOT_PATH = ROOT / "models.json"
 AGENTS_YAML = ROOT / "agents.yaml"
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "model-drift.yml"
-MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 
 OPUS = "claude-opus-5"
 # The workhorse ladder's primary since DRE-4836 (2026-09-25).
@@ -605,7 +600,7 @@ def test_the_library_the_adoption_rule_reads_is_kept(name):
     assert callable(getattr(mc, name, None)), f"model_catalog.{name} is gone"
 
 
-# The policy the module and the workflow state in prose. "Never auto-adopt"
+# The policy the module states in prose. "Never auto-adopt"
 # was true until the CEO's rule of 2026-09-14; a sentence a reader trusts and
 # acts on has to say what is true now, and where the decision is made.
 RETIRED_POLICY = (
@@ -615,15 +610,10 @@ RETIRED_POLICY = (
 )
 
 
-@pytest.mark.parametrize(
-    "path",
-    [ROOT / "scripts" / "model_catalog.py", WORKFLOW_PATH],
-    ids=["model_catalog.py", "model-drift.yml"],
-)
-def test_no_retired_policy_sentence_survives(path):
-    text = path.read_text().lower()
+def test_no_retired_policy_sentence_survives():
+    text = (ROOT / "scripts" / "model_catalog.py").read_text().lower()
     for phrase in RETIRED_POLICY:
-        assert phrase not in text, f"{path.name} still says {phrase!r}"
+        assert phrase not in text, f"model_catalog.py still says {phrase!r}"
 
 
 @pytest.mark.parametrize(
@@ -648,121 +638,3 @@ def test_discovery_policy_says_a_new_family_waits_for_the_ceo():
 def test_cli_rejects_an_unknown_command():
     assert mc.main(["upgrade-the-ladder"]) == 2
 
-
-# --------------------------------------------------------------------------- #
-# 7. The scheduled workflow — the snapshot only, no card, data-only commit   #
-# --------------------------------------------------------------------------- #
-
-def _workflow_doc() -> dict:
-    return yaml.safe_load(WORKFLOW_PATH.read_text())
-
-
-def _workflow_text() -> str:
-    return WORKFLOW_PATH.read_text()
-
-
-def _on(doc: dict) -> dict:
-    # YAML 1.1 parses the bare key `on` as boolean True.
-    on = doc.get("on", doc.get(True))
-    return on if isinstance(on, dict) else {}
-
-
-def _run_steps(doc: dict) -> str:
-    return "\n".join(
-        step.get("run", "")
-        for job in (doc.get("jobs") or {}).values()
-        for step in (job or {}).get("steps") or []
-        if isinstance(step, dict)
-    )
-
-
-def test_the_drift_workflow_is_scheduled():
-    schedule = _on(_workflow_doc()).get("schedule")
-    assert schedule, "the drift check must run on a schedule (weekly is fine)"
-    assert all("cron" in entry for entry in schedule)
-    assert "workflow_dispatch" in _on(_workflow_doc()), "manual re-run must exist"
-
-
-def test_the_drift_workflow_refreshes_the_snapshot():
-    runs = _run_steps(_workflow_doc())
-    assert "model_catalog.py snapshot models.json" in runs
-
-
-def test_the_drift_workflow_decides_nothing():
-    """DRE-3899. The two decision steps are gone — every decision about a
-    model lives in `model-adoption.yml` — and so is the baseline copy only
-    `check-new` read."""
-    text = _workflow_text()
-    for gone in ("check-drift", "check-new", "--baseline", "previous-models.json"):
-        assert gone not in text, f"model-drift.yml still carries {gone!r}"
-
-
-def test_the_drift_workflow_files_no_card():
-    """DRE-3880 (Sonnet 4.6 -> Sonnet 5) and DRE-3881 (five models older than
-    what we run) were filed from here; the CEO said neither should exist."""
-    text = _workflow_text()
-    assert "linear_ops.py create" not in text
-    assert "linear_ops.py find-open" not in text
-    assert "linear_ops.py" not in text
-    assert "LINEAR_API_KEY" not in text, "a job that files nothing needs no Linear key"
-
-
-def test_the_drift_workflow_has_one_job_left():
-    names = [
-        step.get("name", "")
-        for job in (_workflow_doc().get("jobs") or {}).values()
-        for step in (job or {}).get("steps") or []
-        if isinstance(step, dict)
-    ]
-    for gone in (
-        "Keep the previous snapshot as the discovery baseline",
-        "Check the pinned ladder against the catalog",
-        "Open ONE drift card (idempotent)",
-        "Check the catalog for models we have never configured",
-        "Open ONE new-model alert card (idempotent)",
-    ):
-        assert gone not in names, f"model-drift.yml still has the step {gone!r}"
-
-
-def test_the_drift_workflow_points_at_the_adoption_workflow():
-    text = _workflow_text()
-    assert "model-adoption.yml" in text
-    assert "does exactly three things" not in text
-
-
-def test_the_drift_workflow_commits_models_json_and_nothing_else():
-    runs = _run_steps(_workflow_doc())
-    assert "--path models.json" in runs
-    assert "git add ." not in runs and "git add -A" not in runs
-    # Not just "we only staged one path" — the staged set is PROVED before
-    # anything is pushed, so a future edit cannot smuggle agents.yaml along.
-    # Since DRE-3879 that proof lives in the publisher both scheduled jobs
-    # share, and it is exercised there; here we pin that it still refuses.
-    assert bot_branch_pr.unexpected_staged(
-        ["models.json", "agents.yaml"], ["models.json"]) == ["agents.yaml"]
-
-
-def test_the_drift_workflow_never_pushes_to_main():
-    """DRE-3879. `git push origin HEAD:main` is what branch protection
-    refused (`GH006`) on every weekly run since at least 2026-08-10. The
-    snapshot rides one pull request off `bot/model-drift` instead."""
-    text = _workflow_text()
-    uncommented = "\n".join(line for line in text.splitlines()
-                            if not line.lstrip().startswith("#"))
-    assert "HEAD:main" not in uncommented
-    assert not re.search(r"git\s+push[^\n]*\bmain\b", uncommented)
-    assert "--branch bot/model-drift" in uncommented
-
-
-def test_the_drift_workflow_cannot_touch_the_ladder():
-    text = _workflow_text()
-    assert "agents.yaml" not in text
-    assert "model_fallback.py" not in text
-
-
-def test_the_medic_watches_the_drift_workflow():
-    # DRE-2036: every workflow that runs under its own name is in the medic
-    # watch list, or its red runs go undiagnosed.
-    name = _workflow_doc().get("name")
-    watched = _on(yaml.safe_load(MEDIC_STUB.read_text()))["workflow_run"]["workflows"]
-    assert name in watched

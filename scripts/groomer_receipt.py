@@ -6,8 +6,8 @@ One line, posted to the card a judged `propose` proposed on:
     🧠 model-attempt: <receipt> — groomer judgement ranked the census in 1 call
 
 It opens with the marker `plan.yml` posts for the planning classifier, because
-the ladder's readers — the console, the stranded-run watchdog, the model-drift
-report — find a model attempt by that marker and a second grammar would be a
+the ladder's readers — the console and the stranded-run watchdog — find a
+model attempt by that marker and a second grammar would be a
 second answer to the same question.
 
 ## Why this is a Python file and not three lines of YAML

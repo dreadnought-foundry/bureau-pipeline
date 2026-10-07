@@ -7,12 +7,13 @@ there, while `scripts/ledger_context.py` calls a ledger older than
 `LEDGER_MAX_AGE_HOURS` UNKNOWN and the planner reads that instead of the rates.
 Freshness that depends on someone remembering is not freshness.
 
-`.github/workflows/split-ledger.yml` is shaped on `model-drift.yml` — the one
-other scheduled job here that commits a generated file — and these tests pin
-the four things a later edit could quietly take away.
+`.github/workflows/split-ledger.yml` is the one scheduled job here that
+commits a generated file, through the shared publisher
+`scripts/bot_branch_pr.py`, and these tests pin the four things a later edit
+could quietly take away.
 
-DRE-3879 changed where that commit LANDS and nothing else about this job. Both
-jobs used to end in `git push origin HEAD:main`, which branch protection
+DRE-3879 changed where that commit LANDS and nothing else about this job. It
+used to end in `git push origin HEAD:main`, which branch protection
 refuses (`GH006`), so the ledger had failed to save itself every day since the
 card was opened. It now rides one pull request off `bot/split-ledger`, and the
 tests below watch `main` staying exactly where it was.
@@ -23,8 +24,8 @@ tests below watch `main` staying exactly where it was.
      discovers; a `--card` list in the workflow would freeze the ledger at
      whatever someone typed the day they added it.
   3. **The staged set.** Exactly the two generated paths, PROVEN before the
-     push — the model-drift guarantee, which is why that workflow is
-     structurally incapable of moving a model pin.
+     push — the shared publisher's staged-set guarantee, which is why the job
+     is structurally incapable of committing anything but the ledger.
   4. **`contents: write` and nothing else.** A scheduled job that can push to
      `main` needs no other elevated scope, and every scope it does not hold is
      a thing it cannot be edited into doing.
@@ -159,7 +160,7 @@ class TheCadenceTest(unittest.TestCase):
 
     def test_the_minute_is_off_the_hour(self):
         """GitHub delays scheduled jobs hardest at :00 and nothing here is
-        time-critical — the same reason model-drift.yml runs at :17."""
+        time-critical."""
         for entry in self.on["schedule"]:
             minute = entry["cron"].split()[0]
             self.assertNotEqual(minute, "0", f"{entry['cron']} lands on the hour")

@@ -1382,8 +1382,8 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_the_harness_looks_the_epic_up_before_it_files_it(self):
         """Nothing in Linear enforces unique titles, so the dedupe is ours to
-        write — the same `find-open` guard red-main-repair.yml and
-        model-drift.yml mint their cards behind."""
+        write — the same `find-open` guard red-main-repair.yml mints its
+        cards behind."""
         body = step_shell.workflow_source(self.workflows / "planner-replay.yml")
         self.assertIn("linear_ops.py find-open", body)
         self.assertLess(

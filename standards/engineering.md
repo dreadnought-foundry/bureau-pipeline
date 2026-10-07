@@ -41,8 +41,8 @@ is the floor. Every rule here exists because its violation shipped a bug.
   there stay code (DRE-3763). The same formats under a root `architecture/`
   — decisions, forensics, proof records and their screenshots — count as
   docs by the same rule, and source there stays code (DRE-5311). A root `models.json` counts as DATA, beside
-  `config/` and `agents.yaml`: it is the Anthropic catalog snapshot a
-  scheduled job refreshes from the vendor's model list, and there is no RED
+  `config/` and `agents.yaml`: it is the Anthropic catalog snapshot, derived
+  from the vendor's model list and refreshed by hand, and there is no RED
   test to write for a list somebody else publishes (DRE-3879, CEO's signed
   answer 2026-09-16). **That one path, matched exactly** — a `models.json`
   anywhere else in the tree is somebody's source file and stays code, and the

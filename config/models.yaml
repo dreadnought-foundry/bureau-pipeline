@@ -130,9 +130,7 @@
 #                  `adopt` rule above, and replaces its own family's rung
 #                  wherever that rung sits. `alert` must be true: discovery is
 #                  never silent. The daily `model-adoption` workflow sorts
-#                  every newly seen id by the CEO's rule of 2026-09-14; the
-#                  weekly `model-drift` workflow refreshes the snapshot and
-#                  files no card (DRE-3899).
+#                  every newly seen id by the CEO's rule of 2026-09-14.
 #   retired        ids that have rotated OUT of every ladder. READABLE, never
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
@@ -457,7 +455,7 @@ discovery:
   on_new_model: advisory
   # Never silent. A newly discovered model is sorted by the CEO's rule of
   # 2026-09-14 in the daily `model-adoption` workflow — `adopt`, `ignore` or
-  # `ask`; the weekly `model-drift` workflow files no card (DRE-3899).
+  # `ask`.
   alert: true
 
 retired:

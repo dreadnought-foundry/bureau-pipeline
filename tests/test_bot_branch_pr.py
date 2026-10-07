@@ -1,6 +1,7 @@
 """RED-first tests for the shared bot-branch publisher (DRE-3879).
 
-THE INCIDENT. `split-ledger.yml` and `model-drift.yml` each ended in
+THE INCIDENT. `split-ledger.yml` and the weekly catalog-snapshot job (since
+retired, DRE-6049) each ended in
 `git push origin HEAD:main`. Branch protection on `main` does not admit the
 bureau App for a direct push, so GitHub answered `GH006: Protected branch
 update failed` — "Changes must be made through a pull request" — and the daily
@@ -68,12 +69,12 @@ class PrBodyTest(unittest.TestCase):
         self.assertIn("regenerated daily by the ledger job", body)
 
     def test_the_body_names_the_base_it_targets(self):
-        body = bot_branch_pr.pr_body("x", "bot/model-drift", "main")
+        body = bot_branch_pr.pr_body("x", "bot/split-ledger", "main")
         self.assertIn("main", body)
 
 
 class StagedSetTest(unittest.TestCase):
-    """The model-drift guarantee, now in one place: exactly the named paths."""
+    """The staged-set guarantee, now in one place: exactly the named paths."""
 
     def test_nothing_unexpected_is_no_offence(self):
         self.assertEqual(

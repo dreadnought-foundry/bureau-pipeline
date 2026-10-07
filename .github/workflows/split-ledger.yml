@@ -14,12 +14,12 @@
 # two missed runs of margin, which matters because GitHub drops scheduled jobs
 # under load and never retries them.
 #
-# Shaped on `model-drift.yml`, the other scheduled job here that commits a
-# generated file, down to the staged-set proof: stage the paths by name, read
-# the index back, refuse anything else. That is what makes a job holding
+# It publishes through the shared publisher, `scripts/bot_branch_pr.py`
+# (DRE-3879), down to the staged-set proof: stage the paths by name, read the
+# index back, refuse anything else. That is what makes a job holding
 # `contents: write` incapable of committing anything but the two files it just
-# generated. Since DRE-3879 both jobs make that proof in one place —
-# `scripts/bot_branch_pr.py` — rather than in two copies of shell.
+# generated, and the proof lives in that one tested module rather than in a
+# copy of shell here.
 #
 # IT DOES NOT PUSH TO `main`, AND THAT IS THE POINT (DRE-3879). This step used
 # to end in `git push origin HEAD:main`, and branch protection refused it every
@@ -74,8 +74,7 @@ name: Split ledger
 on:
   schedule:
     # Daily, 04:41 UTC. Off the hour on purpose — GitHub delays scheduled jobs
-    # hardest at :00, and a ledger read is not time-critical. Off model-drift's
-    # :17 too, so the two jobs that push to `main` are not racing each other.
+    # hardest at :00, and a ledger read is not time-critical.
     - cron: "41 4 * * *"
   workflow_dispatch:
 
@@ -136,8 +135,8 @@ jobs:
 
       # GENERATED FILES ONLY, and proven so: the two paths are named here, and
       # `bot_branch_pr.py` stages exactly them, reads the index back and
-      # refuses to commit if anything else is in it — the model-drift
-      # guarantee, now in one tested place for both jobs (DRE-3879). It then
+      # refuses to commit if anything else is in it — the shared publisher's
+      # staged-set guarantee, in one tested place (DRE-3879). It then
       # commits to `bot/split-ledger` and opens or updates that branch's ONE
       # pull request. Nothing changed means no pull request and a green run.
       - name: Publish the ledger on bot/split-ledger (one PR, never a push to main)

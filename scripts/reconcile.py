@@ -4381,20 +4381,20 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # the LITERAL branch, not a `bot/` prefix — auto-merge is not a permission any
 # future `bot/…` branch should inherit by name alone.
 #
-# `bot/split-ledger` and `bot/model-drift` join it on the same terms (DRE-3879,
-# CEO's signed answer 2026-09-15 13:12 PT: exactly these two literal names, no
-# wildcard). They are this repo's own scheduled derivations — the daily split
-# ledger and the weekly catalog snapshot — which used to push straight to
-# `main` and had been failing on it every run, because branch protection
-# answers GH006. Each now commits to its own fixed branch and rides ONE pull
-# request through the gate, so the broad question has to own them or the sweep
-# reports the gate's own work as stranded. Card-less, so both stay out of the
-# narrow tuples exactly as the nightly sync does.
+# `bot/split-ledger` joins it on the same terms (DRE-3879, CEO's signed answer
+# 2026-09-15 13:12 PT: exactly two literal names, no wildcard — the other, the
+# weekly catalog snapshot's branch, left with that job, DRE-6049). It is this
+# repo's own scheduled derivation, the daily split ledger, which used to push
+# straight to `main` and had been failing on it every run, because branch
+# protection answers GH006. It now commits to its own fixed branch and rides
+# ONE pull request through the gate, so the broad question has to own it or
+# the sweep reports the gate's own work as stranded. Card-less, so it stays
+# out of the narrow tuples exactly as the nightly sync does.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
 PIPELINE_BRANCH_PREFIXES = (
     "agent/", "repair/", "dependabot/", "bot/standards-sync",
-    "bot/split-ledger", "bot/model-drift",
+    "bot/split-ledger",
 )
 
 

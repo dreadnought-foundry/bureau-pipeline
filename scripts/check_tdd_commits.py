@@ -19,7 +19,7 @@ The rule (engineering standard: "commit the failing test FIRST"):
            `.json` under `console/design/` or a root `design/`, DRE-3763, or
            under a root `architecture/`, DRE-5311);
     ops  = `.github/` + `config/` + `agents.yaml` + `models.json`
-           (the catalog snapshot — data a scheduled job derives from the
+           (the frozen catalog snapshot — data derived from the
            vendor's model list, added by DRE-3879 on the CEO's signed answer
            of 2026-09-16; exactly that one path, matched exactly).
     Anything unrecognized counts as code — fail-closed, so a new source tree
@@ -194,11 +194,11 @@ _OPS_PREFIXES = (".github/", "config/")
 # Root-level DATA files, matched by EXACT path — never a prefix, a suffix or a
 # directory, so `console/models.json` and `models.json.bak` stay code.
 #
-# `models.json` is the Anthropic catalog snapshot `model-drift.yml` refreshes
-# once a week: a vendor's model list, derived rather than authored, and the
-# seam the console reads so agent-bureau needs no Anthropic credential. It
-# classified as `code` (neither a docs path nor an ops one), which made the
-# weekly regeneration unable to satisfy a check whose finding is the ORDER of
+# `models.json` is the frozen Anthropic catalog snapshot the console reads, so
+# agent-bureau needs no Anthropic credential: a vendor's model list, derived
+# rather than authored, and refreshed by hand on an ordinary pull request. It
+# classified as `code` (neither a docs path nor an ops one), which made a
+# regeneration unable to satisfy a check whose finding is the ORDER of
 # commits that already exist — there is no RED test to write for a list
 # somebody else publishes, and DRE-2694 means no added commit clears it.
 #

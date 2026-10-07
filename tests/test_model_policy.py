@@ -138,7 +138,6 @@ KIND_DOCUMENTS = (
     AGENTS,
     WORKFLOWS / "plan.yml",
     WORKFLOWS / "agent-task.yml",
-    WORKFLOWS / "model-drift.yml",
 )
 
 
@@ -753,8 +752,8 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
     """A model id the system sees that is absent from config is found by the
     catalog library, and the discovery policy still reads `advisory` — a NEW
     FAMILY may join the advisory ladder at most, and only after the CEO answers
-    the question the adoption workflow files. The drift watch files no card of
-    its own any more (DRE-3899); the 2026-08-09 schema guard is unchanged."""
+    the question the adoption workflow files. No other job files a card about
+    a new model (DRE-3899); the 2026-08-09 schema guard is unchanged."""
 
     def test_a_model_absent_from_config_is_discovered(self):
         catalog = [
@@ -798,12 +797,10 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
         # or a planning ladder.
         self.assertEqual(mf.DISCOVERY_TARGETS, (ADVISORY, "none"))
 
-    def test_the_drift_watch_files_no_discovery_card(self):
-        # The adoption workflow asks the CEO about a new family; the weekly
-        # snapshot job no longer files a second, contradicting card.
-        drift = (WORKFLOWS / "model-drift.yml").read_text()
-        self.assertNotIn("check-new", drift)
-        self.assertNotIn("linear_ops.py", drift)
+    def test_the_retired_check_new_command_refuses_to_run(self):
+        # The adoption workflow asks the CEO about a new family. The weekly
+        # snapshot job that once filed a second, contradicting card is
+        # retired (DRE-6049), and the command it ran is gone with it.
         proc = subprocess.run(
             [sys.executable, str(MODEL_CATALOG), "check-new"],
             capture_output=True, text=True,
@@ -865,8 +862,8 @@ class DocumentedPolicyTest(unittest.TestCase):
         #     ladder: the planner, and nothing else" is about who walks a
         #     ladder, and is right;
         #   * prose WRAPS, so the surrounding lines count as the same
-        #     sentence. model-drift.yml names `judgement` two lines below its
-        #     "and nothing else", which leaves no reader misled.
+        #     sentence. A line that names `judgement` two lines below its
+        #     "and nothing else" leaves no reader misled.
         stale = []
         for path in KIND_DOCUMENTS:
             lines = path.read_text().splitlines()
