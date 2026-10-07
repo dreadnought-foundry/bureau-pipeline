@@ -151,6 +151,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -542,6 +543,170 @@ def escalation_comment(identifier: str, reason: str | None,
 
 
 # --------------------------------------------------------------------------- #
+# the question as buttons (DRE-6168)                                           #
+# --------------------------------------------------------------------------- #
+#
+# The console shows a card waiting on the CEO with its question, its choices as
+# buttons and the recommended one on top, and one click answers it. Until this
+# card the choices lived inside sentences — DRE-5260's question read "May we
+# add … Or the time alone? I recommend the pair" — so nothing could render them
+# without guessing. The planner now writes them as JSON beside its reason, and
+# the note carries them as ONE fenced block after the closing ask: the prose a
+# Linear reader sees is unchanged, and so is the reason `hygiene_green_light`
+# reads. A fenced block, not a hidden comment: Linear rewrites comment markdown
+# into its own dialect, and a fence survives that verbatim. The contract the
+# console parses is `docs/escalation-choices.md`.
+
+#: The fenced block's info-string — the console parses exactly this.
+CHOICES_FENCE = "escalation-choices"
+
+#: The keys a block carries, and no others.
+CHOICES_KEYS = ("question", "context", "choices", "recommended", "why")
+CHOICE_KEYS = ("id", "label", "effect", "preview", "outcome")
+_CHOICE_OPTIONAL = ("preview",)
+
+#: What a click does to the card: back to the build queue, back to Planning, or
+#: canceled.
+OUTCOMES = ("proceed", "replan", "close")
+
+#: How many buttons a question may offer.
+MIN_CHOICES, MAX_CHOICES = 2, 4
+
+_SLUG = re.compile(r"[a-z][a-z0-9-]*")
+_CARD_NUMBER = re.compile(r"\b[A-Z]{2,}-\d+\b")
+
+
+def choices_problem(block) -> str | None:
+    """The rule this block breaks, or None when the console may show it.
+
+    One rule, named, so the run log says what the planner got wrong. Every
+    word a person reads passes the same plain-words check the reason does.
+    """
+    if not isinstance(block, dict):
+        return "the block is not a JSON object"
+    extra = sorted(set(block) - set(CHOICES_KEYS))
+    if extra:
+        return f"the key {extra[0]!r} is not in the contract"
+    for key in ("question", "context", "why"):
+        problem = _words_problem(key, block.get(key))
+        if problem:
+            return problem
+    choices = block.get("choices")
+    if not isinstance(choices, list) or not (
+            MIN_CHOICES <= len(choices) <= MAX_CHOICES):
+        has = (f"this one has {len(choices)}" if isinstance(choices, list)
+               else "this one has no list of them")
+        return f"a block offers {MIN_CHOICES} to {MAX_CHOICES} choices, and {has}"
+    seen: list[str] = []
+    for n, choice in enumerate(choices, 1):
+        if not isinstance(choice, dict):
+            return f"choice {n} is not a JSON object"
+        extra = sorted(set(choice) - set(CHOICE_KEYS))
+        if extra:
+            return f"choice {n}'s key {extra[0]!r} is not in the contract"
+        ident = choice.get("id")
+        if not isinstance(ident, str) or not _SLUG.fullmatch(ident):
+            return f"choice {n}'s id {ident!r} is not a slug"
+        if ident in seen:
+            return f"two choices share the id {ident!r}"
+        seen.append(ident)
+        for key in ("label", "effect"):
+            problem = _words_problem(f"choice {ident!r}'s {key}",
+                                     choice.get(key))
+            if problem:
+                return problem
+            if _CARD_NUMBER.search(choice[key]):
+                return f"choice {ident!r}'s {key} names a card number"
+        if choice.get("outcome") not in OUTCOMES:
+            return (f"choice {ident!r}'s outcome {choice.get('outcome')!r} is "
+                    f"not one of {', '.join(OUTCOMES)}")
+        if "preview" in choice:
+            problem = _preview_problem(ident, choice["preview"])
+            if problem:
+                return problem
+    if block.get("recommended") not in seen:
+        return (f"recommended names {block.get('recommended')!r}, which is "
+                "not one of the choices")
+    return None
+
+
+def _words_problem(what: str, text) -> str | None:
+    """Why `text` is not a non-empty, plain-words string, or None."""
+    if not isinstance(text, str) or not text.strip():
+        return f"the {what} is empty or missing"
+    leaks = jargon(text)
+    if leaks:
+        return f"the {what} carries {', '.join(leaks)}"
+    return None
+
+
+def _preview_problem(ident: str, preview) -> str | None:
+    """A preview renders the result, so a time or a product string is fine —
+    only a code fence and a verdict marker are refused."""
+    if not isinstance(preview, str):
+        return f"choice {ident!r}'s preview is not text"
+    if "```" in preview:
+        return f"choice {ident!r}'s preview carries a code fence"
+    if any(marker in preview for marker in _VERDICT_MARKERS):
+        return f"choice {ident!r}'s preview carries a verdict marker"
+    return None
+
+
+def _choices_tail(reason: str | None, choices: dict | None) -> str:
+    """What follows the note's closing ask: the block, set off by a blank
+    line, when there are choices and the reason itself was fit to post —
+    otherwise nothing, and the note is exactly the prose."""
+    if choices is None or refusal(reason) is not None:
+        return ""
+    return "\n\n" + choices_block(choices)
+
+
+def choices_block(block: dict) -> str:
+    """The block as it is appended to the note: one fenced JSON object."""
+    body = json.dumps(block, indent=2, ensure_ascii=False)
+    return f"```{CHOICES_FENCE}\n{body}\n```"
+
+
+def parse_choices(body: str | None) -> dict | None:
+    """The last `escalation-choices` block in a comment, or None when it
+    carries none or the block is not a JSON object."""
+    import plan_artifact
+
+    blocks = plan_artifact.fenced_blocks(body or "", CHOICES_FENCE)
+    if not blocks:
+        return None
+    try:
+        block = json.loads(blocks[-1])
+    except ValueError:
+        return None
+    return block if isinstance(block, dict) else None
+
+
+def read_choices(path: str | None) -> dict | None:
+    """The planner's choices from `path`, when they are fit to show.
+
+    A missing file is the normal case on every route that does not ask for
+    one, and says nothing. Anything else that cannot be shown is logged to the
+    run as one line naming the rule, and nothing about it reaches the card —
+    the escalation goes ahead as prose alone.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            block = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"escalation-choices refused: the file is not JSON ({exc})",
+              file=sys.stderr)
+        return None
+    problem = choices_problem(block)
+    if problem:
+        print(f"escalation-choices refused: {problem}", file=sys.stderr)
+        return None
+    return block
+
+
+# --------------------------------------------------------------------------- #
 # the transport failure — a requeue, not a park (DRE-3074)                     #
 # --------------------------------------------------------------------------- #
 
@@ -824,7 +989,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
              transport: bool = False, rewrite: bool = False, *,
              issue: dict | None = None, comments=None,
              attempt_since: str | None = None,
-             last_words: str | None = None) -> Outcome:
+             last_words: str | None = None,
+             choices: dict | None = None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     `issue` and `comments` let a caller that has ALREADY read the card hand
@@ -872,6 +1038,12 @@ def escalate(linear_ops, identifier: str, reason: str | None,
 
     `last_words` is the planner's closing message, shown in either note when
     no reason was written (DRE-5564).
+
+    `choices` is the planner's question as a block the console shows as
+    buttons (DRE-6168, `read_choices`). It is appended after the closing ask,
+    so the prose above it is exactly what it would be without, and only when
+    the reason itself was fit to post. The stand-down note never carries it:
+    it asks nothing.
     """
     lane = destination()
     handed = comments is not None
@@ -919,7 +1091,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         linear_ops.cmd_comment(
             identifier,
             escalation_comment(identifier, reason, transport, rewrite,
-                               last_words=last_words))
+                               last_words=last_words)
+            + _choices_tail(reason, choices))
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return Outcome(parked=True, posted=posted, stood_down=None)
@@ -1251,7 +1424,8 @@ def _cmd_escalate(args) -> int:
             print("the planner's last message is not fit for the card: "
                   f"{refusal(last_words)}", file=sys.stderr)
     outcome = escalate(linear_ops, args.identifier, reason, args.transport,
-                       args.rewrite, last_words=last_words)
+                       args.rewrite, last_words=last_words,
+                       choices=read_choices(args.choices_file))
     if outcome.parked:
         print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     else:
@@ -1300,6 +1474,10 @@ def main(argv=None) -> int:
     # DRE-5564: the planner run's execution file. When no reason was written
     # its closing message is the reason, quoted rather than called "none".
     esc.add_argument("--execution-file", dest="execution_file", default=None)
+    # DRE-6168: the planner's question as JSON, beside its reason. Valid, it is
+    # appended as a fenced block the console shows as buttons; missing, the
+    # note is prose alone, as it is on every route that does not ask for one.
+    esc.add_argument("--choices-file", dest="choices_file", default=None)
 
     req = sub.add_parser("requeue")
     req.add_argument("identifier")
