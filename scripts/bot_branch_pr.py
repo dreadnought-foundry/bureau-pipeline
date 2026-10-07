@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Publish a scheduled job's generated files through ONE pull request (stdlib).
 
-DRE-3879. Two scheduled jobs in this repo derive a file and then have to save
-it: `split-ledger.yml` regenerates the split ledger daily, `model-drift.yml`
-refreshes the Anthropic catalog snapshot weekly. Both ended in
+DRE-3879. Two scheduled jobs in this repo derived a file and then had to save
+it: `split-ledger.yml` regenerates the split ledger daily, and a weekly job
+refreshed the Anthropic catalog snapshot until it was retired (DRE-6049).
+Both ended in
 
     git push origin HEAD:main
 
@@ -28,8 +29,8 @@ branch of its own and opens — or updates — ONE pull request:
   1. STAGE the generated paths BY NAME, then read the index back and refuse
      anything else. This is the guarantee that made these jobs safe to hold
      `contents: write` in the first place, and it moved here rather than being
-     written out twice in shell. `model-drift.yml`'s comment says what it buys:
-     a scheduled job that is *structurally* incapable of moving a model pin.
+     written out twice in shell. What it buys: a scheduled job that is
+     *structurally* incapable of committing anything but what it generated.
   2. NOTHING STAGED ⇒ nothing happens, and the run is GREEN. A week with no
      new models opens no pull request and files no noise.
   3. BUILD ONE COMMIT from the index, parented on the checkout's own HEAD —
@@ -78,12 +79,12 @@ Vendor boundary (standards/vendor-boundaries.md), for the callers:
      receipt or marker is left behind, so a crash anywhere leaves the previous
      state in place and the next run simply repeats.
 
-CLI (the form both workflows call):
+CLI (the form `split-ledger.yml` calls):
 
     python3 bot_branch_pr.py publish \\
-        --repo owner/name --branch bot/model-drift --base main \\
-        --path models.json \\
-        --title "chore(models): refresh the catalog snapshot" \\
+        --repo owner/name --branch bot/split-ledger --base main \\
+        --path config/split-ledger.json --path docs/split-ledger.md \\
+        --title "chore(ledger): regenerate the split ledger" \\
         --body-file "$RUNNER_TEMP/pr-body.md"
 
 Exit 0 → published, updated, or nothing to do. Exit 1 → refused (an
@@ -139,8 +140,8 @@ def pr_body(text: str, branch: str, base: str) -> str:
     decoration. These pull requests carry no card — like `dependabot/*` and
     `bot/standards-sync`, a scheduled job has no per-run card to name — so the
     branch is the only thing on the page that says which job produced it, and
-    a reader who has to guess between the daily ledger and the weekly catalog
-    is a reader who approves the wrong one.
+    a reader who has to guess which scheduled job opened it is a reader who
+    approves the wrong one.
     """
     return (
         f"{text.strip()}\n\n"
@@ -333,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--repo", required=True, help="owner/name")
     p.add_argument("--branch", required=True,
-                   help="the job's own fixed branch, e.g. bot/model-drift")
+                   help="the job's own fixed branch, e.g. bot/split-ledger")
     p.add_argument("--base", default="main",
                    help="the branch the pull request targets (default: main)")
     p.add_argument("--path", dest="paths", action="append", default=[],

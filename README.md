@@ -1361,7 +1361,7 @@ and nothing said so.
 
 The watcher runs daily, reads how far `main` is ahead of `stable` and how old
 the channel head is, and raises **one** deduplicated Linear card (the
-`red-main-repair.yml` / `model-drift.yml` pattern) — commenting on it daily
+`red-main-repair.yml` pattern) — commenting on it daily
 while the condition lasts rather than minting a new one. It holds
 `contents: read` and cannot move the ref it watches. The decision, with the
 full derivation, is `scripts/channel_watch.py`.

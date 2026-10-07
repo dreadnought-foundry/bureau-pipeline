@@ -183,7 +183,7 @@ of it is ever a runtime lookup.
   was derived at, and `docs/split-ledger.md` is rendered from it. Since
   DRE-3357 the derivation is a job rather than a habit: `.github/workflows/
   split-ledger.yml` runs `derive` daily and commits both paths (and only those
-  two — it proves its staged set the way `model-drift.yml` does). Since
+  two — it proves its staged set through `scripts/bot_branch_pr.py`). Since
   DRE-3879 that commit lands on `bot/split-ledger` and reaches `main` through
   **one** pull request, opened once and updated in place: branch protection
   refuses a direct push (`GH006`), which is why the job failed every morning
@@ -361,8 +361,7 @@ validation in `model_fallback.policy_errors()` rather than by convention:
   promotion to land. A newer version of a family already on a ladder is the
   `adopt` rule, not this key: it replaces its own family's rung through a
   trialed, reviewed pull request, and never adds one. `discovery.alert` must
-  be true. The weekly `model-drift` workflow refreshes the catalog snapshot and
-  files no card (DRE-3899).
+  be true.
 
 ## The three rules — `adopt`, `ignore`, `ask` (CEO decision, 2026-09-14)
 

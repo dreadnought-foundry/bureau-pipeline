@@ -439,8 +439,7 @@ def policy_errors(config, prices=None) -> list[str]:
          `judgement` with it (the planning ladder is the strongest one we run),
          and `discovery.alert` must be true: discovery is never silent. The
          `model-adoption` workflow sorts every newly seen id by the CEO's rule
-         of 2026-09-14 and asks about a new family; `model-drift` files no
-         card (DRE-3899).
+         of 2026-09-14 and asks about a new family.
       7. No `excluded` model appears on ANY ladder. Rule 4 only bars the top of
          a non-build ladder from the build path; when the advisory ladder moved
          off Fable (2026-08-12) that stopped covering Fable, and a config

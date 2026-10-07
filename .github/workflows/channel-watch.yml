@@ -43,7 +43,7 @@
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions`, the same actor the
-#      Reconcile and Model drift schedules already run as; the medic admits
+#      Reconcile schedule and its siblings already run as; the medic admits
 #      those today. Nothing is pushed, so no downstream trigger depends on the
 #      identity.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal

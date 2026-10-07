@@ -34,8 +34,11 @@ module's ranking helpers (`family`, `created_at`, `_is_dated_snapshot_of`,
 `_resolve_pin`, `new_models`, `fetch_catalog`, `snapshot_catalog`,
 `load_snapshot`), and price lives in `config/model-prices.yaml` — the only
 source of it; a price is never guessed. `.github/workflows/model-adoption.yml`
-runs the rule. The weekly `.github/workflows/model-drift.yml` only refreshes
-models.json. Nothing in this module writes config/models.yaml or a ladder, and
+runs the rule, and refreshes a snapshot of its own each day with the
+`snapshot` command below. The committed models.json is the snapshot the
+console reads for display names: no scheduled job refreshes it since the
+weekly drift watch was retired (DRE-6049), so a refresh is a hand-run
+`snapshot models.json` on an ordinary pull request. Nothing in this module writes config/models.yaml or a ladder, and
 nothing in it renders a Linear card: the drift and new-model cards it used to
 write (DRE-3880, DRE-3881) were exactly the cards the rule says should not
 exist.
