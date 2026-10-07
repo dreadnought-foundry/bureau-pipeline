@@ -60,7 +60,7 @@ APPROVE = f"🔎 QA Critic — VERDICT: APPROVE @{HEAD}"
 
 VIEW_FIELDS = (
     "headRefName", "state", "mergeStateStatus", "isDraft", "headRefOid",
-    "baseRefName", "body", "createdAt", "author", "url",
+    "baseRefName", "body", "createdAt", "author", "url", "files",
 )
 # The fields a decision is made on: absent or null stops the step.
 HARD_FIELDS = (
@@ -162,6 +162,11 @@ if args[0] == "api":
                          "head_sha": fx["view"]["headRefOid"]}))
     if "/rules/branches/" in path:
         emit([[]])
+    if "/contents/architecture/" in path and "record" in fx:
+        # The proof record at the head (DRE-6141), base64 as the API serves it.
+        import base64
+        emit({"encoding": "base64",
+              "content": base64.b64encode(fx["record"].encode()).decode()})
     if "/contents/" in path:
         fail("HTTP 404: Not Found")
     if path.endswith("/pulls/" + os.environ["PR"]):
@@ -446,6 +451,52 @@ class TheAuthorIsSpelledTheRestWayTest(unittest.TestCase):
         self.assertEqual(run.decision(), "human", run.explain())
         self.assertIn("'dependabot-fan'", run.proc.stdout)
         self.assertEqual(run.merges, [])
+
+
+# --------------------------------------------------------------------------
+# 1b. A proof record is opened before it merges (DRE-6141)
+# --------------------------------------------------------------------------
+PROOF_BRANCH = "agent/DRE-5798-proof-record"
+RECORD_PATH = "architecture/proofs/planners-at-once.md"
+RECORD_FILES = [{"path": RECORD_PATH, "additions": 30, "deletions": 0,
+                 "changeType": "ADDED"}]
+NOT_OBSERVED = ("| Criterion | Result |\n|---|---|\n"
+                "| Two planners run at once | Not observed. |\n")
+ALL_MET = ("| Criterion | Result |\n|---|---|\n"
+           "| Two planners run at once | Met — 09:01 to 09:04 PT |\n")
+
+
+class AProofRecordIsReadOnceAtTheHeadTest(unittest.TestCase):
+    def proof_run(self, record: str) -> Run:
+        fx = green_fixture(headRefName=PROOF_BRANCH, files=RECORD_FILES)
+        fx["record"] = record
+        return run_gate(fx)
+
+    def test_a_record_with_a_row_not_observed_is_held_not_merged(self):
+        run = self.proof_run(NOT_OBSERVED)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "hold", run.explain())
+        self.assertEqual(run.merges, [], run.explain())
+        notes = [c["body"] for c in run.comments
+                 if c["body"].startswith(f"⏸️ Merge gate: declined @{HEAD}")]
+        self.assertEqual(len(notes), 1, run.comments)
+        self.assertIn("Two planners run at once", notes[0])
+
+    def test_a_record_all_met_merges_with_one_more_read(self):
+        run = self.proof_run(ALL_MET)
+        self.assertEqual(run.decision(), "merge", run.explain())
+        self.assertEqual(len(run.views), 1, run.explain())
+        self.assertIn(f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}",
+                      run.api_paths())
+        self.assertEqual(len(run.before_merge()), 10, run.explain())
+
+    def test_off_a_proof_record_branch_the_record_is_never_read(self):
+        fx = green_fixture(files=RECORD_FILES)
+        fx["record"] = NOT_OBSERVED
+        run = run_gate(fx)
+        self.assertEqual(run.decision(), "merge", run.explain())
+        self.assertFalse(any("/contents/architecture/" in p for p in run.api_paths()))
+        self.assertEqual(len(run.before_merge()), 9, run.explain())
 
 
 # --------------------------------------------------------------------------

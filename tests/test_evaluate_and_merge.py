@@ -117,6 +117,13 @@ class TheScriptFileTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertIn(key, what)
 
+    def test_the_header_says_a_proof_record_is_opened_before_it_merges(self):
+        """DRE-6141: the step reads the proof record and the gate holds an
+        unproven one. The header says so in both halves."""
+        what, history = "\n".join(header()).split("Incident history", 1)
+        self.assertIn("proof_record.py gather", what)
+        self.assertRegex(history, r"DRE-6141(?!\d)")
+
     def test_every_history_reference_survives_in_the_header(self):
         history = "\n".join(header()).split("Incident history", 1)[1]
         for ref in REFERENCES:
