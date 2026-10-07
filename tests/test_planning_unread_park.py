@@ -217,3 +217,26 @@ def test_the_first_failure_note_no_longer_promises_the_ceo_a_question():
     note = planning_escalation.transport_comment(CARD, "HTTP 429")
     assert "comes to you as a question" not in note
     assert "Triage" in note
+
+
+def test_the_first_failure_note_of_a_call_the_model_answered_never_says_it_could_not_reach_it():
+    """The headline sits above the reason, so a headline saying "could not reach its model" over an `error_max_turns`
+    reason contradicted itself on every one of the seven cards from 10-05/06. The headline says only what both kinds
+    share; the reason says which it was, and the budget tag is untouched."""
+    note = planning_escalation.transport_comment(CARD, planning_escalation.no_answer_reason("error_max_turns"))
+    assert "could not reach" not in note
+    assert "error_max_turns" in note
+    assert note.startswith(f"{planning_escalation.TRANSPORT_MARK} {planning_escalation.TRANSPORT_TAG}: {CARD} ")
+
+
+def test_the_first_failure_note_of_a_429_still_says_the_model_was_unreachable():
+    note = planning_escalation.transport_comment(CARD, planning_classify._transport(
+        planning_classify.TransportError("HTTP 429: busy", "HTTP 429")))
+    assert "could not reach its model" in note and "429" in note
+
+
+def test_the_requeue_step_log_does_not_claim_the_model_was_unreachable():
+    step = next(s for s in _steps() if "planning_escalation.py requeue" in (s.get("run") or ""))
+    error = next(line for line in step["run"].splitlines() if "::error::" in line)
+    assert "could not reach" not in error
+    assert "retried once" in error

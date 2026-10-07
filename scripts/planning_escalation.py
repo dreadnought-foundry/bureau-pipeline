@@ -514,7 +514,7 @@ def transport_comment(identifier: str, reason: str | None) -> str:
     and the budget are one thing rather than two that can disagree."""
     lines = [
         f"{TRANSPORT_MARK} {TRANSPORT_TAG}: {identifier} was not classified this "
-        "run — the step that reads new cards could not reach its model.",
+        "run — the step that reads new cards got no classification from its model.",
         "",
     ]
     why = refusal(reason)

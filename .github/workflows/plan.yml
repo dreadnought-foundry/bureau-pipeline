@@ -618,8 +618,12 @@ jobs:
       # so the medic re-runs it once. That re-run is the requeue; the card has
       # not moved and nothing has been decided about it. The SECOND failure is
       # budgeted in planning_classify.py off the receipt this step writes, and
-      # takes the escalation branch below instead — an infrastructure failure
-      # that outlived a retry has stopped being transient.
+      # parks the card in Triage for the operator (the park-unread step below,
+      # DRE-5975) — an infrastructure failure that outlived a retry has stopped
+      # being transient, and nothing has read the card for the CEO to decide.
+      # The log line says no classification came back rather than "could not
+      # reach": an `error_max_turns` call reached the model, and the reason the
+      # requeue note carries names which of the two it was.
       - name: Classification transport failed — requeue, do not ask the CEO
         if: steps.classify.outputs.requeue == 'true'
         env:
@@ -629,7 +633,7 @@ jobs:
           python3 .bureau-pipeline/scripts/planning_escalation.py requeue \
             "${{ github.event.client_payload.identifier }}" \
             --reason-file "${{ runner.temp }}/classifier-transport.txt"
-          echo "::error::the classifier could not reach its model — failing this run so it is retried once"
+          echo "::error::the classifier got no classification from its model — failing this run so it is retried once"
           exit 1
 
       # The refusal branch, and it is DRE-2848's exit rather than a second one:
