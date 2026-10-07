@@ -209,7 +209,8 @@ def test_a_release_collects_its_sentences_newest_first_and_drops_the_nones(tmp_p
     assert (15, "none") in result["skipped"]
     # Each pull request is read once, with the documented `gh api` call.
     assert sorted(gh.api_reads()) == [f"repos/{REPO}/pulls/{n}" for n in (12, 15, 17)]
-    read = next(argv for argv in gh.calls if argv[:2] == ["gh", "api"])
+    read = next(argv for argv in gh.calls
+                if argv[:2] == ["gh", "api"] and "/pulls/" in argv[2])
     assert read[3:] == ["--jq", "{head: .head.ref, body: .body}"]
     assert all(env and env.get("GH_TOKEN") == "t" for env in gh.envs)
 
