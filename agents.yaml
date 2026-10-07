@@ -507,7 +507,7 @@ agents:
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     # The engineer's credentials plus GH_READ_TOKEN — the read-only App token
-    # the workflow mints (contents, actions, pull requests, metadata: read)
+    # the workflow mints (its permissions: `Record the read-only proof identity`)
     # and every GitHub observation is made as. The worker token reaches the
     # step as the action's `github_token` input, as it does for every agent.
     # The caller's AWS proof session, when one is assumed, reaches the agent

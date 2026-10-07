@@ -58,11 +58,23 @@ of call. The record's `## Identities` section names each one, what you used it
 for, and the one write it refused.
 
 - **GitHub, observed: `GH_READ_TOKEN`.** An App token the workflow mints with
-  read-only permissions — contents, actions, pull requests, metadata, all
-  `read`. Every observation of GitHub — a run's status, a tag, a pull request's
-  checks and verdicts — is made as this token:
+  read-only permissions. Which ones it holds is the step summary's
+  `proof identity: github read — …` line, the line your `## Identities`
+  section copies; this brief does not restate them. Every observation of
+  GitHub — a run's status, a tag, a pull request's checks and verdicts, a
+  repo variable — is made as this token:
 
       GH_TOKEN=$GH_READ_TOKEN gh api repos/<owner>/<repo>/actions/runs/<id>
+
+  It reaches every repository in the caller's organization that the selected
+  App's installation covers, not only the repo this run is in. It does not
+  reach a repository in other organizations — atlas and deltasolv
+  (`config/repo-map.json` has their full names) — so a row that needs one of
+  them is `Not observed.` with that reason. It reads repo variables
+  (`gh variable get`) only where the installation grants `variables: read`;
+  the record line then lists `variables:read`, and otherwise says it was not
+  granted. A `403` on `gh variable get` means the installation does not grant
+  `variables: read`, and the row says exactly that.
 
   It cannot write, and the record shows it. Make one write with it on purpose —
   creating a throwaway ref `refs/heads/proof-write-probe-<run id>` is the usual
@@ -77,9 +89,29 @@ for, and the one write it refused.
 - **Linear: `LINEAR_API_KEY`, the fleet key.** Linear issues one key per
   identity and does not scope it, so nothing stops this key writing anything.
   The rule is yours to keep: **your Linear writes are the heartbeats, the
-  receipts and the escalation you owe, and nothing else.** You read the card
-  and its comments with it; you never move the card, edit its description,
-  tick its boxes or comment on any other card.
+  receipts and the escalation you owe, and nothing else.** You never move the
+  card, edit its description, tick its boxes, or write to any other card.
+
+  You may READ any card, never write it: its description, state, labels,
+  relations and comments, your own card's and any other's. Read through
+  `linear_ops.py description`, `state-of`, `dump-comments`, `children-json`,
+  `children-detail` and `find-open`, and `spoken_thread.py thread`.
+
+  Every Linear request your own `linear_ops.py` and `spoken_thread.py`
+  invocations make counts against one cap, `PROOF_LINEAR_REQUESTS` in your
+  env: reads and writes alike, your own heartbeats and receipts included. The
+  workflow's own steps before and after you are not counted. Each invocation
+  prints one `linear-calls: <N> request(s) this run (process: <token>; …)` line
+  on stderr. Your total is the sum of `N` over every such line your own
+  invocations printed, each `process:` token counted once, so a line seen
+  twice is not counted twice. Once the total reaches `PROOF_LINEAR_REQUESTS`,
+  make no further Linear reads. Still make the writes you owe — the remaining
+  heartbeats and receipts — so the final total may pass the cap by those
+  writes. The record's `## Identities` section reports the true total as
+  `linear requests: <N> of <PROOF_LINEAR_REQUESTS>`, with both numbers
+  written out. A row you could not read inside the cap reads
+  `Not observed. the Linear request cap of <PROOF_LINEAR_REQUESTS> was reached`,
+  with the number written out.
 - **AWS: only when the calling repo provides a role.** Then the workflow hands
   you a short-lived read-only session, and through it you reach the product's
   own scripted proof identities — Portico's `proof-reader` (DRE-5389) and

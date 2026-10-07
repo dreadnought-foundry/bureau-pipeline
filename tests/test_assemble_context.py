@@ -375,6 +375,28 @@ class ProofBriefTest(unittest.TestCase):
         self.assertIn("a dispatched run that signs in is outside this epic and "
                       "has no card yet", self.flat.lower())
 
+    def test_the_linear_reads_and_their_request_cap(self):
+        """DRE-6143: the run reads any card, never writes one, and counts
+        every Linear request its own invocations make against one cap."""
+        for needle in ("PROOF_LINEAR_REQUESTS", "linear-calls:", "process:",
+                       "linear requests: <N> of <PROOF_LINEAR_REQUESTS>",
+                       "Not observed. the Linear request cap of "
+                       "<PROOF_LINEAR_REQUESTS> was reached",
+                       "linear_ops.py description", "state-of", "dump-comments",
+                       "children-json", "children-detail", "find-open",
+                       "spoken_thread.py thread"):
+            self.assertIn(needle, self.flat, needle)
+
+    def test_the_github_read_token_reaches_the_organization(self):
+        """DRE-6143: every repo the App's installation covers in the caller's
+        organization, variables where the installation grants them, and
+        never a repo in another organization."""
+        for needle in ("variables: read", "gh variable get", "`403`",
+                       "atlas", "deltasolv", "other organizations",
+                       "proof identity: github read"):
+            self.assertIn(needle, self.flat, needle)
+        self.assertNotIn("contents, actions, pull requests, metadata", self.flat)
+
     def test_the_branch_title_and_first_line(self):
         for needle in ("agent/DRE-<n>-proof-record", "PROOF record: <card title>",
                        "Proof record for DRE-<n>"):
