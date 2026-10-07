@@ -44,8 +44,9 @@
 #
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions`, the same actor the
-#      Reconcile schedule already runs as; the medic admits it today. Nothing is pushed or dispatched, so no
-#      downstream trigger depends on the identity.
+#      Reconcile schedule already runs as; the medic admits it today.
+#      Nothing is pushed or dispatched, so no downstream trigger depends on
+#      the identity.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
 #      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
 #      and the App keys resolve. The CROSS-REPO reads cannot use
@@ -167,8 +168,9 @@ jobs:
       # The card is FILED on whichever hour the alarm first fires, so a nightly
       # that stopped is found within the hour. RE-CONFIRMING it is daily
       # (`nightly_watch.RECONFIRM_AFTER_HOURS`, on one morning hour,
-      # `RECONFIRM_HOUR_UTC`): twenty-four "still true" comments a day on one standing
-      # card is the same noise as a card a day, arriving somewhere else.
+      # `RECONFIRM_HOUR_UTC`): twenty-four "still true" comments a day on one
+      # standing card is the same noise as a card a day, arriving somewhere
+      # else.
       - name: Raise the alarm where a human will see it
         if: steps.decide.outputs.alarm == 'true'
         env:

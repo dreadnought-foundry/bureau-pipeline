@@ -46,9 +46,8 @@ names which of four things happened:
 
 machine-readably, so a watcher can count merge trains instead of reporting
 the cause as unknown (the channel-staleness alarm did, until DRE-6053 retired
-it). Three more names cover the refusals that
-already existed and were equally silent: `channel-held`, `no-harness-stamp`,
-`not-ahead-of-channel`.
+it). Three more names cover the refusals that already existed and were equally
+silent: `channel-held`, `no-harness-stamp`, `not-ahead-of-channel`.
 
 THE BY-HAND PATH, AND THE LINE IT MUST NOT CROSS (DRE-4111)
 -----------------------------------------------------------
@@ -137,8 +136,9 @@ SUCCESS = "success"
 TRUNK = "main"
 
 #: The receipt vocabulary (DRE-3070). Stable strings: docs/self-hosting.md
-#: names them, so they are constants here and nowhere else. The first three are the card's three reasons; the rest are the
-#: refusals that already existed and were equally unnamed. `docs/self-hosting.md`
+#: names them, so they are constants here and nowhere else. The first three
+#: are the card's three reasons; the rest are the refusals that already
+#: existed and were equally unnamed. `docs/self-hosting.md`
 #: carries the same table, pinned by a test.
 OUTCOME_PROMOTING = "harness-passed-promoting"
 OUTCOME_CANCELLED = "harness-cancelled-by-newer-push"

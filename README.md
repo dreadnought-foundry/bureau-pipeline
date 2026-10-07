@@ -1359,17 +1359,18 @@ repo ran for the same silence (DRE-2552) was retired on 2026-10-06; promotion,
 
 ## Missing-nightly alarm (DRE-4805)
 
-A watcher for something ceasing to happen rather than going wrong. PR CI now runs only
-the suites a change can reach and a nightly `schedule:` run on `main` runs
-everything (`standards/engineering.md`, "CI: narrow per change, whole every
-night"), which makes the nightly **the only thing that runs the suites a pull
-request skipped**. If it quietly stops, those tests are never run again and
-nobody knows.
+A watcher for something ceasing to happen rather than going wrong. PR CI now
+runs only the suites a change can reach and a nightly `schedule:` run on `main`
+runs everything (`standards/engineering.md`, "CI: narrow per change, whole
+every night"), which makes the nightly **the only thing that runs the suites a
+pull request skipped**. If it quietly stops, those tests are never run again
+and nobody knows.
 
 `nightly-watch.yml` runs **hourly in this repo, on a schedule of its own** — it
 must not depend on the repos it watches running anything — and raises one
-deduplicated Linear card through `linear_ops.py`, the shape `red-main-repair.yml`
-files its card in. The decision is `scripts/nightly_watch.py`.
+deduplicated Linear card through `linear_ops.py`, the shape
+`red-main-repair.yml` files its card in. The decision is
+`scripts/nightly_watch.py`.
 
 - **Who is watched is computed, never listed.** Every workflow, in every repo
   in `config/repo-map.json`, whose file on the default branch triggers on
@@ -1416,8 +1417,8 @@ files its card in. The decision is `scripts/nightly_watch.py`.
   cannot race for one card.
 - **It holds no write anywhere**, and a test fails if one appears. A red run is
   diagnosed by the medic (`Nightly Watch` is in its watch list). A run that
-  never fires at all is the same gap stated above for the channel watcher, and
-  it is stated here rather than papered over.
+  never fires at all is not detected by anything in this repo — nothing polls
+  for its absence — and that is stated here rather than papered over.
 - **Known limit.** The 2026-09-22 outside-read audit (DRE-4655..4665) found
   production has no alert-delivery environment, so CRITICAL alarms do not
   currently reach the CEO. This alarm reaches exactly as far as the card

@@ -2,12 +2,12 @@
 
 `cmd_create` is the seam the medic, red-main-repair, the since-retired
 channel-staleness alarm (until DRE-6053) and the since-retired Model drift job
-(until DRE-3899) filed a failure report through, and it issued `issueCreate` with `teamId`, `title`, `description`
-and `stateId` — no `labelIds` at all. Under the
-front door a card's `repo:` label is the only product key and the readiness gate
-refuses a card without one, so every one of those cards landed in Planning and
-could not leave it: the pipeline filed a report about itself that the pipeline
-could not act on.
+(until DRE-3899) filed a failure report through, and it issued `issueCreate`
+with `teamId`, `title`, `description` and `stateId` — no `labelIds` at all.
+Under the front door a card's `repo:` label is the only product key and the
+readiness gate refuses a card without one, so every one of those cards landed
+in Planning and could not leave it: the pipeline filed a report about itself
+that the pipeline could not act on.
 
 Two halves, and both are needed:
 

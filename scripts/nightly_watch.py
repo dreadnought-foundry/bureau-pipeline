@@ -82,8 +82,8 @@ This alarm reaches exactly as far as the mechanism it rides — one deduplicated
 Linear card — and no further. It does not fix delivery.
 
 The decision here is pure: no network, no clock of its own, the
-`promote_channel.py` shape. `collect()` takes the GitHub reader as an argument so
-the whole gathering path is exercised in tests against a declared fleet.
+`promote_channel.py` shape. `collect()` takes the GitHub reader as an argument
+so the whole gathering path is exercised in tests against a declared fleet.
 """
 
 from __future__ import annotations
@@ -128,7 +128,8 @@ INTERVAL_HOURS = 1.0
 #: above: running hourly is how a missing nightly is FOUND within the hour, and
 #: re-confirming hourly is how the card becomes 24 comments a day that nobody
 #: reads. Daily reads as deliberate rather than as a stuck process. Only the
-#: re-confirmation waits — the card itself is filed on whichever hour the alarm first fires.
+#: re-confirmation waits — the card itself is filed on whichever hour the
+#: alarm first fires.
 RECONFIRM_AFTER_HOURS = 24.0
 
 #: …and the hour it speaks on, in UTC. 07:00 UTC — a morning hour, chosen
