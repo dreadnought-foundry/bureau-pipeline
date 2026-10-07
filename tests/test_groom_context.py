@@ -87,7 +87,7 @@ class StubLops:
         return []
 
 
-def failing_gh(args):
+def failing_gh(args, token=None):
     """What `_gh_json` does when `gh search prs` exits non-zero — the failure
     run 34183475867 actually hit."""
     raise groom_context.ContextError(
@@ -325,12 +325,18 @@ class FakeGitHub:
     is allowed to be larger than the rows it will ever hand back."""
 
     def __init__(self, *, installed=(HOME,), pages=None, totals=None,
-                 failing=None):
+                 failing=None, by_token=None):
         self.installed = list(installed)
         self.pages = pages or {}
         self.totals = totals or {}
         self.failing = failing or {}
+        # `{token: [owners its installation sees]}` (DRE-5746): when given,
+        # each token sees only its own installation, and a search spent on a
+        # token that cannot see the owner answers the confident, empty 0 a
+        # real search of private repositories does.
+        self.by_token = by_token
         self.calls = []
+        self.tokens = []
 
     @staticmethod
     def _field(args, name):
@@ -340,11 +346,17 @@ class FakeGitHub:
                 return args[i + 1].split("=", 1)[1]
         return None
 
-    def __call__(self, args):
+    def _sees(self, token):
+        if self.by_token is None:
+            return self.installed
+        return self.by_token.get(token) or []
+
+    def __call__(self, args, token=None):
         self.calls.append(list(args))
+        self.tokens.append(token)
         joined = " ".join(args)
         if "installation/repositories" in joined:
-            repos = [{"full_name": f"{owner}/repo"} for owner in self.installed]
+            repos = [{"full_name": f"{owner}/repo"} for owner in self._sees(token)]
             return json.dumps({"total_count": len(repos), "repositories": repos})
         assert "search/issues" in joined, f"an unexpected gh call: {args}"
         query = self._field(args, "q") or ""
@@ -352,6 +364,9 @@ class FakeGitHub:
         owner = next(o for o in FLEET_OWNERS + [HOME] if f"user:{o}" in query)
         if owner in self.failing:
             raise groom_context.ContextError(self.failing[owner])
+        if self.by_token is not None and owner not in self._sees(token):
+            return json.dumps({"total_count": 0, "incomplete_results": False,
+                               "items": []})
         pages = self.pages.get(owner) or [[]]
         page = int(self._field(args, "page") or 1)
         items = pages[page - 1] if page <= len(pages) else []
@@ -363,9 +378,17 @@ class FakeGitHub:
         return [c for c in self.calls if "search/issues" in " ".join(c)]
 
 
+def owner_token(owner):
+    """The token the Groom step hands `owner`'s read, in these tests."""
+    return f"token-for-{owner}"
+
+
 @pytest.fixture
 def token(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "app-token")
+    """Every owner in the roster handed its own token, under its own name
+    (DRE-5746) — the groom job mints one per owner."""
+    for owner in FLEET_OWNERS:
+        monkeypatch.setenv(groom_context.token_env(owner), owner_token(owner))
 
 
 def test_a_pr_is_dated_by_its_merge_not_by_when_it_was_opened(token):
@@ -523,3 +546,85 @@ def test_no_token_leaves_the_section_unread_with_the_error_named(monkeypatch):
     assert groom_context.summary(got)["merged_prs"] is None
     assert "could not be read" in groom_context.render(got)
     assert gh.calls == [], "a read with no token was attempted anyway"
+
+
+# --------------------------------------------------------------------------
+# one token per owner (DRE-5746): the groom job mints a read-only token for
+# each owner in the roster, and each owner is searched on its own token
+# --------------------------------------------------------------------------
+def test_the_pipelines_own_owner_keeps_gh_token_and_every_other_owner_has_its_own():
+    """ONE function names each owner's env var. The pipeline's own owner is
+    handed `GH_TOKEN`, so nothing else that reads that name moves."""
+    assert groom_context.token_env(HOME) == groom_context.TOKEN_ENV == "GH_TOKEN"
+    assert groom_context.token_env("EveryBite") == "GH_TOKEN_EVERYBITE"
+    assert groom_context.token_env("DeltaSolv") == "GH_TOKEN_DELTASOLV"
+    names = [groom_context.token_env(o) for o in FLEET_OWNERS]
+    assert len(set(names)) == len(FLEET_OWNERS), "two owners share one name"
+    for name in names:
+        assert name.replace("_", "").isalnum() and name == name.upper(), (
+            f"{name!r} is not a name a workflow env: block can carry")
+
+
+def test_each_owner_is_read_on_its_own_token_and_every_owners_merges_count(token):
+    """The 2026-10-05 morning, fixed: one token per owner, each seeing only
+    its own installation. All three owners are read, and the count is theirs
+    together — not dreadnought-foundry's alone."""
+    assert len(FLEET_OWNERS) == 3, "the fixture is the three-owner fleet"
+    gh = FakeGitHub(
+        by_token={owner_token(o): [o] for o in FLEET_OWNERS},
+        pages={o: [[item(n, merged_days=1, owner=o)]]
+               for n, o in enumerate(FLEET_OWNERS, 1)},
+        totals={o: 100 * n for n, o in enumerate(FLEET_OWNERS, 1)})
+    read = groom_context.read_merged_prs(now=NOW, run=gh)
+    assert read["unread_owners"] == {}
+    assert read["total_count"] == 100 + 200 + 300
+    assert sorted(r["url"].split("/")[3] for r in read["rows"]) == FLEET_OWNERS
+    for call, spent in zip(gh.calls, gh.tokens):
+        joined = " ".join(call)
+        for owner in FLEET_OWNERS:
+            if f"user:{owner}" in joined:
+                assert spent == owner_token(owner), (
+                    f"{owner} was searched on another owner's token")
+
+
+def test_an_owner_with_no_token_is_named_unread_with_the_variable_it_lacked(
+        token, monkeypatch):
+    other = next(o for o in FLEET_OWNERS if o != HOME)
+    monkeypatch.delenv(groom_context.token_env(other))
+    gh = FakeGitHub(by_token={owner_token(o): [o] for o in FLEET_OWNERS},
+                    pages={o: [[item(1, merged_days=1, owner=o)]]
+                           for o in FLEET_OWNERS})
+    read = groom_context.read_merged_prs(now=NOW, run=gh)
+    assert sorted(read["unread_owners"]) == [other]
+    assert groom_context.token_env(other) in read["unread_owners"][other]
+    assert read["total_count"] == len(FLEET_OWNERS) - 1
+    assert not any(f"user:{other}" in " ".join(c) for c in gh.searched())
+
+
+def test_an_owner_its_own_token_cannot_see_is_named_unread(token):
+    other = next(o for o in FLEET_OWNERS if o != HOME)
+    sees = {owner_token(o): [o] for o in FLEET_OWNERS}
+    sees[owner_token(other)] = []
+    gh = FakeGitHub(by_token=sees)
+    read = groom_context.read_merged_prs(now=NOW, run=gh)
+    assert read["unread_owners"] == {
+        other: "the Bureau App token's installation cannot see it"}
+
+
+def test_the_subprocess_is_handed_the_owners_token_as_gh_token(monkeypatch):
+    """`gh` reads its credential from `GH_TOKEN`; a call made for an owner
+    carries that owner's token there, and nothing else changes."""
+    seen = {}
+
+    class Done:
+        returncode, stdout, stderr = 0, "{}", ""
+
+    def run(argv, **kwargs):
+        seen.update(kwargs.get("env") or {})
+        return Done()
+
+    monkeypatch.setenv("GH_TOKEN", "home-token")
+    monkeypatch.setattr(groom_context.subprocess, "run", run)
+    groom_context._gh_json(["api", "installation/repositories"],
+                           token="everybite-token")
+    assert seen.get("GH_TOKEN") == "everybite-token"

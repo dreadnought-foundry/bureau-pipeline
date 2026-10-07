@@ -781,14 +781,22 @@ class JudgedReadReachableTest(unittest.TestCase):
 
 
 class MergedPrTokenTest(unittest.TestCase):
-    """DRE-4964: the context pack's merged-PR read has a token to read with.
+    """DRE-4964: the context pack's merged-PR read has a token to read with —
+    and since DRE-5746, one per owner.
 
     The Groom step set no `GH_TOKEN`, so every `gh` call in it exited rc=4 and
     the proposal said the merged-PR section "could not be read" on every run
     since at least 2026-09-15. `github.token` would not do either — it cannot
     see the fleet's private repositories — so the step is handed the Bureau
-    App's token, minted the way `reconcile.yml` mints it, under the env name
-    the per-card read reads as well.
+    App's token, minted the way `reconcile.yml` mints it.
+
+    One token was not enough either (DRE-5746): minted with no `owner:` it is
+    scoped to one installation, and EveryBite and DeltaSolv went unread every
+    morning, which left every card's per-card read unread too. So the job
+    mints a read-only token per owner in `config/repo-map.json`, from the same
+    two secrets the lookup legs use, and hands each to the Groom step under
+    the name `groom_context.token_env` gives that owner. An owner onboarded
+    into the map with no mint step fails this test rather than going unread.
     """
 
     APP_SECRETS = ("BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY")
@@ -799,10 +807,15 @@ class MergedPrTokenTest(unittest.TestCase):
         self.steps = self.doc["jobs"]["groom"]["steps"]
         self.groom = _step(self.doc, GROOM_STEP)
 
-    def _mint(self) -> dict:
-        found = [s for s in self.steps
-                 if str(s.get("uses") or "").startswith(self.ACTION)]
-        self.assertEqual(len(found), 1, "the groom job mints exactly one App token")
+    def _mints(self) -> list:
+        return [s for s in self.steps
+                if str(s.get("uses") or "").startswith(self.ACTION)]
+
+    def _mint(self, owner: str) -> dict:
+        found = [s for s in self._mints()
+                 if (s.get("with") or {}).get("owner") == owner]
+        self.assertEqual(len(found), 1,
+                         f"the groom job mints no token (or two) for {owner}")
         return found[0]
 
     @staticmethod
@@ -822,11 +835,31 @@ class MergedPrTokenTest(unittest.TestCase):
             self.assertFalse((declared[name] or {}).get("required"),
                              f"{name} must be optional")
 
-    def test_the_mint_uses_the_app_secrets(self):
-        with_ = self._mint().get("with") or {}
-        self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
-        self.assertEqual(_expression(with_.get("private-key")),
-                         "secrets.BUREAU_APP_PRIVATE_KEY")
+    def test_every_owner_in_the_map_has_a_mint_and_an_env_name(self):
+        """The acceptance check: read off `config/repo-map.json`, so a fourth
+        owner onboarded into the map turns this red until it is minted for."""
+        self.assertEqual(groomer_owner_wiring_gaps(self.doc, fleet_owners()), [])
+        self.assertEqual(len(self._mints()), len(fleet_owners()),
+                         "a mint for an owner the roster does not name")
+
+    def test_a_fourth_owner_with_no_mint_is_a_gap(self):
+        """The check above is not vacuous: an owner the job does not mint
+        for, and that the Groom step does not carry, is named."""
+        gaps = groomer_owner_wiring_gaps(self.doc, [*fleet_owners(), "NewCo"])
+        self.assertTrue(gaps)
+        self.assertTrue(all("NewCo" in gap for gap in gaps), gaps)
+
+    def test_each_mint_is_read_only_from_the_app_secrets(self):
+        for owner in fleet_owners():
+            with_ = self._mint(owner).get("with") or {}
+            self.assertEqual(_expression(with_.get("app-id")),
+                             "secrets.BUREAU_APP_ID")
+            self.assertEqual(_expression(with_.get("private-key")),
+                             "secrets.BUREAU_APP_PRIVATE_KEY")
+            perms = {k: v for k, v in with_.items()
+                     if k.startswith("permission-")}
+            self.assertEqual(perms, LOOKUP_PERMISSIONS,
+                             f"{owner}'s token is not read-only")
 
     def test_the_mint_is_pinned_exactly_as_reconcile_pins_it(self):
         ours = self._pin_line(WORKFLOWS / "groomer.yml")
@@ -837,26 +870,60 @@ class MergedPrTokenTest(unittest.TestCase):
                              "the groomer's pin — sha and version comment — "
                              "differs from reconcile.yml's")
 
-    def test_the_groom_step_carries_the_minted_token_as_gh_token(self):
-        mint = self._mint()
-        self.assertTrue(mint.get("id"), "the mint step needs an id to read from")
+    def test_the_pipelines_own_owner_is_still_handed_gh_token(self):
+        import groom_context
+        mint = self._mint(groom_context.PIPELINE_OWNER)
         env = self.groom.get("env") or {}
         self.assertEqual(_expression(env.get("GH_TOKEN")),
                          f"steps.{mint['id']}.outputs.token",
                          "GH_TOKEN is the contract the merged-PR read reads")
         self.assertNotIn("github.token", str(env.get("GH_TOKEN")))
-        self.assertLess(self.steps.index(mint), self.steps.index(self.groom),
-                        "the token is minted after the step that spends it")
 
-    def test_a_failed_mint_degrades_to_an_unread_section_not_a_red_run(self):
-        """A mint that fails renders an empty token; the read then names the
-        section unread with the reason. The proposal is still the morning's
+    def test_every_token_is_minted_before_the_step_that_spends_it(self):
+        for mint in self._mints():
+            self.assertLess(self.steps.index(mint), self.steps.index(self.groom),
+                            "a token is minted after the step that spends it")
+
+    def test_a_failed_mint_degrades_to_an_unread_owner_not_a_red_run(self):
+        """A mint that fails renders an empty token; the read then names that
+        owner unread with the reason. The proposal is still the morning's
         work, and a missing context signal must not take it down."""
-        self.assertTrue(self._mint().get("continue-on-error"))
+        for mint in self._mints():
+            self.assertTrue(mint.get("continue-on-error"), mint.get("name"))
 
     def test_the_drain_mints_no_token(self):
         """The drain reads the approval and moves cards; it builds no pack."""
-        self.assertIn("inputs.mode != 'drain'", _expression(self._mint().get("if")))
+        for mint in self._mints():
+            self.assertIn("inputs.mode != 'drain'", _expression(mint.get("if")))
+
+
+def fleet_owners() -> list:
+    """Every owner in `config/repo-map.json`, read the way `wake-owners`
+    reads it."""
+    import release_train
+    return release_train.fleet_owners(release_train.fleet_roster())
+
+
+def groomer_owner_wiring_gaps(doc: dict, owners) -> list:
+    """Each owner the groom job does not mint for, or whose token the Groom
+    step does not carry under `groom_context.token_env(owner)` (DRE-5746)."""
+    import groom_context
+    steps = doc["jobs"]["groom"]["steps"]
+    env = _step(doc, GROOM_STEP).get("env") or {}
+    gaps = []
+    for owner in owners:
+        mints = [s for s in steps
+                 if str(s.get("uses") or "").startswith(
+                     "actions/create-github-app-token@")
+                 and (s.get("with") or {}).get("owner") == owner]
+        if len(mints) != 1 or not mints[0].get("id"):
+            gaps.append(f"{owner}: {len(mints)} mint step(s) with an id")
+            continue
+        name = groom_context.token_env(owner)
+        want = f"steps.{mints[0]['id']}.outputs.token"
+        if _expression(env.get(name)) != want:
+            gaps.append(f"{owner}: the Groom step's {name} is not {want}")
+    return gaps
 
 
 class JudgementReceiptWiringTest(unittest.TestCase):
@@ -1278,11 +1345,16 @@ class TheLegsAndThePostRunAsWrittenTest(unittest.TestCase):
         block = verified["verify"]
         self.assertEqual(block["cards"], len(rows))
         self.assertEqual(block["counts"]["obsolete"], 1)
-        self.assertEqual(len(block["unverified"]), len(rows) - 1)
+        # DRE-102's repo is not in the map: excluded, not unverified (DRE-5746).
+        self.assertEqual(len(block["unverified"]), len(rows) - 2)
+        self.assertEqual(block["excluded"], [
+            {"identifier": "DRE-102",
+             "reason": "repo not in config/repo-map.json: widgets"}])
         self.assertIn("DRE-101", [r["identifier"]
                                   for r in verified["outcomes"]["dead"]])
         marks = {r["identifier"]: r.get("verify")
                  for r in verified["sequence"]}
+        self.assertEqual(marks["DRE-102"]["verdict"], "excluded")
         self.assertEqual(marks["DRE-102"]["reason"],
                          "repo not in config/repo-map.json: widgets")
         self.assertEqual(marks["DRE-103"]["reason"], "agent step failed")
@@ -1772,16 +1844,28 @@ class DocumentationTest(unittest.TestCase):
             )
 
     def test_what_one_run_does_names_the_three_jobs(self):
-        """DRE-4972: the run is three jobs, an unmapped repo is `unverified`
-        with no code read, and the verify total is on the proposal page."""
+        """DRE-4972: the run is three jobs, an unmapped repo is `excluded`
+        with no code read (DRE-5746), and the verify total is on the
+        proposal page."""
         section = self.doc.split("## What one run does", 1)[1].split(
             "\n## ", 1)[0]
         folded = " ".join(section.split())
         for token in ("`groom`", "`verify`", "`post`", "DRE-4972",
-                      "config/repo-map.json", "`unverified`", "no code is read",
+                      "config/repo-map.json", "`excluded`", "no code is read",
                       "the verify total is on the proposal page"):
             self.assertIn(token, folded,
                           f"`## What one run does` never says {token}")
+
+    def test_the_doc_describes_the_owner_tokens_the_proof_line_and_the_fifth_exclusion(self):
+        """DRE-5746, in the same pull request as the code: one read-only
+        token per owner, each Planning card's proof on its verdict line, and
+        a card whose repo is not in the map excluded rather than unverified."""
+        folded = " ".join(self.doc.split())
+        for token in ("DRE-5746", "groom_context.token_env", "GH_TOKEN_EVERYBITE",
+                      "`path:line — quote`",
+                      "repo not in config/repo-map.json: <slug>",
+                      "the fifth exclusion"):
+            self.assertIn(token, folded, f"docs/groomer.md never says {token}")
 
     def test_the_doc_says_why_a_cycle_is_not_sprint_planning(self):
         self.assertIn(groomer.CYCLE_IS_NOT_SPRINT_PLANNING, self.doc)
