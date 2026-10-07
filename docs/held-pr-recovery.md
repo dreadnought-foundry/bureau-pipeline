@@ -183,6 +183,7 @@ verdict on an OLDER commit, which is a different fault.
 | 🔓 restart receipt | Nothing. The fix loop is running again. |
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
+| 🔄 `head-desync` notice | GitHub left the pull request on an older commit than its branch holds (DRE-6217, bp #780), so every check, the review and the merge gate were reading a commit the branch had already left. The sweep closed and reopened it once for that branch commit, which makes GitHub move the head. Nothing to do. If it is still behind on the next sweep, the sweep posts `head-desync-unresolved` once and stops: close and reopen it by hand, or push a new commit. |
 
 Related: `scripts/fix_budget.py` (the decision), `scripts/fix_convergence.py`
 (what spends the review budget), `scripts/fix_context.py` (the
