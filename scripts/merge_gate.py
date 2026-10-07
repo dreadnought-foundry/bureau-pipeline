@@ -8,8 +8,8 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → S → F → 4 → W
-→ O.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → P → S → F → 4
+→ W → O.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -183,6 +183,21 @@ not a critic catch).
    - Same authorship rule as the critic: a forged FAIL could stall merges,
      a forged PASS could mask a real FAIL.
 
+P. PROOF RECORD (DRE-6141) — on a proof-record branch
+   (`agent/DRE-<n>-proof-record`), the record `proof_record.py gather` read
+   at the head: the one `.md` file the pull request adds under `docs/` or
+   `architecture/`. On 2026-10-07 three records whose rows read
+   `Not observed.` merged on green CI and an
+   APPROVE — the critic approved them because they were honest about what
+   they had not seen — and their cards closed Done. Every judged row of the
+   criterion table must be met, by the reader the hygiene lane and the PROOF
+   close share (`proof_record.shortfall`); a row not met, no table, no
+   judged row, no record found or a record unread is `hold`, naming why.
+   Not `wait`, which posts nothing, and not `human`, which invites a person
+   to merge an unproven record by hand. After 2 and 3, so the critic's own
+   REQUEST_CHANGES still reads as the critic's hold (DRE-5931 re-runs on
+   it); a re-run that amends the record until every row is met lifts it.
+
 S. STACK (DRE-4103) — the OTHER open pull requests this branch carries.
    On 2026-09-16 17:08 PT agent-bureau #2585 (APPROVE) was merged by gate
    run 35165261547 with a branch built on #2583 and #2582, both standing
@@ -336,7 +351,9 @@ Contract with merge-gate.yml:
     gather` writes — condition O, DRE-4341; unreadable is UNKNOWN and merges
     as before), --pr-body-file / --pr-created-at (the pull request's body
     and GitHub's `createdAt` — condition W, DRE-5511; an empty or unreadable
-    body, or an empty or unparseable time, is OFF), all optional;
+    body, or an empty or unparseable time, is OFF), --proof-record-file (the
+    record `proof_record.py gather` writes — condition P, DRE-6141; on a
+    proof-record branch unreadable holds, elsewhere it is not read), all optional;
     omitted = the pre-DRE-2039/2416 behavior for every caller that never
     passes them. The compare payload must NOT be trimmed (DRE-2340): its
     `files[]` is what the head's content id is computed from.
@@ -362,7 +379,8 @@ head); `hold` means an explicit negative verdict is standing
 APPROVE on an open pull request this branch carries) and only a new
 verdict, or that pull request's own merge, lifts it — or, since DRE-4341, a
 required code-owner review is missing and only that person's approval
-lifts it;
+lifts it — or, since DRE-6141, a proof record is not proven and only a new
+head whose record is lifts it;
 `conflict` means the branch cannot merge until it is reconciled with its
 base (DRE-2416) and the workflow dispatches the fix agent; `human` means
 the gate will not merge this PR as it stands and no event it watches will
@@ -1215,6 +1233,56 @@ def evaluate_whats_new(head_branch, pr_body, pr_created_at) -> Optional[Decision
     return None
 
 
+#: The verdict markers a gate note quotes from untrusted text must never carry
+#: (standards/untrusted-content.md).
+VERDICT_MARKERS = ("VERDICT:", CRITIC_MARKER, VERIFIER_MARKER)
+
+
+def without_verdict_markers(text: str) -> str:
+    """`text` with every verdict marker taken out, in any case, until none is
+    left — so `VERVERDICT:DICT:` cannot reassemble one."""
+    pattern = re.compile("|".join(re.escape(m) for m in VERDICT_MARKERS), re.IGNORECASE)
+    while True:
+        stripped = pattern.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
+def evaluate_proof_record(head_branch, proof) -> Optional[Decision]:
+    """Condition P (DRE-6141). None = proceed. `proof` is the record
+    `proof_record.py gather` wrote, parsed (`read_payload`'s input), or None
+    when the caller passed no record — which reproduces the pre-DRE-6141
+    behavior.
+
+    On a proof-record branch the record must prove its card: every judged
+    row of its criterion table met, by the same reader the hygiene lane and
+    the PROOF close judge it with. Anything else is a `hold` naming why —
+    a row not met, no criterion table, no judged row, no record found, a
+    record that could not be read. Never a `wait`, which says nothing on the
+    pull request, and never `human`, which invites a person to merge an
+    unproven record by hand. The hold is posted once per head, and a re-run
+    that amends the record until every row is met lifts it.
+
+    The reason quotes the record, which is untrusted text the qa-bot posts:
+    it is one line and carries no verdict marker.
+    """
+    import proof_record  # lazy: the leaf the PROOF close reads too
+
+    if proof is None or not proof_record.proof_record_branch(head_branch):
+        return None
+    record = proof_record.read_payload(proof)
+    if record is None:
+        record = proof_record.Record(
+            None, None, "the record was gathered as if this were not a "
+            "proof-record branch")
+    why = proof_record.shortfall(record)
+    if why is None:
+        return None
+    why = " ".join(without_verdict_markers(why).split())
+    return Decision("hold", f"proof record not proven: {why} (DRE-6141)")
+
+
 def decide(*args, owners=None, **kwargs) -> Decision:
     """The whole gate — `_decide`'s conditions, then condition O (DRE-4341)
     over `owners`, `code_owner_hold.read_owners`'s answer. Every decision
@@ -1249,8 +1317,9 @@ def _decide(
     owners=None,
     pr_body=None,
     pr_created_at=None,
+    proof=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → S → F → 4 → W → O,
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → P → S → F → 4 → W → O,
     first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
@@ -1313,7 +1382,13 @@ def _decide(
     condition 4 and before O so it never pre-empts a pending review, a stack
     hold or a fix in flight. The defaults (None), and an empty body,
     reproduce the pre-DRE-5511 behavior for every caller that never passes
-    them."""
+    them.
+
+    `proof` is condition P's record (DRE-6141), what `proof_record.py
+    gather` wrote, parsed. Evaluated after the critic and verifier
+    conditions, so the critic's own REQUEST_CHANGES still reads as the
+    critic's hold (the DRE-5931 re-run acts on it), and before S. The
+    default (None) reproduces the pre-DRE-6141 behavior."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1362,6 +1437,12 @@ def _decide(
             decision.carried = carried
             decision.content_id = head_content_id
         return decision
+
+    # Condition P (DRE-6141): the critic approved a proof record, but a
+    # record whose rows were not all seen working proves nothing.
+    blocked = evaluate_proof_record(head_branch, proof)
+    if blocked:
+        return _decided(blocked)
 
     # Condition S (DRE-4103): this pull request's own verdicts say merge, but
     # a merge also lands every open pull request its branch carries.
@@ -1507,6 +1588,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "8601) — the rule binds only pull requests "
                              "opened after the cutover. Empty or unparseable "
                              "is OFF, never a hold")
+    # Condition P's record (DRE-6141) — optional; omitting it reproduces the
+    # pre-DRE-6141 behavior for every caller that never passes it.
+    parser.add_argument("--proof-record-file", default=None,
+                        help="the proof record written by `proof_record.py "
+                             "gather` (DRE-6141). On a proof-record branch a "
+                             "record not fully met is a hold, and so is a "
+                             "file that cannot be read; on any other branch "
+                             "it is not read")
     return parser
 
 
@@ -1724,12 +1813,24 @@ def main(argv=None) -> int:
             body_note = (f"cannot read the pull request body ({e}) — the "
                          "What's new: condition is off (DRE-5511)")
 
+    # DRE-6141: an unreadable proof record file is NOT "no record" — on a
+    # proof-record branch condition P holds on it; elsewhere it is not read.
+    proof = None
+    if args.proof_record_file:
+        try:
+            with open(args.proof_record_file, encoding="utf-8") as f:
+                proof = json.load(f)
+        except (OSError, ValueError) as e:
+            proof = {"applies": True, "text": None,
+                     "detail": f"cannot read the proof record file: {e}"}
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
         head_content_id, args.merge_state, is_draft, fix_lane, args.pr_number,
         unfinished, stack, branch_commits, owners=owners,
         pr_body=pr_body, pr_created_at=args.pr_created_at or None,
+        proof=proof,
     )
     if body_note:
         decision.notes.append(body_note)

@@ -411,6 +411,9 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: keeps the card's band rather than demoting it (DRE-5307).
 #: `proof_dispatch.py` reads an answer after a proof's park, and an unchecked
 #: one neither returns the card nor discharges its hold, and says so (DRE-5926).
+#: `proof_record.py` holds the hold reader both the merge gate and the PROOF
+#: close read, moved out of `proof_dispatch.py`: an unchecked answer
+#: discharges nothing (DRE-6141).
 #: `green_light_reply.py` sends a Green Light plan back on the CEO's comment,
 #: and an unchecked answer after his newest counted one holds the dispatch
 #: and says so (DRE-6138).
@@ -423,6 +426,8 @@ OTHER_READERS = {
     "test_an_unchecked_console_confirmation_keeps_the_band_and_names_the_card",
     "proof_dispatch.py": "tests/test_proof_dispatch.py::"
     "test_an_unchecked_console_answer_neither_returns_nor_discharges_and_says_why",
+    "proof_record.py": "tests/test_proof_record.py::"
+    "test_an_answer_that_could_not_be_checked_discharges_nothing",
 }
 
 

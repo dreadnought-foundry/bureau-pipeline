@@ -213,7 +213,7 @@ gate_note.post_once(FileThread(), args.marker, body, args.author)
 '''
 
 STUBBED = ("stranded_fix.py", "stacked_prs.py", "code_owner_hold.py",
-           "linear_ops.py", "order_sensitive_refresh.py")
+           "proof_record.py", "linear_ops.py", "order_sensitive_refresh.py")
 
 
 def evaluate_body() -> str:

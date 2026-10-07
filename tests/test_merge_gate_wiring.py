@@ -198,6 +198,32 @@ class ScriptInvocationTest(unittest.TestCase):
                 self.assertEqual(body.strip(), "")
                 self.assertEqual(created, "")
 
+    def test_the_proof_record_is_gathered_and_passed(self):
+        """DRE-6141: condition P reads the record `proof_record.py gather`
+        writes — off the one view (which carries `files`) at the evaluated
+        head — and the gate is handed that same file."""
+        m = re.search(r'gh pr view "\$PR" --json (\S+) > /tmp/pr-view\.json\n',
+                      self.run_block)
+        self.assertIsNotNone(m, "the gate's one pull request read is gone")
+        self.assertIn("files", m.group(1).split(","))
+        code = "\n".join(step_shell.code_lines(self.run_block))
+        gather = re.search(
+            r"python3 \.bureau-pipeline/scripts/proof_record\.py gather(.*?)(?:\n(?!\s)|$)",
+            code, re.S)
+        self.assertIsNotNone(gather, "the script no longer runs proof_record.py gather")
+        args = gather.group(1)
+        self.assertIn("--pr-view-file /tmp/pr-view.json", args)
+        self.assertIn('--head-sha "$SHA"', args)
+        self.assertIn('--repo "$REPO_FULL"', args)
+        out = re.search(r"--out (\S+)", args)
+        self.assertIsNotNone(out, "the gather names no output file")
+        passed = re.search(r"--proof-record-file (\S+)", self.run_block)
+        self.assertIsNotNone(passed, "merge_gate.py is not handed --proof-record-file")
+        self.assertEqual(passed.group(1), out.group(1))
+        # Gathered before the decision that reads it.
+        self.assertLess(self.run_block.find("proof_record.py gather"),
+                        self.run_block.find("--proof-record-file"))
+
     def test_origin_listing_uses_the_workflows_own_token(self):
         """The runs listing needs actions:read, which the qa-bot App
         deliberately lacks — that ONE read must use the workflow's own

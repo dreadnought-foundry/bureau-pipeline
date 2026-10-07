@@ -43,16 +43,18 @@ set -e
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
 #     From the one read: mergeability, the draft flag, the head sha, the
-#     author, and the body and creation time. Then the head's check runs and
-#     workflow runs, and `merge_gate.py precheck` asks whether condition 1
-#     waits on those two alone; if it does, the step says `decision=wait` and
-#     stops before reading anything else. Otherwise: the three-dot compare of
-#     base against head, every page of the comments, the commits, the Agent
-#     Fix lane, the open pull requests this branch carries and the code-owner
-#     rules. A record that cannot be read fails closed: it is written empty or
-#     unreadable, and the decision waits or holds on it. The body and creation
-#     time are the exception: they fail soft, an absent or null one is empty
-#     and holds nothing (DRE-5511).
+#     author, the body and creation time, and the files it changes. Then the
+#     head's check runs and workflow runs, and `merge_gate.py precheck` asks
+#     whether condition 1 waits on those two alone; if it does, the step says
+#     `decision=wait` and stops before reading anything else. Otherwise: the
+#     three-dot compare of base against head, every page of the comments, the
+#     commits, the Agent Fix lane, the open pull requests this branch
+#     carries, the code-owner rules and, on a proof-record branch, the proof
+#     record at the head (`proof_record.py gather`; off one it reads
+#     nothing). A record that cannot be read fails closed: it is written
+#     empty or unreadable, and the decision waits or holds on it. The body
+#     and creation time are the exception: they fail soft, an absent or null
+#     one is empty and holds nothing (DRE-5511).
 #  3. Runs merge_gate.py over them. It prints `decision=` (merge, hold, wait,
 #     conflict or human) and `reason=`, and optional lines: `carried=` and
 #     `carried_content_id=` when a verdict carried across a head change, and
@@ -287,12 +289,21 @@ set -e
 #   releasing a card parked for a code-owner review waits for the next full
 #   evaluation. The same package stopped the critic's own completion waking
 #   the gate (merge-gate.yml's `if:`).
+# DRE-6141 (2026-10-07). Three proof records whose rows read `Not observed.`
+#   merged on green CI and the critic's APPROVE, and DRE-5919 closed their
+#   cards. On a proof-record branch, proof_record.py gather now finds the one
+#   .md file the pull request adds under architecture/proofs/ or
+#   architecture/audits/ (`files` joined the one read), reads it at $SHA and
+#   hands it over as --proof-record-file; condition P holds a record whose
+#   rows are not all met, posted as an ordinary decline note once per head.
+#   Off a proof-record branch it reads nothing, so the path to a merge is
+#   still nine reads.
 
 set -euo pipefail
 
 # ONE read of the pull request (Stage 2 #19). No fallback: a failed read kills
 # the step, as each of the eight reads it replaces did.
-gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url > /tmp/pr-view.json
+gh pr view "$PR" --json headRefName,state,mergeStateStatus,isDraft,headRefOid,baseRefName,body,createdAt,author,url,files > /tmp/pr-view.json
 # A field a decision is made on: absent or null kills the step, never an empty value (DRE-3467).
 pr_field() {
   jq -r --arg f "$1" 'if .[$f] == null then empty else .[$f] | tostring end' /tmp/pr-view.json | grep . \
@@ -370,6 +381,10 @@ python3 .bureau-pipeline/scripts/stacked_prs.py gather \
 python3 .bureau-pipeline/scripts/code_owner_hold.py gather \
   --repo "$REPO_FULL" --pr "$PR" --base "$BASE" \
   --compare-file /tmp/compare.json --out /tmp/owners.json
+# The proof record at the head; off a proof-record branch, no read (DRE-6141).
+python3 .bureau-pipeline/scripts/proof_record.py gather \
+  --repo "$REPO_FULL" --pr-view-file /tmp/pr-view.json \
+  --head-sha "$SHA" --out /tmp/proof-record.json
 
 python3 .bureau-pipeline/scripts/merge_gate.py \
   --head-sha "$SHA" \
@@ -390,6 +405,7 @@ python3 .bureau-pipeline/scripts/merge_gate.py \
   --owners-file /tmp/owners.json \
   --pr-body-file /tmp/pr-body.txt \
   --pr-created-at "$CREATED_AT" \
+  --proof-record-file /tmp/proof-record.json \
   | tee /tmp/gate-decision
 # Fail-closed on shape drift: no `decision=merge` line, no merge.
 DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)

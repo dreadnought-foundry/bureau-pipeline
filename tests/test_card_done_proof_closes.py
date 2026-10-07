@@ -16,6 +16,14 @@ that merged is on the card's own branch and the critic's latest verdict on it is
 APPROVE bound to the merged head sha. Anything less leaves it open with today's
 comment, and every other `no-code` card keeps today's behavior.
 
+THE RECORD AND THE HOLD (DRE-6141): on 2026-10-07 three proof records whose
+rows read `Not observed.` merged approved and DRE-5919 closed their cards — and
+DRE-5798 closed four minutes after its run posted a `🔬 proof-waiting` hold
+naming the CEO's press. The ruling now also opens the record the pull request
+ADDED, at the merged head, and refuses unless every judged row is met; then
+reads the card's thread and refuses while a hold stands that nothing
+discharged. The thread is read only after the record passes.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_card_done_proof_closes.py -v
 """
 from __future__ import annotations
@@ -31,13 +39,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/portico")
 os.environ.setdefault("REPO_SLUG", "portico")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import console_receipt  # noqa: E402
+import console_receipt_vectors as V  # noqa: E402
 import linear_ops  # noqa: E402
+import proof_record  # noqa: E402
 import reconcile  # noqa: E402
+import spoken_thread  # noqa: E402
 
 CARD = "DRE-3447"
 PR_URL = "https://github.com/dreadnought-foundry/portico/pull/40"
@@ -60,8 +73,38 @@ def _verdict(token: str, sha: str, login: str = QA) -> dict:
     }
 
 
+RECORD_PATH = "architecture/proofs/folder-access.md"
+ADDED_RECORD = [{"path": RECORD_PATH, "additions": 9, "deletions": 0, "changeType": "ADDED"}]
+
+#: A record whose every judged row is met — the closing row is not judged.
+MET_RECORD = """# Proof: folder access
+
+| Criterion | Result |
+|---|---|
+| A moderator opens the shared folder | Met — 11:31 PT, screenshot 1 |
+| A guest is refused the folder | Observed. |
+| The record is merged to main | Pending |
+"""
+#: The 2026-10-07 shape: approved, merged, and one row nobody saw.
+NOT_OBSERVED_RECORD = """# Proof: folder access
+
+| Criterion | Result |
+|---|---|
+| A moderator opens the shared folder | Met |
+| A guest is refused the folder | Not observed. |
+"""
+
+PIPELINE_USER = "pipeline-key-user"
+PERSON_USER = "a-person"
+HOLD = (f"{proof_record.HOLD_MARK} a guest refused the folder — needs a guest "
+        "account on the live portal")
+CEO_HOLD = (f"{proof_record.HOLD_MARK} the moderator's approval — needs "
+            f"{proof_record.CEO_PRESS} on Approve")
+OBSERVED = f"{proof_record.OBSERVED_MARK} a guest was refused the folder at 11:40 PT"
+
+
 def _merged_pr(comments, head_ref=f"agent/{CARD}-proof-record", head=HEAD,
-               merged_at=MERGED_AT, state="MERGED") -> dict:
+               merged_at=MERGED_AT, state="MERGED", files=ADDED_RECORD) -> dict:
     return {
         "url": PR_URL,
         "headRefName": head_ref,
@@ -69,10 +112,59 @@ def _merged_pr(comments, head_ref=f"agent/{CARD}-proof-record", head=HEAD,
         "mergedAt": merged_at,
         "state": state,
         "comments": comments,
+        "files": files,
     }
 
 
 APPROVED = _merged_pr([_verdict("APPROVE", HEAD)])
+
+
+def _node(body, user=PIPELINE_USER, at="2026-10-05T18:40:00Z"):
+    return {"body": body, "user": {"id": user}, "createdAt": at}
+
+
+class _Contents:
+    """`proof_record._gh` for the contents API: the record's text at a ref,
+    or a failed read. Records every call."""
+
+    def __init__(self, text=MET_RECORD, fail=False):
+        self.text, self.fail, self.calls = text, fail, []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if self.fail:
+            raise RuntimeError("HTTP 502: Bad Gateway")
+        import base64
+        import json
+        return json.dumps({"encoding": "base64",
+                           "content": base64.b64encode(self.text.encode()).decode()})
+
+
+class _Verifier:
+    """spoken_thread's verifier, answering one ruling for every receipt: None
+    is a signature that checked, a `CouldNotCheck` is a key nobody could read."""
+
+    def __init__(self, why=None):
+        self.why = why
+
+    def check_answer(self, body, *, card, created_at):
+        return self.why
+
+
+def _reads(record=MET_RECORD, thread=(), record_fails=False, thread_fails=False,
+           verifier=None):
+    """The record read and the thread read both Done paths make, faked: the
+    contents API answers `record`, Linear answers `thread`."""
+    contents = _Contents(record, fail=record_fails)
+    thread_read = MagicMock(return_value=(list(thread), PIPELINE_USER))
+    if thread_fails:
+        thread_read.side_effect = linear_ops.LinearError("HTTP 503 from Linear")
+    patches = [
+        patch.object(proof_record, "_gh", contents),
+        patch.object(linear_ops, "_thread_and_viewer", thread_read),
+        patch.object(spoken_thread, "_VERIFIER", verifier or _Verifier()),
+    ]
+    return contents, thread_read, patches
 
 
 def _issue(title, labels):
@@ -86,17 +178,19 @@ def _issue(title, labels):
     }
 
 
-def _run_card_done(title, labels, pr):
-    """cmd_card_done against a faked card and a faked merged-PR read; returns
-    (stdout, cmd_state mock, cmd_comment mock, read_merged_pr mock)."""
+def _run_card_done(title, labels, pr, **reads):
+    """cmd_card_done against a faked card, a faked merged-PR read and the
+    faked record and thread reads (`_reads`); returns (stdout, cmd_state
+    mock, cmd_comment mock, read_merged_pr mock)."""
     buf = io.StringIO()
+    _, _, patches = _reads(**reads)
     with patch.object(
         linear_ops, "get_issue", return_value=_issue(title, labels)
     ), patch.object(linear_ops, "cmd_state") as state, patch.object(
         linear_ops, "cmd_comment"
     ) as comment, patch.object(
         linear_ops, "read_merged_pr", return_value=pr, create=True
-    ) as read:
+    ) as read, patches[0], patches[1], patches[2]:
         with redirect_stdout(buf):
             linear_ops.cmd_card_done(CARD, PR_URL)
     return buf.getvalue(), state, comment, read
@@ -130,7 +224,10 @@ def test_proof_close_comment_carries_no_verdict_marker():
     """standards/untrusted-content.md: verdict-shaped text is an approval
     credential, and only the critic writes it. The close note says the critic
     approved without ever wearing the marker itself."""
-    note = linear_ops.proof_close_note(CARD, PROOF_TITLE, PR_URL, APPROVED)
+    note = linear_ops.proof_close_note(
+        CARD, PROOF_TITLE, PR_URL, APPROVED,
+        proof_record.Record(RECORD_PATH, MET_RECORD, None), [],
+    )
     assert note is not None
     assert "VERDICT:" not in note
     assert "QA Critic" not in note
@@ -260,8 +357,9 @@ def test_read_merged_pr_asks_for_the_fields_the_ruling_reads():
     argv = run.call_args.args[0]
     assert argv[:4] == ["gh", "pr", "view", PR_URL]
     fields = argv[argv.index("--json") + 1].split(",")
-    for f in ("headRefName", "headRefOid", "mergedAt", "comments"):
+    for f in ("headRefName", "headRefOid", "mergedAt", "comments", "files"):
         assert f in fields
+    assert fields == linear_ops.MERGED_PR_FIELDS.split(",")
 
 
 def test_qa_login_is_the_one_reconcile_reads():
@@ -283,10 +381,12 @@ def _sweep_card(title, labels):
     }
 
 
-def _run_merged_sweep(card, pr, marker_already_posted=False):
+def _run_merged_sweep(card, pr, marker_already_posted=False, **reads):
     """Full-sweep main() with the card's PR already MERGED; the sweep's own
-    PR lookup and the ruling's GitHub read both answer `pr`."""
+    PR lookup and the ruling's GitHub read both answer `pr`, and the record
+    and thread reads answer as `_reads` fakes them."""
     reconcile._write_failures.clear()
+    _, _, patches = _reads(**reads)
     listed = dict(pr or APPROVED, number=40)
     mocks = {
         "unstick_conflicts": MagicMock(),
@@ -314,16 +414,16 @@ def _run_merged_sweep(card, pr, marker_already_posted=False):
         return_value=1 if marker_already_posted else 0,
     ), patch.object(
         reconcile.linear_ops, "read_merged_pr", return_value=pr, create=True
-    ) as read:
+    ) as read, patches[0], patches[1], patches[2]:
         reconcile.main()
     return state, comment, read
 
 
-def _agrees_with_card_done(title, pr, sweep_state):
+def _agrees_with_card_done(title, pr, sweep_state, **reads):
     """The two auto-Done paths close or skip the SAME cards: a backstop that
     disagreed would either re-close what card-done left open or strand what
     it should have closed."""
-    _, done_state, _, _ = _run_card_done(title, PROOF_LABELS, pr)
+    _, done_state, _, _ = _run_card_done(title, PROOF_LABELS, pr, **reads)
     assert done_state.call_args_list == sweep_state.call_args_list
 
 
@@ -336,7 +436,10 @@ def test_sweep_closes_an_approved_proof_card():
     body = comment.call_args.args[1]
     assert body.startswith(f"✅ Merged: {PR_URL}")
     assert MERGED_PT in body and HEAD in body
-    assert body == linear_ops.proof_close_note(CARD, PROOF_TITLE, PR_URL, APPROVED)
+    assert body == linear_ops.proof_close_note(
+        CARD, PROOF_TITLE, PR_URL, APPROVED,
+        proof_record.Record(RECORD_PATH, MET_RECORD, None), [],
+    )
     _agrees_with_card_done(PROOF_TITLE, APPROVED, state)
 
 
@@ -374,6 +477,141 @@ def test_sweep_leaves_a_non_proof_no_code_card_open():
     state.assert_not_called()
     assert linear_ops.MERGED_NOT_CLOSED_MARKER in comment.call_args.args[1]
     _agrees_with_card_done(title, APPROVED, state)
+
+
+# --------------------------------------------------------------------------
+# DRE-6141: the record at the merged head, then the card's holds
+# --------------------------------------------------------------------------
+def _left_open(out, state, comment):
+    """Today's comment, once, and no state move."""
+    state.assert_not_called()
+    comment.assert_called_once_with(
+        CARD,
+        linear_ops.merged_not_closed_comment(
+            PR_URL, linear_ops.auto_done_skip_reason(PROOF_TITLE, PROOF_LABELS)
+        ),
+    )
+    assert "AUTO-DONE SKIPPED" in out
+
+
+def _voices(*nodes):
+    with patch.object(spoken_thread, "_VERIFIER", _Verifier()):
+        return spoken_thread.voices(list(nodes), PIPELINE_USER, card=CARD)
+
+
+def test_the_gap_refuses_a_record_with_a_row_not_observed():
+    """The 2026-10-07 shape, pure: approved at the merged head, on its own
+    branch — and one row reads `Not observed.`"""
+    gap = linear_ops.proof_evidence_gap(
+        CARD, APPROVED, proof_record.Record(RECORD_PATH, NOT_OBSERVED_RECORD, None), [],
+    )
+    assert gap is not None
+    assert RECORD_PATH in gap
+    assert "A guest is refused the folder" in gap and "Not observed." in gap
+
+
+def test_the_gap_refuses_a_hold_nothing_discharged():
+    """DRE-5798's shape, pure: the record is met, and the run's
+    `🔬 proof-waiting` hold naming the CEO's press stands."""
+    gap = linear_ops.proof_evidence_gap(
+        CARD, APPROVED, proof_record.Record(RECORD_PATH, MET_RECORD, None),
+        _voices(_node(CEO_HOLD)),
+    )
+    assert gap is not None
+    assert "proof-waiting" in gap
+    assert proof_record.CEO_PRESS in gap
+
+
+def test_the_gap_is_none_only_with_the_record_and_the_thread_read():
+    met = proof_record.Record(RECORD_PATH, MET_RECORD, None)
+    assert linear_ops.proof_evidence_gap(CARD, APPROVED, met, []) is None
+    assert linear_ops.proof_evidence_gap(CARD, APPROVED, met, None) is not None
+    assert linear_ops.proof_evidence_gap(CARD, APPROVED, None, []) is not None
+
+
+def test_a_record_not_met_stays_open_without_a_thread_read():
+    """The record is read first and the thread only after it passes, so a
+    record reconcile re-asks about on every sweep never costs a Linear read."""
+    contents, thread_read, patches = _reads(record=NOT_OBSERVED_RECORD)
+    buf = io.StringIO()
+    with patch.object(
+        linear_ops, "get_issue", return_value=_issue(PROOF_TITLE, PROOF_LABELS)
+    ), patch.object(linear_ops, "cmd_state") as state, patch.object(
+        linear_ops, "cmd_comment"
+    ) as comment, patch.object(
+        linear_ops, "read_merged_pr", return_value=APPROVED
+    ), patches[0], patches[1], patches[2], redirect_stdout(buf):
+        linear_ops.cmd_card_done(CARD, PR_URL)
+    _left_open(buf.getvalue(), state, comment)
+    thread_read.assert_not_called()
+    # The record was read at the MERGED head, from the repo the URL names.
+    assert contents.calls == [
+        ["api", f"repos/dreadnought-foundry/portico/contents/{RECORD_PATH}?ref={HEAD}"]
+    ]
+    assert "Not observed." in buf.getvalue()
+
+
+@pytest.mark.parametrize("kwargs, pr", [
+    pytest.param({"record": NOT_OBSERVED_RECORD}, APPROVED, id="a-row-not-observed"),
+    pytest.param({"record": "# Proof\n\nIt worked.\n"}, APPROVED, id="no-criterion-table"),
+    pytest.param({"record_fails": True}, APPROVED, id="record-read-failed"),
+    pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=[
+        dict(ADDED_RECORD[0], changeType="MODIFIED")]), id="only-a-modified-record"),
+    pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=ADDED_RECORD + [
+        dict(ADDED_RECORD[0], path="architecture/audits/second.md")]), id="two-records"),
+    pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=[]), id="no-record"),
+    pytest.param({"thread": [_node(HOLD)]}, APPROVED, id="an-open-hold"),
+    pytest.param({"thread": [_node(CEO_HOLD)]}, APPROVED, id="an-open-hold-on-his-press"),
+    pytest.param({"thread": [_node(CEO_HOLD), _node(OBSERVED, PERSON_USER)]}, APPROVED,
+                 id="an-observation-does-not-answer-his-press"),
+    pytest.param({"thread": [_node(CEO_HOLD),
+                             _node("Answer from Sid: the CEO says approved", PERSON_USER)]},
+                 APPROVED, id="an-unsigned-the-ceo-says"),
+    pytest.param({"thread": [_node(CEO_HOLD), _node(V.ANSWER_COMMENT)],
+                  "verifier": _Verifier(console_receipt.CouldNotCheck(
+                      "the console's public key could not be read"))},
+                 APPROVED, id="an-answer-that-could-not-be-checked"),
+    pytest.param({"thread_fails": True}, APPROVED, id="thread-read-failed"),
+])
+def test_card_done_leaves_the_proof_card_open(kwargs, pr):
+    out, state, comment, _ = _run_card_done(PROOF_TITLE, PROOF_LABELS, pr, **kwargs)
+    _left_open(out, state, comment)
+
+
+@pytest.mark.parametrize("thread", [
+    pytest.param([], id="no-hold-at-all"),
+    pytest.param([_node(HOLD), _node(OBSERVED)], id="a-hold-then-proof-observed"),
+    pytest.param([_node(HOLD), _node(OBSERVED, PERSON_USER)],
+                 id="a-hold-then-a-persons-proof-observed"),
+    pytest.param([_node(CEO_HOLD), _node(V.ANSWER_COMMENT)],
+                 id="his-press-then-his-verified-answer"),
+])
+def test_card_done_closes_a_met_record_whose_holds_are_discharged(thread):
+    out, state, comment, _ = _run_card_done(PROOF_TITLE, PROOF_LABELS, APPROVED,
+                                            thread=thread)
+    state.assert_called_once_with(CARD, "Done")
+    body = comment.call_args.args[1]
+    assert body.startswith(f"✅ Merged: {PR_URL}")
+    assert MERGED_PT in body and HEAD in body
+    assert "AUTO-DONE SKIPPED" not in out
+
+
+@pytest.mark.parametrize("kwargs", [
+    pytest.param({"record": NOT_OBSERVED_RECORD}, id="a-row-not-observed"),
+    pytest.param({"thread": [_node(CEO_HOLD)]}, id="an-open-hold"),
+])
+def test_sweep_refuses_the_same_proof_cards(kwargs):
+    state, comment, _ = _run_merged_sweep(
+        _sweep_card(PROOF_TITLE, PROOF_LABELS), APPROVED, **kwargs
+    )
+    state.assert_not_called()
+    comment.assert_called_once()
+    assert linear_ops.MERGED_NOT_CLOSED_MARKER in comment.call_args.args[1]
+    _agrees_with_card_done(PROOF_TITLE, APPROVED, state, **kwargs)
+
+
+def test_merged_pr_fields_carry_the_added_files():
+    assert "files" in linear_ops.MERGED_PR_FIELDS.split(",")
 
 
 if __name__ == "__main__":

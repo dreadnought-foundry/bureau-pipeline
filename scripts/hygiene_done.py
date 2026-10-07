@@ -19,7 +19,9 @@ from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
 2. **A proof proven.** A `PROOF:` card whose merged pull request touched a file
    under `docs/` or `architecture/` — the record. The record is read at the
    default branch and judged on the one shape a machine can read without
-   judgment, a criterion table (`criterion_rows`): every row but the record's
+   judgment, a criterion table (`criterion_rows`, read through `proof_record`,
+   the one reader the merge gate and the PROOF close share, DRE-6141):
+   every row but the record's
    own merge and the CEO's closing step (`is_closing_row`: one of
    `CLOSING_ROW_WORDS`, in the shape of a merge to main the criterion leads
    with, or of the CEO or the operator closing the card or reading the
@@ -63,9 +65,7 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import sys
-from collections import namedtuple
 from datetime import datetime, timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -76,6 +76,20 @@ import lane_contract
 import linear_ops
 import proof_and_demo
 import reconcile
+# The criterion-table reader lives once, in the leaf the merge gate and the
+# PROOF close read too (DRE-6141) — moved, not copied.
+from proof_record import (  # noqa: F401 — the names this lane's callers and tests read
+    CLOSING_ROW_WORDS,
+    HEDGES,
+    MET_WORDS,
+    RECORD_DIRS as RECORD_ROOTS,
+    Reading,
+    _row,
+    criterion_rows,
+    is_closing_row,
+    reading,
+    row_met,
+)
 
 LANE = "Todo and proofs"
 
@@ -86,17 +100,6 @@ READ_LANES = ("Todo", "In Progress", "In Review", hygiene.HAND_WORK)
 #: This agent's own epic's proof card: the CEO closes it.
 OWN_PROOF = "DRE-5412"
 
-#: A criterion row naming one of these is the record's own merge or the CEO's
-#: closing step, and is skipped — but only in one of the two shapes below, so
-#: "Retry closes the loop" or "The nightly runs on main" is still judged.
-CLOSING_ROW_WORDS = ("merged", "on main", "the ceo", "close")
-#: A result cell opening with one of these, as a whole word, is met — unless a
-#: hedge follows straight after it ("Met, but only…", "Pass with caveats").
-MET_WORDS = ("met", "holds", "observed", "proven", "pass", "yes")
-HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and no", "and not",
-          "not")
-
-RECORD_ROOTS = ("docs/", "architecture/")
 SUPERSEDED = ("Canceled", "Duplicate")
 HAND_BUILT = reconcile.HAND_BUILT_LABEL
 NO_CODE = linear_ops.NO_CODE_LABEL
@@ -113,98 +116,6 @@ TIE_BEFORE = timedelta(minutes=1)
 FAILED = ("failure", "timed_out", "startup_failure")
 
 _PT = ZoneInfo("America/Los_Angeles")
-_FENCE = re.compile(r"^\s*(```|~~~)")
-_SEPARATOR_CELL = re.compile(r":?-+:?")
-_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
-_MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
-_HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
-#: The record's own merge: the criterion leads with it — "Merged to main…",
-#: "The record is on main", "docs/<record>.md merged to main".
-_OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
-                        r"|\S+\.md (?:is )?(?:merged to|on) main)\b")
-#: The closing step: the CEO or the operator closes the card, or reads the record.
-_CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
-                           r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")
-
-#: `rows` is None when the record holds no criterion table; `met` and `unmet`
-#: are the (criterion, result) pairs that are not closing rows.
-Reading = namedtuple("Reading", "rows met unmet")
-
-
-# --------------------------------------------------------------------------- #
-# the criterion table                                                          #
-# --------------------------------------------------------------------------- #
-
-
-def _cells(line: str) -> list:
-    row = line.strip()
-    if row.startswith("|"):
-        row = row[1:]
-    if row.endswith("|") and not row.endswith("\\|"):
-        row = row[:-1]
-    return [c.strip().replace("\\|", "|") for c in _UNESCAPED_PIPE.split(row)]
-
-
-def _is_row(line: str) -> bool:
-    return line.lstrip().startswith("|")
-
-
-def _is_separator(line: str) -> bool:
-    return _is_row(line) and all(_SEPARATOR_CELL.fullmatch(c) for c in _cells(line))
-
-
-def _cell(row: list, at: int) -> str:
-    return row[at] if at < len(row) else ""
-
-
-def criterion_rows(text: str) -> list | None:
-    """The first markdown table whose header row has a cell containing
-    `criteri`, as (criterion cell, the cell after it) pairs — or None when the
-    record holds no such table. Tables inside fenced code are not tables."""
-    lines = (text or "").splitlines()
-    fenced = False
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if _FENCE.match(line):
-            fenced = not fenced
-            i += 1
-            continue
-        if fenced or not _is_row(line) or i + 1 >= len(lines) or not _is_separator(lines[i + 1]):
-            i += 1
-            continue
-        header = _cells(line)
-        body, i = [], i + 2
-        while i < len(lines) and _is_row(lines[i]):
-            body.append(_cells(lines[i]))
-            i += 1
-        at = next((k for k, c in enumerate(header) if "criteri" in c.lower()), None)
-        if at is not None:
-            return [(_cell(r, at), _cell(r, at + 1)) for r in body]
-    return None
-
-
-def is_closing_row(criterion: str) -> bool:
-    text = " ".join((criterion or "").replace("`", "").lower().split())
-    if not any(word in text for word in CLOSING_ROW_WORDS):
-        return False
-    return _OWN_MERGE.match(text) is not None or _CLOSING_STEP.search(text) is not None
-
-
-def _plain(cell: str) -> str:
-    return (cell or "").replace("*", "").replace("_", "").strip()
-
-
-def row_met(result: str) -> bool:
-    text = _plain(result).lower()
-    return _MET.match(text) is not None and _HEDGED.match(text) is None
-
-
-def reading(text: str) -> Reading:
-    rows = criterion_rows(text)
-    judged = [r for r in rows or [] if not is_closing_row(r[0])]
-    return Reading(rows=rows, met=[r for r in judged if row_met(r[1])],
-                   unmet=[r for r in judged if not row_met(r[1])])
 
 
 # --------------------------------------------------------------------------- #
@@ -321,13 +232,6 @@ def merged(card: dict, repo: str, pr: dict, labels: list, has_children: bool,
                       "a person reads the card's evidence and closes it")]
     return [_action(card, "hygiene-card-close", said,
                     [f"pull request {repo}#{number}", RULE_EVIDENCE], ctx, "Done")]
-
-
-def _row(criterion: str, result: str) -> str:
-    def cut(text: str, n: int) -> str:
-        text = " ".join(text.split())
-        return text if len(text) <= n else text[:n - 1].rstrip() + "…"
-    return f"“{cut(criterion, 70)}” reads “{cut(result.replace('*', ''), 50)}”"
 
 
 def proven(card: dict, repo: str, ctx: hygiene.Context, cache: dict) -> list:
