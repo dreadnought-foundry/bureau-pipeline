@@ -13,10 +13,10 @@ given — <why not>` — and is never left out. This module declares the prefixe
 and the `none given` grammar ONCE: it renders an escalation into the lines,
 parses them back out of a comment, lifts them out of a reason, names what is
 wrong with a body, and completes a free-prose question that declared none of
-them. No other file restates the strings. The writers import this module
-(DRE-3909, DRE-3910, DRE-5204, DRE-3911, DRE-6174, and DRE-6189 in the next
-epic), the shell tier runs its CLI, and so does the one reader in this
-repository.
+them. No other file restates the strings. The writers built on it import this
+module (DRE-3909, DRE-3910, DRE-5204, DRE-3911, DRE-6174, and DRE-6189 in the
+next epic), the shell tier runs its CLI, and the one reader in this repository
+(DRE-6196) parses through it too.
 
 ## Who reads the lines
 
