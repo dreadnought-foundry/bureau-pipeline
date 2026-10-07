@@ -1536,6 +1536,10 @@ def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
         why = NO_ANSWER if because == NO_ANSWER else f"is out of capacity ({because})"
         print(f"planning: {model} {why} — asking {below} in the same step",
               file=sys.stderr)
+        if because == NO_ANSWER:
+            # DRE-5975: the next rung usually answers, so this is the only line
+            # that ever carries what the CLI streamed for the rung that did not.
+            print(f"planning: {model}'s call: {e}", file=sys.stderr)
         try:
             answer = _answer_of(call(below, prompt, **kwargs))
         except TransportError as again:
@@ -1684,7 +1688,17 @@ def _unreachable(error: Exception) -> str:
 def _transport(error: TransportError) -> str:
     """The refusal for a call that never reached a model. Says so, in those
     words — the sentence lives in `planning_escalation` beside the other one,
-    because the whole of this card is that they are two different facts."""
+    because the whole of this card is that they are two different facts.
+
+    A call whose CLI record says it ended at the turn limit DID reach the model,
+    which then gave no classification (DRE-5975). It is still plumbing, still
+    budgeted like a transport failure, but it is named for what it was: the log
+    line and the reason carry the CLI's own ending, never "transport"."""
+    record = getattr(error, "record", None)
+    subtype = record.get("subtype") if isinstance(record, dict) else None
+    if subtype == "error_max_turns":
+        print(f"planning classify: the model gave no classification ({subtype}): {error}", file=sys.stderr)
+        return planning_escalation.no_answer_reason(subtype)
     print(f"planning classify: the transport failed: {error}", file=sys.stderr)
     return planning_escalation.transport_reason(error.detail)
 

@@ -639,19 +639,34 @@ jobs:
       # runs — the routing step is gated on the same output — so the card
       # leaves this run parked, never stopped.
       #
-      # `--transport` is the one thing that varies (DRE-3074): the park is the
-      # same, but a card whose classifier failed to reach a model twice must not
-      # be told the reasoning is the deliverable. Same door, honest note.
+      # A transport failure that outlived its retry does NOT come here
+      # (DRE-5975). It used to, through `--transport`, and on 2026-10-05/06 that
+      # put seven cards nothing had read into the CEO's Green Light as "a
+      # question for you" with an Approve that could do nothing. Only a model
+      # that READ the card and could not tell reaches the CEO.
       - name: Classification refused — park the card for the CEO
-        if: steps.classify.outputs.escalate == 'true'
+        if: steps.classify.outputs.escalate == 'true' && steps.classify.outputs.transport != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
-            --reason-file "${{ runner.temp }}/classifier-escalation.txt" \
-            ${{ steps.classify.outputs.transport == 'true' && '--transport' || '' }}
+            --reason-file "${{ runner.temp }}/classifier-escalation.txt"
+
+      # DRE-5975: the card nothing could read goes to Triage, the operator's
+      # queue, with the stall exit's tag on its note so the relay's dispatch on
+      # entering Triage is refused by the plan-gate (DRE-5277). Moving it back
+      # to Planning starts a fresh plan run.
+      - name: Classification could not be read — park the card in Triage for the operator
+        if: steps.classify.outputs.escalate == 'true' && steps.classify.outputs.transport == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_escalation.py park-unread \
+            "${{ github.event.client_payload.identifier }}" \
+            --reason-file "${{ runner.temp }}/classifier-escalation.txt"
 
       # --- Planning branches three ways on the shape (DRE-2844) -------------
       #
