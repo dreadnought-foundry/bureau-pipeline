@@ -276,6 +276,9 @@ class _Pass:
         if not stamp:
             raise _Skip(f"not dispatched: his newest comment ({voice}) has no "
                         "createdAt to name it by", "not_his", loud=True)
+        # Anyone's receipt answers it: a copy can only keep a plan from being
+        # sent back, never send one, and with no viewer the pipeline's own
+        # receipt reads `unknown`.
         if any(_named(v.body) == stamp for v in voices):
             raise _Skip(f"answered: a receipt names his comment {stamp}",
                         "answered")

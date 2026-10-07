@@ -2,7 +2,7 @@
 """The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
 callers that genuinely make one.
 
-Five of them remain:
+Six of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
     the failure kept in its write ledger so the run goes red;
@@ -13,7 +13,10 @@ Five of them remain:
     Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is
     waiting to be planned, whatever its labels (DRE-5366);
   * `proof_dispatch.sweep` — the proof run at an epic's PROOF card, passing
-    `event=PROOF_EVENT` and a `reason` (DRE-5926).
+    `event=PROOF_EVENT` and a `reason` (DRE-5926);
+  * `green_light_reply.sweep` — the review re-run for a Green Light epic the
+    CEO commented on, passing `review_rerun`'s `re-run` reason, `PLAN_EVENT`
+    and the lane the card is in, `green light`, as `trigger_state` (DRE-6138).
 
 This module began as the ONE place that asked for an epic's planner run when
 its turn came in a wave (DRE-2846, `note`), on the belief that nothing
@@ -116,8 +119,9 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
     false-receipt class, DRE-2034).
 
     `trigger_state` / `reason` (DRE-3286) are how a caller asks for the
-    ACTIVATE route instead of the PLAN one — `review_rerun.py dispatch` is the
-    only one that does. Omit them and nothing about this call changes.
+    ACTIVATE route instead of the PLAN one — `review_rerun.py dispatch` does,
+    and `green_light_reply` asks for the review route from Green Light the
+    same way (DRE-6138). Omit them and nothing about this call changes.
 
     `sent_by_run` (DRE-4573) names the planner run sending this, so the run it
     starts does not skip itself as that run's duplicate. See `payload`.
