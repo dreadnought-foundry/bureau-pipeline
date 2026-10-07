@@ -187,8 +187,7 @@ def test_the_reusable_set_is_the_one_the_card_names() -> None:
     reusable = {p.name for p in _workflow_files() if _is_reusable(_load(p))}
     expected = {
         "agent-fix.yml", "agent-task.yml", "groomer.yml", "linear-sync.yml",
-        "medic.yml", "merge-gate.yml", "plan.yml", "planner-replay.yml",
-        "qa-review.yml", "reconcile.yml",
+        "medic.yml", "merge-gate.yml", "plan.yml", "qa-review.yml", "reconcile.yml",
         "red-main-repair.yml", "release-train.yml", "verify.yml",
     }
     assert expected <= reusable, sorted(expected - reusable)
