@@ -41,9 +41,13 @@ on:
 # push group would cancel a review in progress and then decide to skip — the
 # review lost, with nothing to re-ask for it. The pipeline edits bodies near
 # reviews (on agent-bureau #3323 the bot edited the body 9 seconds before the
-# review run was created). Apart, edited runs collapse only each other.
+# review run was created). The same hole would survive inside one edited
+# group, so an edit that can review — a body change by a sender typed and not
+# a Bot, the script's own admission rule — takes `-edited`, and every other
+# edit, which always skips, takes `-edited-other`. A skip then cancels only a
+# skip, and a person's newer body edit replaces the review of the older one.
 concurrency:
-  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}${{ github.event.action == 'edited' && '-edited' || '' }}
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}${{ github.event.action == 'edited' && (github.event.changes.body && github.event.sender.type && github.event.sender.type != 'Bot' && '-edited' || '-edited-other') || '' }}
   cancel-in-progress: true
 
 permissions:

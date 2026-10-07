@@ -406,8 +406,9 @@ _IDENT = re.compile(r"'[^']*'|\b[a-z_]+(?:\.[a-z_]+)+\b")
 
 def _render(template, ctx):
     """Render a `${{ }}` template the way Actions does for the operators a
-    concurrency group uses: `||` and `&&` return an operand, `==` compares,
-    a missing property is null. Dotted names are looked up in `ctx`."""
+    concurrency group uses: `||` and `&&` return an operand, `==` and `!=`
+    compare, parentheses group, a missing property is null. Dotted names are
+    looked up in `ctx`."""
     def evaluate(expr):
         py = _IDENT.sub(
             lambda m: m.group(0) if m.group(0).startswith("'")
@@ -434,9 +435,16 @@ class SelfStubOptsInTest(unittest.TestCase):
     def _group(self, **ctx):
         return _render(self.doc["concurrency"]["group"], ctx)
 
+    def _edit(self, number=42, body=True, sender="User"):
+        ctx = {"github.event.pull_request.number": number,
+               "github.event.action": "edited",
+               "github.event.sender.type": sender}
+        if body:
+            ctx["github.event.changes.body"] = {"from": "the old body"}
+        return self._group(**ctx)
+
     def test_edited_runs_have_a_group_of_their_own(self):
-        edited = self._group(**{"github.event.pull_request.number": 42,
-                                "github.event.action": "edited"})
+        edited = self._edit()
         others = [self._group(**{"github.event.pull_request.number": 42,
                                  "github.event.action": action})
                   for action in ("opened", "reopened", "synchronize",
@@ -446,14 +454,28 @@ class SelfStubOptsInTest(unittest.TestCase):
         # a stale review of the same pull request.
         self.assertEqual(set(others), {"qa-review-42"})
         self.assertNotIn(edited, others)
-        # Edited runs collapse only each other, per pull request.
-        self.assertEqual(edited, self._group(**{
-            "github.event.pull_request.number": 42,
-            "github.event.action": "edited"}))
-        self.assertNotEqual(edited, self._group(**{
-            "github.event.pull_request.number": 43,
-            "github.event.action": "edited"}))
+        # A person's body edits collapse only each other, per pull request:
+        # the newest body is the one to review.
+        self.assertEqual(edited, self._edit())
+        self.assertNotEqual(edited, self._edit(number=43))
         self.assertTrue(self.doc["concurrency"]["cancel-in-progress"])
+
+    def test_an_edit_that_skips_never_cancels_one_that_reviews(self):
+        # Only a person's body edit can review. A bot's body edit, a title-
+        # only edit, or an edit whose sender has no type always skips, and a
+        # run joins its group before it decides — so sharing the reviewing
+        # group would cancel a review in flight and post nothing.
+        reviewing = self._edit()
+        skipping = [self._edit(sender="Bot"),
+                    self._edit(body=False),
+                    self._edit(body=False, sender="Bot"),
+                    self._edit(sender=None)]
+        for group in skipping:
+            self.assertNotEqual(group, reviewing)
+            self.assertNotEqual(group, "qa-review-42")
+        # Skips collapse among themselves, per pull request.
+        self.assertEqual(len(set(skipping)), 1)
+        self.assertNotEqual(skipping[0], self._edit(number=43, sender="Bot"))
 
 
 def _review_job():
