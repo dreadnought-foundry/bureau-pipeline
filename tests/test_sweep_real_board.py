@@ -76,6 +76,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import board_snapshot  # noqa: E402
 import epic_cap  # noqa: E402
 import linear_ops  # noqa: E402
+import mid_epic  # noqa: E402
 import reconcile  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -370,7 +371,8 @@ class Replay:
         self.spend_lines = spend_lines
         self.seconds = seconds
         self.urlopen = urlopen
-        #: `(reconcile, linear_ops)` — the names that were mocks during the pass.
+        #: `(reconcile, linear_ops, mid_epic)` — the names that were mocks
+        #: during the pass.
         self.stubbed = stubbed
         #: Everything the pass printed, so a test can check it reached its end.
         self.printed = printed
@@ -470,6 +472,7 @@ def _run_replay() -> Replay:
 
     before_reconcile = dict(vars(reconcile))
     before_linear = dict(vars(linear_ops))
+    before_mid_epic = dict(vars(mid_epic))
     out = io.StringIO()
     with contextlib.ExitStack() as stack:
         enter = stack.enter_context
@@ -505,6 +508,13 @@ def _run_replay() -> Replay:
         # yet, so every epic would take one — a `get_issue` and an
         # `issueUpdate` apiece for a record a live epic already has.
         enter(patch.object(linear_ops, "set_description"))
+        # …and the read that guards it (DRE-6162). The growth write re-reads
+        # the epic first and writes only if the description has not moved, so
+        # that re-read is part of the write: an epic whose record has not moved
+        # owes no write and pays for neither. Every epic here owes one only
+        # because the board carries no region, so the guarded write is stubbed
+        # as a write that landed, the same as `set_description` above.
+        enter(patch.object(mid_epic, "_write_unless_moved", return_value=None))
         urlopen = enter(patch.object(urllib.request, "urlopen"))
         # WHAT THIS REPLAY CHANGED, read off the modules themselves while the
         # pass is live — never a list this file keeps. "No phase is mocked" is
@@ -514,6 +524,7 @@ def _run_replay() -> Replay:
         stubbed = (
             _changed_names(reconcile, before_reconcile),
             _changed_names(linear_ops, before_linear),
+            _changed_names(mid_epic, before_mid_epic),
         )
         # …and that the one non-mock replacement really is a spy: it wraps the
         # function it stands in for, so the refusals are recorded BY watching
@@ -596,7 +607,7 @@ def test_no_reconcile_function_is_stubbed(replay):
     config VALUES, and one call-through spy. Every backstop, watchdog, gate and
     report is the real function — which is what `test_sweep_request_cuts`
     cannot say, with 18 of them mocked out of its pass."""
-    in_reconcile, in_linear = replay.stubbed
+    in_reconcile, in_linear, in_mid_epic = replay.stubbed
     assert set(in_reconcile) == {
         # GitHub, and only GitHub
         "gh", "gh_actions_read", "gh_dispatch", "gh_read", "_nudge",
@@ -616,6 +627,11 @@ def test_no_reconcile_function_is_stubbed(replay):
         "cmd_comment", "cmd_advance", "cmd_state",
         "add_label", "remove_label", "set_description",
     }, f"a Linear READER other than the seam was stubbed: {in_linear}"
+    # The growth record's guarded write, and nothing else about the growth
+    # report: its re-read is the write's own (DRE-6162).
+    assert set(in_mid_epic) == {"_write_unless_moved"}, (
+        f"the replay changed something else about the growth report: {in_mid_epic}"
+    )
 
 
 def test_the_pass_ran_to_its_end(replay):

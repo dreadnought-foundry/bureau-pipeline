@@ -897,6 +897,22 @@ def _build_growth(epic: str, issue: dict, add, amend) -> dict:
     }
 
 
+def _write_unless_moved(linear_ops, epic: str, built: dict) -> dict | None:
+    """The growth record's write, guarded (DRE-6162): read the epic again and
+    write `built` only if its description is still the one `built` came from.
+
+    Returns None when it wrote, and the fresh read when the description moved,
+    so the caller can rebuild from it. The re-read and the write are one seam
+    because the read exists only for the write: an epic that owes no write
+    pays for neither.
+    """
+    fresh = read_epic(linear_ops, epic)
+    if (fresh.get("description") or "") != built["description"]:
+        return fresh
+    linear_ops.set_description(epic, built["merged"])
+    return None
+
+
 def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
                         issue: dict | None = None) -> dict:
     """Re-derive the epic's growth artifact from what is live, and report it.
@@ -944,9 +960,8 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
         built = _build_growth(epic, issue, add, amend)
         if built["merged"] is None:
             break
-        fresh = read_epic(linear_ops, epic)
-        if (fresh.get("description") or "") == built["description"]:
-            linear_ops.set_description(epic, built["merged"])
+        fresh = _write_unless_moved(linear_ops, epic, built)
+        if fresh is None:
             break
         issue = fresh
     else:
