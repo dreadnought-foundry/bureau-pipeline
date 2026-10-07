@@ -1347,6 +1347,13 @@
       "why": "Act-shaped, and the registry has no row for it — the same debt the `was added to this epic after it was green-lit` row above records, arriving the same way (DRE-3343 converts an emission, not the registry). Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — and the console reads the tag set FIRST (docs/pipeline-acts.md: console-first), so a row added here would declare an act agent-bureau cannot read. Named here so the debt is countable rather than invisible. It reports a refusal the pipeline hit on its own and where the record went instead; nobody is asked for anything, and the card promotes normally on the verdict above it."
     },
     {
+      "file": "scripts/mid_epic.py",
+      "anchor": "growth_contended_comment(epic, add=add, amend=amend)",
+      "kind": "undeclared-act",
+      "means": "Another writer kept changing the epic's description under the growth write, so the record this motion owed was not written, and the card it could not record is named on the epic.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt the `growth_capped_comment(epic, report[\"capped\"])` row above records, arriving the same way (DRE-6162 guards an emission, not the registry). Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — and the console reads the tag set FIRST (docs/pipeline-acts.md: console-first), so a row added here would declare an act agent-bureau cannot read. Named here so the debt is countable rather than invisible. It reports a write the pipeline refused on its own, and names the one line a person adds by hand."
+    },
+    {
       "file": "scripts/planning_escalation.py",
       "anchor": "escalation_comment(identifier, reason, transport, rewrite,",
       "kind": "undeclared-act",

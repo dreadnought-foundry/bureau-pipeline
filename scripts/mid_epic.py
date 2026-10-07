@@ -132,6 +132,13 @@ REAPPROVAL_TAG = "mid-epic-re-green-lit"  # on the EPIC: the re-approval, observ
 NO_VERDICT_TAG = "mid-epic-no-verdict"  # on the SIBLING: promotion refused
 UNRECORDED_TAG = "mid-epic-unrecorded"  # on the EPIC: it grew, its plan did not
 GROWTH_CAPPED_TAG = "mid-epic-growth-capped"  # on the SIBLING: the epic is full
+GROWTH_CONTENDED_TAG = "mid-epic-growth-contended"  # on the EPIC: a record not written
+
+# How many times the growth write re-reads a moved description before it gives
+# up (DRE-6162). Each attempt that finds the description changed rebuilds from
+# that fresh read; three in a row means somebody is writing the epic as fast as
+# we read it, and the honest outcome is a loud refusal, not a fourth guess.
+GROWTH_WRITE_ATTEMPTS = 3
 
 # Where an amendment sends the epic. Planning, not Intake: the epic exists, it
 # is the RECOMMENDATION that changed.
@@ -286,6 +293,34 @@ def growth_capped_comment(epic: str, condition: str) -> str:
         f"written is the notice {epic} owes about growing: read it here.\n\n"
         f"**What to do about {epic}:** docs/epic-comment-cap.md — the receipts "
         f"move to a continuation card; the epic itself is not the problem."
+    )
+
+
+def growth_contended_comment(epic: str, *, add=None, amend=None) -> str:
+    """The record a contended growth write gave up on, named so a person can
+    write it by hand (DRE-6162).
+
+    The line to add is the line `render_artifact` would have written, so the
+    next refresh reads it back as the record it is.
+    """
+    if add:
+        what = f"{add['id']}'s addition"
+        line = f"- {add['id']} — {add['because']}"
+        heading = ADDITIONS_HEADING
+    else:
+        what = "this amendment"
+        line = f"- {amend['at']} — {amend['because']} — {AWAITING_REAPPROVAL}"
+        heading = AMENDMENTS_HEADING
+    return (
+        f"🚨 {GROWTH_CONTENDED_TAG}: {what} was NOT recorded on {epic}'s growth "
+        "record.\n\n"
+        f"**What happened:** the description changed under the write "
+        f"{GROWTH_WRITE_ATTEMPTS} times in a row — another writer was "
+        "refreshing it at the same moment. Writing a record built from a read "
+        "that is already stale would erase what that writer saved, so nothing "
+        "was written.\n\n"
+        f"**What to do:** add this line under `{heading}` in the growth record "
+        f"by hand:\n\n    {line}"
     )
 
 
@@ -733,14 +768,22 @@ def _add(linear_ops, epic, because, title, body, labels, verdict, why) -> str:
     record = {"id": identifier, "because": because}
     report = refresh_epic_growth(linear_ops, epic, add=record)
     if report["capped"]:
+        # The epic refused a notice. When the guarded write also gave up
+        # (DRE-6162), the notice it refused is the one naming this card's
+        # unwritten record, so that is the one this card carries.
         linear_ops.cmd_comment(
-            identifier, growth_capped_comment(epic, report["capped"])
+            identifier,
+            growth_contended_comment(epic, add=record)
+            if report["contended"]
+            else growth_capped_comment(epic, report["capped"]),
         )
-    growth = (
-        f"growth record refused ({report['capped']}) and recorded on the card"
-        if report["capped"]
-        else "growth recorded"
-    )
+    if report["contended"]:
+        where = "the card" if report["capped"] else "the epic"
+        growth = f"growth record NOT written ({report['contended']}) — named on {where}"
+    elif report["capped"]:
+        growth = f"growth record refused ({report['capped']}) and recorded on the card"
+    else:
+        growth = "growth recorded"
     print(
         f"mid-epic: {identifier} joined {epic} as an {ADDITION} — verdict "
         f"recorded, {growth}, no new green light needed"
@@ -790,36 +833,11 @@ def _comment_total(linear_ops, issue: dict) -> int | None:
     return linear_ops.comment_count(uuid) if uuid else None
 
 
-def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
-                        issue: dict | None = None) -> dict:
-    """Re-derive the epic's growth artifact from what is live, and report it.
-
-    Does four things, all from truth rather than memory:
-      * recounts green-lit vs current cards (children before/after the green
-        light read out of the epic's own history);
-      * appends the addition/amendment this motion is recording, if any;
-      * OBSERVES a re-approval — a pending amendment is settled when the epic is
-        seen in an active lane again, never assumed from the return to Planning;
-      * surfaces every mid-epic child the artifact does not account for.
-
-    Returns {"green_lit", "current", "unrecorded", "re_approved", "capped",
-    "comments"}. `capped` is the named condition when the epic refused a
-    comment this call tried to write (DRE-3343) and None otherwise; `comments`
-    is how many the epic holds, or None when Linear did not say.
-
-    `issue` is the epic's record when the caller already holds it (DRE-3643):
-    then the epic is not read again. None reads it, as it always has — the CLI
-    and `discovery` pass nothing.
-
-    The description is written only when the record MEANS something new — see
-    the convergence note at the write below.
-    """
-    if issue is None:
-        issue = read_epic(linear_ops, epic)
+def _build_growth(epic: str, issue: dict, add, amend) -> dict:
+    """The growth record one read of the epic implies — what to write, and the
+    notices it owes. Pure: no request is made here, so the guarded write in
+    `refresh_epic_growth` can rebuild from a fresh read as often as it must."""
     description = issue.get("description") or ""
-    # None, not 0, when Linear could not say: an epic reported at zero comments
-    # reads as a quiet one, which is the opposite of unknown.
-    comment_count = _comment_total(linear_ops, issue)
     children = (issue.get("children") or {}).get("nodes") or []
     lane = (issue.get("state") or {}).get("name")
     green_lit_at = green_light_from((issue.get("history") or {}).get("nodes"))
@@ -830,7 +848,9 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
     if add and add["id"] not in {a["id"] for a in additions}:
         additions.append(add)
     if amend:
-        amendments.append(amend)
+        # A copy: a rebuild must start from the motion as the caller gave it,
+        # not as an earlier attempt's re-approval left it.
+        amendments.append(dict(amend))
 
     # Re-approval, OBSERVED: the epic is in an active lane again. The timestamp
     # recorded is the green light Linear reports; when the history is unreadable
@@ -864,16 +884,123 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
     # epic per pass, for a record that said what it already said, and a bumped
     # `updatedAt` on each. Write when there is no region yet, or when the
     # parsed record moved.
-    if not _REGION.search(description) or (
+    owed = not _REGION.search(description) or (
         parse_artifact(merged) != parse_artifact(description)
-    ):
-        linear_ops.set_description(epic, merged)
+    )
+    return {
+        "description": description,
+        "merged": merged if owed else None,
+        "green_lit": green_lit,
+        "current": len(children),
+        "unrecorded": unrecorded,
+        "re_approved": re_approved,
+    }
+
+
+def _write_unless_moved(linear_ops, epic: str, built: dict) -> dict | None:
+    """The growth record's write, guarded (DRE-6162): read the epic again and
+    write `built` only if its description is still the one `built` came from.
+
+    Returns None when it wrote, and the fresh read when the description moved,
+    so the caller can rebuild from it. The re-read and the write are one seam
+    because the read exists only for the write: an epic that owes no write
+    pays for neither.
+    """
+    fresh = read_epic(linear_ops, epic)
+    if (fresh.get("description") or "") != built["description"]:
+        return fresh
+    linear_ops.set_description(epic, built["merged"])
+    return None
+
+
+def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
+                        issue: dict | None = None) -> dict:
+    """Re-derive the epic's growth artifact from what is live, and report it.
+
+    Does four things, all from truth rather than memory:
+      * recounts green-lit vs current cards (children before/after the green
+        light read out of the epic's own history);
+      * appends the addition/amendment this motion is recording, if any;
+      * OBSERVES a re-approval — a pending amendment is settled when the epic is
+        seen in an active lane again, never assumed from the return to Planning;
+      * surfaces every mid-epic child the artifact does not account for.
+
+    Returns {"green_lit", "current", "unrecorded", "re_approved", "capped",
+    "comments", "contended"}. `capped` is the named condition when the epic
+    refused a comment this call tried to write (DRE-3343) and None otherwise;
+    `comments` is how many the epic holds, or None when Linear did not say;
+    `contended` says why the record was NOT written when the guarded write gave
+    up (DRE-6162), and is None otherwise.
+
+    `issue` is the epic's record when the caller already holds it (DRE-3643):
+    then the epic is not read again unless a write is owed. None reads it, as
+    it always has — the CLI and `discovery` pass nothing.
+
+    The description is written only when the record MEANS something new — see
+    the convergence note in `_build_growth` — and only if it is still the
+    description the record was built from: see the guard below.
+    """
+    if issue is None:
+        issue = read_epic(linear_ops, epic)
+    # None, not 0, when Linear could not say: an epic reported at zero comments
+    # reads as a quiet one, which is the opposite of unknown.
+    comment_count = _comment_total(linear_ops, issue)
+
+    # THE GUARD (DRE-6162). The write replaces the WHOLE description, and two
+    # writers refresh it: `discovery` and the sweep, which hands in a record
+    # read at the top of its pass. On 2026-10-07 the sweep read DRE-6059
+    # between two filings and wrote back a block that predated both, erasing
+    # DRE-6159's and DRE-6160's records. So the epic is read again just before
+    # writing, and the block is written only if the description is still the
+    # one it was built from; if it moved, the block is rebuilt from that fresh
+    # read. Linear offers no compare-and-set, so the window left is the one
+    # between this read and the mutation — not most of a sweep.
+    contended: str | None = None
+    for _attempt in range(GROWTH_WRITE_ATTEMPTS):
+        built = _build_growth(epic, issue, add, amend)
+        if built["merged"] is None:
+            break
+        fresh = _write_unless_moved(linear_ops, epic, built)
+        if fresh is None:
+            break
+        issue = fresh
+    else:
+        contended = (
+            f"the description changed under the write {GROWTH_WRITE_ATTEMPTS} "
+            "times in a row"
+        )
+    green_lit, current = built["green_lit"], built["current"]
+    unrecorded, re_approved = built["unrecorded"], built["re_approved"]
 
     # What the epic refused, if it refused anything. `cmd_comment` returns the
     # named condition instead of raising once an epic is full (DRE-3343), so
     # every write below reports rather than ending the motion — and the caller
     # gets ONE answer for "did this epic take its notices".
     capped: str | None = None
+
+    if contended:
+        # Give up LOUDLY, and only once. The notices the last build owes come
+        # from a read already known to be stale — exactly the read run
+        # 37649266193 raised two false `unrecorded` alarms from — so none of
+        # them is posted; the next refresh reads the epic again. The one thing
+        # a stale read cannot re-derive is the motion this call was recording,
+        # so that is named on the epic. A plain refresh records no motion and
+        # loses nothing: it says so in the log.
+        print(f"epic-growth: {epic} {GROWTH_CONTENDED_TAG} — {contended}; nothing written")
+        if add or amend:
+            capped = linear_ops.cmd_comment(
+                epic, growth_contended_comment(epic, add=add, amend=amend)
+            )
+        print(growth_line(epic, green_lit, current))
+        return {
+            "green_lit": green_lit,
+            "current": current,
+            "unrecorded": [],
+            "re_approved": [],
+            "capped": capped,
+            "comments": comment_count,
+            "contended": contended,
+        }
 
     if re_approved and not linear_ops.count_comments(epic, REAPPROVAL_TAG):
         capped = linear_ops.cmd_comment(
@@ -895,20 +1022,21 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
             "wrong — so the growth is named here rather than policed.\n\n"
             f"This epic was green-lit at "
             f"{green_lit if green_lit is not None else 'an unreadable count of'} "
-            f"cards and is running {len(children)}. If the plan still describes "
+            f"cards and is running {current}. If the plan still describes "
             "the work, file the card as an addition (`scripts/mid_epic.py "
             f"discovery {epic} --kind {ADDITION} --because \"…\"`) so it carries "
             f"a verdict; if it does not, file an {AMENDMENT}.",
         ) or capped
 
-    print(growth_line(epic, green_lit, len(children)))
+    print(growth_line(epic, green_lit, current))
     return {
         "green_lit": green_lit,
-        "current": len(children),
+        "current": current,
         "unrecorded": unrecorded,
         "re_approved": re_approved,
         "capped": capped,
         "comments": comment_count,
+        "contended": None,
     }
 
 
