@@ -1324,6 +1324,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1586,6 +1588,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED runs.
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
@@ -1847,6 +1851,24 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564). On 2026-10-01 at 7:19 pm PT
+          # portico run 36955032837 planned epic DRE-5490: it started three
+          # exploration agents in the background, ended its turn "waiting on
+          # those before drafting the cards", and — in a headless run, where
+          # ending the turn ends the run — finished with no cards, $5.17 spent
+          # and the epic escalated as "no reason". The fix run's twin
+          # (DRE-5271, agent-fix.yml) and the same switch:
+          # https://code.claude.com/docs/en/env-vars documents
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — "Set to `1` to disable all
+          # background task functionality, including the `run_in_background`
+          # parameter on Bash and subagent tools, auto-backgrounding, and the
+          # Ctrl+B shortcut" — read by the 2.1.284 binary the install step
+          # proves. A helper the planner starts now runs in the foreground, so
+          # its report is back before the planner's turn can end. Set on EVERY
+          # model step in this workflow, the critics included: any agent here
+          # that ends its turn on background work loses that work the same
+          # way. Pinned by tests/test_planner_no_background_wait.py.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1910,6 +1932,12 @@ jobs:
 
             Process (mandatory):
             1. Explore this repo enough to ground the plan in reality.
+               Do it in the foreground and wait for every result before
+               you go on: background tasks are off in this run, and you
+               never end your turn while work you started is still running.
+               In this run, ending your turn ends the run — a helper's
+               report that arrives after that is read by nobody, and the
+               epic is left with no cards (DRE-5564).
             2. Decompose into the SMALLEST number of independently-shippable
                sub-issues (each one PR, each with clear acceptance criteria).
                If two sub-issues would share an interface, schema field, or
@@ -2023,6 +2051,9 @@ jobs:
                There is no label, flag or lane that skips Planning. This
                escalation is the only route, and it leaves FROM Planning
                rather than around it.
+               If you end without creating cards for any reason, your last
+               message is posted on the epic as the reason when no reason
+               file was written, so make it say why in plain English.
 
       # DRE-3970 — Plan epic: refused for capacity? The step above is
       # continue-on-error so a refusal is READ rather than ending the job: its
@@ -2065,6 +2096,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2127,6 +2160,12 @@ jobs:
 
             Process (mandatory):
             1. Explore this repo enough to ground the plan in reality.
+               Do it in the foreground and wait for every result before
+               you go on: background tasks are off in this run, and you
+               never end your turn while work you started is still running.
+               In this run, ending your turn ends the run — a helper's
+               report that arrives after that is read by nobody, and the
+               epic is left with no cards (DRE-5564).
             2. Decompose into the SMALLEST number of independently-shippable
                sub-issues (each one PR, each with clear acceptance criteria).
                If two sub-issues would share an interface, schema field, or
@@ -2240,6 +2279,9 @@ jobs:
                There is no label, flag or lane that skips Planning. This
                escalation is the only route, and it leaves FROM Planning
                rather than around it.
+               If you end without creating cards for any reason, your last
+               message is posted on the epic as the reason when no reason
+               file was written, so make it say why in plain English.
 
       - name: Plan epic — finished?
         id: plan_done
@@ -2415,6 +2457,10 @@ jobs:
       # Planning with nobody told. It escalates with a default reason. A
       # returned child the planner could not cut safely wrote a reason, and
       # escalates exactly like any other.
+      #
+      # A planner that wrote no reason file at all is quoted in its own words
+      # (DRE-5564): the escalation reads its closing message off the run's
+      # execution file, so the note says what it said instead of "no reason".
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
         env:
@@ -2422,9 +2468,15 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           RETURNED_CHILD: ${{ steps.shape.outputs.returned_child }}
           PARENT: ${{ steps.shape.outputs.parent }}
+          # DRE-5564: the attempt that counted — the re-run on the next rung
+          # when there was one. A planner that wrote no reason is quoted from
+          # this file's closing message rather than escalated as "no reason".
+          EXEC_FILE_USED: ${{ steps.plan_done.outputs.execution_file || steps.claude.outputs.execution_file }}
         run: |
           CARD="${{ github.event.client_payload.identifier }}"
           REASON="${{ runner.temp }}/planner-escalation.txt"
+          EXEC_FILE="$EXEC_FILE_USED"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           if [ "$RETURNED_CHILD" = "true" ] && [ ! -s "$REASON" ]; then
             STATE=$(python3 .bureau-pipeline/scripts/linear_ops.py state-of "$CARD") || STATE=""
             if [ "$STATE" = "Canceled" ]; then
@@ -2435,7 +2487,8 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "$CARD" \
-            --reason-file "$REASON"
+            --reason-file "$REASON" \
+            --execution-file "$EXEC_FILE"
       # --- The plan artifact (DRE-2720) ------------------------------------
       #
       # What the CEO green-lights. The planner wrote ONE markdown file with
@@ -2592,6 +2645,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2766,6 +2821,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2858,6 +2915,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3036,6 +3095,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3585,6 +3646,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4207,6 +4270,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4330,6 +4395,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4893,6 +4960,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -5021,6 +5090,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of

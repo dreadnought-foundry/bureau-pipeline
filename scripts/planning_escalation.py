@@ -139,6 +139,8 @@ CLI:
     python3 scripts/planning_escalation.py check
     python3 scripts/planning_escalation.py escalate DRE-N --why "…"
     python3 scripts/planning_escalation.py escalate DRE-N --reason-file <path>
+    python3 scripts/planning_escalation.py escalate DRE-N --reason-file <path> \
+        --execution-file <path>   # no reason written: quote the planner (DRE-5564)
     python3 scripts/planning_escalation.py requeue  DRE-N --reason-file <path>
 
 The last one is DRE-3074's: a classification that never reached a model records
@@ -208,6 +210,36 @@ NOT_PLAIN_ENGLISH = (
     "The planner's reason was written in technical terms, so it is not repeated "
     "here — it is in the run's own log."
 )
+
+# --------------------------------------------------------------------------- #
+# the planner's own last words (DRE-5564)                                      #
+# --------------------------------------------------------------------------- #
+#
+# On 2026-10-01 at 7:24 pm PT epic DRE-5490 went to the CEO under
+# NO_REASON_STATED, and the sentence was untrue: the planner had said exactly
+# why it stopped — "Everything I need next depends on the three exploration
+# reports … so I'm waiting on those before drafting the cards." It had started
+# helpers in the background and ended its turn, which in a headless run ends
+# the run (plan.yml now turns background tasks off). It wrote no reason file,
+# because it did not think it was finished, and the run threw its last message
+# away. So a no-card run with no reason file is quoted in its own words, read
+# off the result record the action already writes, and "no reason" is said
+# only when there is nothing to quote.
+
+#: What the note says above the planner's last message when it wrote no reason.
+LAST_WORDS_LEAD = (
+    "The planner ended without creating any cards and wrote no reason of its "
+    "own. Its last message, as it wrote it:"
+)
+LAST_WORDS_NOT_PLAIN_ENGLISH = (
+    "The planner ended without creating any cards and wrote no reason of its "
+    "own. Its last message was written in technical terms, so it is not "
+    "repeated here — it is in the run's own log."
+)
+
+#: How much of the last message is quoted. Enough for a paragraph of
+#: explanation; a closing message longer than this is a transcript, not a reason.
+FINAL_MESSAGE_CAP = 1500
 
 # --------------------------------------------------------------------------- #
 # the OTHER reason a classification produced nothing (DRE-3074)                #
@@ -374,8 +406,57 @@ def refusal(reason: str | None) -> str | None:
     return None
 
 
+def final_message(path: str | None) -> str | None:
+    """The planner's closing message from its run's execution file, or None.
+
+    The `result` of a run that ended WITHOUT an error is the agent's own last
+    message. A run that died carries the provider's error there instead, which
+    is not the planner speaking, so it yields nothing — as does a missing or
+    unreadable file. Bounded at `FINAL_MESSAGE_CAP` characters.
+    """
+    if not path:
+        return None
+    import execution_result
+
+    record = execution_result.load_execution(path)
+    if not record or record.get("is_error") is True:
+        return None
+    text = record.get("result")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = text.strip()
+    if len(text) > FINAL_MESSAGE_CAP:
+        text = text[:FINAL_MESSAGE_CAP].rstrip() + "…"
+    return text
+
+
+def _quoted(text: str) -> str:
+    """`text` as a Markdown block quote, blank lines kept inside it."""
+    return "\n".join(f"> {line}" if line.strip() else ">"
+                     for line in text.splitlines())
+
+
+def _why_lines(heading: str, reason: str | None,
+               last_words: str | None) -> list[str]:
+    """The reason block of a note: the stated reason when there is one that
+    may be shown, else the planner's last words (DRE-5564), else the plain
+    statement that nothing was said. Every text an agent wrote passes
+    `refusal()` before it is shown."""
+    if (reason or "").strip():
+        if refusal(reason) is None:
+            return [f"{heading} {reason.strip()}", ""]
+        return [f"{heading} {NOT_PLAIN_ENGLISH}", ""]
+    if (last_words or "").strip():
+        if refusal(last_words) is None:
+            return [f"{heading} {LAST_WORDS_LEAD}", "",
+                    _quoted(last_words.strip()), ""]
+        return [f"{heading} {LAST_WORDS_NOT_PLAIN_ENGLISH}", ""]
+    return [f"{heading} {NO_REASON_STATED}", ""]
+
+
 def escalation_comment(identifier: str, reason: str | None,
-                       transport: bool = False, rewrite: bool = False) -> str:
+                       transport: bool = False, rewrite: bool = False,
+                       last_words: str | None = None) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
@@ -400,6 +481,9 @@ def escalation_comment(identifier: str, reason: str | None,
     to do the one thing the bound exists to stop. So the wrapper branches where
     it makes a claim, on the flag the decision already published, rather than
     re-reading the text to guess which kind of park this is.
+
+    `last_words` is the planner's closing message (`final_message`), quoted
+    only when no reason was written (DRE-5564).
     """
     lane = destination()
     if rewrite:
@@ -423,13 +507,7 @@ def escalation_comment(identifier: str, reason: str | None,
             "deliverable here, and that part is not work an agent can do."
         )
     lines = [opening, ""]
-    why = refusal(reason)
-    if why is None:
-        lines += [f"**Why it needs you:** {(reason or '').strip()}", ""]
-    elif not (reason or "").strip():
-        lines += [f"**Why it needs you:** {NO_REASON_STATED}", ""]
-    else:
-        lines += [f"**Why it needs you:** {NOT_PLAIN_ENGLISH}", ""]
+    lines += _why_lines("**Why it needs you:**", reason, last_words)
     if rewrite:
         lines += [
             f"This card is parked in **{lane}** — your decision queue, the "
@@ -702,7 +780,8 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
 
 def stood_down_comment(identifier: str, where: str, reason: str | None,
                        withdrawn: bool = False, transport: bool = False,
-                       rewrite: bool = False) -> str:
+                       rewrite: bool = False,
+                       last_words: str | None = None) -> str:
     """The record a card gets when the escalation reached it too late.
 
     `where` is `moved_on()`'s sentence. `withdrawn` is the crash-between-the-
@@ -727,18 +806,12 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
             f"moved on from {ORIGIN}: {where}. It has been left there.",
             "",
         ]
-    why = refusal(reason)
     # `rewrite` sits with `transport` rather than with the question: neither one
     # ASKED anything, so "what this run had to ask" over either of them is the
     # same wrong sentence the rewrite park was flagged for (DRE-4058).
     heading = "**What this run had found:**" if (transport or rewrite) else \
         "**What this run had to ask:**"
-    if why is None:
-        lines += [f"{heading} {(reason or '').strip()}", ""]
-    elif not (reason or "").strip():
-        lines += [f"{heading} {NO_REASON_STATED}", ""]
-    else:
-        lines += [f"{heading} {NOT_PLAIN_ENGLISH}", ""]
+    lines += _why_lines(heading, reason, last_words)
     lines.append(
         "Nothing is needed from you. A card past this step is being handled by "
         "whoever moved it on, and parking it now would only have dragged it "
@@ -750,7 +823,8 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
 def escalate(linear_ops, identifier: str, reason: str | None,
              transport: bool = False, rewrite: bool = False, *,
              issue: dict | None = None, comments=None,
-             attempt_since: str | None = None) -> Outcome:
+             attempt_since: str | None = None,
+             last_words: str | None = None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     `issue` and `comments` let a caller that has ALREADY read the card hand
@@ -795,6 +869,9 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     must be asked again rather than parked silently on the answered receipt —
     and the move is re-asserted every time, because the crash this guards
     against is the one between the two writes.
+
+    `last_words` is the planner's closing message, shown in either note when
+    no reason was written (DRE-5564).
     """
     lane = destination()
     handed = comments is not None
@@ -833,7 +910,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         else:
             linear_ops.cmd_comment(identifier, stood_down_comment(
                 identifier, elsewhere, reason, withdrawn=bool(already),
-                transport=transport, rewrite=rewrite))
+                transport=transport, rewrite=rewrite, last_words=last_words))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:
@@ -841,7 +918,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     else:
         linear_ops.cmd_comment(
             identifier,
-            escalation_comment(identifier, reason, transport, rewrite))
+            escalation_comment(identifier, reason, transport, rewrite,
+                               last_words=last_words))
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return Outcome(parked=True, posted=posted, stood_down=None)
@@ -1162,8 +1240,18 @@ def _cmd_escalate(args) -> int:
         # The raw text goes to the run log and nowhere near the card.
         print(f"the stated reason is not fit for the card: {why}", file=sys.stderr)
         print(f"--- the planner wrote ---\n{reason}", file=sys.stderr)
+    # DRE-5564: a planner that wrote no reason is quoted in its own words.
+    last_words = None
+    if not (reason or "").strip():
+        last_words = final_message(args.execution_file)
+        # The cause only, never the text: a clean run's closing message can
+        # quote whatever the planner read, which is why execution_result keeps
+        # it out of the job log. It stays in the run's scrubbed working log.
+        if last_words is not None and refusal(last_words) is not None:
+            print("the planner's last message is not fit for the card: "
+                  f"{refusal(last_words)}", file=sys.stderr)
     outcome = escalate(linear_ops, args.identifier, reason, args.transport,
-                       args.rewrite)
+                       args.rewrite, last_words=last_words)
     if outcome.parked:
         print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     else:
@@ -1209,6 +1297,9 @@ def main(argv=None) -> int:
     # trip the bound was added to end. Passed by the step that already knows,
     # off `plan_critic`'s published action, never guessed from the reason text.
     esc.add_argument("--rewrite", action="store_true")
+    # DRE-5564: the planner run's execution file. When no reason was written
+    # its closing message is the reason, quoted rather than called "none".
+    esc.add_argument("--execution-file", dest="execution_file", default=None)
 
     req = sub.add_parser("requeue")
     req.add_argument("identifier")
