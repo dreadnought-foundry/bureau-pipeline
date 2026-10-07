@@ -363,8 +363,9 @@ class WatchedSetTest(unittest.TestCase):
 
     def test_only_the_named_owners_repos_are_read(self):
         """The token is scoped to ONE App installation, so the run is per owner
-        (fleet-wake.yml's premortem Q1/Q2). A repo in another owner is not
-        read at all here rather than read and reported unreadable."""
+        (premortem Q1/Q2, the groomer's per-owner token step's shape). A
+        repo in another owner is not read at all here rather than read and
+        reported unreadable."""
         fleet = {
             "portico": "dreadnought-foundry/portico",
             "atlas": "EveryBite/atlas",
@@ -1091,9 +1092,10 @@ class WiringTest(unittest.TestCase):
         self.assertIn(self.doc["name"], watched)
 
     def test_the_owner_matrix_comes_from_the_roster(self):
-        """One App installation token per owner (fleet-wake.yml's premortem
-        Q1/Q2). The owners are computed from `config/repo-map.json`, so a repo
-        onboarded into the map is watched with no second edit."""
+        """One App installation token per owner (premortem Q1/Q2 — the
+        groomer's per-owner token step keeps the same shape). The owners are
+        computed from `config/repo-map.json`, so a repo onboarded into the
+        map is watched with no second edit."""
         text = WATCH_WORKFLOW.read_text()
         self.assertIn("nightly_watch.py owners", text)
         self.assertIn("matrix.owner", text)
