@@ -23,7 +23,8 @@ and the four subcommands here are everything around it.
     fans out over. It also decides which cards are EXCLUDED without
     judgement (DRE-5306): a parent epic with an open child, a `hand-built`
     card, a card moved into Intake from another lane in the last
-    `EXCLUDE_DAYS` days, and a card whose board context could not be read.
+    `EXCLUDE_DAYS` days, a card whose board context could not be read, and
+    (DRE-5746) a card whose repo is not a key of `config/repo-map.json`.
     An excluded card gets no agent, its verdict is `excluded`, and `apply`
     drops it from the batch and leaves it where it is on the board. And each
     card's `lookups` block, through `groom_lookups.cards` (DRE-5458): the
@@ -53,10 +54,13 @@ artifact never arrived.
 
 **No code read, no verdict.** A card whose repo is not a key of
 `config/repo-map.json` has no repository to check out, so no agent ever reads
-code for it. Every subcommand holds that on its own rather than trusting the
-workflow to skip the card: `targets` records it, `prepare` refuses to write an
-agent input for it, `verdict` forces `unverified` whatever the raw answer
-says, and `apply` does the same with or without a verdict file.
+code for it — and since DRE-5746 it is the fifth exclusion, so it leaves the
+Planning list the way the other four do rather than sitting on it as work the
+fleet cannot build. Every subcommand holds that on its own rather than
+trusting the workflow to skip the card: `targets` excludes it, `prepare`
+refuses to write an agent input for it, `verdict` forces `excluded` whatever
+the raw answer says, and `apply` does the same with or without a verdict
+file.
 
 **Why the cancel here is local.** DRE-4966's cancel-and-promote lives inside
 `groomer.propose(verified=…)`, which rebuilds the whole proposal from the
@@ -115,6 +119,12 @@ NO_FILE = "no verdict file"
 NO_PROOF = "no proof"
 UNREADABLE = "unreadable answer"
 NO_ARTIFACT = "no verdict artifact"
+#: Every reason an `unverified` mark may carry, beside `lookup failed: <why>`
+#: (`groom_lookups.LOOKUP_FAILED`). Nothing else reaches the page (DRE-5746):
+#: `_mark` reads any other as `unreadable answer`.
+UNVERIFIED_REASONS = (STEP_FAILED, STEP_SKIPPED, NO_FILE, NO_PROOF,
+                      UNREADABLE, NO_ARTIFACT)
+#: The fifth exclusion reason (DRE-5746), exact.
 UNMAPPED = "repo not in config/repo-map.json: {slug}"
 #: `prepare`'s whole output for a card no agent may read code for.
 NOT_VERIFIABLE = "not verifiable: repo not in config/repo-map.json"
@@ -155,8 +165,9 @@ EXCLUDE_DAYS = 7
 #: `board context unread: <why>` when Linear would not say who the pipeline's
 #: own key is — exact; DRE-5307 names its own unread cards with it.
 VIEWER_UNREAD = "the pipeline's own Linear identity could not be read"
-#: The four exclusion reasons, exact (DRE-5306). Decided in `targets`, never
-#: by the model.
+#: The exclusion reasons, exact (DRE-5306) — four read off the card, and the
+#: fifth, `UNMAPPED`, off the repo map (DRE-5746). Decided in `targets`,
+#: never by the model.
 EXCLUDE_EPIC = "parent epic with {n} open {children}"
 #: The label `reconcile.HAND_BUILT_LABEL` names: a person builds this card.
 HAND_BUILT = "hand-built"
@@ -164,7 +175,8 @@ EXCLUDE_MOVED = "moved into Intake on {day}"
 EXCLUDE_UNREAD = "board context unread: {why}"
 _EXCLUSION_RE = re.compile(
     r"(parent epic with [1-9]\d* open (child|children)|hand-built"
-    r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*)")
+    r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*"
+    r"|repo not in config/repo-map\.json: \S+)")
 INTAKE = "Intake"
 #: `prepare`'s whole output for an excluded card, and the prefix of the
 #: `not-now` and `sequence` reason `apply` writes for one.
@@ -237,8 +249,18 @@ def _fenced(text: str) -> str:
 
 
 def is_exclusion(reason) -> bool:
-    """Is this one of the four exclusion reasons, in its exact shape?"""
+    """Is this one of the five exclusion reasons, in its exact shape?"""
     return isinstance(reason, str) and bool(_EXCLUSION_RE.fullmatch(reason))
+
+
+def is_unverified_reason(reason) -> bool:
+    """Is this a reason an `unverified` mark may carry — one of
+    `UNVERIFIED_REASONS`, or `lookup failed: <why>`?"""
+    if not isinstance(reason, str):
+        return False
+    if reason.startswith(groom_lookups.LOOKUP_FAILED):
+        return bool(reason[len(groom_lookups.LOOKUP_FAILED):].strip())
+    return reason in UNVERIFIED_REASONS
 
 
 def unmapped_reason(row: dict) -> str:
@@ -473,10 +495,15 @@ def targets(proposal: dict, *, lops, repo_map: dict,
             target["excluded"] = EXCLUDE_UNREAD.format(
                 why=_clean(_one_line(e)) or type(e).__name__)
             continue
+        # The fifth exclusion (DRE-5746): no repo in the map, no code to
+        # read, and no place on the Planning list for work the fleet cannot
+        # build. Decided here, off the map, never by the model.
         target.update(
             title=_clean(issue.get("title")),
             body=sanitize_untrusted.sanitize_body(issue.get("description") or ""),
-            context=context, excluded=exclusion(issue, now=now))
+            context=context,
+            excluded=(unmapped_reason(target) if repository is None
+                      else exclusion(issue, now=now)))
     # The newer cards naming each card's files (DRE-5458): one more request
     # per card that names a file and is not excluded, none for any other.
     groom_lookups.cards(out, lops=lops, now=now)
@@ -661,10 +688,14 @@ def judge(raw_path, *, card: str, row: dict, outcome: str) -> dict:
                 "summary": "Not judged: the card was excluded before any "
                            "agent read it.",
                 "reason": _one_line(row["excluded"]), "lookup": lookup}
+    # A row written before DRE-5746 made the unmapped repo an exclusion in
+    # `targets`: the same answer here, so no older targets file can put it
+    # back on the Planning list.
     if _is_unmapped(row):
-        return unverified(unmapped_reason(row),
-                          "No code was read: the card's repo is not one the "
-                          "pipeline can check out.")
+        return {"verdict": EXCLUDED, "proof": [],
+                "summary": "Not judged: the card's repo is not one the "
+                           "pipeline can check out.",
+                "reason": unmapped_reason(row), "lookup": lookup}
     if lookup == _LOOKUP_FAILED:
         return unverified(
             groom_lookups.LOOKUP_FAILED + _one_line(row["lookups"].get("why")),
@@ -764,7 +795,7 @@ def _mark(row: dict, doc: dict | None) -> dict:
         return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
                 "reason": _one_line(row["excluded"])}
     # `apply` in the workflow has no targets file, so a document saying
-    # `excluded` is how it learns — believed only with one of the four
+    # `excluded` is how it learns — believed only with one of the five
     # reasons, and never over a row that says the card was not excluded.
     if (isinstance(doc, dict) and doc.get("verdict") == EXCLUDED
             and "excluded" not in row and is_exclusion(doc.get("reason"))):
@@ -772,7 +803,7 @@ def _mark(row: dict, doc: dict | None) -> dict:
                 "summary": doc.get("summary"),
                 "reason": _one_line(doc["reason"])}
     if _is_unmapped(row):
-        return {**blank, **_spend_of(doc), "verdict": UNVERIFIED,
+        return {**blank, **_spend_of(doc), "verdict": EXCLUDED,
                 "reason": unmapped_reason(row)}
     if doc is None:
         return {**blank, "verdict": UNVERIFIED, "reason": NO_ARTIFACT}
@@ -791,6 +822,10 @@ def _mark(row: dict, doc: dict | None) -> dict:
         mark.update(verdict=UNVERIFIED, reason=NO_PROOF, proof=[])
     elif mark["verdict"] == UNVERIFIED and not mark["reason"]:
         mark["reason"] = NO_PROOF
+    elif mark["verdict"] == UNVERIFIED and not is_unverified_reason(
+            mark["reason"]):
+        # Only the exact reasons reach the page (DRE-5746).
+        mark.update(reason=UNREADABLE, proof=[])
     elif mark["verdict"] != UNVERIFIED:
         mark["reason"] = None
     return mark
@@ -816,13 +851,7 @@ def cancel_reason(mark: dict) -> str:
     `source — quote` — the line the CEO reads and the drain writes onto the
     card. One line, defanged like every other reason on the page."""
     parts = [f"{mark['verdict']}: {_one_line(mark.get('summary'))}"]
-    for item in mark.get("proof") or []:
-        if "file" in item:
-            parts.append(f"{_one_line(item.get('file'))}:{item.get('line')} — "
-                         f"{_one_line(item.get('quote'))}")
-        else:
-            parts.append(f"{_one_line(item.get('source'))} — "
-                         f"{_one_line(item.get('quote'))}")
+    parts += [groomer.proof_line(item) for item in mark.get("proof") or []]
     return groomer.defang_reason("; ".join(parts))[0]
 
 
@@ -1147,13 +1176,9 @@ def _run(args, *, lops) -> int:
         rows = targets(proposal, lops=lops, repo_map=_load(args.repo_map))
         _dump(args.out, rows)
         _dump(args.matrix_out, matrix(rows))
-        unmapped = [r["card"] for r in rows
-                    if _is_unmapped(r) and not r.get("excluded")]
         excluded = [f"{r['card']} ({r['excluded']})" for r in rows
                     if r.get("excluded")]
         print(f"groom-verify: {len(rows)} card(s) to verify"
-              + (f"; no repo to read for {', '.join(unmapped)}"
-                 if unmapped else "")
               + (f"; excluded without judgement: {', '.join(excluded)}"
                  if excluded else ""))
         return 0

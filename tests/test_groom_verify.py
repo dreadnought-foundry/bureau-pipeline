@@ -136,7 +136,7 @@ class FakeGh:
         self.queries: list[str] = []
         self.pulls: list[str] = []
 
-    def __call__(self, args):
+    def __call__(self, args, token=None):
         joined = " ".join(args)
         if "installation/repositories" in joined:
             return json.dumps({"total_count": 1, "repositories": [
@@ -160,9 +160,19 @@ class FakeGh:
         raise AssertionError(f"unexpected gh call: {joined}")
 
 
+#: Every owner of the three-owner fleet, each handed its own token under the
+#: name `groom_context.token_env` gives it (DRE-5746).
+FLEET = ["DeltaSolv", "EveryBite", "dreadnought-foundry"]
+
+
+def owner_token(owner):
+    return f"app-installation-token-{owner}"
+
+
 @pytest.fixture(autouse=True)
 def _token(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "app-installation-token")
+    for owner in FLEET:
+        monkeypatch.setenv(groom_context.token_env(owner), owner_token(owner))
 
 
 def checked(cards=LANE, *, linear=None, gh=None, capacity=3, **extra):
@@ -1031,27 +1041,48 @@ class OwnersGh(FakeGh):
     """`gh api` whose installation sees only `visible`, and whose search of
     each owner in `failing` raises."""
 
-    def __init__(self, visible, *, failing=(), installation_fails=False):
+    def __init__(self, visible, *, failing=(), installation_fails=False,
+                 by_token=None, prs=None):
         super().__init__()
         self.visible = list(visible)
         self.failing = set(failing)
         self.installation_fails = installation_fails
+        # `{token: [owners]}` (DRE-5746): each token sees only its own
+        # installation, and a search on a token that cannot see the owner
+        # answers the confident, empty 0 GitHub gives for private repos.
+        self.by_token = by_token
+        # `{owner: [merged PRs]}`, served to a search of that owner.
+        self.prs_by_owner = dict(prs or {})
+        self.spent: list[tuple[str, str | None]] = []
 
-    def __call__(self, args):
+    def _sees(self, token):
+        if self.by_token is None:
+            return self.visible
+        return self.by_token.get(token) or []
+
+    def __call__(self, args, token=None):
         joined = " ".join(args)
+        self.spent.append((joined, token))
         if "installation/repositories" in joined:
             if self.installation_fails:
                 raise groom_context.ContextError(
                     "gh api installation/repositories failed rc=1: HTTP 401")
-            return json.dumps({"total_count": len(self.visible), "repositories": [
-                {"full_name": f"{o}/repo"} for o in self.visible]})
+            sees = self._sees(token)
+            return json.dumps({"total_count": len(sees), "repositories": [
+                {"full_name": f"{o}/repo"} for o in sees]})
         if "search/issues" in joined:
             self.queries.append(joined)
             if any(f"user:{o}" in joined for o in self.failing):
                 raise groom_context.ContextError(
                     "gh api search/issues failed rc=1: HTTP 403 rate limited")
-            return json.dumps({"total_count": 0, "items": []})
-        raise AssertionError(f"unexpected gh call: {joined}")
+            owner = next((o for o in self.prs_by_owner
+                          if f"user:{o}" in joined), None)
+            if owner is None or owner not in self._sees(token):
+                return json.dumps({"total_count": 0, "items": []})
+            items = self.prs_by_owner[owner]
+            return json.dumps({"total_count": len(items), "items": items})
+        # A single pull request — its head branch — as FakeGh answers it.
+        return super().__call__(args, token)
 
 
 IDS = [f"DRE-{100 + n}" for n in range(1, 8)]
@@ -1068,7 +1099,8 @@ def test_merged_mentions_names_the_owners_whose_search_answered():
 
 
 def test_merged_mentions_with_no_token_searched_no_owner(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "")
+    for owner in THREE_OWNERS:
+        monkeypatch.setenv(groom_context.token_env(owner), "")
     _, gaps, searched = groom_verify.merged_mentions(
         IDS, run=OwnersGh(THREE_OWNERS), owners=THREE_OWNERS)
     assert searched == []
@@ -1122,3 +1154,82 @@ def test_a_check_that_failed_outright_searched_nowhere_and_says_none(monkeypatch
     got = checked()
     assert "merged_prs_searched" in got["verification"]
     assert got["verification"]["merged_prs_searched"] is None
+
+
+# --------------------------------------------------------------------------
+# one token per owner (DRE-5746): the per-card read searches each owner on
+# that owner's own token, so one blind owner no longer marks every card unread
+# --------------------------------------------------------------------------
+def everybite_pr():
+    """A merged pull request under EveryBite that closes DRE-101."""
+    return {"title": "feat: the roster", "body": "Closes DRE-101",
+            "html_url": "https://github.com/EveryBite/atlas/pull/77",
+            "repository_url": "https://api.github.com/repos/EveryBite/atlas",
+            "pull_request": {"merged_at": "2026-10-04T04:23:00Z"}}
+
+
+def per_owner_gh(**extra):
+    return OwnersGh(THREE_OWNERS,
+                    by_token={owner_token(o): [o] for o in THREE_OWNERS},
+                    prs={"EveryBite": [everybite_pr()]}, **extra)
+
+
+def test_each_owner_on_its_own_token_finds_the_everybite_pr_and_leaves_no_card_unread():
+    gh = per_owner_gh()
+    found, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert [p["html_url"] for p in found["DRE-101"]] == [
+        "https://github.com/EveryBite/atlas/pull/77"]
+    assert sorted(searched) == sorted(THREE_OWNERS)
+    assert gaps == {}, "a card was left unread with every owner searched"
+    for joined, token in gh.spent:
+        for owner in THREE_OWNERS:
+            if f"user:{owner}" in joined:
+                assert token == owner_token(owner), (
+                    f"{owner} was searched on another owner's token")
+
+
+def test_the_check_moves_the_card_the_everybite_pr_closes_and_calls_the_rest_clean():
+    first = groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW)
+    result = groom_verify.check(first, lops=FakeLinear(), run=per_owner_gh(),
+                                owners=THREE_OWNERS)
+    assert "DRE-101" in result["cancel"]
+    assert result["unread"] == {}
+    assert sorted(result["merged_prs_searched"]) == sorted(THREE_OWNERS)
+
+
+def test_an_owner_with_no_token_is_named_and_every_card_stays_unread(monkeypatch):
+    monkeypatch.delenv(groom_context.token_env("DeltaSolv"))
+    found, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=per_owner_gh(), owners=THREE_OWNERS)
+    assert sorted(searched) == ["EveryBite", "dreadnought-foundry"]
+    assert set(gaps) == set(IDS), "a search that skipped an owner called a card clean"
+    for i in IDS:
+        assert "DeltaSolv" in gaps[i]
+        assert "GH_TOKEN_DELTASOLV" in gaps[i]
+    assert found["DRE-101"], "evidence from the owners that were read still counts"
+
+
+def test_an_owner_its_own_token_cannot_see_leaves_every_card_unread_by_name():
+    sees = {owner_token(o): [o] for o in THREE_OWNERS}
+    sees[owner_token("EveryBite")] = []
+    gh = OwnersGh(THREE_OWNERS, by_token=sees)
+    _, gaps, searched = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert "EveryBite" not in searched
+    assert all("EveryBite" in gaps[i] and "cannot see" in gaps[i] for i in IDS)
+
+
+def test_a_pr_branch_is_read_on_the_token_of_the_owner_it_lives_under():
+    """A search hit that is not already for the card by its body has its
+    branch read — an EveryBite pull request on EveryBite's token."""
+    pr_ = dict(everybite_pr(), body="DRE-101 is mentioned in passing")
+    gh = OwnersGh(THREE_OWNERS,
+                  by_token={owner_token(o): [o] for o in THREE_OWNERS},
+                  prs={"EveryBite": [pr_]})
+    gh.heads["https://github.com/EveryBite/atlas/pull/77"] = "agent/DRE-101-x"
+    found, _, _ = groom_verify.merged_mentions(
+        IDS, run=gh, owners=THREE_OWNERS)
+    assert found["DRE-101"], "the branch read did not make the PR the card's"
+    [spent] = [t for j, t in gh.spent if "pulls/77" in j]
+    assert spent == owner_token("EveryBite")

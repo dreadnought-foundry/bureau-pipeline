@@ -2573,19 +2573,40 @@ def _render_batch_reasons(proposal: dict) -> list:
     return w
 
 
+def proof_line(item: dict) -> str:
+    """One verify proof item as the page writes it: `path:line — quote` for a
+    `file:line` item, `source — quote` for any other. The ONE form, read by
+    the Cancel reason (`groom_verify_agent.cancel_reason`) and the verdict
+    line alike (DRE-5746). Not defanged here — the caller defangs the line it
+    is part of."""
+    def one(text) -> str:
+        return " ".join(str(text or "").split())
+
+    if "file" in item:
+        return f"{one(item.get('file'))}:{item.get('line')} — {one(item.get('quote'))}"
+    return f"{one(item.get('source'))} — {one(item.get('quote'))}"
+
+
 def _verdict_line(mark: dict) -> str:
     """One batch card's verify verdict, with its summary or, when it went
-    unverified, the reason. Both are the agent's words about card text, so
-    they are defanged like every other reason on the page."""
+    unverified, the reason — then every proof item, `path:line — quote`
+    (DRE-5746), so the CEO reads on the page what the agent read on main.
+    All of it is the agent's words about card text and code, so the line is
+    defanged like every other reason on the page."""
     verdict = mark.get("verdict") or "unverified"
     said = mark.get("reason") if verdict == "unverified" else mark.get("summary")
     line = f"Verified against main: **{_line(verdict)}**"
+    proofs = [proof_line(item) for item in mark.get("proof") or []
+              if isinstance(item, dict)]
     # A Cancel answer the guard refused (DRE-5309) says so instead: the card
     # is on the Planning list, and the summary argues for the other list.
     if mark.get("refused"):
-        return line + f" — Cancel refused: {_line(mark['refused'])}"
-    if said:
-        line += f" — {defang_reason(_line(said))[0]}"
+        line += f" — Cancel refused: {_line(mark['refused'])}"
+        said = None
+    parts = [_line(said)] if said else []
+    if parts or proofs:
+        sep = "; " if mark.get("refused") else " — "
+        line += sep + defang_reason("; ".join(parts + proofs))[0]
     return line
 
 

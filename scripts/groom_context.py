@@ -507,8 +507,35 @@ PR_SEARCH_CEILING = 1000
 
 #: The credential the read spends, by the name the Groom step hands it
 #: (`groomer.yml`) — the Bureau App's installation token. The same name the
-#: per-card read uses; it is a contract, not a local choice.
+#: per-card read uses; it is a contract, not a local choice. Since DRE-5746 it
+#: is the PIPELINE'S OWN OWNER's token, and every other owner is handed its
+#: own under the name `token_env` gives it.
 TOKEN_ENV = "GH_TOKEN"
+
+#: The owner this pipeline lives under — the one whose token keeps
+#: `TOKEN_ENV`, so nothing else that reads `GH_TOKEN` in the Groom step moves.
+PIPELINE_OWNER = "dreadnought-foundry"
+
+
+def token_env(owner: str) -> str:
+    """The env var the Groom step hands `owner`'s read-only token under
+    (DRE-5746) — the ONE place the name is derived, for the workflow's
+    wiring test and both merged-PR reads alike.
+
+    An App installation token is scoped to one installation and this fleet
+    spans three owners, so the groom job mints one per owner in
+    `config/repo-map.json`. The pipeline's own owner keeps `TOKEN_ENV`;
+    every other owner is `GH_TOKEN_<OWNER>`, upper-cased, anything but a
+    letter or digit an underscore — `GH_TOKEN_EVERYBITE`.
+    """
+    if owner.lower() == PIPELINE_OWNER.lower():
+        return TOKEN_ENV
+    return f"{TOKEN_ENV}_" + re.sub(r"[^A-Z0-9]+", "_", owner.upper()).strip("_")
+
+
+def owner_token(owner: str) -> str:
+    """`owner`'s token as the Groom step handed it, or the empty string."""
+    return (os.environ.get(token_env(owner)) or "").strip()
 
 
 def _since(now: str, days: int) -> str:
@@ -558,8 +585,8 @@ def fleet_owners() -> list[str]:
     return release_train.fleet_owners(release_train.fleet_roster())
 
 
-def _api(run, args: list[str], what: str) -> dict:
-    out = run(["api", *args])
+def _api(run, args: list[str], what: str, *, token: str | None = None) -> dict:
+    out = run(["api", *args], token=token)
     try:
         doc = json.loads(out or "{}")
     except ValueError as e:
@@ -569,7 +596,7 @@ def _api(run, args: list[str], what: str) -> dict:
     return doc
 
 
-def installed_owners(run) -> set[str]:
+def installed_owners(run, token: str | None = None) -> set[str]:
     """The owners the token's App installation can see, lower-cased.
 
     An installation token is scoped to ONE installation, and a search of an
@@ -583,7 +610,7 @@ def installed_owners(run) -> set[str]:
     while True:
         doc = _api(run, ["-X", "GET", "installation/repositories",
                          "-f", "per_page=100", "-f", f"page={page}"],
-                   "installation/repositories")
+                   "installation/repositories", token=token)
         repos = doc.get("repositories") or []
         for repo in repos:
             seen.add(str(repo.get("full_name") or "").split("/")[0].lower())
@@ -594,7 +621,42 @@ def installed_owners(run) -> set[str]:
     return seen
 
 
-def _search_owner(run, owner: str, since: str) -> tuple[list[dict], int]:
+def owner_tokens(run, owners) -> tuple[dict[str, str], dict[str, str]]:
+    """`({owner: its token}, {owner: why it cannot be read})` (DRE-5746).
+
+    Each owner is read on ITS OWN token, the one the Groom step handed it
+    under `token_env(owner)`, and that token is asked what its installation
+    can see — never inferred from a search that came back empty. An owner
+    with no token, an installation that could not be read, or one that
+    cannot see the owner is named with the reason, and is not searched.
+    """
+    tokens: dict[str, str] = {}
+    blind: dict[str, str] = {}
+    seen: dict[str, set[str] | Exception] = {}
+    for owner in owners:
+        token = owner_token(owner)
+        if not token:
+            blind[owner] = (f"no {token_env(owner)} in the environment — the "
+                            f"Groom step hands {owner}'s Bureau App token "
+                            f"under that name")
+            continue
+        if token not in seen:
+            try:
+                seen[token] = installed_owners(run, token)
+            except Exception as e:  # noqa: BLE001 — one owner is one named gap
+                seen[token] = e
+        visible = seen[token]
+        if isinstance(visible, Exception):
+            blind[owner] = f"the installation could not be read: {visible}"
+        elif owner.lower() not in visible:
+            blind[owner] = "the Bureau App token's installation cannot see it"
+        else:
+            tokens[owner] = token
+    return tokens, blind
+
+
+def _search_owner(run, owner: str, since: str,
+                  token: str | None = None) -> tuple[list[dict], int]:
     """Every merged PR of `owner` since `since`, every page, and the search's
     own `total_count`."""
     query = f"is:pr is:merged user:{owner} merged:>={since}"
@@ -606,7 +668,7 @@ def _search_owner(run, owner: str, since: str) -> tuple[list[dict], int]:
                          "-f", "sort=updated", "-f", "order=desc",
                          "-f", f"per_page={PR_SEARCH_PER_PAGE}",
                          "-f", f"page={page}"],
-                   f"search/issues for {owner}")
+                   f"search/issues for {owner}", token=token)
         total = int(doc.get("total_count") or 0)
         items = doc.get("items") or []
         for found in items:
@@ -634,32 +696,28 @@ def read_merged_prs(*, now: str, owners=None, days: int = MERGED_PR_DAYS,
     """The fleet's merged pull requests inside the window, via the REST API.
 
     Returns `{"rows", "total_count", "unread_owners"}`. The owners are the
-    fleet's (`config/repo-map.json`); each one the token's installation cannot
-    see, and each one whose search fails, is named in `unread_owners` with the
-    reason and adds nothing to `total_count`.
+    fleet's (`config/repo-map.json`), each searched on its own token
+    (`owner_tokens`, DRE-5746); each one with no token, or whose token's
+    installation cannot see it, and each one whose search fails, is named in
+    `unread_owners` with the reason and adds nothing to `total_count`.
 
-    LOUD where the whole read fails: no token, the installation unreadable, or
-    no owner readable at all raises, so `read_pack` records the section as
-    unread — with the reason — instead of handing the model an empty fortnight.
+    LOUD where the whole read fails: no owner readable at all — no token
+    anywhere, every installation unreadable — raises, so `read_pack` records
+    the section as unread — with the reason — instead of handing the model an
+    empty fortnight.
     """
-    if not (os.environ.get(TOKEN_ENV) or "").strip():
-        raise ContextError(
-            f"no {TOKEN_ENV} in the environment — the Groom step hands the "
-            f"merged-PR read the Bureau App token under that name")
     run = run or _gh_json
     since = (_since(now, days) or "")[:10]
     owners = list(owners) if owners is not None else fleet_owners()
-    visible = installed_owners(run)
+    tokens, unread = owner_tokens(run, owners)
 
     rows: list[dict] = []
     total = 0
-    unread: dict[str, str] = {}
     for owner in owners:
-        if owner.lower() not in visible:
-            unread[owner] = "the Bureau App token's installation cannot see it"
+        if owner not in tokens:
             continue
         try:
-            found, count = _search_owner(run, owner, since)
+            found, count = _search_owner(run, owner, since, tokens[owner])
         except Exception as e:  # noqa: BLE001 — one owner is one named gap
             unread[owner] = str(e)
             continue
@@ -672,9 +730,12 @@ def read_merged_prs(*, now: str, owners=None, days: int = MERGED_PR_DAYS,
     return {"rows": rows, "total_count": total, "unread_owners": unread}
 
 
-def _gh_json(args: list[str]) -> str:
+def _gh_json(args: list[str], token: str | None = None) -> str:
+    """`gh <args>`, its stdout. `token` is the owner's (DRE-5746), handed to
+    `gh` as `GH_TOKEN`; without one `gh` reads the environment as it is."""
+    env = None if token is None else {**os.environ, TOKEN_ENV: token}
     done = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-        ["gh", *args], capture_output=True, text=True, check=False)
+        ["gh", *args], capture_output=True, text=True, check=False, env=env)
     if done.returncode != 0:
         raise ContextError(
             f"gh {' '.join(args)} failed rc={done.returncode}: "
