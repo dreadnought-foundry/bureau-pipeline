@@ -166,7 +166,7 @@ class LinearReads:
         return reconcile.active_cards((state,))
 
     def thread(self, identifier: str):
-        """The whole thread and the viewer, never a raw `comments(last: N)`."""
+        """The whole thread and the viewer, paged past the window (DRE-5850)."""
         return linear_ops._thread_and_viewer(identifier, "body", "user",
                                              "createdAt", whole=True)
 
