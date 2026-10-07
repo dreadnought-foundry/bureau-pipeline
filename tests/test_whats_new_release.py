@@ -20,7 +20,12 @@ What this file pins:
      a rate limit is a problem of its own, and one pull request GitHub will
      not read is skipped while the rest still publish;
   7. `shipped` is the injected clock on the Pacific clock, to the second;
-  8. `publish --dry-run` prints the document and publishes nothing.
+  8. `publish --dry-run` prints the document and publishes nothing;
+  9. the range starts at the newest tag in the surface's series, at or before
+     the previous tag, whose Release carries `whats-new.json` (DRE-6010) — a
+     hand cut or a failed publish drops nothing, the base's own range is never
+     re-read, the walk is capped, a failed Release read falls back to the
+     previous tag, and a rate-limited one is the rate-limit problem.
 
 The git legs build a REAL repository in a temp directory, the way
 tests/test_release_linear.py does; `gh` is a stub that answers like it.
@@ -119,10 +124,13 @@ def _scenario(tmp_path):
 class FakeGh:
     """Records every command and answers the way `gh` does."""
 
-    def __init__(self, pulls, *, release_exists=False, fail=None):
+    def __init__(self, pulls, *, release_exists=False, fail=None, assets=None):
         self.pulls = pulls
         self.release_exists = release_exists
         self.fail = fail or {}
+        # Tag → the asset names its Release carries; a tag missing is a tag with
+        # no Release. None: every tag's Release carries `whats-new.json`.
+        self.assets = assets
         self.calls = []
         self.envs = []
         self.published = []
@@ -134,6 +142,13 @@ class FakeGh:
         key = " ".join(argv[:3])
         if key in self.fail:
             return self.fail[key]
+        if argv[:2] == ["gh", "api"] and "/releases/tags/" in argv[2]:
+            tag = argv[2].split("/releases/tags/", 1)[1]
+            if self.assets is None:
+                return 0, "whats-new.json\n", ""
+            if tag not in self.assets:
+                return 1, "", "gh: Not Found (HTTP 404)\n"
+            return 0, "".join(f"{name}\n" for name in self.assets[tag]), ""
         if argv[:2] == ["gh", "api"]:
             number = int(argv[2].rsplit("/", 1)[1])
             if number not in self.pulls:
@@ -151,7 +166,12 @@ class FakeGh:
         raise AssertionError(f"unexpected command {argv}")
 
     def api_reads(self):
-        return [argv[2] for argv in self.calls if argv[:2] == ["gh", "api"]]
+        return [argv[2] for argv in self.calls
+                if argv[:2] == ["gh", "api"] and "/pulls/" in argv[2]]
+
+    def release_reads(self):
+        return [argv[2].split("/releases/tags/", 1)[1] for argv in self.calls
+                if argv[:2] == ["gh", "api"] and "/releases/tags/" in argv[2]]
 
     def releases(self):
         return [argv for argv in self.calls if argv[:2] == ["gh", "release"]]
@@ -526,3 +546,223 @@ def test_publish_without_dry_run_runs_the_same_write(tmp_path, monkeypatch, caps
     [(_, document)] = gh.published
     assert len(document["items"]) == 2
     assert RELEASE_URL in capsys.readouterr().out
+
+
+# ── 9. the base is the newest tag that published a file (DRE-6010) ──────────
+
+#: The 2026-10-06 console instance's tags, in Portico's series.
+V = "portico-portals-v1.6.{}".format
+
+OLDER = "What's new: new, everyone: A page lists every portal."
+AUDIT = "What's new: improved, admins: The audit log now shows who changed a setting."
+
+
+def _tag(repo, name, when):
+    _git(repo, "tag", "-a", name, "-m", name, env={"GIT_COMMITTER_DATE": when})
+
+
+def _history(tmp_path):
+    """301 → 302 (published) → 303 and 304 (cut by hand, no file) → 305.
+
+    #30 is 302's own range, already published under 302. #31 and #32 are
+    302..303, #33 is 303..304, #34 is 304..305 — the train's own lap.
+    """
+    repo = tmp_path / "portico"
+    (repo / "client").mkdir(parents=True)
+    (repo / "client" / "app.ts").write_text("v0\n")
+    _git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "the start")
+    _tag(repo, V(301), "2026-10-06T09:00:00-07:00")
+    _merge(repo, 30, "agent/DRE-30-portals", "client/portals.ts")
+    _tag(repo, V(302), "2026-10-06T10:58:00-07:00")
+    _merge(repo, 31, "agent/DRE-31-tables", "client/search.ts")
+    _merge(repo, 32, "agent/DRE-32-chores", "client/chores.ts")
+    _tag(repo, V(303), "2026-10-06T12:20:00-07:00")
+    _squash(repo, "Keep the queue in place after an approval (#33)", "client/queue.ts")
+    _tag(repo, V(304), "2026-10-06T12:38:00-07:00")
+    sha = _merge(repo, 34, "agent/DRE-34-audit", "client/audit.ts")
+    return repo, sha
+
+
+def _history_pulls():
+    return {30: ("agent/DRE-30-portals", f"{OLDER}\n"),
+            31: ("agent/DRE-31-tables", f"{TABLES}\n"),
+            32: ("agent/DRE-32-chores", "What's new: none\n"),
+            33: ("agent/DRE-33-queue", f"{QUEUE}\n"),
+            34: ("agent/DRE-34-audit", f"{AUDIT}\n")}
+
+
+def _write_305(repo, sha, gh, *, lines=None):
+    return _write(repo, sha, gh, previous=V(304), lines=lines)
+
+
+def _titles(result):
+    return [item["title"] for item in result["items"]]
+
+
+def _title(line):
+    return line.split(": ", 2)[2]
+
+
+def test_305_holds_every_range_a_hand_cut_left_behind(tmp_path):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(301): ["whats-new.json"],
+                                          V(302): ["whats-new.json"]})
+    result = _write(repo, sha, gh, previous=V(304))
+
+    assert result["problem"] is None
+    # 304..305, 303..304 and 302..303 — newest first, each exactly once.
+    assert _titles(result) == [_title(AUDIT), _title(QUEUE), _title(TABLES)]
+    [(_, document)] = gh.published
+    assert document["release"] == TAG
+    assert document["items"] == result["items"]
+    assert whats_new.validate(document) == []
+    # The walk read back from 304 and stopped at the first tag with a file.
+    assert gh.release_reads() == [V(304), V(303), V(302)]
+    read = next(argv for argv in gh.calls if "/releases/tags/" in argv[2])
+    assert read == ["gh", "api", f"repos/{REPO}/releases/tags/{V(304)}",
+                    "--jq", ".assets[].name"]
+
+
+def test_the_bases_own_range_is_never_collected_again(tmp_path):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"],
+                                          V(303): ["whats-new.json"]})
+    result = _write_305(repo, sha, gh)
+    # 303 published: its range (#31, #32) and 302's (#30) are not read.
+    assert gh.release_reads() == [V(304), V(303)]
+    assert sorted(gh.api_reads()) == [f"repos/{REPO}/pulls/{n}" for n in (33, 34)]
+    assert _titles(result) == [_title(AUDIT), _title(QUEUE)]
+
+
+def test_a_tag_whose_release_had_nothing_to_say_is_passed_over_once(tmp_path):
+    repo, sha = _history(tmp_path)
+    pulls = _history_pulls()
+    pulls[31] = ("agent/DRE-31-tables", "What's new: none\n")
+    # 303's range said nothing, so its release carries no file — even where a
+    # Release exists for the tag with some other asset on it.
+    gh = FakeGh(pulls, assets={V(302): ["whats-new.json"], V(303): ["notes.md"]})
+    result = _write_305(repo, sha, gh)
+
+    assert result["problem"] is None
+    assert gh.release_reads() == [V(304), V(303), V(302)]
+    assert _titles(result) == [_title(AUDIT), _title(QUEUE)]
+    reads = gh.api_reads()
+    assert len(reads) == len(set(reads)) == 4
+    assert f"repos/{REPO}/pulls/30" not in reads
+    assert sorted(number for number, reason in result["skipped"]) == [31, 32]
+    assert {reason for _, reason in result["skipped"]} == {"none"}
+
+
+def test_the_since_line_names_the_base_and_the_tags_reached_over(tmp_path):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"]})
+    lines = []
+    _write_305(repo, sha, gh, lines=lines)
+    since = [line for line in lines if " — since " in line]
+    assert since == [
+        f"whats-new: {TAG} — since {V(302)}, reaching back over {V(304)} and "
+        f"{V(303)}, whose releases carry no whats-new.json; changes: 4"]
+
+
+def test_the_since_line_is_unchanged_when_the_previous_tag_published(tmp_path):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(304): ["whats-new.json"]})
+    lines = []
+    result = _write_305(repo, sha, gh, lines=lines)
+    assert gh.release_reads() == [V(304)]
+    assert [line for line in lines if " — since " in line] == [
+        f"whats-new: {TAG} — since {V(304)}; changes: 1"]
+    assert _titles(result) == [_title(AUDIT)]
+
+
+def test_the_walk_is_bounded_by_a_named_cap(tmp_path, monkeypatch):
+    assert whats_new_release.WALK_CAP == 30
+    repo, sha = _history(tmp_path)
+    monkeypatch.setattr(whats_new_release, "WALK_CAP", 2)
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"]})
+    lines = []
+    result = _write_305(repo, sha, gh, lines=lines)
+
+    # Two reads and no third — 302's file is past the cap, so the given tag stands.
+    assert gh.release_reads() == [V(304), V(303)]
+    assert result["problem"] is None
+    assert _titles(result) == [_title(AUDIT)]
+    fallback = [line for line in lines if "as given" in line]
+    assert fallback == [
+        f"whats-new: no release among the 2 newest tags at or before {V(304)} "
+        f"carries whats-new.json (the walk's cap) — collecting since {V(304)}, "
+        f"as given"]
+    assert f"whats-new: {TAG} — since {V(304)}; changes: 1" in lines
+
+
+def test_a_series_with_no_published_tag_falls_back_to_the_previous_tag(tmp_path):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={})
+    lines = []
+    result = _write_305(repo, sha, gh, lines=lines)
+    assert gh.release_reads() == [V(304), V(303), V(302), V(301)]
+    assert _titles(result) == [_title(AUDIT)]
+    assert [line for line in lines if "as given" in line] == [
+        f"whats-new: no release from {V(304)} back to {V(301)}, the first tag in "
+        f"its series, carries whats-new.json — collecting since {V(304)}, as given"]
+
+
+@pytest.mark.parametrize("stderr", ["gh: HTTP 502: Bad Gateway\n",
+                                    "gh: Forbidden (HTTP 403)\n"])
+def test_a_failed_release_read_falls_back_to_the_previous_tag(tmp_path, stderr):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"]},
+                fail={f"gh api repos/{REPO}/releases/tags/{V(303)}": (1, "", stderr)})
+    lines = []
+    result = _write_305(repo, sha, gh, lines=lines)
+
+    assert result["problem"] is None
+    assert gh.release_reads() == [V(304), V(303)]
+    assert _titles(result) == [_title(AUDIT)]
+    assert [line for line in lines if "as given" in line] == [
+        f"whats-new: the release of {V(303)} could not be read ({stderr.strip()}) "
+        f"— collecting since {V(304)}, as given"]
+    assert f"whats-new: {TAG} — since {V(304)}; changes: 1" in lines
+    [(_, document)] = gh.published
+    assert document["items"] == result["items"]
+
+
+@pytest.mark.parametrize("stderr", [
+    "gh: API rate limit exceeded for installation. (HTTP 403)\n",
+    "gh: You have exceeded a secondary rate limit. (HTTP 403)\n"])
+def test_a_rate_limited_release_read_is_the_rate_limit_problem(tmp_path, stderr):
+    repo, sha = _history(tmp_path)
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"]},
+                fail={f"gh api repos/{REPO}/releases/tags/{V(303)}": (1, "", stderr)})
+    lines = []
+    result = _write_305(repo, sha, gh, lines=lines)
+
+    assert "rate limit" in result["problem"]
+    assert whats_new_release.FORBIDDEN not in result["problem"]
+    assert result["items"] == [] and result["url"] is None
+    assert gh.api_reads() == [] and gh.releases() == []
+    assert not any("as given" in line for line in lines)
+
+
+def test_a_previous_tag_outside_the_series_falls_back_and_says_so(tmp_path):
+    repo, sha = _history(tmp_path)
+    _tag(repo, "hand-cut", "2026-10-06T12:50:00-07:00")
+    gh = FakeGh(_history_pulls(), assets={V(302): ["whats-new.json"]})
+    lines = []
+    result = _write(repo, sha, gh, previous="hand-cut", lines=lines)
+    assert gh.release_reads() == []
+    assert result["problem"] is None
+    assert [line for line in lines if "as given" in line] == [
+        "whats-new: hand-cut is not a tag in portico-portals-v* — collecting "
+        "since hand-cut, as given"]
+
+
+def test_the_docstring_states_the_base_rule():
+    docstring = " ".join((whats_new_release.__doc__ or "").split())
+    section = docstring.split("WHICH PULL REQUESTS", 1)[1].split("THE RULE'S SWITCH", 1)[0]
+    assert "DRE-6010" in section
+    assert "newest tag" in section and "whats-new.json" in section
