@@ -1,8 +1,9 @@
 """RED-first tests for the two scheduled jobs' own branches (DRE-3879).
 
-`split-ledger.yml` and `model-drift.yml` both ended in `git push origin
-HEAD:main` and both had been failing on it — `GH006: Protected branch update
-failed`, every day for the ledger, every week for the drift watch. The CEO's
+`split-ledger.yml` and the weekly catalog-snapshot job (DRE-2236) both ended
+in `git push origin HEAD:main` and both had been failing on it — `GH006:
+Protected branch update failed`, every day for the ledger, every week for the
+drift watch. The CEO's
 signed answers settle the remedy and its limits, and this module is where each
 limit is held:
 
@@ -11,10 +12,19 @@ limit is held:
     ONE pull request, and nothing in this repository touches a GitHub
     protection rule, ruleset or repository setting.
   * **2026-09-15 13:12 PT** — add EXACTLY two literal branch names,
-    `bot/split-ledger` and `bot/model-drift`, trusted the way
+    `bot/split-ledger` and the snapshot job's own branch, trusted the way
     `bot/standards-sync` is. No wildcard; no other branch gains merge rights.
     CI and the critic still run, and a red check or a REQUEST_CHANGES verdict
     still blocks the merge.
+
+The drift watch is retired (DRE-6049, the CEO's decision of 2026-10-06): its
+workflow is deleted, nothing produces its branch any more, and that literal
+leaves every copy of the trusted list. That narrows the list the 2026-09-15
+answer set and contradicts nothing in it — no other branch gains merge rights.
+`bot/split-ledger` keeps its entry, and every test below now holds that one job
+to the same terms. The retired names are deliberately not spelled here: the
+card's own acceptance check is that they appear nowhere outside the historical
+records, so the tests prove the absence by exact sets instead.
 
 Two literals, not `bot/*`, for the reason merge-gate.yml already gives about
 `bot/standards-sync`: a broad prefix hands auto-merge to every future branch
@@ -53,13 +63,18 @@ import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
 import step_shell  # noqa: E402
 
-#: The two jobs this card fixes, and the branch each one is required to use.
-#: The names are the CEO's, quoted verbatim on the card — pinned as literals
-#: here on purpose, because "exactly these two and no others" is the decision.
+#: The job this card fixed that is still running, and the branch it is
+#: required to use. The name is the CEO's, quoted verbatim on the card —
+#: pinned as a literal here on purpose, because "exactly these and no others"
+#: is the decision. Its sibling, the weekly catalog-snapshot job, was retired
+#: by DRE-6049 and is held gone by `TheDriftJobIsRetiredTest`.
 JOB_BRANCHES = {
     "split-ledger.yml": "bot/split-ledger",
-    "model-drift.yml": "bot/model-drift",
 }
+
+#: Every branch the merge gate trusted before DRE-3879 — the baseline the
+#: exact-set assertions below compare against.
+BEFORE_DRE_3879 = {"agent/", "repair/", "dependabot/", "bot/standards-sync"}
 
 HEAD = "aa11" * 10
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
@@ -152,8 +167,8 @@ class EachJobHasOneFixedBranchTest(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 self.assertEqual(declared_branch(workflow), branch)
 
-    def test_the_two_branches_are_distinct(self):
-        self.assertEqual(len(set(JOB_BRANCHES.values())), 2)
+    def test_one_job_branch_is_left(self):
+        self.assertEqual(len(set(JOB_BRANCHES.values())), 1)
 
     def test_neither_workflow_pushes_to_main(self):
         for workflow in JOB_BRANCHES:
@@ -169,7 +184,6 @@ class EachJobHasOneFixedBranchTest(unittest.TestCase):
         the generated paths, by name. It moved into the publisher (which
         proves the staged set and refuses anything else); the workflow's job
         is still to name exactly those paths and no others."""
-        self.assertEqual(declared_paths("model-drift.yml"), ["models.json"])
         self.assertEqual(sorted(declared_paths("split-ledger.yml")),
                          ["config/split-ledger.json", "docs/split-ledger.md"])
         for workflow in JOB_BRANCHES:
@@ -244,12 +258,53 @@ class TheTrustedListTest(unittest.TestCase):
     def test_exactly_these_branches_gained_merge_rights(self):
         """Nothing else joined the trusted list on this card. The set is read
         from the gate itself and compared against what it held before, plus
-        the two the CEO named."""
-        before = {"agent/", "repair/", "dependabot/", "bot/standards-sync"}
+        the one of the CEO's two names still in use (DRE-6049 retired the
+        other)."""
         self.assertEqual(_shell_gate_prefixes(),
-                         before | set(JOB_BRANCHES.values()))
+                         BEFORE_DRE_3879 | set(JOB_BRANCHES.values()))
         self.assertEqual(set(reconcile.PIPELINE_BRANCH_PREFIXES),
-                         before | set(JOB_BRANCHES.values()))
+                         BEFORE_DRE_3879 | set(JOB_BRANCHES.values()))
+
+
+class TheDriftJobIsRetiredTest(unittest.TestCase):
+    """DRE-6049. The drift watch is gone from the code, not just switched
+    off in GitHub: while the file exists, re-enabling "everything that was
+    paused" turns it back on. And a branch nothing produces keeps no merge
+    rights anywhere the trusted list is written. Each absence is proved by an
+    exact set, so nothing here has to spell the retired names."""
+
+    def test_split_ledger_is_the_only_job_that_publishes_a_bot_branch(self):
+        """The drift workflow was the publisher's other caller. Every
+        workflow that still calls it is one this module names."""
+        callers = sorted(
+            path.name for path in WORKFLOWS.glob("*.yml")
+            if "bot_branch_pr.py publish" in step_shell.workflow_source(path))
+        self.assertEqual(callers, sorted(JOB_BRANCHES))
+
+    def test_no_workflow_refreshes_the_committed_snapshot(self):
+        """`model-adoption.yml` snapshots the live catalog into the runner's
+        temp directory; nothing writes the committed `models.json` on a
+        schedule any more."""
+        writers = sorted(
+            path.name for path in WORKFLOWS.glob("*.yml")
+            if re.search(r"model_catalog\.py\s+snapshot\s+models\.json",
+                         _uncommented(step_shell.workflow_source(path))))
+        self.assertEqual(writers, [])
+
+    def test_the_merge_gate_event_filter_names_exactly_the_trusted_literals(self):
+        literals = set(re.findall(r"head_branch == '([^']+)'", _evaluate_if()))
+        self.assertEqual(literals,
+                         {"bot/standards-sync"} | set(JOB_BRANCHES.values()))
+
+    def test_every_name_the_medic_watches_is_a_workflow_here(self):
+        """A watched name with no workflow behind it is a dangling entry."""
+        names = {(_doc(path.name) or {}).get("name")
+                 for path in WORKFLOWS.glob("*.yml")}
+        doc = _doc("self-medic.yml")
+        on = doc.get("on", doc.get(True))
+        dangling = [w for w in on["workflow_run"]["workflows"]
+                    if w not in names]
+        self.assertEqual(dangling, [])
 
 
 # --------------------------------------------------------------------------- #

@@ -56,12 +56,12 @@ SLUG = "bureau-pipeline"
 
 #: merge-gate.yml's branch gate, spelled as the shell spells it. Written once
 #: here and asserted against the workflow below (DRE-3879 added the two
-#: scheduled jobs' own branches, `bot/split-ledger` and `bot/model-drift`);
-#: two copies of this string in one module is how it comes to name a gate
-#: nobody runs.
+#: scheduled jobs' own branches; DRE-6049 retired the drift watch, so
+#: `bot/split-ledger` is the one left); two copies of this string in one
+#: module is how it comes to name a gate nobody runs.
 MERGE_GATE_PATTERN = (
     "agent/*|repair/*|dependabot/*|bot/standards-sync"
-    "|bot/split-ledger|bot/model-drift"
+    "|bot/split-ledger"
 )
 
 
@@ -180,7 +180,9 @@ class BranchNamesTheCardTest(unittest.TestCase):
 
     def test_both_patterns_are_the_ones_the_workflows_use(self):
         # The strings above are only proof if the workflows still spell them.
-        self.assertIn(MERGE_GATE_PATTERN, wf("merge-gate.yml"))
+        # The closing `)` makes it the whole pattern, not a prefix of a
+        # longer one that still names a retired branch.
+        self.assertIn(MERGE_GATE_PATTERN + ")", wf("merge-gate.yml"))
         self.assertIn("agent/*|repair/*", wf("agent-fix.yml"))
 
 

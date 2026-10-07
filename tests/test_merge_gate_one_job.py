@@ -310,7 +310,7 @@ class LegFilterTest(unittest.TestCase):
     def test_ci_on_every_gated_branch_shape_wakes_the_gate(self):
         for branch in (
             "agent/DRE-1-x", "repair/red-main-1", "dependabot/pip/x-1.2",
-            "bot/standards-sync", "bot/split-ledger", "bot/model-drift",
+            "bot/standards-sync", "bot/split-ledger",
         ):
             with self.subTest(branch=branch):
                 self.assertTrue(evaluate_runs(workflow_run_event(branch, pr=PR)))

@@ -70,11 +70,10 @@ class ClassifyPathTest(unittest.TestCase):
 
     # --- the catalog snapshot is data (DRE-3879) ------------------------
     #
-    # `models.json` is the snapshot `model-drift.yml` refreshes from the
-    # Anthropic catalog once a week — the seam the console reads, data the
-    # job derives rather than code anybody authored. It classified as `code`
-    # (it is neither a docs path nor an ops one), so the weekly regeneration
-    # could not satisfy a check whose finding is the ORDER of commits that
+    # `models.json` is the frozen Anthropic catalog snapshot the console
+    # reads — data derived from the vendor's model list rather than code
+    # anybody authored. It classified as `code` (it is neither a docs path nor
+    # an ops one), so a regeneration could not satisfy a check whose finding is the ORDER of commits that
     # already exist: there is no RED test to write for a vendor's model list,
     # and DRE-2694 means no added commit clears it.
     #
@@ -131,10 +130,10 @@ class ClassifyPathTest(unittest.TestCase):
         self.assertTrue(ok, reason)
 
     def test_the_bot_branches_get_no_identity_exemption(self):
-        """The exemption the CEO chose is the PATH, not the branch. Neither
-        scheduled job's branch buys its pull request the standards-sync
-        identity exemption — a `.py` change riding on one is still code."""
-        for branch in ("bot/split-ledger", "bot/model-drift"):
+        """The exemption the CEO chose is the PATH, not the branch. The
+        scheduled job's branch buys its pull request no standards-sync
+        identity exemption — a `.py` change riding on it is still code."""
+        for branch in ("bot/split-ledger",):
             with self.subTest(branch=branch):
                 self.assertFalse(check_tdd_commits.is_standards_sync_pr(
                     branch, "agent-bureau-bot", ["agent-bureau-bot"]))
