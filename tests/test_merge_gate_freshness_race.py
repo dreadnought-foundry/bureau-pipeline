@@ -359,7 +359,7 @@ class CliContractTest(unittest.TestCase):
 
 class WiringTest(unittest.TestCase):
     """merge-gate.yml: the currency re-merge is gone, and the conflict arm is
-    behind the script's machine-readable decision. The gate's one branch
+    behind the script's machine-readable decision. The gate's first branch
     write is the DRE-4912 order-sensitive refresh (DRE-5070) — not a
     currency gate: it fires only on a same-prefix addition on both sides,
     at most once per `main` tip, and replaces a fork rather than freshening
@@ -386,11 +386,19 @@ class WiringTest(unittest.TestCase):
         in which merging forks `main` — once per `main` tip at most, and it
         cannot see a base move that adds nothing there. So exactly one PUT,
         inside the `decision=refresh` branch read from the decision
-        module's stdout, carrying `expected_head_sha`."""
+        module's stdout, carrying `expected_head_sha`.
+
+        DRE-6195 added the second: GitHub refusing the merge with `Head
+        branch is out of date`, the head unmoved, updates the branch once per
+        base tip. A refusal, not the compare status, triggers it, so the
+        DRE-2393 race does not come back: GitHub would refuse that merge
+        whatever the gate did. Two PUTs, then, the second inside the
+        merge-refusal arm, after the head re-read, carrying
+        `expected_head_sha`."""
         rb = self.run_block
         self.assertNotIn('"$DECISION" = "update"', rb)
-        self.assertEqual(rb.count("/update-branch"), 1)
-        self.assertEqual(rb.count("-X PUT"), 1)
+        self.assertEqual(rb.count("/update-branch"), 2)
+        self.assertEqual(rb.count("-X PUT"), 2)
         read = rb.find("grep -m1 '^decision=' /tmp/refresh-decision")
         self.assertGreater(read, -1, "the order-sensitive decision is not read")
         opener = 'if [ "$REFRESH" = "refresh" ]; then'
@@ -407,6 +415,21 @@ class WiringTest(unittest.TestCase):
         self.assertIn("/update-branch", arm)
         put = next(ln for ln in arm.splitlines() if "-X PUT" in ln)
         self.assertIn("expected_head_sha", put)
+        merge = next(i for i, ln in enumerate(lines)
+                     if ln.strip().startswith("if ! gh pr merge"))
+        merge_indent = len(lines[merge]) - len(lines[merge].lstrip())
+        merge_end = next(i for i in range(merge + 1, len(lines))
+                         if len(lines[i]) - len(lines[i].lstrip()) == merge_indent
+                         and lines[i].strip() == "fi")
+        self.assertGreater(merge, end, "the merge-refusal arm precedes the refresh")
+        refusal = lines[merge:merge_end]
+        reread = next((i for i, ln in enumerate(refusal) if "gh pr view" in ln), None)
+        self.assertIsNotNone(reread, "the merge-refusal arm re-reads no head")
+        second = next((i for i, ln in enumerate(refusal) if "-X PUT" in ln), None)
+        self.assertIsNotNone(second, "no update inside the merge-refusal arm")
+        self.assertGreater(second, reread)
+        self.assertIn("/update-branch", refusal[second])
+        self.assertIn('expected_head_sha="$SHA"', refusal[second])
 
     def test_merge_state_is_read_once_and_passed_to_the_script(self):
         self.assertIn("mergeStateStatus", self.run_block)

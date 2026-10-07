@@ -104,6 +104,21 @@ def _refresh_branch(block: str) -> str:
     raise AssertionError("unterminated `decision=refresh` branch")
 
 
+def _merge_refusal_arm(block: str) -> str:
+    """The `gh pr merge` failure arm (DRE-2117): from its `if ! gh pr merge`
+    line to the `fi` at the same indentation."""
+    lines = block.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.strip().startswith("if ! gh pr merge")), None)
+    assert start is not None, "no merge-refusal arm in the step"
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    for end in range(start + 1, len(lines)):
+        ln = lines[end]
+        if len(ln) - len(ln.lstrip()) == indent and ln.strip() == "fi":
+            return "\n".join(lines[start:end + 1])
+    raise AssertionError("unterminated merge-refusal arm")
+
+
 class CurrencyIsNotAGateTest(unittest.TestCase):
     """The retirement, decision by decision. Each of these returned
     `update` or `wait` under DRE-1924/DRE-2274."""
@@ -314,9 +329,10 @@ class CliContractTest(unittest.TestCase):
 class WiringTest(unittest.TestCase):
     """merge-gate.yml no longer updates a branch for being behind, and the
     conflict arm that replaced the update arm sits behind the script's
-    decision. Its one branch write is the DRE-4912 order-sensitive refresh,
+    decision. Its two branch writes are the DRE-4912 order-sensitive refresh,
     guarded by `order_sensitive_refresh.py`'s `decision=refresh` — bounded
-    to a same-prefix addition on both sides, once per `main` tip."""
+    to a same-prefix addition on both sides, once per `main` tip — and the
+    DRE-6195 update on GitHub's out-of-date refusal, once per base tip."""
 
     def setUp(self):
         doc = yaml.safe_load(step_shell.workflow_source(WORKFLOW))
@@ -347,13 +363,21 @@ class WiringTest(unittest.TestCase):
         at most once per `main` tip. So the step holds exactly one PUT, only
         inside the branch taken on `decision=refresh` from the decision
         module's stdout, bound to the evaluated head by `expected_head_sha`,
-        and no other mutating verb."""
+        and no other mutating verb.
+
+        The second is GitHub's own refusal (DRE-6195): a merge refused with
+        `Head branch is out of date` and the head unmoved updates the branch
+        once per base tip. It is not currency either: the compare status
+        never triggers it, only GitHub refusing the merge does. So the step
+        holds exactly two PUTs, the second inside the merge-refusal arm,
+        after the head re-read, and bound by `expected_head_sha` too."""
         rb = self.run_block
         self.assertNotIn('"$DECISION" = "update"', rb)
-        self.assertEqual(rb.count("/update-branch"), 1)
-        self.assertEqual(rb.count("-X PUT"), 1)
+        self.assertEqual(rb.count("/update-branch"), 2)
+        self.assertEqual(rb.count("-X PUT"), 2)
         self.assertEqual(re.findall(r"(?:-X|--method)\s+[A-Z]+", rb),
-                         ["-X PUT"], "a mutating verb besides the refresh")
+                         ["-X PUT", "-X PUT"],
+                         "a mutating verb besides the two updates")
         read = rb.find("grep -m1 '^decision=' /tmp/refresh-decision")
         self.assertGreater(read, -1, "the order-sensitive decision is not read")
         arm = _refresh_branch(rb)
@@ -361,6 +385,15 @@ class WiringTest(unittest.TestCase):
         put = next(ln for ln in arm.splitlines() if "-X PUT" in ln)
         self.assertIn("/update-branch", put)
         self.assertIn("expected_head_sha", put)
+        refusal = _merge_refusal_arm(rb)
+        self.assertGreater(rb.find(refusal), rb.find(arm))
+        reread = refusal.find("gh pr view")
+        self.assertGreater(reread, -1, "the merge-refusal arm re-reads no head")
+        second = refusal.find("-X PUT")
+        self.assertGreater(second, reread, "the second PUT is not after the re-read")
+        put = refusal[second:].splitlines()[0]
+        self.assertIn("/update-branch", put)
+        self.assertIn('expected_head_sha="$SHA"', put)
 
     def test_shell_behind_fast_path_still_absent(self):
         """BEHIND is reported only when branch protection's up-to-date
