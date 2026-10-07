@@ -185,9 +185,9 @@ not a critic catch).
 
 P. PROOF RECORD (DRE-6141) — on a proof-record branch
    (`agent/DRE-<n>-proof-record`), the record `proof_record.py gather` read
-   at the head: the one `.md` file the pull request adds under
-   `architecture/proofs/` or `architecture/audits/`. On 2026-10-07 three
-   records whose rows read `Not observed.` merged on green CI and an
+   at the head: the one `.md` file the pull request adds under `docs/` or
+   `architecture/`. On 2026-10-07 three records whose rows read
+   `Not observed.` merged on green CI and an
    APPROVE — the critic approved them because they were honest about what
    they had not seen — and their cards closed Done. Every judged row of the
    criterion table must be met, by the reader the hygiene lane and the PROOF

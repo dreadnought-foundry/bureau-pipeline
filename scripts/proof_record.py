@@ -19,9 +19,9 @@ or read the hold. Both now do, through this module:
    `MET_WORDS`, no hedge straight after it (`HEDGES`).
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
-   `architecture/proofs/` or `architecture/audits/` (`find_record`, over
-   `gh pr view --json files`), read at a given sha through the contents API
-   (`fetch`). No match, or two, is no record — never a fixed path.
+   `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
+   read at a given sha through the contents API (`fetch`). No match, or two, is
+   no record — never a fixed path.
 
 `shortfall` is the one judgment both halves make over a record. `gather` is the
 merge gate's feed: `python3 proof_record.py gather` writes the record the gate
@@ -215,8 +215,12 @@ def open_holds(voices: list) -> list:
 # the record                                                                   #
 # --------------------------------------------------------------------------- #
 
-#: Where a proof run writes its record: one new `.md` file under either.
-RECORD_DIRS = ("architecture/proofs/", "architecture/audits/")
+#: Where a proof run writes its record: one new `.md` file under either — the
+#: roots the hygiene lane reads a merged record from (`hygiene_done.RECORD_ROOTS`
+#: is this tuple). Narrower would hold most records: bureau-pipeline keeps its
+#: proofs under `docs/` (#772 added `docs/claude-limit-recovery-proof-2026-10.md`),
+#: agent-bureau under `architecture/proofs/`, and nothing re-runs a held record.
+RECORD_DIRS = ("docs/", "architecture/")
 ADDED = "ADDED"
 
 #: The record a pull request carries. `text` is None when there is none to

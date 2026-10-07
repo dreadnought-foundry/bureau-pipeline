@@ -9,7 +9,8 @@ read it through `scripts/proof_record.py`, which holds:
   * the criterion-table reader, moved from `hygiene_done`;
   * the hold-discharge reader, moved from `proof_dispatch` as `open_holds`;
   * the record finder, new: the ONE `.md` file the pull request ADDS under
-    `architecture/proofs/` or `architecture/audits/`, read at a given sha.
+    `docs/` or `architecture/` — the roots `hygiene_done` reads records
+    from — read at a given sha.
 
 Moved, never copied: `hygiene_done.reading is proof_record.reading`. And it is
 a leaf: `reconcile` reads `os.environ["REPO"]` at import, and neither the
@@ -89,6 +90,9 @@ class TestOneReader:
             assert getattr(hygiene_done, name) is getattr(proof_record, name), name
         for name in ("CLOSING_ROW_WORDS", "MET_WORDS", "HEDGES"):
             assert getattr(hygiene_done, name) is getattr(proof_record, name), name
+        # Where a record may live is one answer too: the gate and the hygiene
+        # lane must never disagree about whether a pull request carries one.
+        assert hygiene_done.RECORD_ROOTS is proof_record.RECORD_DIRS
 
     def test_proof_dispatch_reads_holds_and_branches_through_proof_record(self):
         assert proof_dispatch._open_holds is proof_record.open_holds
@@ -137,14 +141,22 @@ class TestTheRecordFinder:
         path = "architecture/audits/repo-map-resolution.md"
         assert proof_record.find_record([added(path)]) == (path, None)
 
+    def test_a_record_under_docs_is_a_record_too(self):
+        """Most of bureau-pipeline's proof records live under `docs/`: #772,
+        on `agent/DRE-5843-proof-record`, added only
+        `docs/claude-limit-recovery-proof-2026-10.md`. A finder that missed it
+        would hold that record forever, with nothing to move it."""
+        path = "docs/claude-limit-recovery-proof-2026-10.md"
+        assert proof_record.find_record([added(path)]) == (path, None)
+
     def test_no_match_is_no_record(self):
-        path, why = proof_record.find_record([added("docs/notes.md"),
-                                              added("architecture/decisions/a.md")])
+        path, why = proof_record.find_record([added("README.md"),
+                                              added("scripts/x.py", "MODIFIED")])
         assert path is None
-        assert "architecture/proofs/" in why and "architecture/audits/" in why
+        assert "docs/" in why and "architecture/" in why
 
     def test_two_matches_are_no_record_and_both_are_named(self):
-        other = "architecture/audits/second.md"
+        other = "docs/second-proof.md"
         path, why = proof_record.find_record([added(RECORD_PATH), added(other)])
         assert path is None
         assert RECORD_PATH in why and other in why
@@ -154,9 +166,9 @@ class TestTheRecordFinder:
         assert path is None
         assert RECORD_PATH in why
 
-    def test_a_record_outside_the_two_folders_or_not_markdown_is_not_one(self):
+    def test_a_record_outside_the_roots_or_not_markdown_is_not_one(self):
         for entry in (added("proofs/planners.md"), added("architecture/proofs/a.txt"),
-                      added("architecture/proofsx/a.md")):
+                      added("docsx/a.md"), added("scripts/docs/a.md")):
             assert proof_record.find_record([entry])[0] is None, entry
 
     def test_an_unreadable_file_list_is_no_record(self):
@@ -339,6 +351,20 @@ class TestGather:
         assert proof_record.read_payload(out) == proof_record.Record(
             RECORD_PATH, NOT_OBSERVED, None)
         assert calls == [["api", f"repos/{REPO}/contents/{RECORD_PATH}?ref={SHA}"]]
+
+    def test_a_docs_record_on_its_record_branch_is_read_and_judged(self):
+        """The real shape of #772: one `docs/…-proof-….md` ADDED on
+        `agent/DRE-<n>-proof-record`. It is read at the head and judged on its
+        rows — met merges, not met holds — never held as "no record"."""
+        path = "docs/claude-limit-recovery-proof-2026-10.md"
+        view = {"headRefName": "agent/DRE-5843-proof-record", "files": [added(path)]}
+        proc, out, calls = gather(view, MET)
+        assert proc.returncode == 0, proc.stderr
+        assert calls == [["api", f"repos/{REPO}/contents/{path}?ref={SHA}"]]
+        assert proof_record.shortfall(proof_record.read_payload(out)) is None
+        _, out, _ = gather(view, NOT_OBSERVED)
+        why = proof_record.shortfall(proof_record.read_payload(out))
+        assert why.startswith(f"{path} has 2 row(s) not met"), why
 
     def test_a_record_it_could_not_read_is_written_as_unread(self):
         proc, out, _ = gather({"headRefName": "agent/DRE-5798-proof-record",

@@ -82,6 +82,7 @@ from proof_record import (  # noqa: F401 — the names this lane's callers and t
     CLOSING_ROW_WORDS,
     HEDGES,
     MET_WORDS,
+    RECORD_DIRS as RECORD_ROOTS,
     Reading,
     _row,
     criterion_rows,
@@ -99,7 +100,6 @@ READ_LANES = ("Todo", "In Progress", "In Review", hygiene.HAND_WORK)
 #: This agent's own epic's proof card: the CEO closes it.
 OWN_PROOF = "DRE-5412"
 
-RECORD_ROOTS = ("docs/", "architecture/")
 SUPERSEDED = ("Canceled", "Duplicate")
 HAND_BUILT = reconcile.HAND_BUILT_LABEL
 NO_CODE = linear_ops.NO_CODE_LABEL

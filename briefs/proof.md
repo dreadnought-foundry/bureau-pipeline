@@ -125,8 +125,11 @@ succeeds live says nothing about the screen that sends it.
 
 ## The record
 **Its path is the one the card's `**Files:**` line names** — every proof card
-names its record there. Its shape is the one `scripts/hygiene_done.py` reads,
-in this order:
+names its record there. It is a new `.md` file under `docs/` or
+`architecture/`, and the only `.md` file your pull request adds: the merge gate
+and the card's close find the record that way (`proof_record.find_record`),
+and a pull request with no such file, or two, is held as having no record. Its
+shape is the one `scripts/hygiene_done.py` reads, in this order:
 
 1. **A title naming the card and the epic** —
    `# PROOF record — DRE-<n>: <card title> (epic DRE-<epic>)`.
@@ -149,6 +152,19 @@ in this order:
 
 A row you could not observe says `Not observed.` and why. It is never dropped,
 and never hedged into `Met` — "met, as far as I could tell" is `Not observed.`
+
+**A record with any row not met does not merge (DRE-6141).** The merge gate
+reads the table at your pull request's head and holds it open while any judged
+row reads `Not observed.` or `Not met.` — the closing row is not judged. The
+card cannot close either: its close reads the same table, and it also refuses
+while a `🔬 proof-waiting` hold stands that nothing discharged. Write the
+record exactly as you saw it anyway, open its pull request, and let the gate
+hold it. The hold is the right outcome for a proof that saw nothing. A held
+record is amended in place by the next run (resume, below), and the gate reads
+it again on every new head, so a record whose rows are all met merges with
+nobody involved. For a press only the CEO can make, the park below is what
+brings that next run. For any other row, nothing re-runs the record by itself.
+It waits, held, for a person. Never reword a row to get it merged.
 
 ## A press only the CEO can make, and his answer
 Some criteria can be satisfied only by a press the CEO's own login can make — a

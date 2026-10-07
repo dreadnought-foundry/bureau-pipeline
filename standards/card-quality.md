@@ -279,11 +279,21 @@ bouncing the plan, and no plan adds one back.
 **A proof card closes itself on its approved record (DRE-5919).** The CEO
 decided on 2026-10-05 that nobody should have to chase a proof down. When the
 record merges on the card's own branch with the critic's APPROVE at the merged
-head, the merge closes the card — the critic already holds the record to its
-criteria, so the approved, merged record is the evidence. The close comment
-names the pull request, the merge time in PT and the approved commit. Without
-that APPROVE the card stays open for a person, as every other `no-code` card
-does.
+head, the merge closes the card. The close comment names the pull request, the
+merge time in PT and the approved commit. Without that APPROVE the card stays
+open for a person, as every other `no-code` card does.
+
+**An approved record is not enough on its own (DRE-6141).** On 2026-10-07 the
+critic approved three records because they were honest about what they had not
+seen, and the merge closed their cards with nearly every row `Not observed.` So
+the record itself is now read. It is the one `.md` file the record's pull
+request adds under `docs/` or `architecture/`. The merge gate holds the pull
+request open unless every judged row of its criterion table is met. It also
+holds when there is no table, no judged row, or no record it can read. The
+close refuses on the same reading of the record at the merged head, and it also
+refuses while a `🔬 proof-waiting` hold stands that nothing discharged. A
+refused card stays open under the `🔒 Merged — card deliberately left open`
+comment.
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that the operator runs a proof as soon as its build cards finish,
