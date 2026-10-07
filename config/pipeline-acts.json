@@ -1680,6 +1680,14 @@
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is the `🛑 Fix attempt … pushed no new commit` note eight lines above it in this same step."
     },
     {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "--body-file /tmp/fix-nothing-to-fix.md",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix round that pushed nothing had nothing to fix: the critic approved the head after the round's verdict, or the fixer found nothing and no blocking finding is open at the head (DRE-6018).",
+      "why": "A stand-down, not something the pipeline did. It creates no obligation, hands the work to nobody and has nothing to discharge — the review that approved the head, or the one still running on it, is already the next step, and the three questions a trailer answers all read 'not applicable'. The line is written by scripts/fix_exit.py and carries the head and 'pushed no new commit', which is all the convergence halt reads."
+    },
+    {
       "file": ".github/workflows/agent-task.yml",
       "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}, $RESUME_CLAUSE).",
       "step": "Card → In Progress",

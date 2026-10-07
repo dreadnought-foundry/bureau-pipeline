@@ -26,6 +26,14 @@ set -e
 #    refuses.
 # 4. It reads the answer format from `fix_context.py --answer-format`.
 #    Every comment that holds the pull request quotes it.
+# 4b. In fix mode, a round that wrote a refutation or a blocker, or left
+#    the head where it started, is classified first by `fix_exit.py
+#    classify`, over the thread as it stands now. A critic APPROVE at the
+#    current head newer than the verdict the run was sent with, or the
+#    fixer's own "Nothing to fix" with no blocking finding open at the
+#    head, posts one quiet line on the PR and exits 0: no card comment,
+#    no `needs-human`, no lane move, no re-review. Anything else, an
+#    unreadable thread included, routes below exactly as before.
 # 5. It routes the round. The first of these that holds takes it:
 #    - Refutation: the agent answered the finding with evidence. The
 #      first one on this head posts `fix-finding-refuted`, then
@@ -176,6 +184,16 @@ set -e
 #   refuses fix mode on one; this is the last line, for a conflict round on
 #   a draft and for a PR put back to draft while the run worked it. An
 #   unreadable flag parks as before.
+# 2026-10-07, DRE-6018, DRE-5654, DRE-5969. Only a real disagreement with
+#   an open blocking finding at the current head reaches a person. On
+#   2026-10-06 two fix runs with nothing left to fix were parked as
+#   disputes: portico #931's fixer wrote "Nothing to fix" while the critic
+#   approved around it (DRE-5654), and agent-bureau #3274's crossed a newer
+#   APPROVE and a Verifier PASS (DRE-5969), where the label then stopped
+#   the medic retrying its CI. The quiet line carries "pushed no new
+#   commit" and the head, so the convergence halt still bounds a loop of
+#   them. A conflict round is never classified: an APPROVE says nothing
+#   about a merge conflict.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -243,6 +261,29 @@ park_for_human() {
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }
+
+# A fix round that pushed nothing is classified before any escalation is written (DRE-6018).
+HEAD_NOW=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+if [ "$MODE" = "fix" ] && { [ "$REFUTED_RC" -eq 0 ] || [ "$BLOCKED_RC" -eq 0 ] \
+     || { [ -n "$PRE_SHA" ] && [ "$HEAD_NOW" = "$PRE_SHA" ]; }; }; then
+  EXIT_THREAD=$(mktemp)
+  gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" \
+    > "$EXIT_THREAD" 2>/dev/null || : > "$EXIT_THREAD"
+  EXIT_TEXT=$(mktemp)
+  if [ "$REFUTED_RC" -eq 0 ]; then printf '%s' "$REFUTATION" > "$EXIT_TEXT"
+  elif [ "$BLOCKED_RC" -eq 0 ]; then printf '%s' "$BLOCKER" > "$EXIT_TEXT"; fi
+  rm -f /tmp/fix-nothing-to-fix.md
+  EXIT_KIND=$(python3 .bureau-pipeline/scripts/fix_exit.py classify \
+    --comments-json "$EXIT_THREAD" --head "$HEAD_NOW" \
+    --verdict-file .bureau-pipeline/critic-verdict.md --text-file "$EXIT_TEXT" \
+    --attempt "$ATTEMPT" --out /tmp/fix-nothing-to-fix.md || echo escalate)
+  echo "fix exit: $(printf '%s\n' "$EXIT_KIND" | tr '\n' ' ')"
+  if [ "$(printf '%s\n' "$EXIT_KIND" | head -1)" != "escalate" ] && [ -s /tmp/fix-nothing-to-fix.md ]; then
+    printf '\n\n%s\n' "$ANSWERS" >> /tmp/fix-nothing-to-fix.md
+    gh pr comment "$PR" --repo "$REPO" --body-file /tmp/fix-nothing-to-fix.md
+    exit 0
+  fi
+fi
 
 # A refutation, read before the blocker: one re-review per head (DRE-3084).
 if [ "$REFUTED_RC" -eq 0 ]; then
