@@ -29,6 +29,25 @@ existed is ordinary. A pull request GitHub will not read — a 404, a 502, a
 release's other sentences still publish. A first release collects nothing, as
 the Linear release attaches nothing.
 
+The range does not start at the previous tag it is handed: it starts at the
+newest tag in the surface's own series, at or before that one, whose GitHub
+Release carries `whats-new.json` (DRE-6010). A tag cut by hand, or one whose
+publish step failed, has no file, so the walk passes it and its changes ride
+in the next train release instead of vanishing — on 2026-10-06 console 1.6.303
+and 1.6.304 were cut by hand and 1.6.305 collected only its own range. The
+series is the `tag_series` globs of the caller's `release.json`, listed from
+`repo_root` newest first by creation date and restricted to tags the previous
+one contains; each tag's Release is read with `gh api
+repos/<repo>/releases/tags/<tag>`, and a 404 is a tag with no Release. A tag
+whose release had nothing to say has no file either, and re-reading its range
+adds nothing — every line in it is a `none` — while the base's own range is
+never read again, so nothing is collected twice. The walk reads at most
+`WALK_CAP` tags. At the cap, at the first tag in the series, or when a Release
+read fails, the given previous tag stands, as it did before this rule, and one
+printed line says why; a rate-limited read is the rate-limit `problem` below.
+The `since` line names the base actually used and, when it is not the previous
+tag, the tags it reached back over.
+
 Each collected entry records the card that delivered it as `cards` (DRE-6015):
 the `DRE-<n>` its head branch names, read with `usage_reading.card_from_ref` —
 the one `agent/DRE-<n>-<slug>` pattern. A branch naming no card writes no
@@ -61,8 +80,11 @@ THE VENDOR, ANSWERED (standards/vendor-boundaries.md)
 * A release this module creates is made with `--latest=false`: it exists to
   carry the file, and on a repository with several surfaces the last one to
   publish would otherwise take GitHub's Latest pointer.
-* A crash after the tag loses only this lap's file, which `publish` re-creates
-  by hand.
+* Reading a tag's Release needs `contents: read`, inside the `contents: write`
+  the stub already grants.
+* A crash after the tag loses only this lap's file, and no entry: the next
+  train release reaches back over the tag with no file (DRE-6010), and
+  `publish` re-creates the file by hand.
 
 WHAT IT NEVER DOES
 ------------------
@@ -73,6 +95,7 @@ WHAT IT NEVER DOES
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -106,6 +129,9 @@ FORBIDDEN = "caller stub lacks pull-requests: read"
 
 DATA_PATH = ".github/bureau/release.json"
 
+#: The most tags the base walk reads back from the previous tag (DRE-6010).
+WALK_CAP = 30
+
 _MERGE_SUBJECT = re.compile(r"^Merge pull request #(\d+) from ")
 _SQUASH_SUBJECT = re.compile(r"\(#(\d+)\)\s*$")
 _FORBIDDEN_ANSWER = re.compile(r"not accessible by integration", re.I)
@@ -123,6 +149,10 @@ class RateLimited(RuntimeError):
 class Unreadable(RuntimeError):
     """GitHub would not answer for this one pull request; its message is
     `gh`'s stderr."""
+
+
+class WalkStopped(RuntimeError):
+    """The base walk could not finish; its message says why."""
 
 
 def _run(argv, *, env=None):
@@ -154,6 +184,78 @@ def read_pull_request(repo: str, number: int, *, run, env) -> dict:
         raise Unreadable(answer or f"gh api exited {code}")
     answer = json.loads(out)
     return {"head": answer.get("head") or "", "body": answer.get("body") or ""}
+
+
+def series_tags(repo_root, series, previous_tag: str) -> list:
+    """The surface's tags at or before `previous_tag`, newest first, starting
+    with it. Raises WalkStopped when git cannot list them or `previous_tag` is
+    not one of them."""
+    done = subprocess.run(
+        ["git", "-C", str(repo_root), "for-each-ref", "--merged", previous_tag,
+         "--sort=-v:refname", "--sort=-creatordate", "--format=%(refname:short)",
+         "refs/tags"], capture_output=True, text=True)
+    if done.returncode != 0:
+        raise WalkStopped(f"the tags at or before {previous_tag} could not be "
+                          f"listed ({done.stderr.strip()})")
+    names = [name for name in done.stdout.split()
+             if any(fnmatch.fnmatch(name, glob) for glob in series)]
+    if previous_tag not in names:
+        raise WalkStopped(f"{previous_tag} is not a tag in "
+                          f"{', '.join(series) or 'an empty tag series'}")
+    return names[names.index(previous_tag):]
+
+
+def release_carries_file(repo: str, tag: str, *, run, env) -> bool:
+    """Whether the tag's GitHub Release carries `whats-new.json`; a tag with
+    no Release does not. Raises RateLimited when GitHub is throttling the
+    token, WalkStopped on any other failure."""
+    code, out, err = run(["gh", "api", f"repos/{repo}/releases/tags/{tag}",
+                          "--jq", ".assets[].name"], env=env)
+    if code != 0:
+        answer = (err or "").strip()
+        if is_rate_limit_refusal(answer):
+            raise RateLimited(f"GitHub rate limited the read of {tag}'s release "
+                              f"({answer})")
+        if "HTTP 404" in answer:
+            return False
+        raise WalkStopped(f"the release of {tag} could not be read "
+                          f"({answer or f'gh api exited {code}'})")
+    return ASSET_NAME in out.splitlines()
+
+
+def base_tag(*, data, surface_name: str, repo: str, repo_root, previous_tag: str,
+             run, env, out) -> tuple:
+    """`(base, reached_over)`: the newest tag in the surface's series, at or
+    before `previous_tag`, whose Release carries the file, and the tags newer
+    than it the walk passed. The given tag, and nothing reached over, when the
+    walk finds none — one printed line says why. Raises RateLimited."""
+    entry = ((data or {}).get("surfaces") or {}).get(surface_name) or {}
+    series = list(entry.get("tag_series") or [])
+    try:
+        tags = series_tags(repo_root, series, previous_tag)
+        for index, tag in enumerate(tags[:WALK_CAP]):
+            if release_carries_file(repo, tag, run=run, env=env):
+                return tag, tags[:index]
+        if len(tags) > WALK_CAP:
+            why = (f"no release among the {WALK_CAP} newest tags at or before "
+                   f"{previous_tag} carries {ASSET_NAME} (the walk's cap)")
+        else:
+            why = (f"no release from {previous_tag} back to {tags[-1]}, the first "
+                   f"tag in its series, carries {ASSET_NAME}")
+    except WalkStopped as error:
+        why = str(error)
+    out(f"{TAG}: {why} — collecting since {previous_tag}, as given")
+    return previous_tag, []
+
+
+def _since(base: str, reached_over) -> str:
+    """The `since` clause: the base, and the tags reached back over."""
+    if not reached_over:
+        return base
+    names = (reached_over[0] if len(reached_over) == 1 else
+             f"{', '.join(reached_over[:-1])} and {reached_over[-1]}")
+    whose = "release carries" if len(reached_over) == 1 else "releases carry"
+    return f"{base}, reaching back over {names}, whose {whose} no {ASSET_NAME}"
 
 
 def judge(head: str, body: str) -> tuple:
@@ -272,9 +374,13 @@ def write(*, data, surface_name: str, repo: str, repo_root, version: str,
             out(f"{TAG}: {version} is the first release in its series — nothing "
                 f"to collect, nothing published")
             return summary
+        base, reached_over = base_tag(
+            data=data, surface_name=surface_name, repo=repo, repo_root=repo_root,
+            previous_tag=previous_tag, run=run, env=environ, out=out)
         paths, exclude = surface_filter(surface_name, data)
-        changes = changes_since(repo_root, previous_tag, sha, paths, exclude)
-        out(f"{TAG}: {version} — since {previous_tag}; changes: {len(changes)}")
+        changes = changes_since(repo_root, base, sha, paths, exclude)
+        out(f"{TAG}: {version} — since {_since(base, reached_over)}; "
+            f"changes: {len(changes)}")
         try:
             entries, summary["skipped"] = collect(changes, repo=repo, run=run,
                                                   env=environ, out=out)

@@ -65,7 +65,10 @@ Once the script's tag is verified, the train collects the `What's new:` lines
 of the pull requests the release carries (`standards/whats-new.md`) and
 publishes them as the `whats-new.json` asset of the tag's GitHub Release
 (`scripts/whats_new_release.py`). It does this for every surface, pipeline or
-not. Reading a private repository's pull requests needs `pull-requests: read`
+not. The lines are counted from the newest earlier tag whose Release already
+carries the file, not blindly from the previous tag, so a tag cut by hand or a
+publish that failed leaves its entries to the next train release rather than
+dropping them (DRE-6010). Reading a private repository's pull requests needs `pull-requests: read`
 in the stub below. A stub without it publishes nothing, and the run says so in
 one `What's new not published` annotation and a block on its summary page.
 
