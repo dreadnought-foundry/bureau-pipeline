@@ -726,6 +726,19 @@ A-vs-B question reaches the CEO with your pick in front of him. No code, no
 diffs, no file paths, no commands — a reason written in technical terms is not
 shown to the CEO at all, and the card parks with the reason missing instead.
 
+**Your last message is the fallback reason (DRE-5564).** A run that ends with
+no cards and no reason file is escalated all the same, and the note quotes your
+closing message — under the same plain-English rule — so make it say why you
+stopped. It is said to be "no reason" only when there is nothing to quote.
+
+**Never end your turn while work you started is still running.** In a headless
+run, ending your turn ends the run: a helper's report that arrives afterwards is
+read by nobody. Background tasks are off in every planner run for that reason,
+so a helper you start runs in the foreground and you wait for its result. On
+2026-10-01 a planner that started three background helpers and then ended its
+turn "waiting on those before drafting the cards" spent $5.17, created nothing,
+and cost an epic the CEO had moved up the line an evening.
+
 **There is no label, flag or lane that skips `Planning`.** This escalation
 leaves FROM Planning rather than around it. If you find yourself wanting a way
 past the lane, this is it — there is no other, and inventing one is the hole
