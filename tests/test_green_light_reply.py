@@ -411,6 +411,31 @@ def test_no_other_voice_counts(monkeypatch, capsys, user, kind):
     assert kind in named[0]
 
 
+def test_an_unchecked_answer_after_his_holds_the_dispatch_and_says_why(monkeypatch, capsys):
+    """His older comment would qualify, but a console answer the check could
+    not run on came after it — it may be his newest word, so nothing is sent
+    back until a pass that can check it."""
+    later = answer(10)
+    later["user"] = {"id": UNCHECKED}
+    card = lane_card("DRE-7001", window=[answer(40), later])
+    h = Harness(monkeypatch, Board([card]))
+    tally = h.sweep()
+    assert h.fired == [] and h.posted == []
+    assert tally.unchecked == 1
+    _, err = _out(capsys)
+    named = [line for line in err if "DRE-7001" in line]
+    assert len(named) == 1 and "COULD NOT BE CHECKED" in named[0], err
+
+
+def test_an_unchecked_answer_before_his_does_not_hold_it(monkeypatch):
+    earlier = answer(40)
+    earlier["user"] = {"id": UNCHECKED}
+    h = Harness(monkeypatch, Board([lane_card("DRE-7001",
+                                              window=[earlier, answer(10)])]))
+    h.sweep()
+    assert len(h.fired) == 1
+
+
 def test_with_no_viewer_a_declared_id_reads_unknown_and_fails_closed(monkeypatch):
     """The real reader: Linear not naming the viewer makes every comment
     `unknown`, and the declared id does not reach past that."""

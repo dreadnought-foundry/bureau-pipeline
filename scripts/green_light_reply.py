@@ -185,6 +185,7 @@ class Tally:
     dispatched: int = 0
     answered: int = 0
     not_his: int = 0
+    unchecked: int = 0
     unreadable: int = 0
     deferred: int = 0
     failures: list = field(default_factory=list)
@@ -194,7 +195,8 @@ class Tally:
                 f"{self.candidates}, read {self.read}, qualifying "
                 f"{self.qualifying}, dispatched {self.dispatched}, answered "
                 f"{self.answered}, no comment of his {self.not_his}, "
-                f"unreadable {self.unreadable}, deferred {self.deferred} "
+                f"unchecked {self.unchecked}, unreadable {self.unreadable}, "
+                f"deferred {self.deferred} "
                 f"({'live' if live else 'dry run'})")
 
 
@@ -269,6 +271,17 @@ class _Pass:
             if voice.kind == spoken_thread.CEO_VIA_CONSOLE or (
                     voice.kind == spoken_thread.PERSON and _author(node) in self.ids):
                 his = i
+        # A console answer the check could not RUN on is neither his voice nor
+        # a refused one (DRE-4153). After his newest comment it may be his
+        # newest word, so nothing is sent back until a pass that can check it.
+        unchecked = [v for v in voices[(-1 if his is None else his) + 1:]
+                     if v.kind == spoken_thread.UNCHECKED]
+        if unchecked:
+            raise _Skip(f"not dispatched: an unchecked console answer posted "
+                        f"{spoken_thread.pacific_label(unchecked[-1].created_at)} "
+                        "COULD NOT BE CHECKED (the console's key could not be "
+                        "read) — it counts for nothing until a pass that can "
+                        "check it", "unchecked", loud=True)
         if his is None:
             raise _Skip(self._not_his(nodes, voices), "not_his", loud=True)
 
