@@ -413,10 +413,11 @@ class ParkedBlockerStatesTheFormatTest(unittest.TestCase):
                 self.assertIn(fix_context.DECISION_EXAMPLE, body_after(marker))
 
     def test_the_dispute_card_comment_points_at_the_pr_answer(self):
-        # DRE-2307 interaction: the card tells the operator there is a
-        # dispute, so the card comment must say where an answer goes.
+        # DRE-2307 interaction: the card tells the operator why the fixer
+        # stopped, so the card comment must say where an answer goes. Its
+        # opening sentence is the blocked attempt's cause (DRE-5745).
         self.assertIn(fix_context.DECISION_EXAMPLE,
-                      body_after("🙋 The fix agent disagrees"))
+                      body_after("🙋 $CAUSE This needs your call."))
 
     def test_prompt_tells_the_fixer_to_surface_a_near_miss(self):
         self.assertRegex(wf_src(), r"(?i)near[- ]miss")

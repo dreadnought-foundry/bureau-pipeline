@@ -251,8 +251,9 @@ class HoldingMessagesCarryOneRestartSentenceTest(unittest.TestCase):
                 self.assertIn(fix_context.SKIP_NOTICE, body)
 
     def test_the_dispute_card_comment_carries_the_promise(self):
+        # The card comment opens with the blocked attempt's cause (DRE-5745).
         self.assertIn(
-            fix_context.RESTART_PROMISE, self.bodies("🙋 The fix agent disagrees")
+            fix_context.RESTART_PROMISE, self.bodies("🙋 $CAUSE This needs your call.")
         )
 
     def test_the_workflow_no_longer_promises_a_self_restart(self):
