@@ -1760,8 +1760,9 @@ COUNT_SUFFIX = "; the merged-PR count was unread too"
 MAP3 = {"portico": "dreadnought-foundry/portico",
         "atlas": "EveryBite/atlas", "deltasolv": "DeltaSolv/deltasolv"}
 OWNERS3 = ["DeltaSolv", "EveryBite", "dreadnought-foundry"]
-INSTALL_WHY = ("the installation could not be read: gh api "
-               "installation/repositories failed rc=1: HTTP 401")
+#: Named by owner since DRE-5746: each owner is read on its own token.
+INSTALL_WHY = ("dreadnought-foundry: the installation could not be read: gh "
+               "api installation/repositories failed rc=1: HTTP 401")
 
 
 def trow(card_id, *, unmapped=False, which="planning"):
@@ -1881,11 +1882,11 @@ def test_an_excluded_card_counts_on_neither_side():
 class BlindGh(FakeGh):
     """2026-09-29: the groom job's token could not read its installation."""
 
-    def __call__(self, args):
+    def __call__(self, args, token=None):
         if "installation/repositories" in " ".join(args):
             raise groom_context.ContextError(
                 "gh api installation/repositories failed rc=1: HTTP 401")
-        return super().__call__(args)
+        return super().__call__(args, token)
 
 
 def blind_proposal(*, judged=False, unread=None):
