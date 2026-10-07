@@ -761,6 +761,13 @@ class GitHub:
                 return False
             raise
 
+    def rerun_workflow_run(self, repo, run_id) -> None:
+        """Re-run a finished run as its next attempt — same run id, a fresh
+        `run_started_at` (DRE-6147). The re-kick for a run GitHub left queued
+        with no jobs: cancelled first, because GitHub re-runs only a
+        completed run."""
+        self.request("POST", f"/repos/{repo}/actions/runs/{int(run_id)}/rerun")
+
     def run_log_text(self, repo, run_id) -> str | None:
         """A completed run's logs as text, or None when GitHub will not serve
         them (410 past retention, 403 without `actions: read`, 404).

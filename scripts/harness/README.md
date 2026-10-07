@@ -88,7 +88,38 @@ Two clocks, and they answer different questions:
   On 2026-09-07, 2026-09-08 and twice on 2026-09-09 `gate_paths` waited its
   full 4,200 seconds against a healthy sandbox and then named the critic.
 
-Neither clock answers a third question, so `framework.probe_pr` does: **is
+### A run GitHub left queued with no jobs (DRE-6147)
+
+Neither checkpoint question catches GitHub's own queue stalling. A sandbox
+run sitting `queued` has not failed, and it WAS started, so the probe reads
+a healthy sandbox gone quiet. On 2026-10-07 four bureau-harness Merge Gate
+runs (37642346652 among them) sat queued with no jobs from about 08:07 PT,
+`gate_paths` ended as `SandboxIdle` 31 minutes in, and `promote-channel`
+called it a red trunk — an hour behind for a stall no code caused.
+
+So every wait also carries `sandbox_health.QueueWatch` (`ctx.queue_watch`).
+About once a minute it lists the sandbox's runs and looks for one that has
+been `queued` with **zero jobs** for longer than
+`framework.QUEUE_STALL_SECONDS` (5 minutes), timed from the latest attempt's
+`run_started_at`. That run is cancelled and re-run, one
+`queue stall: … re-ran it as attempt N …` line names it and the wait, and
+the wait carries on inside the same scenario. Three things never count:
+
+* a run queued WITH jobs — it is waiting for a runner, and keeps today's rule;
+* a run whose job list cannot be read — unknown is never stuck;
+* a run GitHub refused to cancel or re-run — logged once as
+  `could not re-kick` and never tried again, so the wait behaves as it did
+  before.
+
+A run still stuck after `framework.QUEUE_REKICK_LIMIT` (2) re-kicks ends the
+wait as `framework.SandboxQueueStall`, a `SandboxBlocked`. Its receipt opens
+with `promote_channel.QUEUE_STALL_MARKER` (`harness blocked: GitHub queue
+stall`), so the run stops as blocked, red-main repair backs off, and the
+channel reports `harness-blocked-by-github-queue` instead of
+`harness-failed`. `HARNESS_WAIT_DEADLINE_MINUTES=0` turns the watch off with
+the probe: a re-kick is a write into the sandbox.
+
+Neither clock answers one more question, so `framework.probe_pr` does: **is
 the thing this wait is about still there?** Every wait that polls a probe
 PR reads it through that helper, and a PR found closed-and-unmerged ends
 the wait at once naming the closure. A wait polling only for a COMMENT

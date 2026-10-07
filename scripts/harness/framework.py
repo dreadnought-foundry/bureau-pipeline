@@ -183,6 +183,29 @@ WAIT_DEADLINE_SECONDS = 10 * 60.0
 # _budget` has protected since DRE-3076.
 IDLE_PROBE_LIMIT = 2
 
+# How long a sandbox run may sit `queued` with NO JOBS before the harness calls
+# it stuck in GitHub's queue and re-kicks it — cancels it and re-runs it
+# (DRE-6147). Zero jobs is the signature: a run waiting for a runner already
+# has its jobs and is left alone, whatever its age.
+#
+# On 2026-10-07 four bureau-harness Merge Gate runs sat exactly like that from
+# about 08:07 PT while every other sandbox run ran normally. Nothing the
+# harness had did anything about it: the liveness probe correctly saw nothing
+# new starting, and `gate_paths` failed as `SandboxIdle` 31 minutes in, which
+# read as a red trunk and held `stable` for an hour. Five minutes is far past
+# anything a healthy queue does and well inside the first ten-minute deadline.
+QUEUE_STALL_SECONDS = 5 * 60.0
+
+# How many times one stuck run is re-kicked before the wait gives up. A stall
+# that survives two fresh attempts is GitHub's queue, not a lost run, and the
+# wait ends as a `SandboxQueueStall` — blocked, not failed.
+QUEUE_REKICK_LIMIT = 2
+
+# How often a wait looks for a stuck run. Every other poll: the listing is the
+# same page the liveness probe reads, and it is conditional (DRE-4132), so an
+# unchanged sandbox costs nothing.
+QUEUE_CHECK_SECONDS = 60.0
+
 #: The driver's exit code for "the SANDBOX blocked this run" — distinct from 1
 #: (a scenario failed, which is a statement about the commit) and 2 (bad
 #: invocation). Nothing is proven either way; the next run re-proves.
@@ -217,6 +240,18 @@ class SandboxBlocked(Exception):
     def __init__(self, message: str, cause: str = ""):
         super().__init__(message)
         self.cause = cause or message
+
+
+class SandboxQueueStall(SandboxBlocked):
+    """GitHub left a sandbox run queued with no jobs, and re-running it did not
+    help (DRE-6147).
+
+    A `SandboxBlocked`, never a `HarnessTimeout`: nothing about the commit
+    under test was judged, so the run stops and the receipt says blocked —
+    `.cause` opens with `promote_channel.QUEUE_STALL_MARKER`, which is itself
+    a blocked marker, so every reader that knows a blocked run keeps knowing
+    this one.
+    """
 
 
 class ScenarioFailure(Exception):
@@ -346,6 +381,10 @@ class HarnessContext:
     # runs its full budget. A bare `quote | None` is still understood — that
     # was the contract before DRE-3453 and it carries no activity signal.
     sandbox_probe: Optional[Callable] = None
+    # `sandbox_health.QueueWatch` — finds a sandbox run GitHub left queued with
+    # no jobs and re-kicks it (DRE-6147). None means nothing is re-kicked, the
+    # behaviour before it and the one `HARNESS_WAIT_DEADLINE_MINUTES=0` keeps.
+    queue_watch: object = None
     clock: Callable[[], float] = time.monotonic
     # WALL clock, separate from `clock` above: "has the sandbox started
     # anything since this wait began?" compares against Actions' own
@@ -376,6 +415,7 @@ class HarnessContext:
             deadline=self.wait_deadline,
             on_deadline=self.sandbox_probe,
             started_at=self.wall_clock(),
+            queue_watch=self.queue_watch,
         )
 
 
@@ -462,7 +502,8 @@ def probe_answer(value) -> tuple:
 
 def wait_until(description, poll, timeout, interval, clock=time.monotonic,
                sleep=time.sleep, deadline=None, on_deadline=None,
-               started_at=None, idle_limit=IDLE_PROBE_LIMIT):
+               started_at=None, idle_limit=IDLE_PROBE_LIMIT, queue_watch=None,
+               queue_interval=QUEUE_CHECK_SECONDS):
     """Poll until `poll()` returns truthy (that value is returned) or
     `timeout` seconds elapse (HarnessTimeout, naming what was awaited).
     Exceptions from poll() propagate — scenarios use that to fail fast on
@@ -484,6 +525,12 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
         never counts as idle, so a slow-but-working sandbox keeps its full
         budget.
 
+    `queue_watch` (DRE-6147) is asked every `queue_interval` seconds whether
+    the sandbox holds a run GitHub left queued with no jobs. It re-kicks one
+    itself and the wait carries on; one it has already re-kicked
+    `QUEUE_REKICK_LIMIT` times ends the wait as `SandboxQueueStall`. It is a
+    write into the sandbox, so the operator's off switch below turns it off too.
+
     Scenarios call `HarnessContext.wait`, which wires all of it from the
     context; this signature is the mechanism, not the call site.
     """
@@ -493,6 +540,8 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
     # keeps the check but only at expiry.
     probing = bool(on_deadline) and (deadline is None or deadline > 0)
     next_check = deadline if (probing and deadline) else None
+    watching = queue_watch is not None and (deadline is None or deadline > 0)
+    next_queue_check = queue_interval
     # The reference the next probe measures activity against: the wait's own
     # start until the sandbox does something, then whatever it last did.
     last_activity, idle_probes = started_at, 0
@@ -525,6 +574,12 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
                     )
             if next_check is not None:
                 next_check = elapsed + deadline
+        if watching and not expired and elapsed >= next_queue_check:
+            # A re-kick IS the sandbox starting something, so the idle count
+            # starts again from it rather than ending a wait it just unstuck.
+            if queue_watch.check(description):
+                idle_probes = 0
+            next_queue_check = elapsed + queue_interval
         if expired:
             raise HarnessTimeout(
                 f"timed out after {timeout:.0f}s waiting for {description}"

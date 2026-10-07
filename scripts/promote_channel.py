@@ -120,6 +120,14 @@ NO_CHANNEL_YET = "no-channel-yet"
 #: still be recognisable here.
 BLOCKED_MARKER = "harness blocked:"
 
+#: The blocked receipt for one particular sandbox fault (DRE-6147): GitHub left
+#: a sandbox run queued with no jobs, and the harness re-ran it
+#: `framework.QUEUE_REKICK_LIMIT` times without it starting. It OPENS with
+#: `BLOCKED_MARKER`, so the stamp step and red-main repair's back-off read it
+#: as the block it is; the words after it are what lets the receipt name
+#: GitHub's queue rather than the sandbox's machinery.
+QUEUE_STALL_MARKER = f"{BLOCKED_MARKER} GitHub queue stall"
+
 #: GitHub's compare API vocabulary (base=channel, head=candidate).
 AHEAD = "ahead"
 BEHIND = "behind"
@@ -146,6 +154,7 @@ OUTCOME_FAILED = "harness-failed"
 OUTCOME_NOT_MAIN = "harness-run-not-on-main"
 OUTCOME_HELD = "channel-held"
 OUTCOME_BLOCKED = "harness-blocked-by-sandbox"
+OUTCOME_QUEUE_STALL = "harness-blocked-by-github-queue"
 OUTCOME_UNPROVEN = "no-harness-stamp"
 OUTCOME_NOT_AHEAD = "not-ahead-of-channel"
 
@@ -461,6 +470,15 @@ def evaluate(
     #    proven and nothing is disproven, so this is neither a promotion nor a
     #    defect.
     blocked = blocked_by_sandbox(combined)
+    if blocked and blocked.startswith(QUEUE_STALL_MARKER):
+        # The narrower block (DRE-6147): GitHub's own queue, not the sandbox's
+        # machinery. On 2026-10-07 this read as a red trunk and the channel
+        # sat behind for an hour on a stall no code caused.
+        return Decision(False, (
+            f"not promoting {sha}: the harness was blocked by a GitHub QUEUE "
+            f"STALL in the sandbox, not by this commit — {blocked}. Nothing "
+            f"is proven either way; the next run re-proves this trunk."
+        ), OUTCOME_QUEUE_STALL)
     if blocked:
         return Decision(False, (
             f"not promoting {sha}: the harness was BLOCKED BY THE SANDBOX, "

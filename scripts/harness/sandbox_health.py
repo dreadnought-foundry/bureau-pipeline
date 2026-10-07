@@ -35,17 +35,27 @@ consecutive probes that find the sandbox has started nothing since it began.
 The two are opposite verdicts and must not be confused: a quote means *not
 the commit's fault*, an idle sandbox means *this pull request will never get
 what it is waiting for*.
+
+A THIRD fault is neither (DRE-6147): GitHub itself leaving a sandbox run
+`queued` with no jobs. Nothing failed and something WAS started, so the probe
+reads it as a healthy sandbox that has gone quiet, and on 2026-10-07 the
+wait ended as `SandboxIdle` 31 minutes in — a red trunk for a stall in
+GitHub's queue. `QueueWatch` finds such a run, cancels it and re-runs it, and
+only when a run stays stuck through `framework.QUEUE_REKICK_LIMIT` re-runs
+does the wait end — blocked, with GitHub's queue named.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import medic_classify
 import promote_channel
+from harness import framework
 
 #: The sandbox workflows whose failure means the machinery itself has stopped —
 #: the sweep, the gate, the Linear sync. Matched on the workflow FILE, so a
@@ -358,3 +368,168 @@ def probe(clients, repo: str, log: Callable = print) -> Callable:
         return ProbeReport()
 
     return ask
+
+
+#: How long, and how often, a re-kick waits for GitHub to finish cancelling a
+#: stuck run before it re-runs it — GitHub re-runs only a completed run.
+SETTLE_POLLS = 6
+SETTLE_INTERVAL_SECONDS = 5.0
+
+
+@dataclass
+class StuckRun:
+    """A sandbox run GitHub left `queued` with no jobs past the bound."""
+
+    run_id: object
+    workflow: str
+    attempt: int
+    queued_for: float
+    url: str = ""
+
+
+class QueueWatch:
+    """What `HarnessContext.queue_watch` holds (DRE-6147).
+
+    `stuck()` answers one question — which sandbox runs has GitHub left queued
+    with NO jobs for longer than `framework.QUEUE_STALL_SECONDS`? — and
+    `check(description)` acts on it: cancel, re-run, log one line, and carry
+    on. A run already re-kicked `framework.QUEUE_REKICK_LIMIT` times raises
+    `framework.SandboxQueueStall` instead.
+
+    Unknown is never stuck, the same rule as the probe: an unreadable listing,
+    an unreadable job list or an undated run decide nothing. And a re-kick
+    GitHub refuses is logged once and never tried again — this harness then
+    behaves exactly as it did before the watch existed.
+    """
+
+    def __init__(self, gh, repo: str, wall_clock: Callable = time.time,
+                 sleep: Callable = time.sleep, log: Callable = print):
+        self.gh = gh
+        self.repo = repo
+        self.wall_clock = wall_clock
+        self.sleep = sleep
+        self.log = log
+        # Re-kicks per run id. A re-run keeps its id, so this is "how many
+        # fresh attempts has GitHub been given", across every wait of the run.
+        self.rekicks: dict = {}
+        # Runs GitHub would not let us re-kick. Never asked again.
+        self.refused: set = set()
+
+    def stuck(self) -> list:
+        lister = getattr(self.gh, "list_recent_runs", None)
+        if lister is None:
+            return []
+        try:
+            runs = list(lister(self.repo) or ())
+        except Exception as e:  # a watch must never be the thing that fails a run
+            self.log(f"queue stall: could not list {self.repo} runs ({e})")
+            return []
+        now = self.wall_clock()
+        found = []
+        for run in runs:
+            if not isinstance(run, dict) or run.get("status") != "queued":
+                continue
+            if run.get("id") in self.refused:
+                continue
+            # The LATEST attempt's start: a re-run resets `run_started_at` and
+            # not `created_at`, so a replacement gets its own five minutes.
+            started = epoch(run.get("run_started_at") or run.get("created_at"))
+            if started is None or now - started <= framework.QUEUE_STALL_SECONDS:
+                continue
+            if self._job_count(run.get("id")) != 0:
+                continue  # waiting for a runner, or unknown — never stuck
+            found.append(StuckRun(
+                run_id=run.get("id"),
+                workflow=run.get("name") or workflow_stem(run) or "a workflow",
+                attempt=int(run.get("run_attempt") or 1),
+                queued_for=now - started,
+                url=run.get("html_url") or "",
+            ))
+        return found
+
+    def _job_count(self, run_id) -> Optional[int]:
+        try:
+            jobs = self.gh.list_run_jobs(self.repo, run_id)
+        except Exception as e:
+            self.log(f"queue stall: could not read run {run_id}'s jobs ({e})")
+            return None
+        if not isinstance(jobs, dict):
+            return None
+        count = jobs.get("total_count")
+        if isinstance(count, int):
+            return count
+        listed = jobs.get("jobs")
+        return len(listed) if isinstance(listed, list) else None
+
+    def check(self, description: str) -> int:
+        """Re-kick every stuck run; return how many were re-kicked.
+
+        Raises `framework.SandboxQueueStall` for a run that is stuck again
+        after its last allowed re-kick.
+        """
+        rekicked = 0
+        for run in self.stuck():
+            done = self.rekicks.get(run.run_id, 0)
+            if done >= framework.QUEUE_REKICK_LIMIT:
+                quote = (
+                    f"{promote_channel.QUEUE_STALL_MARKER} — sandbox "
+                    f"{run.workflow} run {run.run_id} still queued with no "
+                    f"jobs after {done} re-runs (attempt {run.attempt})"
+                )
+                self.log(f"queue stall: {quote} {run.url}".rstrip())
+                raise framework.SandboxQueueStall(
+                    f"{quote} — gave up waiting for {description}",
+                    cause=quote,
+                )
+            if self._rekick(run, description):
+                self.rekicks[run.run_id] = done + 1
+                rekicked += 1
+        return rekicked
+
+    def _rekick(self, run: StuckRun, description: str) -> bool:
+        name = f"{run.workflow} run {run.run_id}"
+        try:
+            cancelled = self.gh.cancel_workflow_run(self.repo, run.run_id)
+        except Exception as e:
+            return self._refuse(run, f"could not re-kick {name}: cancel "
+                                     f"refused ({e})")
+        if cancelled is False:
+            # GitHub says it already finished — it moved on its own.
+            self.log(f"queue stall: {name} finished before it could be "
+                     f"re-kicked — leaving it")
+            return False
+        self._settle(run.run_id)
+        try:
+            self.gh.rerun_workflow_run(self.repo, run.run_id)
+        except Exception as e:
+            return self._refuse(run, f"could not re-kick {name}: cancelled, "
+                                     f"but the re-run was refused ({e})")
+        self.log(
+            f"queue stall: {name} sat queued with no jobs for "
+            f"{run.queued_for:.0f}s — cancelled it and re-ran it as attempt "
+            f"{run.attempt + 1} (re-kick {self.rekicks.get(run.run_id, 0) + 1} "
+            f"of {framework.QUEUE_REKICK_LIMIT}); still waiting for "
+            f"{description} {run.url}".rstrip()
+        )
+        return True
+
+    def _settle(self, run_id) -> None:
+        """Best effort: give GitHub a moment to finish the cancel. If it never
+        reports `completed`, the re-run is sent anyway and its refusal, if
+        any, is what gets logged."""
+        getter = getattr(self.gh, "get_workflow_run", None)
+        for _ in range(SETTLE_POLLS):
+            if getter is None:
+                return
+            try:
+                if (getter(self.repo, run_id) or {}).get("status") == "completed":
+                    return
+            except Exception:
+                pass
+            self.sleep(SETTLE_INTERVAL_SECONDS)
+
+    def _refuse(self, run: StuckRun, why: str) -> bool:
+        self.refused.add(run.run_id)
+        self.log(f"queue stall: {why} — not trying again; this wait keeps its "
+                 f"ordinary deadline")
+        return False
