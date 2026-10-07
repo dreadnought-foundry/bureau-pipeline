@@ -9,10 +9,14 @@ rather than a build run:
 
   * it assembles context and selects a model for role `proof`, and pins no
     model id;
-  * it holds a GitHub identity that is read-only BY ITS PERMISSIONS — the
-    four `permission-*: read` inputs and nothing else — and an AWS session
-    only when the caller provides a role, both minted before the agent runs,
-    and both written to the step summary in the line the record copies;
+  * it holds a GitHub identity that is read-only BY ITS PERMISSIONS — only
+    `permission-*: read` inputs, scoped to the caller's organization, minted
+    with `variables` and again without it when the installation refuses that
+    — and an AWS session only when the caller provides a role, both minted
+    before the agent runs, and both written to the step summary in the line
+    the record copies, the GitHub line derived from the mint that succeeded;
+  * it states the agent's Linear request cap, `PROOF_LINEAR_REQUESTS`, beside
+    the reason for its value;
   * it writes three lanes and no other (DRE-5925): the park into
     `Green Light` on a press only the CEO can make, out of `Hand-work` or
     `In Review`, after the `🔬 proof-waiting` hold and the question; the
@@ -22,9 +26,11 @@ rather than a build run:
     `Card → In Progress` step, no `report_agent_result.sh` (whose every move
     reads the card out of `In Progress,Todo` and whose dead-run exits requeue,
     park or replan), no `dead_run.py`, and no `state` write;
-  * its result step has exactly four exits, the pull request read before the
-    escalation — and that, and the return step, are EXECUTED here, against
-    stub scripts, rather than grepped, because the order is the contract.
+  * its result step's exits — an open record, a merged one, an escalation,
+    and nothing at all — read the pull request before the escalation, and
+    that, the return step and the identity record line are EXECUTED here,
+    against stub scripts, rather than grepped, because the order is the
+    contract.
 """
 
 from __future__ import annotations
@@ -52,17 +58,9 @@ AWS_CREDS = "aws-actions/configure-aws-credentials"
 #: The pin this repo already carries for the App token mint (v3.2.0).
 APP_TOKEN_PIN = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 
-READ_PERMISSIONS = {
-    "permission-contents": "read",
-    "permission-actions": "read",
-    "permission-pull-requests": "read",
-    "permission-metadata": "read",
-}
+#: The version comment the pin above carries on every mint.
+APP_TOKEN_VERSION = "v3.2.0"
 
-GITHUB_SUMMARY = (
-    "proof identity: github read — app {slug}, permissions contents:read "
-    "actions:read pull-requests:read metadata:read"
-)
 AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
 
@@ -237,45 +235,211 @@ class ProofRoleTest(unittest.TestCase):
             self.assertIn(kept, names)
 
 
+def _step_source(name: str) -> str:
+    """The step's own lines in the file, so a `uses:` line's comment is read."""
+    src = PROOF_TASK.read_text()
+    start = src.index(f"      - name: {name}\n")
+    end = src.find("\n      - name: ", start + 1)
+    return src[start:end if end != -1 else len(src)]
+
+
+def _permissions(step: dict) -> dict:
+    return {k: v for k, v in (step.get("with") or {}).items()
+            if k.startswith("permission-")}
+
+
+def _permission_text(step: dict) -> str:
+    """The mint's own `permission-*` inputs as the record line spells them:
+    `permission-pull-requests: read` → `pull-requests:read`."""
+    return " ".join(f"{k[len('permission-'):]}:{v}"
+                    for k, v in _permissions(step).items())
+
+
 class ReadOnlyIdentityTest(unittest.TestCase):
     MINT = "Mint the read-only proof identity"
+    NARROW = "Mint the read-only proof identity without variables"
+    HAND = "Hand the read-only proof identity to the agent"
+    RECORD = "Record the read-only proof identity"
+    FIVE = {"permission-contents", "permission-actions",
+            "permission-pull-requests", "permission-metadata",
+            "permission-variables"}
+    FOUR = FIVE - {"permission-variables"}
+
+    def _mints(self) -> list[dict]:
+        return [_step(self.MINT), _step(self.NARROW)]
 
     def test_the_mint_is_read_only_by_its_permissions(self):
-        step = _step(self.MINT)
-        self.assertEqual(f"{APP_TOKEN}@{APP_TOKEN_PIN}", step.get("uses"))
-        with_ = step.get("with") or {}
-        perms = {k: v for k, v in with_.items() if k.startswith("permission-")}
-        self.assertEqual(READ_PERMISSIONS, perms)
-        self.assertNotIn("write", " ".join(str(v) for v in with_.values()))
+        for name in (self.MINT, self.NARROW):
+            step = _step(name)
+            self.assertEqual(f"{APP_TOKEN}@{APP_TOKEN_PIN}", step.get("uses"), name)
+            self.assertIn(f"uses: {APP_TOKEN}@{APP_TOKEN_PIN} # {APP_TOKEN_VERSION}",
+                          _step_source(name), name)
+            with_ = step.get("with") or {}
+            # Every repository the App's installation reaches in the caller's
+            # organization: owner set, repositories empty.
+            self.assertEqual("${{ github.repository_owner }}", with_.get("owner"), name)
+            self.assertNotIn("repositories", with_, name)
+            perms = _permissions(step)
+            self.assertTrue(perms, name)
+            self.assertEqual({"read"}, set(perms.values()), name)
+        self.assertEqual("reader", _step(self.MINT).get("id"))
+        self.assertEqual("reader_narrow", _step(self.NARROW).get("id"))
+        self.assertEqual(self.FIVE, set(_permissions(_step(self.MINT))))
+        self.assertEqual(self.FOUR, set(_permissions(_step(self.NARROW))))
+        self.assertEqual("steps.reader.outcome != 'success'",
+                         str(_step(self.NARROW).get("if")).strip())
+        self.assertEqual(_index(self.MINT) + 1, _index(self.NARROW))
+
+    def test_neither_mint_asks_for_a_write(self):
+        for step in self._mints():
+            with_ = step.get("with") or {}
+            for key, value in _permissions(step).items():
+                self.assertNotEqual("write", str(value).strip(), (step["name"], key))
+                self.assertEqual("read", str(value).strip(), (step["name"], key))
+            self.assertNotIn("write", " ".join(str(v) for v in with_.values()),
+                             step["name"])
 
     def test_the_mint_draws_from_the_read_pool(self):
-        step = _step(self.MINT)
-        pool_id = re.search(r"steps\.(\w+)\.outputs\.n", str(step["with"]["app-id"])).group(1)
-        pool = next(s for s in _steps() if s.get("id") == pool_id)
-        self.assertIn("dispatch_pool.py select", pool["run"])
-        self.assertEqual("1", str(pool["env"].get("BUREAU_POOL_READ_ONLY")))
-        self.assertLess(_steps().index(pool), _index(self.MINT))
+        for step in self._mints():
+            pool_ids = {re.search(r"steps\.(\w+)\.outputs\.n", str(step["with"][k])).group(1)
+                        for k in ("app-id", "private-key")}
+            self.assertEqual({"readpool"}, pool_ids, step["name"])
+            pool = next(s for s in _steps() if s.get("id") == "readpool")
+            self.assertIn("dispatch_pool.py select", pool["run"])
+            self.assertEqual("1", str(pool["env"].get("BUREAU_POOL_READ_ONLY")))
+            self.assertLess(_steps().index(pool), _steps().index(step))
+        # Both mints ask the same App pair, so the fallback is the same App.
+        self.assertEqual(_step(self.MINT)["with"]["app-id"],
+                         _step(self.NARROW)["with"]["app-id"])
+        self.assertEqual(_step(self.MINT)["with"]["private-key"],
+                         _step(self.NARROW)["with"]["private-key"])
+
+    def test_one_step_hands_the_token_on_in_the_form_the_roster_reads(self):
+        step = _step(self.HAND)
+        self.assertEqual("readtoken", step.get("id"))
+        self.assertGreater(_index(self.HAND), _index(self.MINT))
+        self.assertGreater(_index(self.HAND), _index(self.NARROW))
+        self.assertEqual(
+            {"TOKEN": "${{ steps.reader.outputs.token || steps.reader_narrow.outputs.token }}"},
+            step.get("env"))
+        script = str(step.get("run") or "")
+        self.assertNotIn("${{", script)
+        self.assertIn("token=", script)
+        self.assertIn("$GITHUB_OUTPUT", script)
+        # Executed: the token reaches the output and nothing is printed.
+        for token in ("ghs_example", ""):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "output"
+                done = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    env={"PATH": os.environ["PATH"], "TOKEN": token,
+                         "GITHUB_OUTPUT": str(out)},
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual("", done.stdout + done.stderr)
+                self.assertEqual(f"token={token}\n", out.read_text())
 
     def test_the_agent_holds_it_as_gh_read_token_and_it_comes_first(self):
-        mint_id = _step(self.MINT)["id"]
         for i, step in _agent_steps():
-            self.assertEqual(f"${{{{ steps.{mint_id}.outputs.token }}}}",
+            self.assertEqual("${{ steps.readtoken.outputs.token }}",
                              (step.get("env") or {}).get("GH_READ_TOKEN"))
-            self.assertLess(_index(self.MINT), i)
+            self.assertLess(_index(self.HAND), i)
+
+    def _record(self, wide: str, narrow: str) -> str:
+        step = _step(self.RECORD)
+        script = step["run"]
+        self.assertNotIn("${{", script, "the step reads env, never interpolates")
+        env = {"WIDE": wide, "NARROW": narrow, "APP_SLUG": "agent-bureau-bot-3",
+               "OWNER": "acme"}
+        self.assertEqual(set(env), set(step.get("env") or {}))
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            done = subprocess.run(
+                ["bash", "-e", "-c", script],
+                env={"PATH": os.environ["PATH"], "GITHUB_STEP_SUMMARY": str(summary),
+                     **env},
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertEqual(done.stdout, summary.read_text())
+            return done.stdout.rstrip("\n")
 
     def test_the_summary_line_names_the_app_and_the_permissions(self):
-        runs = _runs()
-        self.assertIn(GITHUB_SUMMARY.format(slug="$APP_SLUG"), runs)
-        self.assertIn("$GITHUB_STEP_SUMMARY", runs)
+        step = _step(self.RECORD)
+        env = step.get("env") or {}
+        self.assertEqual("${{ steps.reader.outcome }}", env.get("WIDE"))
+        self.assertEqual("${{ steps.reader_narrow.outcome }}", env.get("NARROW"))
+        self.assertEqual(
+            "${{ steps.reader.outputs.app-slug || steps.reader_narrow.outputs.app-slug }}",
+            env.get("APP_SLUG"))
+        # The owner the line names is the owner the mints were scoped to.
+        for mint in self._mints():
+            self.assertEqual(mint["with"]["owner"], env.get("OWNER"))
+        self.assertGreater(_index(self.RECORD), _index(self.HAND))
+
+        # Derived from each mint's own inputs, never restated here.
+        wide = _permission_text(_step(self.MINT))
+        narrow = _permission_text(_step(self.NARROW))
+        self.assertIn("variables:read", wide)
+        self.assertNotIn("variables:read", narrow)
+        self.assertIn(wide, step["run"])
+        self.assertIn(narrow, step["run"])
+        head = "proof identity: github read — app agent-bureau-bot-3, owner acme, permissions "
+        self.assertEqual(head + wide, self._record("success", "skipped"))
+        self.assertEqual(head + narrow + " (variables:read not granted to this installation)",
+                         self._record("failure", "success"))
+        self.assertEqual("proof identity: github read — none, the read-only mint was refused",
+                         self._record("failure", "failure"))
 
     def test_a_refused_mint_costs_the_rows_never_the_run(self):
         """GitHub refuses the whole mint when the installation lacks one of
-        the four permissions. The run goes on, the summary says why the
-        GitHub rows are `Not observed.`, and the prompt forbids falling back
-        to the worker token."""
-        self.assertIs(_step(self.MINT).get("continue-on-error"), True)
+        the permissions asked for. The narrow mint runs; when it is refused
+        too, the run goes on, the summary says why the GitHub rows are
+        `Not observed.`, and the prompt forbids falling back to the worker
+        token."""
+        for name in (self.MINT, self.NARROW):
+            self.assertIs(_step(name).get("continue-on-error"), True, name)
         self.assertIn("proof identity: github read — none, the read-only mint was refused", _runs())
-        self.assertIn("never observe with GH_TOKEN instead", _agent_steps()[0][1]["with"]["prompt"])
+        prompt = _agent_steps()[0][1]["with"]["prompt"]
+        self.assertIn("never observe with GH_TOKEN instead", prompt)
+        self.assertIn("If GH_READ_TOKEN is empty, the", prompt)
+
+    def test_no_other_copy_lists_the_permissions(self):
+        roster = (ROOT / "agents.yaml").read_text()
+        entry = roster[roster.index("  - name: proof\n"):]
+        entry = entry[:entry.index("\n  - name: ", 1)]
+        self.assertNotIn("pull requests, metadata", entry)
+        self.assertIn("Record the read-only proof identity", entry)
+        brief = " ".join((ROOT / "briefs" / "proof.md").read_text().split())
+        self.assertNotIn("contents, actions, pull requests, metadata", brief)
+
+
+class LinearRequestCapTest(unittest.TestCase):
+    """The agent may read cards in Linear, never write them, within a stated
+    number of requests per run (briefs/proof.md, Identities)."""
+
+    def test_every_agent_step_states_the_cap_with_its_reason(self):
+        src = PROOF_TASK.read_text().splitlines()
+        lines = [i for i, l in enumerate(src)
+                 if l.strip().startswith("PROOF_LINEAR_REQUESTS:")]
+        self.assertEqual(3, len(lines), "one on each agent step")
+        for i in lines:
+            self.assertEqual('PROOF_LINEAR_REQUESTS: "40"', src[i].strip())
+            comment = " ".join(l.strip() for l in src[i - 6:i] if l.strip().startswith("#"))
+            self.assertIn("2,500", comment)
+        for _i, step in _agent_steps():
+            self.assertEqual("40", (step.get("env") or {}).get("PROOF_LINEAR_REQUESTS"))
+
+    def test_the_prompt_allows_reading_cards_up_to_the_cap(self):
+        prompt = _agent_steps()[0][1]["with"]["prompt"]
+        flat = " ".join(prompt.split())
+        bullet = flat[flat.index("- LINEAR_API_KEY"):]
+        bullet = bullet[:bullet.index(" - ", 2)]
+        self.assertNotIn("and nothing else", bullet)
+        for phrase in ("heartbeats, receipts and escalation",
+                       "reading cards (never writing them)",
+                       "PROOF_LINEAR_REQUESTS requests in all",
+                       "briefs/proof.md"):
+            self.assertIn(phrase, bullet)
 
 
 class CallerAwsIdentityTest(unittest.TestCase):
