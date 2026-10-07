@@ -385,6 +385,70 @@ def test_problems_passes_none_given_with_a_why():
     assert ce.problems(ce.render(ce.Escalation("f", "q?", None, "w"))) == []
 
 
+# What `render_with_block` writes, `problems` accepts and `parse` reads back —
+# for the awkward free text a writer will pass, not just the four fixtures.
+
+
+def _keep_or_drop(keep_label: str = "keep it",
+                  drop_label: str = "drop it") -> tuple:
+    return (ce.Choice("keep-it", keep_label, "nothing changes", "proceed"),
+            ce.Choice("drop-it", drop_label, "the item goes", "proceed"))
+
+
+@pytest.mark.parametrize("label", ["keep it — as is", "keep it—as is"])
+def test_a_label_carrying_the_separator_renders_a_body_problems_accepts(label):
+    esc = ce.Escalation("f", "Keep it or drop it?", None, "nothing is lost",
+                        _keep_or_drop(label), "keep-it")
+    text = ce.render_with_block(esc)
+    assert ce.block(esc) is not None
+    assert ce.problems(text) == []
+    read = ce.parse(text)
+    assert read.recommendation == label
+    assert read.why == "nothing is lost"
+
+
+def test_a_free_answer_carrying_the_separator_reads_back_with_its_why():
+    esc = ce.Escalation("f", "q?", "keep it — as is", "nothing is lost")
+    text = ce.render(esc)
+    assert ce.problems(text) == []
+    assert ce.parse(text).why == "nothing is lost"
+    assert "keep it" in ce.parse(text).recommendation
+
+
+def test_a_newline_in_the_finding_cannot_inject_a_question_line():
+    esc = ce.Escalation("line one\n❓ Question: sneaky", "the real one?", "a",
+                        "w")
+    text = ce.render(esc)
+    assert len(text.split("\n")) == 3
+    read = ce.parse(text)
+    assert read.question == "the real one?"
+    assert read.finding == "line one ❓ Question: sneaky"
+    assert ce.problems(text) == []
+
+
+def test_a_newline_in_the_question_keeps_the_block_and_the_line_equal():
+    esc = ce.Escalation("f", "line one\nline two?", None, "w",
+                        _keep_or_drop(), "keep-it")
+    text = ce.render_with_block(esc)
+    assert ce.block(esc)["question"] == "line one line two?"
+    assert ce.problems(text) == []
+    assert ce.parse(text).question == "line one line two?"
+
+
+def test_a_newline_in_a_label_or_the_why_keeps_three_lines():
+    esc = ce.Escalation("f", "q?", None, "first\nsecond",
+                        _keep_or_drop("keep\nit"), "keep-it")
+    text = ce.render_with_block(esc)
+    assert text.split("\n")[2] == "💡 Recommendation: keep it — first second"
+    assert ce.problems(text) == []
+    assert ce.parse(text).recommendation == "keep it"
+
+
+def test_a_newline_in_a_free_recommendation_keeps_three_lines():
+    esc = ce.Escalation("f", "q?", "an\nanswer", "w")
+    assert ce.render(esc).split("\n")[2] == "💡 Recommendation: an answer — w"
+
+
 # --------------------------------------------------------------------------- #
 # 6. split                                                                     #
 # --------------------------------------------------------------------------- #
