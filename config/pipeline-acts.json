@@ -1438,6 +1438,13 @@
       "why": "Act-shaped, and the registry has no row for it. The note was `planning_escalation`'s question until DRE-5286 moved this exit to Triage, and that module's notes were already declared here rather than in the registry; giving the park a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber and a cadence — and the console is the registry's consumer, so it is its own card. It carries its own idempotency key, `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry; a trailer appended after the tag would leave that reading intact, but converting it moves a key two modules read."
     },
     {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "unread_park_note(identifier, reason)",
+      "kind": "undeclared-act",
+      "means": "A card the classifier could not read after its one retry is parked in Triage for the operator, the note landing first and saying what happened and the way back, never in the CEO's Green Light (DRE-5975).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as `reconcile.stall_park_note` above, whose note and tag it shares: it opens with `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry. Giving either park a row is a REGISTRY change and its own card; converting this one alone would split two notes that read the same key into two shapes."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "🏁 Epic complete",
       "kind": "undeclared-act",

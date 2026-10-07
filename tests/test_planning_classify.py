@@ -1080,14 +1080,17 @@ class TestTheTwoReasons:
         assert "the reasoning itself is the deliverable" in note
         assert "waiting on judgement" in note
 
-    def test_the_workflow_passes_the_transport_flag_to_that_note(self):
+    def test_the_workflow_sends_a_spent_transport_budget_to_triage_not_the_ceo(self):
+        """DRE-5975 replaced DRE-3074's `--transport` park: the classifier's
+        CEO step no longer runs for a transport failure, and `park-unread`
+        does. `tests/test_planning_unread_park.py` pins both halves."""
         doc = yaml.safe_load(WF.read_text(encoding="utf-8"))
         step = next(
             s for s in doc["jobs"]["plan"]["steps"]
             if "planning_escalation.py escalate" in json.dumps(s.get("run") or "")
         )
-        assert "steps.classify.outputs.transport == 'true'" in step["run"]
-        assert "--transport" in step["run"]
+        assert "steps.classify.outputs.transport != 'true'" in step["if"]
+        assert "--transport" not in step["run"]
 
     def test_the_stamp_the_classifier_writes_is_the_one_the_router_reads(self):
         """FD-4a end to end, as far as a suite can carry it: the classifier

@@ -491,13 +491,30 @@ def transport_reason(detail: str | None) -> str:
     )
 
 
+#: What may stand for the CLI's own ending in a reason (DRE-5975): `transport_detail`'s rule plus the underscore, so
+#: `error_max_turns` reads as the CLI wrote it.
+_SUBTYPE = re.compile(r"[^A-Za-z0-9_ -]")
+
+
+def no_answer_reason(subtype: str | None) -> str:
+    """What a call that reached the model and came back with no classification says (DRE-5975).
+
+    Not `transport_reason`: the model was reached, and on 2026-10-05 that sentence told the reader the opposite of
+    what happened on every card it parked. It names the CLI's ending and says nothing read the card."""
+    cleaned = " ".join(_SUBTYPE.sub(" ", str(subtype or "")).split())[:60] or "no answer"
+    return (
+        f"The classifier's model answered without a classification ({cleaned}), so nothing has read this card yet. "
+        "That is our own plumbing failing, not a question about the work."
+    )
+
+
 def transport_comment(identifier: str, reason: str | None) -> str:
     """The receipt a requeued card carries. It is also the COUNTER: the cap on
     how many times this may happen is read back off these comments, so the note
     and the budget are one thing rather than two that can disagree."""
     lines = [
         f"{TRANSPORT_MARK} {TRANSPORT_TAG}: {identifier} was not classified this "
-        "run — the step that reads new cards could not reach its model.",
+        "run — the step that reads new cards got no classification from its model.",
         "",
     ]
     why = refusal(reason)
@@ -507,7 +524,8 @@ def transport_comment(identifier: str, reason: str | None) -> str:
         "",
         "**What happens next:** this run is failed on purpose so it runs again. "
         "The card has not moved and nothing has been decided about it. If the "
-        "next run cannot reach a model either, this comes to you as a question.",
+        "next run fails the same way, the card goes to Triage for the operator "
+        "(DRE-5975), not to you.",
         "",
         "Nothing is needed from you yet.",
     ]
@@ -830,6 +848,62 @@ def escalate(linear_ops, identifier: str, reason: str | None,
 
 
 # --------------------------------------------------------------------------- #
+# the card nothing could read — Triage, not the CEO (DRE-5975)                 #
+# --------------------------------------------------------------------------- #
+
+
+#: Where a card the classifier could not read after its one retry rests: the operator's queue. A literal, as
+#: `reconcile.PARKED_STATE` is, so `ready_lane_writers` and `green_light_rows` can read the destination.
+UNREAD_LANE = "Triage"
+
+
+def unread_park_note(identifier: str, reason: str | None) -> str:
+    """The note a card parked unread carries. Written for the operator, whose queue Triage is.
+
+    It opens with the Planning stall exit's tag, `dedupe_dispatch.STALL_PARK_TAG`, because that tag on the card's
+    NEWEST comment is what the plan-gate honors (DRE-5277): the relay dispatches a plan run the moment an
+    `agent:planner` card enters Triage, and without it a card that cannot be read would be re-planned on the spot and
+    fail the same way. Same tag, same reader, same reason as `reconcile.stall_park_note`: no planner and no critic has
+    read the card, so it carries no recommendation and there is no decision in it for the CEO."""
+    import dedupe_dispatch
+
+    why = (reason or "").strip()
+    if not why or refusal(why) is not None:
+        why = "the step that reads new cards could not get a classification for it, twice"
+    return (
+        f"🧹 {dedupe_dispatch.STALL_PARK_TAG}: {identifier} — {why}\n\n"
+        f"Parked in **{UNREAD_LANE}**, the operator's queue, and not in front of the CEO: nothing has read this "
+        "card, so it carries no recommendation and there is no decision here for him. The way back is to move it "
+        "to **Planning**, where the relay starts a fresh plan run."
+    )
+
+
+def park_unread(linear_ops, identifier: str, reason: str | None) -> Outcome:
+    """Post the note and park the card in Triage — if the card is still ours (DRE-5975).
+
+    The shape is `escalate`'s, minus the CEO: the lane is read live first and a card that has moved on gets no write;
+    the note lands BEFORE the move, because the plan-gate reads the newest comment when the card enters Triage; and it
+    is posted once per planning attempt while the move is re-asserted every time, because the crash this guards
+    against is the one between the two writes. It never posts `ESCALATION_TAG`, so nothing reaches Green Light."""
+    import dedupe_dispatch
+
+    issue = linear_ops.get_issue(identifier, fresh=True)
+    bodies = linear_ops.comment_timeline(identifier)
+    elsewhere = moved_on(issue, bodies, attempt_since=attempt_started_at())
+    if elsewhere is not None:
+        print(f"{identifier}: left where it is — {elsewhere}")
+        return Outcome(parked=False, posted=False, stood_down=elsewhere)
+    posted = False
+    if any(dedupe_dispatch.STALL_PARK_TAG in _body(r) for r in _this_attempt(bodies)):
+        print(f"{identifier}: this attempt's park note is already on the card — re-asserting the move only")
+    else:
+        linear_ops.cmd_comment(identifier, unread_park_note(identifier, reason))
+        posted = True
+    linear_ops.cmd_state(identifier, UNREAD_LANE)
+    return Outcome(parked=True, posted=posted, stood_down=None)
+
+
+# --------------------------------------------------------------------------- #
 # the absence: nothing here skips Planning                                     #
 # --------------------------------------------------------------------------- #
 
@@ -1100,10 +1174,26 @@ def _cmd_escalate(args) -> int:
     return 0
 
 
+def _cmd_park_unread(args) -> int:
+    import linear_ops
+
+    reason = _read_reason(args)
+    outcome = park_unread(linear_ops, args.identifier, reason)
+    if outcome.parked:
+        print(f"{args.identifier} could not be read — parked in {UNREAD_LANE} for the operator, not the CEO")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("check")
+
+    # DRE-5975: a card the classifier could not read after its one retry. Triage, never the CEO's queue.
+    unread = sub.add_parser("park-unread")
+    unread.add_argument("identifier")
+    unread.add_argument("--why", default=None)
+    unread.add_argument("--reason-file", dest="reason_file", default=None)
 
     esc = sub.add_parser("escalate")
     esc.add_argument("identifier")
@@ -1143,6 +1233,9 @@ def main(argv=None) -> int:
 
     if command == "requeue":
         return _cmd_requeue(args)
+
+    if command == "park-unread":
+        return _cmd_park_unread(args)
 
     parser.print_usage(sys.stderr)
     return 2
