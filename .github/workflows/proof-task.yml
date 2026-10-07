@@ -485,9 +485,12 @@ jobs:
       # not by convention — which is what lets the record show a refused
       # write. reconcile.yml's read-token mint: the read pool (slot 1 held
       # back for writes, DRE-4576) picks the app, and the action's permission
-      # inputs narrow the token to four reads. The agent holds it as
-      # GH_READ_TOKEN and makes every GitHub read as it; the worker token
-      # (GH_TOKEN) stays for the branch push and the pull request.
+      # inputs narrow the token to reads. `owner` with no `repositories`
+      # scopes it to every repository the App's installation reaches in the
+      # caller's organization (DRE-6143); with neither, the action limits it
+      # to this one repository. The agent holds it as GH_READ_TOKEN and makes
+      # every GitHub read as it; the worker token (GH_TOKEN) stays for the
+      # branch push and the pull request.
       - name: Select the read-only proof identity's pool app
         id: readpool
         env:
@@ -505,10 +508,13 @@ jobs:
           python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
 
       # continue-on-error: GitHub refuses the whole mint when the installation
-      # lacks any one permission asked for (a 422, not a narrower token). That
-      # costs the GitHub rows — `Not observed.`, with the cause in the summary
-      # line below — and never the run, and the agent is told never to observe
-      # with the worker token instead.
+      # lacks any one permission asked for (a 422, not a narrower token). This
+      # first mint asks for `variables: read` too, which no record says any
+      # pool App's installation grants, so a refusal here is followed by the
+      # same mint without it. Both refused costs the GitHub rows —
+      # `Not observed.`, with the cause in the summary line below — and never
+      # the run, and the agent is told never to observe with the worker token
+      # instead.
       - name: Mint the read-only proof identity
         id: reader
         continue-on-error: true
@@ -524,19 +530,65 @@ jobs:
              || steps.readpool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
              || steps.readpool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
              || secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-actions: read
+          permission-pull-requests: read
+          permission-metadata: read
+          permission-variables: read
+
+      # The same App and scope, without `variables`: today's four reads, for an
+      # installation that does not grant the fifth. One fallback, no retry.
+      - name: Mint the read-only proof identity without variables
+        id: reader_narrow
+        if: steps.reader.outcome != 'success'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.readpool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.readpool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.readpool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.readpool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.readpool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.readpool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
           permission-contents: read
           permission-actions: read
           permission-pull-requests: read
           permission-metadata: read
 
-      # One line, in the shape the record's `## Identities` section copies.
+      # Whichever mint succeeded, as ONE step's token output: the agent steps
+      # hold `steps.readtoken.outputs.token`, the single-step form the roster's
+      # credential check (tests/test_agents_registry.py) recognizes as a
+      # minted token. Empty when both mints were refused. The action already
+      # masks the token, and this step prints nothing.
+      - name: Hand the read-only proof identity to the agent
+        id: readtoken
+        env:
+          TOKEN: ${{ steps.reader.outputs.token || steps.reader_narrow.outputs.token }}
+        run: |
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # One line, in the shape the record's `## Identities` section copies:
+      # the App, the owner the token was scoped to, and the permissions the
+      # mint that succeeded asked for (tests/test_proof_task_workflow.py
+      # derives them from the mints' own inputs).
       - name: Record the read-only proof identity
         env:
-          APP_SLUG: ${{ steps.reader.outputs.app-slug }}
-          MINTED: ${{ steps.reader.outcome }}
+          WIDE: ${{ steps.reader.outcome }}
+          NARROW: ${{ steps.reader_narrow.outcome }}
+          APP_SLUG: ${{ steps.reader.outputs.app-slug || steps.reader_narrow.outputs.app-slug }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          if [ "$MINTED" = "success" ]; then
-            LINE="proof identity: github read — app $APP_SLUG, permissions contents:read actions:read pull-requests:read metadata:read"
+          IDENTITY="proof identity: github read — app $APP_SLUG, owner $OWNER, permissions"
+          if [ "$WIDE" = "success" ]; then
+            LINE="$IDENTITY contents:read actions:read pull-requests:read metadata:read variables:read"
+          elif [ "$NARROW" = "success" ]; then
+            LINE="$IDENTITY contents:read actions:read pull-requests:read metadata:read (variables:read not granted to this installation)"
           else
             LINE="proof identity: github read — none, the read-only mint was refused"
           fi
@@ -626,11 +678,18 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          # Linear for the brief's ⏳ heartbeats and receipts; GH_READ_TOKEN for every
-          # GitHub read the record makes (briefs/proof.md, Identities).
+          # Linear for the brief's ⏳ heartbeats and receipts, and for reading
+          # cards; GH_READ_TOKEN for every GitHub read the record makes
+          # (briefs/proof.md, Identities).
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
-          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.readtoken.outputs.token }}
+          # The run's Linear request cap: every request the agent's own
+          # linear_ops.py and spoken_thread.py invocations make, reads and
+          # writes alike. The fleet key's hour is 2,500 requests, shared with
+          # every other run, and 40 is one run's share of it when a sweep, a
+          # build and a review run in the same hour.
+          PROOF_LINEAR_REQUESTS: "40"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -677,7 +736,9 @@ jobs:
               push the record branch and open the pull request; never to
               observe.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
-              and nothing else.
+              and for reading cards (never writing them) up to
+              PROOF_LINEAR_REQUESTS requests in all, counted as
+              briefs/proof.md says.
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
@@ -789,11 +850,18 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          # Linear for the brief's ⏳ heartbeats and receipts; GH_READ_TOKEN for every
-          # GitHub read the record makes (briefs/proof.md, Identities).
+          # Linear for the brief's ⏳ heartbeats and receipts, and for reading
+          # cards; GH_READ_TOKEN for every GitHub read the record makes
+          # (briefs/proof.md, Identities).
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
-          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.readtoken.outputs.token }}
+          # The run's Linear request cap: every request the agent's own
+          # linear_ops.py and spoken_thread.py invocations make, reads and
+          # writes alike. The fleet key's hour is 2,500 requests, shared with
+          # every other run, and 40 is one run's share of it when a sweep, a
+          # build and a review run in the same hour.
+          PROOF_LINEAR_REQUESTS: "40"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -840,7 +908,9 @@ jobs:
               push the record branch and open the pull request; never to
               observe.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
-              and nothing else.
+              and for reading cards (never writing them) up to
+              PROOF_LINEAR_REQUESTS requests in all, counted as
+              briefs/proof.md says.
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
@@ -950,11 +1020,18 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
-          # Linear for the brief's ⏳ heartbeats and receipts; GH_READ_TOKEN for every
-          # GitHub read the record makes (briefs/proof.md, Identities).
+          # Linear for the brief's ⏳ heartbeats and receipts, and for reading
+          # cards; GH_READ_TOKEN for every GitHub read the record makes
+          # (briefs/proof.md, Identities).
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
-          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.readtoken.outputs.token }}
+          # The run's Linear request cap: every request the agent's own
+          # linear_ops.py and spoken_thread.py invocations make, reads and
+          # writes alike. The fleet key's hour is 2,500 requests, shared with
+          # every other run, and 40 is one run's share of it when a sweep, a
+          # build and a review run in the same hour.
+          PROOF_LINEAR_REQUESTS: "40"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1001,7 +1078,9 @@ jobs:
               push the record branch and open the pull request; never to
               observe.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
-              and nothing else.
+              and for reading cards (never writing them) up to
+              PROOF_LINEAR_REQUESTS requests in all, counted as
+              briefs/proof.md says.
             - An AWS session, only when the calling repo provides a proof role.
               With none, every row that needs one is `Not observed.` with that
               reason.
