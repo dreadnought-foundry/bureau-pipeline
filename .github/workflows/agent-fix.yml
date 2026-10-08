@@ -1277,9 +1277,11 @@ jobs:
           # THE PER-COMMAND LIMIT IS NOT RAISED, on purpose. BASH_MAX_TIMEOUT_MS
           # (same page) would let one command run past 600 seconds, but a
           # longer foreground wait only walks the agent closer to the
-          # 60-minute token expiry this job cannot yet survive (DRE-4911) —
-          # run 36640595665 waited forty minutes for two full suites and its
-          # push got HTTP 401. The prompt's step 4 removes the need instead:
+          # 60-minute token expiry — run 36640595665 waited forty minutes for
+          # two full suites and its push got HTTP 401. The `Push rescue` step
+          # below now delivers what was committed by then (DRE-6350), but
+          # nothing delivers an edit that was never committed. The prompt's
+          # step 4 removes the need instead:
           # no full suite locally, push before any long check.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
@@ -1530,10 +1532,24 @@ jobs:
                in exactly this form, pushed to the SAME branch:
                git commit --allow-empty -m "fix(${{ steps.pr.outputs.card }}): What's new line (attempt ${{ steps.pr.outputs.attempt }})"
                One such commit, never a second one.
+               If `git push` is refused by GitHub — `Bad credentials`, a
+               `GH013` rule violation, a permission — rather than by a
+               non-fast-forward you can fetch and retry, do not retry with
+               another token, do not undo the commit, and do not write the
+               blocker file; leave the commit on the branch and end, because
+               the `Push rescue` step after this run pushes it with a freshly
+               minted token, and if GitHub refuses that push too the commits
+               are uploaded as the run artifact
+               `rescue-${{ steps.pr.outputs.card }}.patch` rather than lost.
             6. If a finding is unfixable in scope, or settling it needs a
                judgement only a person can make, do NOT push anything: write
                your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
                a HUMAN, and the card is parked until one answers.
+               The blocker file is for work you did not commit, so commit
+               nothing when you write it; a push GitHub refused is step 5's
+               case, not this one, and a commit you made beyond the head you
+               started from is delivered after this run whatever you write
+               here.
                NOTHING TO FIX is not that (DRE-6018). When no blocking finding
                is open on the current head — the critic has approved it since,
                or the review of a newer head is still running — push nothing
@@ -1700,6 +1716,114 @@ jobs:
             | python3 .bureau-pipeline/scripts/upload_agent_log.py \
                 --log-file "$EXEC_FILE" $EFFORT_ARG || true
 
+      # ---- DELIVER WHAT THE FIX AGENT COMMITTED (DRE-6350) ----
+      # The token minted at the top of this job dies at sixty minutes, and
+      # every git credential on the runner is a job-start token. A fix run
+      # that passes the hour ends with a commit on the runner and a `git push`
+      # that answers `Bad credentials`: agent-bureau run 36169231289 (DRE-4883,
+      # 2026-09-25) committed `a2ab30b` and lost it 171 seconds after the
+      # token died; bureau-pipeline run 36640595665 (DRE-3898, 2026-09-29)
+      # committed `2a08e0a` and lost it the same way. agent-task.yml has
+      # carried the remedy since DRE-3043 (sharpened by DRE-3098), and these
+      # four steps are its copy, on push_rescue.py's fix-run flags (DRE-6348).
+      #
+      # Two mints of the rescue's OWN, as agent-task.yml's — a `run:` step
+      # cannot mint, and the retry must not be a second go with the token
+      # GitHub just refused. The BOOT App's pair, the one `Mint bot token` and
+      # `Mint fresh report token` use: `Checkout PR branch` configures git
+      # with that App's token, so the rescue's push lands as the same login
+      # the agent's own push would have and the `pull_request: synchronize`
+      # actor does not change. (The pool slot is the agent's `gh` bucket, not
+      # its push identity.) Gated exactly as the Report is, `always()`
+      # included: a `Fix` that failed or hit its ceiling after committing is
+      # the run most likely to be holding unpushed work. continue-on-error: a
+      # mint that fails leaves the run as it was, and the rescue writes the
+      # work out instead.
+      - name: Mint fresh push token
+        id: pushtoken
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - name: Mint rescue retry token
+        id: pushtoken2
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # Push the pull request's own branch if GitHub does not have the
+      # agent's commits — never a second pull request (`--existing-pr`), and
+      # never onto one that has merged or closed: push_rescue.py reads the
+      # state with the fresh mint before it pushes, and fails closed on an
+      # unreadable answer (DRE-6348). The `Refuse a push onto a merged pull
+      # request` hook installed above does NOT guard this push: it bakes in
+      # the job-start reader token, `stranded_fix.py guard` fails open on an
+      # unreadable read, and on the run this step exists for that token is
+      # dead, so the hook allows everything. push_rescue.py's own check is
+      # the one this push relies on.
+      #
+      # A COMMITTED FIX IS DELIVERED WHATEVER THE AGENT WROTE BESIDE IT. No
+      # stop note is passed and no handoff file is read: the DRE-4883 run
+      # ended on a blocker written AFTER its push was refused, and a step
+      # that honored that file would lose that run's work again. An agent
+      # that escalates is told to commit nothing (the prompt's step 6), so a
+      # commit beyond `--base` — the head this run started from, so the
+      # branch's own commits are exactly the agent's — is work and nothing
+      # else. The agent's exits are the Report's to read (DRE-6351).
+      #
+      # A strict no-op when the agent pushed its own work, and it never fails
+      # the job (push_rescue.py exits 0 on every path).
+      - name: Push rescue
+        id: rescue
+        if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        env:
+          # Through the environment, never argv. BOTH are the rescue's own
+          # mints and there is no fallback to `steps.app` or `steps.worker`
+          # (DRE-3098): the one push whose purpose is to run after something
+          # has gone wrong cannot spend a credential the failure touched.
+          PUSH_TOKEN: ${{ steps.pushtoken.outputs.token }}
+          PUSH_TOKEN_RETRY: ${{ steps.pushtoken2.outputs.token }}
+          PUSH_TOKEN_SOURCE: the rescue's own mint (Mint fresh push token)
+          PUSH_TOKEN_RETRY_SOURCE: the rescue's own re-mint (Mint rescue retry token)
+          CARD: ${{ steps.pr.outputs.card }}
+          REPO: ${{ github.repository }}
+          PRE_SHA: ${{ steps.pr.outputs.head_sha }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          # --patch: where the branch's commits (and, beside them, the
+          # rescue-<card>.target.json naming the branch they belong on) go
+          # when GitHub refuses both credentials. The next step uploads both.
+          python3 .bureau-pipeline/scripts/push_rescue.py rescue \
+            --card "$CARD" --repo "$REPO" --base "$PRE_SHA" \
+            --branch "$BRANCH" --existing-pr "$PR" \
+            --patch "$RUNNER_TEMP/rescue-$CARD.patch" \
+            >> "$GITHUB_OUTPUT"
+
+      # THE RUNNER IS NEVER THE LAST COPY (DRE-3098). `patch` is set only when
+      # the rescue did not push — every other run skips this step. What
+      # happens to the artifact next is the Report's to say (DRE-6351). The
+      # escalation conjunct is every post-gate step's
+      # (tests/test_unfixable_check_escalation.py); an escalated run never
+      # reaches the rescue, so it never has a patch to upload either.
+      - name: Upload rescued work
+        if: always() && steps.rescue.outputs.patch != '' && steps.unfixable.outputs.escalate != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rescue-${{ steps.pr.outputs.card }}.patch
+          path: |
+            ${{ steps.rescue.outputs.patch }}
+            ${{ steps.rescue.outputs.sidecar }}
+          if-no-files-found: warn
+          retention-days: 30
+
       # ---- RE-MINT BEFORE THE REPORT (DRE-4320) ----
       # The token minted at the top of this job is dead by now if the run
       # passed an hour: GitHub gives an App installation token exactly 60
@@ -1785,4 +1909,15 @@ jobs:
           MODE: ${{ steps.pr.outputs.mode }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # DRE-6350: what the Push rescue step did, for the Report to say on
+          # the pull request. Wired here so DRE-6351, which teaches
+          # report_fix_result.sh to read them, never edits this file.
+          RESCUE_LOCAL_WORK: ${{ steps.rescue.outputs.local_work }}
+          RESCUE_PUSHED: ${{ steps.rescue.outputs.pushed }}
+          RESCUE_PATCH: ${{ steps.rescue.outputs.patch }}
+          RESCUE_ARTIFACT: rescue-${{ steps.pr.outputs.card }}.patch
+          RESCUE_PUSH_STATUS: ${{ steps.rescue.outputs.push_status }}
+          RESCUE_ERROR: ${{ steps.rescue.outputs.error }}
+          RESCUE_TARGET_BRANCH: ${{ steps.rescue.outputs.target_branch }}
+          RUN_ID: ${{ github.run_id }}
         run: bash .bureau-pipeline/scripts/report_fix_result.sh

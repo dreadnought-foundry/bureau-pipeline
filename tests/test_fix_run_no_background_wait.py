@@ -23,8 +23,8 @@ command that would be backgrounded.
 A second variant, run 36640595665 (#569): the agent waited in the foreground
 for two full-suite runs, its push got HTTP 401 when the 60-minute token
 expired, and it then trusted `briefs/engineer.md`'s promise that "the workflow
-re-mints a fresh token ... and delivers your branch". Only agent-task.yml does
-that; agent-fix.yml has no delivery step (that half is DRE-4911).
+re-mints a fresh token ... and delivers your branch". Only agent-task.yml did
+that then; agent-fix.yml has carried the same delivery step since DRE-6350.
 
 What is pinned here, three ways:
 
@@ -216,17 +216,32 @@ class BackgroundTasksAreOffInTheFixStep(unittest.TestCase):
 class TheBriefPromisesDeliveryOnlyWhereItHappens(unittest.TestCase):
 
     def test_the_detector_knows_which_workflows_deliver(self):
-        # Non-vacuous: agent-task.yml has the rescue, and agent-fix.yml, as of
-        # this card, does not (DRE-4911 adds it).
+        # Non-vacuous: agent-task.yml has carried the rescue since DRE-3043,
+        # agent-fix.yml since DRE-6350, and a workflow with no rescue reads as
+        # one that does not deliver.
         self.assertTrue(has_delivery_step("agent-task.yml"))
-        self.assertFalse(has_delivery_step("agent-fix.yml"))
+        self.assertTrue(has_delivery_step("agent-fix.yml"))
+        self.assertFalse(has_delivery_step("qa-review.yml"))
 
-    def test_the_check_catches_a_brief_that_promises_it_for_agent_fix(self):
+    def test_the_brief_names_agent_fix_among_the_workflows_that_deliver(self):
+        # DRE-6350: the fix run re-mints and delivers now, and the brief says
+        # so rather than telling a fixing agent its committed work is lost.
+        text = BRIEF.read_text(encoding="utf-8")
+        named = {name for claim in delivery_claims(text)
+                 for name in WORKFLOW_NAME_RE.findall(claim)}
+        self.assertIn("agent-task.yml", named)
+        self.assertIn("agent-fix.yml", named)
+        self.assertNotRegex(
+            flat(text), r"(?i)agent-fix\.yml[^.]{0,80}\bno\b[^.]{0,40}\bstep\b")
+
+    def test_the_check_catches_a_brief_that_promises_it_where_nothing_delivers(self):
+        # agent-fix.yml was this test's example until DRE-6350 gave it the
+        # rescue; a workflow with no delivery step stands in for it now.
         promise = (
-            "agent-fix.yml re-mints a fresh token after you finish and "
+            "qa-review.yml re-mints a fresh token after you finish and "
             "delivers your branch if you could not."
         )
-        self.assertEqual(undelivered_names(promise), ["agent-fix.yml"])
+        self.assertEqual(undelivered_names(promise), ["qa-review.yml"])
 
     def test_the_check_catches_the_unscoped_sentence_that_misled_run_36640595665(self):
         # The sentence as it stood names no workflow at all, so it reads as
@@ -250,11 +265,6 @@ class TheBriefPromisesDeliveryOnlyWhereItHappens(unittest.TestCase):
         text = BRIEF.read_text(encoding="utf-8")
         self.assertEqual(undelivered_names(text), [])
 
-    def test_the_brief_says_a_fix_run_has_no_delivery_while_it_has_none(self):
-        text = flat(BRIEF.read_text(encoding="utf-8"))
-        if has_delivery_step("agent-fix.yml"):
-            self.skipTest("agent-fix.yml delivers now (DRE-4911); nothing to warn about")
-        self.assertRegex(text, r"(?i)agent-fix\.yml[^.]{0,80}\bno\b[^.]{0,40}\bstep\b")
 
 
 if __name__ == "__main__":
