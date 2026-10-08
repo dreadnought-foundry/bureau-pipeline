@@ -10,7 +10,9 @@ mechanical defects the standard already names, returning the card to
      Backlog with the loop named;
   3. a retired-repo card — marked `hand-built` and parked in Backlog;
   4. a proof with an open pull request — moved to In Review;
-  5. a card whose parent epic is Canceled or Duplicate — canceled.
+  5. a card whose parent epic is Canceled or Duplicate — canceled;
+  6. a card held `no-route` (DRE-6190) — its newest `🔒 hold:` stamp says so,
+     and the holds lane owns its lift: one `Left` row and no other rule.
 
 Everything else is a `Left` row naming what a person must do.
 
@@ -427,6 +429,105 @@ class TestAMootCard:
 
 
 # --------------------------------------------------------------------------- #
+# (6) a card held no-route (DRE-6190)                                          #
+# --------------------------------------------------------------------------- #
+
+NO_ROUTE_STAMP = "🔒 hold: reason=no-route at=repo:legacy-site lifts=repo-on-rail by=reconcile.py"
+
+
+def comment(body, at="2026-09-30T19:00:00.000Z"):
+    return {"body": body, "createdAt": at, "user": {"id": "u-synthetic"}}
+
+
+class TestAHeldNoRouteCard:
+    def test_the_fixture_card_carries_the_label_and_the_stamp_newest(self):
+        held = card(fixture(), "DRE-4423")
+        assert {"repo:legacy-site", "needs-human"} <= {n["name"] for n in held["labels"]["nodes"]}
+        assert held["comments"]["nodes"][-1]["body"] == NO_ROUTE_STAMP
+
+    def test_it_is_one_left_row_and_no_write(self):
+        items, _ctx, _gh, _linear = plan()
+        assert actions(items, "DRE-4423") == []
+        rows = lefts(items, "DRE-4423")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.why == ("held no-route on repo:legacy-site — the slug is not on the "
+                           "dispatch rail")
+        assert "repo:" in row.recommendation
+        assert "config/repo-map.json" in row.recommendation
+        assert "holds lane" in row.recommendation
+        assert row.recommendation == (
+            "correct the card's repo: label to a slug on the rail, or add the repo to "
+            "config/repo-map.json if it should route; the holds lane reads the card's "
+            "current label, lifts the hold and sends the card to Planning on its next "
+            "pass, and nothing on the card needs clearing")
+
+    @pytest.mark.parametrize("ident", ["DRE-4421", "DRE-4422"])
+    def test_the_same_slug_and_the_archived_repo_with_no_stamp_are_still_retired(self, ident):
+        items, _ctx, _gh, _linear = plan()
+        action = the_action(items, ident)
+        assert action.act == "hygiene-triage-return"
+        assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
+        assert action.writes[0].label == "hand-built"
+        assert (action.writes[2].lane, action.writes[2].park) == ("Backlog", True)
+
+    def test_a_newer_stamp_of_another_reason_decides_and_the_card_is_retired(self):
+        doc = fixture()
+        card(doc, "DRE-4423")["comments"]["nodes"].append(comment(
+            "🔒 hold: reason=dead-run-cap at=none lifts=unpark-marker by=dead_run.py"))
+        items, _ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4423")
+        assert action.cause == "retired repo legacy-site"
+        assert kinds(action) == ["linear_label", "linear_comment", "linear_state"]
+        assert lefts(items, "DRE-4423") == []
+
+    def test_the_stamp_without_the_label_is_retired_as_today(self):
+        doc = fixture()
+        held = card(doc, "DRE-4423")
+        held["labels"]["nodes"] = [n for n in held["labels"]["nodes"] if n["name"] != "needs-human"]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4423").cause == "retired repo legacy-site"
+        assert lefts(items, "DRE-4423") == []
+
+    def test_a_spent_stamp_is_no_hold_and_the_card_is_read_as_today(self):
+        doc = fixture()
+        card(doc, "DRE-4423")["comments"]["nodes"].append(comment(
+            "🔓 hold lifted: reason=no-route because=operator by=hold.py"))
+        items, _ctx, _gh, _linear = plan(doc)
+        assert the_action(items, "DRE-4423").cause == "retired repo legacy-site"
+
+    def test_a_canceled_parent_outranks_the_hold(self):
+        doc = fixture()
+        card(doc, "DRE-4423")["parent"] = copy.deepcopy(card(doc, "DRE-4441")["parent"])
+        items, _ctx, _gh, _linear = plan(doc)
+        action = the_action(items, "DRE-4423")
+        assert action.act == "hygiene-card-cancel"
+        assert action.cause == "parent DRE-4440 is Canceled"
+        assert action.writes[-1].lane == "Canceled"
+        assert lefts(items, "DRE-4423") == []
+
+    def test_a_prose_blocker_on_a_held_card_gets_no_relation_and_no_move(self):
+        doc = fixture()
+        card(doc, "DRE-4423")["description"] = card(doc, "DRE-4401")["description"]
+        items, _ctx, _gh, _linear = plan(doc)
+        assert actions(items, "DRE-4423") == []
+        rows = lefts(items, "DRE-4423")
+        assert len(rows) == 1 and "no-route" in rows[0].why
+
+    def test_a_stamp_at_repo_none_says_the_card_wears_no_repo_label(self):
+        doc = fixture()
+        held = card(doc, "DRE-4423")
+        held["labels"]["nodes"] = [n for n in held["labels"]["nodes"]
+                                   if not n["name"].startswith("repo:")]
+        held["comments"]["nodes"][-1]["body"] = NO_ROUTE_STAMP.replace(
+            "at=repo:legacy-site", "at=repo:none")
+        items, _ctx, _gh, _linear = plan(doc)
+        rows = lefts(items, "DRE-4423")
+        assert len(rows) == 1
+        assert rows[0].why == "held no-route — the card wears no repo: label"
+
+
+# --------------------------------------------------------------------------- #
 # everything else — a row for a person                                         #
 # --------------------------------------------------------------------------- #
 
@@ -469,7 +570,7 @@ EXPECTED = {
     "DRE-4431": "hygiene-review-move",
     "DRE-4441": "hygiene-card-cancel",
 }
-LEFT = ["DRE-4402", "DRE-4403", "DRE-4412", "DRE-4432", "DRE-4451"]
+LEFT = ["DRE-4402", "DRE-4403", "DRE-4412", "DRE-4423", "DRE-4432", "DRE-4451"]
 
 _CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b|\bPT\b|\bUTC\b")
 _COUNT = re.compile(r"\b\d+\s+(?:time|times|attempt|attempts|round|rounds|minute|minutes|"
@@ -595,6 +696,13 @@ class TestWhatItMayWrite:
                 if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
                 and n.value.id == "hygiene" and n.attr in WRITE_CONSTRUCTORS}
         assert used == ALLOWED
+
+    def test_it_reads_hold_only_through_read_stamp(self):
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        used = {n.attr for n in ast.walk(tree)
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                and n.value.id == "hold"}
+        assert used == {"read_stamp"}
 
     def test_the_cores_static_scan_passes_over_it(self):
         spec = importlib.util.spec_from_file_location(
