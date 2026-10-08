@@ -168,7 +168,9 @@ def _run_watchdog(cards, bodies=()):
         reconcile.linear_ops, "cmd_comment"
     ) as comment, patch.object(
         reconcile.linear_ops, "add_label"
-    ) as add_label:
+    ) as add_label, patch.object(
+        reconcile.linear_ops, "cmd_advance"  # the no-route move (DRE-6177)
+    ):
         result = reconcile.flag_stranded()
     lanes = [c.args[0] for c in active.call_args_list]
     assert reconcile.WATCHDOG_LANES in lanes, (
@@ -184,7 +186,7 @@ def test_no_route_card_flagged_past_the_grace_period():
     card = _card(labels=("repo:ghost-product",), minutes_stale=45)
     flagged, comment, add_label = _run_watchdog([card])
     assert flagged == {"DRE-1978"}
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     assert body.startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     assert "hand-built" in body
     add_label.assert_called_once_with("DRE-1978", reconcile.HOLD_LABEL)
@@ -194,7 +196,7 @@ def test_missing_repo_label_counts_as_no_route():
     card = _card(labels=(), minutes_stale=45)
     flagged, comment, _ = _run_watchdog([card])
     assert flagged == {"DRE-1978"}
-    assert "hand-built" in comment.call_args.args[1]
+    assert "hand-built" in comment.call_args_list[0].args[1]
 
 
 # DRE-2736: the NO-ROUTE class had NO age gate at all — it fired on the first
@@ -223,7 +225,7 @@ def test_dispatchable_todo_card_with_no_run_after_30min_flagged():
     card = _card(minutes_stale=45)
     flagged, comment, add_label = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-1978"}
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     assert body.startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     assert "no agent run" in body
     add_label.assert_called_once_with("DRE-1978", reconcile.HOLD_LABEL)
@@ -259,7 +261,7 @@ def test_redispatch_receipt_counts_as_elapsed_time():
          patch.object(reconcile.linear_ops, "add_label"):
         flagged = reconcile.flag_stranded()
     assert flagged == {"DRE-1978"}
-    assert "no agent run" in comment.call_args.args[1]
+    assert "no agent run" in comment.call_args_list[0].args[1]
 
 
 @pytest.mark.parametrize(
@@ -345,7 +347,7 @@ def test_a_promoted_one_off_wearing_agent_planner_is_still_watched():
     card["title"] = "a plain one-off title"
     flagged, comment, add_label = _run_watchdog([card], bodies=[_ONE_OFF_STAMP])
     assert flagged == {"DRE-1978"}
-    assert "no agent run" in comment.call_args.args[1]
+    assert "no agent run" in comment.call_args_list[0].args[1]
     add_label.assert_called_once_with("DRE-1978", reconcile.HOLD_LABEL)
 
 
@@ -421,7 +423,7 @@ def test_label_less_card_needs_no_live_snapshot(monkeypatch):
     card = _card(labels=(), minutes_stale=999)
     flagged, comment, _ = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-1978"}
-    assert "hand-built" in comment.call_args.args[1]
+    assert "hand-built" in comment.call_args_list[0].args[1]
 
 
 def test_no_route_reason_names_the_snapshot_read():
@@ -429,7 +431,7 @@ def test_no_route_reason_names_the_snapshot_read():
     was reading, so a stale pin is diagnosable from the card itself."""
     card = _card(labels=("repo:ghost-product",), minutes_stale=999)
     _, comment, _ = _run_watchdog([card], bodies=[])
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     for slug in ("agent-bureau", "atlas", "bureau-pipeline"):
         assert slug in body, f"reason must name the snapshot ({slug} missing)"
 
@@ -515,7 +517,7 @@ def test_watchdog_comment_is_machine_marked_not_proof_of_life():
     assert not "🚨".startswith(reconcile._LIFE_PREFIXES)
     card = _card(labels=("repo:ghost-product",))
     _, comment, _ = _run_watchdog([card])
-    assert comment.call_args.args[1].startswith("🚨")
+    assert comment.call_args_list[0].args[1].startswith("🚨")
 
 
 # --------------------------------------------------------------------------

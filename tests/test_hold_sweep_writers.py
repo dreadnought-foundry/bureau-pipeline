@@ -197,6 +197,15 @@ def test_a_card_with_no_repo_label_is_stamped_repo_none():
     assert ("advance", "DRE-7001", "Triage", "Todo,In Progress") in writes
 
 
+def test_a_slug_the_stamp_cannot_carry_is_stamped_repo_none():
+    """A malformed label is no route either; the hold still says so, rather
+    than the stamp refusing it after the receipt is already posted."""
+    flagged, writes, _ = _sweep([_card(labels=("repo:Ghost Product",))])
+    assert flagged == {"DRE-7001"}
+    assert ("comment", "DRE-7001", no_route_stamp("none")) in writes
+    assert writes[-1] == ("advance", "DRE-7001", "Triage", "Todo,In Progress")
+
+
 def test_the_no_route_stamp_reads_back_as_its_reason():
     _, writes, _ = _sweep([_card(labels=("repo:ghost-product",))])
     labels = ["repo:ghost-product", reconcile.HOLD_LABEL]

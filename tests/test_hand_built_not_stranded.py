@@ -134,7 +134,9 @@ def _run_watchdog(cards, bodies=()):
         reconcile.linear_ops, "cmd_comment"
     ) as comment, patch.object(
         reconcile.linear_ops, "add_label"
-    ) as add_label:
+    ) as add_label, patch.object(
+        reconcile.linear_ops, "cmd_advance"  # the no-route move (DRE-6177)
+    ):
         flagged = reconcile.flag_stranded()
     return flagged, comment, add_label
 
@@ -189,7 +191,7 @@ def test_without_the_label_a_receiptless_card_is_still_flagged():
         [_card(labels=("repo:portico",))], bodies=[]
     )
     assert flagged == {"DRE-2499"}
-    assert "no agent run" in comment.call_args.args[1]
+    assert "no agent run" in comment.call_args_list[0].args[1]
     add_label.assert_called_once_with("DRE-2499", reconcile.HOLD_LABEL)
 
 
@@ -198,7 +200,7 @@ def test_without_the_label_an_unroutable_card_is_still_flagged():
         [_card(labels=("repo:ghost-product",))], bodies=[]
     )
     assert flagged == {"DRE-2499"}
-    assert "hand-built" in comment.call_args.args[1]
+    assert "hand-built" in comment.call_args_list[0].args[1]
 
 
 def test_a_similar_label_does_not_suppress():
@@ -522,7 +524,7 @@ def test_hand_built_card_with_a_merged_pr_is_still_moved_to_done():
 def test_no_run_notice_states_what_was_observed():
     """Plain English, and specific: how long, which lane, what was missing."""
     _, comment, _ = _run_watchdog([_card(labels=("repo:portico",))], bodies=[])
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     assert body.startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     assert "no agent run" in body
     assert str(reconcile.WATCHDOG_MINUTES) in body
@@ -535,7 +537,7 @@ def test_no_run_notice_does_not_guess_at_three_causes():
     listed the Actions budget, the LLM quota and the relay — three suspects,
     no evidence for any of them, and a reader left to check all three."""
     _, comment, _ = _run_watchdog([_card(labels=("repo:portico",))], bodies=[])
-    body = comment.call_args.args[1].lower()
+    body = comment.call_args_list[0].args[1].lower()
     for guess in ("actions budget", "llm quota", "the relay"):
         assert guess not in body, f"the notice still speculates about {guess!r}"
 
