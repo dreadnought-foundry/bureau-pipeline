@@ -165,7 +165,13 @@ def test_the_no_run_receipt_names_the_resend_and_the_lift():
     assert "out of Todo and back" in body
     assert "linear_ops.py unpark" in body
     assert "lifts itself on the first run receipt newer than" in body
-    assert "nothing on the card needs clearing" in body
+    # Nothing lifts the hold by itself until the holds lane lands (DRE-6180),
+    # so the receipt says how today's re-send clears it, and never both that
+    # the label must go and that nothing needs clearing.
+    assert "Once the hygiene agent's holds lane is live" in body
+    assert f"remove the '{reconcile.HOLD_LABEL}' label and move the card" in body
+    assert "nothing on the card needs clearing" not in body
+    assert "merely queued" not in body
     # The sentence comes after the anchor phrase, never before it.
     assert body.index(anchor) < body.index("out of Todo and back")
 
@@ -188,6 +194,27 @@ def test_a_no_route_card_is_held_stamped_and_moved_to_triage(state):
         ("comment", "DRE-7001", stamp),
         ("advance", "DRE-7001", "Triage", "Todo,In Progress"),
     ]
+
+
+def test_a_refused_triage_move_is_reported_and_the_card_stays_flagged(monkeypatch, capsys):
+    """The hold is already on the card when the move fails: the failure is
+    recorded for the sweep's exit and printed, and the card is still flagged."""
+    monkeypatch.setattr(reconcile, "_write_failures", [])
+
+    def refuse(*_a, **_k):
+        raise reconcile.linear_ops.LinearError("lane moved")
+
+    card = _card(labels=("repo:ghost-product",))
+    with patch.object(reconcile.linear_ops, "cmd_comment"), \
+         patch.object(reconcile.linear_ops, "add_label"), \
+         patch.object(reconcile, "active_cards",
+                      side_effect=lambda states=reconcile.SWEEP_STATES: [card]), \
+         patch.object(reconcile.linear_ops, "cmd_advance", side_effect=refuse):
+        flagged = reconcile.flag_stranded()
+    assert flagged == {"DRE-7001"}
+    assert reconcile._write_failures == ["DRE-7001 no-route move to Triage: lane moved"]
+    assert "ERROR: watchdog: DRE-7001 was not moved to Triage: lane moved" in (
+        capsys.readouterr().err)
 
 
 def test_a_card_with_no_repo_label_is_stamped_repo_none():
@@ -228,7 +255,11 @@ def test_the_no_route_receipt_names_both_fixes_and_the_lift():
     assert "repo:" in body and "label" in body
     assert "config/repo-map.json" in body
     assert "lifts itself on the next hygiene pass" in body
-    assert "nothing on the card needs clearing" in body
+    # Until the holds lane lands, a person lifts it (DRE-6180, DRE-6273).
+    assert "Once the hygiene agent's holds lane is live" in body
+    assert (f"remove the '{reconcile.HOLD_LABEL}' label and move the card to "
+            "Planning yourself") in body
+    assert "nothing on the card needs clearing" not in body
     assert pipeline_act.read_trailer(body) is not None
 
 
@@ -306,6 +337,7 @@ def test_triage_entrance_names_the_no_route_park():
     assert "`🔒 hold: reason=no-route`" in text
     assert "left alone by the hygiene agent's Triage lane while the hold stands" in text
     assert "lifted by the hygiene agent's holds lane" in text
+    assert "Not live yet" in text, "the lift is a sibling's, and says so"
 
 
 def test_triage_exit_names_both_lifts_and_where_each_sends_the_card():
@@ -315,6 +347,7 @@ def test_triage_exit_names_both_lifts_and_where_each_sends_the_card():
     assert "a `no-route` hold to Planning" in text
     assert "a `fix-dispute` or `unfixable-check` hold to In Review" in text
     assert "new head" in text
+    assert "Not live yet" in text, "the lifts are a sibling's, and say so"
 
 
 def test_in_review_entrance_names_the_one_further_move_out_of_green_light():
@@ -325,6 +358,7 @@ def test_in_review_entrance_names_the_one_further_move_out_of_green_light():
     assert "standing unspent" in text
     assert "moves the card nowhere by itself" in text
     assert "returns a card from Triage" in text
+    assert "Not live yet" in text, "the park and the return are siblings', and say so"
 
 
 def test_the_rendered_page_matches_the_contract():

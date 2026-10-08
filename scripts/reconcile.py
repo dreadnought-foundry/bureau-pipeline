@@ -2349,8 +2349,8 @@ def flag_stranded() -> set[str]:
     HOLD_LABEL and its `🔒 hold:` stamp, through `hold.apply` (DRE-6177), so
     the card says which of the two holds it is. A NO RUN card is not moved
     and never canceled: a false positive costs a label a human removes, the
-    run itself is untouched, and the stamp lifts on the first run receipt
-    newer than it. A NO ROUTE card is a mechanical fix — a person corrects
+    run itself is untouched, and once the hygiene agent's holds lane lands
+    (DRE-6180) the stamp lifts on the first run receipt newer than it. A NO ROUTE card is a mechanical fix — a person corrects
     its `repo:` label, or the repo joins the rail — and not a decision, so
     after the stamp it is moved to Triage, the operator's queue, out of Todo
     or In Progress only (`cmd_advance`). A card the read door's board put in
@@ -2463,16 +2463,18 @@ def flag_stranded() -> set[str]:
                 f"{state} for {WATCHDOG_MINUTES}+ minutes with no run receipt "
                 "on it — every agent posts one the moment it starts, so as far "
                 "as this sweep can see, nothing has begun. Why it has not "
-                "started is not known from here. If a run is merely queued, "
-                f"remove the '{HOLD_LABEL}' label and it will carry on; "
-                "otherwise this card needs a human to look. "
-                f"Evidence: {evidence}. "
+                "started is not known from here, so this card needs a human "
+                f"to look. Evidence: {evidence}. "
                 # The way back, for the person who reads it (DRE-6177): the
                 # re-send is the one move that starts the run the stamp waits on.
-                "To re-send it, move the card out of Todo and back, or run "
-                f"`linear_ops.py unpark {ident}` — the hold lifts itself on the "
-                "first run receipt newer than its stamp, and nothing on the "
-                "card needs clearing."
+                # Nothing lifts the hold by itself until the hygiene agent's
+                # holds lane lands (DRE-6180), so today's re-send clears it.
+                f"To re-send it, run `linear_ops.py unpark {ident}`, which "
+                f"clears the hold for you, or remove the '{HOLD_LABEL}' label "
+                "and move the card out of Todo and back. Once the hygiene "
+                "agent's holds lane is live (DRE-6172), a re-send needs no "
+                "clearing: the hold lifts itself on the first run receipt "
+                "newer than its stamp."
             )
             code, at = "stranded-no-run", "none"
         else:
@@ -2501,11 +2503,14 @@ def flag_stranded() -> set[str]:
                 "hand-built (or the repo onboarded to the routing map first). "
                 f"Absent from this sweep's routing snapshot [{snapshot}]"
                 f"{live_confirmed}. Labeled '{HOLD_LABEL}' for a human. "
-                # Both fixes, and that nothing needs clearing (DRE-6177).
+                # Both fixes, and who lifts the hold today (DRE-6177): the
+                # holds lane's lift lands with DRE-6180 and DRE-6273.
                 "This is a fix, not a decision: correct the card's `repo:` "
                 "label to a slug on the rail, or add the repo to "
-                "config/repo-map.json, and the hold lifts itself on the next "
-                "hygiene pass — nothing on the card needs clearing."
+                "config/repo-map.json. Once the hygiene agent's holds lane is "
+                "live (DRE-6172), the hold lifts itself on the next hygiene "
+                "pass after that fix; until then, remove the "
+                f"'{HOLD_LABEL}' label and move the card to Planning yourself."
             )
             # The qualifier records what the sweep read; the lift reads the
             # card's live `repo:` label (DRE-6173). A slug the stamp cannot
