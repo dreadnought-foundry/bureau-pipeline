@@ -1,0 +1,55 @@
+[
+  {
+    "card": "DRE-3879",
+    "route": "one-off-critic QUESTION",
+    "finding": "The card offers two different fixes for the same problem without picking one, and choosing between them is a security policy call, not a coding task.",
+    "question": "Should the job open a pull request, or be let past branch protection?",
+    "recommendation": "open a pull request",
+    "recommendation_why": "a bypass loosens the repository's security for one job, and a pull request keeps every change reviewed",
+    "choices": [
+      {"id": "open-a-pull-request", "label": "open a pull request", "effect": "every change stays reviewed and the job is granted no bypass", "outcome": "proceed"},
+      {"id": "grant-a-bypass", "label": "grant a bypass", "effect": "one job skips review from now on", "outcome": "proceed"},
+      {"id": "a-person-merges", "label": "a person merges", "effect": "the job opens nothing and an operator pushes by hand", "outcome": "close"}
+    ],
+    "recommended": "open-a-pull-request"
+  },
+  {
+    "card": "DRE-3885",
+    "route": "one-off-critic QUESTION",
+    "finding": "The card names two ways to exempt the nightly standards-sync pull request from the test-first rule and does not pick one.",
+    "question": "Exempt it by branch and author, or by the paths it touches?",
+    "recommendation": "by branch and author",
+    "recommendation_why": "a path rule would also exempt hand-written changes to the same files, and branch plus author names exactly the bot's own pull requests",
+    "choices": [
+      {"id": "by-branch-and-author", "label": "by branch and author", "effect": "names exactly the bot's own pull requests", "outcome": "proceed"},
+      {"id": "by-path", "label": "by path", "effect": "also exempts hand-written changes to those files", "outcome": "proceed"}
+    ],
+    "recommended": "by-branch-and-author"
+  },
+  {
+    "card": "DRE-3887",
+    "route": "one-off-critic QUESTION",
+    "finding": "One of the four checklist items can only be proven true after the change is already approved and live, so nobody can ever tick that box.",
+    "question": "Drop the after-merge item from this card, or keep it and accept the card can never close on its own?",
+    "recommendation": "move it to the follow-on card",
+    "recommendation_why": "DRE-3875 already waits for this card to merge, so it is the card that can actually watch the stable tag move",
+    "choices": [
+      {"id": "move-it-to-the-follow-on-card", "label": "move it to the follow-on card", "effect": "the card already waiting on this merge is the one that can watch the tag move", "outcome": "proceed"},
+      {"id": "keep-it-here", "label": "keep it here", "effect": "this card can never close on its own", "outcome": "proceed"}
+    ],
+    "recommended": "move-it-to-the-follow-on-card"
+  },
+  {
+    "card": "DRE-3889",
+    "route": "one-off-critic NO_RESULT",
+    "finding": "the critic produced no result",
+    "question": "Re-run the review, or settle the card yourself?",
+    "recommendation": "re-run the review",
+    "recommendation_why": "the critic returned no result, and a no-result is a crash, not a rejection",
+    "choices": [
+      {"id": "re-run-the-review", "label": "re-run the review", "effect": "the card is read again by the critic", "outcome": "replan"},
+      {"id": "settle-it-yourself", "label": "settle it yourself", "effect": "the card goes on without the reader's answer", "outcome": "proceed"}
+    ],
+    "recommended": "re-run-the-review"
+  }
+]
