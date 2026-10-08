@@ -3,9 +3,10 @@
 
 The planner's context is assembled by `scripts/assemble_context.py` out of
 standards and a role brief — static prose. This script writes the one block
-that is not static: what the split ledger (`config/split-ledger.json`, derived
-by DRE-3077) and `.mulch/expertise/planning.jsonl` (written by earlier agent
-sessions in the product repo) say about cards that did not fit one run. It
+that is not static: what the split ledger (DRE-3077 — derived from the
+console's record at the start of each plan run, DRE-6055) and
+`.mulch/expertise/planning.jsonl` (written by earlier agent sessions in the
+product repo) say about cards that did not fit one run. It
 prints in the same fence grammar `assemble_context.assemble` uses, so `plan.yml`
 can append it after the standards; the wiring is DRE-3359 and this module owes
 it nothing but stdout.
@@ -42,7 +43,8 @@ The fence-and-status pattern belongs to this side.
 
 A ledger that is missing, unreadable, malformed or older than
 `LEDGER_MAX_AGE_HOURS` renders `LEDGER STATUS: UNKNOWN — <reason>` naming which
-of the four it was, and the CLI still exits 0: the planner run must never fail
+of the four it was — and so does a run that names no ledger at all, which says
+it could not be read — and the CLI still exits 0: the planner run must never fail
 because a file it reads for CONTEXT was not there
 (`standards/console-honesty.md` rule 2 — unknown is shown as unknown, never as
 the last known value).
@@ -68,13 +70,12 @@ import sanitize_untrusted  # noqa: E402
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 
-#: This checkout's ledger, resolved from the script's OWN location rather than
-#: the CWD: in a product repo the planner runs with the product repo as the CWD
-#: and this repo checked out at `.bureau-pipeline/`.
-LEDGER_PATH = os.path.join(ROOT, "config", "split-ledger.json")
+#: Where the ledger is read from when no `--ledger` is named: the path the plan
+#: job exports after it derives this run's ledger (DRE-6055). There is no
+#: committed default any more (DRE-6056) — unset, the ledger could not be read.
+LEDGER_PATH_ENV = "SPLIT_LEDGER_PATH"
 
-#: The mulch file is the PRODUCT repo's, so it is CWD-relative — the opposite
-#: default to the ledger's, for the opposite reason.
+#: The mulch file is the PRODUCT repo's, so it is CWD-relative.
 MULCH_PATH = os.path.join(".mulch", "expertise", "planning.jsonl")
 
 #: Older than this and the ledger is not evidence about today's board. Read by
@@ -278,8 +279,14 @@ def status(path: str | None = None, now=None):
     / malformed / older-than-the-max it was. Four different facts with four
     different next actions — collapsing them into one "no ledger" is the silent
     zero the ledger itself exists to refuse.
+
+    No `path` and no `SPLIT_LEDGER_PATH` is a fifth case, said in its own
+    words: no ledger was derived for this run, so it could not be read.
     """
-    path = path or LEDGER_PATH
+    path = path or os.environ.get(LEDGER_PATH_ENV)
+    if not path:
+        return UNKNOWN, (f"could not be read — no ledger was derived for this "
+                         f"run ({LEDGER_PATH_ENV} is unset)")
     shown = context_line(path, TEXT_LIMIT)
     try:
         if not os.path.exists(path):
@@ -433,8 +440,8 @@ def render_ledger(doc, now=None, last: int = 10) -> str:
 
     Everything is read from the ledger's own field names and nothing is
     recomputed — the counts, the rates and the sentences are the ones
-    `split_ledger` derived, so this block and `docs/split-ledger.md` cannot
-    disagree about a number.
+    `split_ledger` derived, so this block and the ledger cannot disagree about
+    a number.
     """
     doc = doc if isinstance(doc, dict) else {}
     state, detail = _freshness(doc, now if now is not None else _now())
@@ -476,10 +483,10 @@ def ledger_block(path: str | None = None, now=None, last: int = 10) -> str:
     the artifact line: the planner is owed the same shape either way, and
     `ledger_status` is what it records.
     """
-    path = path or LEDGER_PATH
+    path = path or os.environ.get(LEDGER_PATH_ENV)
     now = now if now is not None else _now()
     state, detail = status(path, now)
-    if state == FRESH or os.path.exists(path):
+    if path and (state == FRESH or os.path.exists(path)):
         split_ledger = _split_ledger()
         if split_ledger is not None:
             try:
@@ -602,8 +609,10 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     rendering = sub.add_parser(
         "render", help="print both context blocks to stdout")
-    rendering.add_argument("--ledger", default=LEDGER_PATH,
-                           help="the split ledger (default: this checkout's)")
+    rendering.add_argument("--ledger",
+                           help="the split ledger (default: "
+                                f"${LEDGER_PATH_ENV}, the one this run "
+                                "derived; none named, it could not be read)")
     rendering.add_argument("--mulch", default=MULCH_PATH,
                            help="the planning records (default: CWD-relative "
                                 f"{MULCH_PATH})")

@@ -3207,18 +3207,20 @@ def shared_files(cards: list[dict]) -> dict[str, list[str]]:
 
 # --- A footprint that has died before (DRE-3079) -----------------------------
 #
-# `config/split-ledger.json` (DRE-3077) is the record of every card that did
-# not fit one run: what it declared, what its split pieces actually touched,
+# The split ledger (DRE-3077) is the record of every card that did not fit one
+# run: what it declared, what its split pieces actually touched,
 # how many turn-cap deaths it cost and which of DRE-2893's tells applied in
 # hindsight. Piece 2 injects it into the planner; this is the OTHER reader —
 # the mechanical half of the first critic, checking a plan the planner has
 # already written against the deaths the ledger already holds.
 
-#: Where the ledger lives, for the finding to cite. Named here rather than
-#: imported at module scope: `split_ledger` imports `planner_score`, which
+#: Where the ledger comes from, for the finding to cite. It is no file in this
+#: repo: the plan job derives it from the console's record at the start of the
+#: run (DRE-6055), and the committed copy is retired (DRE-6056). The module is
+#: not imported at module scope: `split_ledger` imports `planner_score`, which
 #: imports THIS module, so the import is deferred to the one function that
 #: needs it (see `_ledger`).
-LEDGER_FILE = "config/split-ledger.json"
+LEDGER_FILE = "the split ledger, derived from the console's record at plan time"
 
 #: How many files a child must share with a ledger row before the overlap is
 #: worth a finding. ONE shared file is the ordinary state of this repo —
@@ -3261,9 +3263,9 @@ def _death_reasons() -> tuple:
 
 def _ledger(ledger=None):
     """The ledger to check against: what the caller passed, or what
-    `split_ledger.load()` reads — this run's derived ledger when the plan job
-    exported `SPLIT_LEDGER_PATH`, the shipped file otherwise (DRE-6055) — or
-    `LEDGER_UNREADABLE` when it could not be read."""
+    `split_ledger.load()` reads — this run's derived ledger, which the plan job
+    exports as `SPLIT_LEDGER_PATH` (DRE-6055) — or `LEDGER_UNREADABLE` when it
+    could not be read, including when no ledger was derived (DRE-6056)."""
     if ledger is LEDGER_UNREADABLE:
         return LEDGER_UNREADABLE
     if ledger is not None:
@@ -3388,9 +3390,8 @@ def ledger_findings(cards: list[dict], ledger=None) -> list[str]:
     (standards/console-honesty.md rule 1).
     """
     if _ledger(ledger) is LEDGER_UNREADABLE:
-        return [f"the split ledger ({LEDGER_FILE}) could not be read, so no "
-                "card in this plan was checked against a footprint that has "
-                "died before"]
+        return [f"{LEDGER_FILE} could not be read, so no card in this plan "
+                "was checked against a footprint that has died before"]
     findings = []
     for match in ledger_footprint_matches(cards, ledger):
         deaths = match["deaths"] if isinstance(match["deaths"], int) else "an unread number of"
@@ -3409,7 +3410,7 @@ def ledger_findings(cards: list[dict], ledger=None) -> list[str]:
         because = f" ({match['evidence']})" if match["evidence"] else ""
         findings.append(
             f"{match['card']}: carries the {match['tell']} tell{because} — the "
-            f"split ledger says {match['sentence']} ({LEDGER_FILE})"
+            f"split ledger says {match['sentence']} (read from {LEDGER_FILE})"
         )
     return findings
 
@@ -3456,11 +3457,11 @@ def _ledger_line(ledger=None) -> str:
     that tells them apart.
     """
     if _ledger(ledger) is LEDGER_UNREADABLE:
-        return (f"The split ledger (`{LEDGER_FILE}`) **could not be read**, so "
-                "no footprint here was checked against a card that has died.")
+        return (f"{LEDGER_FILE[0].upper()}{LEDGER_FILE[1:]} **could not be "
+                "read**, so no footprint here was checked against a card that "
+                "has died.")
     rows = ledger_death_rows(ledger)
-    return (f"Checked against the split ledger (`{LEDGER_FILE}`): "
-            f"{len(rows)} death row(s).")
+    return (f"Checked against {LEDGER_FILE}: {len(rows)} death row(s).")
 
 
 def _state_block(cards: list[dict]) -> list[str]:

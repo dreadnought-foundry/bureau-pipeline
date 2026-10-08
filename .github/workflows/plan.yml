@@ -1054,11 +1054,11 @@ jobs:
       # scorer's ledger. BOTH routes that read the ledger derive it: `plan`
       # for the planner's context and the first critic's mechanical findings,
       # `review` for `Mechanical findings — the revised plan (review)`, whose
-      # footprint checks would otherwise read the committed file — and nothing
-      # refreshes that file any more (split-ledger.yml). A derive that fails
-      # leaves the path unset and says so in one line; the committed
-      # `config/split-ledger.json` is the fallback (DRE-6056 retires it), and
-      # context never fails a plan run (DRE-3358).
+      # footprint checks would otherwise have no ledger at all. The ledger is
+      # derived here, at the start of the run, and nowhere else: no committed
+      # copy is left to fall back to (DRE-6056). A derive that fails leaves the
+      # path unset and says so in one line; every reader then says the ledger
+      # could not be read, and context never fails a plan run (DRE-3358).
       - name: Split ledger — derive it from the read door
         if: steps.route.outputs.mode == 'plan' || steps.route.outputs.mode == 'review'
         continue-on-error: true
@@ -1068,10 +1068,10 @@ jobs:
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: |
-          if python3 .bureau-pipeline/scripts/split_ledger.py derive --out "$RUNNER_TEMP/split-ledger.json" --no-doc; then
+          if python3 .bureau-pipeline/scripts/split_ledger.py derive --out "$RUNNER_TEMP/split-ledger.json"; then
             echo "SPLIT_LEDGER_PATH=$RUNNER_TEMP/split-ledger.json" >> "$GITHUB_ENV"
           else
-            echo "split-ledger: the derive from the read door failed — SPLIT_LEDGER_PATH stays unset, and this run reads the committed config/split-ledger.json"
+            echo "split-ledger: the derive from the read door failed — SPLIT_LEDGER_PATH stays unset, and this run's planner and critics are told the ledger could not be read"
           fi
 
       # Assemble the planner's context = its shared standards + the planner
@@ -1084,12 +1084,12 @@ jobs:
       # ledger and the product repo's mulch planning records say about cards
       # that did not fit one run. It is APPENDED — `>>`, after the standards, so
       # the planner sizes against evidence rather than against memory — and the
-      # renderer (DRE-3358) always exits 0: a missing ledger (the one the step
-      # above derived, else config/split-ledger.json)
+      # renderer (DRE-3358) always exits 0: a missing ledger (the step above
+      # derives it at the start of the run; a failed derive leaves none)
       # or .mulch/expertise/planning.jsonl renders `UNKNOWN — <reason>`, because
       # a file read for CONTEXT must never fail a plan run. The `--mulch` path
-      # is the PRODUCT checkout's, the opposite side to the ledger's own
-      # default. The two STATUS lines are grepped back into the step log so a
+      # is the PRODUCT checkout's; the ledger is the runner-temp file the step
+      # above derived. The two STATUS lines are grepped back into the step log so a
       # run answers "what was the planner given" without opening a file nothing
       # commits. The roll-up route is untouched: it decomposes into epics, not
       # cards, and sizes nothing.
@@ -1109,7 +1109,7 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
-          python3 .bureau-pipeline/scripts/ledger_context.py render --ledger "${SPLIT_LEDGER_PATH:-.bureau-pipeline/config/split-ledger.json}" --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
+          python3 .bureau-pipeline/scripts/ledger_context.py render --ledger "${SPLIT_LEDGER_PATH:-}" --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"

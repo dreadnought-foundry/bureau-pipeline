@@ -7,9 +7,8 @@ the dollars it burned; a split leaves a Canceled or Backlog card whose
 successors cite it; a hand-back leaves the agent's own note saying "this is an
 epic's worth". Three receipts, all machine-readable, all already on the board.
 
-`derive` reads them into `config/split-ledger.json` and renders
-`docs/split-ledger.md` from it. That is the whole card: the ledger, and nothing
-that consumes it. Injecting it into the planner is DRE-3078 and the plan-critic
+`derive` reads them into one ledger document. That is the whole card: the
+ledger, and nothing that consumes it. Injecting it into the planner is DRE-3078 and the plan-critic
 check plus the scorer row is DRE-3079 — this module owes them nothing but a
 file.
 
@@ -94,16 +93,16 @@ the whole month; an incomplete month is a PARTIAL count, not a low one.
 
 ## Where the ledger is read from
 
-`load()` reads `SPLIT_LEDGER_PATH` when it is set and the committed
-`config/split-ledger.json` otherwise. The plan job derives the ledger once per
-run into `$RUNNER_TEMP` and exports the path (`plan.yml`), so its readers see
-this run's history; the committed file is the fallback until DRE-6056 retires
-it.
+The plan job derives the ledger at the start of each run into `$RUNNER_TEMP`
+and exports `SPLIT_LEDGER_PATH` (`plan.yml`), so its readers see this run's
+history. `load()` reads the path it is given, else `SPLIT_LEDGER_PATH`, and
+nothing else: the daily job that committed a copy is retired (DRE-6056), so
+with neither it raises `LedgerError` and every reader says the ledger could
+not be read — never a stale file.
 
 CLI:
 
-    python3 scripts/split_ledger.py derive [--window-days N] [--from J]
-                                           [--out F] [--doc F | --no-doc]
+    python3 scripts/split_ledger.py derive --out F [--window-days N] [--from J]
     python3 scripts/split_ledger.py tells --body-file F
 """
 
@@ -125,8 +124,6 @@ import validate_card  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
-LEDGER_PATH = os.path.join(ROOT, "config", "split-ledger.json")
-DOC_PATH = os.path.join(ROOT, "docs", "split-ledger.md")
 
 #: The literal every unreadable field carries. Never `0`, never `[]`.
 UNKNOWN = "UNKNOWN"
@@ -283,21 +280,6 @@ TELL_TIERS = "two-languages-or-tiers"
 TELL_UNENUMERATED = "unenumerated-count"
 TELL_UNBOUNDED = "unbounded-quantifier"
 TELLS = (TELL_CONTRACT, TELL_TIERS, TELL_UNENUMERATED, TELL_UNBOUNDED)
-
-#: What each tell means, for the rendered document. Verbatim from the standard.
-TELL_QUESTIONS = {
-    TELL_CONTRACT: "Does one deliverable read what another writes? The "
-                   "strongest tell — if B reads what A writes it is not one "
-                   "card.",
-    TELL_TIERS: "Does the declared footprint span two languages or two tiers? "
-                "Bounded is not the same as small.",
-    TELL_UNENUMERATED: "Does a criterion count something the body never "
-                       "enumerates? DRE-2837 said \"the nine derivations\" and "
-                       "the nine were named nowhere.",
-    TELL_UNBOUNDED: "Does the card quantify without a bound — \"every "
-                    "surface\", \"all call sites\"? DRE-2838's was 57 mount "
-                    "sites.",
-}
 
 #: The phrases a contract between pieces is actually written with, each named
 #: with where it was read from. Following `routing_verdict`'s rule: match the
@@ -1026,197 +1008,26 @@ def document(rows: list, *, generated_at: str | None = None,
 
 
 #: The ledger this run derived (DRE-6055). `plan.yml` derives it from the read
-#: door once per run and exports the path; unset, or empty, the committed file
-#: is read instead — the fallback until DRE-6056 retires that file.
+#: door once per run and exports the path. Unset, or empty, there is no ledger
+#: to read: the committed fallback is retired (DRE-6056).
 LEDGER_PATH_ENV = "SPLIT_LEDGER_PATH"
 
 
 def load(path: str | None = None) -> dict:
-    """The ledger at `path`, else at `$SPLIT_LEDGER_PATH`, else the committed
-    `config/split-ledger.json`. Raises `LedgerError` rather than defaulting."""
-    path = path or os.environ.get(LEDGER_PATH_ENV) or LEDGER_PATH
+    """The ledger at `path`, else at `$SPLIT_LEDGER_PATH`. Raises `LedgerError`
+    rather than defaulting — with neither, there is nothing to read."""
+    path = path or os.environ.get(LEDGER_PATH_ENV)
+    if not path:
+        raise LedgerError(
+            f"cannot read the split ledger: no path was given and "
+            f"{LEDGER_PATH_ENV} is unset — the plan job derives the ledger at "
+            "the start of its run (`split_ledger.py derive`), and no committed "
+            "copy is kept")
     try:
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError) as e:
         raise LedgerError(f"cannot read the split ledger: {e}") from e
-
-
-# --------------------------------------------------------------------------- #
-# the document                                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def _cell(value) -> str:
-    if value is UNKNOWN or value == UNKNOWN:
-        return f"`{UNKNOWN}`"
-    if isinstance(value, list):
-        return ", ".join(f"`{v}`" for v in value) if value else "—"
-    if isinstance(value, float):
-        return f"${value:.2f}"
-    return str(value)
-
-
-def _count_cell(value) -> str:
-    """A footprint as a COUNT, for the summary table. The files themselves get
-    their own section — DRE-2719's six pieces touched 30 files between them, and
-    a table cell carrying all 30 stops being a table."""
-    if value is UNKNOWN or value == UNKNOWN:
-        return f"`{UNKNOWN}`"
-    return f"{len(value)} file{'' if len(value) == 1 else 's'}"
-
-
-def render_markdown(doc: dict) -> str:
-    """`docs/split-ledger.md`, rendered from the JSON.
-
-    A hand-written second copy of a table drifts, so there is not one — the same
-    discipline `docs/routing-verdicts.md` and `docs/lane-contract.md` are held
-    to, and tests/test_split_ledger.py fails the build when the committed file
-    and this render disagree.
-    """
-    out: list[str] = []
-    w = out.append
-    w("# The split ledger")
-    w("")
-    w("<!-- GENERATED FILE — do not edit by hand. -->")
-    w("<!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->")
-    w("")
-    w(f"Generated **{doc['generated_at']}** from {doc['source']}.")
-    w("")
-    w("Every card here did not fit one run: it died at the turn cap, it was "
-      "split, or a build run handed it back as an epic. The point of writing "
-      "it down is DRE-3022's: the planner has been sizing cards against "
-      "nothing.")
-    w("")
-    window = doc.get("window_days", UNKNOWN)
-    w("**The population discovers itself.** Nobody names it: the derive asks "
-      "Linear for every card whose own comments carry a turn-cap or hand-back "
-      "receipt, and for every card a successor cites as the one it was cut "
-      "from, created in the "
-      + (f"**{window} days**" if isinstance(window, int) else f"`{UNKNOWN}`")
-      + " before that timestamp. The seed cards stay in whatever the window "
-        "says, because they are here for a different reason — DRE-3077 named "
-        "them.")
-    w("")
-    w("**A read that failed says `UNKNOWN`, never 0 and never \"none\".** "
-      "\"GitHub would not say\" and \"the pull request touched nothing\" are "
-      "different facts, and a ledger that collapses them reports a history "
-      "that never happened.")
-    w("")
-
-    rates_ = doc["rates"]
-    w("## The rates")
-    w("")
-    w(f"{rates_['cards']} card(s) in the ledger, {rates_['died']} of which "
-      f"died at the turn cap at least once. "
-      + (f"They cost **${rates_['dead_dollars']:.2f}** in dead runs"
-         if isinstance(rates_["dead_dollars"], float)
-         else "Their cost is `UNKNOWN`")
-      + (f" ({rates_['dead_dollars_unreadable']} card(s) carry no readable "
-         "cost)." if rates_["dead_dollars_unreadable"] else "."))
-    w("")
-    if rates_["unreadable_footprint"]:
-        w(f"{rates_['unreadable_footprint']} card(s) declared no footprint at "
-          "all. They are counted apart from every band below, never into one — "
-          "an unread card in a denominator is a rate nobody can check.")
-        w("")
-    w("| Declared footprint | Cards | Died | Rate |")
-    w("| --- | --- | --- | --- |")
-    for band in rates_["by_declared_files"]:
-        rate = (f"{100 * band['died'] / band['of']:.0f}%"
-                if band["of"] else f"`{UNKNOWN}`")
-        w(f"| more than {band['more_than']} file"
-          f"{'' if band['more_than'] == 1 else 's'} | {band['of']} | "
-          f"{band['died']} | {rate} |")
-    w("")
-    for band in rates_["by_declared_files"]:
-        w(f"- {band['sentence']}")
-    w("")
-    w("## By month")
-    w("")
-    w("One row per calendar month the window touches. **Planner-created "
-      "children** is every card the planner gave a parent in that month — the "
-      "denominator DRE-3022's split rate is measured against. **Split** and "
-      "**died** are this ledger's own rows created in that month, so a card "
-      "created before the window belongs to no row here.")
-    w("")
-    w("A month is **complete** when the window covers all of it and it ended "
-      "before this file was generated. An incomplete month is a PARTIAL count, "
-      "not a low one — and a count that could not be read says `UNKNOWN`, "
-      "never 0.")
-    w("")
-    months = doc.get("monthly") or []
-    if not months:
-        w("*(no month fell inside the window)*")
-        w("")
-    else:
-        w("| Month | Planner-created children | Split | Died at the turn cap | "
-          "Complete |")
-        w("| --- | --- | --- | --- | --- |")
-        for record in months:
-            w(f"| {record['month']} | {_cell(record['planner_children'])} | "
-              f"{_cell(record['split'])} | {_cell(record['died'])} | "
-              + ("yes" if record["complete"] else "no — a partial count")
-              + " |")
-        w("")
-    w("## The tells, in hindsight")
-    w("")
-    w("DRE-2893's four tells, read back over each card's own body by "
-      "`split_ledger.tells` — a deterministic reading of the text, not a "
-      "judgement. Each one under-reports on purpose.")
-    w("")
-    w("| Tell | What it asks | Cards | Died |")
-    w("| --- | --- | --- | --- |")
-    for band in rates_["by_tell"]:
-        w(f"| `{band['tell']}` | {TELL_QUESTIONS[band['tell']]} | "
-          f"{band['of']} | {band['died']} |")
-    w("")
-    w("## The rows")
-    w("")
-    w("| Card | Created | Size | Role | Declared | Pieces touched | Pieces | "
-      "Deaths | Cost | Tells | Why it is here |")
-    w("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-    for row_ in doc["rows"]:
-        w("| " + " | ".join([
-            f"[{row_['card']}]({row_['url']})" if row_.get("url")
-            else row_["card"],
-            _cell(row_.get("created_at", UNKNOWN)),
-            _cell(row_["size"]),
-            _cell(row_["role"]),
-            _count_cell(row_["declared_files"]),
-            _count_cell(row_["piece_files"]),
-            _cell(row_["pieces"]),
-            _cell(row_["deaths"]),
-            _cell(row_["dollars"]),
-            _cell(row_["tells"]),
-            _cell(row_["reasons"]),
-        ]) + " |")
-    w("")
-    w("## The footprints")
-    w("")
-    w("What each card SAID it would touch, against what its pieces actually "
-      "touched. The two columns above are the counts; these are the files, and "
-      "they are the input DRE-3078 sizes against.")
-    w("")
-    for row_ in doc["rows"]:
-        w(f"### {row_['card']}")
-        w("")
-        w(f"- declared: {_cell(row_['declared_files'])}")
-        w(f"- pieces touched: {_cell(row_['piece_files'])}")
-        w("")
-    w("## What could not be read")
-    w("")
-    w("Named rather than counted, because the absence of evidence is not "
-      "evidence that a card was well sized.")
-    w("")
-    unread = [r for r in doc["rows"] if r["unreadable"]]
-    if not unread:
-        w("*(nothing — every field of every row was read)*")
-        w("")
-    for row_ in unread:
-        w(f"- **{row_['card']}** — " + "; ".join(row_["unreadable"]))
-    w("")
-    return "\n".join(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -1428,8 +1239,8 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     derived = sub.add_parser(
-        "derive", help="write config/split-ledger.json and docs/split-ledger.md "
-                       "from the read door's split history")
+        "derive", help="write the split ledger from the read door's split "
+                       "history")
     derived.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS,
                          help="how far back the history and the monthly counts "
                               f"look (default {DEFAULT_WINDOW_DAYS}; the door "
@@ -1437,16 +1248,17 @@ def main(argv=None) -> int:
     derived.add_argument("--from", dest="source",
                          help="a saved door response to derive from, instead "
                               "of asking the door")
-    derived.add_argument("--out", default=LEDGER_PATH)
-    derived.add_argument("--doc", default=DOC_PATH)
-    derived.add_argument("--no-doc", action="store_true",
-                         help="write the ledger only, not its markdown render")
+    derived.add_argument("--out", required=True,
+                         help="where to write the ledger — the plan job's "
+                              "runner temp directory; nothing is committed")
 
     telling = sub.add_parser("tells")
     telling.add_argument("--body-file", required=True)
 
     args = parser.parse_args(argv)
-    command = args.command or "derive"
+    # No default command: a bare run used to derive into the committed file,
+    # and there is no committed file any more (DRE-6056).
+    command = args.command
 
     if command == "tells":
         with open(args.body_file, encoding="utf-8") as fh:
@@ -1458,9 +1270,9 @@ def main(argv=None) -> int:
         return 0
 
     if command == "derive":
-        window_days = getattr(args, "window_days", DEFAULT_WINDOW_DAYS)
+        window_days = args.window_days
         try:
-            if getattr(args, "source", None):
+            if args.source:
                 try:
                     with open(args.source, encoding="utf-8") as fh:
                         saved = json.load(fh)
@@ -1472,18 +1284,11 @@ def main(argv=None) -> int:
         except LedgerError as e:
             print(f"split-ledger: could not be read — {e}", file=sys.stderr)
             return 1
-        out = getattr(args, "out", LEDGER_PATH)
-        with open(out, "w", encoding="utf-8") as fh:
+        with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=2)
             fh.write("\n")
-        wrote = out
-        if not getattr(args, "no_doc", False):
-            doc_path = getattr(args, "doc", DOC_PATH)
-            with open(doc_path, "w", encoding="utf-8") as fh:
-                fh.write(render_markdown(doc))
-            wrote += f" and {doc_path}"
         print(summary_line(doc))
-        print(f"wrote {wrote} ({len(doc['rows'])} rows, "
+        print(f"wrote {args.out} ({len(doc['rows'])} rows, "
               f"{len(doc['monthly'])} month(s))")
         for note in _source_notes(doc):
             print(f"  unread: {note}", file=sys.stderr)
