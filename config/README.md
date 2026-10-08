@@ -135,6 +135,20 @@ of it is ever a runtime lookup.
   written down, with the two mornings that produced it. Offline the guard
   SKIPS with the reason printed — never a silent pass — and the `act registry
   consumers` job in `tests.yml` is where a skip is red.
+- **`holds.json`** — every code path that applies the `needs-human` hold
+  (DRE-6173). The contract's vocabulary first — `reasons` (each with its fixed
+  `lifts`, its `why` and where its lift sends the card), `lift_kinds`,
+  `universal_lift` (`card-closed`), `readers`, and the `stamp` and `lift_line`
+  grammars — then `sites`, one row per writer: `file`, `scope` (the enclosing
+  Python function, `<module>`, or the workflow step's `name`), `anchor` (a
+  phrase in that scope's text that is never the label-write line), `reasons`
+  (each `{reason, lifts, tried_first}`, where `tried_first` is
+  `{step, receipt}` or `none — <reason>`), and `readers`. Read only through
+  `scripts/hold.py`. `python3 scripts/hold.py check` DISCOVERS the writers in
+  the tree and fails when one has no row, when a row's anchor matches nothing
+  or two sites, when a row names a lift kind the contract does not fix for its
+  reason, or when a `tried_first` receipt occurs nowhere under `scripts/` or
+  `.github/workflows/`. `docs/holds.md` is the page a person reads.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.

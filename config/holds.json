@@ -1,0 +1,420 @@
+{
+  "_readme": "Every code path that applies the `needs-human` hold (DRE-6173). Read through scripts/hold.py; `python3 scripts/hold.py check` holds this file to the tree and to the contract, and docs/holds.md is the page a person reads. A row names its site by `file`, `scope` and `anchor` — a phrase in the scope's text that is never the label-write line — and carries each reason the site writes, the reason's lift kind, what the pipeline tries first, and the readers that honor it. The vocabulary below is the contract of epic DRE-6172, identical in every card of it.",
+  "version": 1,
+  "label": "needs-human",
+  "reasons": {
+    "stranded-no-run": {
+      "lifts": "run-started",
+      "why": "A run receipt newer than the stamp proves a run started. Nothing in the pipeline starts one on its own — the sweep skips a held card and the relay dispatches only on an entry to Todo — so the run that lifts it is the one a person's re-send starts.",
+      "lift_sends": "nothing moves"
+    },
+    "no-route": {
+      "lifts": "repo-on-rail",
+      "why": "Read off the card's CURRENT repo: label, never the stamp: the usual fix is a person correcting the label, which a lift reading the stamped slug would never see.",
+      "lift_sends": "Triage to Planning"
+    },
+    "review-cap-spent": {
+      "lifts": "new-head",
+      "why": "The review re-triggers were spent on one head; a pushed fix is a new head the review runs on again.",
+      "lift_sends": "Green Light to In Review"
+    },
+    "dead-run-cap": {
+      "lifts": "unpark-marker",
+      "why": "Only an operator's unpark resets the death budget, and its dead-run-budget-reset marker is the fact.",
+      "lift_sends": "nothing moves"
+    },
+    "turn-cap-park": {
+      "lifts": "unpark-marker",
+      "why": "The same budget reset as the dead-run cap: two turn-cap deaths past green are the most a card gets.",
+      "lift_sends": "nothing moves"
+    },
+    "epic-rereview-twice": {
+      "lifts": "manual",
+      "why": "The park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
+      "lift_sends": "nothing moves"
+    },
+    "plan-critic-bound": {
+      "lifts": "manual",
+      "why": "Every bound park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
+      "lift_sends": "nothing moves"
+    },
+    "fix-dispute": {
+      "lifts": "new-head",
+      "why": "The fix loop's budget was spent on one head; a pushed fix is a new head the review, the gate and the fix loop run on again.",
+      "lift_sends": "Triage to In Review"
+    },
+    "unfixable-check": {
+      "lifts": "new-head",
+      "why": "The red check was read on one head (its receipt is keyed unfixable-check-hold @<sha8>); a new head is read again.",
+      "lift_sends": "Triage to In Review"
+    },
+    "manual": {
+      "lifts": "manual",
+      "why": "A person chose it, or a writer created the card already held; nothing a sweep can read says it is over.",
+      "lift_sends": "nothing moves"
+    }
+  },
+  "lift_kinds": {
+    "run-started": "A 🧠 or ⏳ run receipt newer than the stamp.",
+    "repo-on-rail": "Every repo: label the card wears now names a key of config/repo-map.json.",
+    "new-head": "The open pull request's head differs from the stamped sha.",
+    "unpark-marker": "A dead-run-budget-reset marker newer than the stamp.",
+    "manual": "Nothing a sweep can read: only card-closed or a person lifts it."
+  },
+  "universal_lift": {
+    "card-closed": "Lifts every reason, and a label with no stamp, when the card is Done or Canceled."
+  },
+  "readers": {
+    "sweep": "reconcile.held(): the sweep skips a held card entirely — no requeue, no nudge, no dispatch.",
+    "fix-dispatch": "reconcile.fix_dispatch_blocked(): the fix agent is kept off the held card's pull request.",
+    "medic": "medic_retry: the medic refuses its one automatic retry of a held card's build, fix, plan or review run.",
+    "limit-recovery": "limit_recovery: a held card's stages are not re-entered, save its sync bookkeeping."
+  },
+  "stamp": "🔒 hold: reason=<code> at=<qualifier or none> lifts=<lift-kind> by=<writer-file>",
+  "lift_line": "🔓 hold lifted: reason=<code> because=<lift-kind or card-closed or operator> by=<writer-file>",
+  "sites": [
+    {
+      "file": "scripts/reconcile.py",
+      "scope": "flag_stranded",
+      "anchor": "WATCHDOG_TAG",
+      "note": "The stall watchdog. One label write, two reasons: a routable card no run ever started on (stranded-no-run), and a card whose repo is not on the dispatch rail (no-route).",
+      "reasons": [
+        {
+          "reason": "stranded-no-run",
+          "lifts": "run-started",
+          "tried_first": {
+            "step": "The sweep re-sends a card that sat in Todo with no run, once, before it stamps the strand (DRE-5743). A second unattended re-send is the move that already failed.",
+            "receipt": "card sat in Todo with no run — re-dispatched"
+          }
+        },
+        {
+          "reason": "no-route",
+          "lifts": "repo-on-rail",
+          "tried_first": {
+            "step": "The card is moved to the operator's queue under the card-stranded act; the move lands with DRE-6177, and the row names it now.",
+            "receipt": "card-stranded"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "scope": "hand_review_nudge_to_person",
+      "anchor": "REVIEW_NUDGE_CAP_KEY",
+      "note": "The review lane's nudge cap is spent on this head; the card stays In Review with the label.",
+      "reasons": [
+        {
+          "reason": "review-cap-spent",
+          "lifts": "new-head",
+          "tried_first": {
+            "step": "Three review re-triggers on the head (REVIEW_NUDGE_CAP), then the evidence-built Green Light question, which lands with DRE-6181.",
+            "receipt": "review-nudge-cap"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "scope": "main",
+      "anchor": "agent keeps dying with no PR",
+      "note": "The sweep's In Progress no-PR dead-run cap: parked in Backlog.",
+      "reasons": [
+        {
+          "reason": "dead-run-cap",
+          "lifts": "unpark-marker",
+          "tried_first": {
+            "step": "Two requeues at the same budget (REQUEUE_CAP); then, on a silent death — no pull request and no blocker note — one hand-off to the planner, which lands with DRE-6178 and the sweep hand-off DRE-6186. A credential refusal or an API or model death at the cap holds as today, because neither is a size reading.",
+            "receipt": "✂️ dead-run-cap → Planning:"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "scope": "main",
+      "anchor": "with no PR after {dead}",
+      "note": "The sweep's In Review no-PR dead-run cap: parked in Backlog.",
+      "reasons": [
+        {
+          "reason": "dead-run-cap",
+          "lifts": "unpark-marker",
+          "tried_first": {
+            "step": "Two requeues at the same budget (REQUEUE_CAP); then, on a silent death — no pull request and no blocker note — one hand-off to the planner, which lands with DRE-6178 and the sweep hand-off DRE-6186. A credential refusal or an API or model death at the cap holds as today, because neither is a size reading.",
+            "receipt": "✂️ dead-run-cap → Planning:"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/dead_run.py",
+      "scope": "_cmd_park",
+      "anchor": "PARK_STATE",
+      "note": "`dead_run.py park`, reached from the build run's Report step (scripts/report_agent_result.sh): the dead-run-requeue budget's cap, or the turn-exhaustion-requeue budget's.",
+      "reasons": [
+        {
+          "reason": "dead-run-cap",
+          "lifts": "unpark-marker",
+          "tried_first": {
+            "step": "Two requeues at the same budget (REQUEUE_CAP); then, on a silent death — no pull request and no blocker note — one hand-off to the planner, which lands with DRE-6178 and the sweep hand-off DRE-6186. A credential refusal or an API or model death at the cap holds as today, because neither is a size reading.",
+            "receipt": "✂️ dead-run-cap → Planning:"
+          }
+        },
+        {
+          "reason": "turn-cap-park",
+          "lifts": "unpark-marker",
+          "tried_first": {
+            "step": "One requeue at the same budget after a turn-cap death past implementation green (DRE-4366).",
+            "receipt": "turn-exhaustion-requeue"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/rereview_watch.py",
+      "scope": "_fire",
+      "anchor": "BOUND_PARK_LANE",
+      "note": "The re-review watcher's second firing parks the epic in Triage.",
+      "reasons": [
+        {
+          "reason": "epic-rereview-twice",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The watcher's own first firing asks for the second critic's review again.",
+            "receipt": "asked for the review again"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "First critic — the bound parks in Triage",
+      "anchor": "the plan goes on to neither the second critic nor Green Light",
+      "note": "The first critic's bound.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "Review — the review died",
+      "anchor": "PARK_NOTE",
+      "note": "The second critic's review died a second time.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "Review — the second critic passed a plan the first critic held",
+      "anchor": "plan_critic.py held-park",
+      "note": "The second critic passed a plan the first critic still held.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "Review — the second critic produced no result",
+      "anchor": "could not decide on this plan",
+      "note": "The second critic produced no result as many times as the bound allows.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "Re-check the revised plan — review mode",
+      "anchor": "the revision did not pass the plan's own gates",
+      "note": "The re-plan's revision failed the plan's own gates.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "scope": "Review — the bound parks the plan in Triage",
+      "anchor": "nothing reaches Green Light until a person settles it",
+      "note": "The second critic's bound.",
+      "reasons": [
+        {
+          "reason": "plan-critic-bound",
+          "lifts": "manual",
+          "tried_first": {
+            "step": "The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. Each round is recorded as `plan-critic: stage=<stage> round=<n>`, composed in plan_critic.py, beside the 🔁 notices.",
+            "receipt": "{MARKER_PREFIX} stage={stage} round="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "scope": "Escalate checks the loop structurally cannot fix",
+      "anchor": "unfixable-check-hold",
+      "note": "A red check the fix loop cannot change, held on this head.",
+      "reasons": [
+        {
+          "reason": "unfixable-check",
+          "lifts": "new-head",
+          "tried_first": {
+            "step": "The fix run itself: it read the red check on this head and found nothing a fix could change.",
+            "receipt": "unfixable-check-hold @"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "scope": "Report",
+      "anchor": "park_for_human",
+      "note": "`park_for_human` in scripts/report_fix_result.sh, the fix run's Report step read through its workflow.",
+      "reasons": [
+        {
+          "reason": "fix-dispute",
+          "lifts": "new-head",
+          "tried_first": {
+            "step": "The fix loop's rounds on the pull request, up to its budget.",
+            "receipt": "Fix budget exhausted"
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/model_adoption_actions.py",
+      "scope": "<module>",
+      "anchor": "The question card",
+      "note": "QUESTION_LABELS: the model-adoption question card is created already held, with no stamp.",
+      "reasons": [
+        {
+          "reason": "manual",
+          "lifts": "manual",
+          "tried_first": "none — a person, or a writer creating a card already held, chose it"
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    }
+  ]
+}
