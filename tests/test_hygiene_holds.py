@@ -1,4 +1,4 @@
-"""RED-first: the hygiene agent's holds lane (DRE-6180).
+"""RED-first: the hygiene agent's holds lane (DRE-6180, DRE-6273).
 
 `scripts/hygiene_holds.py` finds every card carrying `needs-human` in the
 leg's scope — in any lane, archived issues included, read for itself through
@@ -9,14 +9,20 @@ lifts the hold whose reason has cleared:
     or not — how the 207 stale labels come off;
   * `run-started`, a 🧠 or ⏳ run receipt newer than a `stranded-no-run` stamp;
   * `unpark-marker`, asked of `hold.lift_due` for `dead-run-cap` and
-    `turn-cap-park`.
+    `turn-cap-park`;
+  * `new-head` (DRE-6273), the open pull request's head off the leg's listing
+    differing from the stamped sha — and the card returned to In Review from
+    Green Light (`review-cap-spent`) or Triage (`fix-dispute`,
+    `unfixable-check`);
+  * `repo-on-rail` (DRE-6273), the card's current `repo:` label on the rail —
+    and the card returned from Triage to Planning.
 
 A lift is the label off and the agent's own receipt (`hyg-hold-cleared`), and
 an archived card is unarchived for the two writes and re-archived after them.
-`new-head` and `repo-on-rail` need a lane move, which lands with DRE-6273; until
-then they are a `Left` row and nothing is written. A `manual` hold is never
-lifted outside Done or Canceled. A pass lifts at most
-`HYGIENE_HOLDS_MAX_LIFTS` holds and carries the rest.
+The two DRE-6273 lifts add a third write, the lane move, only from the lane
+the hold parked the card in. A `manual` hold is never lifted outside Done or
+Canceled. A pass lifts at most `HYGIENE_HOLDS_MAX_LIFTS` holds and carries the
+rest.
 
 The fixtures are built here, in the shape the lane's own query answers: an
 issue with `identifier`, `state`, `archivedAt`, `labels`, `children` and the
@@ -54,7 +60,6 @@ SUMMARY = "DRE-900"
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
 CAP_VAR = "HYGIENE_HOLDS_MAX_LIFTS"
-DRE_6273 = "lift needs a lane move — lands with DRE-6273"
 LABEL = "needs-human"
 ACT = "hygiene-hold-clear"
 TAG = "hyg-hold-cleared"
@@ -386,51 +391,269 @@ class TestArchived:
 
 
 # --------------------------------------------------------------------------- #
-# the lifts that need a lane move — DRE-6273                                   #
+# the lifts that move the card — DRE-6273                                      #
 # --------------------------------------------------------------------------- #
 
 
-def pr_list(number, head):
-    return {"dreadnought-foundry/bureau-pipeline": [
-        {"number": number, "headRefName": "agent/DRE-10-x", "headRefOid": head,
-         "title": "feat(DRE-10): x", "body": "", "comments": []}]}
+PIPELINE_REPO = "dreadnought-foundry/bureau-pipeline"
 
 
-class TestLiftsThatNeedALaneMove:
-    def test_a_green_light_review_cap_with_a_new_head_is_a_row_naming_dre_6273(
-        self, lift_due_calls
-    ):
-        card = issue("DRE-10", "Green Light", [stamp("review-cap-spent", SHA)])
-        items, _, _ = plan(card, prs=pr_list(42, OTHER_SHA))
-        assert actions(items) == []
-        [row] = lefts(items)
-        assert row.target == "DRE-10" and row.why == DRE_6273
-        assert lift_due_calls == []
+def pull(ident, number, head, repo=PIPELINE_REPO):
+    """One open pull request on the card's branch, in the leg's listing shape."""
+    return {"number": number, "headRefName": f"agent/{ident}-x", "headRefOid": head,
+            "title": f"feat({ident}): x", "body": "", "comments": []}
 
-    def test_a_triage_no_route_wearing_an_on_rail_label_is_the_same_row(self, lift_due_calls):
-        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site")],
-                     repo="bureau-pipeline")
-        items, _, _ = plan(card)
-        assert actions(items) == []
-        [row] = lefts(items)
-        assert row.why == DRE_6273
-        assert lift_due_calls == []
+
+def pr_list(number, head, ident="DRE-10", repo=PIPELINE_REPO):
+    return {repo: [pull(ident, number, head)]}
+
+
+def lane_moves(action):
+    return [w.lane for w in action.writes if w.kind == "linear_state"]
+
+
+def assert_three_writes(action, because, destination):
+    label, note, move = action.writes
+    assert (label.kind, label.label, label.add) == ("linear_label", LABEL, False)
+    assert note.kind == "linear_comment"
+    assert receipt_head(note)["cause"].endswith(f"because={because}")
+    assert (move.kind, move.lane, move.park) == ("linear_state", destination, False)
+
+
+class TestNewHeadFromGreenLight:
+    """`review-cap-spent` — the sweep's Green Light park (DRE-6181)."""
+
+    def card(self, lane_name="Green Light", ident="DRE-10", repo="bureau-pipeline"):
+        return issue(ident, lane_name, [stamp("review-cap-spent", SHA)], repo=repo)
+
+    def test_the_stamped_head_still_open_yields_nothing(self):
+        items, _, _ = plan(self.card(), prs=pr_list(42, SHA))
+        assert items == []
+
+    def test_a_new_head_is_three_writes_ending_in_in_review(self):
+        items, _, _ = plan(self.card(), prs=pr_list(42, OTHER_SHA))
+        [action] = actions(items)
+        assert lefts(items) == []
+        assert action.act == ACT and action.target == "DRE-10"
+        assert action.cause == "reason=review-cap-spent because=new-head"
+        assert first_line(action.writes[1]) == (
+            f"🧹 hygiene: {TAG} — reason=review-cap-spent because=new-head · {CLOCK}")
+        assert_three_writes(action, "new-head", "In Review")
+
+    def test_the_receipt_names_the_stamped_sha_the_new_head_and_the_lane(self):
+        items, _, _ = plan(self.card(), prs=pr_list(42, OTHER_SHA))
+        [action] = actions(items)
+        assert f"stamp at={SHA}" in action.evidence
+        assert any(f"{PIPELINE_REPO}#42" in e and OTHER_SHA in e for e in action.evidence)
+        assert "lane Green Light" in action.evidence
+
+    def test_the_same_card_in_in_review_is_two_writes_and_no_move(self):
+        items, _, _ = plan(self.card("In Review"), prs=pr_list(42, OTHER_SHA))
+        [action] = actions(items)
+        assert action.cause == "reason=review-cap-spent because=new-head"
+        assert [w.kind for w in action.writes] == ["linear_label", "linear_comment"]
+
+    def test_no_open_pull_request_yields_nothing(self):
+        items, _, _ = plan(self.card())
+        assert items == []
+
+    def test_another_cards_pull_request_is_not_this_cards_head(self):
+        items, _, _ = plan(self.card(), prs=pr_list(42, OTHER_SHA, ident="DRE-100"))
+        assert items == []
+
+    def test_the_newest_of_the_cards_pull_requests_is_its_head(self):
+        prs = {PIPELINE_REPO: [pull("DRE-10", 41, OTHER_SHA), pull("DRE-10", 42, SHA)]}
+        assert plan(self.card(), prs=prs)[0] == []
+
+    def test_lift_due_is_asked_with_the_open_pull_requests_head(self, lift_due_calls):
+        plan(self.card(), prs=pr_list(42, OTHER_SHA))
+        [(asked, kwargs)] = lift_due_calls
+        assert asked["reason"] == "review-cap-spent"
+        assert kwargs["pr_head"] == OTHER_SHA and kwargs["lane"] == "Green Light"
+
+
+class TestNewHeadFromTriage:
+    """`fix-dispute` and `unfixable-check` — the fix loop's Triage park
+    (DRE-6179)."""
 
     @pytest.mark.parametrize("reason", ["fix-dispute", "unfixable-check"])
-    def test_a_triage_new_head_hold_is_the_row_and_lift_due_is_not_asked(
-        self, reason, lift_due_calls
-    ):
+    def test_the_stamped_head_still_open_yields_nothing(self, reason):
         card = issue("DRE-12", "Triage", [stamp(reason, SHA)])
-        items, _, _ = plan(card, prs=pr_list(43, OTHER_SHA))
+        assert plan(card, prs=pr_list(43, SHA, ident="DRE-12"))[0] == []
+
+    @pytest.mark.parametrize("reason", ["fix-dispute", "unfixable-check"])
+    def test_a_new_head_is_three_writes_ending_in_in_review(self, reason):
+        card = issue("DRE-12", "Triage", [stamp(reason, SHA)])
+        items, _, _ = plan(card, prs=pr_list(43, OTHER_SHA, ident="DRE-12"))
+        [action] = actions(items)
+        assert lefts(items) == []
+        assert action.cause == f"reason={reason} because=new-head"
+        assert_three_writes(action, "new-head", "In Review")
+        assert "lane Triage" in action.evidence
+
+    @pytest.mark.parametrize("reason", ["fix-dispute", "unfixable-check"])
+    def test_no_open_pull_request_yields_nothing(self, reason):
+        card = issue("DRE-12", "Triage", [stamp(reason, SHA)])
+        assert plan(card)[0] == []
+
+    @pytest.mark.parametrize("lane_name", ["Backlog", "Todo", "In Progress", "In Review",
+                                           "Green Light", "Planning"])
+    @pytest.mark.parametrize("reason", ["fix-dispute", "unfixable-check"])
+    def test_any_lane_but_triage_is_two_writes_and_no_move(self, reason, lane_name):
+        card = issue("DRE-12", lane_name, [stamp(reason, SHA)])
+        items, _, _ = plan(card, prs=pr_list(43, OTHER_SHA, ident="DRE-12"))
+        [action] = actions(items)
+        assert action.cause == f"reason={reason} because=new-head"
+        assert [w.kind for w in action.writes] == ["linear_label", "linear_comment"]
+
+    def test_a_review_cap_stamp_in_triage_does_not_move(self):
+        # Only the lane the hold parked the card in is the lane a lift moves
+        # it out of: the sweep parks `review-cap-spent` in Green Light.
+        card = issue("DRE-12", "Triage", [stamp("review-cap-spent", SHA)])
+        [action] = actions(plan(card, prs=pr_list(43, OTHER_SHA, ident="DRE-12"))[0])
+        assert lane_moves(action) == []
+
+
+class TestRepoOnRail:
+    """`no-route` — the sweep's Triage park (DRE-6177), lifted by the card's
+    current `repo:` label and never by the stamp's qualifier."""
+
+    def test_a_label_corrected_onto_the_rail_lifts_to_planning(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site")],
+                     repo="portico")
+        items, _, _ = plan(card)
+        [action] = actions(items)
+        assert lefts(items) == []
+        assert action.cause == "reason=no-route because=repo-on-rail"
+        assert_three_writes(action, "repo-on-rail", "Planning")
+
+    def test_the_receipt_names_the_stamp_the_live_label_and_the_lane(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site")],
+                     repo="portico")
+        [action] = actions(plan(card)[0])
+        assert "stamp at=repo:legacy-site" in action.evidence
+        assert any("repo:portico" in e for e in action.evidence)
+        assert "lane Triage" in action.evidence
+        evidence_line = action.writes[1].body.splitlines()[1]
+        for fact in ("repo:legacy-site", "repo:portico", "lane Triage"):
+            assert fact in evidence_line
+
+    def test_a_repo_none_stamp_lifts_once_an_on_rail_label_is_added(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:none")], repo="portico")
+        [action] = actions(plan(card)[0])
+        assert action.cause == "reason=no-route because=repo-on-rail"
+        assert lane_moves(action) == ["Planning"]
+
+    def test_the_label_unchanged_off_the_rail_yields_nothing(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site")],
+                     repo="legacy-site")
+        assert plan(card)[0] == []
+
+    def test_a_stamped_slug_now_on_the_rail_lifts_nothing_while_the_label_is_off_it(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:portico")],
+                     repo="legacy-site")
+        assert plan(card)[0] == []
+
+    def test_no_repo_label_at_all_yields_nothing(self):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:none")], repo=None)
+        assert plan(card)[0] == []
+
+    @pytest.mark.parametrize("lane_name", ["Backlog", "Todo", "Planning", "Green Light",
+                                           "In Review"])
+    def test_any_lane_but_triage_is_two_writes_and_no_move(self, lane_name):
+        card = issue("DRE-11", lane_name, [stamp("no-route", "repo:legacy-site")],
+                     repo="portico")
+        [action] = actions(plan(card)[0])
+        assert action.cause == "reason=no-route because=repo-on-rail"
+        assert [w.kind for w in action.writes] == ["linear_label", "linear_comment"]
+
+    def test_lift_due_is_asked_with_the_live_labels_and_the_rail(self, lift_due_calls):
+        card = issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site")],
+                     repo="portico")
+        plan(card)
+        [(asked, kwargs)] = lift_due_calls
+        assert asked["reason"] == "no-route"
+        assert "repo:portico" in kwargs["labels"]
+        assert "portico" in kwargs["rail_slugs"]
+
+
+class TestSpentStampsOfTheMovingLifts:
+    def green_light(self, *after):
+        return issue("DRE-10", "Green Light", [stamp("review-cap-spent", SHA), *after])
+
+    def triage(self, *after):
+        return issue("DRE-11", "Triage", [stamp("no-route", "repo:legacy-site"), *after],
+                     repo="portico")
+
+    def spent_review_cap(self):
+        return self.green_light(hold.lift_line("review-cap-spent", "operator",
+                                               "scripts/linear_ops.py"))
+
+    def spent_no_route(self):
+        return self.triage(hyg_cleared())
+
+    def test_a_lift_line_spends_a_review_cap_stamp_whose_head_moved(self, lift_due_calls):
+        items, _, _ = plan(self.spent_review_cap(), prs=pr_list(42, OTHER_SHA))
         assert actions(items) == []
         [row] = lefts(items)
-        assert row.why == DRE_6273
+        assert row.target == "DRE-10" and "manual" in row.why
         assert lift_due_calls == []
 
-    def test_the_row_says_what_lifts_it(self):
-        card = issue("DRE-12", "Triage", [stamp("fix-dispute", SHA)])
-        [row] = lefts(plan(card)[0])
-        assert row.recommendation.strip()
+    def test_a_cleared_receipt_spends_a_no_route_stamp_on_an_on_rail_card(self, lift_due_calls):
+        items, _, _ = plan(self.spent_no_route())
+        assert actions(items) == []
+        [row] = lefts(items)
+        assert row.target == "DRE-11" and "manual" in row.why
+        assert lift_due_calls == []
+
+    def test_a_fresh_stamp_after_the_lift_line_lifts_again(self):
+        card = self.green_light(
+            hold.lift_line("review-cap-spent", "operator", "scripts/linear_ops.py"),
+            stamp("review-cap-spent", SHA))
+        [action] = actions(plan(card, prs=pr_list(42, OTHER_SHA))[0])
+        assert lane_moves(action) == ["In Review"]
+
+    def test_a_fresh_stamp_after_the_cleared_receipt_lifts_again(self):
+        card = self.triage(hyg_cleared(), stamp("no-route", "repo:legacy-site"))
+        [action] = actions(plan(card)[0])
+        assert lane_moves(action) == ["Planning"]
+
+
+def moving_fixture():
+    """The DRE-6273 fixtures, each card in its own lane."""
+    return [
+        issue("DRE-110", "Green Light", [stamp("review-cap-spent", SHA)]),
+        issue("DRE-112", "Triage", [stamp("fix-dispute", SHA)]),
+        issue("DRE-113", "Triage", [stamp("unfixable-check", SHA)]),
+        issue("DRE-111", "Triage", [stamp("no-route", "repo:legacy-site")], repo="portico"),
+        issue("DRE-116", "Triage", [stamp("no-route", "repo:legacy-site")],
+              repo="legacy-site"),
+        issue("DRE-117", "In Review", [stamp("review-cap-spent", SHA)]),
+        issue("DRE-118", "Green Light", [stamp("review-cap-spent", SHA),
+                                         hold.lift_line("review-cap-spent", "operator",
+                                                        "scripts/linear_ops.py")]),
+        issue("DRE-119", "Triage", [stamp("no-route", "repo:legacy-site"), hyg_cleared()],
+              repo="portico"),
+    ]
+
+
+def moving_prs():
+    return {PIPELINE_REPO: [pull(ident, n, OTHER_SHA) for n, ident in enumerate(
+        ("DRE-110", "DRE-112", "DRE-113", "DRE-117", "DRE-118"), start=50)]}
+
+
+class TestNoRowNamesThisCard:
+    def test_every_row_is_a_manual_hold_or_a_carry(self, monkeypatch):
+        monkeypatch.setenv(CAP_VAR, "3")
+        items, _, _ = plan(*moving_fixture(), *every_fixture(), prs=moving_prs())
+        assert actions(items)
+        for row in lefts(items):
+            assert ("manual" in row.why
+                    or row.why == "over the per-pass cap of 3 — carried to the next pass"), row
+            assert "DRE-6273" not in row.why
+
+    def test_the_lane_no_longer_names_this_card_as_a_later_landing(self):
+        assert "lands with DRE-6273" not in MODULE_PATH.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -555,7 +778,7 @@ class TestSpentStamps:
         [row] = lefts(items)
         assert row.target == ident
         assert "manual" in row.why
-        assert row.why != DRE_6273 and "DRE-6273" not in row.why
+        assert "DRE-6273" not in row.why
         assert lift_due_calls == []
 
     @pytest.mark.parametrize("which", sorted(SPENT))
@@ -594,19 +817,38 @@ def every_fixture():
     ]
 
 
+def listing(prs):
+    """The read-only `gh` answering the leg's `gh pr list` off `prs`."""
+    def gh(argv):
+        repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
+        return json.dumps(prs.get(repo, []))
+    return gh
+
+
 class TestGuardAndScope:
     def test_every_write_passes_the_real_guard(self):
-        items, ctx, _ = plan(*every_fixture())
+        items, ctx, _ = plan(*every_fixture(), *moving_fixture(), prs=moving_prs())
         writes = [w for a in actions(items) for w in a.writes]
         assert writes
+        assert {"In Review", "Planning"} <= {w.lane for w in writes}
         for write in writes:
             hygiene.guard(write, ctx)
 
-    def test_it_never_proposes_a_lane_move(self):
-        items, _, _ = plan(*every_fixture())
+    def test_the_only_lane_moves_are_the_moving_lifts_from_their_park(self):
+        items, _, _ = plan(*every_fixture(), *moving_fixture(), prs=moving_prs())
         kinds = {w.kind for a in actions(items) for w in a.writes}
-        assert kinds <= {"linear_label", "linear_comment", "linear_archived"}
-        assert "linear_state" not in kinds
+        assert kinds <= {"linear_label", "linear_comment", "linear_archived", "linear_state"}
+        moves = {a.target: lane_moves(a) for a in actions(items) if lane_moves(a)}
+        assert moves == {"DRE-11": ["Planning"], "DRE-110": ["In Review"],
+                         "DRE-111": ["Planning"], "DRE-112": ["In Review"],
+                         "DRE-113": ["In Review"]}
+
+    def test_the_lane_move_is_the_last_write(self):
+        items, _, _ = plan(*moving_fixture(), prs=moving_prs())
+        for action in actions(items):
+            kinds = [w.kind for w in action.writes]
+            assert "linear_state" not in kinds[:-1]
+            assert kinds[:2] == ["linear_label", "linear_comment"]
 
     def test_every_label_write_takes_the_hold_off_and_nothing_else(self):
         items, _, _ = plan(*every_fixture())
@@ -619,6 +861,16 @@ class TestGuardAndScope:
         assert items == []
         items, ctx, _ = plan(atlas, owner="EveryBite")
         [action] = actions(items)
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_moving_lift_outside_the_legs_scope_yields_nothing(self):
+        atlas = issue("DRE-71", "Green Light", [stamp("review-cap-spent", SHA)], repo="atlas")
+        prs = {"EveryBite/atlas": [pull("DRE-71", 7, OTHER_SHA)]}
+        assert plan(atlas, prs=prs)[0] == []
+        items, ctx, _ = plan(atlas, owner="EveryBite", prs=prs)
+        [action] = actions(items)
+        assert lane_moves(action) == ["In Review"]
         for write in action.writes:
             hygiene.guard(write, ctx)
 
@@ -636,10 +888,15 @@ class TestGuardAndScope:
         monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [need_lane()])
         monkeypatch.setattr(hygiene, "send", lambda write, ctx: sent.append(write))
         monkeypatch.setattr(linear_ops, "comment_records", lambda ident, **k: [])
-        ctx, _ = context(every_fixture())
+        ctx, _ = context(every_fixture() + moving_fixture(), gh=listing(moving_prs()))
         ledger = hygiene.run_leg({"lanes": {}}, ctx)
         assert ledger["actions"] and all(a["outcome"] == "executed" for a in ledger["actions"])
-        assert {w.kind for w in sent} <= {"linear_label", "linear_comment", "linear_archived"}
+        assert {w.kind for w in sent} <= {"linear_label", "linear_comment", "linear_archived",
+                                          "linear_state"}
+        assert {w.lane for w in sent if w.kind == "linear_state"} == {"In Review", "Planning"}
+
+    def test_the_core_discovers_one_holds_lane(self):
+        assert [m.__name__ for m in hygiene.discover()].count("hygiene_holds") == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -663,6 +920,28 @@ class TestDryRun:
         assert "would: label DRE-1 − needs-human" in out
         assert "would: comment DRE-1: 🧹 hygiene: hyg-hold-cleared" in out
         assert "would: unarchive DRE-5" in out and "would: archive DRE-5" in out
+
+    def test_a_dry_run_names_each_moving_lifts_lane_move_and_sends_nothing(
+        self, monkeypatch, capsys
+    ):
+        def refuse(write, ctx):
+            raise AssertionError(f"a dry run sent {write.describe()}")
+
+        monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [need_lane()])
+        monkeypatch.setattr(hygiene, "send", refuse)
+        monkeypatch.setattr(linear_ops, "comment_records", lambda ident, **k: [])
+        monkeypatch.setenv("HYGIENE_DRY_RUN", "1")
+        ctx, _ = context(moving_fixture(), gh=listing(moving_prs()),
+                         dry_run=os.environ["HYGIENE_DRY_RUN"] == "1")
+        ledger = hygiene.run_leg({"lanes": {}}, ctx)
+        out = capsys.readouterr().out
+        assert ledger["actions"] and all(a["outcome"] == "would" for a in ledger["actions"])
+        assert ("would: comment DRE-110: 🧹 hygiene: hyg-hold-cleared — "
+                "reason=review-cap-spent because=new-head") in out
+        assert "would: state DRE-110 → In Review" in out
+        assert ("would: comment DRE-111: 🧹 hygiene: hyg-hold-cleared — "
+                "reason=no-route because=repo-on-rail") in out
+        assert "would: state DRE-111 → Planning" in out
 
     def test_the_summary_digest_changes_when_a_lift_is_proposed(self, monkeypatch):
         monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [need_lane()])
@@ -729,9 +1008,35 @@ class TestThePerPassCap:
 
     def test_the_carry_does_not_hide_a_row_of_another_kind(self, monkeypatch):
         monkeypatch.setenv(CAP_VAR, "1")
-        items, _, _ = plan(*cap_fixture(), issue("DRE-12", "Triage", [stamp("fix-dispute", SHA)]))
+        spent = issue("DRE-12", "Triage", [stamp("fix-dispute", SHA), hyg_cleared()])
+        items, _, _ = plan(*cap_fixture(), spent)
         assert [a.target for a in actions(items)] == ["DRE-90"]
-        assert [r.why for r in lefts(items, "DRE-12")] == [DRE_6273]
+        [row] = lefts(items, "DRE-12")
+        assert "manual" in row.why
+
+    def test_a_cap_of_two_takes_the_moving_lifts_ahead_of_the_closed_backlog(
+        self, monkeypatch
+    ):
+        base = datetime(2026, 9, 1, tzinfo=UTC)
+
+        def at(days):
+            return (base + timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+        green = issue("DRE-210", "Green Light", [(stamp("review-cap-spent", SHA), at(9))])
+        triage = issue("DRE-211", "Triage", [(stamp("no-route", "repo:legacy-site"), at(4))],
+                       repo="portico")
+        done = [issue("DRE-201", "Done", [(stamp("dead-run-cap"), at(1))]),
+                issue("DRE-202", "Done", [(stamp("turn-cap-park"), at(2))]),
+                issue("DRE-203", "Done", ["talk"])]
+        monkeypatch.setenv(CAP_VAR, "2")
+        items, _, _ = plan(*done, green, triage, prs=pr_list(60, OTHER_SHA, ident="DRE-210"))
+        lifted = actions(items)
+        assert [a.target for a in lifted] == ["DRE-211", "DRE-210"]
+        assert [lane_moves(a) for a in lifted] == [["Planning"], ["In Review"]]
+        rows = lefts(items)
+        assert sorted(r.target for r in rows) == ["DRE-201", "DRE-202", "DRE-203"]
+        for row in rows:
+            assert row.why == "over the per-pass cap of 2 — carried to the next pass"
 
     @pytest.mark.parametrize("value", ["", "  "])
     def test_an_empty_value_is_the_default(self, monkeypatch, value):
@@ -799,13 +1104,30 @@ class TestThePage:
         assert f"`{TAG}`" in text and f"`{ACT}`" in text
         assert "reason=<code> because=<lift-kind>" in text
 
-    def test_it_names_the_three_lifts_this_lane_makes_and_the_two_it_leaves(self):
+    def test_it_names_the_five_lifts_this_lane_makes(self):
         section = self.text().split("## How a hold lifts", 1)[-1]
         for kind in ("`card-closed`", "`run-started`", "`unpark-marker`",
                      "`new-head`", "`repo-on-rail`"):
             assert kind in section, kind
-        assert "DRE-6273" in section
-        assert DRE_6273 in section
+
+    def test_it_says_where_each_lift_sends_the_card(self):
+        section = self.text().split("## How a hold lifts", 1)[-1]
+        assert "Green Light to In Review" in section
+        assert "Triage to In Review" in section
+        assert "Triage to Planning" in section
+        assert "moves nothing" in section
+        assert "third write" in section
+
+    def test_it_says_the_no_route_lift_reads_the_current_label(self):
+        section = self.text().split("## How a hold lifts", 1)[-1]
+        assert "current `repo:` label" in section
+        assert "never the stamp" in section
+
+    def test_it_no_longer_says_the_two_lifts_land_later(self):
+        text = self.text()
+        assert "lands with DRE-6273" not in text
+        assert "lift needs a lane move" not in text
+        assert "Until then a card whose live" not in text
 
     def test_it_says_a_manual_hold_waits_for_a_person(self):
         section = self.text().split("## How a hold lifts", 1)[-1]
