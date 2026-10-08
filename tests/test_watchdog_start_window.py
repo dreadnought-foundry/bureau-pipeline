@@ -177,7 +177,7 @@ def test_a_full_window_after_the_resend_still_stamps():
     card = _card(sent, [(RESEND, sent)])
     flagged, comment, add_label = _watch([card])
     assert flagged == {CARD}
-    assert comment.call_args.args[1].lstrip().startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
+    assert comment.call_args_list[0].args[1].lstrip().startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     add_label.assert_called_once_with(CARD, reconcile.HOLD_LABEL)
 
 
@@ -324,7 +324,7 @@ def test_the_stamp_names_the_last_dispatch_and_the_run_lookup():
     runs = [_run(906, "completed", _iso(3), "success")]
     flagged, comment, _ = _watch([card], runs=runs, jobs={"906": _job("DRE-5372")})
     assert flagged == {CARD}
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     assert "last dispatch" in body.lower()
     assert dead_run.pacific(sent_at) in body, "the dispatch time, in PT"
     assert "run lookup" in body.lower()
@@ -335,7 +335,7 @@ def test_the_stamp_says_when_no_dispatch_time_is_on_record():
     card = _card(_iso(45))
     flagged, comment, _ = _watch([card])
     assert flagged == {CARD}
-    body = comment.call_args.args[1].lower()
+    body = comment.call_args_list[0].args[1].lower()
     assert "last dispatch" in body and "none on record" in body
 
 

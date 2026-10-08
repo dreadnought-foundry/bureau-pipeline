@@ -506,7 +506,8 @@ class TestTheRepairPass:
 #: activate route's two (its send-back bound and its second death, both into
 #: Green Light) with the review that route no longer runs.
 _LABEL_WRITERS = (
-    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 4),
+    # Three since DRE-6177: `flag_stranded` writes through `hold.apply`.
+    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 3),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
     # Eight since DRE-5284 (the first critic's bound parks in Triage too);
@@ -541,12 +542,16 @@ class TestTheOtherWritersAreUnchanged:
             "flag_stalled_planning"
         )
 
-    def test_flag_stranded_still_comments_and_labels_in_place(self):
+    def test_flag_stranded_holds_in_place_or_moves_to_triage(self):
         """Its no-route cards belong in Triage rather than Green Light, so it is
-        a separate card and is deliberately not changed here."""
+        a separate card and is deliberately not changed here. DRE-6177 made it
+        that card: the hold is stamped through `hold.apply`, and the one move it
+        makes is a no-route card's, to Triage — never to Green Light."""
         source = inspect.getsource(reconcile.flag_stranded)
-        assert "linear_ops.add_label(ident, HOLD_LABEL)" in source
-        assert "cmd_state" not in source and "cmd_advance" not in source
+        assert 'hold.apply(ident, code, at, "reconcile.py")' in source
+        assert "linear_ops.add_label(ident, HOLD_LABEL)" not in source
+        assert "cmd_state" not in source
+        assert re.findall(r"cmd_advance\(ident, \"([^\"]+)\"", source) == ["Triage"]
 
     def test_the_dead_run_cap_still_pairs_the_label_with_a_park(self):
         """Both cap sites write the label AND move the card to Backlog. Six of

@@ -158,6 +158,7 @@ import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fi
 import groom_schedule_gate  # noqa: E402 — the standing card's variable name
 import groomer  # noqa: E402
 import head_desync  # noqa: E402 — DRE-6217: a pull request GitHub left behind its branch
+import hold  # noqa: E402 — DRE-6173: ONE writer of the hold's label and its stamp
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -2345,9 +2346,17 @@ def flag_stranded() -> set[str]:
     Flagging = one plain-English comment (🚨 + WATCHDOG_TAG) naming the
     reason — and, for the no-run class, the evidence it was read off: the
     last dispatch time and the run lookup's result (DRE-5743) — plus
-    HOLD_LABEL — no state move, no cancel. A false positive costs a label a
-    human removes; the run itself is untouched. Fail loud beats fail silent
-    (DRE-1979).
+    HOLD_LABEL and its `🔒 hold:` stamp, through `hold.apply` (DRE-6177), so
+    the card says which of the two holds it is. A NO RUN card is not moved
+    and never canceled: a false positive costs a label a human removes, the
+    run itself is untouched, and once the hygiene agent's holds lane lands
+    (DRE-6180) the stamp lifts on the first run receipt newer than it. A NO ROUTE card is a mechanical fix — a person corrects
+    its `repo:` label, or the repo joins the rail — and not a decision, so
+    after the stamp it is moved to Triage, the operator's queue, out of Todo
+    or In Progress only (`cmd_advance`). A card the read door's board put in
+    its lane is read live once before the first write (`_door_lane_still`):
+    one that left the lane since gets no receipt, no label and no stamp.
+    Fail loud beats fail silent (DRE-1979).
 
     Returns the identifiers flagged THIS sweep so the caller's nudge loop
     can skip them — their fetched labels predate the hold label.
@@ -2454,11 +2463,20 @@ def flag_stranded() -> set[str]:
                 f"{state} for {WATCHDOG_MINUTES}+ minutes with no run receipt "
                 "on it — every agent posts one the moment it starts, so as far "
                 "as this sweep can see, nothing has begun. Why it has not "
-                "started is not known from here. If a run is merely queued, "
-                f"remove the '{HOLD_LABEL}' label and it will carry on; "
-                "otherwise this card needs a human to look. "
-                f"Evidence: {evidence}."
+                "started is not known from here, so this card needs a human "
+                f"to look. Evidence: {evidence}. "
+                # The way back, for the person who reads it (DRE-6177): the
+                # re-send is the one move that starts the run the stamp waits on.
+                # Nothing lifts the hold by itself until the hygiene agent's
+                # holds lane lands (DRE-6180), so today's re-send clears it.
+                f"To re-send it, run `linear_ops.py unpark {ident}`, which "
+                f"clears the hold for you, or remove the '{HOLD_LABEL}' label "
+                "and move the card out of Todo and back. Once the hygiene "
+                "agent's holds lane is live (DRE-6172), a re-send needs no "
+                "clearing: the hold lifts itself on the first run receipt "
+                "newer than its stamp."
             )
+            code, at = "stranded-no-run", "none"
         else:
             live_confirmed = ""
             if slug is not None:
@@ -2484,11 +2502,43 @@ def flag_stranded() -> set[str]:
                 "rail — no agent can ever pick this card up, so it must be "
                 "hand-built (or the repo onboarded to the routing map first). "
                 f"Absent from this sweep's routing snapshot [{snapshot}]"
-                f"{live_confirmed}. Labeled '{HOLD_LABEL}' for a human."
+                f"{live_confirmed}. Labeled '{HOLD_LABEL}' for a human. "
+                # Both fixes, and who lifts the hold today (DRE-6177): the
+                # holds lane's lift lands with DRE-6180 and DRE-6273.
+                "This is a fix, not a decision: correct the card's `repo:` "
+                "label to a slug on the rail, or add the repo to "
+                "config/repo-map.json. Once the hygiene agent's holds lane is "
+                "live (DRE-6172), the hold lifts itself on the next hygiene "
+                "pass after that fix; until then, remove the "
+                f"'{HOLD_LABEL}' label and move the card to Planning yourself."
             )
+            # The qualifier records what the sweep read; the lift reads the
+            # card's live `repo:` label (DRE-6173). A slug the stamp cannot
+            # carry is no route either, and is stamped as none.
+            code, at = "no-route", f"repo:{slug or 'none'}"
+            try:
+                hold.stamp_line(code, at, "reconcile.py")
+            except ValueError:
+                at = "repo:none"
+            # A write in three parts — the receipt, the hold, the lane — so a
+            # card the door's read put here is read live once first: one that
+            # left its lane since gets none of them (item 33).
+            if not _door_lane_still(card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)):
+                continue
         linear_ops.cmd_comment(ident, pipeline_act.receipt(
             "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
-        linear_ops.add_label(ident, HOLD_LABEL)
+        hold.apply(ident, code, at, "reconcile.py")
+        if not routable:
+            # Triage, the operator's queue, and only out of the lanes this
+            # watchdog walks for it — a hand-built card is skipped above, and
+            # Planning has its own rule. The hygiene agent's Triage lane
+            # leaves a stamped no-route card where this puts it (DRE-6190).
+            try:
+                linear_ops.cmd_advance(ident, "Triage", "Todo,In Progress")
+            except linear_ops.LinearError as e:
+                _write_failures.append(f"{ident} no-route move to Triage: {e}")
+                print(f"ERROR: watchdog: {ident} was not moved to Triage: {e}",
+                      file=sys.stderr)
         flagged.add(ident)
         print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
     return flagged | flag_stalled_planning()
