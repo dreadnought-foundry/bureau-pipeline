@@ -39,8 +39,11 @@ set -e
 #      reconcile sweep re-checks. A run that failed to deliver skips it.
 #    - Otherwise, the dead-run or turn-cap decision. `dead_run.py decide`
 #      reads the budget the death spends and answers requeue (Todo), hold
-#      (`dead_run.py park`: Backlog and the hold label, both or neither),
-#      replan (Planning), infra (a run warning, the card left where it is)
+#      (`dead_run.py park`: Backlog and the hold label, both or neither,
+#      then the stamp naming the budget), replan (Planning — a turn-cap death
+#      short of green, or the dead-run cap trying the planner once on a run
+#      that left no PR and no blocker note), infra (a run warning, the card
+#      left where it is)
 #      or defer (a receipt only, for a cancelled run).
 # 4. A turn-cap death that an escalation, a blocker, a rescue delivery or
 #    the unreadable receipt took still gets its tagged receipt from
@@ -343,20 +346,29 @@ else
   else
     PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
       "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
-    ERR_FLAGS=""
+    # The thread decides whether the cap tries the planner first (DRE-6178).
+    # A dump that fails passes no file, never `[]` — `[]` reads as a budget
+    # that never tried the planner, so the cap holds instead.
+    COMMENTS_FILE="${RUNNER_TEMP:-/tmp}/card-comments.json"
+    ERR_FLAGS="--comments-file $COMMENTS_FILE"
+    python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+      > "$COMMENTS_FILE" || ERR_FLAGS=""
     if [ "$DEATH_CLASS" = "api_death" ]; then
-      ERR_FLAGS="--is-error --error-model $MODEL_USED"
+      ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED"
     fi
   fi
   if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
     ERR_FLAGS="$ERR_FLAGS --cancelled"
   fi
+  # The stamp names the budget the hold spent (DRE-6178).
+  PARK_REASON="dead-run-cap"
+  if [ "$PARK_TAG_FLAGS" = "--turn-exhaustion" ]; then PARK_REASON="turn-cap-park"; fi
   # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
   DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
     "${PRIOR:-0}" $ERR_FLAGS --failed-step "$FAILED_STEP" --run-url "$RUN_URL")
   ACTION=$(printf '%s\n' "$DECISION" | head -1)
   BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
-  if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD"; then ACTION="hold-unlanded"; fi
+  if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD" --reason "$PARK_REASON"; then ACTION="hold-unlanded"; fi
   if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL" "$PARK_TAG_FLAGS"); fi
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"
   # The park is atomic or it is nothing; an unlanded park says so (DRE-2931).
@@ -365,7 +377,7 @@ else
   elif [ "$ACTION" = "requeue" ]; then
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
   elif [ "$ACTION" = "replan" ]; then
-    # A turn-cap death before implementation green: Planning, via advance (DRE-4366).
+    # A turn-cap death before green, or the dead-run cap's hand-off: Planning (DRE-4366, DRE-6178).
     python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
   elif [ "$ACTION" = "infra" ]; then
     # A fault against the run, reported on the run; the card stays where it is.

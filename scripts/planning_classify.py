@@ -1825,11 +1825,16 @@ def returned_why(receipt: str) -> str:
     hand-back, that never happened.
     """
     import dead_run
+    import hold
     import planner_score
 
     kinds = {
         planner_score.HANDBACK_RECEIPT_PREFIX: "a build run handed it back",
         dead_run.REPLAN_MARK: "a run ran out of turns before implementation green",
+        hold.DEAD_SPLIT_MARK: (
+            "its builds kept dying with no pull request and the dead-run cap "
+            "handed it to the planner to split"
+        ),
     }
     first = ((receipt or "").strip().splitlines() or [""])[0]
     kind = "it was sent back"

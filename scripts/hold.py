@@ -373,6 +373,19 @@ def apply(card: str, reason: str, at: str | None, by: str) -> None:
 
     stamp = stamp_line(reason, at, by)
     linear_ops.add_label(card, HOLD_LABEL)
+    post_stamp(card, stamp)
+
+
+def post_stamp(card: str, stamp: str) -> None:
+    """Post a stamp `stamp_line` composed, on its own. `apply` posts through
+    here, and so does a writer whose label write is its own — `dead_run.park`
+    lands the label and the lane both or neither (DRE-6178), so `apply`'s
+    second label write is not its to make. Anything that is not a stamp is
+    refused before it reaches the card."""
+    import linear_ops  # local: only the Linear commands need the seam
+
+    if not _STAMP.match(stamp or ""):
+        raise ValueError(f"{stamp!r} is not a hold stamp")
     linear_ops.cmd_comment(card, stamp)
 
 

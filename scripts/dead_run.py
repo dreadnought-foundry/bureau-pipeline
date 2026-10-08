@@ -3,7 +3,10 @@
 
 A card whose agent dies with NO PR is requeued at most REQUEUE_CAP times, then
 HELD for a human (Backlog + needs-human label) so the pipeline stops looping
-(DRE-1403). Three death classes share ONE cap, counted by the `dead-run-requeue`
+(DRE-1403) — except that a SILENT death at the cap hands the card to the
+planner once per budget first (DRE-6178, `hold.DEAD_SPLIT_MARK`): runs that
+end with no PR and no blocker note are the one death a smaller card can
+answer. A credential refusal and an is_error death at the cap hold as before. Three death classes share ONE cap, counted by the `dead-run-requeue`
 comment tag:
 
   - silent  : ended with no PR and no blocker note (agent-task Report step)
@@ -612,7 +615,9 @@ class Decision:
 
     action   — "requeue" (→ Todo), "hold" (→ Backlog + needs-human label),
                "replan" (DRE-4366: a turn-cap death before implementation
-               green — → Planning, no label, no retry),
+               green — → Planning, no label, no retry; DRE-6178: a silent
+               death at the dead-run cap whose budget has not tried the
+               planner yet — the same move),
                "defer" (cancelled run: post the receipt, change NOTHING —
                the reconcile sweep requeues off the run's real conclusion),
                "infra" (DRE-2931: the run died before the agent started —
@@ -688,6 +693,9 @@ def decide(
     artifact: str = "",
     run_url: str = "",
     limit: LimitDeath | None = None,
+    split_tried: bool | None = None,
+    deaths: list[str] | None = None,
+    footprint: str = "",
     cap: int = REQUEUE_CAP,
     turn_cap: int = TURN_REQUEUE_CAP,
 ) -> Decision:
@@ -767,6 +775,23 @@ def decide(
     no hold label — the reconcile sweep brings the card back
     (limit_recovery.py) once the reset time has passed or the account has
     switched.
+
+    `split_tried`/`deaths`/`footprint` (DRE-6178): the planner gets a card once
+    before the dead-run cap holds it — on the SILENT class only, the one death
+    whose cap can be a size reading. `split_tried` is `split_tried()` over the
+    card's thread: False means this budget has not handed the card to the
+    planner yet, and the cap answers "replan" with a `hold.DEAD_SPLIT_MARK`
+    receipt instead of "hold". True holds as before, and so does None, which
+    means the caller did not read the thread — so every caller that passes
+    nothing gets exactly the answer it always got. A credential refusal and an
+    `is_error` death hold at the cap whatever it says: finished work that could
+    not be pushed and a model that failed say nothing about the card's size.
+    `deaths` is `death_lines()` over the same thread and `footprint` the card's
+    `**Files:**` line; both are receipt text for the planner, never facts the
+    decision branches on. The reconcile sweep's hand-off (DRE-6186) passes
+    `footprint`, having the card body in hand; the Report step's CLI reads
+    only the thread and does not, so its receipt tells the planner to read
+    the line off the card.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:
@@ -969,6 +994,14 @@ def decide(
         # on the next attempt; on its OWN line so it survives any later edit.
         error_marker_line = f"\n{ERROR_MARKER_PREFIX} {error_model}"
 
+    if prior_dead >= cap and split_tried is False and not is_error:
+        # Size, maybe (DRE-6178). Runs that end with no pull request and no
+        # blocker note are the one death a smaller card can answer, so the
+        # planner reads the card once on this budget before a person does.
+        return Decision(
+            "replan",
+            [dead_split_comment(prior_dead + 1, deaths, footprint, run_url, cap)],
+        )
     if prior_dead >= cap:
         names = ""
         if is_error and error_model:
@@ -991,6 +1024,89 @@ def decide(
             f"{run_suffix}{error_marker_line}"
         ],
     )
+
+
+def _quoted(line: str) -> str:
+    """A line the split receipt quotes, with every key a reader counts taken
+    out — `hold.FORBIDDEN`, the reset tag and the `model-error:` marker. A
+    death line IS a `dead-run-requeue` receipt's first line: quoted whole it
+    would make the hand-off one more death, and a quoted marker would arm the
+    model fallback for a model nothing here ran."""
+    import hold  # local: hold imports this module at its top
+
+    text = re.sub(rf"^🪦 {re.escape(DEAD_TAG)}:\s*", "", (line or "").strip())
+    for key in (*hold.FORBIDDEN, RESET_TAG, ERROR_MARKER_PREFIX):
+        text = text.replace(key, "")
+    return " ".join(text.split())
+
+
+def dead_split_comment(dead: int, deaths=None, footprint: str = "",
+                       run_url: str = "", cap: int = REQUEUE_CAP) -> str:
+    """The receipt that hands a dead-run-capped card to the planner (DRE-6178).
+
+    Its first line opens `hold.DEAD_SPLIT_MARK`, which is what every reader
+    keys on — `split_tried` below, the medic's park rule and Planning's
+    return marks. It carries no budget tag: the death it reports is counted by
+    nothing, and the next one on the same budget reads `split_tried` and holds.
+    """
+    import hold  # local: hold imports this module at its top
+
+    listed = "\n".join(f"- {_quoted(line)}" for line in deaths or ()) or (
+        "- none: the thread held no earlier receipt")
+    files = _quoted(footprint)
+    files = (f"The card's file footprint:\n{files}" if files else
+             "The card's file footprint: its **Files:** line was not read here "
+             "— read it off the card.")
+    run = f"\n\nRun: {run_url}" if run_url else ""
+    return (
+        f"{hold.DEAD_SPLIT_MARK} the dead-run cap is reached — {dead} runs on "
+        f"this card's budget ended with no pull request, the last with no "
+        f"blocker note either (dead run {dead}/{cap + 1}). That is the one "
+        f"death that can mean the card is too big for a run, so the planner "
+        f"gets the card once before a person is asked to look."
+        f"\n\nThe earlier deaths on this budget, oldest first:\n{listed}"
+        f"\n\n{files}"
+        f"\n\nThe planner reads this and either splits the card on its file "
+        f"footprint or sends it back as one piece. Nothing is parked and no "
+        f"label is written; if the card comes back as one piece and its next "
+        f"run dies the same way, the cap parks it for a person.{run}"
+    )
+
+
+def _since_reset(comment_bodies) -> list:
+    """The thread after the newest `dead-run-budget-reset` marker — one
+    budget, the window `linear_ops.count_comments(..., since=RESET_TAG)`
+    counts deaths in."""
+    bodies = list(comment_bodies or ())
+    for i in range(len(bodies) - 1, -1, -1):
+        if RESET_TAG in (bodies[i] or ""):
+            return bodies[i + 1:]
+    return bodies
+
+
+def split_tried(comment_bodies) -> bool:
+    """Has this budget already handed the card to the planner (DRE-6178)?
+
+    True when a comment newer than the last `dead-run-budget-reset` marker
+    OPENS with `hold.DEAD_SPLIT_MARK`. Pure, the shape of `count_of`: the
+    Report step's thread dump and the sweep's comment window both feed it.
+    """
+    import hold  # local: hold imports this module at its top
+
+    return any((body or "").lstrip().startswith(hold.DEAD_SPLIT_MARK)
+               for body in _since_reset(comment_bodies))
+
+
+def death_lines(comment_bodies) -> list[str]:
+    """The first line of each `dead-run-requeue` comment on this budget,
+    oldest first (DRE-6178) — a credential receipt's names the credential, an
+    API death's the model, a silent one's says no pull request. The split
+    receipt quotes them so the planner reads what each death was."""
+    return [
+        (body or "").strip().splitlines()[0]
+        for body in _since_reset(comment_bodies)
+        if DEAD_TAG in (body or "")
+    ]
 
 
 def count_of(comment_bodies, tag: str) -> int:
@@ -1204,17 +1320,38 @@ def _flag_value(rest: list[str], flag: str) -> str:
     return ""
 
 
-def _cmd_park(identifier: str) -> int:
-    """`park <CARD>` — the hold's two writes, atomically, against Linear.
+#: The two reasons a park here is stamped with (DRE-6178): the dead-run cap
+#: and the turn cap, the two budgets `decide` reaches "hold" from.
+PARK_REASONS = ("dead-run-cap", "turn-cap-park")
+
+
+def _cmd_park(identifier: str, reason: str = "") -> int:
+    """`park <CARD> --reason <code>` — the hold's two writes, atomically,
+    against Linear, then its stamp.
 
     Exit 0 iff BOTH landed. Exit 1 means the park did not happen and NOTHING
     was left half-applied: the caller posts park_unlanded_comment() instead of
     a hold receipt that would claim a Backlog the card is not in.
+
+    `--reason` names the budget the hold spent (DRE-6178), one of
+    PARK_REASONS. The stamp is composed before anything is written, so a bad
+    reason writes nothing, and posted through `hold.post_stamp` only once both
+    writes landed — an unlanded park has no hold to stamp. A stamp that fails
+    to post leaves the park standing: the label is the hold, and a label with
+    no stamp reads `manual`, which every reader already stands down for.
     """
-    if not identifier:
-        print("usage: dead_run.py park <CARD>")
+    if not identifier or not reason:
+        print("usage: dead_run.py park <CARD> --reason <code> — --reason is "
+              f"required, one of {', '.join(PARK_REASONS)}")
         return 2
+    if reason not in PARK_REASONS:
+        print(f"dead_run.py park: --reason {reason!r} is not one of "
+              f"{', '.join(PARK_REASONS)}")
+        return 2
+    import hold  # local: hold imports this module at its top
     import linear_ops  # local: only this command needs the Linear seam
+
+    stamp = hold.stamp_line(reason, None, "dead_run.py")
 
     def has_label(name: str) -> bool:
         return any(
@@ -1239,7 +1376,14 @@ def _cmd_park(identifier: str) -> int:
         remove_label=lambda name: linear_ops.remove_label(identifier, name),
         write_state=write_state,
     )
-    return 0 if ok else 1
+    if not ok:
+        return 1
+    try:
+        hold.post_stamp(identifier, stamp)
+    except Exception as exc:  # the park stands; see the docstring
+        print(f"park {identifier}: parked, but the hold stamp did not post ({exc})",
+              file=sys.stderr)
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -1250,7 +1394,7 @@ def main(argv: list[str]) -> int:
              [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
              [--credential-expiry [--push-status N] [--artifact NAME]]
-      park <CARD>
+      park <CARD> --reason dead-run-cap|turn-cap-park
       park-unlanded [--run-url U] [--turn-exhaustion]
       turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]
 
@@ -1264,7 +1408,13 @@ def main(argv: list[str]) -> int:
     finished is not a reason to spend another run, so that death is read as
     size and nothing is retried.
 
-    A "replan" body is completed here, not in decide(): the run's own markers
+    Without --turn-exhaustion the same thread is read for the dead-run cap's
+    hand-off (DRE-6178): `split_tried` and `death_lines` over it, so the shell
+    carries no copy of the rule. No file, or one that cannot be read, passes
+    `split_tried=None` and the answer is exactly what it was before the
+    hand-off existed.
+
+    A turn-cap "replan" body is completed here, not in decide(): the run's own markers
     and, when the agent wrote one before it died, the hand-back at
     HANDBACK_PATH are listed under the first line. They are receipt text, not
     facts the decision branches on.
@@ -1285,14 +1435,15 @@ def main(argv: list[str]) -> int:
              "[--push-status N] [--artifact NAME] [--run-url U] "
              "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
              "[--now ISO]] | "
-             "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion] | "
+             "park <CARD> --reason <code> | park-unlanded [--run-url U] [--turn-exhaustion] | "
              "turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]")
     if not argv:
         print(usage)
         return 2
     cmd, *rest = argv
     if cmd == "park":
-        return _cmd_park(rest[0] if rest else "")
+        card = rest[0] if rest and not rest[0].startswith("--") else ""
+        return _cmd_park(card, _flag_value(rest, "--reason"))
     if cmd == "park-unlanded":
         # --turn-exhaustion mirrors `decide`'s own flag: the caller names the
         # cap that produced the hold, and the tag string stays in this module
@@ -1402,6 +1553,24 @@ def main(argv: list[str]) -> int:
             print(f"dead_run: could not read the run's progress from "
                   f"{comments_path} ({exc}) — reading it as no marker at all",
                   file=sys.stderr)
+    # DRE-6178: has this budget handed the card to the planner yet, and what
+    # did each death on it say? Fail-soft to None — today's answer, a hold.
+    tried = None
+    deaths = None
+    if comments_path and not turn_exhaustion:
+        try:
+            import json as _json
+
+            with open(comments_path) as fh:
+                bodies = _json.load(fh)
+            if not isinstance(bodies, list):
+                raise ValueError("the thread is not a list of comment bodies")
+            tried = split_tried(bodies)
+            deaths = death_lines(bodies)
+        except Exception as exc:
+            print(f"dead_run: could not read the card's thread from "
+                  f"{comments_path} ({exc}) — the cap holds as it always has",
+                  file=sys.stderr)
     d = decide(
         prior_dead,
         is_error=is_error,
@@ -1418,9 +1587,11 @@ def main(argv: list[str]) -> int:
         artifact=artifact,
         run_url=run_url,
         limit=limit,
+        split_tried=tried,
+        deaths=deaths,
     )
     body = d.comments[0]
-    if d.action == "replan":
+    if d.action == "replan" and turn_exhaustion:
         body += replan_evidence(markers, _read_handback(HANDBACK_PATH))
     print(d.action)
     print()

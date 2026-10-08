@@ -406,14 +406,18 @@ def return_marks() -> tuple:
 
     Imported from the modules that own each receipt, never retyped: the build
     run's hand-back (`planner_score.HANDBACK_RECEIPT_PREFIX`, which the scorer
-    and the split ledger already key on) and the turn death read as size
-    (`dead_run.REPLAN_MARK`, DRE-4366). Local imports: this module is read by
-    nearly everything, and neither of those is needed until a thread is read.
+    and the split ledger already key on), the turn death read as size
+    (`dead_run.REPLAN_MARK`, DRE-4366) and the dead-run cap handing the card
+    to the planner (`hold.DEAD_SPLIT_MARK`, DRE-6178). Local imports: this
+    module is read by nearly everything, and none of those is needed until a
+    thread is read.
     """
     import dead_run
+    import hold
     import planner_score
 
-    return (planner_score.HANDBACK_RECEIPT_PREFIX, dead_run.REPLAN_MARK)
+    return (planner_score.HANDBACK_RECEIPT_PREFIX, dead_run.REPLAN_MARK,
+            hold.DEAD_SPLIT_MARK)
 
 
 def return_receipt(comment_bodies) -> str | None:
