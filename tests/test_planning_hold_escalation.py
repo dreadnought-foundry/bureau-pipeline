@@ -377,8 +377,12 @@ class TestAPersonsHoldIsStillHonoured:
         assert limit_recovery._held(_held_card())
         assert "_held(card)" in inspect.getsource(limit_recovery.recover)
 
-    def test_the_fix_dispatch_gate_still_reads_the_label(self):
-        assert "HOLD_LABEL" in inspect.getsource(reconcile.card_parked_for_human)
+    def test_the_fix_dispatch_gate_still_honours_the_hold(self):
+        """The gate asks `hold.respects` as the fix-dispatch reader (DRE-6182)
+        rather than scanning for the bare label."""
+        source = inspect.getsource(reconcile.card_parked_for_human)
+        assert "hold.respects(" in source
+        assert '"fix-dispatch"' in source
         assert reconcile.card_parked_for_human.__doc__ is not None
 
     def test_the_label_constant_is_still_one_definition(self):
