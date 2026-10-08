@@ -123,6 +123,11 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "merge"]:
     if fx.get("merge_error"):
         fail(fx["merge_error"])
+    # One answer per attempt, in order; past the list GitHub accepts (DRE-6242).
+    tries = sum(1 for ln in open(os.environ["GH_LOG"]) if json.loads(ln)[:2] == ["pr", "merge"])
+    errors = fx.get("merge_errors", [])
+    if tries <= len(errors):
+        fail(errors[tries - 1])
     emit("merged")
 
 if args[:2] == ["run", "list"]:
@@ -307,6 +312,7 @@ def run_gate(fixture: dict, seed=(APPROVE,), linear_stub=False) -> Run:
                 "COMMENTS": str(td / "comments.json"),
                 "GH_LOG": str(td / "gh.log"),
                 "LINEAR_LOG": str(td / "linear.log"),
+                "MERGE_RETRY_SECONDS": "0",
             },
         )
         calls = [json.loads(ln) for ln in (td / "gh.log").read_text().splitlines() if ln]
@@ -552,6 +558,83 @@ class EveryOtherRefusalIsStillARealFailureTest(unittest.TestCase):
         self.assertEqual(run.proc.returncode, 0, run.explain())
         self.assertIn("merged PR", run.proc.stdout)
         self.assertEqual(update_branch_puts(run), [], run.explain())
+
+    def test_a_refusal_is_never_retried(self):
+        """Only GitHub's own server error earns the second try (DRE-6242)."""
+        run = run_gate(refused_fixture(
+            merge_error="GraphQL: Base branch was modified (mergePullRequest)"))
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertEqual(len(run.merges), 1, run.explain())
+
+
+# --------------------------------------------------------------------------
+# 1b. GitHub's own server error is not a refusal: one more try (DRE-6242)
+# --------------------------------------------------------------------------
+# GitHub's own words, sandbox merge gate run 37703550700 on bureau-harness
+# #3556: green, approved, decision=merge, and the merge call answered this.
+# Nothing in the sandbox re-runs a red gate, so the pull request sat until
+# main's harness run timed out at 1200s.
+SERVER_ERROR = ("GraphQL: Something went wrong while executing your query on "
+                "2026-10-07T23:40:21Z. Please include "
+                "`2437:36E9BD:398876:BD2C5E:6AC6D860` when reporting this issue.")
+
+
+class GitHubsServerErrorIsTriedOnceMoreTest(unittest.TestCase):
+    def test_a_second_try_github_accepts_is_a_merge(self):
+        fx = green_fixture()
+        fx["merge_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertIn("merged PR", run.proc.stdout, run.explain())
+        self.assertNotIn("real failure", run.proc.stdout)
+        self.assertEqual(len(run.merges), 2, run.explain())
+
+    def test_the_second_try_is_pinned_to_the_evaluated_head(self):
+        fx = green_fixture()
+        fx["merge_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        for merge in run.merges:
+            self.assertEqual(merge[merge.index("--match-head-commit") + 1], HEAD,
+                             run.explain())
+
+    def test_the_second_try_comes_after_the_head_reread(self):
+        """The race guard (DRE-2117) still answers first: a second try is
+        made only for a head that has not moved."""
+        fx = green_fixture()
+        fx["merge_errors"] = [SERVER_ERROR]
+        run = run_gate(fx)
+        views = [i for i, c in enumerate(run.calls) if c[:2] == ["pr", "view"]]
+        merges = [i for i, c in enumerate(run.calls) if c[:2] == ["pr", "merge"]]
+        self.assertEqual(len(views), 2, run.explain())
+        self.assertLess(merges[0], views[1], run.explain())
+        self.assertLess(views[1], merges[1], run.explain())
+
+    def test_only_one_more_try(self):
+        fx = green_fixture()
+        fx["merge_errors"] = [SERVER_ERROR, SERVER_ERROR]
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertIn("real failure", run.proc.stdout)
+        self.assertNotIn("merged PR", run.proc.stdout)
+        self.assertEqual(len(run.merges), 2, run.explain())
+
+    def test_a_moved_head_is_never_tried_again(self):
+        fx = green_fixture()
+        fx["merge_errors"] = [SERVER_ERROR]
+        fx["head_after_merge"] = "2e" * 20
+        run = run_gate(fx)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertIn("head moved since evaluation", run.proc.stdout)
+        self.assertEqual(len(run.merges), 1, run.explain())
+
+    def test_an_out_of_date_answer_on_the_second_try_updates_the_branch(self):
+        """The second try's own answer is the one the arms below read."""
+        run = run_gate(refused_fixture(merge_error=None,
+                                       merge_errors=[SERVER_ERROR, OUT_OF_DATE]))
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(len(run.merges), 2, run.explain())
+        self.assertEqual(len(update_branch_puts(run)), 1, run.explain())
+        self.assertEqual(len(update_notes(run)), 1, run.comments)
 
 
 class EveryReadFailsTheWayItDidTest(unittest.TestCase):
