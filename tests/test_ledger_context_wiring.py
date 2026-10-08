@@ -47,6 +47,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_ledger_context_wiring.py
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess  # nosec B404 — fixed-arg bash/python calls against a temp dir
@@ -277,6 +278,50 @@ def derive_step() -> dict:
     return hits[0]
 
 
+REVIEW_MECHANICAL = "Mechanical findings — the revised plan (review)"
+
+
+def review_mechanical_step() -> dict:
+    hits = [s for s in plan_job_steps() if s.get("name") == REVIEW_MECHANICAL]
+    if len(hits) != 1:
+        raise AssertionError(f"the plan job carries {len(hits)} {REVIEW_MECHANICAL!r} steps")
+    return hits[0]
+
+
+#: A stand-in for `linear_ops.py` in a throwaway checkout: `children-json`
+#: prints the cards at `$FAKE_CHILDREN`, `comment` appends its body to
+#: `$FAKE_COMMENTS`. Nothing else is asked of it by the step under test.
+FAKE_LINEAR_OPS = """\
+import os, sys
+cmd = sys.argv[1]
+if cmd == "children-json":
+    sys.stdout.write(open(os.environ["FAKE_CHILDREN"], encoding="utf-8").read())
+elif cmd == "comment":
+    with open(os.environ["FAKE_COMMENTS"], "a", encoding="utf-8") as fh:
+        fh.write(sys.argv[3] + "\\n")
+else:
+    sys.exit(f"fake linear_ops: unexpected {cmd!r}")
+"""
+
+
+def fake_checkout_with_linear_ops(tmp: str) -> str:
+    """`fake_checkout`, but with `scripts/` a real directory whose
+    `linear_ops.py` is `FAKE_LINEAR_OPS` and every other entry a symlink to
+    this repo's — so the step's Linear calls are answered locally and every
+    script it runs is still the one under test."""
+    pipeline = fake_checkout(tmp)
+    scripts = os.path.join(pipeline, "scripts")
+    os.unlink(scripts)
+    os.makedirs(scripts)
+    for entry in os.listdir(SCRIPTS):
+        if entry == "linear_ops.py":
+            continue
+        os.symlink(os.path.join(SCRIPTS, entry), os.path.join(scripts, entry))
+    with open(os.path.join(scripts, "linear_ops.py"), "w", encoding="utf-8") as fh:
+        fh.write(FAKE_LINEAR_OPS)
+    return pipeline
+
+
 class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
     """DRE-6055: the plan job derives the ledger from the read door, once,
     before the context step, and the planner reads what it derived."""
@@ -288,9 +333,20 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
         self.assertEqual(wf_src().count("split_ledger.py derive"), 1,
                          "one derive per run, in one step")
 
-    def test_the_derive_is_on_the_plan_route(self):
-        self.assertIn("steps.route.outputs.mode == 'plan'",
-                      derive_step().get("if", ""))
+    def test_the_derive_is_on_both_routes_that_read_the_ledger(self):
+        # `plan` reads it for the planner's context and the first critic's
+        # mechanical findings; `review` reads it for the revised plan's
+        # mechanical findings. A route left out reads the committed file,
+        # which nothing refreshes any more (split-ledger.yml).
+        gate = derive_step().get("if", "")
+        for mode in ("plan", "review"):
+            self.assertIn(f"steps.route.outputs.mode == '{mode}'", gate)
+
+    def test_the_derive_runs_before_the_review_routes_mechanical_step(self):
+        names = [s.get("name") for s in plan_job_steps()]
+        self.assertLess(names.index(DERIVE_STEP), names.index(REVIEW_MECHANICAL))
+        self.assertIn("steps.route.outputs.mode == 'review'",
+                      review_mechanical_step().get("if", ""))
 
     def test_the_derive_writes_to_runner_temp_and_skips_the_render(self):
         lines = logical_lines(derive_step()["run"])
@@ -373,6 +429,57 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
             [line for line in blob.splitlines()
              if line == "===== END ledger/split-ledger ====="],
             ["===== END ledger/split-ledger ====="])
+
+    def test_the_review_routes_mechanical_step_reads_the_derived_ledger(self):
+        # The second critic's revised-plan findings check each child's
+        # footprint against the ledger's death rows. Run the derive, then the
+        # review step itself with what the derive exported: the row the door
+        # served — and that the committed file has never held — is the one
+        # the epic's note names.
+        epic = "DRE-9500"
+        files = ["scripts/ledger_a.py", "scripts/ledger_b.py"]
+        with tempfile.TemporaryDirectory() as tmp, FakeIssuer() as issuer, \
+                FakeDoor() as door:
+            door.split_history = split_history_body(
+                [split_history_row("DRE-9402", created_at="2026-09-30T00:00:00Z",
+                                   deaths=2, reasons=["turn-cap-death"],
+                                   declared_files=files,
+                                   declared_file_count=len(files))],
+                read_at=sl.now_iso())
+            fake_checkout_with_linear_ops(tmp)
+            runner_temp, github_env = os.path.join(tmp, "runner"), os.path.join(tmp, "env")
+            os.makedirs(runner_temp)
+            open(github_env, "w").close()
+            env = {**without_ledger_env(), "RUNNER_TEMP": runner_temp,
+                   "GITHUB_ENV": github_env,
+                   **door_env(door_url=door.url, issuer=issuer)}
+            proc = run_step(derive_step()["run"], tmp, env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            exported = open(github_env).read().strip().splitlines()
+            self.assertEqual(len(exported), 1, exported)
+            key, value = exported[0].split("=", 1)
+
+            children = os.path.join(tmp, "children.json")
+            comments = os.path.join(tmp, "comments.txt")
+            with open(children, "w", encoding="utf-8") as fh:
+                json.dump([{"identifier": "DRE-9501", "labels": [], "state": "Todo",
+                            "parent": epic,
+                            "body": "Edit them.\n**Files:** "
+                                    + ", ".join(f"`{f}`" for f in files) + "\n"}],
+                          fh)
+            script = (review_mechanical_step()["run"]
+                      .replace("${{ github.event.client_payload.identifier }}", epic)
+                      .replace("${{ runner.temp }}", runner_temp))
+            self.assertNotIn("${{", script)
+            proc = run_step(script, tmp, {**without_ledger_env(), key: value,
+                                          "FAKE_CHILDREN": children,
+                                          "FAKE_COMMENTS": comments})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            note = open(comments, encoding="utf-8").read()
+        self.assertIn("DRE-9501: shares 2 file(s) with DRE-9402", proc.stdout)
+        self.assertIn("DRE-9402", note)
+        self.assertIn("1 death row(s)", note)
+        self.assertNotIn("could not be read", note)
 
     def test_the_context_step_reads_the_committed_ledger_without_the_path(self):
         # The fallback is the pipeline checkout's committed file, spelled the

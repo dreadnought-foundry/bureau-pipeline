@@ -1051,11 +1051,16 @@ jobs:
       # never 0). The path is exported so every later step reads THIS run's
       # history: the context step passes it to the renderer, and
       # `split_ledger.load()` reads `SPLIT_LEDGER_PATH` for the critic's and the
-      # scorer's ledger. A derive that fails leaves the path unset and says so
-      # in one line; the committed `config/split-ledger.json` is the fallback
-      # (DRE-6056 retires it), and context never fails a plan run (DRE-3358).
+      # scorer's ledger. BOTH routes that read the ledger derive it: `plan`
+      # for the planner's context and the first critic's mechanical findings,
+      # `review` for `Mechanical findings — the revised plan (review)`, whose
+      # footprint checks would otherwise read the committed file — and nothing
+      # refreshes that file any more (split-ledger.yml). A derive that fails
+      # leaves the path unset and says so in one line; the committed
+      # `config/split-ledger.json` is the fallback (DRE-6056 retires it), and
+      # context never fails a plan run (DRE-3358).
       - name: Split ledger — derive it from the read door
-        if: steps.route.outputs.mode == 'plan'
+        if: steps.route.outputs.mode == 'plan' || steps.route.outputs.mode == 'review'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}

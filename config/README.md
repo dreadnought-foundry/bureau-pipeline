@@ -218,11 +218,13 @@ of it is ever a runtime lookup.
   than 91). A read the door could not make, and a card it could not place in
   the window, are named in the file's own `source` sentence rather than
   quietly shrinking the population. The plan job derives the ledger this way
-  once per run into `$RUNNER_TEMP` and exports `SPLIT_LEDGER_PATH`, which
-  `split_ledger.load()` and the planner's context read; this committed file is
-  the fallback when that derive fails. The daily job holds no read-door token
-  (its one permission is `contents: write`, and DRE-6055 widened none), so its
-  derive now fails and this file stays at its last Linear derivation — the
+  once per run, on both the `plan` and the `review` route, into
+  `$RUNNER_TEMP` and exports `SPLIT_LEDGER_PATH`, which `split_ledger.load()`
+  and the planner's context read; this committed file is the fallback when
+  that derive fails. The daily job holds no read-door token (its one
+  permission is `contents: write`, and DRE-6055 widened none), so its derive
+  now cannot read the door: the run says so in one warning, publishes nothing
+  and stays green, and this file stays at its last Linear derivation — the
   baseline DRE-6056 compares a live plan run against before it retires the
   job and the file. Two blocks come off that window: **`rows[].created_at`** — the
   card's Linear `createdAt` as ISO-8601 UTC or `UNKNOWN`, never `""`, which is
