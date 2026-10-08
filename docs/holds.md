@@ -142,8 +142,9 @@ the retiring line is live again, which is how a re-park on the same head works.
 
 ## How a hold lifts
 
-The hygiene agent's holds lane, `scripts/hygiene_holds.py` (DRE-6180), lifts a
-hold whose reason has cleared, once an hour, with nobody touching the card.
+The hygiene agent's holds lane, `scripts/hygiene_holds.py` (DRE-6180, DRE-6273),
+lifts a hold whose reason has cleared, once an hour, with nobody touching the
+card, and sends the card back to the lane where the pipeline resumes it.
 
 **What it reads.** Holds outlive the five lanes the hygiene board read covers,
 so the lane reads its own candidates: one paged Linear query, fifty issues a
@@ -154,7 +155,7 @@ put away is exactly the kind a stale label sits on. Each candidate's newest
 live stamp is read with `hold.read_stamp`, the whole thread where the
 fifty-comment window was cut short.
 
-**What it lifts.** Three lift kinds, each finished by the label alone:
+**What it lifts.** Five lift kinds. Three are finished by the label alone:
 
 - `card-closed` — any card in Done or Canceled, whatever its stamp says and
   whether it has one. The cause names the stamp's reason, or `reason=manual`
@@ -165,17 +166,53 @@ fifty-comment window was cut short.
 - `unpark-marker` — asked of `hold.lift_due` for a `dead-run-cap` or
   `turn-cap-park` stamp. An operator's `unpark` already moved the card.
 
-None of the three moves the card. A lift is two writes, in order: the label
-comes off, then the agent's own receipt, act `hygiene-hold-clear`, tag
-`hyg-hold-cleared`:
+None of those three moves the card. The other two leave a card in a lane
+nothing resumes, so each also moves it (DRE-6273):
+
+- `new-head` — the head sha of the card's open pull request differs from the
+  stamped sha. The lane reads the head off the leg's own pull-request listing:
+  the newest open pull request whose branch carries the card's identifier. No
+  open pull request means no lift. A `review-cap-spent` card the sweep parked
+  in Green Light (DRE-6181) goes from Green Light to In Review, and a
+  `fix-dispute` or `unfixable-check` card the fix loop parked in Triage
+  (DRE-6179) goes from Triage to In Review — the lane its open pull request
+  says it is in. The push that made the new head has already started the
+  review, and a head still stuck is re-parked with a fresh stamp on that head.
+- `repo-on-rail` — the card's current `repo:` label names a key of
+  `config/repo-map.json`. The lane reads the label off the card,
+  never the stamp's qualifier, so a label a person corrected lifts the hold
+  as much as a slug that joined the rail, and a `repo:none` stamp lifts once
+  the card wears an on-rail label. A `no-route` card the sweep parked in
+  Triage (DRE-6177)
+  goes from Triage to Planning. The Triage lane leaves such a card alone
+  while the hold stands (DRE-6190), so it is still there to be found. Planning
+  and not Backlog: a card that has been through Triage since its newest
+  routing verdict is refused `stale-verdict` in Backlog (DRE-4962), and
+  Planning's exit routes it afresh.
+
+The move is made only from the lane the hold parked the card in. A card a
+person has already moved anywhere else is lifted and moves nothing.
+
+A lift is two writes, in order: the label comes off, then the agent's own
+receipt, act `hygiene-hold-clear`, tag `hyg-hold-cleared`:
 
     🧹 hygiene: hyg-hold-cleared — reason=<code> because=<lift-kind> · <HH:MM PT>
     evidence: <what was read>
 
 The cause is `reason=<code> because=<lift-kind>`. The evidence names the
-stamp's qualifier and the live fact that met it, or `lane Done` / `lane
-Canceled` for the universal lift. The receipt spends the stamp it lifted, like
-every `hyg-hold-cleared` receipt.
+stamp's qualifier and the live fact that met it — the run receipt or budget
+reset, the open pull request and its new head, or the live `repo:` label —
+and, for a `new-head` or `repo-on-rail` lift, the lane it was read in; or
+`lane Done` / `lane Canceled` for the universal lift. The receipt spends the
+stamp it lifted, like every `hyg-hold-cleared` receipt.
+
+**The third write is the lane move.** A `new-head` or `repo-on-rail` lift
+from the lane the hold parked the card in adds a state write after the
+receipt: In Review, or Planning. The label is already off when that write
+fires a run, so the plan-gate does not refuse a plan run for it. Every other
+lift moves nothing. In Review and Planning are both lanes the hygiene agent
+may write (`hygiene.DESTINATIONS`); the lane proposes no other lane write and
+no `gh` write.
 
 **An archived card is unarchived for the write and re-archived after it.** A
 card whose read carried `archivedAt` takes four writes: unarchive, the label
@@ -186,14 +223,7 @@ its new `archivedAt`. The guard admits the archive write only on a Done or
 Canceled card the read said was archived (DRE-6248). An archived card outside
 Done or Canceled is left alone like any other open hold.
 
-**What it leaves.** The `new-head` and `repo-on-rail` lifts leave a card in a
-lane nothing resumes, Green Light or Triage, so they are finished only by a
-lane move, and that move lands with DRE-6273. Until then a card whose live
-stamp lifts by either kind is a row in the hygiene summary reading
-`lift needs a lane move — lands with DRE-6273`, nothing is written on it, and
-`hold.lift_due` is not asked.
-
-A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
+**What it leaves.** A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
 label with no stamp — is lifted only in Done or Canceled. Anywhere else it waits
 for a person, and the lane writes nothing on it. A label standing over a spent
 stamp is the same person's hold, and the summary names it once as `held
@@ -207,12 +237,13 @@ live stamp would meet the lift, and `unpark` takes the label off itself when it
 posts one.
 
 **A pass is bounded.** The lane lifts at most `HYGIENE_HOLDS_MAX_LIFTS` holds a
-pass, default 40, so a pass makes at most about 160 Linear writes. A value that
+pass, default 40, so a pass makes at most about 160 Linear writes — four for
+an archived closed card, three for a lift that moves the card. A value that
 is not a positive integer stops the lane with the variable named. Order inside
 the cap:
 
-1. lifts met on an open card (`run-started`, `unpark-marker`), oldest stamp
-   first;
+1. lifts met on an open card (`run-started`, `unpark-marker`, `new-head`,
+   `repo-on-rail`), oldest stamp first;
 2. then the `card-closed` lifts, oldest stamp first;
 3. then the closed cards with no live stamp, by identifier.
 
