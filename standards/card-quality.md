@@ -116,9 +116,12 @@ cannot safely resolve: **ambiguous intent**, a **risky/destructive change**, or
 a real **business A-vs-B decision** the CEO should own. When it stops, it posts a
 **plain-English question** (business terms, no code or diffs) as a comment and
 parks the card in the **`Green Light`** lane — the CEO's "needs you" queue,
-the same lane epics wait in for plan approval. The CEO answers and moves the
-card back to `Todo` to proceed (a fresh run picks up the guidance) or to
-`Backlog` to drop it.
+the same lane epics wait in for plan approval. Since epic DRE-3893 that
+question carries the three declared lines — Finding, Question and
+Recommendation, rendered by `scripts/console_escalation.py` — with
+`none given — …` on the Recommendation line where the agent stated none. The
+CEO answers and moves the card back to `Todo` to proceed (a fresh run picks up
+the guidance) or to `Backlog` to drop it.
 
 **NOT `Triage`, and the distinction is the point.** Triage is the *broken-card*
 lane: an unroutable `repo:` label, an archived repo, a card the readiness guard
