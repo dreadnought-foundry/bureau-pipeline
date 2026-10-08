@@ -718,10 +718,15 @@ def held(card: dict) -> bool:
     HOLD_LABEL and the card's live stamp off the window the board read already
     carries, and `config/holds.json`'s `readers` says whether `sweep` honors
     that reason. The label with no stamp, or a reason the registry does not
-    know, is held — fail closed."""
-    return hold.respects(
-        (card.get("labels") or {}).get("nodes", []), card_comment_bodies(card), "sweep"
-    )
+    know, is held — fail closed.
+
+    A card without the label is answered before its comments are read, so
+    a caller that reads them once itself still reads them once (the
+    planning watchdog's budget, tests/test_sweep_request_budget.py)."""
+    labels = (card.get("labels") or {}).get("nodes", [])
+    if not any((lbl.get("name") or "").lower() == HOLD_LABEL for lbl in labels):
+        return False
+    return hold.respects(labels, card_comment_bodies(card), "sweep")
 
 
 def hand_built(card: dict) -> bool:
