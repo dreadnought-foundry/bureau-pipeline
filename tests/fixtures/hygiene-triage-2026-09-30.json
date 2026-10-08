@@ -624,6 +624,78 @@
         }
       },
       {
+        "id": "00000000-0000-4000-8000-000000004423",
+        "identifier": "DRE-4423",
+        "title": "legacy-site: a card held no-route by the sweep",
+        "description": "Synthetic card text.",
+        "createdAt": "2026-09-20T16:00:00.000Z",
+        "updatedAt": "2026-09-30T18:00:00.000Z",
+        "state": {
+          "name": "Triage"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "repo:legacy-site"
+            },
+            {
+              "name": "agent:engineer"
+            },
+            {
+              "name": "needs-human"
+            }
+          ]
+        },
+        "parent": null,
+        "children": {
+          "nodes": []
+        },
+        "comments": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "body": "🧭 routing-verdict: **FLEET** — Buildable unattended in one pull request.\n\n**Why:** one PR, criteria checkable from the diff\n\n**Where it goes:** Todo. **Who handles it there:** agent-task.yml.",
+              "createdAt": "2026-09-29T17:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            },
+            {
+              "body": "🔒 hold: reason=no-route at=repo:legacy-site lifts=repo-on-rail by=reconcile.py",
+              "createdAt": "2026-09-30T18:00:00.000Z",
+              "user": {
+                "id": "u-synthetic"
+              }
+            }
+          ]
+        },
+        "relations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "inverseRelations": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "history": {
+          "nodes": [
+            {
+              "createdAt": "2026-09-30T16:00:00.000Z",
+              "toState": {
+                "name": "Triage"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "00000000-0000-4000-8000-000000004431",
         "identifier": "DRE-4431",
         "title": "PROOF: the widget is observed live",
