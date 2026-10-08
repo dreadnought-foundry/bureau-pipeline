@@ -1552,7 +1552,7 @@ jobs:
             {
               echo "🙋 The proof run met a press only the CEO can make, and asks:"
               echo ""
-              cat "$ESCALATION_FILE"
+              python3 .bureau-pipeline/scripts/console_escalation.py complete "$ESCALATION_FILE" --question "Make the press and say what you saw, or drop the criterion?" --who "the proof run" || cat "$ESCALATION_FILE"
               echo ""
               echo "Run: $RUN_URL"
             } > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
