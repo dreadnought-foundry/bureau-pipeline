@@ -206,6 +206,16 @@ sends the card somewhere different. Framed as a score a critic drifts toward
 marking things good so it looks useful; framed as routing there is no good or
 bad, only a wrong destination, which shows up immediately.
 
+**A card sent back to Planning leaves with a fresh verdict (DRE-4884).**
+Sending a card back says its routing is in question. When it leaves Planning
+again, the exit retires every verdict written before the card re-entered and
+stamps the one it reads now. The retirement is a `🪦 verdict-retired` comment
+naming the verdict, when it was written and when the card came back. The old
+comment stays as the record, and nothing routes on it. A `hand-built` the old
+verdict put on comes off unless the new verdict puts it on too. A `hand-built`
+the retired verdict never applied is a person's own, and stays. Two live
+verdicts on one card are still refused.
+
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |

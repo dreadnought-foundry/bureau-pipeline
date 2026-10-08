@@ -1397,10 +1397,17 @@
     },
     {
       "file": "scripts/planning_route.py",
-      "anchor": "routing_verdict.verdict_comment(plan.verdict, plan.reason)",
+      "anchor": "routing_verdict.verdict_comment(plan.verdict, plan.reason, replaces=replaced)",
       "kind": "not-an-act",
       "means": "The machine-readable routing verdict stamped on a card as it leaves planning.",
       "why": "A judgement in another registry's vocabulary, with its own single writer and its own readers — the same shape this file is, for a different question. A verdict says where the work goes or what it is; an act says what the pipeline did on its own. One line carrying both grammars would let two registries answer for the same comment, and the reader could not tell which one was speaking."
+    },
+    {
+      "file": "scripts/planning_route.py",
+      "anchor": "linear_ops.cmd_comment(identifier, retirement)",
+      "kind": "not-an-act",
+      "means": "The note that retires a re-planned card's old routing verdict as it leaves planning (DRE-4884).",
+      "why": "Part of the routing verdict's own record, not an act: `routing_verdict.verdicts_on` reads it to know which verdict comments no longer count, and its one writer is the planning exit beside the verdict it makes room for. A trailer from a second registry on the same comment would let two vocabularies answer for it — the reason the verdict itself is declared here."
     },
     {
       "file": "scripts/planning_shape.py",

@@ -93,6 +93,17 @@ answered no, and was sent back. So `decide` runs the same mechanical read on a
 one-off and writes `person_verdict()`'s answer as a step output; `plan.yml`
 skips the critic on it and runs the exit on it.
 
+## A re-planned card leaves with a fresh verdict (DRE-4884)
+
+A card sent back to Planning used to leave on the verdict it was sent back
+from: `_one_off_check` found the old one and stamped nothing, and the sweep
+routed the card on it — DRE-4724 went back to Todo marked `hand-built` on a
+WORKBENCH its rewrite had removed the reason for. So the exit retires, on the
+record, every verdict written before the card re-entered Planning
+(`routing_verdict.retiring`), takes off a `hand-built` the old verdict put on
+when the new one does not, and then decides and stamps exactly as for a card
+on its first trip.
+
 CLI:
 
     python3 scripts/planning_route.py check          # validate the routes
@@ -107,6 +118,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lane_contract  # noqa: E402
@@ -837,6 +849,31 @@ def _read_person_verdict(lops, identifier: str) -> str:
         return ""
 
 
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _retirement(lops, identifier: str, nodes) -> tuple:
+    """`(verdict comments to retire, the note that retires them)` for a card
+    leaving Planning, or `((), None)` (DRE-4884).
+
+    Sending a card back to Planning says its routing is in question, so a
+    verdict written before the card re-entered is retired on the record and
+    the exit stamps the one it reads now. The lane history is bought only for
+    a card that carries a live verdict — most cards leaving Planning carry
+    none — and `routing_verdict.retiring` says what an unreadable one means.
+    """
+    if not routing_verdict.verdicts_on(node.get("body") for node in nodes):
+        return (), None
+    moves = routing_verdict.lane_moves(identifier)
+    retired = routing_verdict.retiring(nodes, moves)
+    if not retired:
+        return (), None
+    note = routing_verdict.retirement_comment(
+        retired, routing_verdict.planning_entered_at(moves), now=_now())
+    return retired, note
+
+
 def _cmd_exit(identifier: str) -> int:
     import critic_score
     import linear_ops
@@ -844,14 +881,30 @@ def _cmd_exit(identifier: str) -> int:
     # Read the card WHOLE: the routing check reads the acceptance criteria, and
     # the list API truncates a description without saying so.
     card = critic_score.read_card(linear_ops, identifier)
-    # The window, not the whole thread, on purpose (DRE-5644 left it): this
-    # list also feeds `routing_verdict.verdicts_on` and its `stamp_refusal`,
-    # which read every verdict on the thread rather than from the newest return
-    # receipt the way `planning_shape.shape_on` does. Read whole, a one-off
-    # that came back (DRE-4370) would see its old verdict and refuse the new
-    # one. The exit serves one-off and roll-up cards, whose threads stay short.
-    bodies = linear_ops.comment_bodies(identifier)
+    # The whole thread, with times (DRE-4884). It used to be the window, so a
+    # one-off that came back would not see an old verdict past it and refuse
+    # the new one; the old verdict is now retired instead, and one past the
+    # window that the exit did not see would stay live beside the new one.
+    nodes = linear_ops.comment_timeline(identifier, whole_thread=True)
+    bodies = [node.get("body") or "" for node in nodes]
+    retired, retirement = _retirement(linear_ops, identifier, nodes)
+    if retirement is not None:
+        # The exit decides on the card as it will read once the note is
+        # posted: the old verdict no longer counts, so it no longer stops the
+        # new one being stamped.
+        bodies = bodies + [retirement]
     plan = exit_plan(card, bodies)
+
+    if retirement is not None:
+        # Labels FIRST, then the note: a run that died between them would
+        # leave the note standing and the old verdict's `hand-built` on a
+        # card the sweep then promotes — the stall this exists to end. In
+        # this order a retry still finds the old verdict live and finishes.
+        names = tuple(dict.fromkeys(name for name, _ in routing_verdict.retired_pairs(retired)))
+        for label in routing_verdict.lifted_marks(names, plan.verdict):
+            linear_ops.remove_label(identifier, label)
+        linear_ops.cmd_comment(identifier, retirement)
+        print(f"{identifier}: retired {' and '.join(names)} — the card re-entered Planning")
 
     if plan.escalation is not None:
         # The card does not leave Planning, so it is stamped with nothing and
@@ -881,8 +934,10 @@ def _cmd_exit(identifier: str) -> int:
     if plan.verdict:
         refusal = routing_verdict.stamp_refusal(plan.verdict, bodies)
         if refusal is None:
+            replaced = routing_verdict.retired_pairs(retired)
             linear_ops.cmd_comment(
-                identifier, routing_verdict.verdict_comment(plan.verdict, plan.reason)
+                identifier,
+                routing_verdict.verdict_comment(plan.verdict, plan.reason, replaces=replaced),
             )
         else:
             print(f"not stamping {plan.verdict}: {refusal}")

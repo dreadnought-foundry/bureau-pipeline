@@ -51,6 +51,9 @@ from test_parentless_promotion import _Board, _card  # noqa: E402
 FIXTURE = ROOT / "tests" / "fixtures" / "dre-4724-replan-2026-10-07.json"
 DRE_4724 = json.loads(FIXTURE.read_text(encoding="utf-8"))
 CARD = DRE_4724["identifier"]
+#: The card's real `blockedBy` relation, Done — its body declares it, and the
+#: sweep sends a declaration the board does not hold to Triage (DRE-2676).
+BLOCKER = "DRE-4688"
 HAND_BUILT = reconcile.HAND_BUILT_LABEL
 
 # The card's own clock, 2026-09 (UTC; PT is seven hours behind).
@@ -359,7 +362,8 @@ class _Linear:
         """The next reconcile, over the card as the exit left it. Comments go
         in as Linear returns them — newest first."""
         assert self.lane == "Backlog"
-        backlog = _card(identifier=CARD, parent_state=None, labels=self.labels)
+        backlog = _card(identifier=CARD, parent_state=None, labels=self.labels,
+                        blocked_by=BLOCKER)
         backlog["title"] = DRE_4724["title"]
         backlog["description"] = self.description
         backlog["comments"] = {"nodes": list(reversed(self.nodes))}
@@ -429,7 +433,8 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
         """The pairing that makes the test above mean something: the same card
         with its old verdict LIVE goes back to Hand-work marked hand-built."""
         backlog = _card(identifier=CARD, parent_state=None,
-                        labels=DRE_4724["labels"])
+                        labels=DRE_4724["labels"], blocked_by=BLOCKER)
+        backlog["description"] = DRE_4724["description"]
         backlog["comments"] = {"nodes": list(reversed(
             [{"body": _shape(), "createdAt": "2026-09-23T20:30:00.000Z"},
              _old_workbench()]))}
