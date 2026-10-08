@@ -58,7 +58,10 @@ keep bouncing. The row is `Left`, naming both parks.
 
 **Everything else is left.** An escalation that is a real question gets no
 write and one `Left` row whose recommendation is the escalation's own
-recommendation line. A plan both critics passed, with every child carrying
+recommendation line: the note's declared Recommendation line when it
+carries the three lines (`console_escalation`, DRE-3908 and DRE-6196), read
+off the whole note since those lines sit above the `**Why it needs you:**`
+block, and otherwise a recommendation line in that block. A plan both critics passed, with every child carrying
 criteria, yields nothing: it waits on the CEO's approval, which is his act
 (DRE-5268) and never this agent's. Any other row is `Left` for a person.
 
@@ -226,13 +229,14 @@ def classify(body: str) -> dict | None:
 
 def newest_receipt(card: dict, me: str) -> dict | None:
     """The newest planning receipt the pipeline wrote on the card, with its
-    time, or None."""
+    time and the body it was classified from, or None."""
     newest = None
     for node in pipeline_nodes(card, me):
-        found = classify(node.get("body") or "")
+        body = node.get("body") or ""
+        found = classify(body)
         when = _when(node.get("createdAt"))
         if found is not None and when is not None:
-            newest = {**found, "at": when, "iso": node.get("createdAt")}
+            newest = {**found, "at": when, "iso": node.get("createdAt"), "body": body}
     return newest
 
 
@@ -261,9 +265,36 @@ def is_stall(reason: str) -> bool:
     return reason.lower().startswith(STALL_OPENINGS)
 
 
-def recommendation(reason: str) -> str:
-    """The escalation's own recommendation line — the planner ends its reason
-    with one (`briefs/planner.md`) — or a sentence saying it has none."""
+def _declared(note: str | None) -> str | None:
+    """The note's declared Recommendation line as the line carries it —
+    `<answer> — <why>`, or `none given — <why>` — or None when the note
+    declares no lines. `console_escalation` is the one parser of the lines
+    (DRE-3908), imported here so a checkout without it reads today's way."""
+    if not note:
+        return None
+    try:
+        import console_escalation
+    except ImportError:
+        return None
+    esc = console_escalation.parse(note)
+    if esc is None:
+        return None
+    answer = (esc.recommendation if esc.recommendation is not None
+              else console_escalation.NONE_GIVEN)
+    if not esc.why:
+        return answer
+    return f"{answer}{console_escalation.SEPARATOR}{esc.why}".strip()
+
+
+def recommendation(reason: str, note: str | None = None) -> str:
+    """The escalation's recommendation. A `note` — the whole comment body —
+    that declares the three lines answers with its Recommendation line
+    (DRE-6196). Otherwise the reason's own recommendation line — the planner
+    ends its reason with one (`briefs/planner.md`) — or a sentence saying it
+    has none."""
+    declared = _declared(note)
+    if declared is not None:
+        return declared
     lines = [line.strip() for line in reason.splitlines() if line.strip()]
     for line in reversed(lines):
         match = _RECOMMEND_LINE.match(line)
@@ -340,7 +371,7 @@ def _escalation(card: dict, receipt: dict, ctx: hygiene.Context, me: str):
         return resend(card, f"escalation asks for {wants}, posted {stamp}",
                       [f"escalation comment {receipt['iso']}", _quote(reason)], ctx)
     return left(card, f"the planner asks a question, posted {stamp}",
-                recommendation(reason))
+                recommendation(reason, note=receipt.get("body")))
 
 
 def plan_card(card: dict, ctx: hygiene.Context, me: str):
