@@ -68,6 +68,29 @@ and `deliver_rescue.py` spends them: the run's last step names the artifact on
 the card and dispatches a `deliver-rescue` follow-up that replays the patch with
 a credential of its own. What is preserved here is what that job delivers.
 
+AND A FIX RUN IS A DIFFERENT DELIVERY (DRE-6348). A fix run pushes onto a pull
+request that already exists, on a branch the run names, and two optional flags
+say so — the build workflow's call passes neither and is unchanged:
+
+  * `--branch <name>` delivers that branch instead of the `agent/<CARD>-*`
+    glob, and the stop notes are not read at all: in the fix job the handoff
+    files are the Report's to read (DRE-6351), and a committed fix outranks a
+    note written beside it — the DRE-4883 run ended on a blocker written AFTER
+    its push answered 401. The commits beyond `--base` (the head the run
+    started from, DRE-6350) decide whether there is work, and the patch is
+    written with `format-patch --always` so the fix loop's one sanctioned
+    empty commit (DRE-5632) survives into it.
+  * `--existing-pr <number>` never opens a pull request, and reads that one's
+    state with the fresh credential before any push. `MERGED`, `CLOSED` and an
+    unreadable answer all refuse it: the pre-push hook the fix workflow
+    installs holds the job-start token and fails open, so by the time this
+    step runs it allows everything — and a push onto a merged pull request's
+    deleted branch recreates it (DRE-4486). Fail closed here instead; the
+    patch keeps the work and the delivery follow-up asks again (DRE-6349).
+
+Whenever `--branch` was given and the push was not made, `rescue-<CARD>.target.json`
+is written beside the patch, naming the branch the patch belongs on.
+
 CLI (the form agent-task.yml calls; outputs on stdout, logs on stderr, so the
 whole thing can be appended to `$GITHUB_OUTPUT`):
 
@@ -75,6 +98,12 @@ whole thing can be appended to `$GITHUB_OUTPUT`):
     python3 push_rescue.py rescue \\
         --card DRE-3043 --repo owner/name --base main \\
         --card-url <url> --card-title <title>
+
+and the fix run's form:
+
+    python3 push_rescue.py rescue --card DRE-4911 --repo owner/name \\
+        --base <the sha the run started from> \\
+        --branch agent/DRE-4911-x --existing-pr 7
 """
 
 from __future__ import annotations
@@ -110,6 +139,17 @@ RETRY_TOKEN_SOURCE_ENV = "PUSH_TOKEN_RETRY_SOURCE"
 # is validated rather than trusted — a pattern, not a sanitiser, so anything
 # unexpected is refused instead of silently rewritten.
 _CARD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# A `--branch` value becomes an argv element and a refspec. It must not open
+# with `-` (an option) or carry `:` (a second refspec half), so it is held to
+# the shape the pipeline's own branches have rather than trusted.
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+# The pull request states that refuse a fix-run push (DRE-6348). The words are
+# the `error=` output, verbatim — DRE-6349 and the Report read them.
+PR_MERGED = "pull request is MERGED"
+PR_CLOSED = "pull request is CLOSED"
+PR_UNREADABLE = "pull request state unreadable"
 
 # The agent's three deliberate exits (briefs/engineer.md, agent-task.yml's
 # Report step). An agent that wrote one of these chose NOT to open a pull
@@ -178,6 +218,10 @@ class Outcome:
         self.push_status = ""
         self.attempts = 0
         self.patch = ""
+        # The fix run's two (DRE-6348): the `--branch` it named, and the
+        # sidecar saying which branch the patch belongs on.
+        self.target_branch = ""
+        self.sidecar = ""
 
     @property
     def rescued(self) -> bool:
@@ -224,6 +268,10 @@ def output_lines(outcome: Outcome) -> list[str]:
         # tells them apart. It reaches the card, so it is collapsed to one line
         # and truncated; the run's log keeps the rest.
         f"error={one_line(outcome.error)}",
+        # Appended after the ten above, which keep their names and order
+        # (DRE-6348). Both empty on the build path.
+        f"target_branch={outcome.target_branch}",
+        f"sidecar={outcome.sidecar}",
     ]
 
 
@@ -249,7 +297,8 @@ def default_patch_path(card: str) -> str:
     return os.path.join(directory, f"rescue-{card}.patch")
 
 
-def write_patch(branch: str, base: str, path: str, *, run, workdir: str = ".") -> str:
+def write_patch(branch: str, base: str, path: str, *, run, workdir: str = ".",
+                always: bool = False) -> str:
     """Write `branch`'s own commits to `path`. Returns the path, or "".
 
     `format-patch` first: it carries the commit messages and authorship, so
@@ -258,11 +307,16 @@ def write_patch(branch: str, base: str, path: str, *, run, workdir: str = ".") -
     commit with no merge base, a shallow clone). The base is tried as
     `origin/<base>` and then `<base>`, exactly as `_commits_ahead` does — a
     runner's checkout may carry either.
+
+    `always` keeps EMPTY commits, which format-patch otherwise drops: the fix
+    loop sanctions one (the What's new resubmission, DRE-5632), and without
+    it that run's patch would be empty (DRE-6348).
     """
     if not path:
         return ""
+    format_patch = ["format-patch", "--stdout"] + (["--always"] if always else [])
     for ref in (f"origin/{base}", base):
-        for sub in (["format-patch", "--stdout", f"{ref}..{branch}"],
+        for sub in ([*format_patch, f"{ref}..{branch}"],
                     ["diff", f"{ref}...{branch}"]):
             code, out, _ = run(["git", "-C", workdir, *sub])
             if code == 0 and out.strip():
@@ -273,6 +327,42 @@ def write_patch(branch: str, base: str, path: str, *, run, workdir: str = ".") -
                     return ""
                 return path
     return ""
+
+
+def target_sidecar_path(card: str, patch_path: str) -> str:
+    """Where `rescue-<CARD>.target.json` goes: beside the patch (DRE-6348).
+
+    With no patch path, beside the default one — the same `RUNNER_TEMP` rule
+    `default_patch_path` uses — so the artifact upload that takes the patch
+    finds the sidecar in the same directory.
+    """
+    directory = os.path.dirname(patch_path or default_patch_path(card))
+    return os.path.join(directory, f"rescue-{card}.target.json")
+
+
+def write_target_sidecar(card: str, outcome, patch_path: str) -> str:
+    """Write which branch the patch belongs on. Returns the path, or "".
+
+    A fix run's patch belongs on the pull request's EXISTING branch, which the
+    delivery follow-up cannot derive from the card (DRE-6349): `head` is what
+    the push would have delivered, `remote_head` what the remote held before
+    it ("" when that could not be read), so the follow-up can tell a branch
+    that moved on from one that did not. Exactly these four keys.
+    """
+    path = target_sidecar_path(card, patch_path)
+    body = {
+        "card": card,
+        "branch": outcome.branch,
+        "head": outcome.local_sha,
+        "remote_head": outcome.remote_sha,
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(body, fh, indent=2)
+            fh.write("\n")
+    except OSError:
+        return ""
+    return path
 
 
 def basic_auth_header(token: str) -> str:
@@ -480,6 +570,39 @@ def _existing_pr(branch: str, repo: str, token: str, *, run, workdir: str) -> st
     return (rows[0].get("url") or "") if rows else ""
 
 
+def pr_state_refusal(number: str, repo: str, token: str, *, run,
+                     workdir: str) -> str:
+    """"" when pull request `number` is open; otherwise why not to push.
+
+    Read with the credential the push is about to spend, never the job-start
+    one (DRE-6348). FAIL CLOSED: every answer that is not plainly an open,
+    unmerged pull request refuses — the pre-push hook behind this fails open
+    on an unreadable read, and nothing after this step asks again before the
+    push lands. A `mergedAt` beside any state is a merge.
+    """
+    code, out, _ = run(
+        ["gh", "pr", "view", number, "--repo", repo, "--json",
+         "state,mergedAt"],
+        cwd=workdir, env=_gh_env(token),
+    )
+    if code != 0:
+        return PR_UNREADABLE
+    try:
+        row = json.loads(out or "")
+    except ValueError:
+        return PR_UNREADABLE
+    if not isinstance(row, dict):
+        return PR_UNREADABLE
+    state = str(row.get("state") or "").upper()
+    if state == "MERGED" or row.get("mergedAt"):
+        return PR_MERGED
+    if state == "CLOSED":
+        return PR_CLOSED
+    if state == "OPEN":
+        return ""
+    return PR_UNREADABLE
+
+
 def _pr_body(card: str, card_url: str) -> str:
     """The body for a PR the AGENT did not open.
 
@@ -533,24 +656,58 @@ def rescue(
     run=None,
     log=_log,
     stop_notes=STOP_NOTES,
+    branch: str = "",
+    existing_pr: str = "",
 ) -> Outcome:
-    """Deliver the card's work with a credential that is still alive."""
+    """Deliver the card's work with a credential that is still alive.
+
+    `branch` and `existing_pr` are the fix run's (DRE-6348); with neither,
+    this is the build run's rescue exactly as it was.
+    """
     if not _CARD_RE.match(card or ""):
         raise ValueError(f"refusing an unrecognisable card reference: {card!r}")
+    if branch and (not _BRANCH_RE.match(branch) or ".." in branch):
+        raise ValueError(f"refusing an unrecognisable branch name: {branch!r}")
+    existing_pr = str(existing_pr or "").strip()
+    if existing_pr and not existing_pr.isdigit():
+        raise ValueError(f"refusing an unrecognisable pull request number: "
+                         f"{existing_pr!r}")
     run = run or _subprocess_run
     out = Outcome()
+    out.target_branch = branch
 
-    wrote = [p for p in (stop_notes or ()) if os.path.isfile(p) and os.path.getsize(p)]
-    if wrote:
-        log(f"push rescue: the agent chose a different exit ({wrote[0]}) — "
-            f"nothing to deliver")
-        return out
+    def preserve():
+        # The work that is not being pushed: the patch always, and on the fix
+        # path the sidecar naming the branch it belongs on.
+        out.patch = write_patch(out.branch, base, patch_path, run=run,
+                                workdir=workdir, always=bool(branch))
+        if branch:
+            out.sidecar = write_target_sidecar(card, out, patch_path)
+        log(_preserved(out))
 
-    out.branch = card_branch(card, run=run, workdir=workdir)
-    if not out.branch:
-        log(f"push rescue: no agent/{card}-* branch on the runner — nothing to "
-            f"deliver")
-        return out
+    if branch:
+        # The stop notes are the BUILD agent's exits. On the fix path the
+        # handoff files are the Report's to read (DRE-6351), and a committed
+        # fix outranks a note written beside it (DRE-4883): the commits below
+        # decide, and nothing else does.
+        out.branch = branch
+        if not _rev_parse(f"refs/heads/{branch}", run=run, workdir=workdir):
+            log(f"push rescue: no {branch} branch on the runner — nothing to "
+                f"deliver")
+            return out
+    else:
+        wrote = [p for p in (stop_notes or ())
+                 if os.path.isfile(p) and os.path.getsize(p)]
+        if wrote:
+            log(f"push rescue: the agent chose a different exit ({wrote[0]}) — "
+                f"nothing to deliver")
+            return out
+
+        out.branch = card_branch(card, run=run, workdir=workdir)
+        if not out.branch:
+            log(f"push rescue: no agent/{card}-* branch on the runner — nothing "
+                f"to deliver")
+            return out
 
     out.local_sha = _rev_parse(out.branch, run=run, workdir=workdir)
     ahead = _commits_ahead(out.branch, base, run=run, workdir=workdir)
@@ -567,11 +724,9 @@ def rescue(
         # state this step can reach — and it is precisely the state where the
         # runner must not be the last copy of the work.
         out.local_work = True
-        out.patch = write_patch(out.branch, base, patch_path, run=run,
-                                workdir=workdir)
         log(f"push rescue: no push credential was minted — {out.branch} cannot "
             f"be delivered")
-        log(_preserved(out))
+        preserve()
         return out
 
     # BEFORE any credentialed call: `git ls-remote` below authenticates too,
@@ -583,6 +738,22 @@ def rescue(
 
     out.remote_sha = _remote_sha(out.branch, run=run, workdir=workdir)
     out.local_work = out.local_sha != out.remote_sha
+
+    if out.local_work and existing_pr:
+        # Asked here, after the re-point and before any push, with the
+        # credential the push would spend (DRE-6348). One read, on the first
+        # mint: a refusal of it is "unreadable", and unreadable refuses — the
+        # patch keeps the work and DRE-6349's follow-up asks again with its
+        # own token.
+        refusal = pr_state_refusal(existing_pr, repo, active_token, run=run,
+                                   workdir=workdir)
+        if refusal:
+            out.error = refusal
+            out.push_status = ""
+            log(f"push rescue: not pushing {out.branch} — {refusal} "
+                f"(#{existing_pr})")
+            preserve()
+            return out
 
     if out.local_work:
         for attempt, (candidate, source) in enumerate(credentials, start=1):
@@ -616,11 +787,9 @@ def rescue(
             # readings send a reader to opposite ends of the system.
             log(_auth_header_line(credential_origins(run=run, workdir=workdir)))
         if not out.pushed:
-            out.patch = write_patch(out.branch, base, patch_path, run=run,
-                                    workdir=workdir)
             log("push rescue: the work is still on the runner; the Report step "
                 "records this as a credential expiry, not a dead agent")
-            log(_preserved(out))
+            preserve()
             return out
         # `git branch -r` is how the Gate and Report steps find this card's
         # branch, so the remote-tracking ref has to exist or a delivered
@@ -631,6 +800,11 @@ def rescue(
         run(["git", "-C", workdir, "fetch", "origin",
              f"+refs/heads/{out.branch}:refs/remotes/origin/{out.branch}"])
         log(f"push rescue: delivered {out.branch} with a freshly minted token")
+
+    if existing_pr:
+        # The caller's own pull request: never a second one, and its url is
+        # the caller's to know (DRE-6348).
+        return out
 
     # `active_token`, not the one the step started with: after a retry that is
     # the credential GitHub actually accepted, and handing `gh` the one that
@@ -680,6 +854,13 @@ def main(argv: list[str]) -> int:
     r.add_argument("--patch", default="",
                    help="where to write the branch's commits when nothing can "
                         "be pushed (default: $RUNNER_TEMP/rescue-<card>.patch)")
+    r.add_argument("--branch", default="",
+                   help="deliver this existing branch instead of the "
+                        "agent/<card>-* lookup; the stop notes are not read "
+                        "(the fix run, DRE-6348)")
+    r.add_argument("--existing-pr", default="",
+                   help="the pull request the branch belongs to: never open "
+                        "one, and push only while it is OPEN")
     args = parser.parse_args(argv)
 
     token = os.environ.get(TOKEN_ENV, "").strip()
@@ -701,6 +882,7 @@ def main(argv: list[str]) -> int:
             patch_path=args.patch,
             base=args.base, card_url=args.card_url,
             card_title=args.card_title, workdir=args.workdir,
+            branch=args.branch, existing_pr=args.existing_pr,
         )
     except Exception as exc:  # never fail the job over a rescue
         _log(f"push rescue: skipped — {exc}")
