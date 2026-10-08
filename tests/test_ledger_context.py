@@ -498,13 +498,22 @@ def test_the_plan_critic_can_import_what_the_contract_promises():
     assert isinstance(ledger_context.LEDGER_MAX_AGE_HOURS, int)
 
 
-def test_the_shipped_ledger_reads_through_the_renderer(capsys):
-    # The committed `config/split-ledger.json` is the file plan.yml will point
-    # at: it must render without the defaults being touched.
-    code, lines = _render(ROOT, capsys,
-                          ledger=str(ROOT / "config" / "split-ledger.json"),
-                          now="2026-09-04T06:00:00Z")
+def test_no_ledger_named_and_none_derived_could_not_be_read(
+        tmp_path, capsys, monkeypatch):
+    # No committed ledger is left to fall back to (DRE-6056): with no
+    # `--ledger` and no `SPLIT_LEDGER_PATH` the block says the ledger could not
+    # be read, gives the planner its artifact line, and the CLI exits 0.
+    monkeypatch.delenv("SPLIT_LEDGER_PATH", raising=False)
+    code = ledger_context.main(["render", "--mulch", str(tmp_path / "no.jsonl"),
+                                "--now", NOW])
+    lines = capsys.readouterr().out.splitlines()
     assert code == 0
     body = _block(lines, LEDGER_BEGIN, LEDGER_END)
-    assert body[0].startswith("LEDGER STATUS: fresh — ")
-    assert _row_lines(body)
+    assert body[0].startswith("LEDGER STATUS: UNKNOWN — ")
+    assert "could not be read" in body[0]
+    assert "SPLIT_LEDGER_PATH" in body[0]
+    assert body[-1] == ARTIFACT_LINE
+
+    state, reason = ledger_context.status(None, now=NOW)
+    assert state == "UNKNOWN"
+    assert "could not be read" in reason

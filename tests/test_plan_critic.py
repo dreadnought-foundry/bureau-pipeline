@@ -36,7 +36,7 @@ One section per acceptance criterion:
       hidden for security".
 
   L (DRE-3079). The same mechanical half reads the SPLIT LEDGER
-      (`config/split-ledger.json`, DRE-3077): a child whose declared footprint
+      (DRE-3077, derived at plan time since DRE-6055): a child whose declared footprint
       lands on a row that died is a finding citing the row, and a child
       carrying a tell the ledger has watched kill cards is another. A ledger
       that could not be read says so — it never reads as "no matches".
@@ -1262,7 +1262,7 @@ def _ledger(*rows, by_tell=()):
 
 
 #: The ledger every test passes when the ledger is not what it is testing
-#: (DRE-5314). `config/split-ledger.json` is regenerated every night, so a test
+#: (DRE-5314). The live ledger changes with every derive, so a test
 #: that read it for its expected findings went red the night a row landed on
 #: its fixture's files — bureau-pipeline #584, a DRE-5280 row over
 #: SHIPPED_CARD's two files. `TheLiveLedgerCannotChangeTheseTests` holds every
@@ -1286,7 +1286,7 @@ DEAD_ROW = ("DRE-2937", ["turn-cap-death", "split"], 4,
             ["scripts/alerts.py", "console/src/Board.tsx"], "UNKNOWN", 63.9)
 LIVE_ROW = ("DRE-3029", ["named-as-a-seed"], 0,
             ["scripts/planning_shape.py", "briefs/planner.md"], "UNKNOWN", 0.0)
-#: DRE-3016's row as `config/split-ledger.json` carried it on 2026-09-28.
+#: DRE-3016's row as the committed ledger carried it on 2026-09-28.
 DRE_3016_ROW = ("DRE-3016", ["turn-cap-death"], 1,
                 ["scripts/planner_score.py", "config/planner-audit.json",
                  "tests/test_planner_score.py", "docs/planner-audit.md",
@@ -1294,7 +1294,7 @@ DRE_3016_ROW = ("DRE-3016", ["turn-cap-death"], 1,
 
 
 class AFootprintThatHasDiedBefore(unittest.TestCase):
-    """DRE-3079. The ledger (`config/split-ledger.json`, DRE-3077) records
+    """DRE-3079. The ledger (DRE-3077, derived at plan time) records
     every card that did not fit one run — what it declared, what its pieces
     actually touched, how many turn-cap deaths it cost. Until this card the
     only thing that could read it was the planner.
@@ -1325,8 +1325,9 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
         )[0]
         self.assertIn("scripts/alerts.py", finding)
         self.assertIn("console/src/Board.tsx", finding)
-        self.assertIn("config/split-ledger.json", finding,
+        self.assertIn(pc.LEDGER_FILE, finding,
                       "the finding must say where the row can be read")
+        self.assertIn("derived from the console's record at plan time", finding)
 
     def test_the_match_is_reported_structurally_as_well_as_in_prose(self):
         matches = pc.ledger_footprint_matches(
@@ -1453,7 +1454,8 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
         ledger = _ledger(DEAD_ROW)
         note = pc.findings_note(cards, pc.mechanical_findings(cards, ledger=ledger),
                                 ledger=ledger)
-        self.assertIn("config/split-ledger.json", note)
+        self.assertIn("the split ledger, derived from the console's record at "
+                      "plan time", note)
         self.assertIn("1 death row", note)
 
     def test_an_unreadable_ledger_is_said_so_never_read_as_no_matches(self):
@@ -1843,7 +1845,7 @@ LEDGER_READERS = ("mechanical_findings(", "findings_note(", "ledger_findings(",
 
 
 class TheLiveLedgerCannotChangeTheseTests(unittest.TestCase):
-    """DRE-5314. `config/split-ledger.json` is regenerated every night, so a
+    """DRE-5314. The live ledger changes with every derive, so a
     test that reads it for its expected findings goes red the night a row
     lands on its fixture's files — and the ledger PR that added the row cannot
     merge. Every test here passes its ledger explicitly; this class writes an
@@ -1866,7 +1868,9 @@ class TheLiveLedgerCannotChangeTheseTests(unittest.TestCase):
                 self.default_reads.append(path)
             return real_load(path)
 
-        for patch in (mock.patch.object(split_ledger, "LEDGER_PATH", self.path),
+        # The default read is `$SPLIT_LEDGER_PATH` — the one the plan job
+        # exports — since there is no committed ledger (DRE-6056).
+        for patch in (mock.patch.dict(os.environ, {"SPLIT_LEDGER_PATH": self.path}),
                       mock.patch.object(split_ledger, "load", load)):
             patch.start()
             self.addCleanup(patch.stop)
