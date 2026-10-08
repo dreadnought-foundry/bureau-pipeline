@@ -1044,6 +1044,31 @@ jobs:
             "${{ github.event.client_payload.identifier }}" \
             "🧠 model-attempt: ${{ steps.model.outputs.model }} — planner agent starting. ${{ steps.model.outputs.why }}"
 
+      # The split ledger, derived ONCE per run from the read door (DRE-6055):
+      # one `GET /split-history` — the rows the console derives from its own
+      # record of the board — plus GitHub for the split pieces' pull requests,
+      # on this job's own App token (a repo it cannot read records UNKNOWN,
+      # never 0). The path is exported so every later step reads THIS run's
+      # history: the context step passes it to the renderer, and
+      # `split_ledger.load()` reads `SPLIT_LEDGER_PATH` for the critic's and the
+      # scorer's ledger. A derive that fails leaves the path unset and says so
+      # in one line; the committed `config/split-ledger.json` is the fallback
+      # (DRE-6056 retires it), and context never fails a plan run (DRE-3358).
+      - name: Split ledger — derive it from the read door
+        if: steps.route.outputs.mode == 'plan'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          if python3 .bureau-pipeline/scripts/split_ledger.py derive --out "$RUNNER_TEMP/split-ledger.json" --no-doc; then
+            echo "SPLIT_LEDGER_PATH=$RUNNER_TEMP/split-ledger.json" >> "$GITHUB_ENV"
+          else
+            echo "split-ledger: the derive from the read door failed — SPLIT_LEDGER_PATH stays unset, and this run reads the committed config/split-ledger.json"
+          fi
+
       # Assemble the planner's context = its shared standards + the planner
       # brief (DRE-1646). assemble_context.py owns the per-role standards
       # mapping and reads the files from this checkout at run time, so a `@main`
@@ -1054,7 +1079,8 @@ jobs:
       # ledger and the product repo's mulch planning records say about cards
       # that did not fit one run. It is APPENDED — `>>`, after the standards, so
       # the planner sizes against evidence rather than against memory — and the
-      # renderer (DRE-3358) always exits 0: a missing config/split-ledger.json
+      # renderer (DRE-3358) always exits 0: a missing ledger (the one the step
+      # above derived, else config/split-ledger.json)
       # or .mulch/expertise/planning.jsonl renders `UNKNOWN — <reason>`, because
       # a file read for CONTEXT must never fail a plan run. The `--mulch` path
       # is the PRODUCT checkout's, the opposite side to the ledger's own
@@ -1078,7 +1104,7 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
-          python3 .bureau-pipeline/scripts/ledger_context.py render --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
+          python3 .bureau-pipeline/scripts/ledger_context.py render --ledger "${SPLIT_LEDGER_PATH:-.bureau-pipeline/config/split-ledger.json}" --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"

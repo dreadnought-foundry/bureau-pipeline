@@ -25,12 +25,13 @@ What these tests pin, and why each one exists:
 
 DRE-3356 adds three things and these tests pin each of them:
 
-  * **The population is DISCOVERED, not named.** `discover()` asks Linear for
-    the cards whose own comments carry a turn-cap or hand-back receipt and for
-    the cards a successor cites as the one it was cut from, inside a
-    `--window-days` window — and the seeds stay in whatever the window says. A
-    search that failed is NAMED, never quietly dropped: a discovery that loses
-    a search reports a smaller history in exactly the same shape.
+  * **The population is DISCOVERED, not named.** Discovery finds the cards
+    whose own comments carry a turn-cap or hand-back receipt and the cards a
+    successor cites as the one it was cut from, inside a `--window-days`
+    window — and the seeds stay in whatever the window says. Since DRE-6055 it
+    runs in the console behind the read door; the needles and `cites()` it is
+    built on are pinned here, and a read the door could not make is NAMED in
+    the ledger's `source`, never quietly dropped.
   * **Every row is dated.** `created_at` is the card's Linear `createdAt` as
     ISO-8601 UTC, or the literal `UNKNOWN` — never the empty string, which is
     what a reader sorting "the last N splits" would silently sort first.
@@ -580,81 +581,6 @@ def test_the_document_says_how_it_is_generated():
 
 
 # --------------------------------------------------------------------------- #
-# the live seam                                                                #
-# --------------------------------------------------------------------------- #
-
-
-class _FakeLops:
-    """Just enough Linear for `collect`, and a record of what it was asked."""
-
-    def __init__(self, *, search_raises: bool = False):
-        self.search_raises = search_raises
-        self.asked: list[str] = []
-
-    def gql(self, query: str, variables: dict) -> dict:
-        if "containsIgnoreCase" in query:
-            if self.search_raises:
-                raise RuntimeError("Linear refused the search")
-            return {"issues": {"nodes": [{
-                "identifier": "DRE-3077",
-                "title": "The split ledger, derived",
-                "description": "**Split from** DRE-3022 by its author",
-                "state": {"name": "In Progress", "type": "started"},
-                "labels": {"nodes": [{"name": "repo:bureau-pipeline"}]},
-            }]}}
-        self.asked.append(variables["id"])
-        return {"issue": {
-            "identifier": variables["id"],
-            "title": "The planner sizes against the ledger",
-            "url": f"https://linear.app/x/issue/{variables['id']}",
-            "createdAt": "2026-08-12T09:33:21.482Z",
-            "description": "**A card.**\n\n**Files:** `scripts/a.py`\n",
-            "state": {"name": "Backlog", "type": "backlog"},
-            "labels": {"nodes": [{"name": "agent:engineer"}, {"name": "size:M"}]},
-        }}
-
-    def comment_bodies(self, identifier: str) -> list:
-        return [_hold_receipt()]
-
-
-def test_collect_reads_a_card_its_receipts_and_its_successors():
-    lops = _FakeLops()
-    out = split_ledger.collect(
-        ["DRE-3022"], lops=lops,
-        finder=lambda *a, **k: {"number": 251, "state": "MERGED",
-                                "files": [{"path": "scripts/split_ledger.py"}]},
-        readable=lambda repo, run=None: True)
-    card = out["cards"][0]
-    assert card["identifier"] == "DRE-3022"
-    assert card["size"] == "M" or "size:M" in card["labels"]
-    assert [s["identifier"] for s in card["successors"]] == ["DRE-3077"]
-    assert card["successors"][0]["pr"]["files"] == ["scripts/split_ledger.py"]
-
-
-def test_collect_records_why_a_successor_search_could_not_be_read():
-    lops = _FakeLops(search_raises=True)
-    out = split_ledger.collect(["DRE-3022"], lops=lops,
-                               finder=lambda *a, **k: None,
-                               readable=lambda repo, run=None: True)
-    card = out["cards"][0]
-    assert card["successors"] is None
-    assert "refused" in card["successors_unreadable"]
-    assert split_ledger.row(card)["pieces"] == split_ledger.UNKNOWN
-
-
-def test_collect_never_believes_a_pr_search_in_a_repo_it_cannot_see():
-    """`gh pr list` exits 0 and prints `[]` for an invisible repo — the same
-    trap `planner_score.repo_is_readable` was written for."""
-    lops = _FakeLops()
-    out = split_ledger.collect(["DRE-3022"], lops=lops,
-                               finder=lambda *a, **k: None,
-                               readable=lambda repo, run=None: False)
-    successor = out["cards"][0]["successors"][0]
-    assert successor["pr"] is None
-    assert "cannot read" in successor["pr_unreadable"]
-
-
-# --------------------------------------------------------------------------- #
 # DRE-3356 — the population discovers itself                                   #
 # --------------------------------------------------------------------------- #
 
@@ -670,45 +596,6 @@ REAL_CITATIONS = (
      "finish.**", "DRE-2871"),
     ("**Backend half of** [DRE-2937](https://linear.app/x)", "DRE-2937"),
 )
-
-
-class _DiscoveryLops:
-    """Linear as `discover` asks it: comment searches, description searches and
-    the planner-children count, each answered from a canned page.
-
-    Every filter it is handed is recorded, so a test can assert the window is
-    on the query rather than trusting that it was.
-    """
-
-    def __init__(self, *, comment_hits=None, citation_hits=None,
-                 children=None, raise_on=None):
-        self.comment_hits = comment_hits or {}
-        self.citation_hits = citation_hits or {}
-        self.children = children or {}
-        self.raise_on = raise_on or ()
-        self.filters: list = []
-        self.calls = 0
-
-    def gql(self, query: str, variables: dict) -> dict:
-        self.calls += 1
-        filter_ = (variables or {}).get("filter") or {}
-        self.filters.append(filter_)
-        if any(needle in json.dumps(filter_) for needle in self.raise_on):
-            raise RuntimeError("Linear refused the search: RATELIMITED")
-        if "parent" in filter_:
-            since = (filter_.get("createdAt") or {}).get("gte") or ""
-            nodes = [{"identifier": f"DRE-{n}"}
-                     for n in range(self.children.get(since[:7], 0))]
-        elif "comments" in filter_:
-            needle = filter_["comments"]["body"]["containsIgnoreCase"]
-            nodes = [{"identifier": card}
-                     for card in self.comment_hits.get(needle, ())]
-        else:
-            needle = filter_["description"]["containsIgnoreCase"]
-            nodes = [{"identifier": ident, "description": body}
-                     for ident, body in self.citation_hits.get(needle, ())]
-        return {"issues": {"nodes": nodes,
-                           "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
 
 def test_every_real_citation_is_found_by_a_needle_and_accepted_by_cites():
@@ -733,79 +620,6 @@ def test_a_mention_below_the_opening_paragraph_names_no_origin():
     assert split_ledger.cited_origins(body) == []
 
 
-def test_discovery_finds_turn_cap_handback_and_cited_split_origins():
-    lops = _DiscoveryLops(
-        comment_hits={
-            split_ledger.TURN_TAG: ["DRE-4001"],
-            split_ledger.TURN_HOLD_MARK: ["DRE-4001", "DRE-4002"],
-            split_ledger.HANDBACK_RECEIPT_PREFIX: ["DRE-4003"],
-        },
-        citation_hits={"split from": [
-            ("DRE-4005", "**Split from** [DRE-4004](https://linear.app/x)"),
-        ]},
-    )
-    found = split_ledger.discover(lops=lops, now="2026-09-10T00:00:00Z")
-    assert set(found["cards"]) >= {"DRE-4001", "DRE-4002", "DRE-4003",
-                                   "DRE-4004"}
-    # The successor itself is not the origin — the card it NAMES is.
-    assert "DRE-4005" not in found["cards"]
-    assert split_ledger.REASON_TURN_CAP in found["found"]["DRE-4001"]
-    assert split_ledger.REASON_HANDBACK in found["found"]["DRE-4003"]
-    assert split_ledger.REASON_SPLIT in found["found"]["DRE-4004"]
-
-
-def test_discovery_keeps_every_seed_whatever_the_window_says():
-    """The seeds are in the ledger because DRE-3077 named them, and a 1-day
-    window does not un-name them."""
-    found = split_ledger.discover(lops=_DiscoveryLops(), window_days=1,
-                                  now="2026-09-10T00:00:00Z")
-    assert set(split_ledger.SEED_CARDS) <= set(found["cards"])
-
-
-def test_every_discovery_search_is_bounded_by_the_window():
-    lops = _DiscoveryLops()
-    split_ledger.discover(lops=lops, window_days=90, now="2026-09-10T00:00:00Z")
-    assert lops.filters, "discovery asked Linear nothing"
-    for filter_ in lops.filters:
-        assert filter_["createdAt"]["gte"] == "2026-06-12T00:00:00Z", filter_
-
-
-def test_a_discovery_search_that_failed_is_named_not_silently_dropped():
-    """A lost search reports a smaller history in exactly the same shape —
-    the silent zero this whole module is written against."""
-    lops = _DiscoveryLops(
-        comment_hits={split_ledger.HANDBACK_RECEIPT_PREFIX: ["DRE-4003"]},
-        raise_on=[split_ledger.TURN_TAG])
-    found = split_ledger.discover(lops=lops, now="2026-09-10T00:00:00Z")
-    assert found["unreadable"], "a refused search left no trace"
-    assert any(split_ledger.TURN_TAG in note for note in found["unreadable"])
-    # The searches that DID answer still count — one unknown does not poison
-    # the population.
-    assert "DRE-4003" in found["cards"]
-
-
-def test_discovery_follows_every_page_it_is_offered():
-    """Linear serves at most 100 nodes per page and says so only in `pageInfo`
-    (DRE-2681). A discovery that reads page one is a population decided by
-    Linear's default ordering."""
-    pages = [
-        {"issues": {"nodes": [{"identifier": "DRE-5001"}],
-                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}},
-        {"issues": {"nodes": [{"identifier": "DRE-5002"}],
-                    "pageInfo": {"hasNextPage": False, "endCursor": None}}},
-    ]
-
-    class _Paged(_DiscoveryLops):
-        def gql(self, query, variables):
-            filter_ = (variables or {}).get("filter") or {}
-            if "comments" not in filter_ or not pages:
-                return super().gql(query, variables)
-            return pages.pop(0)
-
-    found = split_ledger.discover(lops=_Paged(), now="2026-09-10T00:00:00Z")
-    assert {"DRE-5001", "DRE-5002"} <= set(found["cards"])
-
-
 # --------------------------------------------------------------------------- #
 # DRE-3356 — every row is dated                                                #
 # --------------------------------------------------------------------------- #
@@ -822,15 +636,6 @@ def test_a_creation_date_that_could_not_be_read_is_unknown_not_empty():
     assert row["created_at"] == split_ledger.UNKNOWN
     assert row["created_at"] != ""
     assert any("creation date" in note for note in row["unreadable"])
-
-
-def test_collect_reads_the_creation_date_off_the_card():
-    lops = _FakeLops()
-    out = split_ledger.collect(["DRE-3022"], lops=lops,
-                               finder=lambda *a, **k: None,
-                               readable=lambda repo, run=None: True)
-    assert out["cards"][0]["created_at"] == "2026-08-12T09:33:21.482Z"
-    assert "createdAt" in split_ledger._CARD_QUERY
 
 
 # --------------------------------------------------------------------------- #
@@ -915,32 +720,17 @@ def test_the_month_windows_clamp_to_the_window_and_say_when_they_did_not():
     assert by_month["2026-09"]["until"] == "2026-09-10T00:00:00Z"
 
 
-def test_the_children_count_is_a_planner_child_query_per_month():
-    lops = _DiscoveryLops(children={"2026-07": 3, "2026-08": 5})
-    windows = split_ledger.month_windows("2026-07-01T00:00:00Z",
-                                         "2026-09-01T00:00:00Z")
-    counts = split_ledger.child_counts(windows, lops=lops)
-    assert counts["2026-07"] == 3
-    assert counts["2026-08"] == 5
-    for filter_ in lops.filters:
-        assert filter_["parent"] == {"null": False}
-
-
-def test_a_children_count_that_failed_is_unknown_in_the_month_never_zero():
-    lops = _DiscoveryLops(children={"2026-07": 3},
-                          raise_on=['"gte": "2026-08'])
-    windows = split_ledger.month_windows("2026-07-01T00:00:00Z",
-                                         "2026-09-01T00:00:00Z")
-    notes: list = []
-    counts = split_ledger.child_counts(windows, lops=lops, unreadable=notes)
-    assert counts["2026-07"] == 3
-    assert counts.get("2026-08") is None
-    assert any("2026-08" in note for note in notes)
-    record = split_ledger.monthly([], counts, since="2026-07-01T00:00:00Z",
-                                  generated_at="2026-09-01T00:00:00Z")
-    august = [r for r in record if r["month"] == "2026-08"][0]
-    assert august["planner_children"] == split_ledger.UNKNOWN
-    assert august["planner_children"] != 0
+def test_a_children_count_the_door_could_not_read_is_unknown_never_zero():
+    """The door serves `"UNKNOWN"` for a month it could not count (DRE-6054);
+    the month says so, and a month it never mentioned says so too."""
+    record = split_ledger.monthly(
+        [], {"2026-07": 3, "2026-08": "UNKNOWN"},
+        since="2026-07-01T00:00:00Z", generated_at="2026-09-02T00:00:00Z")
+    months = {r["month"]: r for r in record}
+    assert months["2026-07"]["planner_children"] == 3
+    for month in ("2026-08", "2026-09"):
+        assert months[month]["planner_children"] == split_ledger.UNKNOWN
+        assert months[month]["planner_children"] != 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1108,17 +898,6 @@ def test_a_candidate_whose_successor_search_failed_stays_too():
                      created_at="2026-08-01T00:00:00Z")
     doc = split_ledger.ledger([unread], generated_at="2026-09-10T00:00:00Z")
     assert [r["card"] for r in doc["rows"]] == ["DRE-8003"]
-
-
-def test_a_card_named_on_the_command_line_stays_whatever_history_says():
-    """`--card` is a person saying "look at this one". A row that vanished
-    because the board had nothing to say about it would look like a bug."""
-    quiet = _record(identifier="DRE-8004", comments=[], successors=[],
-                    created_at="2026-08-01T00:00:00Z")
-    doc = split_ledger.ledger([quiet], generated_at="2026-09-10T00:00:00Z",
-                              keep=["DRE-8004"])
-    assert [r["card"] for r in doc["rows"]] == ["DRE-8004"]
-    assert doc["rows"][0]["reasons"] == []
 
 
 def test_every_committed_row_says_why_it_is_there():
