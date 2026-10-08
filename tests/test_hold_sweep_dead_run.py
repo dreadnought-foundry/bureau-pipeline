@@ -68,8 +68,9 @@ def _credential(n: int, status: str) -> str:
                            artifact=f"rescue-DRE-7100-{n}.patch").comments[0]
 
 
-def _three_silent() -> list[str]:
-    return [_silent(1), _silent(2), _silent(3)]
+def _at_cap() -> list[str]:
+    """The thread of a card at the cap: one requeue receipt per spent strike."""
+    return [_silent(n) for n in range(1, reconcile.REQUEUE_CAP + 1)]
 
 
 def _card(state="In Progress", identifier="DRE-7100", bodies=()):
@@ -148,21 +149,21 @@ class _Linear:
 class TestTheFirstStrikeHandsTheCardToPlanning:
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     def test_an_untried_budget_advances_to_planning_under_the_split_receipt(self, lane):
-        linear = _Linear(_three_silent())
+        linear = _Linear(_at_cap())
         card = _card(lane)
-        linear.run(card, reconcile.REQUEUE_CAP + 1,
+        linear.run(card, reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=False)])
         assert linear.kinds() == ["comment", "advance"]
         receipt = linear.comments()[0]
         assert receipt.startswith(hold.DEAD_SPLIT_MARK)
         assert FILES in receipt, "the receipt quotes the card's **Files:** line"
-        assert f"dead run {reconcile.REQUEUE_CAP + 1}/" in receipt
+        assert f"dead run {reconcile.REQUEUE_CAP + 1}/{reconcile.REQUEUE_CAP + 1}" in receipt
         assert linear.writes[1] == ("advance", "DRE-7100", "Planning", lane)
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     def test_the_hand_off_writes_no_label_and_never_parks(self, lane):
-        linear = _Linear(_three_silent())
-        linear.run(_card(lane), reconcile.REQUEUE_CAP + 1)
+        linear = _Linear(_at_cap())
+        linear.run(_card(lane), reconcile.REQUEUE_CAP)
         assert "label" not in linear.kinds()
         assert not [w for w in linear.writes if w[0] == "state"]
         assert not any(c.startswith(hold.STAMP_PREFIX) for c in linear.comments())
@@ -171,8 +172,8 @@ class TestTheFirstStrikeHandsTheCardToPlanning:
 class TestTheSecondStrikeHolds:
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     def test_a_tried_budget_parks_with_the_label_the_stamp_and_the_anchor(self, lane):
-        linear = _Linear(_three_silent())
-        linear.run(_card(lane), reconcile.REQUEUE_CAP + 1,
+        linear = _Linear(_at_cap())
+        linear.run(_card(lane), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
         assert linear.kinds() == ["label", "comment", "state", "comment"]
         assert linear.writes[0] == ("label", "DRE-7100", reconcile.HOLD_LABEL)
@@ -184,23 +185,28 @@ class TestTheSecondStrikeHolds:
         assert not any(c.startswith(hold.DEAD_SPLIT_MARK) for c in linear.comments())
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
-    def test_the_same_card_dying_once_more_after_the_hand_off_holds(self, lane):
-        """The scenario, on the real `split_tried`: three deaths hand the card
-        off; the planner sends it back as one piece, its next run dies, and
-        the fourth death at the cap is the hold."""
-        linear = _Linear(_three_silent())
+    @pytest.mark.parametrize("recorded", [False, True], ids=["hung", "recorded"])
+    def test_the_same_card_dying_once_more_after_the_hand_off_holds(self, lane, recorded):
+        """The scenario, on the real `split_tried`: at the cap the card is
+        handed off; the planner sends it back as one piece and it dies again —
+        hung, which only the sweep sees, or with a requeue receipt, which still
+        counts — and the second strike is the hold."""
+        linear = _Linear(_at_cap())
         card = _card(lane)
-        with linear.patches(card)[-1]:
-            dead = reconcile.linear_ops.count_comments(
-                "DRE-7100", reconcile.DEAD_TAG, since=reconcile.RESET_TAG)
+
+        def count():
+            with linear.patches(card)[-1]:
+                return reconcile.linear_ops.count_comments(
+                    "DRE-7100", reconcile.DEAD_TAG, since=reconcile.RESET_TAG)
+
+        dead = count()
         linear.run(card, dead)
         assert linear.kinds() == ["comment", "advance"]
-        linear.thread.append(_silent(dead + 1))
+        if recorded:
+            linear.thread.append(_silent(dead + 1))
         linear.writes.clear()
-        with linear.patches(card)[-1]:
-            dead = reconcile.linear_ops.count_comments(
-                "DRE-7100", reconcile.DEAD_TAG, since=reconcile.RESET_TAG)
-        assert dead == reconcile.REQUEUE_CAP + 2, "the next death after a hand-off still counts"
+        dead = count()
+        assert dead == reconcile.REQUEUE_CAP + recorded, "the next death still counts"
         linear.run(card, dead)
         assert linear.kinds() == ["label", "comment", "state", "comment"]
         assert CAP_STAMP in linear.comments()
@@ -208,10 +214,10 @@ class TestTheSecondStrikeHolds:
         assert f"after {dead} requeues" in linear.comments()[-1]
 
     def test_a_reset_marker_makes_the_planner_tryable_once_more(self):
-        handed = _three_silent() + [
-            dead_run.dead_split_comment(3, footprint=FILES), _silent(4)]
-        linear = _Linear(handed + [f"{reconcile.RESET_TAG} — unparked"] + _three_silent())
-        linear.run(_card(), reconcile.REQUEUE_CAP + 1)
+        handed = _at_cap() + [
+            dead_run.dead_split_comment(reconcile.REQUEUE_CAP + 1, footprint=FILES)]
+        linear = _Linear(handed + [f"{reconcile.RESET_TAG} — unparked"] + _at_cap())
+        linear.run(_card(), reconcile.REQUEUE_CAP)
         assert linear.kinds() == ["comment", "advance"]
 
 
@@ -220,16 +226,16 @@ class TestTheReadDoorRunsFirst:
     def test_a_door_card_that_left_its_lane_gets_no_write(self, tried):
         card = _card()
         reconcile._door_sourced.add(card["identifier"])
-        linear = _Linear(_three_silent(), live_lane="Done")
-        linear.run(card, reconcile.REQUEUE_CAP + 1,
+        linear = _Linear(_at_cap(), live_lane="Done")
+        linear.run(card, reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=tried)])
         assert linear.writes == []
 
     def test_a_door_card_still_in_its_lane_is_parked_from_lane_conditionally(self):
         card = _card()
         reconcile._door_sourced.add(card["identifier"])
-        linear = _Linear(_three_silent())
-        linear.run(card, 3,
+        linear = _Linear(_at_cap())
+        linear.run(card, reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
         assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
         assert linear.state_guards == [{"expect": ("In Progress",), "labels_absent": ()}]
@@ -242,15 +248,15 @@ class TestTheReadDoorRunsFirst:
 
 class TestTheDecisionIsDeadRuns:
     def test_decide_is_asked_with_no_class_flag_and_the_death_lines(self):
-        bodies = _three_silent()
+        bodies = _at_cap()
         linear = _Linear(bodies)
         real = dead_run.decide
         spy = MagicMock(side_effect=real)
-        linear.run(_card(), 3, bodies,
+        linear.run(_card(), reconcile.REQUEUE_CAP, bodies,
                    extra=[patch.object(reconcile.dead_run, "decide", spy)])
         spy.assert_called_once()
         args, kwargs = spy.call_args
-        assert args == (3,)
+        assert args == (reconcile.REQUEUE_CAP,)
         assert not kwargs.get("is_error")
         assert not kwargs.get("credential_expiry")
         assert kwargs["deaths"] == dead_run.death_lines(bodies)
@@ -265,7 +271,7 @@ class TestTheDecisionIsDeadRuns:
                   f"{reconcile.RESET_TAG} — unparked",
                   _credential(1, "403"), _credential(2, "400"), _silent(3)]
         linear = _Linear(bodies)
-        linear.run(_card(), 3, bodies)
+        linear.run(_card(), reconcile.REQUEUE_CAP, bodies)
         receipt = linear.comments()[0]
         quoted = [dead_run._quoted(line) for line in dead_run.death_lines(bodies)]
         assert len(quoted) == 3
@@ -276,18 +282,18 @@ class TestTheDecisionIsDeadRuns:
         assert "an old death" not in receipt, "a death before the reset is not this budget's"
 
     def test_a_hold_answer_parks(self):
-        linear = _Linear(_three_silent())
+        linear = _Linear(_at_cap())
         held = dead_run.Decision("hold", ["🚨 held-for-human (decided elsewhere)"])
-        linear.run(_card(), 3,
+        linear.run(_card(), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "decide", return_value=held)])
         assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
         assert "advance" not in linear.kinds()
 
     def test_a_replan_answer_advances(self):
-        linear = _Linear(_three_silent())
+        linear = _Linear(_at_cap())
         body = f"{hold.DEAD_SPLIT_MARK} decided elsewhere"
         replan = dead_run.Decision("replan", [body])
-        linear.run(_card(reconcile.REVIEW_LANE), 3,
+        linear.run(_card(reconcile.REVIEW_LANE), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True),
                           patch.object(reconcile.dead_run, "decide", return_value=replan)])
         assert linear.writes == [
@@ -301,7 +307,7 @@ class TestTheDecisionIsDeadRuns:
 
         def visit(node, scope):
             for child in ast.iter_child_nodes(node):
-                inner = child if isinstance(child, ast.FunctionDef) else scope
+                inner = child.name if isinstance(child, ast.FunctionDef) else scope
                 if isinstance(child, ast.Attribute) and child.attr == "DEAD_SPLIT_MARK":
                     marks.append(child.lineno)
                 if isinstance(child, ast.Attribute) and child.attr == "split_tried":
@@ -317,14 +323,14 @@ class TestTheDecisionIsDeadRuns:
 
 class TestTheHandOffSpendsNoBudget:
     def test_the_receipt_carries_neither_budget_tag(self):
-        linear = _Linear(_three_silent())
-        linear.run(_card(), 3)
+        linear = _Linear(_at_cap())
+        linear.run(_card(), reconcile.REQUEUE_CAP)
         receipt = linear.comments()[0]
         assert reconcile.DEAD_TAG not in receipt
         assert reconcile.RESET_TAG not in receipt
 
     def test_the_count_is_the_same_before_and_after_it(self):
-        linear = _Linear(_three_silent())
+        linear = _Linear(_at_cap())
         card = _card()
 
         def count():
@@ -335,7 +341,7 @@ class TestTheHandOffSpendsNoBudget:
         before = count()
         linear.run(card, before)
         assert linear.comments()[0].startswith(hold.DEAD_SPLIT_MARK)
-        assert count() == before == 3
+        assert count() == before == reconcile.REQUEUE_CAP
 
 
 # --------------------------------------------------------------------------- #
@@ -372,7 +378,7 @@ def _sweep(card, dead):
 class TestBothCapsReachTheHelper:
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     def test_at_the_cap_the_branch_calls_the_helper_once(self, lane):
-        card = _card(lane, bodies=_three_silent())
+        card = _card(lane, bodies=_at_cap())
         helper, add_label, cmd_state = _sweep(card, reconcile.REQUEUE_CAP)
         helper.assert_called_once_with(
             card, reconcile.REQUEUE_CAP, reconcile.card_comment_bodies(card))

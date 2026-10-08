@@ -45,17 +45,23 @@ def _clean_failure_state(monkeypatch):
     getattr(reconcile, "_read_failures", []).clear()
 
 
-def _review_lane_card():
+def _review_lane_card(bodies=()):
     return {
         "identifier": "DRE-2034",
         "description": "**Repo:** agent-bureau\nwork",
         "state": {"name": "In Review"},
         "labels": {"nodes": []},
         "updatedAt": "2026-06-28T00:00:00Z",
+        "comments": {"nodes": [{"body": b} for b in bodies]},
     }
 
 
-def _sweep_mocks(extra=None):
+# DRE-6186: the cap hands the card to the planner once per budget before it
+# parks — a thread already carrying the hand-off is the second strike.
+_HANDED_OFF = (f"{reconcile.hold.DEAD_SPLIT_MARK} the dead-run cap is reached",)
+
+
+def _sweep_mocks(extra=None, bodies=()):
     m = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
@@ -66,7 +72,7 @@ def _sweep_mocks(extra=None):
         "age_minutes": MagicMock(return_value=999),  # always stale
         "pr_for": MagicMock(return_value=None),  # In Review, no PR
         "redispatch": MagicMock(return_value=True),
-        "active_cards": MagicMock(return_value=[_review_lane_card()]),
+        "active_cards": MagicMock(return_value=[_review_lane_card(bodies)]),
         # DRE-1993: the stranded-card watchdog runs on every full sweep and
         # would make real Linear calls on this mocked card; stub it out —
         # this test exercises the In-QA requeue cap, not the watchdog.
@@ -98,8 +104,9 @@ def test_review_lane_requeue_below_cap_counts_the_shared_dead_tag():
 
 def test_review_lane_requeue_at_cap_holds_instead_of_looping():
     """ACCEPTANCE: at the cap the card parks needs-human in Backlog — no
-    third lap. On the unfixed code this FAILS: it requeues to Todo again."""
-    mocks = _sweep_mocks()
+    third lap. On the unfixed code this FAILS: it requeues to Todo again.
+    Since DRE-6186 that is the second strike: the planner has had the card."""
+    mocks = _sweep_mocks(bodies=_HANDED_OFF)
     with patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=reconcile.REQUEUE_CAP
     ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
@@ -110,6 +117,23 @@ def test_review_lane_requeue_at_cap_holds_instead_of_looping():
     # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as In Progress.
     cmd_state.assert_called_once_with("DRE-2034", "Backlog", "--park")
     assert ("DRE-2034", "Todo") not in [c.args for c in cmd_state.call_args_list]
+
+
+def test_review_lane_at_cap_first_hands_the_card_to_planning():
+    """DRE-6186: the first strike at the cap on a budget the planner has not
+    had goes to Planning — no label, no park, no third lap either."""
+    mocks = _sweep_mocks()
+    with patch.multiple(reconcile, **mocks), patch.object(
+        reconcile.linear_ops, "count_comments", return_value=reconcile.REQUEUE_CAP
+    ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
+        reconcile.linear_ops, "cmd_state"
+    ) as cmd_state, patch.object(
+        reconcile.linear_ops, "cmd_advance"
+    ) as cmd_advance, patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile.main()
+    cmd_advance.assert_called_once_with("DRE-2034", "Planning", "In Review")
+    add_label.assert_not_called()
+    cmd_state.assert_not_called()
 
 
 def test_review_lane_with_open_pr_is_untouched_by_the_cap():
