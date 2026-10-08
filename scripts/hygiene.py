@@ -59,7 +59,8 @@ every write of every action is guarded before any is sent, so nothing was.
 
 One comment on `HYGIENE_CARD`, opening `SUMMARY_MARK <digest> · <HH:MM PT>`,
 where the digest is the first 12 hex of a sha256 over the sorted left-row
-targets of every leg. It posts when an action was executed or the digest
+targets of every leg — and, on a dry run, every write a lane proposed, each
+listed under its lane as `would` (DRE-6248). It posts when an action was executed or the digest
 differs from the newest summary's, and posts nothing otherwise — a left row is
 reported when it appears and when it goes, never every hour in between. The
 summary is a report, not an act: the registry's `unconverted` block declares it
@@ -181,7 +182,15 @@ _API_WRITE_LONG = ("--method", "--field", "--raw-field", "--input")
 _API_WRITE_SHORT = ("-X", "-f", "-F")
 
 GH_KINDS = ("gh_dispatch", "gh_rerun", "gh_update_branch", "gh_pr_close", "gh_pr_comment")
-LINEAR_KINDS = ("linear_state", "linear_comment", "linear_label", "linear_relation")
+LINEAR_KINDS = ("linear_state", "linear_comment", "linear_label", "linear_relation",
+                "linear_archived")
+
+#: Linear's mutation for each direction of an archive write: `archived=True`
+#: archives the card, `archived=False` unarchives it.
+_ARCHIVE_MUTATIONS = {
+    True: "mutation($id: String!) { issueArchive(id: $id) { success } }",
+    False: "mutation($id: String!) { issueUnarchive(id: $id) { success } }",
+}
 
 
 class Forbidden(RuntimeError):
@@ -278,6 +287,11 @@ class Write:
     label: str | None = None
     add: bool | None = None
     blocked_by: str | None = None
+    # An archive write's direction, and the two facts its guard reads off the
+    # card's read: the lane it stands in (`state.name`) and its `archivedAt`.
+    archived: bool | None = None
+    state: str | None = None
+    archived_at: str | None = None
     repo: str | None = None
     workflow: str | None = None
     body: str | None = None
@@ -293,6 +307,8 @@ class Write:
             return f"label {self.card} {'+' if self.add else '−'} {self.label}"
         if self.kind == "linear_relation":
             return f"relation {self.card} blocked by {self.blocked_by}"
+        if self.kind == "linear_archived":
+            return f"{'archive' if self.archived else 'unarchive'} {self.card}"
         shown = [a.splitlines()[0] if a == self.body else a for a in self.argv or ()]
         return shlex.join(shown)
 
@@ -431,6 +447,17 @@ def linear_label(card: dict, label: str, add: bool) -> Write:
 def linear_relation(card: dict, blocked_by: str | dict) -> Write:
     blocker = blocked_by.get("identifier") if isinstance(blocked_by, dict) else blocked_by
     return Write("linear_relation", blocked_by=blocker, **_card_fields(card))
+
+
+def linear_archived(card: dict, archived: bool) -> Write:
+    """Archive (`archived=True`) or unarchive a closed card. Linear's issue
+    queries leave an archived card out, so a lane that writes to one
+    unarchives it first and re-archives it after; the order is the lane's,
+    and the guard judges each write on its own."""
+    fields = _card_fields(card)
+    return Write("linear_archived", archived=bool(archived),
+                 state=(card.get("state") or {}).get("name"),
+                 archived_at=card.get("archivedAt"), **fields)
 
 
 def _gh_write(argv: list, kind: str, repo: str, target: str,
@@ -583,6 +610,18 @@ def _guard_linear(write: Write, ctx: Context) -> None:
         refusal = linear_ops.agent_label_refusal(write.label or "")
         if refusal is not None:
             raise Forbidden(refusal)
+    elif write.kind == "linear_archived":
+        if write.state not in CLOSING_LANES:
+            raise Forbidden(
+                f"{write.card} stands in {write.state!r} — the hygiene agent "
+                f"archives or unarchives only a card in {' or '.join(CLOSING_LANES)}"
+            )
+        if not write.archived_at:
+            raise Forbidden(
+                f"{write.card} is {write.state} but its read carried no archivedAt — "
+                "the hygiene agent archives or unarchives only a card the read "
+                "said was archived"
+            )
 
 
 def _guard_gh(write: Write, ctx: Context) -> None:
@@ -808,6 +847,9 @@ def send(write: Write, ctx: Context) -> None:
     elif write.kind == "linear_relation":
         card_id = write.card_id or linear_ops.get_issue(write.card)["id"]
         linear_ops._add_blocked_by(card_id, [write.blocked_by])
+    elif write.kind == "linear_archived":
+        card_id = write.card_id or linear_ops.get_issue(write.card)["id"]
+        linear_ops.gql(_ARCHIVE_MUTATIONS[bool(write.archived)], {"id": card_id})
     elif write.kind in GH_KINDS:
         GH_RUNNER(list(write.argv))
     else:  # pragma: no cover — the guard refused it already
@@ -928,12 +970,21 @@ def newest_summary_digest(card: str) -> str | None:
 
 def render_summary(ledgers: list, now: datetime) -> str:
     left = [row for ledger in ledgers for row in ledger.get("left") or []]
-    lines = [f"{SUMMARY_MARK} {digest(r['target'] for r in left)}{_SEPARATOR}{pt(now)}"]
+    # A dry run's proposed writes are keyed too, so a pass that would write
+    # shows it; only a dry run proposes, so a live digest is the left set's.
+    proposed = [f"would: {w}" for ledger in ledgers for a in ledger.get("actions") or []
+                if a["outcome"] == "would" for w in a.get("writes") or []]
+    lines = [f"{SUMMARY_MARK} {digest([*(r['target'] for r in left), *proposed])}"
+             f"{_SEPARATOR}{pt(now)}"]
     by_lane: dict = {}
     for ledger in ledgers:
         when = pt(datetime.fromisoformat(ledger["taken_at"].replace("Z", "+00:00")))
         for a in ledger.get("actions") or []:
-            if a["outcome"] == "executed":
+            if a["outcome"] == "would":
+                by_lane.setdefault(a["lane"], []).append(
+                    f"- would {a['target']} — {TAGS.get(a['act'], a['act'])}: "
+                    f"{a['cause']} · {when} — {'; '.join(a.get('writes') or [])}")
+            elif a["outcome"] == "executed":
                 by_lane.setdefault(a["lane"], []).append(
                     f"- cleared {a['target']} — {TAGS.get(a['act'], a['act'])}: "
                     f"{a['cause']} · {when}")
