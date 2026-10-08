@@ -437,6 +437,12 @@ class TheCommitsDecideWhetherThereIsWork(unittest.TestCase):
         text = self.fx.patch.read_text(encoding="utf-8")
         self.assertTrue(text.strip())
         self.assertIn("resubmit for the What's new line", text)
+        # Whether a bare format-patch drops an empty commit varies by git
+        # version (2.55 keeps it), so the artifact alone cannot prove the
+        # flag: the contract is that the fix path asks for `--always`.
+        patches = [c for c in self.fx.git_calls() if "format-patch" in c]
+        self.assertTrue(patches, self.fx.git_calls())
+        self.assertTrue(all("--always" in c for c in patches), patches)
 
     def test_one_empty_commit_is_pushed_when_the_push_is_allowed(self):
         head = self.fx.agent_committed_an_empty_resubmission()
