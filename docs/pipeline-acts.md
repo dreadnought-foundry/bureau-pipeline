@@ -268,7 +268,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's twelve rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's thirteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -284,6 +284,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-review-move` | `hyg-moved-to-review` | recovery | `reconcile.py` |
 | `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
+| `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
@@ -291,7 +292,7 @@ table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
 trailer. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all twelve through one seam, which is why `tests/test_check_act_receipts.py`
+all thirteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 

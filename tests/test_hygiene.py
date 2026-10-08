@@ -70,6 +70,7 @@ ACTS = {
     "hygiene-review-move": "hyg-moved-to-review",
     "hygiene-card-cancel": "hyg-card-canceled",
     "hygiene-cause-name": "hyg-cause-named",
+    "hygiene-hold-clear": "hyg-hold-cleared",
 }
 
 
@@ -1460,6 +1461,7 @@ class TestTheActRegistry:
             "hygiene-resend-to-planning": "plan.yml",
             "hygiene-triage-return": "reconcile.py",
             "hygiene-review-move": "reconcile.py",
+            "hygiene-hold-clear": "reconcile.py",
         })
         assert {n: r["next_actor"] for n, r in rows.items()} == expected
 
