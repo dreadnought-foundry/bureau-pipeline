@@ -49,10 +49,13 @@ from test_act_emission_scenario import (  # noqa: E402
 STEP = "Report"
 DELEGATION = "bash .bureau-pipeline/scripts/report_fix_result.sh"
 
-#: The step's `env:` on `main` at 9fe61d5, as the card lists it.
+#: The step's `env:` on `main` at 9fe61d5, as the card lists it, and the
+#: eight DRE-6350 wired for the Push rescue routes DRE-6351 reads.
 ENV_KEYS = (
     "GH_TOKEN", "LINEAR_API_KEY", "CARD", "PRE_SHA", "DISPATCH_TOKEN",
     "CLASSIFICATION", "REPO", "PR", "ATTEMPT", "MODE", "EXEC_FILE", "RUN_URL",
+    "RESCUE_LOCAL_WORK", "RESCUE_PUSHED", "RESCUE_PATCH", "RESCUE_ARTIFACT",
+    "RESCUE_PUSH_STATUS", "RESCUE_ERROR", "RESCUE_TARGET_BRANCH", "RUN_ID",
 )
 
 #: The 21 card references the block carried on `main`; `verify` requires
