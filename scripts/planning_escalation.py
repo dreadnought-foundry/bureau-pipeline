@@ -160,6 +160,7 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402
+import console_escalation  # noqa: E402 — the three lines a park opens with (DRE-3909)
 import lane_contract  # noqa: E402
 import plan_critic  # noqa: E402 — the attempt boundary is its record (DRE-4223)
 import planning_route  # noqa: E402
@@ -455,9 +456,166 @@ def _why_lines(heading: str, reason: str | None,
     return [f"{heading} {NO_REASON_STATED}", ""]
 
 
+# --------------------------------------------------------------------------- #
+# the three lines a park opens with (DRE-3909)                                 #
+# --------------------------------------------------------------------------- #
+#
+# Every note `escalation_comment` writes carries DRE-3908's Finding, Question
+# and Recommendation directly under its opening sentence, so the CEO reads what
+# was found, what is asked and what we recommend before the detail. The
+# prefixes and the `none given` grammar are `console_escalation`'s and are
+# never restated here. Where the lines come from, in precedence: lifted out of
+# a reason that declares them; completed from the choices block in hand;
+# otherwise completed from the reason's first sentence, the route's fixed
+# question and the recommendation the reason states in its own prose — read
+# the way the Green Light lane reads it — or `none given` when it states none.
+# The fixed question is used only in that last case, so a note never carries
+# two asks.
+
+#: What the ordinary note asks when nothing stated a question.
+ORDINARY_QUESTION = (
+    "Is this something you want to settle yourself, or should we put it back "
+    "in the queue as it stands?"
+)
+#: What the rewrite note asks (DRE-4058).
+REWRITE_QUESTION = (
+    "Rewrite the card and send it back through, or park it for good?"
+)
+#: The transport note's lines (DRE-3074): nothing read the card, so the
+#: finding and the recommendation are ours to state.
+TRANSPORT_FINDING = "the step that reads new cards failed twice to reach its model"
+TRANSPORT_QUESTION = "Leave it parked until the classifier is reading cards again?"
+TRANSPORT_RECOMMENDATION = "leave it parked"
+TRANSPORT_WHY = "nothing has read the card; this is our plumbing, not a judgement"
+
+#: Why a completed Recommendation is `none given`.
+NO_RECOMMENDATION = "the run that parked this card stated no recommendation"
+#: The why on a Recommendation completed from the reason's own prose: the
+#: run recommended it in its own words and gave the line no why of its own.
+RECOMMENDED_IN_REASON = "the run that parked this card recommended it in its reason"
+
+
+def _leaked(name: str) -> str:
+    """What stands for a lifted line that is not fit to show."""
+    return f"{name} was written in technical terms; it is in the run log"
+
+
+def _lift(reason: str | None) -> tuple:
+    """`(shown, lifted)`: the reason the note shows and the lines it declared.
+
+    `console_escalation.split` lifts the lines and the one accepted block out
+    of the prose, and `refusal` reads the prose that remains — exactly as it
+    read the whole reason before the lines existed. A reason whose prose is
+    refused is never lifted: it is shown, and refused, whole. A reason that is
+    nothing but its lines shows its Finding as the reason."""
+    if not (reason or "").strip():
+        return reason, None
+    prose, lifted = console_escalation.split(reason)
+    if lifted is None:
+        return reason, None
+    prose = prose.strip() or lifted.finding
+    if refusal(prose) is not None:
+        return reason, None
+    return prose, lifted
+
+
+def lifted_choices(reason: str | None) -> dict | None:
+    """The `escalation-choices` block `split` lifts out of this reason, or
+    None. The last block `choices_problem` accepts — the one `split` reads."""
+    _, lifted = _lift(reason)
+    if lifted is None or not lifted.choices:
+        return None
+    import plan_artifact
+
+    for raw in reversed(plan_artifact.fenced_blocks(reason, CHOICES_FENCE)):
+        try:
+            block = json.loads(raw)
+        except ValueError:
+            continue
+        if choices_problem(block) is None:
+            return block
+    return None
+
+
+def _plain_lines(
+        esc: console_escalation.Escalation) -> console_escalation.Escalation:
+    """The lifted lines with any that leak replaced by `_leaked`. A choice's
+    label has already passed `choices_problem`, so only the why is replaced
+    on a Recommendation that carries choices."""
+    finding, question = esc.finding, esc.question
+    recommendation, why = esc.recommendation, esc.why
+    if jargon(finding):
+        finding = _leaked("Finding")
+    if jargon(question):
+        question = _leaked("Question")
+    if jargon(f"{recommendation or ''}\n{why}"):
+        recommendation, why = None, _leaked("Recommendation")
+    return console_escalation.Escalation(
+        finding, question, recommendation, why, esc.choices, esc.recommended)
+
+
+def _from_block(block: dict) -> console_escalation.Escalation:
+    """The lines a choices block states: its question, its context as the
+    Finding, and its recommended choice's label with its why."""
+    return console_escalation.Escalation(
+        finding=block["context"],
+        question=block["question"],
+        recommendation=None,
+        why=block["why"],
+        choices=tuple(console_escalation.Choice(
+            c["id"], c["label"], c["effect"], c["outcome"], c.get("preview", ""))
+            for c in block["choices"]),
+        recommended=block["recommended"],
+    )
+
+
+def _stated_recommendation(shown: str | None) -> str | None:
+    """What a plain reason recommends in its own prose — a `Recommendation:`
+    line or an "I recommend" sentence — read exactly as the Green Light lane
+    reads it (`hygiene_green_light.recommendation`, DRE-6196), or None when it
+    recommends nothing or is refused. Imported here, not at the top: the lane
+    imports this module."""
+    if not (shown or "").strip() or refusal(shown) is not None:
+        return None
+    import hygiene_green_light
+
+    stated = hygiene_green_light.recommendation(shown)
+    return None if stated == hygiene_green_light.NO_RECOMMENDATION else stated
+
+
+def _three_lines(shown: str | None,
+                 lifted: console_escalation.Escalation | None,
+                 choices: dict | None,
+                 transport: bool, rewrite: bool,
+                 last_words: str | None) -> str:
+    """The three lines for one note, in the precedence above."""
+    if lifted is not None:
+        esc = _plain_lines(lifted)
+    elif choices is not None and refusal(shown) is None:
+        esc = _from_block(choices)
+    elif transport:
+        esc = console_escalation.Escalation(
+            TRANSPORT_FINDING, TRANSPORT_QUESTION, TRANSPORT_RECOMMENDATION,
+            TRANSPORT_WHY)
+    else:
+        # The first sentence of what the reason block states — the reason
+        # itself, or the sentence that stands for one refused or never written.
+        # The Recommendation is the one the reason states in prose, and
+        # `none given` only when it states none.
+        stated = _why_lines("", shown, last_words)[0].strip()
+        recommended = _stated_recommendation(shown)
+        esc = console_escalation.Escalation(
+            console_escalation._first_sentence(stated),
+            REWRITE_QUESTION if rewrite else ORDINARY_QUESTION,
+            recommended,
+            NO_RECOMMENDATION if recommended is None else RECOMMENDED_IN_REASON)
+    return console_escalation.render(esc)
+
+
 def escalation_comment(identifier: str, reason: str | None,
                        transport: bool = False, rewrite: bool = False,
-                       last_words: str | None = None) -> str:
+                       last_words: str | None = None,
+                       choices: dict | None = None) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
@@ -485,8 +643,16 @@ def escalation_comment(identifier: str, reason: str | None,
 
     `last_words` is the planner's closing message (`final_message`), quoted
     only when no reason was written (DRE-5564).
+
+    The three lines (DRE-3909) sit directly under the opening sentence, above
+    the reason block `hygiene_green_light.escalation_reason` reads. `choices`
+    is the block `escalate` chose; the lines complete from it when the reason
+    declared none, and the block itself is appended by `escalate`, not here.
+    A reason that declares the lines has them lifted out of its prose and
+    shown once, in this position.
     """
     lane = destination()
+    shown, lifted = _lift(reason)
     if rewrite:
         opening = (
             f"{REWRITE_MARK} {ESCALATION_TAG}: {identifier} has been sent back "
@@ -507,8 +673,10 @@ def escalation_comment(identifier: str, reason: str | None,
             "from you before it can be planned — the reasoning itself is the "
             "deliverable here, and that part is not work an agent can do."
         )
-    lines = [opening, ""]
-    lines += _why_lines("**Why it needs you:**", reason, last_words)
+    lines = [opening, "",
+             _three_lines(shown, lifted, choices, transport, rewrite, last_words),
+             ""]
+    lines += _why_lines("**Why it needs you:**", shown, last_words)
     if rewrite:
         lines += [
             f"This card is parked in **{lane}** — your decision queue, the "
@@ -655,8 +823,10 @@ def _preview_problem(ident: str, preview) -> str | None:
 def _choices_tail(reason: str | None, choices: dict | None) -> str:
     """What follows the note's closing ask: the block, set off by a blank
     line, when there are choices and the reason itself was fit to post —
-    otherwise nothing, and the note is exactly the prose."""
-    if choices is None or refusal(reason) is not None:
+    otherwise nothing, and the note is exactly the prose. The reason is read
+    as the note shows it, with any declared lines and block lifted out
+    (DRE-3909), so a block the reason carried is not refused as a code fence."""
+    if choices is None or refusal(_lift(reason)[0]) is not None:
         return ""
     return "\n\n" + choices_block(choices)
 
@@ -1044,7 +1214,13 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     so the prose above it is exactly what it would be without, and only when
     the reason itself was fit to post. The stand-down note never carries it:
     it asks nothing.
+
+    The block is chosen ONCE (DRE-3909): the one the reason carried and
+    `split` lifts out of it when there is one, else `choices`, else none. That
+    one block completes the note's three lines and is the one appended, so a
+    reason carrying a block and a run passing a choices file never post two.
     """
+    choices = lifted_choices(reason) or choices
     lane = destination()
     handed = comments is not None
     if issue is None:
@@ -1091,7 +1267,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         linear_ops.cmd_comment(
             identifier,
             escalation_comment(identifier, reason, transport, rewrite,
-                               last_words=last_words)
+                               last_words=last_words, choices=choices)
             + _choices_tail(reason, choices))
         posted = True
     linear_ops.cmd_state(identifier, lane)

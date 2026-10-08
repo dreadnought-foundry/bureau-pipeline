@@ -149,7 +149,8 @@ class TestAValidAnswerAddsTheBlock:
         card = _escalate(tmp_path, _write(tmp_path, DRE_5260))
         assert len(card.posted) == 1
         body = card.posted[0]
-        today = planning_escalation.escalation_comment(CARD, REASON)
+        today = planning_escalation.escalation_comment(CARD, REASON,
+                                                       choices=DRE_5260)
         assert body.startswith(today)
         rest = body[len(today):]
         assert rest.startswith("\n\n```escalation-choices\n")
@@ -162,6 +163,22 @@ class TestAValidAnswerAddsTheBlock:
     def test_the_block_parses_back_to_the_same_fields(self, tmp_path):
         card = _escalate(tmp_path, _write(tmp_path, DRE_5260))
         assert planning_escalation.parse_choices(card.posted[0]) == DRE_5260
+
+    def test_the_three_lines_are_completed_from_the_block(self, tmp_path):
+        """A reason declaring no lines, escalated with a block, carries the
+        lines the block states (DRE-3909): its question, and its recommended
+        choice's label with its why."""
+        import console_escalation
+        card = _escalate(tmp_path, _write(tmp_path, DRE_5260))
+        body = card.posted[0]
+        lines = body.split("\n")
+        assert lines[2] == f"{console_escalation.FINDING_PREFIX} " + \
+            " ".join(DRE_5260["context"].split())
+        assert lines[3] == f"{console_escalation.QUESTION_PREFIX} " + \
+            DRE_5260["question"]
+        assert lines[4] == ("💡 Recommendation: Time + Refresh — a time you "
+                            "cannot act on is a dead end")
+        assert console_escalation.problems(body) == []
 
     def test_the_card_still_parks_in_green_light(self, tmp_path):
         card = _escalate(tmp_path, _write(tmp_path, DRE_5260))

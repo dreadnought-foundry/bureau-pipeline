@@ -400,8 +400,10 @@ class TestAnEscalation:
             datetime(2026, 9, 30, 11, 15, tzinfo=UTC))
         items, _ctx = plan(doc)
         recommendation = lefts(items, "DRE-9109")[0].recommendation
-        assert recommendation.endswith("close it on Friday.")
-        assert "*" not in recommendation and not recommendation.lower().startswith("recommend")
+        assert recommendation.endswith(FROM_REASON)
+        answer = recommendation.removesuffix(FROM_REASON)
+        assert answer.endswith("close it on Friday.")
+        assert "*" not in answer and not answer.lower().startswith("recommend")
 
     def test_a_question_that_states_no_recommendation_says_so(self):
         doc = fixture()
@@ -460,7 +462,8 @@ class TestAnEscalation:
         assert not actions(items, "DRE-9109")
         rows = lefts(items, "DRE-9109")
         assert len(rows) == 1
-        assert rows[0].recommendation == reason.rsplit("Recommendation: ", 1)[1]
+        assert rows[0].recommendation == (
+            reason.rsplit("Recommendation: ", 1)[1] + FROM_REASON)
 
     def test_a_question_that_mentions_access_for_customers_is_still_a_question(self):
         doc = fixture()
@@ -471,7 +474,7 @@ class TestAnEscalation:
             datetime(2026, 9, 30, 11, 15, tzinfo=UTC))
         items, _ctx = plan(doc)
         assert not actions(items, "DRE-9109")
-        assert lefts(items, "DRE-9109")[0].recommendation == "after a week."
+        assert lefts(items, "DRE-9109")[0].recommendation == "after a week." + FROM_REASON
 
 
 # --------------------------------------------------------------------------- #
@@ -491,6 +494,11 @@ UNSTATED = console_escalation.Escalation(
     question="Bypass the branch rules for the deploy job, or open a pull request?",
     recommendation=None,
     why="the run that parked this card stated no recommendation")
+
+
+#: How a Recommendation completed from a reason's own prose ends (DRE-3909):
+#: the reason's recommendation is the answer, and this is its why.
+FROM_REASON = console_escalation.SEPARATOR + planning_escalation.RECOMMENDED_IN_REASON
 
 
 def declared(ident: str, reason: str, esc) -> str:
@@ -543,10 +551,19 @@ class TestTheDeclaredRecommendation:
         "Should the partner page close on Friday or on Monday?",
         ACCESS,
     ])
-    def test_a_note_with_no_declared_lines_reads_todays_way(self, reason):
+    def test_a_note_completed_from_a_prose_reason_carries_its_recommendation(
+            self, reason):
+        """DRE-3909 declares the lines on every note `escalation_comment`
+        writes. One completed from a reason in free prose carries the reason's
+        own recommendation — the one this lane reads off the reason — and
+        `none given` only when the reason states none."""
         note = planning_escalation.escalation_comment("DRE-9109", reason)
-        assert lane.recommendation(lane.escalation_reason(note), note=note) == (
-            lane.recommendation(lane.escalation_reason(note)))
+        assert console_escalation.parse(note) is not None
+        stated = lane.recommendation(lane.escalation_reason(note))
+        expected = ("none given" + console_escalation.SEPARATOR
+                    + planning_escalation.NO_RECOMMENDATION
+                    if stated == lane.NO_RECOMMENDATION else stated + FROM_REASON)
+        assert lane.recommendation(lane.escalation_reason(note), note=note) == expected
 
     def test_the_receipt_keeps_the_body_it_classified(self):
         doc = fixture()
