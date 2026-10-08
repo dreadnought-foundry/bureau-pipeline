@@ -404,6 +404,69 @@ class AnUnreadableStateFailsClosed(_StateRefuses, unittest.TestCase):
     ERROR = "pull request state unreadable"
 
 
+class AStaleFirstMintFallsThroughToTheFreshOne(unittest.TestCase):
+    """A dead first mint cannot read the state — that is the first mint's
+    failure, not the pull request's, so the retry mint reads it again
+    (DRE-3098's second credential, which `--existing-pr` must not bypass)."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+
+    def _cli(self, state: str):
+        self.fx = Fixture(self.td.name, pr_state=state)
+        self.head = self.fx.agent_committed_a_fix()
+        return self.fx.cli("--branch", BRANCH, "--existing-pr", PR,
+                           PUSH_TOKEN=STALE_TOKEN,
+                           PUSH_TOKEN_RETRY=FRESH_TOKEN)
+
+    def test_an_open_pull_request_is_delivered_on_the_second_mint(self):
+        proc = self._cli("OPEN")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = outputs(proc)
+        self.assertEqual(out.get("pushed"), "true", proc.stderr)
+        self.assertEqual(out.get("attempts"), "2", out)
+        self.assertEqual(out.get("error"), "", out)
+        self.assertEqual(out.get("sidecar"), "", out)
+        self.assertEqual(self.fx.remote_sha(), self.head, proc.stderr)
+        self.assertEqual(self.fx.pr_creates(), [])
+        self.assertFalse(self.fx.sidecar.exists())
+
+    def test_the_push_spends_the_credential_that_read_the_state(self):
+        self._cli("OPEN")
+        views = [c for c in self.fx.gh_calls() if c["argv"][:3] == ["pr", "view", PR]]
+        self.assertEqual([v["token"] for v in views], [STALE_TOKEN, FRESH_TOKEN])
+        # The only push is the one made after the fresh mint read OPEN.
+        self.assertEqual(len(self.fx.pushes()), 1, self.fx.git_calls())
+
+    def test_a_merged_pull_request_read_by_the_second_mint_still_refuses(self):
+        proc = self._cli("MERGED")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = outputs(proc)
+        self.assertEqual(out.get("pushed"), "false", out)
+        self.assertEqual(out.get("error"), "pull request is MERGED", out)
+        self.assertEqual(out.get("sidecar"), str(self.fx.sidecar), out)
+        self.assertEqual(self.fx.pushes(), [], self.fx.git_calls())
+        self.assertEqual(self.fx.remote_sha(), self.fx.start_sha)
+        self.assertEqual(self.fx.pr_creates(), [])
+        body = json.loads(self.fx.sidecar.read_text(encoding="utf-8"))
+        self.assertEqual((body["branch"], body["head"]), (BRANCH, self.head))
+
+    def test_no_mint_that_can_read_the_state_refuses_unreadable(self):
+        self.fx = Fixture(self.td.name, pr_state="OPEN")
+        self.fx.agent_committed_a_fix()
+        proc = self.fx.cli("--branch", BRANCH, "--existing-pr", PR,
+                           PUSH_TOKEN=STALE_TOKEN,
+                           PUSH_TOKEN_RETRY=OTHER_DEAD_TOKEN)
+        out = outputs(proc)
+        self.assertEqual(out.get("pushed"), "false", out)
+        self.assertEqual(out.get("attempts"), "2", out)
+        self.assertEqual(out.get("error"), "pull request state unreadable", out)
+        self.assertEqual(out.get("push_status"), "", out)
+        self.assertEqual(self.fx.pushes(), [], self.fx.git_calls())
+        self.assertTrue(self.fx.sidecar.exists(), proc.stderr)
+
+
 class TheCommitsDecideWhetherThereIsWork(unittest.TestCase):
     """AC 3: `--base` is the run's start, so nothing beyond it is nothing to
     deliver — and the one sanctioned EMPTY commit is still work."""
