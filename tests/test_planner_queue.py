@@ -2070,5 +2070,195 @@ class ParkEndsThePlace(_Base):
         self.assertIn("parked", pq.BECAUSE)
 
 
+# =========================================================================== #
+# DRE-6329 — a new arrival never takes a freed slot while cards wait In line  #
+# =========================================================================== #
+#
+# DRE-5810's proof, sixth attempt, 2026-10-08, sandbox agent-bureau-demo. All
+# four slots were held. Epic A (DRE-6300) waited at place 1 of 1 from
+# 14:08:49Z and epic B (DRE-6301) at place 2 of 2 from 14:09:08Z. At 14:09:26Z
+# DRE-6287's run released its slot `because finished`, and in the same second
+# single card C (DRE-6302), just moved to Planning, posted its `claimed`. C's
+# claim step answered `admitted=true`, `place=0`, `waiting=2`; DRE-6287's
+# `next` found nobody (`card=` at 14:09:27.96Z), and A waited until another
+# release dispatched it at 14:12:04Z.
+
+OCT8_A = "DRE-6300"
+OCT8_B = "DRE-6301"
+OCT8_C = "DRE-6302"
+OCT8_RELEASER = "DRE-6287"
+OCT8_RELEASER_RUN = "37789691121"
+OCT8_C_RUN = "37790062876"
+OCT8_DEMO = "dreadnought-foundry/agent-bureau-demo"
+OCT8_FLEET = "dreadnought-foundry/agent-bureau"
+
+
+def oct8(hms: str) -> datetime:
+    h, m, s = (int(x) for x in hms.split(":"))
+    return datetime(2026, 10, 8, h, m, s, tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------- #
+# 26. a claim never passes a card that was already waiting                     #
+# --------------------------------------------------------------------------- #
+
+
+class ArrivalWaitsBehindTheLine(_Base):
+    def _receipt(self, ident: str, state: str, hms: str, run: str, *,
+                 repo: str = OCT8_DEMO, trigger: str = "planning", **extra) -> None:
+        at = oct8(hms)
+        self.board.post(ident, pq.format_receipt(
+            state, card=ident, run=run, repo=repo, trigger=trigger, at=iso(at),
+            **extra), at=at)
+
+    def _oct8(self) -> list:
+        """The receipts on the board at 14:09:26Z, C's claim the newest."""
+        keys = []
+        for n, hms in enumerate(("13:51:02", "13:58:40", "14:04:15"), start=1):
+            ident = self.board.add(f"DRE-K{n}")
+            self._receipt(ident, "claimed", hms, f"run-K{n}")
+            keys.append(ident)
+        self.board.add(OCT8_RELEASER)
+        self._receipt(OCT8_RELEASER, "claimed", "14:07:21", OCT8_RELEASER_RUN,
+                      repo=OCT8_FLEET)
+        self.board.add(OCT8_A)
+        self._receipt(OCT8_A, "waiting", "14:08:49", "run-A", place=1, of=1)
+        self.board.add(OCT8_B)
+        self._receipt(OCT8_B, "waiting", "14:09:08", "run-B", place=2, of=2)
+        self._receipt(OCT8_RELEASER, "released", "14:09:26", OCT8_RELEASER_RUN,
+                      repo=OCT8_FLEET, because="finished")
+        self.board.add(OCT8_C)
+        self._receipt(OCT8_C, "claimed", "14:09:26", OCT8_C_RUN)
+        self.board.clock = oct8("14:09:27")
+        return keys
+
+    def _settle_c(self, order=()) -> dict:
+        with mock.patch.object(pq, "planning_order", lambda: list(order)):
+            return pq.settle_claim(linear_ops, OCT8_C, run_id=OCT8_C_RUN,
+                                   repo=OCT8_DEMO, trigger_state="planning")
+
+    def _next(self, order=()):
+        with mock.patch.object(pq, "planning_order", lambda: list(order)):
+            return pq.next_in_line(pq.ordered_ledger(list(self.board.cards.values()),
+                                                     now=self.board.clock))
+
+    def test_the_fixture_has_a_slot_free_when_c_reads(self):
+        """The guard against a vacuous replay: three planners running, one slot
+        free, A and B in line — exactly what C's read saw."""
+        self._oct8()
+        led = self.board.ledger()
+        self.assertEqual(len(led.running), 4)  # K1..K3 and C's own claim
+        self.assertEqual(pq.taken_before(led, led._views[OCT8_C].open_claims()[0]), 3)
+        self.assertEqual([w.card for w in led.waiting], [OCT8_A, OCT8_B])
+
+    def test_the_replay_c_waits_at_place_3_of_3(self):
+        self._oct8()
+        out = self._settle_c()
+        self.assertEqual((out["admitted"], out["place"], out["waiting"]),
+                         ("false", "3", "3"))
+        newest = self.board.newest(OCT8_C)
+        self.assertEqual((newest.state, newest.run, newest.place, newest.of),
+                         ("waiting", OCT8_C_RUN, 3, 3))
+        self.assertIn("waiting for a planner: place 3 of 3",
+                      self.board.nodes(OCT8_C)[0]["body"])
+
+    def test_the_release_still_hands_the_slot_to_a(self):
+        self._oct8()
+        self._settle_c()
+        led = self.board.ledger()
+        self.assertEqual([w.card for w in led.waiting], [OCT8_A, OCT8_B, OCT8_C])
+        self.assertEqual(led.free_slots(4), 1)
+        self.assertEqual(self._next().card, OCT8_A)
+
+    def test_the_ceos_order_is_kept(self):
+        self._oct8()
+        out = self._settle_c(order=[OCT8_B])
+        self.assertEqual((out["admitted"], out["place"], out["waiting"]),
+                         ("false", "3", "3"))
+        self.assertEqual(self.board.newest(OCT8_C).state, "waiting")
+        self.assertEqual(self._next(order=[OCT8_B]).card, OCT8_B)
+
+    def test_an_approval_waits_at_the_front_and_is_served_next(self):
+        self._oct8()
+        epic = self.board.add("DRE-EPIC", lane="In Progress")
+        self._receipt(epic, "claimed", "14:09:27", "run-epic", trigger="in progress")
+        self.board.clock = oct8("14:09:28")
+        out = pq.settle_claim(linear_ops, epic, run_id="run-epic", repo=OCT8_DEMO,
+                              trigger_state="in progress", reason="approved")
+        self.assertEqual((out["admitted"], out["place"]), ("false", "1"))
+        newest = self.board.newest(epic)
+        self.assertEqual((newest.state, newest.place, newest.trigger, newest.reason),
+                         ("waiting", 1, "in progress", "approved"))
+        nxt = self._next()
+        self.assertEqual((nxt.card, nxt.trigger, nxt.reason),
+                         (epic, "in progress", "approved"))
+
+    # --- the paths that keep admitting ------------------------------------ #
+
+    def test_an_empty_line_with_a_free_slot_admits(self):
+        fill_running(self.board, 3)
+        card = self.board.add("DRE-ALONE")
+        claim_write(self.board, card, "run-alone")
+        out = claim_read(self.board, card, "run-alone")
+        self.assertEqual((out["admitted"], out["waiting"]), ("true", "0"))
+        self.assertFalse(any(r.state == "waiting" for r in self.board.receipts(card)))
+
+    def test_the_card_the_release_dispatched_is_admitted_while_others_wait(self):
+        self._oct8()
+        self._settle_c()
+        # DRE-6287's run: `next` names A, and its dispatch lands.
+        self._receipt(OCT8_A, "dispatched", "14:09:28", OCT8_RELEASER_RUN,
+                      repo=OCT8_DEMO)
+        self._receipt(OCT8_A, "claimed", "14:09:50", "run-A-planner")
+        self.board.clock = oct8("14:09:51")
+        out = pq.settle_claim(linear_ops, OCT8_A, run_id="run-A-planner",
+                              repo=OCT8_DEMO, trigger_state="planning")
+        self.assertEqual(out["admitted"], "true")
+        led = self.board.ledger()
+        self.assertEqual([w.card for w in led.waiting], [OCT8_B, OCT8_C])
+        self.assertEqual(len(led.running), 4)
+
+    def test_a_handover_is_admitted_with_no_ledger_read_while_others_wait(self):
+        keys = self._oct8()
+        reads = self.board.board_reads
+        out = pq.claim(linear_ops, keys[0], run_id="run-K1-review", repo=OCT8_DEMO,
+                       trigger_state="planning", sent_by_run="run-K1",
+                       reason="re-review")
+        self.assertEqual((out["admitted"], out["inherited"]), ("true", "true"))
+        self.assertEqual(self.board.board_reads, reads)
+
+    def test_a_ledger_read_that_raises_still_admits_with_a_warning(self):
+        self._oct8()
+        card = self.board.add("DRE-BLIND")
+
+        def boom(*a, **k):
+            raise RuntimeError("Linear 503")
+
+        stdout = io.StringIO()
+        with mock.patch.object(linear_ops, "gql_paged", boom), \
+                contextlib.redirect_stdout(stdout):
+            out = pq.claim(linear_ops, card, run_id="run-blind", repo=OCT8_DEMO,
+                           trigger_state="planning")
+        self.assertEqual(out["admitted"], "true")
+        self.assertIn("::warning::planner slot for DRE-BLIND: admitted without a "
+                      "ledger read", stdout.getvalue())
+
+    def test_a_card_that_joins_the_line_after_the_claim_does_not_hold_it_back(self):
+        """Claim order still decides between two claims in flight: a card that
+        posted its `waiting` AFTER this run's claim was not waiting when this
+        run arrived, so this run passes nobody by taking the slot."""
+        fill_running(self.board, 3)
+        early, late = self.board.add("DRE-EARLY"), self.board.add("DRE-LATE")
+        claim_write(self.board, early, "run-early")
+        claim_write(self.board, late, "run-late")
+        # The later claimant reads first: one slot, the earlier claim takes it.
+        self.assertEqual(claim_read(self.board, late, "run-late")["admitted"], "false")
+        self.assertEqual(claim_read(self.board, early, "run-early")["admitted"], "true")
+
+    def test_the_docstring_says_a_claim_never_passes_a_waiting_card(self):
+        self.assertIn("never passes a card that is waiting",
+                      " ".join(pq.__doc__.split()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -451,6 +451,22 @@ def test_a_card_that_lost_its_slot_keeps_its_place_in_line():
     assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-700"]
 
 
+def test_a_slot_left_free_by_a_queued_claim_is_served_to_the_head():
+    """DRE-6329: a claim that finds cards already waiting queues behind them
+    and leaves its free slot to `next`. With no release pending to run that
+    `next`, the sweep serves the head of the line — never the queued claim."""
+    a = _waiting("DRE-6300", 20.0)
+    b = _waiting("DRE-6301", 19.0)
+    c = _card("DRE-6302", "Planning",
+              _r("claimed", 18.0, run="37790062876"),
+              _r("waiting", 18.0 - 1 / 60, run="37790062876"))
+    cards = [_claimed(f"DRE-73{n}", f"73{n}") for n in range(3)] + [a, b, c]
+    world = _serve(cards, {r: "in_progress" for r in ("730", "731", "732")})
+    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-6300"]
+    assert [i for i, _ in world.receipts("dispatched")] == ["DRE-6300"]
+    assert world.receipts("released") == []
+
+
 def _retried_card() -> dict:
     """DRE-5213's receipts (DRE-5378): claimed and admitted, released by the
     run that finished, then the automatic retry — a GitHub re-run, under the
