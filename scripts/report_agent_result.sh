@@ -347,10 +347,12 @@ else
     PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
       "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
     # The thread decides whether the cap tries the planner first (DRE-6178).
+    # A dump that fails passes no file, never `[]` — `[]` reads as a budget
+    # that never tried the planner, so the cap holds instead.
     COMMENTS_FILE="${RUNNER_TEMP:-/tmp}/card-comments.json"
-    python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
-      > "$COMMENTS_FILE" || echo '[]' > "$COMMENTS_FILE" || true
     ERR_FLAGS="--comments-file $COMMENTS_FILE"
+    python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+      > "$COMMENTS_FILE" || ERR_FLAGS=""
     if [ "$DEATH_CLASS" = "api_death" ]; then
       ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED"
     fi

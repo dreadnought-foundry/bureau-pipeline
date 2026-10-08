@@ -788,7 +788,10 @@ def decide(
     not be pushed and a model that failed say nothing about the card's size.
     `deaths` is `death_lines()` over the same thread and `footprint` the card's
     `**Files:**` line; both are receipt text for the planner, never facts the
-    decision branches on.
+    decision branches on. The reconcile sweep's hand-off (DRE-6186) passes
+    `footprint`, having the card body in hand; the Report step's CLI reads
+    only the thread and does not, so its receipt tells the planner to read
+    the line off the card.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:

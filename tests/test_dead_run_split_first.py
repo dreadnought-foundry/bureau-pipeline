@@ -372,6 +372,8 @@ with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
 if sys.argv[1] == "count-comments":
     print(os.environ.get("STUB_PRIOR", "2"))
 if sys.argv[1] == "dump-comments":
+    if os.environ.get("STUB_DUMP_FAILS"):
+        sys.exit("linear: rate limited")
     print(os.environ["STUB_THREAD"])
 '''
 
@@ -449,6 +451,17 @@ class TestTheReportStepHandsDecideTheThread:
         if death_class == "api_death":
             assert "--is-error" in decide["args"]
 
+    @pytest.mark.parametrize("death_class", ["none", "api_death"])
+    def test_a_failed_dump_passes_no_thread_so_the_cap_holds(self, td, death_class):
+        # `[]` would read as a budget that never tried the planner and hand
+        # the card off again on every failed dump; no file reads as None.
+        journal = run_block(td, death_class=death_class, STUB_DUMP_FAILS="1")
+        assert _calls(journal, "linear_ops", "dump-comments")
+        (decide,) = _calls(journal, "dead_run", "decide")
+        assert "--comments-file" not in decide["args"]
+        if death_class == "api_death":
+            assert "--is-error" in decide["args"]
+
     def test_the_credential_branch_passes_no_thread(self, td):
         journal = run_block(td, death_class="credential_expiry")
         (decide,) = _calls(journal, "dead_run", "decide")
@@ -500,6 +513,14 @@ class TestTheCliReadsTheThreadItself:
         assert body.startswith(hold.DEAD_SPLIT_MARK)
         assert "agent died with no PR and no blocker note" in body
         assert dead_run.DEAD_TAG not in body
+
+    def test_an_empty_thread_hands_off(self, td):
+        # A card with no comments has a budget that never tried the planner —
+        # which is why the Report step never writes `[]` for a failed dump.
+        action, body = _cli("decide", str(CAP), "--comments-file", self._thread(td, []))
+        assert action == "replan"
+        assert body.startswith(hold.DEAD_SPLIT_MARK)
+        assert "the thread held no earlier receipt" in body
 
     def test_a_thread_whose_budget_already_tried_the_planner_holds(self, td):
         thread = THREAD + [_handoff()]
