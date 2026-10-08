@@ -56,7 +56,8 @@ GATE_NOTE = (f"⏸️ Merge gate: declined @{HEAD} — required check "
 
 def args(**over) -> dict:
     """The keyword arguments the sweep passes, one fixture's worth."""
-    base = dict(card="DRE-9001", pr_number=812, head=HEAD, tag=rcq.GATE_TAG,
+    base = dict(card="DRE-9001", pr_number=812, head=HEAD,
+                tag=rcq.GATE_NUDGE_KEY,
                 critic="REQUEST_CHANGES", verifier="none", spent=3,
                 hours=6.25, gate_note_line=None, cap=3)
     base.update(over)
@@ -68,7 +69,7 @@ FIXTURES = {
     "request-changes": args(),
     "approve-red-checks": args(critic="APPROVE", verifier="PASS",
                                gate_note_line=GATE_NOTE),
-    "no-verdict": args(tag=rcq.REVIEW_TAG, critic="none", verifier="none",
+    "no-verdict": args(tag=rcq.REVIEW_NUDGE_KEY, critic="none", verifier="none",
                        hours=7.5),
 }
 
@@ -77,10 +78,10 @@ ALL = {
     **FIXTURES,
     "verifier-fail": args(critic="APPROVE", verifier="FAIL"),
     "earlier-head-approve": args(critic="APPROVE from earlier head 1a2b3c4",
-                                 tag=rcq.REVIEW_TAG),
+                                 tag=rcq.REVIEW_NUDGE_KEY),
     "cap-off-gate": args(cap=0, spent=0, hours=0.0, critic="APPROVE",
                          verifier="PASS", gate_note_line=GATE_NOTE),
-    "cap-off-review": args(cap=0, spent=0, hours=0.0, tag=rcq.REVIEW_TAG,
+    "cap-off-review": args(cap=0, spent=0, hours=0.0, tag=rcq.REVIEW_NUDGE_KEY,
                            critic="none"),
     "one-re-trigger": args(spent=1, hours=2.0, cap=1),
 }
@@ -193,8 +194,8 @@ def test_the_notice_and_key_match_the_sweep_s_own_spelling():
     """The sweep looks for the notice and counts the key by these words
     (DRE-5231). Where reconcile spells them as literals they must agree."""
     tree = ast.parse(RECONCILE.read_text(encoding="utf-8"))
-    ours = {"REVIEW_NUDGE_CAP_KEY": rcq.KEY, "GATE_NUDGE_KEY": rcq.GATE_TAG,
-            "REVIEW_NUDGE_KEY": rcq.REVIEW_TAG}
+    ours = {name: getattr(rcq, name) for name in
+            ("REVIEW_NUDGE_CAP_KEY", "GATE_NUDGE_KEY", "REVIEW_NUDGE_KEY")}
     seen = set()
     for node in tree.body:
         if (isinstance(node, ast.Assign) and len(node.targets) == 1
