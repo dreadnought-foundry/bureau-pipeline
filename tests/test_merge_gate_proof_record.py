@@ -164,6 +164,37 @@ class WhatStillMergesTest(unittest.TestCase):
         self.assertEqual(fields.get("decision"), "merge", proc.stdout)
 
 
+#: DRE-6244: a criterion the operator accepted as overtaken, with and without
+#: the linked decision.
+ACCEPTED_RESULT = "ACCEPTED by operator decision — DRE-5883"
+ACCEPTED = f"""| Criterion | Result |
+|---|---|
+| Two planners run at once | Met |
+| The proof-reader is refused | {ACCEPTED_RESULT} (https://linear.app/dreadnoughtfoundry/issue/DRE-5883/reader#comment-1a2b) |
+| The record is merged to main | Pending |
+"""
+ACCEPTED_UNLINKED = f"""| Criterion | Result |
+|---|---|
+| Two planners run at once | Met |
+| The proof-reader is refused | {ACCEPTED_RESULT} |
+"""
+
+
+class AnAcceptedRowTest(unittest.TestCase):
+    def test_an_accepted_row_with_its_linked_decision_merges(self):
+        proc, fields = gate(PROOF_BRANCH, record(ACCEPTED))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(fields.get("decision"), "merge", proc.stdout)
+
+    def test_the_same_row_with_no_link_holds_and_says_why(self):
+        proc, fields = gate(PROOF_BRANCH, record(ACCEPTED_UNLINKED))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(fields.get("decision"), "hold", proc.stdout)
+        for text in ("The proof-reader is refused", ACCEPTED_RESULT,
+                     "accepted without a linked decision"):
+            self.assertIn(text, fields["reason"])
+
+
 class TheCriticStillSpeaksFirstTest(unittest.TestCase):
     def test_request_changes_reads_as_the_critics_hold(self):
         """DRE-5931 re-runs a record the critic sent back: that hold must stay

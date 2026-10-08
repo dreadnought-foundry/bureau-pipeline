@@ -1256,8 +1256,9 @@ def evaluate_proof_record(head_branch, proof) -> Optional[Decision]:
     behavior.
 
     On a proof-record branch the record must prove its card: every judged
-    row of its criterion table met, by the same reader the hygiene lane and
-    the PROOF close judge it with. Anything else is a `hold` naming why —
+    row of its criterion table met — or accepted by operator decision with
+    the decision linked, a link whose shape alone is read (DRE-6244) — by the
+    same reader the hygiene lane and the PROOF close judge it with. Anything else is a `hold` naming why —
     a row not met, no criterion table, no judged row, no record found, a
     record that could not be read. Never a `wait`, which says nothing on the
     pull request, and never `human`, which invites a person to merge an

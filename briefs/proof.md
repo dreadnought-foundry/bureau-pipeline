@@ -166,7 +166,8 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
 1. **A title naming the card and the epic** —
    `# PROOF record — DRE-<n>: <card title> (epic DRE-<epic>)`.
 2. **A status line**, exactly one of `**Status: PASS | PARTIAL | FAIL.**` —
-   `**Status: PASS.**` when every judged row is `Met.`, `**Status: FAIL.**`
+   `**Status: PASS.**` when every judged row is `Met.` (or accepted by the
+   operator, below), `**Status: FAIL.**`
    when any row is `Not met.`, `**Status: PARTIAL.**` otherwise.
 3. **`## How this was recorded`** — the run id and its URL, the commit and
    release you observed, and every time in Pacific (`2026-10-06 14:05 PT`),
@@ -197,6 +198,24 @@ it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
 brings that next run. For any other row, nothing re-runs the record by itself.
 It waits, held, for a person. Never reword a row to get it merged.
+
+**A criterion a later decision overtook is accepted by the operator, never by
+you (DRE-6244).** An accepted row is used only when a criterion has been
+overtaken by a later shipped decision, and the linked comment names that
+decision. The operator, never the builder and never the proof run, writes the
+decision comment and the row. You never write an accepted row on your own
+judgment, however plainly the design has moved on: record `Not observed.` or
+`Not met.` with what you saw, and let the gate hold. The operator's row reads
+
+    ACCEPTED by operator decision — <reason> (<link>)
+
+where the link, in the same cell, is a Linear comment
+(`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
+request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`). The
+row without the link is held as not met. A record whose judged rows are all
+`Met.` or accepted is `**Status: PASS.**`, and the card's close names every
+accepted row. The gate checks only that a link of the right shape is present —
+it does not open it, so the critic is the reader who follows it.
 
 ## A press only the CEO can make, and his answer
 Some criteria can be satisfied only by a press the CEO's own login can make — a

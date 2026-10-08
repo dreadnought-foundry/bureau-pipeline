@@ -2476,19 +2476,28 @@ def proof_close_note(
 
     Opens `✅ Merged: <url>` like every merge receipt, so the readers that key
     on it (`hand_work_migration.MERGED_RECEIPT`) still find it; then the PT
-    merge time and the sha the critic approved. It never wears a verdict
-    marker itself (standards/untrusted-content.md).
+    merge time and the sha the critic approved; then what its criterion
+    table held — the rows met, and every row the operator accepted by
+    decision, by its criterion (`proof_record.summary`, DRE-6244). It never
+    wears a verdict marker itself (standards/untrusted-content.md), and the
+    criteria it quotes are the record's untrusted text, so neither do they.
     """
     if not _PROOF_TITLE_RE.match(title or ""):
         return None
     if proof_evidence_gap(identifier, pr, record, voices) is not None:
         return None
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    table = merge_gate.without_verdict_markers(
+        proof_record.summary(proof_record.reading(record.text)))
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
     return (
         f"✅ Merged: {pr_url}\n\n"
         f"This proof record merged {dead_run.pacific(merged)} with the critic's "
-        f"APPROVE at the merged head `{pr['headRefOid']}`. A PROOF card's "
-        "deliverable is its merged record, so the card closes itself (DRE-5919)."
+        f"APPROVE at the merged head `{pr['headRefOid']}`. Its criterion table: "
+        f"{table}. A PROOF card's deliverable is its merged record, so the card "
+        "closes itself (DRE-5919)."
     )
 
 

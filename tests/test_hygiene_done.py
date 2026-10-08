@@ -344,6 +344,40 @@ class TestAProofProven:
         (action,) = actions(items, "DRE-3904")
         assert action.cause == f"record {path} at #605, 4 rows met"
 
+    def test_a_record_with_an_accepted_row_closes_and_names_it(self):
+        """DRE-6244: a criterion the operator accepted as overtaken, with the
+        linked decision, closes — and the receipt names the row."""
+        doc = fixture()
+        path = "docs/subscriptions-proof.md"
+        overtaken = "The proof-reader is refused on the Subscriptions page"
+        text = ("| Criterion | Result |\n|---|---|\n| The heading shows the tenant | Met |\n"
+                f"| {overtaken} | ACCEPTED by operator decision — DRE-5883 made it a platform "
+                "reader (https://linear.app/dreadnoughtfoundry/issue/DRE-5527/x#comment-7c1d) |\n")
+        doc["gh"][lookup_key(BP, "DRE-3904")] = json.dumps(
+            [merged_pr(BP, 605, "DRE-3904", "2026-09-30T21:56:26Z", [path])])
+        doc["gh"][contents_key(BP, path)] = contents_answer(path, text)
+        items, _ctx, _gh = plan(doc)
+        (action,) = actions(items, "DRE-3904")
+        cause = (f"record {path} at #605, 1 rows met, 1 accepted by operator decision: "
+                 f"“{overtaken}”")
+        assert action.act == "hygiene-proof-close"
+        assert action.cause == cause
+        assert first_line(comment_of(action)).startswith(f"🧹 hygiene: hyg-proof-closed — {cause} · ")
+
+    def test_an_accepted_row_with_no_link_is_ready_for_the_ceo(self):
+        doc = fixture()
+        path = "docs/subscriptions-proof.md"
+        text = ("| Criterion | Result |\n|---|---|\n| The heading shows the tenant | Met |\n"
+                "| The proof-reader is refused | ACCEPTED by operator decision — DRE-5883 |\n")
+        doc["gh"][lookup_key(BP, "DRE-3904")] = json.dumps(
+            [merged_pr(BP, 605, "DRE-3904", "2026-09-30T21:56:26Z", [path])])
+        doc["gh"][contents_key(BP, path)] = contents_answer(path, text)
+        items, _ctx, _gh = plan(doc)
+        assert actions(items, "DRE-3904") == []
+        (row,) = lefts(items, "DRE-3904")
+        assert row.why.startswith("ready for the CEO")
+        assert "accepted without a linked decision" in row.why
+
     def test_a_proof_with_no_merged_pull_request_yields_nothing(self):
         doc = fixture()
         doc["gh"][lookup_key(BP, "DRE-3904")] = "[]"
