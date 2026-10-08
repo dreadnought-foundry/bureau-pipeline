@@ -79,6 +79,11 @@ START_MINT_ID = "app"
 # from it are owned by tests/test_readers_on_the_pool.py (the reads) and
 # tests/test_fix_worker_on_the_pool.py (the model step).
 POOL_STEP_IDS = {"reader", "worker", "probe_2", "probe_3", "probe_4"}
+REPORT_MINT_ID = "reporttoken"
+# The Push rescue's two mints (DRE-6350), agent-task.yml's pair: post-model,
+# `continue-on-error`, and spent with NO fallback (DRE-3098).
+RESCUE_STEP = "Push rescue"
+RESCUE_MINT_IDS = ("pushtoken", "pushtoken2")
 
 
 def _steps() -> list[dict]:
@@ -269,8 +274,13 @@ class TheReMintIsTheBootMintAgain(unittest.TestCase):
             and s.get("id") not in POOL_STEP_IDS
         ]
 
-    def test_there_is_a_re_mint(self):
-        self.assertEqual(len(self._re_mints()), 1, self._re_mints())
+    def test_the_re_mints_are_the_reports_and_the_rescues(self):
+        # `Mint fresh report token` (DRE-4320), and the rescue's own pair
+        # (DRE-6350) — named, so a fourth re-mint added later is a decision.
+        self.assertEqual(
+            sorted(s.get("id") for _i, s in self._re_mints()),
+            sorted([REPORT_MINT_ID, *RESCUE_MINT_IDS]),
+        )
 
     def test_same_pin_and_same_inputs_as_the_boot_mint(self):
         boot = _steps()[_index_of_id(START_MINT_ID)]
@@ -303,6 +313,45 @@ class TheReMintIsTheBootMintAgain(unittest.TestCase):
 
     def _report_if(self) -> str:
         return _steps()[_index_named(CONSUMER_STEP)].get("if") or ""
+
+
+class ThePushRescueSpendsOnlyItsOwnMints(unittest.TestCase):
+    """DRE-6350: the rescue push runs after an unbounded model step, so both
+    its credentials are minted after `Fix`, and neither falls back to a token
+    minted before it — a push whose whole purpose is to run after something
+    has gone wrong cannot spend a credential the failure touched (DRE-3098,
+    agent-task.yml's rule)."""
+
+    def _rescue(self) -> dict:
+        return _steps()[_index_named(RESCUE_STEP)]
+
+    def test_it_spends_the_two_rescue_mints_and_nothing_else(self):
+        self.assertEqual(sorted(_token_step_ids(self._rescue())),
+                         sorted(RESCUE_MINT_IDS))
+        for _expression, ids in _token_reads(self._rescue()):
+            self.assertEqual(len(ids), 1, f"no fallback: {_expression!r}")
+
+    def test_both_mints_sit_after_the_model_step_and_before_the_rescue(self):
+        model, rescue = _index_named(MODEL_STEP), _index_named(RESCUE_STEP)
+        for step_id in RESCUE_MINT_IDS:
+            mint = _index_of_id(step_id)
+            self.assertGreater(mint, model, step_id)
+            self.assertLess(mint, rescue, step_id)
+
+    def test_both_mints_may_fail_without_failing_the_run(self):
+        for step_id in RESCUE_MINT_IDS:
+            self.assertTrue(_steps()[_index_of_id(step_id)].get("continue-on-error"),
+                            step_id)
+
+    def test_both_mints_take_the_boot_mints_inputs(self):
+        # The identity the agent's own push goes out as: `Checkout PR branch`
+        # configures git with the boot App's token, so the rescue's push lands
+        # as the same login and the `synchronize` actor does not change.
+        boot = _steps()[_index_of_id(START_MINT_ID)]
+        for step_id in RESCUE_MINT_IDS:
+            step = _steps()[_index_of_id(step_id)]
+            self.assertEqual(step.get("uses"), boot.get("uses"), step_id)
+            self.assertEqual(step.get("with"), boot.get("with"), step_id)
 
 
 class TheFixAgentsOwnTokenNeedsNoReMint(unittest.TestCase):
