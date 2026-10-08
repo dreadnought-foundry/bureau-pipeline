@@ -59,6 +59,8 @@ import re
 import sys
 from dataclasses import dataclass
 
+import console_escalation
+
 # The gh seam is stranded_fix's — `(stdout, None)` or `(None, detail)`, never
 # an exception — the same one stacked_prs.py gathers through.
 from stranded_fix import SELF_HOST_REPO, _gh  # noqa: F401  (patched in tests)
@@ -79,6 +81,14 @@ MAX_COMPARE_FILES = 300
 #: The lanes the park and the release move between.
 REVIEW_LANE = "In Review"
 PARK_LANE = "Green Light"
+
+#: The park's answer on the card's Recommendation line (DRE-5204). There is
+#: nothing to choose between — the rule names the one review that releases it.
+RECOMMENDATION = "approve the pull request"
+RECOMMENDATION_WHY = (
+    "its checks and its review have passed, and the only thing holding it is "
+    "the code-owner rule this repository sets"
+)
 
 #: The PR note's marker, per head. The sha sits inside an HTML comment, so it
 #: keys the note without showing in it.
@@ -295,7 +305,18 @@ def pr_note(head_sha: str, sentence: str) -> tuple:
 
 
 def card_comment(pr, sentence: str) -> str:
-    return f"⏸️ {_CARD_MARKER.format(kind='hold', pr=pr)}\n\n{sentence}"
+    """The hold marker, the sentence, then the three Green Light lines
+    (DRE-5204). The Finding is the sentence's first sentence, cut from it
+    rather than rebuilt, so the two can never say different things."""
+    head, sep, _ = sentence.partition(". ")
+    lines = console_escalation.render(console_escalation.Escalation(
+        finding=head + "." if sep else sentence,
+        question=(f"Open pull request #{pr} and submit an approving review "
+                  "so it merges, or leave it waiting?"),
+        recommendation=RECOMMENDATION,
+        why=RECOMMENDATION_WHY,
+    ))
+    return f"⏸️ {_CARD_MARKER.format(kind='hold', pr=pr)}\n\n{sentence}\n\n{lines}"
 
 
 def release_comment(pr) -> str:
