@@ -127,37 +127,15 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "scope": "main",
-      "anchor": "agent keeps dying with no PR",
-      "note": "The sweep's In Progress no-PR dead-run cap: parked in Backlog.",
+      "scope": "hand_dead_run_to_planner",
+      "anchor": "held-for-human",
+      "note": "The sweep's two no-PR dead-run caps — In Progress with no live run and the rescue route spent, and In Review with its pull request gone — both reach this helper: handed to Planning once on a budget, then parked in Backlog.",
       "reasons": [
         {
           "reason": "dead-run-cap",
           "lifts": "unpark-marker",
           "tried_first": {
-            "step": "Two requeues at the same budget (REQUEUE_CAP); then, on a silent death — no pull request and no blocker note — one hand-off to the planner, which lands with DRE-6178 and the sweep hand-off DRE-6186. A credential refusal or an API or model death at the cap holds as today, because neither is a size reading.",
-            "receipt": "✂️ dead-run-cap → Planning:"
-          }
-        }
-      ],
-      "readers": [
-        "sweep",
-        "fix-dispatch",
-        "medic",
-        "limit-recovery"
-      ]
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "scope": "main",
-      "anchor": "with no PR after {dead}",
-      "note": "The sweep's In Review no-PR dead-run cap: parked in Backlog.",
-      "reasons": [
-        {
-          "reason": "dead-run-cap",
-          "lifts": "unpark-marker",
-          "tried_first": {
-            "step": "Two requeues at the same budget (REQUEUE_CAP); then, on a silent death — no pull request and no blocker note — one hand-off to the planner, which lands with DRE-6178 and the sweep hand-off DRE-6186. A credential refusal or an API or model death at the cap holds as today, because neither is a size reading.",
+            "step": "Two requeues at the same budget (REQUEUE_CAP); then one hand-off to the planner, decided by dead_run.decide (DRE-6178, DRE-6186). What the sweep sees at the cap is always the silent death — no pull request and no blocker note — so the hold is the second strike on the budget.",
             "receipt": "✂️ dead-run-cap → Planning:"
           }
         }

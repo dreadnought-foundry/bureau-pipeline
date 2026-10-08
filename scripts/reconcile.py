@@ -181,6 +181,7 @@ import mid_epic  # noqa: E402
 # say about releasing an epic's children. The sweep reads them; it never
 # re-derives the grammar.
 import plan_critic  # noqa: E402
+import plan_footprint  # noqa: E402 — ONE parse of a card's `**Files:**` line (DRE-6186)
 # ONE source for the planner's dispatch payload and the dispatch itself
 # (`redispatch` below, and `review_rerun.py dispatch`). The wave's turns no
 # longer ask through it — the relay dispatches on the lane entry (DRE-3659,
@@ -418,9 +419,10 @@ EPIC_ACTIVE_STATES = ("In Progress",)
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
 # crashes (counted by agent-task) or HANGS/times out (seen only here) — is
-# requeued at most REQUEUE_CAP times. After that it is parked in Backlog with
-# HOLD_LABEL so neither the relay nor this sweep re-dispatch it into the same
-# wall. Both paths count the shared DEAD_TAG so the cap is unified. A human
+# requeued at most REQUEUE_CAP times. After that it goes to Planning once per
+# budget (DRE-6186, `hand_dead_run_to_planner`), and the next time it is parked
+# in Backlog with HOLD_LABEL so neither the relay nor this sweep re-dispatch it
+# into the same wall. Both paths count the shared DEAD_TAG so the cap is unified. A human
 # splits/fixes the card and releases it with `linear_ops.py unpark <CARD>`,
 # which posts RESET_TAG — every death count below is taken SINCE that marker, so
 # a released card gets a genuinely fresh budget instead of re-holding on its
@@ -5135,6 +5137,80 @@ def hand_review_nudge_to_person(
         f"stands on it — and removes the '{HOLD_LABEL}' label. A new commit "
         f"gives the sweep a fresh {REVIEW_NUDGE_CAP} re-triggers.",
     )
+
+
+def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
+    """The dead-run cap is reached on a card with no pull request: hand it to
+    the planner once on this budget, and hold it the second time (DRE-6186).
+
+    Both of main()'s no-PR caps call this — In Progress with no live run and
+    the rescue route spent, and the review lane with its pull request gone —
+    so a card cannot be handed off by one path and held by the other. The
+    answer is `dead_run.decide`'s, the rule the Report step's cap asks too
+    (DRE-6178). What the sweep sees is always the silent death — no pull
+    request, no blocker note — so it passes no class flag; the classes of the
+    earlier deaths its count includes ride on the receipt as their first
+    lines, for the planner to read, and never branch the decision.
+
+    `replan`: the decision's body, which opens `hold.DEAD_SPLIT_MARK`, then
+    Planning from the lane the card is in. No label. The receipt carries no
+    budget tag, so the next death on this budget still counts, finds the mark
+    through `split_tried`, and holds; `dead-run-budget-reset` makes the
+    planner tryable once more.
+
+    `hold`: the label and its `🔒 hold:` stamp (`hold.apply`), the `--park`
+    move to Backlog, and the lane's `🚨 held-for-human` receipt, worded as it
+    always was.
+
+    A card the read door's board put here is read live once before either
+    write (`_door_lane_still`). False when nothing was written, or the park
+    was refused.
+    """
+    ident = card["identifier"]
+    lane = (card.get("state") or {}).get("name") or ""
+    decision = dead_run.decide(
+        dead,
+        split_tried=dead_run.split_tried(bodies),
+        deaths=dead_run.death_lines(bodies),
+        footprint=plan_footprint.footprint_section(card.get("description") or "") or "",
+        run_url="",
+        cap=REQUEUE_CAP,
+    )
+    # On the door's reading, the lane is confirmed live BEFORE the first
+    # write (item 33): a hold label must never land on a card the park then
+    # refuses to move, and a hand-off must not post on a card that left.
+    if not _door_lane_still(card, labels_absent=(HOLD_LABEL,)):
+        return False
+    replan = decision.action == "replan"
+    if not replan:
+        hold.apply(ident, "dead-run-cap", "none", "reconcile.py")
+        # --park: a deliberate HOLD-cap park (DRE-1403). Without it the
+        # DRE-1885 building-card guard would re-route this In Progress →
+        # Backlog move to Todo and re-loop forever.
+        if linear_ops.cmd_state(
+            ident, "Backlog", "--park", **_door_guard(card)
+        ) is False and _door_guard(card):
+            return False
+    # ONE post for the three bodies: config/pipeline-acts.json names this
+    # site by the two lanes' hold phrases, kept verbatim. The hand-off goes up
+    # BEFORE the move, so the mark the medic and `split_tried` read is on the
+    # card by the time it is in Planning; the hold receipt goes up after the
+    # park, as it always did.
+    linear_ops.cmd_comment(ident, decision.comments[0] if replan else (
+        f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
+        f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
+        "so the sweep stops looping. A human must split/fix the card "
+        "and clear the label to retry."
+        if lane == REVIEW_LANE else
+        f"🚨 held-for-human: agent keeps dying with no PR (hung or "
+        f"silent) after {dead} requeues — parked in Backlog with the "
+        f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
+        "split/fix the card and clear the label to retry."
+    ))
+    if replan:
+        linear_ops.cmd_advance(ident, "Planning", lane)
+        print(f"dead-run: {ident} at the cap ({dead}) — handed to Planning once")
+    return True
 
 
 def redispatch(card: dict) -> bool:
@@ -12810,26 +12886,9 @@ def main(
                     # since=RESET_TAG: only deaths after the last un-park count.
                     dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                     if dead >= REQUEUE_CAP:
-                        # On the door's reading, the lane is confirmed live
-                        # BEFORE the label (item 33): a hold label must never
-                        # land on a card the park then refuses to move.
-                        if not _door_lane_still(card, labels_absent=(HOLD_LABEL,)):
+                        # The planner once, then the hold (DRE-6186).
+                        if not hand_dead_run_to_planner(card, dead, card_comment_bodies(card)):
                             continue
-                        linear_ops.add_label(ident, HOLD_LABEL)
-                        # --park: a deliberate HOLD-cap park (DRE-1403). Without it
-                        # the DRE-1885 building-card guard would re-route this
-                        # In Progress → Backlog move to Todo and re-loop forever.
-                        if linear_ops.cmd_state(
-                            ident, "Backlog", "--park", **_door_guard(card)
-                        ) is False and _door_guard(card):
-                            continue
-                        linear_ops.cmd_comment(
-                            ident,
-                            f"🚨 held-for-human: agent keeps dying with no PR (hung or "
-                            f"silent) after {dead} requeues — parked in Backlog with the "
-                            f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
-                            "split/fix the card and clear the label to retry.",
-                        )
                     else:
                         # From-lane-conditional on the door's reading (item
                         # 33): requeued only if still In Progress and still
@@ -12898,22 +12957,9 @@ def main(
                 # since=RESET_TAG: only deaths after the last un-park count.
                 dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                 if dead >= REQUEUE_CAP:
-                    if not _door_lane_still(card, labels_absent=(HOLD_LABEL,)):
+                    # The same helper as the In Progress cap (DRE-6186).
+                    if not hand_dead_run_to_planner(card, dead, card_comment_bodies(card)):
                         continue
-                    linear_ops.add_label(ident, HOLD_LABEL)
-                    # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
-                    # the In Progress hold.
-                    if linear_ops.cmd_state(
-                        ident, "Backlog", "--park", **_door_guard(card)
-                    ) is False and _door_guard(card):
-                        continue
-                    linear_ops.cmd_comment(
-                        ident,
-                        f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
-                        f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
-                        "so the sweep stops looping. A human must split/fix the card "
-                        "and clear the label to retry.",
-                    )
                 else:
                     if linear_ops.cmd_state(ident, "Todo", **_door_guard(
                         card, labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)

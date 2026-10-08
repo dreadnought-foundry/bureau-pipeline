@@ -330,6 +330,7 @@ def test_sweep_still_holds_dead_card_at_cap():
     })
     with patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=2
+    ), patch.object(reconcile.dead_run, "split_tried", return_value=True  # DRE-6186: the planner already had it
     ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
         reconcile.linear_ops, "cmd_state"
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):

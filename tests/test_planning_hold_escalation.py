@@ -506,8 +506,10 @@ class TestTheRepairPass:
 #: activate route's two (its send-back bound and its second death, both into
 #: Green Light) with the review that route no longer runs.
 _LABEL_WRITERS = (
-    # Three since DRE-6177: `flag_stranded` writes through `hold.apply`.
-    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 3),
+    # Three since DRE-6177: `flag_stranded` writes through `hold.apply`. One
+    # since DRE-6186: main()'s two dead-run caps write through it too, in
+    # `hand_dead_run_to_planner`.
+    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 1),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
     # Eight since DRE-5284 (the first critic's bound parks in Triage too);
@@ -515,15 +517,16 @@ _LABEL_WRITERS = (
     (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 6),
 )
 
-#: The two dead-run cap sites in `main()`, each of which pairs the label with a
-#: deliberate park into Backlog. Anchored on the park flag rather than on a line
+#: The dead-run cap site — `hand_dead_run_to_planner` since DRE-6186, which both
+#: of main()'s no-PR caps call — pairs the label (and its stamp, through
+#: `hold.apply`) with a deliberate park into Backlog. Anchored on the park flag rather than on a line
 #: number, so the pairing is what is asserted.
 # The park may carry the read door's conditional-write keywords and be asked
 # whether it landed (Stage 2 item 33): `if linear_ops.cmd_state(ident,
 # "Backlog", "--park", **_door_guard(card)) is False …`. Still the label, then
-# the park, at both cap sites — which is the pairing this pins.
+# the park, at the cap site — which is the pairing this pins.
 _DEAD_RUN_PARK = (
-    r'linear_ops\.add_label\(ident, HOLD_LABEL\)\s*\n(?:\s*#.*\n)*'
+    r'hold\.apply\(ident, "dead-run-cap", "none", "reconcile\.py"\)\s*\n(?:\s*#.*\n)*'
     r'\s*(?:if )?linear_ops\.cmd_state\(\s*ident, "Backlog", "--park"[^)]*\)'
 )
 
@@ -554,11 +557,11 @@ class TestTheOtherWritersAreUnchanged:
         assert re.findall(r"cmd_advance\(ident, \"([^\"]+)\"", source) == ["Triage"]
 
     def test_the_dead_run_cap_still_pairs_the_label_with_a_park(self):
-        """Both cap sites write the label AND move the card to Backlog. Six of
+        """The cap site writes the label AND moves the card to Backlog. Six of
         the seven writers pair the label with a lane a person watches — those
         six are why the label keeps meaning something, and none moves here."""
         source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
-        assert len(re.findall(_DEAD_RUN_PARK, source)) == 2
+        assert len(re.findall(_DEAD_RUN_PARK, source)) == 1
 
     def test_dead_runs_park_writes_both_or_neither(self):
         """`dead_run.park` is the third label-plus-move writer, and its whole
