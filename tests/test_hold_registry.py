@@ -171,12 +171,12 @@ class TestSwappingTheWriteKeepsTheRow:
         shutil.copytree(ROOT / ".github" / "workflows",
                         tmp_path / ".github" / "workflows")
         doc = _real_doc()
+        real = hold.discover()
         before = {
-            row["anchor"]: next(s for s in hold.discover() if hold.row_matches(row, s))
+            row["anchor"]: next(s for s in real if hold.row_matches(row, s))
             for row in doc["sites"]
         }
-        calls = [s for s in hold.discover()
-                 if s.file.endswith(".py") and s.kind == "call"]
+        calls = [s for s in real if s.file.endswith(".py") and s.kind == "call"]
         assert len(calls) == 6, [s.where for s in calls]
         by_file: dict = {}
         for site in calls:
@@ -361,8 +361,8 @@ class TestCheckGoesRed:
         root = _tree(tmp_path, {"scripts/a.py": '''
 import linear_ops
 def stall(ident):
-    print("a stall receipt")
     linear_ops.add_label(ident, HOLD_LABEL)
+    print("a stall receipt")
     linear_ops.add_label(ident, HOLD_LABEL)
 '''})
         found = hold.problems(_doc([_row("scripts/a.py", "stall", "a stall receipt")]),

@@ -2597,6 +2597,20 @@
       "kind": "not-an-act",
       "means": "The hygiene agent's hourly summary — what each lane cleared, with its PT time, and what it left and why — posted to the standing HYGIENE_CARD only when an action ran or the set of left rows changed.",
       "why": "A REPORT about a pass, not something the pipeline did to a piece of work. Every act the pass took already carries its own 🧹 receipt and trailer on the card or pull request it acted on; the summary restates them for a person and creates no obligation, hands nothing to anybody and discharges nothing, so the three questions a trailer answers all read 'not applicable'. Declared the way Nightly Watch's report is (DRE-5368)."
+    },
+    {
+      "file": "scripts/hold.py",
+      "anchor": "cmd_comment(card, stamp)",
+      "kind": "not-an-act",
+      "means": "The hold's stamp — `🔒 hold: reason=<code> at=<qualifier> lifts=<lift-kind> by=<writer-file>` — posted by hold.apply right after the `needs-human` label (DRE-6173).",
+      "why": "The label's RECORD, not an act of its own. The act is the hold its caller takes, and that caller posts its own receipt beside it; the stamp only says which reason the label stands for and what lifts it, so the readers in docs/holds.md can tell one hold from another. It must be one line and the first line of its comment — `hold.read_stamp` reads exactly that — and it may carry no tag a reader counts, so a trailer has no place on it."
+    },
+    {
+      "file": "scripts/hold.py",
+      "anchor": "cmd_comment(card, lifted)",
+      "kind": "not-an-act",
+      "means": "The lift line — `🔓 hold lifted: reason=<code> because=<lift-kind, card-closed or operator> by=<writer-file>` — posted by hold.lift after the `needs-human` label comes off (DRE-6173).",
+      "why": "The label's removal RECEIPT, not an act of its own: it records that a caller took the label off and spends every stamp older than it (`hold.read_stamp`). The caller's own act, where it has one, carries its own receipt — the hygiene agent's lift is its own `hygiene-hold-clear` act and never posts this line. It is read by its opening words, and it may carry no tag a reader counts."
     }
   ]
 }
