@@ -35,15 +35,44 @@ So this module is the two halves of "the run still delivers":
      the pull request, say so on the card. Nothing it spends was minted by the
      run that failed, which is the whole reason it is a separate job.
 
+TWO SHAPES OF WORK (DRE-6349). What is above is a BUILD run's: its commits
+start a branch, so the delivery makes one, `agent/<CARD>-rescued-delivery`, and
+opens the pull request. A FIX run's commits belong on the pull request it was
+fixing, and a second pull request for one card is worse than the push it lost.
+So the rescue leaves a sidecar beside the patch — `rescue-<CARD>.target.json`,
+written by `push_rescue.py` (DRE-6348), keys exactly `card`, `branch`, `head`,
+`remote_head` — and when `deliver()` finds one it replays onto that branch and
+opens nothing. It asks first, in this order, because up to thirty minutes
+have passed since the run and the only guard before it (the fix workflow's
+pre-push hook, `stranded_fix.py guard`) held the run's own reader token and
+fails open:
+
+  * the pull request's state, with THIS job's token — merged or closed means
+    nothing is replayed (the DRE-4486 shape), and an unreadable state is not
+    an answer, so nothing is replayed and the job goes red for the medic's
+    one retry;
+  * the branch's head — at the sidecar's `head`, the work is already there; at
+    neither `head` nor `remote_head`, a later hand pushed and the patch is
+    stale by construction, so the replay is skipped rather than stacked on
+    top; at `remote_head`, the patch is replayed with `git am -3
+    --empty=keep` (the fix loop's one sanctioned empty commit, DRE-5632) and
+    pushed to the same branch, never forced.
+
+Every one of those outcomes is one `rescue-delivered` receipt on the card. The
+branch travels in the artifact, never in a workflow input, so the dispatch and
+every delivery stub are the same for both shapes; `handoff --branch` only makes
+the card's wording true for a fix run and puts the branch in the marker.
+
 The grammar is here and nowhere else. `parse_marker()` reads exactly what
 `announcement()` writes, so the reconcile sweep's re-check (reconcile.py's
 In-Progress-no-PR branch) reads the ARTIFACT FACT off the card rather than
 concluding "dead agent, rebuild" from a pull request that was never opened.
 
-CLI (the two forms the workflows call):
+CLI (the two forms the workflows call; `--branch` only for a fix run):
 
     python3 deliver_rescue.py handoff --card DRE-3165 --repo owner/name \\
-        --run-id 34045232203 --artifact rescue-DRE-3165.patch --status 400
+        --run-id 34045232203 --artifact rescue-DRE-3165.patch --status 400 \\
+        [--branch agent/DRE-3165-x]
 
     PUSH_TOKEN=<fresh> python3 deliver_rescue.py apply --card DRE-3165 \\
         --repo owner/name --run-id 34045232203 --patch-dir /tmp/rescue \\
@@ -54,6 +83,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import subprocess  # nosec B404 — git and gh; argv lists, never a shell
@@ -83,11 +113,31 @@ SELF_DELIVERY_WORKFLOW = "self-deliver-rescue.yml"
 
 #: What `announcement()` writes, read back. Anchored on the tag and on the two
 #: facts the follow-up needs — the artifact and the run that holds it — so
-#: ordinary prose mentioning a patch file is not mistaken for a marker.
+#: ordinary prose mentioning a patch file is not mistaken for a marker. The
+#: `for branch` clause is a fix run's (DRE-6349) and optional, so a marker
+#: written before it still parses.
 _MARKER_RE = re.compile(
     rf"{FAILED_TAG}:.*?artifact (?P<artifact>[A-Za-z0-9][A-Za-z0-9._-]*) "
     rf"on run (?P<run_id>\d+)"
+    rf"(?: for branch (?P<branch>[A-Za-z0-9][A-Za-z0-9._/-]*))?"
 )
+
+#: The four things a fix run's delivery can find (DRE-6349), one receipt each.
+OUTCOME_REPLAYED = "replayed"
+OUTCOME_PR_CLOSED = "pull-request-closed"
+OUTCOME_ALREADY_THERE = "already-there"
+OUTCOME_BRANCH_MOVED = "branch-moved"
+
+#: The sidecar's keys, exactly — the contract with push_rescue.py (DRE-6348).
+_TARGET_KEYS = ("card", "branch", "head", "remote_head")
+#: What each sidecar value must look like before it reaches git's argv. The
+#: branch is the marker's own branch grammar, so it can never open with `-`.
+_TARGET_SHAPES = {
+    "card": re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*"),
+    "branch": re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*"),
+    "head": re.compile(r"[0-9a-fA-F]{7,64}"),
+    "remote_head": re.compile(r"[0-9a-fA-F]{7,64}"),
+}
 
 #: Anything shaped like a GitHub credential, removed before git's own words are
 #: quoted onto a card. git does not echo the `http.extraheader` value, so this
@@ -107,6 +157,20 @@ class Marker(NamedTuple):
 
     run_id: str
     artifact: str
+    #: The pull request's branch a fix run's work belongs on; "" for a build
+    #: run's marker and for every marker written before DRE-6349.
+    branch: str = ""
+
+
+class Target(NamedTuple):
+    """Where a fix run's rescued work goes: the sidecar beside the patch."""
+
+    card: str
+    branch: str
+    #: The run's own finished head — the work.
+    head: str
+    #: The branch's head when the run started — what the patch applies to.
+    remote_head: str
 
 
 class Handoff(NamedTuple):
@@ -126,6 +190,12 @@ class Delivery:
         self.pr_opened = False
         self.pr_url = ""
         self.error = ""
+        #: Set when the artifact carried a sidecar: a fix run's delivery,
+        #: which opens no pull request and has its own exit rule.
+        self.target: Target | None = None
+        #: Which of the four fix-run outcomes this was; "" when it failed.
+        self.outcome = ""
+        self.pr_number = ""
 
 
 def _log(message: str) -> None:
@@ -155,6 +225,7 @@ def announcement(
     run_id: str,
     status: str = "",
     mints: int = 2,
+    branch: str = "",
 ) -> str:
     """The line the card gets when the rescue push failed.
 
@@ -162,9 +233,17 @@ def announcement(
     human reads it, `parse_marker()` reads it, and the sweep's re-check acts on
     it. An unnamed refusal says so rather than printing a number nobody saw —
     `push_rescue.http_status` answers "" for a message it cannot name.
+
+    A fix run's line ends `for branch <name>` (DRE-6349) and makes no promise
+    about opening a pull request: its pull request already exists.
     """
     named = f"status {status}" if str(status).strip() else "no HTTP status"
     where = "both mints" if mints >= 2 else "its only mint"
+    if branch:
+        return (
+            f"🚨 {FAILED_TAG}: {named} on {where} — the work is in artifact "
+            f"{artifact} on run {run_id} for branch {branch}"
+        )
     return (
         f"🚨 {FAILED_TAG}: {named} on {where} — the work is in artifact "
         f"{artifact} on run {run_id}; nothing will open a PR until it is "
@@ -177,7 +256,8 @@ def parse_marker(body: str) -> Marker | None:
     match = _MARKER_RE.search(body or "")
     if not match:
         return None
-    return Marker(run_id=match.group("run_id"), artifact=match.group("artifact"))
+    return Marker(run_id=match.group("run_id"), artifact=match.group("artifact"),
+                  branch=match.group("branch") or "")
 
 
 def pending_delivery(bodies) -> Marker | None:
@@ -246,6 +326,7 @@ def handoff(
     status: str = "",
     mints: int = 2,
     stderr: str = "",
+    branch: str = "",
     run=None,
     post=None,
 ) -> Handoff:
@@ -260,11 +341,15 @@ def handoff(
     Never raises: this runs in the run's last step, after something has already
     gone wrong, and a crash here would replace a recoverable loss with a red
     step that summons the medic to re-run work that is already done.
+
+    `branch` is a fix run's: the follow-up replays onto that branch of the
+    existing pull request rather than opening one, and the card says so. The
+    dispatch is the same either way — the branch rides in the artifact.
     """
     run = run or _run
     post = post or (lambda body: _post_comment(card, body))
     line = announcement(card, artifact=artifact, run_id=run_id, status=status,
-                        mints=mints)
+                        mints=mints, branch=branch)
     workflow = delivery_workflow(repo)
     argv = dispatch_argv(repo, run_id=run_id, card=card, artifact=artifact)
     code, _, err = run(argv, env=dispatch_env())
@@ -272,7 +357,26 @@ def handoff(
     dispatched = code == 0
 
     parts = [line, ""]
-    if dispatched:
+    if dispatched and branch:
+        parts.append(
+            f"🚚 {DISPATCH_TAG}: dispatched `{workflow}` on `{repo}` with "
+            f"`run_id={run_id}` — that run downloads {artifact} with its own "
+            f"freshly minted token and, once it has checked the pull request is "
+            f"still open and `{branch}` has not moved, applies the patch onto "
+            f"`{branch}`, the existing pull request's branch. No new pull "
+            f"request is opened. Nobody needs to do this by hand."
+        )
+    elif branch:
+        parts.append(
+            f"⚠️ the delivery follow-up could NOT be dispatched "
+            f"(`{workflow}` on `{repo}`: {detail or 'no reason given'}), so this "
+            f"card needs a human: `gh run download {run_id} --name {artifact}`, "
+            f"then `git am -3 --empty=keep` it onto `{branch}` and push that "
+            f"branch, if its pull request is still open and the branch has not "
+            f"moved since the run. The reconcile sweep re-checks this card off "
+            f"the artifact fact above."
+        )
+    elif dispatched:
         parts.append(
             f"🚚 {DISPATCH_TAG}: dispatched `{workflow}` on `{repo}` with "
             f"`run_id={run_id}` — that run downloads {artifact} with its own "
@@ -318,6 +422,39 @@ def patch_file(directory: str) -> str:
     return matches[0] if matches else ""
 
 
+def read_target(directory: str, card: str) -> Target | None:
+    """The fix run's sidecar under the download, or None when there is none.
+
+    None means a build run's artifact, and today's delivery. A sidecar that IS
+    there and cannot be used raises ValueError rather than answering None:
+    falling back to the build-run path would open a second pull request for a
+    card that already has one, which is the thing this exists to prevent.
+    """
+    name = f"rescue-{card}.target.json"
+    matches = sorted(glob.glob(os.path.join(directory or ".", "**", name),
+                               recursive=True))
+    if not matches:
+        return None
+    try:
+        with open(matches[0], encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{name} could not be read: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError(f"{name} is not a JSON object")
+    missing = [k for k in _TARGET_KEYS
+               if not isinstance(doc.get(k), str) or not doc[k].strip()]
+    if missing:
+        raise ValueError(f"{name} has no {', '.join(missing)}")
+    target = Target(**{k: doc[k].strip() for k in _TARGET_KEYS})
+    for key in _TARGET_KEYS:
+        if not _TARGET_SHAPES[key].fullmatch(getattr(target, key)):
+            raise ValueError(f"{name} carries an unusable {key}")
+    if target.card != card:
+        raise ValueError(f"{name} names {target.card}, not {card}")
+    return target
+
+
 def delivery_branch(card: str) -> str:
     """The branch the delivery pushes.
 
@@ -357,6 +494,34 @@ def _gh_env(token: str) -> dict:
     return env
 
 
+def _replay(patch: str, *, card: str, run_id: str, artifact: str, am: list,
+            prefix: str, run, workdir: str) -> str:
+    """Replay `patch` onto the checked-out branch; "" on success, else why.
+
+    `git am` first: it replays the agent's own commits, messages and
+    authorship. A plain diff is what write_patch falls back to on a shallow
+    clone, and `am` refuses it — so the fallback is applied and committed as
+    one commit rather than losing the work a second time.
+    """
+    code, _, am_err = run(["git", "-C", workdir, *am, patch])
+    if code == 0:
+        return ""
+    run(["git", "-C", workdir, "am", "--abort"])
+    code, _, apply_err = run(["git", "-C", workdir, "apply", "--3way", patch])
+    if code != 0:
+        return (f"neither `git am` nor `git apply` could replay "
+                f"{os.path.basename(patch)}: "
+                f"{redact(apply_err).strip() or redact(am_err).strip()}")
+    run(["git", "-C", workdir, "add", "-A"])
+    code, _, err = run([
+        "git", "-C", workdir, "commit", "-m",
+        f"{prefix}({card}): work rescued from run {run_id} ({artifact})",
+    ])
+    if code != 0:
+        return f"the applied patch produced no commit: {redact(err).strip()}"
+    return ""
+
+
 def deliver(
     card: str,
     *,
@@ -382,8 +547,24 @@ def deliver(
     run = run or _run
     post = post or (lambda body: _post_comment(card, body))
     out = Delivery()
-    out.branch = delivery_branch(card)
     artifact = artifact or f"rescue-{card}.patch"
+
+    # The sidecar first: a fix run's work goes onto its own pull request's
+    # branch, and nothing below — a fresh branch, a new pull request — applies.
+    try:
+        target = read_target(patch_dir, card)
+    except ValueError as exc:
+        out.error = f"the rescue's target sidecar is unusable — {exc}"
+        _log(f"rescue delivery: {out.error}")
+        return out
+    if target is not None:
+        return _deliver_to_branch(
+            out, card, target, repo=repo, run_id=run_id, patch_dir=patch_dir,
+            token=token, artifact=artifact, workdir=workdir, run=run,
+            post=post,
+        )
+
+    out.branch = delivery_branch(card)
 
     existing = push_rescue._existing_pr(out.branch, repo, token, run=run,
                                         workdir=workdir)
@@ -414,29 +595,12 @@ def deliver(
         _log(f"rescue delivery: {out.error}")
         return out
 
-    # `git am` first: it replays the agent's own commits, messages and
-    # authorship. A plain diff is what write_patch falls back to on a shallow
-    # clone, and `am` refuses it — so the fallback is applied and committed as
-    # one commit rather than losing the work a second time.
-    code, _, am_err = run(["git", "-C", workdir, "am", "-3", patch])
-    if code != 0:
-        run(["git", "-C", workdir, "am", "--abort"])
-        code, _, apply_err = run(["git", "-C", workdir, "apply", "--3way", patch])
-        if code != 0:
-            out.error = (f"neither `git am` nor `git apply` could replay "
-                         f"{os.path.basename(patch)}: "
-                         f"{redact(apply_err).strip() or redact(am_err).strip()}")
-            _log(f"rescue delivery: {out.error}")
-            return out
-        run(["git", "-C", workdir, "add", "-A"])
-        code, _, err = run([
-            "git", "-C", workdir, "commit", "-m",
-            f"feat({card}): work rescued from run {run_id} ({artifact})",
-        ])
-        if code != 0:
-            out.error = f"the applied patch produced no commit: {redact(err).strip()}"
-            _log(f"rescue delivery: {out.error}")
-            return out
+    error = _replay(patch, card=card, run_id=run_id, artifact=artifact,
+                    am=["am", "-3"], prefix="feat", run=run, workdir=workdir)
+    if error:
+        out.error = error
+        _log(f"rescue delivery: {out.error}")
+        return out
 
     code, _, err = run(["git", "-C", workdir, "push", "origin",
                         f"{out.branch}:refs/heads/{out.branch}"])
@@ -472,6 +636,179 @@ def deliver(
     return out
 
 
+# --------------------------------------------------------------------------
+# the follow-up run, fix-run shape: the artifact lands on the pull request's
+# own branch (DRE-6349)
+# --------------------------------------------------------------------------
+def _same_sha(a: str, b: str) -> bool:
+    """One commit named twice, tolerating an abbreviated side."""
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    if len(a) < 7 or len(b) < 7:
+        return False
+    return a.startswith(b) or b.startswith(a)
+
+
+def _branch_pull_request(branch: str, repo: str, token: str, *, run,
+                         workdir: str) -> tuple[str, str, str]:
+    """(number, state, error) of the pull request on `branch`.
+
+    Read with THIS job's token. `--state all`, so a pull request merged or
+    closed since the run is seen as exactly that; when the branch has had more
+    than one, an open one is the one that counts. An unreadable answer, and an
+    empty one, are errors: a fix run's branch has a pull request by definition,
+    and "could not tell" is never "go ahead" (DRE-2034).
+    """
+    code, out, err = run(
+        ["gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "all",
+         "--json", "number,state,headRefOid", "--limit", "5"],
+        cwd=workdir, env=_gh_env(token),
+    )
+    if code != 0:
+        why = (redact(err).strip().splitlines() or ["no reason given"])[-1]
+        return "", "", f"could not read the pull request on {branch}: {why[:_STDERR_LIMIT]}"
+    try:
+        rows = [r for r in json.loads(out or "[]") if isinstance(r, dict)]
+    except (ValueError, TypeError):
+        return "", "", f"could not parse the pull request listing for {branch}"
+    if not rows:
+        return "", "", f"no pull request found on {branch}"
+    row = next((r for r in rows if str(r.get("state", "")).upper() == "OPEN"),
+               rows[0])
+    return str(row.get("number") or ""), str(row.get("state") or "").upper(), ""
+
+
+def _fix_receipt(outcome: str, *, branch: str, pr_number: str, run_id: str,
+                 artifact: str, target: Target, actual: str = "",
+                 state: str = "") -> str:
+    """The one `rescue-delivered` receipt a fix run's delivery posts."""
+    pr = f"pull request #{pr_number}" if pr_number else "its pull request"
+    lead = f"🚚 {DELIVERED_TAG}: run {run_id}'s artifact {artifact}"
+    if outcome == OUTCOME_REPLAYED:
+        return (
+            f"{lead} is replayed onto `{branch}`, the branch of {pr}, and "
+            f"pushed — no new pull request was opened. The commits are the "
+            f"fix agent's; only the replay is this job's."
+        )
+    if outcome == OUTCOME_PR_CLOSED:
+        return (
+            f"{lead} was not delivered: {pr} on `{branch}` is "
+            f"{state.lower() or 'not open'}, so nothing was replayed or pushed. "
+            f"The work is still in artifact {artifact} on run {run_id} for a "
+            f"person who wants it: `gh run download {run_id} --name {artifact}`."
+        )
+    if outcome == OUTCOME_ALREADY_THERE:
+        return (
+            f"{lead} is already there: `{branch}` ({pr}) is at {target.head}, "
+            f"the run's own head, so nothing was applied or pushed."
+        )
+    return (
+        f"{lead} was not replayed — the replay was skipped because the branch "
+        f"moved: `{branch}` ({pr}) is at {actual}, which is neither the head "
+        f"the run started from ({target.remote_head}) nor the head it finished "
+        f"at ({target.head}). A later push redid or replaced the work, and "
+        f"replaying a stale patch on top of it would duplicate it. The artifact "
+        f"is still on run {run_id} for a person who wants it."
+    )
+
+
+def _deliver_to_branch(
+    out: Delivery,
+    card: str,
+    target: Target,
+    *,
+    repo: str,
+    run_id: str,
+    patch_dir: str,
+    token: str,
+    artifact: str,
+    workdir: str,
+    run,
+    post,
+) -> Delivery:
+    """Replay a fix run's patch onto its own pull request's branch.
+
+    Asks before it acts, in the module docstring's order: the pull request's
+    state, then the branch's head. Every answer it reaches is one receipt on
+    the card and `out.outcome`; a question it could not answer, a replay that
+    failed and a push that was refused leave `out.outcome` empty and say why
+    in `out.error`, and post no `rescue-delivered` — that tag ends the sweep's
+    interest in the card, and the work has not been delivered.
+    """
+    out.target = target
+    out.branch = target.branch
+    branch = target.branch
+
+    def receipt(outcome: str, **kw) -> Delivery:
+        out.outcome = outcome
+        try:
+            post(_fix_receipt(outcome, branch=branch, pr_number=out.pr_number,
+                              run_id=run_id, artifact=artifact, target=target,
+                              **kw))
+        except Exception as exc:  # the receipt must not undo the outcome
+            _log(f"rescue delivery: could not comment on {card} — {exc}")
+        _log(f"rescue delivery: {outcome} on {branch}")
+        return out
+
+    def fail(error: str) -> Delivery:
+        out.error = error
+        _log(f"rescue delivery: {error}")
+        return out
+
+    # 1. The pull request's state, with this job's own token — before any git.
+    number, state, error = _branch_pull_request(branch, repo, token, run=run,
+                                                workdir=workdir)
+    if error:
+        return fail(error)
+    out.pr_number = number
+    if state in ("MERGED", "CLOSED"):
+        return receipt(OUTCOME_PR_CLOSED, state=state)
+    if state != "OPEN":
+        return fail(f"the pull request on {branch} answered state "
+                    f"{state or 'nothing'}, which is not an answer")
+
+    # 2-4. The branch's head, as the remote holds it now.
+    if token:
+        push_rescue.repoint_git_credential(token, run=run, workdir=workdir)
+    tracking = f"refs/remotes/origin/{branch}"
+    code, _, err = run(["git", "-C", workdir, "fetch", "origin",
+                        f"+refs/heads/{branch}:{tracking}"])
+    if code != 0:
+        return fail(f"could not fetch {branch}: {redact(err).strip()}")
+    code, actual, err = run(["git", "-C", workdir, "rev-parse", "--verify",
+                             f"{tracking}^{{commit}}"])
+    actual = (actual or "").strip()
+    if code != 0 or not actual:
+        return fail(f"could not read the head of {branch}: {redact(err).strip()}")
+    if _same_sha(actual, target.head):
+        return receipt(OUTCOME_ALREADY_THERE)
+    if not _same_sha(actual, target.remote_head):
+        return receipt(OUTCOME_BRANCH_MOVED, actual=actual)
+
+    patch = patch_file(patch_dir)
+    if not patch:
+        return fail(f"no .patch file in {patch_dir} — the artifact did not arrive")
+    code, _, err = run(["git", "-C", workdir, "checkout", "-B", branch, tracking])
+    if code != 0:
+        return fail(f"could not check out {branch}: {redact(err).strip()}")
+    error = _replay(patch, card=card, run_id=run_id, artifact=artifact,
+                    am=["am", "-3", "--empty=keep"], prefix="fix", run=run,
+                    workdir=workdir)
+    if error:
+        return fail(error)
+    code, replayed, _ = run(["git", "-C", workdir, "rev-parse", "HEAD"])
+    if code != 0 or _same_sha(replayed, actual):
+        return fail(f"replaying {os.path.basename(patch)} added no commit to "
+                    f"{branch}, so there is nothing to push")
+    # The SAME branch, never forced: had anything pushed since the fetch, the
+    # remote refuses the push rather than this job overwriting it.
+    code, _, err = run(["git", "-C", workdir, "push", "origin",
+                        f"{branch}:refs/heads/{branch}"])
+    if code != 0:
+        return fail(f"pushing {branch} failed: {redact(err).strip()}")
+    out.pushed = True
+    return receipt(OUTCOME_REPLAYED)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -485,6 +822,8 @@ def main(argv: list[str]) -> int:
     h.add_argument("--mints", type=int, default=2)
     h.add_argument("--stderr", default="",
                    help="git's own refusal, quoted onto the card (redacted)")
+    h.add_argument("--branch", default="",
+                   help="a fix run's pull-request branch the work belongs on")
 
     a = sub.add_parser("apply", help="deliver a downloaded rescue patch")
     a.add_argument("--card", required=True)
@@ -502,6 +841,7 @@ def main(argv: list[str]) -> int:
             args.card, repo=args.repo, run_id=args.run_id,
             artifact=args.artifact or f"rescue-{args.card}.patch",
             status=args.status, mints=args.mints, stderr=args.stderr,
+            branch=args.branch,
         )
         # ALWAYS 0, for push_rescue.py's reason: a red step here summons the
         # medic to re-run a run that already did the work. The card carries
@@ -516,6 +856,16 @@ def main(argv: list[str]) -> int:
         artifact=args.artifact or f"rescue-{args.card}.patch",
         workdir=args.workdir,
     )
+    # A fix run's delivery opens no pull request by design, so it has its own
+    # rule: green when it reached one of its four answers, red when it could
+    # not (an unread state, a failed replay or push) — the medic's one retry
+    # asks again.
+    if outcome.target is not None:
+        if not outcome.outcome:
+            print(f"rescue delivery FAILED: {outcome.error or 'no outcome'}")
+            return 1
+        print(f"rescue delivery: {outcome.outcome} on {outcome.branch}")
+        return 0
     # This one DOES fail loudly: it is a job whose only purpose is the
     # delivery, so a delivery that did not happen must be red — the medic and
     # the next sweep are the retry, and a green run here would claim the work
