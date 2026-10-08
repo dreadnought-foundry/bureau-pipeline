@@ -216,8 +216,10 @@ the cap:
 A hold whose reason has just cleared lifts within one pass, whatever the stale
 backlog behind it. Every lift over the cap is a summary row reading
 `over the per-pass cap of <n> — carried to the next pass`, recommending a wait,
-so an operator can watch the backlog drain. The 207 clear in about six hourly
-passes, and the pass that finishes them is the first with no carried row.
+so an operator can watch the backlog drain. The pass that finishes the backlog
+is the first with no carried row. A read-only dry plan on 2026-10-08 found 591
+held cards across the fleet, 534 of them closed cards in the home leg — about
+fourteen passes at the default.
 
 ## The reader rule
 
