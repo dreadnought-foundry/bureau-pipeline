@@ -51,6 +51,7 @@
     "hygiene/hygiene-review-move": "🧹 hygiene: hyg-moved-to-review — the cause a lane read · 14:05 PT\nevidence: run 1, PR #7",
     "hygiene/hygiene-card-cancel": "🧹 hygiene: hyg-card-canceled — the cause a lane read · 14:05 PT\nevidence: run 1, PR #7",
     "hygiene/hygiene-cause-name": "🧹 hygiene: hyg-cause-named — the cause a lane read · 14:05 PT\nevidence: run 1, PR #7",
+    "hygiene/hygiene-hold-clear": "🧹 hygiene: hyg-hold-cleared — the cause a lane read · 14:05 PT\nevidence: run 1, PR #7",
     "epic-queue-started": "▶️ epic-started: a slot opened and this epic was next in line (place 1) — the sweep started it, and 15 of 15 epics are now in motion.",
     "epic-start-redispatched": "▶️ epic-start-redispatched: this epic was started from the line 120 minutes ago and its activation never ran — the `epic-queued` label is still on it and the pipeline has posted nothing since — so the sweep asked for the activate run itself. It asks once per start: if this run does not take either, the epic shows as overdue in the console.",
     "proof-run-dispatched": "🔬 proof-run: dispatched a proof run at 2026-10-06 10:00 PT — first proof run (dispatch 1 of 2)"

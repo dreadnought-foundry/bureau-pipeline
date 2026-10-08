@@ -603,7 +603,7 @@ def _drive_proof_run_dispatched(mp):
         now=datetime(2026, 10, 6, 17, 0, tzinfo=UTC))
 
 
-#: The hygiene agent's twelve acts (DRE-5368). The core composes every one of
+#: The hygiene agent's thirteen acts (DRE-5368, DRE-6180). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
 #: lanes are sibling cards. So each driver hands the real seam the receipt a
@@ -614,6 +614,7 @@ HYGIENE_ACTS = (
     "hygiene-decision-needed", "hygiene-pr-close", "hygiene-resend-to-planning",
     "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
     "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
+    "hygiene-hold-clear",
 )
 
 
