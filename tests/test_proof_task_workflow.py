@@ -880,5 +880,224 @@ class ReturnStepTest(_StepHarness):
         self.assertEqual(self.RETURN, writes[2])
 
 
+# --- the park's three lines (DRE-6174) ------------------------------------
+
+#: The command the park runs on the agent's escalation file (DRE-3908's CLI),
+#: and the `cat` it falls back to when the renderer cannot run.
+COMPLETE = ('python3 .bureau-pipeline/scripts/console_escalation.py complete '
+            '"$ESCALATION_FILE" --question "Make the press and say what you '
+            'saw, or drop the criterion?" --who "the proof run"')
+FALLBACK = 'cat "$ESCALATION_FILE"'
+NONE_GIVEN = "none given — the proof run stated no recommendation"
+WF_REL = ".github/workflows/proof-task.yml"
+INTRODUCED_BY = "console_escalation.py complete"
+
+#: An escalation in the proof brief's shape: one plain sentence naming the
+#: press and the one decision asked, its recommendation in prose.
+PROSE = ("The release row needs the CEO's press: approve the release in the "
+         "console and say what you saw, or drop the criterion — I would make "
+         "the press, since every other row is met.\n")
+
+
+def _console_escalation():
+    import importlib
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        return importlib.import_module("console_escalation")
+    finally:
+        sys.path.remove(str(ROOT / "scripts"))
+
+
+def _git(*args: str) -> str | None:
+    try:
+        out = subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                             text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def _before_and_after() -> tuple[str, str] | None:
+    """proof-task.yml before and after this card: the commit that first
+    brought `console_escalation.py complete` into it against its parent, or —
+    before that commit exists — the working tree against its merge base with
+    `main`."""
+    log = _git("log", "--format=%H", "--reverse", "-S", INTRODUCED_BY, "--", WF_REL)
+    first = (log or "").split()
+    if first:
+        before = _git("show", f"{first[0]}^:{WF_REL}")
+        after = _git("show", f"{first[0]}:{WF_REL}")
+        if before is not None and after is not None:
+            return before, after
+    base = (_git("merge-base", "HEAD", "origin/main") or "").strip()
+    if base:
+        before = _git("show", f"{base}:{WF_REL}")
+        if before is not None:
+            return before, PROOF_TASK.read_text(encoding="utf-8")
+    return None
+
+
+def _step_texts(src: str) -> list[tuple[str, str]]:
+    """Every step of the file as `(name, its own lines)`, in order."""
+    marker = "\n      - name: "
+    chunks = src.split(marker)[1:]
+    return [(c.split("\n", 1)[0], c) for c in chunks]
+
+
+class ParkCompletesThreeLinesTest(unittest.TestCase):
+    """The park's question carries the three Green Light lines (DRE-6174):
+    the agent's file run through `console_escalation.py complete`, which
+    leaves a declared file alone and finishes a prose one with `none given`."""
+
+    def _run_lines(self) -> list[str]:
+        return str(_step(RESULT_STEP)["run"]).split("\n")
+
+    def _line(self, needle: str, start: int = 0) -> int:
+        lines = self._run_lines()
+        for i in range(start, len(lines)):
+            if needle in lines[i]:
+                return i
+        self.fail(f"no line after {start} carries {needle!r}")
+
+    def test_the_question_is_completed_inside_the_escalation_comment(self):
+        lines = self._run_lines()
+        preamble = self._line(f'echo "{PARK_RECEIPT}"')
+        complete = self._line(INTRODUCED_BY)
+        self.assertEqual(f"{COMPLETE} || {FALLBACK}", lines[complete].strip())
+        self.assertIn('--who "the proof run"', lines[complete])
+        # Inside the block whose output is the comment posted below.
+        opened = max(i for i in range(preamble) if lines[i].strip() == "{")
+        closed = self._line('} > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"',
+                            complete)
+        self.assertLess(opened, preamble)
+        self.assertLess(preamble, complete)
+        self.assertLess(complete, closed)
+        comment = self._line('linear_ops.py comment "$CARD"', complete)
+        park = self._line('advance "$CARD" "Green Light"', complete)
+        self.assertLess(closed, comment)
+        self.assertLess(comment, park)
+        self.assertIn("proof-escalation-comment.md", lines[comment + 1])
+
+    def test_cat_is_only_the_fallback(self):
+        lines = [l for l in self._run_lines() if FALLBACK in l]
+        self.assertEqual(1, len(lines), lines)
+        self.assertTrue(lines[0].strip().endswith(f"|| {FALLBACK}"), lines[0])
+        self.assertTrue(lines[0].strip().startswith(COMPLETE), lines[0])
+
+    def _complete(self, text: str) -> str:
+        """The `complete` half of the step's own line, run as written."""
+        [line] = [l for l in self._run_lines() if INTRODUCED_BY in l]
+        command = line.strip().split(f" || {FALLBACK}")[0]
+        self.assertEqual(COMPLETE, command)
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        scripts = tmp / ".bureau-pipeline" / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy(ROOT / "scripts" / "console_escalation.py", scripts)
+        staged = tmp / "agent-escalation.txt"
+        staged.write_text(text, encoding="utf-8")
+        done = subprocess.run(["bash", "-e", "-c", command], cwd=tmp,
+                              env={"PATH": os.environ["PATH"],
+                                   "ESCALATION_FILE": str(staged)},
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return done.stdout
+
+    def test_a_prose_escalation_ends_with_the_three_lines_none_given(self):
+        ce = _console_escalation()
+        out = self._complete(PROSE)
+        self.assertTrue(out.startswith(PROSE.rstrip("\n")), out)
+        last = out.rstrip("\n").split("\n")[-3:]
+        for line, prefix in zip(last, (ce.FINDING_PREFIX, ce.QUESTION_PREFIX,
+                                       ce.RECOMMENDATION_PREFIX)):
+            self.assertTrue(line.startswith(prefix), last)
+        self.assertEqual([], ce.problems("\n".join(last)))
+        self.assertEqual([], ce.problems(out))
+        self.assertEqual(f"{ce.RECOMMENDATION_PREFIX} {NONE_GIVEN}", last[2])
+        self.assertEqual(f"{ce.QUESTION_PREFIX} Make the press and say what you "
+                         "saw, or drop the criterion?", last[1])
+
+    def test_a_declared_escalation_comes_back_byte_identical(self):
+        ce = _console_escalation()
+        declared = PROSE + "\n" + ce.render(ce.Escalation(
+            finding="The release row needs the CEO's press",
+            question="Approve the release in the console, or drop the criterion?",
+            recommendation="Approve it",
+            why="every other row is met"))
+        self.assertEqual([], ce.problems(declared))
+        # The file's own bytes, and the newline `print` ends them with.
+        self.assertEqual(declared + "\n", self._complete(declared))
+
+    def test_the_diff_touches_no_other_step(self):
+        pair = _before_and_after()
+        if pair is None:
+            # The unit job checks out full history and sets this, so there the
+            # missing history is a failure, never a green skip.
+            if os.environ.get("BUREAU_REQUIRE_GIT_HISTORY"):
+                self.fail(f"no git history for {WF_REL}, and this job requires it")
+            self.skipTest(f"no git history for {WF_REL} (a shallow checkout)")
+        before, after = pair
+        was, now = _step_texts(before), _step_texts(after)
+        self.assertEqual([n for n, _ in was], [n for n, _ in now])
+        agents = 0
+        for (name, old), (_, new) in zip(was, now):
+            if name != RESULT_STEP:
+                self.assertEqual(old, new, f"the step {name!r} changed")
+                agents += f"uses: {ACTION}@" in new
+        self.assertEqual(3, agents, "the three agent attempts are compared")
+        self.assertEqual(before.split("\n")[0], after.split("\n")[0])
+        self.assertEqual(before.split("\n      - name: ")[0],
+                         after.split("\n      - name: ")[0])
+        # Within the step, the one line and nothing else.
+        old_lines, new_lines = before.split("\n"), after.split("\n")
+        changed = [(o, n) for o, n in zip(old_lines, new_lines) if o != n]
+        self.assertEqual(len(old_lines), len(new_lines))
+        self.assertEqual([(f"              {FALLBACK}",
+                           f"              {COMPLETE} || {FALLBACK}")], changed)
+
+
+class ParkStepThreeLinesTest(_StepHarness):
+    """The result step executed with the real renderer beside it, and with
+    one that cannot run: the park is never lost to the renderer."""
+
+    STEP = RESULT_STEP
+
+    def _park(self, escalation: str) -> tuple[str, list]:
+        self.escalation.write_text(escalation, encoding="utf-8")
+        done, posted, _ = self._exec({
+            "FAKE_PR": "", "CARD": "DRE-77", "CARD_DESCRIPTION": DESCRIPTION,
+            "RECORD_BRANCH": "agent/DRE-77-proof-record",
+            "ESCALATION_FILE": str(self.escalation),
+            "BUREAU_SERVER_URL": "https://github.example",
+            "BUREAU_REPOSITORY": "acme/widgets", "BUREAU_RUN_ID": "42",
+            "CLAUDE_EXECUTION_FILE": ""})
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(["proof-waiting", "comment", "advance"], [c[1] for c in posted])
+        self.assertEqual(["Green Light", "Hand-work,In Review"], posted[2][3:])
+        return posted[1][3], posted
+
+    def test_a_prose_escalation_parks_with_none_given(self):
+        shutil.copy(ROOT / "scripts" / "console_escalation.py",
+                    self.tmp / ".bureau-pipeline" / "scripts")
+        ce = _console_escalation()
+        ask, _ = self._park(PROSE)
+        self.assertTrue(ask.startswith(PARK_RECEIPT), ask)
+        self.assertIn(PROSE.rstrip("\n"), ask)
+        self.assertTrue(ask.endswith(f"Run: {RUN_URL}"), ask)
+        got = ce.parse(ask)
+        self.assertIsNotNone(got, ask)
+        self.assertIsNone(got.recommendation)
+        self.assertIn(f"{ce.RECOMMENDATION_PREFIX} {NONE_GIVEN}\n", ask)
+        self.assertEqual([], ce.problems(ask))
+
+    def test_a_renderer_that_cannot_run_still_parks_the_file_verbatim(self):
+        (self.tmp / ".bureau-pipeline" / "scripts" / "console_escalation.py").write_text(
+            "import sys\nsys.exit('console_escalation: broken')\n")
+        ask, _ = self._park(PROSE)
+        self.assertEqual(f"{PARK_RECEIPT}\n\n{PROSE}\nRun: {RUN_URL}", ask)
+        self.assertNotIn(_console_escalation().RECOMMENDATION_PREFIX, ask)
+
+
 if __name__ == "__main__":
     unittest.main()
