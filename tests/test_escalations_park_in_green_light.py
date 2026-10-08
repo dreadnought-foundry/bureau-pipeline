@@ -24,12 +24,17 @@ the other three untouched — which is the whole reason this file exists.
 """
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import console_escalation  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import step_shell  # noqa: E402
@@ -229,6 +234,187 @@ class HumanParkGateTest(unittest.TestCase):
         self.assertEqual(
             (BROKEN_CARD_LANE, DECISION_LANE), reconcile.PARKED_STATES
         )
+
+
+#: The file the agent writes its question to, and the one the branch completes.
+ESCALATION_FILE = "/tmp/agent-escalation.txt"  # nosec B108 — the prompt's own path
+
+#: Who the completed Recommendation line says stated nothing (DRE-3911).
+BUILD_AGENT = "the build agent"
+
+REPORT_SCRIPT = os.path.join("scripts", "report_agent_result.sh")
+
+
+def complete_command() -> str:
+    """The one shell line in the escalation branch that runs `complete`, its
+    `||` fallback included — the exact text the step executes."""
+    found = [line.strip() for line in escalation_branch().split("\n")
+             if "console_escalation.py complete" in line]
+    assert len(found) == 1, f"expected one `complete` line, found {found}"
+    return found[0]
+
+
+def run_complete(text: str, *, renderer: bool = True) -> str:
+    """Stage `text` as the agent's question and run the branch's own
+    `complete` line through bash, from a directory where `.bureau-pipeline` is
+    this checkout — or, with `renderer=False`, where it is missing."""
+    td = tempfile.mkdtemp()
+    try:
+        if renderer:
+            os.symlink(ROOT, os.path.join(td, ".bureau-pipeline"))
+        staged = os.path.join(td, "agent-escalation.txt")
+        with open(staged, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        line = complete_command().replace(ESCALATION_FILE, shlex.quote(staged))
+        proc = subprocess.run(["bash", "-c", "set -e\n" + line], cwd=td,
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        return proc.stdout
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+class TheQuestionCarriesTheThreeLinesTest(unittest.TestCase):
+    """DRE-3911: the question the CEO reads carries the three declared lines.
+    The branch points at `console_escalation.py complete`; it never names a
+    prefix itself."""
+
+    def test_the_branch_completes_the_question_before_it_posts_and_moves(self):
+        branch = escalation_branch()
+        at = branch.index("console_escalation.py complete")
+        self.assertLess(branch.index("🙋"), at)
+        self.assertLess(at, branch.index("linear_ops.py comment"))
+        self.assertLess(at, branch.index(f'"{DECISION_LANE}"'))
+
+    def test_the_complete_line_names_the_file_and_the_build_agent(self):
+        words = shlex.split(complete_command().split("||")[0])
+        self.assertEqual(
+            ["python3", ".bureau-pipeline/scripts/console_escalation.py",
+             "complete", ESCALATION_FILE], words[:4])
+        self.assertEqual(BUILD_AGENT, words[words.index("--who") + 1])
+        self.assertTrue(words[words.index("--question") + 1].endswith("?"))
+
+    def test_the_file_is_cat_only_as_the_fallback(self):
+        branch = escalation_branch()
+        cats = [m.start() for m in
+                re.finditer(re.escape(f"cat {ESCALATION_FILE}"), branch)]
+        self.assertEqual(1, len(cats), branch)
+        self.assertTrue(branch[:cats[0]].rstrip().endswith("||"), branch)
+        self.assertTrue(complete_command().endswith(
+            f"|| cat {ESCALATION_FILE}"))
+
+    def test_the_branch_names_no_prefix(self):
+        branch = escalation_branch()
+        for _, prefix in console_escalation._LINES:
+            self.assertNotIn(prefix, branch)
+        self.assertNotIn(console_escalation.NONE_GIVEN, branch)
+
+
+class TheCompleteCommandRunsTest(unittest.TestCase):
+    """The branch's own `complete` line, run through bash on staged files."""
+
+    PROSE = ("The export the old console read still ships, and nothing in "
+             "this repository reads it any more.\n\n"
+             "Keeping it costs a test suite; dropping it breaks anyone outside "
+             "the repository who still reads it.\n\n"
+             "Should the build keep the old export, or drop it now?\n")
+
+    def test_plain_prose_parks_with_none_given(self):
+        out = run_complete(self.PROSE)
+        self.assertTrue(out.startswith(self.PROSE.rstrip()), out)
+        last = out.rstrip("\n").split("\n")[-3:]
+        self.assertEqual([], console_escalation.problems("\n".join(last)), last)
+        self.assertEqual([], console_escalation.problems(out), out)
+        esc = console_escalation.parse("\n".join(last))
+        self.assertEqual(
+            "Should the build keep the old export, or drop it now?",
+            esc.question)
+        self.assertIsNone(esc.recommendation)
+        recommendation = last[2][len(console_escalation.RECOMMENDATION_PREFIX):]
+        self.assertEqual(
+            "none given — the build agent stated no recommendation",
+            recommendation.strip())
+
+    def test_a_question_that_carries_the_three_lines_comes_back_unchanged(self):
+        lines = console_escalation.render(console_escalation.Escalation(
+            finding="The old export still ships and nothing here reads it.",
+            question="Should the build drop the old export?",
+            recommendation="Drop it",
+            why="nothing in the fleet reads it",
+        ))
+        text = "The export is dead weight.\n\n" + lines
+        # `print` ends the last line; not one byte of the body changes.
+        self.assertEqual(text + "\n", run_complete(text))
+
+    def test_a_renderer_that_cannot_run_still_posts_the_question(self):
+        self.assertEqual(self.PROSE, run_complete(self.PROSE, renderer=False))
+
+
+def _git(*args: str) -> str | None:
+    try:
+        done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                              text=True, check=False)
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _script_before_and_after() -> tuple[str, str] | None:
+    """The script before and after DRE-3911: the commit that first ran
+    `console_escalation.py complete` against its parent, or — before that
+    commit exists — the working tree against its merge base with `main`."""
+    log = _git("log", "--format=%H", "--reverse", "-S",
+               "console_escalation.py complete", "--", REPORT_SCRIPT)
+    first = (log or "").split()
+    if first:
+        before = _git("show", f"{first[0]}^:{REPORT_SCRIPT}")
+        after = _git("show", f"{first[0]}:{REPORT_SCRIPT}")
+        if before is not None and after is not None:
+            return before, after
+    base = (_git("merge-base", "HEAD", "origin/main") or "").strip()
+    if base:
+        before = _git("show", f"{base}:{REPORT_SCRIPT}")
+        if before is not None:
+            return before, read(REPORT_SCRIPT)
+    return None
+
+
+_ESCALATION_REGION = re.compile(
+    r"(\nelif \[ -f /tmp/agent-escalation\.txt \].*?)(?=\nelif \[ -f /tmp/agent-blocker\.txt \])",
+    re.S)
+_DEAD_RUN_BLOCK = re.compile(r"\nelse\n  # The dead-run or turn-cap decision.*?\nfi\n", re.S)
+
+
+class NoOtherBranchChangedTest(unittest.TestCase):
+    """DRE-3911 edits the escalation branch and nothing else in the script —
+    above all not the dead-run block DRE-6178 owns."""
+
+    def _pair(self) -> tuple[str, str]:
+        pair = _script_before_and_after()
+        if pair is None:
+            # The unit job checks out full history and sets this, so there the
+            # missing history is a failure, never a green skip.
+            if os.environ.get("BUREAU_REQUIRE_GIT_HISTORY"):
+                self.fail("no git history for the script, and this job requires it")
+            self.skipTest("no git history for the script (a shallow checkout)")
+        return pair
+
+    def test_the_escalation_branch_is_what_changed(self):
+        before, after = self._pair()
+        self.assertNotIn("console_escalation.py complete",
+                         _ESCALATION_REGION.search(before).group(1))
+        self.assertIn("console_escalation.py complete",
+                      _ESCALATION_REGION.search(after).group(1))
+
+    def test_everything_outside_the_escalation_branch_is_unchanged(self):
+        before, after = self._pair()
+        self.assertEqual(_ESCALATION_REGION.sub("", before),
+                         _ESCALATION_REGION.sub("", after))
+
+    def test_the_dead_run_block_is_byte_identical(self):
+        before, after = self._pair()
+        self.assertEqual(_DEAD_RUN_BLOCK.search(before).group(0),
+                         _DEAD_RUN_BLOCK.search(after).group(0))
 
 
 if __name__ == "__main__":
