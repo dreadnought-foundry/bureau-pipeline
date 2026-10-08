@@ -622,6 +622,11 @@ class TestReasonOfAndRespects:
         assert hold.respects(["needs-human"], bodies, "sweep", doc=doc) is True
         assert hold.respects(["needs-human"], bodies, "medic", doc=doc) is False
 
+    def test_a_manual_hold_holds_a_reader_its_row_does_not_name(self):
+        doc = _doc([_row("scripts/a.py", "stall", "x")])
+        doc["sites"][0]["readers"] = ["sweep"]
+        assert hold.respects(["needs-human"], ["talk"], "medic", doc=doc) is True
+
     def test_today_every_row_names_every_reader(self):
         for row in _real_doc()["sites"]:
             assert sorted(row["readers"]) == sorted(READERS), row
@@ -666,6 +671,15 @@ class TestLiftDue:
 
     def test_repo_on_rail_with_no_repo_label_does_not_lift(self):
         assert _due("no-route", "repo:portico", labels=("needs-human",)) is None
+
+    def test_repo_on_rail_with_one_of_two_repo_labels_off_the_rail_does_not_lift(self):
+        assert _due("no-route", "repo:elsewhere",
+                    labels=("needs-human", "repo:portico", "repo:elsewhere")) is None
+
+    def test_repo_on_rail_with_both_repo_labels_on_the_rail_lifts(self):
+        assert _due("no-route", "repo:legacy-site",
+                    labels=("needs-human", "repo:portico", "repo:agent-bureau")
+                    ) == "repo-on-rail"
 
     @pytest.mark.parametrize("lane", ["Done", "Canceled"])
     @pytest.mark.parametrize("reason", REASONS)
