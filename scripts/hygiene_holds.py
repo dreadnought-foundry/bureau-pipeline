@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The hygiene agent's holds lane (DRE-6180): a hold lifts itself when its
-reason clears.
+"""The hygiene agent's holds lane (DRE-6180, DRE-6273): a hold lifts itself
+when its reason clears, and the card goes back where the pipeline resumes it.
 
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. The
 `needs-human` label is the pipeline's hold, and `scripts/hold.py` (DRE-6173)
@@ -32,10 +32,21 @@ Each candidate is scoped with `hygiene.in_scope` like every other lane's.
    a `dead-run-cap` or `turn-cap-park` stamp. Nothing moves the card: the run
    already started, and an operator's `unpark` already moved it. This lane
    reads the run receipt and never starts a run.
-3. **`new-head` and `repo-on-rail`** leave a card in a lane nothing resumes
-   (Green Light, Triage), so their lift is finished only by a lane move, and
-   that move is DRE-6273's. Until it lands such a card is a `Left` row reading
-   `LANE_MOVE_WHY`, nothing is written, and `hold.lift_due` is not asked.
+3. **`new-head` and `repo-on-rail`** (DRE-6273) — asked of `hold.lift_due`
+   with the facts each reads. For `new-head`, the head sha of the card's open
+   pull request off the leg's own listing (`Board.prs`): the newest whose
+   head branch carries the card's identifier (`card_pr.matches_card`), and no
+   pull request means not lifted. For `repo-on-rail`, the card's current
+   labels off the candidate read and the slugs of `config/repo-map.json` —
+   the live `repo:` label decides, never the stamp's qualifier (DRE-6173).
+   These lifts leave a card in a lane nothing resumes, so each takes a third
+   write after the label and the receipt (`RETURNS`): a `review-cap-spent`
+   card in Green Light (DRE-6181) and a `fix-dispute` or `unfixable-check`
+   card in Triage (DRE-6179) go to In Review, the lane their open pull
+   request says they are in; a `no-route` card in Triage (DRE-6177, left
+   there by the Triage lane, DRE-6190) goes to Planning, whose exit routes it
+   afresh. A card in any other lane is two writes and no move. The label is
+   off before the move, so the run the move fires is not refused for it.
 4. **A `manual` hold** — `epic-rereview-twice`, `plan-critic-bound`, `manual`,
    or the label with no stamp — is a person's, and nothing here lifts it
    outside Done or Canceled. A label over a SPENT stamp (one a newer lift
@@ -48,20 +59,22 @@ Each candidate is scoped with `hygiene.in_scope` like every other lane's.
 
 A lift is two writes, in order: the label off, then the agent's own receipt
 (`hygiene.receipt`, act `hygiene-hold-clear`), whose evidence names what was
-read. An archived card is unarchived for them and re-archived after them —
-four writes — so the lane never depends on whether Linear takes a label write
-on an archived issue, and the card ends archived as it began. This lane
-proposes no lane write and no `gh` write. The core's (tag, cause) key and the
-label's absence both keep a lift from repeating: a lifted card is not a
-candidate on the next pass.
+read — then the lane move, for a lift `RETURNS` names. An archived card is
+unarchived for them and re-archived after them — four writes — so the lane
+never depends on whether Linear takes a label write on an archived issue, and
+the card ends archived as it began; an archived card is never moved, because
+only a closed one is lifted. This lane proposes no lane write but In Review
+and Planning, and no `gh` write. The core's (tag, cause) key and the label's
+absence both keep a lift from repeating: a lifted card is not a candidate on
+the next pass.
 
 ## The per-pass cap
 
 At most `HYGIENE_HOLDS_MAX_LIFTS` lifts a pass (default `DEFAULT_MAX_LIFTS`,
 read before anything else; a value that is not a positive integer raises).
-Order inside the cap: the lifts met on an open card first, oldest stamp
-first; then the `card-closed` lifts, oldest stamp first, and the cards with
-no live stamp last by identifier. Every lift over the cap is a `Left` row
+Order inside the cap: the lifts met on an open card first (the four kinds
+above, moving or not), oldest stamp first; then the `card-closed` lifts,
+oldest stamp first, and the cards with no live stamp last by identifier. Every lift over the cap is a `Left` row
 reading `over the per-pass cap of <n> — carried to the next pass`, so the
 summary names the carry and an operator can watch it drain.
 
@@ -77,6 +90,7 @@ import re
 import sys
 from datetime import datetime
 
+import card_pr
 import dead_run
 import hold
 import hygiene
@@ -92,14 +106,18 @@ DEFAULT_MAX_LIFTS = 40
 #: Issues a page of the candidate read.
 PAGE = 50
 
-#: The lift kinds this lane asks `hold.lift_due` about: met on an open card,
-#: and finished by the label and the receipt alone.
-OPEN_LIFTS = ("run-started", "unpark-marker")
+#: The lift kinds this lane asks `hold.lift_due` about on an open card.
+OPEN_LIFTS = ("run-started", "unpark-marker", "new-head", "repo-on-rail")
 
-#: The lift kinds that also need a lane move, and the row each one gets until
-#: DRE-6273 lands that move.
-LANE_MOVE_LIFTS = ("new-head", "repo-on-rail")
-LANE_MOVE_WHY = "lift needs a lane move — lands with DRE-6273"
+#: Where a lift sends the card (DRE-6273): the hold's reason and the lane it
+#: parked the card in → the lane the pipeline resumes it in. The third write,
+#: after the label and the receipt; any other pairing moves nothing.
+RETURNS = {
+    ("review-cap-spent", "Green Light"): "In Review",
+    ("fix-dispute", "Triage"): "In Review",
+    ("unfixable-check", "Triage"): "In Review",
+    ("no-route", "Triage"): "Planning",
+}
 
 #: Every issue carrying the hold, in any lane, archived ones included.
 CANDIDATES_QUERY = """query($after: String) {
@@ -208,14 +226,17 @@ def _ident_key(ident: str) -> tuple:
 
 
 def _lift(card: dict, ctx: hygiene.Context, reason: str, because: str,
-          evidence: list) -> hygiene.Action:
-    """The label off and the receipt — between an unarchive and a re-archive
-    for a card the read said was archived."""
+          evidence: list, move_to: str | None = None) -> hygiene.Action:
+    """The label off and the receipt, then the lane move when there is one —
+    between an unarchive and a re-archive for a card the read said was
+    archived."""
     archived = bool(card.get("archivedAt"))
     evidence = [*evidence, ARCHIVED] if archived else list(evidence)
     cause = f"reason={reason} because={because}"
     writes = [hygiene.linear_label(card, hold.HOLD_LABEL, add=False),
               hygiene.linear_comment(card, hygiene.receipt(ACT, cause, evidence, ctx.now))]
+    if move_to:
+        writes.append(hygiene.linear_state(card, move_to))
     if archived:
         writes = [hygiene.linear_archived(card, archived=False), *writes,
                   hygiene.linear_archived(card, archived=True)]
@@ -226,6 +247,20 @@ def _lift(card: dict, ctx: hygiene.Context, reason: str, because: str,
 def _left(card: dict, why: str, recommendation: str) -> hygiene.Left:
     return hygiene.Left(lane=LANE, target=card["identifier"], why=why,
                         recommendation=recommendation)
+
+
+def _open_pull(card: dict, board: hygiene.Board, ctx: hygiene.Context):
+    """`(repo, pull request)` for the card's open pull request off the leg's
+    listing — the newest whose head branch carries the card's identifier, in
+    the repo its `repo:` label maps to, or in any listed repo when it maps to
+    none — else None."""
+    slug = hygiene._repo_slug(card)
+    mapped = ctx.repo_map.get(slug) if slug else None
+    repos = [mapped] if mapped else sorted(board.prs)
+    found = [(repo, pull) for repo in repos for pull in board.prs.get(repo) or []
+             if card_pr.matches_card(pull.get("headRefName"), card["identifier"])]
+    newest = card_pr.newest([pull for _, pull in found])
+    return next(((repo, pull) for repo, pull in found if pull is newest), None)
 
 
 def _newer_fact(stamp: dict, thread: list, kind: str) -> str:
@@ -246,7 +281,7 @@ def _newer_fact(stamp: dict, thread: list, kind: str) -> str:
     return f"{what} at {when}" if when else what
 
 
-def plan_card(card: dict, ctx: hygiene.Context):
+def plan_card(card: dict, ctx: hygiene.Context, board: hygiene.Board):
     """`(order key, Action)` for a lift, a `Left` row, or None."""
     lane = (card.get("state") or {}).get("name")
     thread = _thread(card)
@@ -275,19 +310,29 @@ def plan_card(card: dict, ctx: hygiene.Context):
                      "card is free to move; nothing lifts it outside Done or Canceled")
 
     kind = hold.CONTRACT_LIFTS.get(stamp["reason"])
-    if kind in LANE_MOVE_LIFTS:
-        return _left(card, LANE_MOVE_WHY,
-                     f"its {kind} lift also moves the card out of {lane}; until DRE-6273 "
-                     "lands that move, a person who sees the lift met takes the label off "
-                     "and moves the card")
     if kind not in OPEN_LIFTS:
         return None
-    due = hold.lift_due(stamp, lane=lane, labels=_labels(card), pr_head=None,
-                        rail_slugs=set(ctx.repo_map), bodies=bodies)
-    if due not in OPEN_LIFTS:
+    found = _open_pull(card, board, ctx) if kind == "new-head" else None
+    if kind == "new-head" and found is None:
         return None
-    action = _lift(card, ctx, stamp["reason"], due,
-                   [f"stamp at={stamp['at']}", _newer_fact(stamp, thread, due)])
+    pr_head = (found[1].get("headRefOid") or None) if found else None
+    labels = _labels(card)
+    due = hold.lift_due(stamp, lane=lane, labels=labels, pr_head=pr_head,
+                        rail_slugs=set(ctx.repo_map), bodies=bodies)
+    if due != kind:
+        return None
+    evidence = [f"stamp at={stamp['at']}"]
+    if due == "new-head":
+        repo, pull = found
+        evidence += [f"open pull request {repo}#{pull.get('number')} head {pr_head}",
+                     f"lane {lane}"]
+    elif due == "repo-on-rail":
+        live = " ".join(n for n in labels if n.lower().startswith("repo:"))
+        evidence += [f"label {live} on the rail", f"lane {lane}"]
+    else:
+        evidence.append(_newer_fact(stamp, thread, due))
+    action = _lift(card, ctx, stamp["reason"], due, evidence,
+                   RETURNS.get((stamp["reason"], lane)))
     return (0, _stamped_at(stamp, thread), _ident_key(card["identifier"])), action
 
 
@@ -318,7 +363,7 @@ def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
         if not card.get("identifier") or not _held(card) or not hygiene.in_scope(ctx, card):
             continue
         try:
-            item = plan_card(card, ctx)
+            item = plan_card(card, ctx, board)
         except hygiene.Forbidden:
             raise
         except (RuntimeError, ValueError, KeyError, TypeError) as e:
