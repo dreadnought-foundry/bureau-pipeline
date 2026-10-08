@@ -263,6 +263,21 @@ class TestTheDecisionIsDeadRuns:
         assert kwargs["split_tried"] is dead_run.split_tried(bodies) is False
         assert kwargs["footprint"] == FILES
         assert kwargs["run_url"] == ""
+        assert kwargs["cap"] == reconcile.REQUEUE_CAP
+
+    @pytest.mark.parametrize("cap", [1, 3])
+    def test_a_custom_dead_run_cap_still_hands_off_first(self, monkeypatch, cap):
+        """`DEAD_RUN_CAP` can move the sweep's cap off dead_run's default of 2:
+        the sweep's cap is the one decide is asked against, so the first
+        strike there is still the hand-off, never a bare park."""
+        monkeypatch.setattr(reconcile, "REQUEUE_CAP", cap)
+        linear = _Linear(_at_cap())
+        linear.run(_card(), cap)
+        assert linear.kinds() == ["comment", "advance"]
+        receipt = linear.comments()[0]
+        assert receipt.startswith(hold.DEAD_SPLIT_MARK)
+        assert f"dead run {cap + 1}/{cap + 1}" in receipt
+        assert linear.writes[1] == ("advance", "DRE-7100", "Planning", "In Progress")
 
     def test_the_hand_off_quotes_every_earlier_death_in_order(self):
         """Two refused pushes and one silent death since the reset: the
