@@ -12,12 +12,11 @@ So this greps the five directories that ARE the pipeline and fails naming every
 file that still carries one. `docs/` and `tests/` are history and are not
 scanned. The word "wave" alone is not a marker — `Wave 1.5` names a programme.
 
-One file under `config/` is history too and is skipped by name:
-`config/split-ledger.json` is DERIVED (`scripts/split_ledger.py derive`, on the
-`split-ledger.yml` schedule) from the files each past split piece's merged pull
-requests touched. It lists `scripts/wave_plan.py` because a merged pull request
-edited it; deleting that line would be rewritten back by the next derive, and
-would falsify the record it exists to keep.
+No file under `config/` is skipped any more. The one that was — the committed
+split ledger, derived from the files each past split piece's merged pull
+requests touched, which listed a wave module because a merged pull request
+edited it — is no longer committed (DRE-6056): the plan job derives the ledger
+into its runner's temp directory at the start of each run.
 
 Run: python3 -m pytest tests/test_no_wave_markers.py -v
 """
@@ -41,8 +40,9 @@ MARKERS = (
     "route == 'wave'",
 )
 
-#: Derived history, not live pipeline — see the module docstring.
-HISTORY = frozenset({"config/split-ledger.json"})
+#: Derived history, not live pipeline — see the module docstring. Empty since
+#: DRE-6056; a new entry should be argued for, not added to make a test pass.
+HISTORY: frozenset = frozenset()
 
 
 def _files():
@@ -85,11 +85,10 @@ def test_the_scan_reads_the_files_it_claims_to():
     assert "standards/card-quality.md" in scanned
 
 
-def test_the_history_exemption_is_only_the_derived_ledger():
-    """The one skipped file is generated, and says so on its own first lines."""
-    assert HISTORY == {"config/split-ledger.json"}
-    ledger = (ROOT / "config" / "split-ledger.json").read_text(encoding="utf-8")
-    assert '"generated_by": "scripts/split_ledger.py derive"' in ledger
+def test_the_history_exemption_is_empty():
+    """The derived ledger it held is no longer committed (DRE-6056), so every
+    file under the scanned directories is read."""
+    assert HISTORY == frozenset()
 
 
 def test_a_bare_wave_is_not_a_marker():

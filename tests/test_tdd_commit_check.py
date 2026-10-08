@@ -130,10 +130,11 @@ class ClassifyPathTest(unittest.TestCase):
         self.assertTrue(ok, reason)
 
     def test_the_bot_branches_get_no_identity_exemption(self):
-        """The exemption the CEO chose is the PATH, not the branch. The
-        scheduled job's branch buys its pull request no standards-sync
-        identity exemption — a `.py` change riding on it is still code."""
-        for branch in ("bot/split-ledger",):
+        """The exemption the CEO chose is the PATH, not the branch. A `bot/`
+        branch that is not standards-sync buys its pull request no
+        standards-sync identity exemption — a `.py` change riding on it is
+        still code."""
+        for branch in ("bot/anything-else",):
             with self.subTest(branch=branch):
                 self.assertFalse(check_tdd_commits.is_standards_sync_pr(
                     branch, "agent-bureau-bot", ["agent-bureau-bot"]))

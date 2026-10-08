@@ -56,13 +56,10 @@ SLUG = "bureau-pipeline"
 
 #: merge-gate.yml's branch gate, spelled as the shell spells it. Written once
 #: here and asserted against the workflow below (DRE-3879 added the two
-#: scheduled jobs' own branches; DRE-6049 retired the drift watch, so
-#: `bot/split-ledger` is the one left); two copies of this string in one
-#: module is how it comes to name a gate nobody runs.
-MERGE_GATE_PATTERN = (
-    "agent/*|repair/*|dependabot/*|bot/standards-sync"
-    "|bot/split-ledger"
-)
+#: scheduled jobs' own branches; DRE-6049 and DRE-6056 retired both jobs, so
+#: neither is left); two copies of this string in one module is how it comes
+#: to name a gate nobody runs.
+MERGE_GATE_PATTERN = "agent/*|repair/*|dependabot/*|bot/standards-sync"
 
 
 def wf(name: str) -> str:

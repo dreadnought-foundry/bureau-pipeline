@@ -262,7 +262,7 @@ def test_a_sentence_without_an_open_path_says_so(either_rule):
 # ── which heads get the block ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("branch", ["dependabot/x", "repair/DRE-1-abc", "bot/split-ledger"])
+@pytest.mark.parametrize("branch", ["dependabot/x", "repair/DRE-1-abc", "bot/standards-sync"])
 def test_machine_heads_get_no_block(either_rule, branch):
     for card in ("", "DRE-1"):
         for body in (NO_LINE, NONE_LINE, WELL_FORMED, UNPARSABLE):
