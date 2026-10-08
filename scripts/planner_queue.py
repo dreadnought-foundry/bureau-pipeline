@@ -116,6 +116,19 @@ THE RULES, in the order the ledger applies them.
     claim, and the earlier never counts the later — that is what bounds the
     fleet at the cap under every interleaving. Nothing revokes an admitted
     claim but its own release, the TTL, or the sweep's run-gone check.
+  * A CLAIM NEVER PASSES A CARD THAT IS WAITING (DRE-6329). Under the cap is
+    not enough: when another card's line entry is earlier in claim order
+    than this claim, the claim does not take the free slot. It posts
+    `waiting` at its place, counted exactly as a refusal at the cap is — an
+    approval's `in progress` claim at the front. Only `next` hands a free
+    slot to the head of the line: the releasing run's pick, and the sweep's
+    backstop for a slot nothing is handing on. The card `next` dispatched
+    (its newest receipt before the claim an in-grace `dispatched`) is that
+    hand-off arriving and is admitted under the cap, whoever still waits. A
+    card that joins the line after the claim was posted was not waiting when
+    the run arrived, and does not hold it back. On 2026-10-08 a card moved to
+    Planning claimed in the second DRE-6287's run released, and was admitted
+    past two epics already waiting; that run's `next` then found nobody.
   * THE HANDOVER. A planner run's own re-dispatch (`re-review`,
     `review-retry`) carries the sender's run id as `sent_by_run`. When that
     run holds the card's open claim, the child posts `claimed … · from run
@@ -628,15 +641,20 @@ class _View:
     def since_release(self) -> list:
         return [r for i, r in self.effective() if i > self.release_point]
 
-    def line_entry(self) -> str | None:
+    def entry_receipt(self) -> Receipt | None:
+        """The receipt the card's line entry is read off."""
         if self.state() not in ("waiting", "dispatched"):
             return None
         after = self.since_release()
         for state in ("waiting", "dispatched"):
             found = [r for r in after if r.state == state]
             if found:
-                return found[0].created_at
+                return found[0]
         return None
+
+    def line_entry(self) -> str | None:
+        entry = self.entry_receipt()
+        return entry.created_at if entry is not None else None
 
     def _continued(self, run: str) -> Receipt | None:
         """The claim a re-run of `run` continues (DRE-5378): the one `run`'s
@@ -840,6 +858,30 @@ def admits(ledger: Ledger, claim: Receipt, cap: int) -> bool:
     return taken_before(ledger, claim) < cap
 
 
+def waiting_ahead(ledger: Ledger, claim: Receipt) -> list:
+    """The other cards already in line when `claim` was posted: each waiting
+    card whose line entry is earlier in claim order than the claim's slot
+    (DRE-6329). A card that joins the line after the claim was not waiting
+    when this run arrived, so the claim passes nobody by taking a slot ahead
+    of it — claim order still decides between claims in flight."""
+    mine = ledger.slot_key(claim)
+    ahead = []
+    for w in ledger.waiting:
+        if w.card == claim.card:
+            continue
+        entry = ledger._views[w.card].entry_receipt()
+        if entry is not None and _key(entry) < mine:
+            ahead.append(w)
+    return ahead
+
+
+def handed_a_slot(ledger: Ledger, claim: Receipt) -> bool:
+    """`claim`'s card stood `dispatched` inside the grace when the claim was
+    posted: `next` (a release's, or the sweep's) already gave it the slot."""
+    view = ledger._views.get(claim.card)
+    return view is not None and view.before(claim).state() == "dispatched"
+
+
 def expired_claims(ledger: Ledger, now) -> list:
     at = _now(now)
     ttl = timedelta(minutes=ledger.ttl_minutes)
@@ -875,9 +917,12 @@ def _place(led: Ledger, mine: Receipt, limit: int) -> tuple[int, int]:
             continue
         earlier_reserved = sum(1 for d in led.reserved
                                if d.card != r.card and _key(d) < _key(r))
+        # `mine` is refused, so it holds no slot ahead of anyone (DRE-6329).
         taken = sum(1 for x in led.running
-                    if x.card != r.card and led.slot_key(x) < led.slot_key(r))
-        if taken + earlier_reserved < limit:
+                    if x.card not in (r.card, mine.card)
+                    and led.slot_key(x) < led.slot_key(r))
+        if taken + earlier_reserved < limit and (not waiting_ahead(led, r)
+                                                 or handed_a_slot(led, r)):
             continue  # admitted, or will be
         total += 1
         entry = _dt(led._views[r.card].arrival(r))
@@ -1056,7 +1101,11 @@ def settle_claim(linear_ops, identifier, *, run_id, repo, trigger_state, reason=
                       trigger_state=trigger_state, because="duplicate")
         return _answer(False, waiting=len(led.waiting), duplicate=True)
     limit = cap(cfg)
-    if admits(led, mine, limit):
+    # A free slot is not this run's to take while a card already waits for
+    # one (DRE-6329): only `next` hands a slot to the head of the line. The
+    # card `next` dispatched is that hand-off arriving, and is admitted.
+    if admits(led, mine, limit) and (not waiting_ahead(led, mine)
+                                     or handed_a_slot(led, mine)):
         return _answer(True, waiting=len(led.waiting))
     # Refused: the place it waits at is counted in the order the line is
     # served in, the CEO's order included (DRE-5807). Read only now — an
