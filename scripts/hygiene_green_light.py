@@ -61,8 +61,8 @@ write and one `Left` row whose recommendation is the escalation's own
 recommendation line: the note's declared Recommendation line when it
 carries the three lines (`console_escalation`, DRE-3908 and DRE-6196), read
 off the whole note since those lines sit above the `**Why it needs you:**`
-block, and otherwise a recommendation line in that block. A plan both critics passed, with every child carrying
-criteria, yields nothing: it waits on the CEO's approval, which is his act
+block, and otherwise a recommendation line in that block. A plan both critics
+passed, with every child carrying criteria, yields nothing: it waits on the CEO's approval, which is his act
 (DRE-5268) and never this agent's. Any other row is `Left` for a person.
 
 This lane returns only `linear_comment` and `linear_state(card, "Planning")`.
