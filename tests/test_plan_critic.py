@@ -4092,6 +4092,7 @@ class TheSecondCriticReadsBeforeGreenLight(unittest.TestCase):
 # ===========================================================================
 
 import console_escalation  # noqa: E402
+import planning_escalation  # noqa: E402
 
 #: The one-off text's opening sentence for a QUESTION — kept, and the
 #: "The question: …" paragraph and the closing ask under it replaced.
