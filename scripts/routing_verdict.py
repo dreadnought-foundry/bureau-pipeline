@@ -111,6 +111,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -163,10 +164,33 @@ STALE_VERDICT_LANES = ("Intake", "Green Light", "Triage", "Canceled", "Duplicate
 # that comment as this notice and never say anything.
 STALE_VERDICT_NEEDLE = f"🚨 {STALE_VERDICT_TAG}:"
 
-# The lane a second trip leaves from. The planning exit does not re-stamp a
-# verdict the card already carries (`stamp_refusal`: "nothing to add"), so the
-# exit itself is what a re-planned card has to show for its second trip.
+# The lane a second trip leaves from. Since DRE-4884 the planning exit retires
+# the verdict a re-planned card carried and stamps a fresh one, so a second
+# trip leaves a newer verdict behind; the exit itself still counts as the
+# approval for a card re-planned before that, which kept its old verdict.
 PLANNING_LANE = "Planning"
+
+# A verdict RETIRED by the planning exit (DRE-4884). Sending a card back to
+# Planning is itself a statement that its routing is in question, so a card
+# that re-entered Planning after its verdict was written has that verdict
+# retired, and leaves with the one Planning reads now. Before this the exit
+# refused to stamp ("the card already carries WORKBENCH") and the sweep routed
+# the card on the verdict it had just been rescued from: DRE-4724 went back to
+# Todo marked `hand-built` on 2026-09-25, as DRE-4496, DRE-6143 and DRE-5960
+# did. Retiring never edits or deletes the old comment — it stays on the card
+# as the record — and the note says which verdict, when, and why.
+#
+# The note names each verdict it retires by `fingerprint`, never by position:
+# some readers hold a card's comments newest-first, and a reading that retired
+# "everything before the note" would revive the old verdict there.
+RETIRED_TAG = "verdict-retired"
+RETIRED_MARK = "🪦"
+
+# The labels a retirement takes off with the verdict that put them on, when
+# the new verdict does not put them on too. `hand-built` alone: it is the mark
+# that silences the sweeps, so a stale one is a card nothing builds and nothing
+# reports. `no-code` stays, because a person may mean it on its own.
+RETIREMENT_LIFTS = ("hand-built",)
 
 # The lanes the sweep promotes a Backlog card INTO are READ, not declared
 # (DRE-5321). Until then one constant said `Todo`, because THREE of the five
@@ -194,6 +218,11 @@ PROMOTER = "reconcile.py"
 _VERDICT_LINE = re.compile(
     rf"^\s*{VERDICT_MARK}\s*{VERDICT_TAG}:\s*\**([A-Z][A-Z ]*[A-Z])\b"
 )
+
+# The retirement note, anchored the same way, and the one line per verdict it
+# retires. Read only inside a comment that OPENS with the note's marker.
+_RETIRED_LINE = re.compile(rf"^\s*{RETIRED_MARK}\s*{RETIRED_TAG}:")
+_RETIRED_PRINT = re.compile(r"`retired:([0-9a-f]{16})`")
 
 # Acceptance criteria are checkbox items and nothing else — that is what
 # standards/card-quality.md requires a card to carry, and reading prose instead
@@ -604,8 +633,15 @@ def _evidence_problems(key: str, signal: dict) -> list:
 # --------------------------------------------------------------------------- #
 
 
-def verdict_comment(name: str, why: str, doc: dict | None = None) -> str:
-    """The comment that IS the verdict. One card, one of these."""
+def verdict_comment(name: str, why: str, doc: dict | None = None, *,
+                    replaces=()) -> str:
+    """The comment that IS the verdict. One card, one of these.
+
+    `replaces` is `retired_pairs()` of the verdicts the planning exit retired
+    on the way to writing this one (DRE-4884). Naming their fingerprints is
+    what keeps a restamp unique: WORKBENCH retired and WORKBENCH written again
+    for the same reason would otherwise be the same text, and read as retired.
+    """
     entry = record(name, doc)
     if not (why or "").strip():
         raise RoutingError(
@@ -633,24 +669,61 @@ def verdict_comment(name: str, why: str, doc: dict | None = None) -> str:
             "This card is **not** dispatched to the fleet: the promoter reads "
             "this verdict and leaves it where a person will find it."
         )
+    if replaces:
+        lines.append(
+            "**Replaces:** "
+            + ", ".join(f"{old} (`{print_}`)" for old, print_ in replaces)
+            + " — retired when the card re-entered Planning."
+        )
     return "\n".join(lines)
 
 
+def _verdict_name(body, known) -> str | None:
+    """The verdict `body` IS, or None. The marker must OPEN the comment."""
+    match = _VERDICT_LINE.match((body or "").lstrip())
+    if not match:
+        return None
+    name = match.group(1).strip()
+    return name if name in known else None
+
+
+def fingerprint(body) -> str:
+    """The name a retirement note gives one verdict comment (DRE-4884).
+
+    A hash of the text as Linear returns it, so every reader — whatever order
+    or window it holds the thread in — can tell the retired comment from a
+    live one without a comment id it does not have.
+    """
+    return hashlib.sha256((body or "").strip().encode("utf-8")).hexdigest()[:16]
+
+
+def retired_fingerprints(comment_bodies) -> frozenset:
+    """Every verdict fingerprint a retirement note on the card names."""
+    out: set[str] = set()
+    for body in comment_bodies or ():
+        text = (body or "").lstrip()
+        if _RETIRED_LINE.match(text):
+            out.update(_RETIRED_PRINT.findall(text))
+    return frozenset(out)
+
+
 def verdicts_on(comment_bodies, doc: dict | None = None) -> tuple:
-    """Every DISTINCT verdict stamped on a card, in the order first seen.
+    """Every DISTINCT live verdict stamped on a card, in the order first seen.
 
     The marker must OPEN a comment. A body that merely quotes a verdict — the
-    sweep's own refusal notice does exactly that — carries no verdict.
+    sweep's own refusal notice does exactly that — carries no verdict. And a
+    verdict a retirement note names is not live (DRE-4884): it stays on the
+    card as the record, and nothing routes on it.
     """
+    bodies = list(comment_bodies or ())
     known = verdicts(doc)
+    retired = retired_fingerprints(bodies)
     seen: list[str] = []
-    for body in comment_bodies or ():
-        match = _VERDICT_LINE.match((body or "").lstrip())
-        if not match:
+    for body in bodies:
+        name = _verdict_name(body, known)
+        if name is None or name in seen or fingerprint(body) in retired:
             continue
-        name = match.group(1).strip()
-        if name in known and name not in seen:
-            seen.append(name)
+        seen.append(name)
     return tuple(seen)
 
 
@@ -694,7 +767,9 @@ def stamp_refusal(name: str, comment_bodies, doc: dict | None = None) -> str | N
     return (
         f"this card already carries {' and '.join(found)}; refusing to add {name}. "
         "A card leaving Planning carries exactly one verdict. If the routing "
-        "decision changed, say so on the card and let a human retire the old one."
+        "decision changed, send the card back to Planning: its exit retires "
+        "every verdict written before the card re-entered, on the record, and "
+        "stamps the one it reads now."
     )
 
 
@@ -834,13 +909,15 @@ def newest_verdict_at(comment_nodes, doc: dict | None = None) -> str | None:
 
     Nodes, not bodies: the time is the whole question. The marker must OPEN
     the comment, exactly as `verdicts_on` reads it, so a refusal notice that
-    quotes a verdict is not one.
+    quotes a verdict is not one — and a retired verdict is not one either.
     """
+    nodes = list(comment_nodes or ())
     known = verdicts(doc)
+    retired = retired_fingerprints(node.get("body") for node in nodes)
     newest = None
-    for node in comment_nodes or ():
-        match = _VERDICT_LINE.match((node.get("body") or "").lstrip())
-        if not match or match.group(1).strip() not in known:
+    for node in nodes:
+        body = node.get("body") or ""
+        if _verdict_name(body, known) is None or fingerprint(body) in retired:
             continue
         at = _instant(node.get("createdAt"))
         if at is not None and (newest is None or at > newest[0]):
@@ -858,8 +935,9 @@ def lanes_entered_since(moves, verdict_at: str, approved_at: str | None = None) 
 
     The last approval is the newest of three moments. The verdict itself. A
     later exit from Planning into a lane that is not listed — the second trip,
-    which leaves no second verdict because the planning exit will not stamp one
-    a card already carries. And, for a child, `approved_at`: its epic's green
+    which before DRE-4884 left no second verdict because the planning exit
+    would not stamp one a card already carries (it now retires the old one and
+    stamps afresh). And, for a child, `approved_at`: its epic's green
     light, the approval the CEO's signed answer on DRE-4668 makes of an epic
     for the cards filed under it — a child cut over to Intake and adopted keeps
     the verdict it already had. An exit from Planning INTO a listed lane (an
@@ -914,6 +992,131 @@ def stale_verdict_refusal(
         f"{PLANNING_LANE}, and the planning exit routes it afresh. "
         "**To drop it:** leave it here, or cancel it."
     )
+
+
+def planning_entered_at(moves) -> str | None:
+    """When the card last moved INTO Planning, off its lane history, or None
+    when no move into Planning is on it (or none can be placed in time)."""
+    newest = None
+    for m in moves or ():
+        at = _instant(m.get("at"))
+        if m.get("to") != PLANNING_LANE or m.get("from") == PLANNING_LANE or at is None:
+            continue
+        if newest is None or at > newest[0]:
+            newest = (at, m.get("at"))
+    return newest[1] if newest else None
+
+
+def retiring(comment_nodes, moves, doc: dict | None = None) -> tuple:
+    """The live verdict comments the planning exit retires, or () (DRE-4884).
+
+    A verdict approves one trip through Planning (DRE-4962), and a card that
+    re-entered Planning after its verdict was written is on a new trip whose
+    routing is in question. So: every live verdict written BEFORE the card's
+    newest move into Planning. A verdict written since is this trip's own — a
+    retried exit's — and stays, so a retry converges instead of becoming a
+    thread.
+
+    `moves` is `lane_moves()`. None is a history Linear could not return, and
+    then every live verdict is retired: the exit runs on a card that is IN
+    Planning, the one way a carried verdict is this trip's is a retried exit,
+    and retiring that costs a note and an identical restamp — where keeping a
+    stale one costs the loop this exists to end. A history with no move into
+    Planning is a card created there, whose verdict can only be this trip's.
+    A verdict whose own time cannot be read is treated as older than the trip.
+
+    Pure: `comment_nodes` are `{"body", "createdAt"}`.
+    """
+    nodes = list(comment_nodes or ())
+    if moves is not None:
+        entered = _instant(planning_entered_at(moves))
+        if entered is None:
+            return ()
+    known = verdicts(doc)
+    retired = retired_fingerprints(node.get("body") for node in nodes)
+    out: list[dict] = []
+    for node in nodes:
+        body = node.get("body") or ""
+        if _verdict_name(body, known) is None or fingerprint(body) in retired:
+            continue
+        at = _instant(node.get("createdAt"))
+        if moves is None or at is None or at < entered:
+            out.append(node)
+    return tuple(out)
+
+
+def retired_pairs(comment_nodes, doc: dict | None = None) -> tuple:
+    """`(verdict, fingerprint)` for each verdict comment in `comment_nodes` —
+    what a retirement note lists and a restamp's `replaces` names."""
+    known = verdicts(doc)
+    out: list[tuple] = []
+    for node in comment_nodes or ():
+        body = node.get("body") or ""
+        name = _verdict_name(body, known)
+        if name is not None:
+            out.append((name, fingerprint(body)))
+    return tuple(out)
+
+
+def _pacific(iso, unknown: str) -> str:
+    """`iso` as a Pacific time a person reads, or `unknown`."""
+    import dead_run
+
+    at = iso if isinstance(iso, datetime) else _instant(iso)
+    return dead_run.pacific(at) if at is not None else unknown
+
+
+def retirement_comment(comment_nodes, entered_at: str | None, *,
+                       now: datetime, doc: dict | None = None) -> str:
+    """The note that retires `comment_nodes` (`retiring()`'s answer), written
+    by the planning exit. It names each verdict, when it was written, when the
+    card re-entered Planning and when it was retired — the history keeps both
+    decisions, and only the newer one routes the card."""
+    known = verdicts(doc)
+    rows = [
+        (_verdict_name(node.get("body"), known), node)
+        for node in comment_nodes or ()
+        if _verdict_name(node.get("body"), known) is not None
+    ]
+    names = list(dict.fromkeys(name for name, _ in rows))
+    entered = _pacific(entered_at, "at a time Linear could not report")
+    entered = entered if entered.startswith("at ") else f"on {entered}"
+    lines = [
+        f"{RETIRED_MARK} {RETIRED_TAG}: "
+        + " and ".join(f"**{name}**" for name in names)
+        + f" — this card re-entered Planning {entered}, after "
+        + ("that verdict was" if len(rows) == 1 else "those verdicts were")
+        + " written, so it no longer routes the card.",
+        "",
+    ]
+    for name, node in rows:
+        written = _pacific(node.get("createdAt"), "at a time Linear did not report")
+        lines.append(
+            f"- **{name}**, written {written} — `retired:{fingerprint(node.get('body'))}`")
+    lifted = ", ".join(f"`{m}`" for m in RETIREMENT_LIFTS)
+    lines += [
+        "",
+        f"Retired on {_pacific(now, 'an unknown time')} by Planning's exit. A "
+        "routing verdict approves one trip through Planning, and sending a card "
+        "back says its routing is in question. The old decision stays on the "
+        "card as the record; the verdict Planning writes next is the card's one "
+        f"live verdict, and a {lifted} the old one put on comes off unless the "
+        "new one puts it on too.",
+    ]
+    return "\n".join(lines)
+
+
+def lifted_marks(retired, new: str | None, doc: dict | None = None) -> tuple:
+    """The labels to take off a card whose `retired` verdicts are replaced by
+    `new` (None when nothing replaces them): each of `RETIREMENT_LIFTS` that a
+    retired verdict put on and the new one does not.
+
+    A `hand-built` on a card whose retired verdict never applied it is a
+    person's own, for another reason, and is not the pipeline's to remove.
+    """
+    applied = {mark for name in retired or () for mark in marks(name, doc)}
+    kept = set(marks(new, doc)) if new else set()
+    return tuple(m for m in RETIREMENT_LIFTS if m in applied and m not in kept)
 
 
 def _read_state_history(identifier: str) -> list:

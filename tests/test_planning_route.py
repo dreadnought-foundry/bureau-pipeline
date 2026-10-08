@@ -473,10 +473,16 @@ class _Card:
             # has to tell a verdict from this planning attempt from one a spent
             # attempt left behind. Same window, same query, `createdAt` kept.
             linear_ops, "comment_timeline",
-            side_effect=lambda i: [
+            side_effect=lambda i, **_kw: [
                 {"body": body, "createdAt": COMMENTED_AT}
                 for body in self.comments
             ],
+        ), patch.object(
+            # The exit reads the lane history only for a card carrying a
+            # verdict, to tell one from an earlier trip (DRE-4884). None of
+            # these cards was ever moved INTO Planning, so none is retired;
+            # `tests/test_verdict_retirement.py` covers the ones that were.
+            routing_verdict, "lane_moves", side_effect=lambda i: [],
         ), patch.object(
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(

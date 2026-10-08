@@ -3707,12 +3707,20 @@ def viewer_id() -> str | None:
     return me
 
 
-def comment_timeline(identifier: str) -> list[dict]:
+def comment_timeline(identifier: str, *, whole_thread: bool = False) -> list[dict]:
     """`[{"body", "createdAt"}]`, oldest→newest — the liveness check's read
-    (reconcile.agent_run_alive), served from the pass's board read."""
+    (reconcile.agent_run_alive), served from the pass's board read.
+
+    `whole_thread` pages past the window, as `comment_bodies` does: the
+    planning exit retires every verdict a re-planned card carried (DRE-4884),
+    and a verdict past the window that it did not see would stay live."""
+    if whole_thread:
+        nodes, _ = _thread_and_viewer(identifier, "body", "createdAt", whole=True)
+    else:
+        nodes = _thread(identifier, "body", "createdAt")
     return [
         {"body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
-        for c in _thread(identifier, "body", "createdAt")
+        for c in nodes
     ]
 
 
