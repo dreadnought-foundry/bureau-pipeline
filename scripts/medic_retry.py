@@ -127,6 +127,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
 import execution_result  # noqa: E402
+import hold  # noqa: E402
 import out_of_memory  # noqa: E402
 import pipeline_act  # noqa: E402
 import stream_watchdog  # noqa: E402
@@ -176,7 +177,12 @@ HELD_RECEIPT_MARK = "held-for-human ("
 # string nobody writes.
 REPLAN_RECEIPT_MARK = dead_run.REPLAN_MARK
 
-# The lane that receipt sends the card to.
+# DRE-6178. The receipt the dead-run cap writes when it hands a card to the
+# planner instead of holding it — the same question as the replan receipt, so
+# rule 3 reads both. `hold`'s own constant, never a copy.
+DEAD_SPLIT_RECEIPT_MARK = hold.DEAD_SPLIT_MARK
+
+# The lane those receipts send the card to.
 REPLAN_STATE = "Planning"
 
 # Stage 2 fix #23. The workflows whose rerun starts NO AGENT WORK, so the
@@ -504,8 +510,10 @@ def park_reason(
          a hold — it is also where a blocked card and a PARKED routing verdict
          sit, and neither of those is this run's business;
       3. Planning plus the replan receipt that sent the card there, newer
-         than the run (DRE-4366). Required for the same reason: Planning is
-         also where a hand-back and a NEEDS WORK verdict send a card.
+         than the run (DRE-4366) — or the dead-run cap's hand-off to the
+         planner, `DEAD_SPLIT_RECEIPT_MARK` (DRE-6178). Required for the same
+         reason: Planning is also where a hand-back and a NEEDS WORK verdict
+         send a card.
     """
     hold = dead_run.HOLD_LABEL.lower()
     if any((name or "").strip().lower() == hold for name in labels or ()):
@@ -513,7 +521,17 @@ def park_reason(
     if (state or "").strip().lower() == REPLAN_STATE.lower():
         replanned = _newest_after(receipts, REPLAN_RECEIPT_MARK, run_started_at)
         if not replanned:
-            return ""
+            handed = _newest_after(receipts, DEAD_SPLIT_RECEIPT_MARK, run_started_at)
+            if not handed:
+                return ""
+            when = (handed.get("created_at") or "").strip()
+            at = f" at {when}" if when else ""
+            return (
+                f"it was handed to the planner in {REPLAN_STATE}{at} by the "
+                f"pipeline's own dead-run cap, after this run started — the "
+                f"planner owns the card now, and it owes a split or a verdict, "
+                f"not a rerun"
+            )
         when = (replanned.get("created_at") or "").strip()
         at = f" at {when}" if when else ""
         return (

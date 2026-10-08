@@ -104,7 +104,10 @@ The qualifier follows the lift kind: the full head sha for `review-cap-spent`,
 `fix-dispute` and `unfixable-check`, `repo:<slug>` for `no-route`, and `none`
 for the other six. `hold.stamp_line` refuses any other pairing, so a wrong
 qualifier fails at the writer and never at the lift. `hold.py apply` exits 2 on
-the same input before it writes anything.
+the same input before it writes anything. A writer that lands the label itself
+posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
+<code>` writes the label and Backlog, both or neither, and stamps
+`dead-run-cap` or `turn-cap-park` only once both have landed (DRE-6178).
 
 A writer other than the hygiene agent that lifts a hold posts the lift line
 through `hold.lift`, after the label comes off:

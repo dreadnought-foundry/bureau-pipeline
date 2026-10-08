@@ -478,7 +478,13 @@ class UnlandedParkScenario(unittest.TestCase):
         self.assertEqual(
             [e["args"][1] for e in ops(journal, "state")], [dead_run.PARK_STATE]
         )
-        self.assertIn(dead_run.DEAD_TAG, comments(journal)[0])
+        # The stamp first, once both writes landed (DRE-6178), then the receipt.
+        self.assertEqual(
+            comments(journal),
+            ["🔒 hold: reason=dead-run-cap at=none lifts=unpark-marker by=dead_run.py",
+             comments(journal)[1]],
+        )
+        self.assertIn(dead_run.DEAD_TAG, comments(journal)[1])
 
     def test_a_refused_state_write_leaves_no_label_behind(self):
         # DRE-2911's park, exactly: the label landed and the state did not.

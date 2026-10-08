@@ -597,14 +597,18 @@ class TurnDeathIsReadScenario(unittest.TestCase):
         self.assertFalse([m for m in moves(journal) if "Todo" == m[-1]])
 
     def test_a_second_death_past_green_parks(self):
-        """Backlog plus the hold label, atomically (DRE-2931), and a receipt
-        that reads budget rather than size."""
+        """Backlog plus the hold label, atomically (DRE-2931), the stamp
+        naming the turn cap (DRE-6178), and a receipt that reads budget rather
+        than size."""
         _, journal = run_report(self, _this_run(3), prior="1")
         posted = comments(journal)
-        self.assertEqual(1, len(posted), posted)
-        self.assertTrue(posted[0].startswith(HOLD_PREFIX), posted[0])
-        self.assertIn("budget, not size", posted[0])
-        self.assertNotIn("split", posted[0].lower())
+        self.assertEqual(2, len(posted), posted)
+        self.assertEqual(
+            "🔒 hold: reason=turn-cap-park at=none lifts=unpark-marker by=dead_run.py",
+            posted[0])
+        self.assertTrue(posted[1].startswith(HOLD_PREFIX), posted[1])
+        self.assertIn("budget, not size", posted[1])
+        self.assertNotIn("split", posted[1].lower())
         self.assertIn(("add_label", "needs-human"), moves(journal))
         self.assertIn(("state", "Backlog", "--park"), moves(journal))
 
