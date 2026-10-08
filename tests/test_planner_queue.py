@@ -548,6 +548,9 @@ class EveryInterleaving(_Base):
                              trigger_state="Planning", because="finished")
             nxt = pq.next_in_line(self.board.ledger())
             self.assertEqual(nxt.card, idents[2])
+            # The release's dispatch lands, then the run it started claims.
+            pq.post_dispatched(linear_ops, idents[2], run_id=f"run-{first}", repo=REPO,
+                               trigger_state="Planning")
             claim_write(self.board, idents[2], "run-again")
             self.assertEqual(claim_read(self.board, idents[2], "run-again")["admitted"],
                              "true")
@@ -644,7 +647,11 @@ class PlaceInLine(_Base):
         self.assertEqual(pq.line_entry(self.board.nodes(a), now=self.board.clock),
                          iso(base))
 
-    def test_fresh_arrival_one_second_earlier_wins_the_slot(self):
+    def test_fresh_arrival_one_second_earlier_waits_behind_the_line(self):
+        """DRE-6329 turned this round: the fresh claim is earlier in claim
+        order than A's, but B and C were already waiting, so it does not take
+        the slot. A, dispatched into it, is admitted; the fresh card joins the
+        line behind B and C."""
         a, b, c, base = self._fixture()
         # One of the four finishes: one slot is free.
         pq.post_released(linear_ops, "RUN-1", run_id="run-RUN-1", repo=REPO,
@@ -658,16 +665,17 @@ class PlaceInLine(_Base):
             "claimed", card=a, run="run-a", repo=REPO, trigger="Planning",
             at=iso(t6)), at=t6)
         self.board.clock = t6 + timedelta(seconds=1)
-        self.assertEqual(claim_read(self.board, fresh, "run-fresh")["admitted"], "true")
-        self.assertEqual(claim_read(self.board, a, "run-a")["admitted"], "false")
+        out = claim_read(self.board, fresh, "run-fresh")
+        self.assertEqual((out["admitted"], out["place"], out["waiting"]),
+                         ("false", "3", "3"))
+        self.assertEqual(claim_read(self.board, a, "run-a")["admitted"], "true")
         led = self.board.ledger()
-        self.assertEqual(led.waiting[0].card, a)
-        self.assertEqual(pq.line_entry(self.board.nodes(a), now=self.board.clock),
-                         iso(base))
+        self.assertEqual([w.card for w in led.waiting], [b, c, fresh])
+        self.assertIn(a, [r.card for r in led.running])
         self.assertIsNone(pq.next_in_line(led))
         pq.post_released(linear_ops, "RUN-2", run_id="run-RUN-2", repo=REPO,
                          trigger_state="Planning", because="finished")
-        self.assertEqual(pq.next_in_line(self.board.ledger()).card, a)
+        self.assertEqual(pq.next_in_line(self.board.ledger()).card, b)
 
 
 # --------------------------------------------------------------------------- #
@@ -2180,12 +2188,19 @@ class ArrivalWaitsBehindTheLine(_Base):
 
     def test_an_approval_waits_at_the_front_and_is_served_next(self):
         self._oct8()
+        self._settle_c()
         epic = self.board.add("DRE-EPIC", lane="In Progress")
-        self._receipt(epic, "claimed", "14:09:27", "run-epic", trigger="in progress")
-        self.board.clock = oct8("14:09:28")
-        out = pq.settle_claim(linear_ops, epic, run_id="run-epic", repo=OCT8_DEMO,
-                              trigger_state="in progress", reason="approved")
-        self.assertEqual((out["admitted"], out["place"]), ("false", "1"))
+        self._receipt(epic, "claimed", "14:09:28", "run-epic", trigger="in progress")
+        self.board.clock = oct8("14:09:29")
+        # One slot is free when the approval reads: three running, three waiting.
+        self.assertEqual(self.board.ledger().free_slots(4), 0)  # its own claim is 4th
+        self.assertEqual(pq.taken_before(self.board.ledger(),
+                                         self.board.newest(epic)), 3)
+        with mock.patch.object(pq, "planning_order", lambda: []):
+            out = pq.settle_claim(linear_ops, epic, run_id="run-epic", repo=OCT8_DEMO,
+                                  trigger_state="in progress", reason="approved")
+        self.assertEqual((out["admitted"], out["place"], out["waiting"]),
+                         ("false", "1", "4"))
         newest = self.board.newest(epic)
         self.assertEqual((newest.state, newest.place, newest.trigger, newest.reason),
                          ("waiting", 1, "in progress", "approved"))
@@ -2256,8 +2271,8 @@ class ArrivalWaitsBehindTheLine(_Base):
         self.assertEqual(claim_read(self.board, early, "run-early")["admitted"], "true")
 
     def test_the_docstring_says_a_claim_never_passes_a_waiting_card(self):
-        self.assertIn("never passes a card that is waiting",
-                      " ".join(pq.__doc__.split()))
+        self.assertIn("a claim never passes a card that is waiting",
+                      " ".join(pq.__doc__.split()).lower())
 
 
 if __name__ == "__main__":
