@@ -35,6 +35,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_merge_gate_code_owner_ho
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import os
 import re
@@ -55,6 +56,7 @@ SELF_STUB = ROOT / ".github" / "workflows" / "self-merge-gate.yml"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import code_owner_hold as coh  # noqa: E402
+import console_escalation  # noqa: E402
 import merge_gate  # noqa: E402
 
 REPO = "dreadnought-foundry/portico"
@@ -260,12 +262,17 @@ class TheSentenceTest(unittest.TestCase):
         self.assertIn(f"#{PR}", self.sentence)
 
     def test_it_carries_no_sha_no_diff_and_no_verdict_text(self):
-        self.assertIsNone(HEX_RUN.search(self.sentence), self.sentence)
-        self.assertNotIn("diff", self.sentence.lower())
-        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
-            self.assertNotIn(forbidden, self.sentence)
-        self.assertNotIn(";", self.sentence)
-        self.assertNotIn("!", self.sentence)
+        # The sentence, and the whole card comment it parks with — the three
+        # Green Light lines included (DRE-5204).
+        card = coh.card_comment(PR, self.sentence)
+        self.assertIsNotNone(console_escalation.parse(card), card)
+        for text in (self.sentence, card):
+            self.assertIsNone(HEX_RUN.search(text), text)
+            self.assertNotIn("diff", text.lower())
+            for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+                self.assertNotIn(forbidden, text)
+            self.assertNotIn(";", text)
+            self.assertNotIn("!", text)
 
     def test_the_pr_note_and_the_card_comment_carry_the_same_sentence(self):
         marker, note = coh.pr_note(HEAD, self.sentence)
@@ -288,6 +295,129 @@ class TheSentenceTest(unittest.TestCase):
         s = coh.hold_sentence(PR, groups)
         for who in ("@a", "@b", "@c", "docs/", "src/"):
             self.assertIn(who, s)
+
+
+def first_sentence(sentence: str) -> str:
+    """`sentence` up to and including its first `.` followed by a space."""
+    head, sep, _ = sentence.partition(". ")
+    return head + "." if sep else sentence
+
+
+class TheCardCommentDeclaresTheLinesTest(unittest.TestCase):
+    """The park is an escalation, so its card comment ends with the three
+    Green Light lines, rendered by `console_escalation` (DRE-5204)."""
+
+    def setUp(self):
+        self.groups = coh.read_owners(record(), AUTHOR).groups
+        self.sentence = coh.hold_sentence(PR, self.groups)
+        self.card = coh.card_comment(PR, self.sentence)
+
+    def test_the_incident_comment_conforms(self):
+        self.assertEqual(console_escalation.problems(self.card), [])
+
+    def test_it_ends_with_the_three_lines_after_the_sentence_and_a_blank_line(self):
+        marker, sentence, lines = self.card.split("\n\n")
+        self.assertEqual(sentence, self.sentence)
+        prefixes = (console_escalation.FINDING_PREFIX,
+                    console_escalation.QUESTION_PREFIX,
+                    console_escalation.RECOMMENDATION_PREFIX)
+        rows = lines.split("\n")
+        self.assertEqual(len(rows), 3, lines)
+        for row, prefix in zip(rows, prefixes):
+            self.assertTrue(row.startswith(prefix), row)
+
+    def test_the_first_line_is_still_the_hold_marker(self):
+        self.assertEqual(self.card.split("\n", 1)[0], f"⏸️ merge-gate: code-owner hold · PR #{PR}")
+        self.assertEqual(
+            coh.latest_gate_marker([{"body": self.card, "authored_by_pipeline": True}], PR),
+            "hold")
+
+    def test_the_finding_is_the_sentences_first_sentence_verbatim(self):
+        esc = console_escalation.parse(self.card)
+        self.assertEqual(esc.finding, first_sentence(self.sentence))
+        self.assertIn("@smeed652", esc.finding)
+        self.assertIn("docs/design/system/", esc.finding)
+        self.assertNotIn("Review changes", esc.finding)
+
+    def test_the_question_names_the_pull_request(self):
+        esc = console_escalation.parse(self.card)
+        self.assertEqual(
+            esc.question,
+            f"Open pull request #{PR} and submit an approving review so it "
+            "merges, or leave it waiting?")
+
+    def test_the_recommendation_is_the_rules_own_answer_and_there_are_no_choices(self):
+        esc = console_escalation.parse(self.card)
+        self.assertEqual(esc.recommendation, "approve the pull request")
+        self.assertEqual(
+            esc.why,
+            "its checks and its review have passed, and the only thing holding "
+            "it is the code-owner rule this repository sets")
+        self.assertEqual((esc.recommendation, esc.why),
+                         (coh.RECOMMENDATION, coh.RECOMMENDATION_WHY))
+        self.assertEqual(esc.choices, ())
+        self.assertNotIn("```", self.card)
+
+    def test_two_owner_groups_cut_the_finding_from_the_two_group_sentence(self):
+        text = "/docs/ @a\n/src/ @b @c\n"
+        groups = coh.read_owners(
+            record(codeowners=text, files=["docs/x.md", "src/y.py"]), AUTHOR).groups
+        self.assertEqual(len(groups), 2)
+        sentence = coh.hold_sentence(PR, groups)
+        card = coh.card_comment(PR, sentence)
+        self.assertEqual(console_escalation.problems(card), [])
+        self.assertEqual(console_escalation.parse(card).finding, first_sentence(sentence))
+
+    def test_the_finding_is_cut_from_whatever_sentence_it_is_given(self):
+        # Never rebuilt from groups: the comment has none to rebuild from.
+        card = coh.card_comment(PR, "One thing happened. Then another.")
+        self.assertEqual(console_escalation.parse(card).finding, "One thing happened.")
+
+    def test_card_comment_takes_the_pull_request_and_the_sentence_alone(self):
+        params = list(inspect.signature(coh.card_comment).parameters)
+        self.assertEqual(params, ["pr", "sentence"])
+
+    def test_park_comments_with_the_sentence_alone(self):
+        fake = mock.MagicMock()
+        fake.get_issue.return_value = {"state": {"name": coh.REVIEW_LANE}}
+        fake.comment_records.return_value = []
+        with mock.patch.dict(sys.modules, {"linear_ops": fake}), \
+                mock.patch.object(coh, "card_comment", wraps=coh.card_comment) as cc:
+            coh.park(CARD, PR, self.sentence)
+        cc.assert_called_once_with(PR, self.sentence)
+        fake.cmd_comment.assert_called_once_with(CARD, self.card)
+
+    def test_the_line_grammar_is_imported_never_restated(self):
+        source = (ROOT / "scripts" / "code_owner_hold.py").read_text(encoding="utf-8")
+        for literal in (console_escalation.FINDING_PREFIX,
+                        console_escalation.QUESTION_PREFIX,
+                        console_escalation.RECOMMENDATION_PREFIX,
+                        console_escalation.NONE_GIVEN,
+                        "🔎", "❓", "💡"):
+            self.assertNotIn(literal, source)
+
+
+class TheOtherWordsAreUnchangedTest(unittest.TestCase):
+    """`pr_note` is a GitHub comment and `release_comment` is no escalation:
+    both stay exactly as they rendered before DRE-5204."""
+
+    def test_the_pr_note_is_byte_for_byte_unchanged(self):
+        sentence = coh.hold_sentence(PR, coh.read_owners(record(), AUTHOR).groups)
+        self.assertEqual(coh.pr_note(HEAD, sentence), (
+            "Merge gate: code-owner hold <!-- head 4f1d2c3baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "⏸️ Merge gate: code-owner hold <!-- head 4f1d2c3baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            " --> — Pull request #616 has passed its checks and its review, but this "
+            "repository's rules also need a review from @smeed652 for docs/design/system/ "
+            "before GitHub will merge it. To release it, open the pull request, choose "
+            "Review changes, pick Approve and submit — it then merges on its own.\n",
+        ))
+
+    def test_the_release_comment_is_byte_for_byte_unchanged(self):
+        self.assertEqual(
+            coh.release_comment(PR),
+            "▶️ merge-gate: code-owner release · PR #616\n\nThe review pull request "
+            "#616 was waiting on has landed, so the card is back in review and the "
+            "merge gate merges it on its own.")
 
 
 # --------------------------------------------------------------------------
@@ -885,6 +1015,24 @@ class TheReviewLandsTest(unittest.TestCase):
         run = run_shipped(reviews=[review(OWNER, "APPROVED")], card_state="Green Light",
                           card_comments=[{"body": forged, "authored_by_pipeline": False}])
         self.assertEqual(run.moves, [])
+
+
+class TheShippedParkDeclaresTheLinesTest(unittest.TestCase):
+    """The comment the shipped step posts on the card is the one
+    `card_comment` renders: the hold marker, the sentence, the three lines
+    (DRE-5204)."""
+
+    def test_the_posted_comment_conforms_and_still_reads_as_the_hold(self):
+        shipped = run_shipped()
+        self.assertEqual(len(shipped.card_comments), 1, shipped.out)
+        posted = shipped.card_comments[0]
+        self.assertEqual(console_escalation.problems(posted), [])
+        sentence = coh.hold_sentence(PR, coh.read_owners(record(), AUTHOR).groups)
+        self.assertEqual(posted, coh.card_comment(PR, sentence))
+        self.assertEqual(console_escalation.parse(posted).finding, first_sentence(sentence))
+        self.assertEqual(
+            coh.latest_gate_marker([{"body": posted, "authored_by_pipeline": True}], PR),
+            "hold")
 
 
 class OtherRefusalsStayLoudTest(unittest.TestCase):
