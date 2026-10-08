@@ -12,17 +12,26 @@ cause named. One action per card, the first of these that applies:
    written down. Cause: `parent <DRE-N> is <state>`. A card with children is
    an epic, which the core's guard refuses to close — this lane leaves it as a
    row for a person rather than propose a write the guard would stop the whole
-   leg on.
-2. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
+   leg on. A moot card is canceled even when it is held: its parent's
+   cancellation outranks any hold.
+2. **A card held `no-route`** (DRE-6190). It carries `needs-human` and its
+   newest live `🔒 hold:` stamp (`hold.read_stamp`) says `reason=no-route`:
+   the sweep parked it because its `repo:` label is not on the dispatch rail.
+   It is not a broken card this lane fixes — the holds lane owns its lift, and
+   sends it from Triage to Planning once the label names a slug on the rail.
+   One `Left` row says what the hold is and what lifts it, and no other rule
+   runs on it. A newer stamp of another reason, a spent stamp, or the stamp
+   without the label is no such hold, and the card reads on as below.
+3. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
    key of `config/repo-map.json` (cause `retired repo <slug>`), or a repo that
    answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
    repo <owner/repo>`). It is marked `reconcile.HAND_BUILT_LABEL` and parked in
    Backlog.
-3. **A proof with an open pull request.** The title opens `PROOF:` and
+4. **A proof with an open pull request.** The title opens `PROOF:` and
    `card_pr.find` — the one "did this card produce a pull request" seam —
    answers an OPEN pull request in the card's repo. It moves to In Review, the
    lane that pull request says it is in. Cause: `open pull request #<n>`.
-4. **A prose blocker with no relation.** `prose_blockers.undeclared_claims`
+5. **A prose blocker with no relation.** `prose_blockers.undeclared_claims`
    names the ids a declaring line claims with no `blockedBy` behind them. Each
    id that resolves — on the board read, or by one `ctx.linear` read per pass —
    gets the relation, which makes the sentence true (a relation to a Done card
@@ -33,12 +42,12 @@ cause named. One action per card, the first of these that applies:
    nothing for Backlog to route on. Then the relation is still added, under a
    `hyg-cause-named` receipt, and a `Left` row says what is missing. Nothing
    rewrites a description.
-5. **A dependency loop.** The card's `blockedBy` chain returns to itself
+6. **A dependency loop.** The card's `blockedBy` chain returns to itself
    through the relations on the board read — every card's inverse `blocks`
    relations, and its own `blocks` relations read the other way round, so a
    Done card off the board still closes a loop. When a card in the loop is met
    (`prose_blockers.TERMINAL` — the gate's own reading of a blocker that holds
-   nothing) the card returns to Backlog, under the same verdict rule as (4).
+   nothing) the card returns to Backlog, under the same verdict rule as (5).
    Cause: `loop <A → B → A> broken, <DRE-N> is <state>`. When every card in it
    is open, which edge to cut is a person's call.
 
@@ -64,6 +73,7 @@ import re
 import sys
 
 import card_pr
+import hold
 import hygiene
 import linear_ops
 import prose_blockers
@@ -189,7 +199,32 @@ def moot(card: dict, ctx: hygiene.Context) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (2) a retired-repo card                                                      #
+# (2) a card held no-route                                                     #
+# --------------------------------------------------------------------------- #
+
+NO_ROUTE = "no-route"
+
+
+def held_no_route(card: dict) -> hygiene.Left | None:
+    """One row for a card the sweep held `no-route`, or None. The newest live
+    stamp decides; the slug is the stamp's own `at` qualifier."""
+    stamp = hold.read_stamp(_bodies(card))
+    if NEEDS_HUMAN not in _labels(card) or stamp is None or stamp["reason"] != NO_ROUTE:
+        return None
+    at = stamp["at"]
+    if at == "repo:none":
+        why = f"held {NO_ROUTE} — the card wears no repo: label"
+    else:
+        why = f"held {NO_ROUTE} on {at} — the slug is not on the dispatch rail"
+    return _left(card, why,
+                 "correct the card's repo: label to a slug on the rail, or add the repo "
+                 "to config/repo-map.json if it should route; the holds lane reads the "
+                 "card's current label, lifts the hold and sends the card to Planning on "
+                 "its next pass, and nothing on the card needs clearing")
+
+
+# --------------------------------------------------------------------------- #
+# (3) a retired-repo card                                                      #
 # --------------------------------------------------------------------------- #
 
 
@@ -210,7 +245,7 @@ def retired(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (3) a proof with an open pull request                                        #
+# (4) a proof with an open pull request                                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -230,7 +265,7 @@ def proof_in_review(card: dict, ctx: hygiene.Context) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (4) a prose blocker with no relation                                         #
+# (5) a prose blocker with no relation                                         #
 # --------------------------------------------------------------------------- #
 
 
@@ -270,7 +305,7 @@ def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
 
 
 # --------------------------------------------------------------------------- #
-# (5) a dependency loop                                                        #
+# (6) a dependency loop                                                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -360,7 +395,9 @@ def left_for_a_person(card: dict) -> hygiene.Left:
 
 
 def _plan_card(card: dict, ctx: hygiene.Context, seen: _Pass) -> list:
-    for rule in (lambda: moot(card, ctx), lambda: retired(card, ctx, seen),
+    held = held_no_route(card)
+    for rule in (lambda: moot(card, ctx), lambda: None if held is None else [held],
+                 lambda: retired(card, ctx, seen),
                  lambda: proof_in_review(card, ctx), lambda: prose_blocker(card, ctx, seen),
                  lambda: loop(card, ctx, seen)):
         items = rule()
