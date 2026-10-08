@@ -739,22 +739,6 @@ def rescue(
     out.remote_sha = _remote_sha(out.branch, run=run, workdir=workdir)
     out.local_work = out.local_sha != out.remote_sha
 
-    if out.local_work and existing_pr:
-        # Asked here, after the re-point and before any push, with the
-        # credential the push would spend (DRE-6348). One read, on the first
-        # mint: a refusal of it is "unreadable", and unreadable refuses — the
-        # patch keeps the work and DRE-6349's follow-up asks again with its
-        # own token.
-        refusal = pr_state_refusal(existing_pr, repo, active_token, run=run,
-                                   workdir=workdir)
-        if refusal:
-            out.error = refusal
-            out.push_status = ""
-            log(f"push rescue: not pushing {out.branch} — {refusal} "
-                f"(#{existing_pr})")
-            preserve()
-            return out
-
     if out.local_work:
         for attempt, (candidate, source) in enumerate(credentials, start=1):
             if attempt > 1:
@@ -766,6 +750,23 @@ def rescue(
                                        log=log)
                 active_token = candidate
             out.attempts = attempt
+            if existing_pr:
+                # Asked per credential, after the re-point and before its
+                # push, so the read and the push spend one token (DRE-6348).
+                # MERGED or CLOSED refuses outright; "unreadable" is this
+                # credential's failure, so the next mint asks again — and
+                # when none can read it, unreadable refuses.
+                refusal = pr_state_refusal(existing_pr, repo, candidate,
+                                           run=run, workdir=workdir)
+                if refusal:
+                    out.error = refusal
+                    out.push_status = ""
+                    log(f"push rescue: not pushing {out.branch} — {refusal} "
+                        f"(#{existing_pr}), credential: {source} (attempt "
+                        f"{attempt} of {len(credentials)})")
+                    if refusal != PR_UNREADABLE:
+                        break
+                    continue
             code, _, err = run([
                 "git", "-C", workdir, "push", "origin",
                 f"{out.branch}:refs/heads/{out.branch}",
@@ -787,8 +788,10 @@ def rescue(
             # readings send a reader to opposite ends of the system.
             log(_auth_header_line(credential_origins(run=run, workdir=workdir)))
         if not out.pushed:
-            log("push rescue: the work is still on the runner; the Report step "
-                "records this as a credential expiry, not a dead agent")
+            if out.error not in (PR_MERGED, PR_CLOSED):
+                log("push rescue: the work is still on the runner; the Report "
+                    "step records this as a credential expiry, not a dead "
+                    "agent")
             preserve()
             return out
         # `git branch -r` is how the Gate and Report steps find this card's
