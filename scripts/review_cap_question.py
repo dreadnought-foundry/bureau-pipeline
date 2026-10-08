@@ -28,7 +28,8 @@ three lines are identical in each.
 The question follows the evidence. A REQUEST_CHANGES or a Verifier FAIL
 standing asks whether the finding is fixed; an APPROVE asks whether the red
 check is fixed; no verdict asks whether a person reads the pull request and
-says what to change. Each offers dropping the change — closing the pull
+says what to change. A verdict written about an earlier head is no verdict on
+this one. Each offers dropping the change — closing the pull
 request and canceling the card by hand, the one answer no mechanism makes,
 and the cancel is what lifts the hold (`card-closed`). The merge gate reads
 no Operator decision, so nothing here offers one as a way past a check.
@@ -92,9 +93,19 @@ _NO_VERDICT = (
 )
 
 
+#: What `reconcile.standing_verdict` appends when the newest verdict names an
+#: earlier commit than the head.
+_EARLIER_HEAD = "from earlier head"
+
+
 def _token(verdict: str | None) -> str:
     """The verdict word `reconcile.standing_verdict` leads with — APPROVE,
-    REQUEST_CHANGES, PASS, FAIL, SKIP — or `none`."""
+    REQUEST_CHANGES, PASS, FAIL, SKIP — or `none`. A verdict written about an
+    earlier head is `none` here: it is not bound to this head, so it neither
+    approves it nor stands a finding on it. The Finding still quotes it as
+    the sweep gave it."""
+    if _EARLIER_HEAD in (verdict or ""):
+        return "none"
     words = (verdict or "").split()
     return words[0] if words else "none"
 

@@ -79,6 +79,9 @@ ALL = {
     "verifier-fail": args(critic="APPROVE", verifier="FAIL"),
     "earlier-head-approve": args(critic="APPROVE from earlier head 1a2b3c4",
                                  tag=rcq.REVIEW_NUDGE_KEY),
+    "earlier-head-fail": args(critic="none",
+                              verifier="FAIL from earlier head 1a2b3c4",
+                              tag=rcq.REVIEW_NUDGE_KEY),
     "cap-off-gate": args(cap=0, spent=0, hours=0.0, critic="APPROVE",
                          verifier="PASS", gate_note_line=GATE_NOTE),
     "cap-off-review": args(cap=0, spent=0, hours=0.0, tag=rcq.REVIEW_NUDGE_KEY,
@@ -258,6 +261,21 @@ def test_the_question_follows_the_evidence():
     assert "read the pull request" in _esc("no-verdict").question.lower()
     # A Verifier FAIL stands the same way a REQUEST_CHANGES does.
     assert _esc("verifier-fail").question == _esc("request-changes").question
+
+
+@pytest.mark.parametrize("name", ["earlier-head-approve", "earlier-head-fail"])
+def test_a_verdict_on_an_earlier_head_is_no_verdict_on_this_one(name):
+    """An APPROVE or a FAIL written about an earlier commit neither approves
+    this head nor stands a finding on it — the question is the no-verdict one,
+    while the Finding still quotes what the sweep gave."""
+    esc = _esc(name)
+    assert esc.question == _esc("no-verdict").question
+    assert esc.recommendation == _esc("no-verdict").recommendation
+    assert esc.question != _esc("approve-red-checks").question
+    assert esc.question != _esc("request-changes").question
+    assert "approved this head" not in esc.why
+    assert "finding stands on this head" not in esc.why
+    assert "from earlier head 1a2b3c4" in esc.finding
 
 
 def test_the_gate_note_is_quoted_in_the_finding():
