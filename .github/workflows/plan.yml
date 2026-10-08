@@ -1775,8 +1775,10 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           REVISION: ${{ steps.oorevised.outputs.outcome }}
         run: |
-          # DRE-6168: only the planner's own question carries choices — the
-          # critic's is one line of its own grammar, so it stays prose only.
+          # DRE-6168: only the planner's own question passes a choices file.
+          # The critic's choices ride inside the reason text as the
+          # escalation-choices block plan_critic.py builds from its OPTION
+          # lines (DRE-3910), and `escalate` lifts that block from the reason.
           CHOICES=()
           if [ "$REVISION" = "asked" ]; then
             CHOICES=(--choices-file "${{ runner.temp }}/one-off-question-choices.json")

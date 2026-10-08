@@ -458,7 +458,8 @@ class TestThePostingStepsPassTheFile:
         step = _named("One-off critic — escalate")
         assert "--choices-file" in step["run"]
         assert "${{ runner.temp }}/" + ONE_OFF_FILE in step["run"]
-        # The critic's own question stays prose only.
+        # The critic's own question passes no file: its block rides in the
+        # reason text (DRE-3910).
         assert "asked" in step["run"]
         assert "steps.oorevised.outputs.outcome" in str(step.get("env"))
 
