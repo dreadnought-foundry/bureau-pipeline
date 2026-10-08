@@ -132,7 +132,7 @@ class TheEscalationQuotesTheAgentsReason(NoPushCase):
         _write(self.paths["reason"], REASON)
         self.only_comment(self.run.report_step())
         notes = self.run.card_notes()
-        self.assertIn(["add-label", CARD, "needs-human"], notes)
+        self.assertTrue([n for n in notes if n[:3] == ["hold.py", "apply", CARD]], notes)
 
     def test_a_reason_from_another_run_is_never_quoted(self):
         # DRE-3951's rule holds for the new file too: a reason that appears at

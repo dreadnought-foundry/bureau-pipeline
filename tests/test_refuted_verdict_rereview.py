@@ -185,6 +185,14 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
         "import json, sys\n"
         f"open({linear_log!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n",
     )
+    # DRE-6179: a park holds the card through the registry's writer, logged
+    # into the same file so it reads in order with the lane move.
+    write_exec(
+        os.path.join(pipeline, "scripts", "hold.py"),
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        f"open({linear_log!r}, 'a').write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n",
+    )
     comments_file = os.path.join(td, "comments.json")
     with open(comments_file, "w") as f:
         json.dump(comments, f)
@@ -416,7 +424,7 @@ class ReportRefutedBranchTest(unittest.TestCase):
         self.assertIn(REFUTE_KEY, bodies[0])
         # No park: the whole point is that a person is NOT needed.
         self.assertEqual(
-            [c for c in linear if c[:1] in (["add-label"], ["advance"], ["state"])],
+            [c for c in linear if c[:1] in (["add-label"], ["hold.py"], ["advance"], ["state"])],
             [],
             linear,
         )
@@ -455,8 +463,8 @@ class ReportRefutedBranchTest(unittest.TestCase):
         # loop never sees.
         self.assertIn("Operator decision", bodies[0])
         verbs = [c[0] for c in linear]
-        self.assertIn("add-label", verbs)
-        self.assertIn(["add-label", CARD, "needs-human"], linear)
+        self.assertIn("hold.py", verbs)
+        self.assertTrue([c for c in linear if c[:3] == ["hold.py", "apply", CARD]], linear)
         self.assertTrue(
             any(c[0] in ("advance", "state") and "Triage" in c for c in linear),
             linear,
@@ -488,7 +496,7 @@ class ReportRefutedBranchTest(unittest.TestCase):
             proc, gh_calls, linear = run_report(td, [], dispatch_rc=1)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn(["add-label", CARD, "needs-human"], linear)
+        self.assertTrue([c for c in linear if c[:3] == ["hold.py", "apply", CARD]], linear)
 
     def test_a_cardless_branch_never_shells_out_with_an_empty_id(self):
         with tempfile.TemporaryDirectory() as td:
