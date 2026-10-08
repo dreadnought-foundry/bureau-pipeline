@@ -467,8 +467,10 @@ def _why_lines(heading: str, reason: str | None,
 # never restated here. Where the lines come from, in precedence: lifted out of
 # a reason that declares them; completed from the choices block in hand;
 # otherwise completed from the reason's first sentence, the route's fixed
-# question and `none given`. The fixed question is used only in that last case,
-# so a note never carries two asks.
+# question and the recommendation the reason states in its own prose — read
+# the way the Green Light lane reads it — or `none given` when it states none.
+# The fixed question is used only in that last case, so a note never carries
+# two asks.
 
 #: What the ordinary note asks when nothing stated a question.
 ORDINARY_QUESTION = (
@@ -488,6 +490,9 @@ TRANSPORT_WHY = "nothing has read the card; this is our plumbing, not a judgemen
 
 #: Why a completed Recommendation is `none given`.
 NO_RECOMMENDATION = "the run that parked this card stated no recommendation"
+#: The why on a Recommendation completed from the reason's own prose: the
+#: run recommended it in its own words and gave the line no why of its own.
+RECOMMENDED_IN_REASON = "the run that parked this card recommended it in its reason"
 
 
 def _leaked(name: str) -> str:
@@ -564,6 +569,20 @@ def _from_block(block: dict) -> console_escalation.Escalation:
     )
 
 
+def _stated_recommendation(shown: str | None) -> str | None:
+    """What a plain reason recommends in its own prose — a `Recommendation:`
+    line or an "I recommend" sentence — read exactly as the Green Light lane
+    reads it (`hygiene_green_light.recommendation`, DRE-6196), or None when it
+    recommends nothing or is refused. Imported here, not at the top: the lane
+    imports this module."""
+    if not (shown or "").strip() or refusal(shown) is not None:
+        return None
+    import hygiene_green_light
+
+    stated = hygiene_green_light.recommendation(shown)
+    return None if stated == hygiene_green_light.NO_RECOMMENDATION else stated
+
+
 def _three_lines(shown: str | None,
                  lifted: console_escalation.Escalation | None,
                  choices: dict | None,
@@ -581,11 +600,15 @@ def _three_lines(shown: str | None,
     else:
         # The first sentence of what the reason block states — the reason
         # itself, or the sentence that stands for one refused or never written.
+        # The Recommendation is the one the reason states in prose, and
+        # `none given` only when it states none.
         stated = _why_lines("", shown, last_words)[0].strip()
+        recommended = _stated_recommendation(shown)
         esc = console_escalation.Escalation(
             console_escalation._first_sentence(stated),
             REWRITE_QUESTION if rewrite else ORDINARY_QUESTION,
-            None, NO_RECOMMENDATION)
+            recommended,
+            NO_RECOMMENDATION if recommended is None else RECOMMENDED_IN_REASON)
     return console_escalation.render(esc)
 
 

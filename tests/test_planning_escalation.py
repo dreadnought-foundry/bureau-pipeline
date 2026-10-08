@@ -1273,8 +1273,8 @@ class TestTheDocumentsAgree:
 # reads what was found, what is asked and what we recommend before the detail.
 # Where they come from, in precedence: lifted out of a reason that declares
 # them, completed from a choices block when one is in hand, otherwise completed
-# from the reason's first sentence with the route's fixed question and
-# `none given`. The critic-shaped reasons are built HERE from the fixture
+# from the reason's first sentence with the route's fixed question and the
+# reason's own prose recommendation, or `none given`. The critic-shaped reasons are built HERE from the fixture
 # records — nothing in `plan_critic` writes one yet (DRE-3910).
 
 import console_escalation  # noqa: E402
@@ -1470,6 +1470,41 @@ class TestTheLinesAreCompletedWhenNothingDeclaredThem:
         assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
         assert console_escalation.problems(note) == []
         assert note.split("\n")[-1] == CLOSING_ASK
+
+    @pytest.mark.parametrize("line, answer", [
+        ("Recommendation: keep the old page live for one week.",
+         "keep the old page live for one week."),
+        ("**Recommendation:** close it on Friday.", "close it on Friday."),
+        ("Recommended — close it on Friday.", "close it on Friday."),
+        ("We can close it on Friday or Monday. I recommend close it on Friday.",
+         "I recommend close it on Friday."),
+    ])
+    def test_a_reason_that_recommends_in_prose_carries_its_recommendation(
+            self, line, answer):
+        """A reason that declares no lines but recommends in its own words
+        (`briefs/planner.md` ends a reason with one) is not `none given`: the
+        Recommendation is what it said, read the way the Green Light lane
+        reads it (DRE-6196), so the row a person reads keeps the advice."""
+        reason = f"{REASON}\n\n{line}"
+        note = planning_escalation.escalation_comment(CARD, reason)
+        _assert_lines_open_the_note(note)
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == (
+            f"{console_escalation.RECOMMENDATION_PREFIX} {answer}"
+            f"{console_escalation.SEPARATOR}{planning_escalation.RECOMMENDED_IN_REASON}")
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) != NONE_GIVEN_LINE
+        assert console_escalation.problems(note) == []
+        assert hygiene_green_light.escalation_reason(note) == reason
+        assert hygiene_green_light.recommendation(
+            hygiene_green_light.escalation_reason(note), note=note) == (
+            f"{answer}{console_escalation.SEPARATOR}"
+            f"{planning_escalation.RECOMMENDED_IN_REASON}")
+
+    def test_a_refused_reason_recommends_nothing_whatever_it_says(self):
+        reason = ("the fix belongs in scripts/reconcile.py\n\n"
+                  "Recommendation: patch promote_ready().")
+        note = planning_escalation.escalation_comment(CARD, reason)
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        assert "promote_ready" not in note
 
     @pytest.mark.parametrize("reason, sentence", [
         ("the fix belongs in scripts/reconcile.py, around promote_ready()",
