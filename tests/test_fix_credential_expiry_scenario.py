@@ -381,8 +381,12 @@ class TheStepsAreWiredToTheContract(unittest.TestCase):
 
     def test_the_upload_takes_the_patch_and_the_sidecar(self):
         _, upload = named(UPLOAD_STEP)
-        self.assertEqual(conjuncts(upload.get("if")),
-                         conjuncts("always() && steps.rescue.outputs.patch != ''"))
+        # Gated on the patch output; the escalation conjunct is the one every
+        # step past the unfixable-check gate carries
+        # (tests/test_unfixable_check_escalation.py).
+        self.assertEqual(conjuncts(upload.get("if")), conjuncts(
+            "always() && steps.rescue.outputs.patch != '' && "
+            "steps.unfixable.outputs.escalate != 'true'"))
         self.assertTrue(upload.get("continue-on-error"))
         self.assertTrue(str(upload.get("uses")).startswith("actions/upload-artifact@"))
         with_ = upload.get("with") or {}

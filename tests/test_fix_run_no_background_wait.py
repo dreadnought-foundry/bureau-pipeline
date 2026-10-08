@@ -234,12 +234,14 @@ class TheBriefPromisesDeliveryOnlyWhereItHappens(unittest.TestCase):
         self.assertNotRegex(
             flat(text), r"(?i)agent-fix\.yml[^.]{0,80}\bno\b[^.]{0,40}\bstep\b")
 
-    def test_the_check_catches_a_brief_that_promises_it_for_agent_fix(self):
+    def test_the_check_catches_a_brief_that_promises_it_where_nothing_delivers(self):
+        # agent-fix.yml was this test's example until DRE-6350 gave it the
+        # rescue; a workflow with no delivery step stands in for it now.
         promise = (
-            "agent-fix.yml re-mints a fresh token after you finish and "
+            "qa-review.yml re-mints a fresh token after you finish and "
             "delivers your branch if you could not."
         )
-        self.assertEqual(undelivered_names(promise), ["agent-fix.yml"])
+        self.assertEqual(undelivered_names(promise), ["qa-review.yml"])
 
     def test_the_check_catches_the_unscoped_sentence_that_misled_run_36640595665(self):
         # The sentence as it stood names no workflow at all, so it reads as

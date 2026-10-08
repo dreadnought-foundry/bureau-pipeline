@@ -104,20 +104,24 @@ and push a WIP branch immediately**, then carry on:
     git add -A && git commit -m "wip(DRE-N): checkpoint" && git push -u origin agent/DRE-N-<slug>
 
 An expiry after that costs a rebase, not a rebuild; an expiry before it costs
-the whole run. On a build run, agent-task.yml re-mints a fresh token after you
-finish and delivers your branch if you could not, so a push you never managed
-is still recoverable — but only if the work is COMMITTED. Uncommitted changes
-are not. A fix run is different: agent-fix.yml has no delivery step yet
-(DRE-4911), so a fixing agent whose push fails at the hour loses the work. On
-a fix run, push before any long check, and never end your turn waiting on
-one (DRE-5271).
+the whole run. On a build run agent-task.yml, and on a fix run agent-fix.yml,
+re-mints a fresh token after you finish and delivers your branch if you could
+not, so a push you never managed is still recoverable — but only if the work
+is COMMITTED. Uncommitted changes are not. On a fix run that delivery is the
+`Push rescue` step (DRE-6350): it pushes onto the pull request's own branch,
+never opens a second pull request, and refuses one that has merged or closed.
+It delivers every commit beyond the head the run started from, whatever
+handoff file you wrote beside it — so a fixing agent whose push GitHub refuses
+leaves the commit where it is and ends, and an agent that escalates commits
+nothing. On a fix run, still push before any long check, and never end your
+turn waiting on one (DRE-5271).
 If GitHub refuses that delivery twice (DRE-3098), the committed branch is
-uploaded to the run as `rescue-<CARD>.patch` — again, only what is committed —
-and the run's last step says so on the card (`🚨 rescue-push-failed`, naming the
-artifact and the run) and dispatches a `deliver-rescue` follow-up that replays
-that patch on a fresh branch with a credential of its own (DRE-3262). You do not
-have to do anything about it; what you have to do is COMMIT, because the whole
-chain begins at a commit.
+uploaded to the run as `rescue-<CARD>.patch` — again, only what is committed.
+On a build run the run's last step then says so on the card
+(`🚨 rescue-push-failed`, naming the artifact and the run) and dispatches a
+`deliver-rescue` follow-up that replays that patch on a fresh branch with a
+credential of its own (DRE-3262). You do not have to do anything about it;
+what you have to do is COMMIT, because the whole chain begins at a commit.
 
 This does not change the TDD commit order: the RED test commit still comes
 first, and a WIP checkpoint pushed after it is just the same commits, earlier.
