@@ -733,7 +733,13 @@ class TestThePerPassCap:
         assert [a.target for a in actions(items)] == ["DRE-90"]
         assert [r.why for r in lefts(items, "DRE-12")] == [DRE_6273]
 
-    @pytest.mark.parametrize("value", ["0", "-3", "forty", "2.5", ""])
+    @pytest.mark.parametrize("value", ["", "  "])
+    def test_an_empty_value_is_the_default(self, monkeypatch, value):
+        monkeypatch.setenv(CAP_VAR, value)
+        items, _, _ = plan(*cap_fixture())
+        assert len(actions(items)) == 6 and lefts(items) == []
+
+    @pytest.mark.parametrize("value", ["0", "-3", "forty", "2.5", "1e3"])
     def test_a_value_that_is_not_a_positive_integer_raises_naming_the_variable(
         self, monkeypatch, value
     ):

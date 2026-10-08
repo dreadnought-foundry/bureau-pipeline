@@ -935,6 +935,24 @@
       }
     },
     {
+      "name": "hygiene-hold-clear",
+      "tag": "hyg-hold-cleared",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A needs-human hold whose reason has cleared is lifted: the label comes off and this receipt says once on the card which hold it was and what lifted it — the card closed, a run started, or an operator's budget reset.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: with the label off the card is the sweep's again, and scripts/reconcile.py reads it at its own gates on the next ~15-minute pass, resuming whatever the hold was keeping it off — or, for a closed card, nothing follows at all; nothing speaks on this receipt's behalf.",
+      "why": "DRE-6180, the hygiene agent's holds lane (scripts/hygiene_holds.py) under epic DRE-6172; the core holds the one table of tags so every lane's receipt reads the same. It is the hygiene agent's lift of a hold, and the contract makes it its own receipt rather than the 🔓 hold lifted: line: its tag retires every 🔒 hold: stamp older than it (`hold.read_stamp`). Its idempotency key is (tag, cause), and the label's absence is the stronger guard — a lifted card is no longer a candidate. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act ends one rather than leaving any: the label is the hold, and its removal is a write the agent may make. It discharges nothing in this file: the hold it ends is the label's, recorded by the stamp, which is declared `not-an-act`. The lane moves the card nowhere; the two lifts that also need a move (new-head, repo-on-rail) land with DRE-6273.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-hold-cleared\""
+      }
+    },
+    {
       "name": "epic-approval-queued",
       "tag": "epic-queued",
       "adopted": true,

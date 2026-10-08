@@ -137,6 +137,88 @@ Canceled. This is what keeps a person's hand-applied label from being read as
 an old machine reason whose condition is already met. A stamp written after
 the retiring line is live again, which is how a re-park on the same head works.
 
+## How a hold lifts
+
+The hygiene agent's holds lane, `scripts/hygiene_holds.py` (DRE-6180), lifts a
+hold whose reason has cleared, once an hour, with nobody touching the card.
+
+**What it reads.** Holds outlive the five lanes the hygiene board read covers,
+so the lane reads its own candidates: one paged Linear query, fifty issues a
+page, for every issue carrying `needs-human` in any lane. The query passes
+`includeArchived: true` and selects `archivedAt`. Linear leaves archived issues
+out of every issue query by default, and a Done card the team's auto-archive
+put away is exactly the kind a stale label sits on. Each candidate's newest
+live stamp is read with `hold.read_stamp`, the whole thread where the
+fifty-comment window was cut short.
+
+**What it lifts.** Three lift kinds, each finished by the label alone:
+
+- `card-closed` — any card in Done or Canceled, whatever its stamp says and
+  whether it has one. The cause names the stamp's reason, or `reason=manual`
+  for a card with no live stamp. This is how the 207 stale labels counted on
+  2026-10-07 come off.
+- `run-started` — a 🧠 or ⏳ run receipt newer than a `stranded-no-run` stamp.
+  The lane reads the receipt and never starts a run.
+- `unpark-marker` — asked of `hold.lift_due` for a `dead-run-cap` or
+  `turn-cap-park` stamp. An operator's `unpark` already moved the card.
+
+None of the three moves the card. A lift is two writes, in order: the label
+comes off, then the agent's own receipt, act `hygiene-hold-clear`, tag
+`hyg-hold-cleared`:
+
+    🧹 hygiene: hyg-hold-cleared — reason=<code> because=<lift-kind> · <HH:MM PT>
+    evidence: <what was read>
+
+The cause is `reason=<code> because=<lift-kind>`. The evidence names the
+stamp's qualifier and the live fact that met it, or `lane Done` / `lane
+Canceled` for the universal lift. The receipt spends the stamp it lifted, like
+every `hyg-hold-cleared` receipt.
+
+**An archived card is unarchived for the write and re-archived after it.** A
+card whose read carried `archivedAt` takes four writes: unarchive, the label
+off, the receipt (whose evidence also says `archived`), and archive again. So
+the lane never depends on whether Linear accepts a label write on an archived
+issue, and the card ends archived as it began, with the re-archive's time as
+its new `archivedAt`. The guard admits the archive write only on a Done or
+Canceled card the read said was archived (DRE-6248). An archived card outside
+Done or Canceled is left alone like any other open hold.
+
+**What it leaves.** The `new-head` and `repo-on-rail` lifts leave a card in a
+lane nothing resumes, Green Light or Triage, so they are finished only by a
+lane move, and that move lands with DRE-6273. Until then a card whose live
+stamp lifts by either kind is a row in the hygiene summary reading
+`lift needs a lane move — lands with DRE-6273`, nothing is written on it, and
+`hold.lift_due` is not asked.
+
+A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
+label with no stamp — is lifted only in Done or Canceled. Anywhere else it waits
+for a person, and the lane writes nothing on it. A label standing over a spent
+stamp is the same person's hold, and the summary names it once as `held
+manual` so somebody sees the label came back.
+
+**One reset, one lift.** A budget reset retires the stamp it follows, so the
+label over it reads `manual`. A fresh `dead-run-cap` or `turn-cap-park` stamp
+after the reset is the card parked again with the reset's budget spent, and
+it is not lifted by the reset that came before it. Only a reset newer than the
+live stamp would meet the lift, and `unpark` takes the label off itself when it
+posts one.
+
+**A pass is bounded.** The lane lifts at most `HYGIENE_HOLDS_MAX_LIFTS` holds a
+pass, default 40, so a pass makes at most about 160 Linear writes. A value that
+is not a positive integer stops the lane with the variable named. Order inside
+the cap:
+
+1. lifts met on an open card (`run-started`, `unpark-marker`), oldest stamp
+   first;
+2. then the `card-closed` lifts, oldest stamp first;
+3. then the closed cards with no live stamp, by identifier.
+
+A hold whose reason has just cleared lifts within one pass, whatever the stale
+backlog behind it. Every lift over the cap is a summary row reading
+`over the per-pass cap of <n> — carried to the next pass`, recommending a wait,
+so an operator can watch the backlog drain. The 207 clear in about six hourly
+passes, and the pass that finishes them is the first with no carried row.
+
 ## The reader rule
 
 `hold.respects(labels, bodies, reader)` answers whether a reader stands down
