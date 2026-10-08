@@ -26,9 +26,11 @@ from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
    `CLOSING_ROW_WORDS`, in the shape of a merge to main the criterion leads
    with, or of the CEO or the operator closing the card or reading the
    record) must open with one of `MET_WORDS`, no hedge straight after it
-   (`HEDGES`). Then a `hyg-proof-closed` receipt and Done. Cause:
-   `record <path> at #<n>, <k> rows met` — k is the record's, fixed once
-   merged. Anything else is a `Left` row "ready for the CEO" naming the record
+   (`HEDGES`), or be accepted by operator decision with the decision linked in
+   the same cell (`row_accepted`, DRE-6244). Then a `hyg-proof-closed` receipt
+   and Done. Cause: `record <path> at #<n>, <k> rows met` — k is the record's,
+   fixed once merged — and, when any row was accepted, `, <m> accepted by
+   operator decision: “<criterion>”; …` naming each (`summary`). Anything else is a `Left` row "ready for the CEO" naming the record
    and each row not met, or saying it has no criterion table. Checkboxes are
    never read: they are the card's own criteria copied in. `OWN_PROOF`, this
    agent's own epic's proof, is a `Left` row before anything is looked up —
@@ -88,7 +90,10 @@ from proof_record import (  # noqa: F401 — the names this lane's callers and t
     criterion_rows,
     is_closing_row,
     reading,
+    row_accepted,
     row_met,
+    summary,
+    unmet_row,
 )
 
 LANE = "Todo and proofs"
@@ -235,7 +240,8 @@ def merged(card: dict, repo: str, pr: dict, labels: list, has_children: bool,
 
 
 def proven(card: dict, repo: str, ctx: hygiene.Context, cache: dict) -> list:
-    """(2) a `PROOF:` card whose merged record is a criterion table, all met."""
+    """(2) a `PROOF:` card whose merged record is a criterion table, all met
+    or accepted."""
     ident = card["identifier"]
     pr = _merged_pr(ident, repo, ctx)
     if pr is None:
@@ -259,13 +265,13 @@ def proven(card: dict, repo: str, ctx: hygiene.Context, cache: dict) -> list:
                              "criterion table", recommend)]
     path, read = found
     if read.unmet:
-        rows = "; ".join(_row(c, r) for c, r in read.unmet)
+        rows = "; ".join(unmet_row(c, r) for c, r in read.unmet)
         return [_left(ident, f"ready for the CEO — record {path} at #{number}, "
                              f"{len(read.unmet)} row(s) not met: {rows}", recommend)]
-    if not read.met:
+    if not read.met and not read.accepted:
         return [_left(ident, f"ready for the CEO — record {path} at #{number} has a criterion "
                              "table with no row but its closing step", recommend)]
-    cause = f"record {path} at #{number}, {len(read.met)} rows met"
+    cause = f"record {path} at #{number}, {summary(read)}"
     return [_action(card, "hygiene-proof-close", cause,
                     [f"pull request {repo}#{number}", f"record {path} at {branch}",
                      RULE_EVIDENCE], ctx, "Done")]

@@ -305,6 +305,25 @@ refuses while a `🔬 proof-waiting` hold stands that nothing discharged. A
 refused card stays open under the `🔒 Merged — card deliberately left open`
 comment.
 
+**A criterion a later decision overtook is accepted, not met (DRE-6244).** The
+CEO decided on 2026-10-07 that a record may carry a row the operator accepted
+as out of date, provided the record links the written reason. Use it only when
+a criterion has been overtaken by a later shipped decision, and the linked
+comment names that decision. The operator writes the decision comment and the
+row — never the builder, and never the proof run. A proof run never writes an
+accepted row on its own judgment: it records `Not observed.` or `Not met.` and
+lets the gate hold. The row reads `ACCEPTED by operator decision — <reason>
+(<link>)`, where the link is a Linear comment
+(`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
+request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`) in
+the same cell. An accepted row with no such link is held as not met. A record
+whose judged rows are all `Met.` or accepted is `**Status: PASS.**`, and the
+card's close comment names every accepted row by its criterion. The gate checks
+only that a link of the right shape is present. It does not open the link, so
+it cannot confirm the comment exists, that the operator wrote it, or that it
+names a shipped decision — the critic, whose APPROVE the gate still requires,
+is the reader who follows it.
+
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that the operator runs a proof as soon as its build cards finish,
 and the card closes on the evidence that run records. The CEO is needed only

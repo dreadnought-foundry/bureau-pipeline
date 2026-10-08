@@ -16,7 +16,12 @@ or read the hold. Both now do, through this module:
    the CEO's closing step (`is_closing_row`: one of `CLOSING_ROW_WORDS`, in the
    shape of a merge to main the criterion leads with, or of the CEO or the
    operator closing the card or reading the record) must open with one of
-   `MET_WORDS`, no hedge straight after it (`HEDGES`).
+   `MET_WORDS`, no hedge straight after it (`HEDGES`) — or be **accepted**
+   (DRE-6244): open with `ACCEPTED by operator decision` and link, in the same
+   cell, the operator's written decision as a Linear comment or a GitHub pull
+   request comment (`row_accepted`). Only the link's shape is read; nothing
+   here fetches it. An accepted row with no link is not met, and `unmet_row`
+   says so. `summary` renders the reading as both PROOF closes post it.
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`.
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
@@ -77,12 +82,27 @@ CLOSING_ROW_WORDS = ("merged", "on main", "the ceo", "close")
 MET_WORDS = ("met", "holds", "observed", "proven", "pass", "yes")
 HEDGES = ("but", "only", "except", "partly", "partially", "with caveats?", "and no", "and not",
           "not")
+#: A result cell opening with this is a criterion the operator accepted as
+#: overtaken by a later shipped decision (DRE-6244) — accepted, not met, and
+#: only when the same cell links the written decision (`_DECISION_LINK`).
+ACCEPTED_OPENING = "accepted by operator decision"
+#: What an accepted row with no linked decision is held for.
+UNLINKED = "accepted without a linked decision"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _MET = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b")
 _HEDGED = re.compile(rf"(?:{'|'.join(MET_WORDS)})\b[\s,;:—–-]*(?:{'|'.join(HEDGES)})\b")
+_ACCEPTED = re.compile(rf"{ACCEPTED_OPENING}\b")
+#: The written decision, bare or inside a markdown link: a Linear comment on a
+#: card or a GitHub comment on a pull request. Its SHAPE is all that is read —
+#: nothing fetches it, so nothing here says the comment exists, who wrote it,
+#: or that it names a shipped decision; the critic follows the link.
+_DECISION_LINK = re.compile(
+    r"(?<![\w.-])(?:https?://)?(?:www\.)?"
+    r"(?:linear\.app/[\w.-]+/issue/DRE-\d+/[^\s/#()<>\[\]|]+#comment-[\w-]+"
+    r"|github\.com/[\w.-]+/[\w.-]+/pull/\d+#issuecomment-\d+)", re.IGNORECASE)
 #: The record's own merge: the criterion leads with it — "Merged to main…",
 #: "The record is on main", "docs/<record>.md merged to main".
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
@@ -91,9 +111,9 @@ _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:mer
 _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e) (?:this card"
                            r"|the card|it)|reads? (?:the|this) (?:merged )?record)\b")
 
-#: `rows` is None when the record holds no criterion table; `met` and `unmet`
-#: are the (criterion, result) pairs that are not closing rows.
-Reading = namedtuple("Reading", "rows met unmet")
+#: `rows` is None when the record holds no criterion table; `met`, `unmet`
+#: and `accepted` are the (criterion, result) pairs that are not closing rows.
+Reading = namedtuple("Reading", "rows met unmet accepted")
 
 
 def _cells(line: str) -> list:
@@ -160,18 +180,50 @@ def row_met(result: str) -> bool:
     return _MET.match(text) is not None and _HEDGED.match(text) is None
 
 
+def _opens_accepted(result: str) -> bool:
+    return _ACCEPTED.match(_plain(result).lower()) is not None
+
+
+def row_accepted(result: str) -> bool:
+    """Does the result cell open with `ACCEPTED_OPENING` and link the written
+    decision in the same cell? `HEDGES` are not read: the link is the test."""
+    return _opens_accepted(result) and _DECISION_LINK.search(result or "") is not None
+
+
 def reading(text: str) -> Reading:
     rows = criterion_rows(text)
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
+    accepted = [r for r in judged if row_accepted(r[1])]
     return Reading(rows=rows, met=[r for r in judged if row_met(r[1])],
-                   unmet=[r for r in judged if not row_met(r[1])])
+                   unmet=[r for r in judged if not row_met(r[1]) and not row_accepted(r[1])],
+                   accepted=accepted)
+
+
+def _cut(text: str, n: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
 def _row(criterion: str, result: str) -> str:
-    def cut(text: str, n: int) -> str:
-        text = " ".join(text.split())
-        return text if len(text) <= n else text[:n - 1].rstrip() + "…"
-    return f"“{cut(criterion, 70)}” reads “{cut(result.replace('*', ''), 50)}”"
+    return f"“{_cut(criterion, 70)}” reads “{_cut(result.replace('*', ''), 50)}”"
+
+
+def unmet_row(criterion: str, result: str) -> str:
+    """An unmet row as `_row` renders it, with `UNLINKED` after it when the
+    row opened as accepted but linked no decision — the result kept, the
+    reason added."""
+    said = _row(criterion, result)
+    return f"{said} — {UNLINKED}" if _opens_accepted(result) else said
+
+
+def summary(read: Reading) -> str:
+    """`<k> rows met`, and every accepted row by its criterion — what both
+    PROOF closes say of the table (DRE-6244)."""
+    said = f"{len(read.met)} rows met"
+    if not read.accepted:
+        return said
+    named = "; ".join(f"“{_cut(c, 70)}”" for c, _ in read.accepted)
+    return f"{said}, {len(read.accepted)} {ACCEPTED_OPENING}: {named}"
 
 
 # --------------------------------------------------------------------------- #
@@ -293,7 +345,8 @@ def fetch(repo: str, files, ref: str, gh=None) -> Record:
 
 def shortfall(record: Record) -> str | None:
     """Why this record does not prove its card, or None when every judged row
-    is met — the one judgment the merge gate and the PROOF close make."""
+    is met or accepted — the one judgment the merge gate and the PROOF close
+    make."""
     if record is None or record.text is None:
         detail = getattr(record, "detail", None) or "nothing was read"
         return f"no proof record could be read — {_one_line(detail)}"
@@ -302,9 +355,9 @@ def shortfall(record: Record) -> str | None:
     if read.rows is None:
         return f"{path} has no criterion table"
     if read.unmet:
-        rows = "; ".join(_row(c, r) for c, r in read.unmet)
+        rows = "; ".join(unmet_row(c, r) for c, r in read.unmet)
         return f"{path} has {len(read.unmet)} row(s) not met: {rows}"
-    if not read.met:
+    if not read.met and not read.accepted:
         return f"{path} has a criterion table with no row but its closing step"
     return None
 
