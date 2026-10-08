@@ -81,7 +81,9 @@ set -e
 #     per base tip, `wait` stops, `proceed` goes on.
 #  7. Moves the card to In Review if it is still In Progress, merges pinned to
 #     the evaluated head, and comments the merge on the card. A merge refused
-#     because the head moved exits 0. One refused with the head unmoved is a
+#     because the head moved exits 0. With the head unmoved, GitHub's own
+#     server error earns one more try at the same head, and that try's answer
+#     is the one read from here. One refused with the head unmoved is a
 #     real failure, explained and red, unless GitHub's text says the head
 #     branch is out of date: then the branch is updated from the base once per
 #     base tip, one note says so, and the step exits 0 without merging.
@@ -321,6 +323,15 @@ set -e
 #   with the head unmoved is a real failure as before, and a branch that is
 #   behind but accepted still merges as it stands: the compare status is
 #   never the trigger.
+# DRE-6242 (2026-10-08). The sandbox gate decided `merge` on bureau-harness
+#   #3556, green and approved, and GitHub answered the merge with its own
+#   server error: "Something went wrong while executing your query". The head
+#   had not moved, so the run went red. Nothing in the sandbox re-runs a red
+#   gate, and main's harness waited 1200s for a merge that never came. Now,
+#   with the head unmoved, that text earns ONE more merge pinned to the same
+#   head after MERGE_RETRY_SECONDS (15 by default). It is a merge only if
+#   GitHub accepts it; a second refusal is read by the arms below exactly as
+#   a first one was, and a second server error is a real failure.
 
 set -euo pipefail
 
@@ -522,6 +533,14 @@ if [ "$DECISION" = "hold" ] && [ -z "$STACKED" ] && [ -z "$OWNER_HOLD" ]; then
     --body-file /tmp/hold-note.md \
     || echo "the hold note did not post — the hold stands; the next evaluation tries again"
 fi
+# The merged path, from the merge or from its one second try (DRE-6242).
+merged() {
+  cat /tmp/merge-error.txt >&2
+  echo "merged PR #$PR"
+  [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+    "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $PR_URL" || true
+  exit 0
+}
 [ "$DECISION" = "merge" ] || exit 0
 
 # The fork refresh, the first of the gate's two branch writes (DRE-4912, DRE-5070).
@@ -583,6 +602,14 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp
   cat /tmp/merge-error.txt >&2
   NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
   if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
+    # GitHub's own server error is not a refusal: one more try, the same pin,
+    # and the arms below read that try's answer (DRE-6242).
+    if grep -qF 'Something went wrong while executing your query' /tmp/merge-error.txt; then
+      echo "GitHub answered the merge with its own server error, the head still at $SHA — trying once more"
+      sleep "${MERGE_RETRY_SECONDS:-15}"
+      gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt && merged
+      cat /tmp/merge-error.txt >&2
+    fi
     # GitHub's up-to-date rule, which this gate does not enforce: one update
     # per base tip, pinned to the evaluated head, as the qa-bot (DRE-6195).
     if grep -qF 'Head branch is out of date' /tmp/merge-error.txt; then
@@ -621,7 +648,4 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp
   echo "head moved since evaluation (was $SHA, now ${NOW:-unverifiable}) — not merging; the gate re-runs on the new head's events"
   exit 0
 fi
-cat /tmp/merge-error.txt >&2
-echo "merged PR #$PR"
-[ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-  "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $PR_URL" || true
+merged
