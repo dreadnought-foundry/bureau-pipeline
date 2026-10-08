@@ -1262,3 +1262,294 @@ class TestTheDocumentsAgree:
             for line in _read(rel).splitlines():
                 if "hand-plan" in line.lower():
                     assert "Triage" not in line, f"{rel}: {line}"
+
+
+# ===========================================================================
+# 7. The three lines on every park this note writes (DRE-3909)
+# ===========================================================================
+#
+# The note opens with its sentence, then the three lines DRE-3908 declares —
+# Finding, Question, Recommendation — and only then the reason, so the CEO
+# reads what was found, what is asked and what we recommend before the detail.
+# Where they come from, in precedence: lifted out of a reason that declares
+# them, completed from a choices block when one is in hand, otherwise completed
+# from the reason's first sentence with the route's fixed question and
+# `none given`. The critic-shaped reasons are built HERE from the fixture
+# records — nothing in `plan_critic` writes one yet (DRE-3910).
+
+import console_escalation  # noqa: E402
+import hygiene_green_light  # noqa: E402
+
+#: What every note asks when nothing stated a question.
+ORDINARY_QUESTION = (
+    "Is this something you want to settle yourself, or should we put it back "
+    "in the queue as it stands?"
+)
+TRANSPORT_QUESTION = "Leave it parked until the classifier is reading cards again?"
+REWRITE_QUESTION = "Rewrite the card and send it back through, or park it for good?"
+NONE_GIVEN_LINE = (
+    "💡 Recommendation: none given — the run that parked this card stated no "
+    "recommendation"
+)
+#: The ordinary note's closing line, exactly as it has always been written.
+CLOSING_ASK = (
+    "Answer it here and move the card back to be picked up, or park it if we "
+    "should not do this at all."
+)
+WHY_HEADING = "**Why it needs you:**"
+PREFIXES = (console_escalation.FINDING_PREFIX, console_escalation.QUESTION_PREFIX,
+            console_escalation.RECOMMENDATION_PREFIX)
+
+#: The plain sentence a critic-shaped reason opens with.
+PREAMBLE = "The reviewer read this card twice and could not settle it on its own."
+
+
+def _record(card: str) -> dict:
+    return next(r for r in console_escalation.load_fixtures() if r["card"] == card)
+
+
+def _critic(record: dict) -> console_escalation.Escalation:
+    """A fixture record as the escalation the one-off critic will write."""
+    return console_escalation.Escalation(
+        finding=record["finding"],
+        question=record["question"],
+        recommendation=record["recommendation"],
+        why=record["recommendation_why"],
+        choices=tuple(console_escalation.Choice(c["id"], c["label"], c["effect"],
+                                                c["outcome"])
+                      for c in record["choices"]),
+        recommended=record["recommended"],
+    )
+
+
+def _critic_reason(card: str) -> str:
+    """One plain preamble sentence, then the rendered lines and their block."""
+    return (f"{PREAMBLE}\n\n"
+            + console_escalation.render_with_block(_critic(_record(card))))
+
+
+def _label(record: dict) -> str:
+    return next(c["label"] for c in record["choices"]
+                if c["id"] == record["recommended"])
+
+
+def _line(note: str, prefix: str) -> str:
+    found = [line for line in note.split("\n") if line.startswith(prefix)]
+    assert len(found) == 1, (prefix, note)
+    return found[0]
+
+
+def _value(note: str, prefix: str) -> str:
+    return _line(note, prefix)[len(prefix):].strip()
+
+
+def _assert_lines_open_the_note(note: str) -> None:
+    """The three lines, in order, each on its own line, directly under the
+    opening sentence and its blank line, and above the reason."""
+    lines = note.split("\n")
+    assert lines[1] == "", note
+    assert [line.split(":", 1)[0] + ":" for line in lines[2:5]] == list(PREFIXES), note
+    assert lines[5] == "", note
+    assert lines[6].startswith(WHY_HEADING), note
+    for prefix in PREFIXES:
+        assert note.count(prefix) == 1, (prefix, note)
+
+
+def _posted(reason: str, *flags: str) -> str:
+    card = _Card()
+    argv = ["escalate", CARD, "--why", reason, *flags]
+    assert card.run(lambda: planning_escalation.main(argv)) == 0
+    assert len(card.posted) == 1
+    return card.posted[0][1]
+
+
+#: A valid block that is not the critic's, for a run that ALSO passed one.
+OTHER_BLOCK = {
+    "question": "Ship it now or wait a week?",
+    "context": "The change is ready and nothing depends on it.",
+    "choices": [
+        {"id": "ship-now", "label": "ship now", "effect": "it goes out today",
+         "outcome": "proceed"},
+        {"id": "wait", "label": "wait a week", "effect": "it waits",
+         "outcome": "close"},
+    ],
+    "recommended": "ship-now",
+    "why": "nothing depends on it",
+}
+
+
+class TestTheLinesAreLiftedFromACriticShapedReason:
+    @pytest.mark.parametrize("card", ["DRE-3879", "DRE-3889"])
+    def test_the_three_lines_open_the_note(self, card):
+        record = _record(card)
+        note = planning_escalation.escalation_comment(CARD, _critic_reason(card))
+        _assert_lines_open_the_note(note)
+        assert _value(note, console_escalation.QUESTION_PREFIX) == record["question"]
+        assert console_escalation.parse(note).recommendation == _label(record)
+        assert console_escalation.problems(note) == []
+
+    @pytest.mark.parametrize("card", ["DRE-3879", "DRE-3889"])
+    def test_the_posted_note_carries_one_ask_and_the_block_last(self, card):
+        record = _record(card)
+        note = _posted(_critic_reason(card))
+        _assert_lines_open_the_note(note)
+        assert console_escalation.problems(note) == []
+        assert ORDINARY_QUESTION not in note
+        asks = [line for line in note.split("\n") if line.rstrip().endswith("?")]
+        assert asks == [_line(note, console_escalation.QUESTION_PREFIX)]
+        prose, _ = note.split("\n\n```escalation-choices\n")
+        assert prose.split("\n")[-1] == CLOSING_ASK
+        assert note.count("```escalation-choices") == 1
+        assert note.rstrip().endswith("```")
+        assert planning_escalation.parse_choices(note) == \
+            console_escalation.block(_critic(record))
+
+    def test_the_lifted_recommendation_reaches_the_note_verbatim(self):
+        reason = _critic_reason("DRE-3879")
+        note = planning_escalation.escalation_comment(CARD, reason)
+        for prefix in PREFIXES:
+            assert _line(note, prefix) == _line(reason, prefix)
+
+    def test_the_surrounding_prose_is_unchanged(self):
+        tail = "Either answer is cheap to undo."
+        reason = (f"{PREAMBLE}\n\n"
+                  + console_escalation.render(_critic(_record("DRE-3879")))
+                  + f"\n\n{tail}")
+        note = planning_escalation.escalation_comment(CARD, reason)
+        _assert_lines_open_the_note(note)
+        assert f"{WHY_HEADING} {PREAMBLE}\n\n{tail}\n\n" in note
+
+    def test_a_choices_file_never_adds_a_second_block(self, tmp_path):
+        path = tmp_path / "choices.json"
+        path.write_text(json.dumps(OTHER_BLOCK), encoding="utf-8")
+        record = _record("DRE-3879")
+        note = _posted(_critic_reason("DRE-3879"), "--choices-file", str(path))
+        assert note.count("```escalation-choices") == 1
+        assert planning_escalation.parse_choices(note) == \
+            console_escalation.block(_critic(record))
+        assert OTHER_BLOCK["question"] not in note
+        assert console_escalation.problems(note) == []
+
+    def test_a_lifted_line_that_leaks_is_not_shown(self):
+        esc = console_escalation.Escalation(
+            finding="the fix belongs in scripts/reconcile.py",
+            question="Should we fix it now?",
+            recommendation="fix it now", why="it is cheap")
+        reason = f"{PREAMBLE}\n\n{console_escalation.render(esc)}"
+        note = planning_escalation.escalation_comment(CARD, reason)
+        assert "reconcile.py" not in note
+        assert _value(note, console_escalation.FINDING_PREFIX) == (
+            "Finding was written in technical terms; it is in the run log")
+        assert _value(note, console_escalation.QUESTION_PREFIX) == "Should we fix it now?"
+        assert console_escalation.problems(note) == []
+
+    def test_a_refused_block_is_refused_as_a_code_fence_as_today(self):
+        record = _record("DRE-3879")
+        built = console_escalation.block(_critic(record))
+        built["choices"][1]["label"] = "grant DRE-3879 a bypass"
+        reason = (f"{PREAMBLE}\n\n"
+                  + console_escalation.render(_critic(record))
+                  + "\n\n" + planning_escalation.choices_block(built))
+        assert "a code fence" in planning_escalation.refusal(reason)
+        note = _posted(reason)
+        assert "```" not in note
+        assert f"{WHY_HEADING} {planning_escalation.NOT_PLAIN_ENGLISH}" in note
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        _assert_lines_open_the_note(note)
+        assert console_escalation.problems(note) == []
+
+
+class TestTheLinesAreCompletedWhenNothingDeclaredThem:
+    def test_a_plain_reason_recommends_nothing(self):
+        note = planning_escalation.escalation_comment(CARD, REASON)
+        _assert_lines_open_the_note(note)
+        assert _value(note, console_escalation.FINDING_PREFIX) == (
+            "This one is a judgement call about who we are selling to, not a "
+            "piece of work an agent can finish.")
+        assert _value(note, console_escalation.QUESTION_PREFIX) == ORDINARY_QUESTION
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        assert console_escalation.problems(note) == []
+        assert note.split("\n")[-1] == CLOSING_ASK
+
+    @pytest.mark.parametrize("reason, sentence", [
+        ("the fix belongs in scripts/reconcile.py, around promote_ready()",
+         planning_escalation.NOT_PLAIN_ENGLISH),
+        ("", planning_escalation.NO_REASON_STATED),
+        (None, planning_escalation.NO_REASON_STATED),
+    ])
+    def test_a_refused_or_empty_reason_still_gets_well_formed_lines(
+            self, reason, sentence):
+        note = planning_escalation.escalation_comment(CARD, reason)
+        _assert_lines_open_the_note(note)
+        assert _value(note, console_escalation.FINDING_PREFIX) == sentence
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        assert console_escalation.problems(note) == []
+        assert "reconcile.py" not in note and "promote_ready" not in note
+
+    def test_a_refused_reason_ignores_a_block_in_hand(self):
+        leak = "see scripts/reconcile.py"
+        assert planning_escalation.escalation_comment(
+            CARD, leak, choices=OTHER_BLOCK) == \
+            planning_escalation.escalation_comment(CARD, leak)
+
+    def test_the_transport_note_recommends_leaving_it_parked(self):
+        note = planning_escalation.escalation_comment(
+            CARD, planning_escalation.transport_reason("429"), transport=True)
+        _assert_lines_open_the_note(note)
+        assert _value(note, console_escalation.FINDING_PREFIX) == (
+            "the step that reads new cards failed twice to reach its model")
+        assert _value(note, console_escalation.QUESTION_PREFIX) == TRANSPORT_QUESTION
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == (
+            "💡 Recommendation: leave it parked — nothing has read the card; "
+            "this is our plumbing, not a judgement")
+        assert console_escalation.problems(note) == []
+        assert note.split("\n")[-1] == (
+            "Move it back to be picked up once we tell you the classifier is "
+            "reading cards again.")
+
+    def test_the_rewrite_note_asks_for_a_rewrite(self):
+        note = planning_escalation.escalation_comment(CARD, REASON, rewrite=True)
+        _assert_lines_open_the_note(note)
+        assert _value(note, console_escalation.QUESTION_PREFIX) == REWRITE_QUESTION
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        assert console_escalation.problems(note) == []
+        assert note.split("\n")[-1] == (
+            "Rewrite it and move the card back to be picked up, or park it if "
+            "we should not do this at all.")
+
+    @pytest.mark.parametrize("kw", [{}, {"transport": True}, {"rewrite": True}])
+    def test_no_line_below_the_three_asks_a_second_question(self, kw):
+        note = planning_escalation.escalation_comment(CARD, REASON, **kw)
+        asks = [line for line in note.split("\n") if line.rstrip().endswith("?")]
+        assert asks == [_line(note, console_escalation.QUESTION_PREFIX)]
+
+    def test_the_stand_down_and_requeue_notes_carry_no_lines(self):
+        for note in (
+            planning_escalation.stood_down_comment(CARD, "it is in Todo", REASON),
+            planning_escalation.transport_comment(
+                CARD, planning_escalation.transport_reason("429")),
+        ):
+            assert not any(prefix in note for prefix in PREFIXES), note
+
+
+class TestTheReasonHygieneReadsIsUnchanged:
+    """`hygiene_green_light.escalation_reason` reads from the reason block to
+    the parked paragraph; the lines sit above it. Pinned against what today's
+    note gives for the reason it shows — the reason as stated, or for a lifted
+    reason the prose that remains once the lines and block are lifted."""
+
+    def test_the_lifted_case(self):
+        note = _posted(_critic_reason("DRE-3889"))
+        assert hygiene_green_light.escalation_reason(note) == PREAMBLE
+
+    def test_the_block_completed_case(self):
+        note = planning_escalation.escalation_comment(CARD, REASON,
+                                                      choices=OTHER_BLOCK)
+        assert _value(note, console_escalation.QUESTION_PREFIX) == \
+            OTHER_BLOCK["question"]
+        assert hygiene_green_light.escalation_reason(note) == REASON
+
+    def test_the_none_given_case(self):
+        note = planning_escalation.escalation_comment(CARD, REASON)
+        assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
+        assert hygiene_green_light.escalation_reason(note) == REASON
