@@ -157,6 +157,7 @@ import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fi
 # answer to "did he exclude this card", waiting to disagree with the first.
 import groom_schedule_gate  # noqa: E402 — the standing card's variable name
 import groomer  # noqa: E402
+import head_desync  # noqa: E402 — DRE-6217: a pull request GitHub left behind its branch
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -7697,6 +7698,159 @@ def retrigger_dead_heads() -> None:
                "-f", f"sha={new}")
 
 
+def resync_desynced_heads() -> None:
+    """DRE-6217: a pull request GitHub never moved to its branch's newest
+    commit is closed and reopened — once per (pull request, branch commit).
+
+    Origin (bureau-pipeline #780, 2026-10-07): a push landed at 9:58 AM PT
+    while GitHub Actions was failing to start runs fleet-wide. The branch ref
+    moved to `d1754c31`; `pulls/780` kept `head.sha = 79764952` for six hours.
+    Every check, the critic, the fix loop and the merge gate read the stale
+    commit, the fix agent was dispatched against it and asked for "a new
+    commit on the branch" the branch already held, and `retrigger_dead_heads`
+    one step up never fired — it reads the pull request's own `headRefOid`,
+    and that commit HAD check runs. `update-branch` refused on both APIs with
+    `head sha didn't match the current head ref`. The operator's close and
+    reopen moved the head within a minute; that is the remedy here.
+
+    One ref read per open card-branch pull request, and nothing else unless
+    the two commits differ. A mismatch is acted on only when every one of
+    these holds, each read LOUDLY so unreadable is UNKNOWN and never "in
+    sync" (DRE-2034):
+
+      * the branch commit is over `head_desync.MIN_AGE_MINUTES` old — under
+        that is GitHub's normal synchronize lag;
+      * a fresh read of the pull request still shows the old head — the
+        listing is a snapshot, and GitHub may have caught up since;
+      * no worker-bot `head-desync` receipt names this branch commit — the
+        receipt is the idempotency key, and only the worker bot's own count,
+        so a planted one cannot freeze a pull request (DRE-1998);
+      * the branch is a descendant of the old head (compare reads `ahead`):
+        GitHub can refuse to reopen a pull request whose head was rewritten,
+        and a pull request left closed is invisible to every sweep that lists
+        open ones.
+
+    Still desynced after the one resync, or rewritten rather than extended:
+    one `head-desync-unresolved` notice, once per branch commit, and nothing
+    else — a person hears about it and the sweep does not repeat itself.
+
+    The writes run under the sweep's default `GH_TOKEN`, the App token, so the
+    `pull_request: reopened` the reopen fires initiates as `agent-bureau-bot`,
+    which the review stub's `allowed_bots` admits (premortem Q1,
+    `standards/vendor-boundaries.md`). Closing an unmerged pull request fires
+    linear-sync's `closed` trigger, whose jobs all require `merged == true`.
+    """
+    try:
+        prs = json.loads(gh(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+            "--json", "number,headRefName,headRefOid,comments",
+        ) or "[]")
+    except ValueError as e:
+        _read_failures.append(f"head-desync: PR listing unreadable: {e}")
+        print(f"ERROR: head-desync: PR listing UNKNOWN — {e}", file=sys.stderr)
+        return
+    for pr in prs:
+        number = pr.get("number")
+        if not card_branch(pr.get("headRefName")):
+            continue
+        try:
+            _resync_one_head(pr)
+        except ReconcileRateLimited as e:
+            print(f"{head_desync.TAG}: PR #{number} UNKNOWN — {e}")
+            _degrade(head_desync.TAG, f"PR #{number}", e,
+                     then="no resync this sweep; the next sweep reads it again")
+        except (ReconcileReadError, ValueError, KeyError, TypeError) as e:
+            print(f"{head_desync.TAG}: PR #{number} UNKNOWN — unreadable, "
+                  f"nothing done: {e}")
+            _read_failures.append(f"head-desync on PR #{number}: {e}")
+        except Exception as e:  # noqa: BLE001 — isolate the PR, sweep the rest
+            _write_failures.append(f"head-desync on PR #{number}: {e}")
+            print(f"ERROR: head-desync on PR #{number}: {e}", file=sys.stderr)
+
+
+def _resync_one_head(pr: dict) -> None:
+    """Evaluate ONE pull request; raises ReconcileReadError on any read the
+    decision needs and cannot have."""
+    number, ref = pr["number"], pr["headRefName"]
+    branch = json.loads(gh_read(
+        "api", f"repos/{REPO}/git/ref/heads/{ref}") or "{}")
+    # An exact ref answers one object; anything else (a list of partial
+    # matches, an empty body) is not an answer about THIS branch.
+    tip = ((branch.get("object") or {}).get("sha") or ""
+           if isinstance(branch, dict) else "")
+    if not tip:
+        raise ReconcileReadError(f"git/ref/heads/{ref} carried no commit")
+    head = pr.get("headRefOid") or ""
+    if tip == head:
+        return
+    commit = json.loads(gh_read("api", f"repos/{REPO}/git/commits/{tip}") or "{}")
+    when = (commit.get("committer") or {}).get("date")
+    if not when:
+        raise ReconcileReadError(f"commit {tip[:8]} carried no committer date")
+    age = age_minutes(when)
+    line = head_desync.log_line(number, head, tip)
+    if age < head_desync.MIN_AGE_MINUTES:
+        print(f"{line} — the branch commit is {age:.0f}m old; GitHub's "
+              f"synchronize lag gets {head_desync.MIN_AGE_MINUTES}m")
+        return
+    receipts = [c.get("body") or "" for c in pr.get("comments") or []
+                if is_worker_bot_comment(c)]
+    if head_desync.told(receipts, tip):
+        print(f"{line} — UNRESOLVED, a person was already told; nothing more")
+        return
+    fresh = json.loads(gh_read(
+        "pr", "view", str(number), "--repo", REPO, "--json", "headRefOid,state",
+    ) or "{}")
+    if not fresh.get("state") or not fresh.get("headRefOid"):
+        raise ReconcileReadError(f"pr view {number} carried no head or state")
+    if fresh["state"] != "OPEN" or fresh["headRefOid"] == tip:
+        print(f"{line} — a fresh read says GitHub has caught up; nothing done")
+        return
+    head = fresh["headRefOid"]
+    line = head_desync.log_line(number, head, tip)
+    if head_desync.resynced(receipts, tip):
+        print(f"{line} — UNRESOLVED after the one resync; telling a person, once")
+        _post_pr_note(number, head_desync.unresolved_notice(number, head, tip, "after"))
+        return
+    status = json.loads(gh_read(
+        "api", f"repos/{REPO}/compare/{head}...{tip}") or "{}").get("status")
+    if not status:
+        raise ReconcileReadError(f"compare {head[:8]}...{tip[:8]} carried no status")
+    if status != "ahead":
+        print(f"{line} — UNRESOLVED: the branch is {status}, not ahead, of the "
+              "head; not closing a pull request GitHub may refuse to reopen")
+        _post_pr_note(number, head_desync.unresolved_notice(number, head, tip, "diverged"))
+        return
+    print(f"{line} — the branch commit is {age:.0f}m old and the pull request "
+          "never followed it; closing and reopening once")
+    if not _pr_state_write(number, "close"):
+        return
+    if not _pr_state_write(number, "reopen") and not _pr_state_write(number, "reopen"):
+        err = (f"head-desync: PR #{number} was closed and could not be "
+               "reopened — it is CLOSED and needs reopening by hand")
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    _post_pr_note(number, head_desync.resync_notice(number, head, tip, age))
+
+
+def _pr_state_write(number: int, verb: str) -> bool:
+    """`gh pr close|reopen`, LOUD: a refusal is recorded, never read as done
+    (DRE-1254). The sweep's default GH_TOKEN on purpose — see
+    resync_desynced_heads."""
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "pr", verb, str(number), "--repo", REPO],
+        capture_output=True, text=True, check=False,
+    )
+    if p.returncode != 0:
+        err = (f"head-desync: gh pr {verb} #{number} failed rc={p.returncode}: "
+               f"{p.stderr.strip()[:400]}")
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return False
+    return True
+
+
 # No-checks watchdog (DRE-2261). A PR the pipeline cannot see: 30 minutes,
 # the same reasoning as WATCHDOG_MINUTES — long enough for GitHub's check
 # spin-up lag and the 15-minute lost-event re-push (retrigger_dead_heads) to
@@ -12138,6 +12292,10 @@ def main(
             # finished, so the decision would read `unevaluated` anyway.
             refresh_stale_merge_refs,
             retrigger_dead_heads,
+            # DRE-6217, beside the dead-head re-push because it is the case
+            # that one cannot see: it reads the pull request's own head, and
+            # bp #780's stale head HAD check runs while its branch had moved.
+            resync_desynced_heads,
             flag_no_checks_prs,
             flag_unowned_prs,
             flag_unlanded_work,

@@ -369,7 +369,7 @@ def _nudge_stubs(stack, *, dead=0):
                  "flag_unowned_prs", "flag_unlanded_work", "flag_stranded_fixes",
                  "fix_approved_but_red", "retry_dead_fix_runs",
                  "redispatch_standing_verdicts", "recover_limit_deaths",
-                 "rerun_runner_lost_ci", "restart_answered_blockers", "card_dependabot_prs",
+                 "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers", "card_dependabot_prs",
                  "review_dependabot_prs", "recover_crashed_reviews",
                  "report_fleet_reviewer_outage", "check_dependabot_capacity",
                  "settle_repair_cards", "promote_ready"):

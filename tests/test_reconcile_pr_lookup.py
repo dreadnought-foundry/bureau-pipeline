@@ -194,6 +194,7 @@ def _sweep_mocks(extra=None):
         # branch and its CI runs on every full sweep; same treatment (its own
         # coverage lives in test_runner_lost_rerun.py).
         "rerun_runner_lost_ci": MagicMock(),
+        "resync_desynced_heads": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale

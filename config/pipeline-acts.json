@@ -1158,6 +1158,27 @@
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its body is written by scripts/fix_context.py, which owns the operator-decision-near-miss tag."
     },
     {
+      "file": "scripts/reconcile.py",
+      "anchor": "head_desync.resync_notice(number, head, tip, age)",
+      "kind": "undeclared-act",
+      "means": "GitHub never moved this pull request to its branch's newest commit, so the sweep closed and reopened it once for that commit and says so, naming both commits (DRE-6217).",
+      "why": "Act-shaped — it is a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/head_desync.py, and the `head-desync @<branch sha>` marker it opens with is the idempotency key the next sweep reads back before it would close the pull request again, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "head_desync.unresolved_notice(number, head, tip, \"after\")",
+      "kind": "undeclared-act",
+      "means": "The pull request is still behind its branch after the sweep's one close and reopen for that commit, so the sweep hands it to a person, once, and stops (DRE-6217).",
+      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/head_desync.py, and its `head-desync-unresolved @<branch sha>` marker is what keeps the sweep from saying it twice, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "head_desync.unresolved_notice(number, head, tip, \"diverged\")",
+      "kind": "undeclared-act",
+      "means": "The pull request is behind a branch that was rewritten rather than extended, so the sweep does not close it — GitHub can refuse to reopen one whose head was rewritten — and hands it to a person, once (DRE-6217).",
+      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/head_desync.py, and its `head-desync-unresolved @<branch sha>` marker is what keeps the sweep from saying it twice, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
       "file": "scripts/backlog_cutover.py",
       "anchor": "move_note(card, position, total, first)",
       "kind": "not-an-act",

@@ -56,7 +56,7 @@ GITHUB_BACKSTOPS = (
     "unstick_conflicts", "refresh_stale_merge_refs", "retrigger_dead_heads",
     "flag_no_checks_prs", "flag_unowned_prs", "flag_unlanded_work",
     "flag_stranded_fixes", "fix_approved_but_red", "retry_dead_fix_runs",
-    "redispatch_standing_verdicts", "rerun_runner_lost_ci", "restart_answered_blockers",
+    "redispatch_standing_verdicts", "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers",
     "review_dependabot_prs", "recover_crashed_reviews", "check_dependabot_capacity",
     "report_fix_concurrency", "report_evicted_fix_runs",
 )

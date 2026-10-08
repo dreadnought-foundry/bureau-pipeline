@@ -379,7 +379,7 @@ _BACKSTOPS_STUBBED = (
     "report_fleet_reviewer_outage", "check_dependabot_capacity",
     "report_intake_depth", "repair_frozen_planning_holds", "close_finished_epics",
     "report_break_glass", "report_fix_concurrency", "report_evicted_fix_runs",
-    "rerun_runner_lost_ci",
+    "rerun_runner_lost_ci", "resync_desynced_heads",
 )
 
 
