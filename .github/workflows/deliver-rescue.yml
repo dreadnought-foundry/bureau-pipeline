@@ -21,6 +21,12 @@
 # reads the `rescue-push-failed` marker on the card rather than the pull-request
 # list that could not answer during the incident.
 #
+# A FIX run's artifact carries a sidecar, `rescue-<CARD>.target.json`, naming
+# the pull request's branch (DRE-6349). `deliver_rescue.py apply` then replays
+# onto THAT branch instead — after checking the pull request is still open and
+# the branch has not moved — and opens no pull request. Nothing in this file
+# changes for it: the branch rides in the artifact, never in an input.
+#
 # IDEMPOTENT. Both dispatchers may fire for one card, and a second pull request
 # for one card is worse than the bug this fixes — so the delivery checks for an
 # existing PR on its own branch first and does nothing when there is one.
@@ -174,7 +180,8 @@ jobs:
       # lanes a build leaves behind — the same `advance` the Report step makes
       # for a PR the agent opened. `|| true`: the pull request is the delivery,
       # and a Linear write that fails must not fail a job that already
-      # succeeded (the reconcile sweep re-reads the state).
+      # succeeded (the reconcile sweep re-reads the state). For a fix run's
+      # card this is a no-op: it is already past those lanes.
       - name: Card → In Review
         if: success()
         env:

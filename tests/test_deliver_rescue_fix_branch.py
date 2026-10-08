@@ -127,9 +127,10 @@ class _Rescue:
                          f"{self.remote_head}..{self.head}")
         # `gh run download` unpacks into a subdirectory; the sidecar is found
         # anywhere under the download, the same glob discipline as the patch.
-        nested = self.download / ARTIFACT
+        nested = self.download / "artifact"
         nested.mkdir()
-        (nested / ARTIFACT).write_text(patch)
+        self.patch = nested / ARTIFACT
+        self.patch.write_text(patch)
         self.sidecar = nested / f"rescue-{CARD}.target.json"
         self.write_sidecar()
 
@@ -314,11 +315,23 @@ class TheBranchIsWhereTheRunLeftIt(_FixRunCase):
 
     def test_a_patch_that_will_not_replay_is_red_and_pushes_nothing(self):
         self.r.answer("OPEN")
-        patch = self.r.download / ARTIFACT / ARTIFACT
-        patch.write_text("this is not a patch\n")
+        self.r.patch.write_text("this is not a patch\n")
         self.assertEqual(self.apply(), 1)
         self.assertEqual(self.git_commands("push"), [], self.calls)
         self.assertEqual(self.r.remote_branch(), self.r.remote_head)
+
+
+class AReplayThatAddsNothingIsNotADelivery(_FixRunCase):
+    def test_no_new_commit_means_no_push_and_a_red_job(self):
+        """`git am` handed a directory reads it as an empty Maildir and exits
+        0 having applied nothing. Pushing then answers "Everything up-to-date"
+        — and a receipt saying the work was replayed would be a lie."""
+        self.r.patch.unlink()
+        self.r.patch.mkdir()
+        self.r.answer("OPEN")
+        self.assertEqual(self.apply(), 1)
+        self.assertEqual(self.git_commands("push"), [], self.calls)
+        self.assertFalse(any(deliver_rescue.DELIVERED_TAG in b for b in self.posted))
 
 
 class AnEmptyCommitReplays(_FixRunCase):
@@ -448,6 +461,20 @@ class TheSidecar(_FixRunCase):
         self.assertEqual(self.git_commands("push"), [], self.calls)
         self.assertEqual(self.r.remote_branch(), self.r.remote_head)
         self.assertFalse(any(c[:2] == ["pr", "create"] for c in self.r.gh_calls()))
+
+    def test_a_branch_that_could_read_as_an_option_delivers_nothing(self):
+        self.r.write_sidecar(branch="--upload-pack=x")
+        with self.assertRaises(ValueError):
+            deliver_rescue.read_target(str(self.r.download), CARD)
+        self.r.answer("OPEN")
+        self.assertEqual(self.apply(), 1)
+        self.assertEqual(self.r.gh_calls(), [])
+
+    def test_an_unknown_pull_request_state_is_not_an_answer(self):
+        self.r.answer("DRAFTISH")
+        self.assertEqual(self.apply(), 1)
+        self.assertEqual(self.git_commands("push"), [], self.calls)
+        self.assertEqual(self.r.remote_branch(), self.r.remote_head)
 
     def test_a_sidecar_missing_a_key_delivers_nothing(self):
         doc = json.loads(self.r.sidecar.read_text())
