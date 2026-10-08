@@ -434,6 +434,8 @@ def test_a_park_on_door_data_that_still_holds_parks_conditionally(monkeypatch):
     linear = Linear(stuck)
     with door_at(monkeypatch, stuck), wired(linear), contextlib.ExitStack() as stack:
         _nudge_stubs(stack, dead=reconcile.REQUEUE_CAP)
+        # DRE-6186: the planner already had it, so the cap parks.
+        monkeypatch.setattr(reconcile.dead_run, "split_tried", lambda bodies: True)
         reconcile.main()
     assert linear.labels == [("DRE-301", reconcile.HOLD_LABEL)]
     assert linear.writes == [("state", "DRE-301", "Backlog", ("--park",),
