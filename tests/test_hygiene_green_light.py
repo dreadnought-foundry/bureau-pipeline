@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
+import console_escalation  # noqa: E402
 import dead_run  # noqa: E402
 import hygiene  # noqa: E402
 import plan_critic  # noqa: E402
@@ -471,6 +472,140 @@ class TestAnEscalation:
         items, _ctx = plan(doc)
         assert not actions(items, "DRE-9109")
         assert lefts(items, "DRE-9109")[0].recommendation == "after a week."
+
+
+# --------------------------------------------------------------------------- #
+# the declared Recommendation line, read off the whole note (DRE-6196)        #
+# --------------------------------------------------------------------------- #
+
+#: A real question whose Why block names no recommendation at all.
+BYPASS_REASON = ("Should the deploy job be given a bypass of the branch rules, or "
+                 "should it open a pull request like every other change?")
+BYPASS = console_escalation.Escalation(
+    finding="the deploy job cannot push to the protected branch",
+    question="Bypass the branch rules for the deploy job, or open a pull request?",
+    recommendation="open a pull request",
+    why="a bypass loosens the repository's security for one job")
+UNSTATED = console_escalation.Escalation(
+    finding="the deploy job cannot push to the protected branch",
+    question="Bypass the branch rules for the deploy job, or open a pull request?",
+    recommendation=None,
+    why="the run that parked this card stated no recommendation")
+
+
+def declared(ident: str, reason: str, esc) -> str:
+    """`escalation_comment`'s note as DRE-3909 leaves it: the three lines,
+    written by `console_escalation.render`, under the opening sentence and
+    above the `**Why it needs you:**` block."""
+    opening, rest = planning_escalation.escalation_comment(ident, reason).split("\n\n", 1)
+    return f"{opening}\n\n{console_escalation.render(esc)}\n\n{rest}"
+
+
+def fixture_escalations() -> list:
+    """Every escalation note in the fixture — none declares the three lines."""
+    return [n["body"] for c in fixture()["lanes"][LANE] for n in c["comments"]["nodes"]
+            if lane.classify(n["body"]) and lane.classify(n["body"])["kind"] == "escalation"]
+
+
+class TestTheDeclaredRecommendation:
+    def test_the_line_is_read_off_the_note_not_the_why_block(self):
+        note = declared("DRE-9109", BYPASS_REASON, BYPASS)
+        reason = lane.escalation_reason(note)
+        assert reason == BYPASS_REASON
+        assert lane.recommendation(reason) == lane.NO_RECOMMENDATION
+        assert lane.recommendation(reason, note=note) == (
+            "open a pull request — a bypass loosens the repository's security for one job")
+
+    def test_a_line_that_gives_none_answers_why_none_was_given(self):
+        note = declared("DRE-9109", BYPASS_REASON, UNSTATED)
+        assert lane.recommendation(lane.escalation_reason(note), note=note) == (
+            "none given — the run that parked this card stated no recommendation")
+
+    def test_the_note_takes_the_line_over_a_recommendation_in_the_why_block(self):
+        reason = f"{BYPASS_REASON}\n\nRecommendation: bypass it."
+        note = declared("DRE-9109", reason, BYPASS)
+        assert lane.recommendation(lane.escalation_reason(note), note=note).startswith(
+            "open a pull request — ")
+
+    def test_every_fixture_escalation_reads_as_it_does_without_a_note(self):
+        bodies = fixture_escalations()
+        assert len(bodies) >= 3
+        for body in bodies:
+            reason = lane.escalation_reason(body)
+            assert console_escalation.parse(body) is None
+            assert lane.recommendation(reason, note=body) == lane.recommendation(reason)
+            assert lane.recommendation(reason, note=None) == lane.recommendation(reason)
+
+    @pytest.mark.parametrize("reason", [
+        "Should the partner page close on Friday or on Monday?\n\n"
+        "**Recommendation:** close it on Friday.",
+        "We can close it on Friday or Monday. I recommend close it on Friday.",
+        "Should the partner page close on Friday or on Monday?",
+        ACCESS,
+    ])
+    def test_a_note_with_no_declared_lines_reads_todays_way(self, reason):
+        note = planning_escalation.escalation_comment("DRE-9109", reason)
+        assert lane.recommendation(lane.escalation_reason(note), note=note) == (
+            lane.recommendation(lane.escalation_reason(note)))
+
+    def test_the_receipt_keeps_the_body_it_classified(self):
+        doc = fixture()
+        note = declared("DRE-9109", BYPASS_REASON, BYPASS)
+        push_comment(doc, "DRE-9109", note, LATER)
+        receipt = lane.newest_receipt(card(doc, "DRE-9109"), PIPELINE_USER)
+        assert receipt["kind"] == "escalation" and receipt["body"] == note
+
+    def test_the_lane_shows_the_line_on_the_row_a_person_reads(self):
+        doc = fixture()
+        note = declared("DRE-9109", BYPASS_REASON, BYPASS)
+        push_comment(doc, "DRE-9109", note, LATER)
+        items, _ctx = plan(doc)
+        assert not actions(items, "DRE-9109")
+        rows = lefts(items, "DRE-9109")
+        assert len(rows) == 1
+        assert rows[0].recommendation == (
+            "open a pull request — a bypass loosens the repository's security for one job")
+        # The DRE-3909 pin, read from this side: the lines change no reason.
+        bare = planning_escalation.escalation_comment("DRE-9109", BYPASS_REASON)
+        assert lane.escalation_reason(note) == lane.escalation_reason(bare) == BYPASS_REASON
+
+    def test_the_lane_shows_a_none_given_line_with_its_why(self):
+        doc = fixture()
+        push_comment(doc, "DRE-9109", declared("DRE-9109", BYPASS_REASON, UNSTATED), LATER)
+        items, _ctx = plan(doc)
+        assert lefts(items, "DRE-9109")[0].recommendation == (
+            "none given — the run that parked this card stated no recommendation")
+
+    def test_a_declared_note_is_still_only_left_never_moved(self):
+        doc = fixture()
+        reason = "This card is too big for one pull request and must be split."
+        push_comment(doc, "DRE-9109", declared("DRE-9109", reason, BYPASS), LATER)
+        items, _ctx = plan(doc)
+        assert resent(items, "DRE-9109").cause == (
+            "escalation asks for split, posted 2026-09-30 06:30 PT")
+
+    def test_the_lane_makes_no_more_linear_reads_than_before(self):
+        _items, ctx = plan()
+        assert len(ctx.linear.calls) == 2  # the viewer, and DRE-9104's children
+        doc = fixture()
+        push_comment(doc, "DRE-9109", declared("DRE-9109", BYPASS_REASON, BYPASS), LATER)
+        _items, ctx = plan(doc)
+        assert len(ctx.linear.calls) == 2
+
+    def test_without_the_module_the_lane_reads_todays_way(self, monkeypatch):
+        note = declared("DRE-9109", BYPASS_REASON, BYPASS)
+        reason = f"{BYPASS_REASON}\n\nRecommendation: open a pull request."
+        noted = declared("DRE-9109", reason, BYPASS)
+        monkeypatch.setitem(sys.modules, "console_escalation", None)
+        with pytest.raises(ImportError):
+            import console_escalation as _gone  # noqa: F401
+        assert lane.recommendation(BYPASS_REASON, note=note) == lane.NO_RECOMMENDATION
+        assert lane.recommendation(lane.escalation_reason(noted), note=noted) == (
+            "open a pull request.")
+        doc = fixture()
+        push_comment(doc, "DRE-9109", noted, LATER)
+        items, _ctx = plan(doc)
+        assert lefts(items, "DRE-9109")[0].recommendation == "open a pull request."
 
 
 # --------------------------------------------------------------------------- #
