@@ -78,11 +78,15 @@ ACTS = {
 # --------------------------------------------------------------------------- #
 
 
-def card(ident, lane, slug=None, *, children=(), comments=(), labels=()):
+def card(ident, lane, slug=None, *, children=(), comments=(), labels=(), archived_at=None):
     """One card in the `board_snapshot.CARD_QUERY` shape. Comments are given
-    oldest-first and stored NEWEST FIRST, the way Linear answers the window."""
+    oldest-first and stored NEWEST FIRST, the way Linear answers the window.
+    `archived_at` adds the `archivedAt` a read of a closed card carries; the
+    board read selects none, so a card built without it has no such key."""
     names = list(labels) + ([f"repo:{slug}"] if slug else [])
+    extra = {} if archived_at is None else {"archivedAt": archived_at}
     return {
+        **extra,
         "id": f"uuid-{ident}",
         "identifier": ident,
         "title": f"synthetic {ident}",
@@ -1058,6 +1062,225 @@ class TestSend:
     def test_gh(self, calls):
         hygiene.send(hygiene.gh_rerun(PORTICO, 5), context())
         assert calls == [("gh", "gh", "run", "rerun", "5", "--failed", "--repo", PORTICO)]
+
+
+# --------------------------------------------------------------------------- #
+# the archive write — a closed card unarchived for a write, re-archived after  #
+# (DRE-6248)                                                                   #
+# --------------------------------------------------------------------------- #
+
+ARCHIVED_AT = "2026-10-01T08:00:00.000Z"
+#: Every lane a card can stand in that does not close it: the write is
+#: refused on each, whatever the read said about `archivedAt`.
+OPEN_LANES = ("Todo", "In Progress", "In Review", "Triage", "Green Light",
+              "Backlog", "Planning", "Hand-work")
+
+
+def archived(ident="DRE-1", lane="Done", slug="portico", archived_at=ARCHIVED_AT, **kw):
+    return card(ident, lane, slug, archived_at=archived_at, **kw)
+
+
+class _Recorder:
+    """`linear_ops` with every function replaced: `gql` and `get_issue`
+    answer and are recorded, and any other call is recorded too, so a test
+    can say nothing else was asked."""
+
+    def __init__(self, monkeypatch, issue_id="uuid-from-read"):
+        import inspect
+
+        self.calls: list = []
+        for name, fn in vars(linear_ops).items():
+            if inspect.isfunction(fn) and fn.__module__ == linear_ops.__name__:
+                monkeypatch.setattr(linear_ops, name,
+                                    lambda *a, _n=name, **k: self.calls.append((_n, a, k)))
+
+        def gql(query, variables=None):
+            self.calls.append(("gql", (query, variables), {}))
+            return {}
+
+        def get_issue(identifier, **k):
+            self.calls.append(("get_issue", (identifier,), k))
+            return {"id": issue_id, "identifier": identifier}
+
+        monkeypatch.setattr(linear_ops, "gql", gql)
+        monkeypatch.setattr(linear_ops, "get_issue", get_issue)
+
+
+def _mutation_field(query):
+    """The one mutation field a query names: `issueArchive` out of
+    `mutation(...) { issueArchive(id: $id) { success } }`."""
+    assert query.lstrip().startswith("mutation"), query
+    body = query[query.index("{") + 1:]
+    return re.match(r"\s*([A-Za-z]+)\s*\(", body).group(1)
+
+
+class TestTheArchiveWrite:
+    def test_the_fifth_linear_kind(self):
+        assert hygiene.LINEAR_KINDS == ("linear_state", "linear_comment", "linear_label",
+                                        "linear_relation", "linear_archived")
+
+    @pytest.mark.parametrize("flag", [False, True])
+    def test_the_constructor_carries_the_card_off_its_dict(self, flag):
+        c = archived("DRE-1", "Done", labels=["needs-human"], children=[])
+        w = hygiene.linear_archived(c, archived=flag)
+        assert w.kind == "linear_archived"
+        assert w.archived is flag
+        assert w.card == w.target == "DRE-1"
+        assert w.card_id == "uuid-DRE-1"
+        assert w.labels == ("needs-human", "repo:portico")
+        assert w.children == ()
+        assert w.state == "Done"
+        assert w.archived_at == ARCHIVED_AT
+
+    def test_a_card_with_a_child_carries_it(self):
+        w = hygiene.linear_archived(archived(children=["DRE-2"]), archived=False)
+        assert w.children == ("DRE-2",)
+
+    def test_a_read_that_carried_no_archived_at_carries_none(self):
+        w = hygiene.linear_archived(card("DRE-1", "Done", "portico"), archived=False)
+        assert w.archived_at is None
+
+    @pytest.mark.parametrize("bare", ["DRE-1", None, {"id": "uuid-DRE-1"}])
+    def test_a_bare_identifier_is_refused_as_for_a_label(self, bare):
+        with pytest.raises(hygiene.Forbidden):
+            hygiene.linear_label(bare, "hand-built", True)
+        with pytest.raises(hygiene.Forbidden):
+            hygiene.linear_archived(bare, archived=False)
+
+    def test_describe_is_one_line_naming_the_card_and_the_direction(self):
+        c = archived("DRE-7")
+        assert hygiene.linear_archived(c, archived=False).describe() == "unarchive DRE-7"
+        assert hygiene.linear_archived(c, archived=True).describe() == "archive DRE-7"
+
+    @pytest.mark.parametrize("lane", ["Done", "Canceled"])
+    @pytest.mark.parametrize("flag", [False, True])
+    def test_a_closed_card_the_read_said_was_archived_is_admitted(self, lane, flag):
+        hygiene.guard(hygiene.linear_archived(archived(lane=lane), archived=flag), context(HOME))
+
+    @pytest.mark.parametrize("lane", OPEN_LANES)
+    @pytest.mark.parametrize("flag", [False, True])
+    def test_the_same_card_in_an_open_lane_is_refused_by_name(self, lane, flag):
+        with pytest.raises(hygiene.Forbidden, match="DRE-1"):
+            hygiene.guard(hygiene.linear_archived(archived(lane=lane), archived=flag),
+                          context(HOME))
+
+    @pytest.mark.parametrize("lane", ["Done", "Canceled"])
+    @pytest.mark.parametrize("stamp", [None, ""])
+    def test_a_closed_card_the_read_did_not_say_was_archived_is_refused(self, lane, stamp):
+        c = card("DRE-1", lane, "portico") if stamp is None else archived(lane=lane, archived_at=stamp)
+        for flag in (False, True):
+            with pytest.raises(hygiene.Forbidden, match="DRE-1"):
+                hygiene.guard(hygiene.linear_archived(c, archived=flag), context(HOME))
+
+    def test_a_card_outside_the_legs_scope_is_refused_by_name(self):
+        c = archived("DRE-1", "Done", "atlas")
+        for flag in (False, True):
+            with pytest.raises(hygiene.Forbidden, match="DRE-1"):
+                hygiene.guard(hygiene.linear_archived(c, archived=flag), context(HOME))
+        hygiene.guard(hygiene.linear_archived(c, archived=False), context("EveryBite"))
+
+    def test_the_summary_card_is_refused(self):
+        with pytest.raises(hygiene.Forbidden, match=SUMMARY_CARD):
+            hygiene.guard(hygiene.linear_archived(archived(SUMMARY_CARD), archived=False),
+                          context(HOME))
+
+    @pytest.mark.parametrize("flag,field", [(False, "issueUnarchive"), (True, "issueArchive")])
+    def test_send_is_exactly_one_mutation_on_the_cards_id(self, monkeypatch, flag, field):
+        rec = _Recorder(monkeypatch)
+        hygiene.send(hygiene.linear_archived(archived(), archived=flag), context(HOME))
+        [(name, (query, variables), _)] = rec.calls
+        assert name == "gql"
+        assert _mutation_field(query) == field
+        assert variables == {"id": "uuid-DRE-1"}
+
+    @pytest.mark.parametrize("flag,field", [(False, "issueUnarchive"), (True, "issueArchive")])
+    def test_a_write_with_no_card_id_resolves_it_once_first(self, monkeypatch, flag, field):
+        c = archived()
+        c["id"] = ""
+        rec = _Recorder(monkeypatch, issue_id="uuid-resolved")
+        hygiene.send(hygiene.linear_archived(c, archived=flag), context(HOME))
+        assert [name for name, _, _ in rec.calls] == ["get_issue", "gql"]
+        assert rec.calls[0][1] == ("DRE-1",)
+        _, (query, variables), _ = rec.calls[1]
+        assert _mutation_field(query) == field
+        assert variables == {"id": "uuid-resolved"}
+
+
+ARCHIVE_LANE = """
+c = {"id": "uuid-DRE-5", "identifier": "DRE-5", "state": {"name": "Done"},
+     "archivedAt": "2026-10-01T08:00:00.000Z", "children": {"nodes": []},
+     "labels": {"nodes": [{"name": "repo:portico"}]}}
+out.append(hygiene.Action(lane=LANE, target="DRE-5", act="hygiene-card-close",
+    cause="fixture: unarchive a closed card", evidence=["DRE-5"],
+    writes=[hygiene.linear_archived(c, archived=False)]))
+"""
+
+
+class TestTheArchiveWriteInADryRun:
+    def _pass(self, lanes, monkeypatch, tmp_path, name, body):
+        write_lane(lanes, name, body, lane="Done")
+        board = tmp_path / f"board-{name}.json"
+        board.write_text(json.dumps(board_doc()))
+        monkeypatch.setattr(hygiene, "GH_RUNNER", FakeGh())
+        ledger = tmp_path / f"ledger-{name}.json"
+        assert hygiene.main(["run", "--board", str(board), "--owner", HOME,
+                             "--ledger", str(ledger)]) == 0
+        (lanes / f"hygiene_{name}.py").unlink()
+        return str(ledger)
+
+    def test_it_is_printed_under_would_and_nothing_is_sent(
+        self, lanes, monkeypatch, tmp_path, capsys
+    ):
+        monkeypatch.setenv("HYGIENE_DRY_RUN", "1")
+        monkeypatch.setenv("HYGIENE_CARD", SUMMARY_CARD)
+        monkeypatch.setattr(hygiene, "send", lambda *_a: pytest.fail("dry run reached the seam"))
+        rec = _Recorder(monkeypatch)
+        monkeypatch.setattr(linear_ops, "comment_records", lambda *_a, **_k: [])
+        ledger = self._pass(lanes, monkeypatch, tmp_path, "archive", ARCHIVE_LANE)
+        out = capsys.readouterr().out
+        assert "would: unarchive DRE-5" in out.splitlines()
+        assert [n for n, _, _ in rec.calls] == []
+        [action] = json.loads(Path(ledger).read_text())["actions"]
+        assert action["outcome"] == "would"
+        assert action["writes"] == ["unarchive DRE-5"]
+
+    def test_the_summary_digest_changes_when_it_is_proposed(
+        self, lanes, monkeypatch, tmp_path, capsys
+    ):
+        monkeypatch.setenv("HYGIENE_DRY_RUN", "1")
+        monkeypatch.setattr(hygiene, "send", lambda *_a: pytest.fail("dry run reached the seam"))
+        monkeypatch.setattr(linear_ops, "comment_records", lambda *_a, **_k: [])
+        quiet = self._pass(lanes, monkeypatch, tmp_path, "quiet", "")
+        proposing = self._pass(lanes, monkeypatch, tmp_path, "archive", ARCHIVE_LANE)
+        capsys.readouterr()
+
+        def first_line(path):
+            return hygiene.render_summary([json.loads(Path(path).read_text())], NOW).splitlines()[0]
+
+        assert first_line(quiet) != first_line(proposing)
+        assert "unarchive DRE-5" in hygiene.render_summary(
+            [json.loads(Path(proposing).read_text())], NOW)
+
+        # Under a standing summary of the quiet pass, the quiet pass is
+        # "nothing changed" and the proposing pass is the summary it would post.
+        s = Summary(monkeypatch, newest=summary_with(digest_of([])))
+        hygiene.main(["summarize", quiet])
+        assert "nothing changed" in capsys.readouterr().out
+        hygiene.main(["summarize", proposing])
+        out = capsys.readouterr().out
+        assert f"would: comment {SUMMARY_CARD}:" in out
+        assert "unarchive DRE-5" in out
+        assert s.posts == []
+
+    def test_a_live_ledger_is_digested_as_before(self, tmp_path):
+        # Only a dry run proposes; an executed or suppressed action leaves the
+        # digest over the left rows alone, so the standing card never carries
+        # a digest a live pass could not reproduce.
+        doc = json.loads(Path(ledger(tmp_path, "a", actions=[("DRE-1", "executed"),
+                                                              ("DRE-2", "suppressed")],
+                                     left=[("DRE-3", "stuck")])).read_text())
+        first = hygiene.render_summary([doc], NOW).splitlines()[0]
+        assert first.split()[3] == digest_of(["DRE-3"])
 
 
 # --------------------------------------------------------------------------- #
