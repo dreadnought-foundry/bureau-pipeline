@@ -161,6 +161,14 @@ class FixRun:
             f"open({self.linear_log!r}, 'a')"
             ".write(json.dumps(sys.argv[1:]) + '\\n')\n",
         )
+        # DRE-6179: a park holds the card through the registry's writer,
+        # logged into the same file so it reads in order with the lane move.
+        _executable(
+            os.path.join(self.pipeline, "scripts", "hold.py"),
+            "#!/usr/bin/env python3\nimport json, sys\n"
+            f"open({self.linear_log!r}, 'a')"
+            ".write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n",
+        )
 
     # ── the steps, executed ────────────────────────────────────────────────
     def _bash(self, run: str, env: dict):

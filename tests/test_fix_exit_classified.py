@@ -288,6 +288,11 @@ def report(thread, *, blocker=None, refutation=None, fetched="", head=PRE_SHA,
         with open(os.path.join(base, "scripts", "linear_ops.py"), "w") as fh:
             fh.write("#!/usr/bin/env python3\nimport json, sys\n"
                      f"open({linear_log!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n")
+        # DRE-6179: the hold goes on through the registry's writer, logged
+        # into the same file so it reads in order with the lane move.
+        with open(os.path.join(base, "scripts", "hold.py"), "w") as fh:
+            fh.write("#!/usr/bin/env python3\nimport json, sys\n"
+                     f"open({linear_log!r}, 'a').write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n")
         with open(os.path.join(base, "critic-verdict.md"), "w", encoding="utf-8") as fh:
             fh.write(fetched)
         binary = os.path.join(td, "bin")
@@ -328,9 +333,16 @@ def report(thread, *, blocker=None, refutation=None, fetched="", head=PRE_SHA,
         return proc, lines(gh_log), lines(linear_log), answers(td)
 
 
+def held(calls):
+    """The card's hold, stamped as a fix dispute (DRE-6179)."""
+    return [c for c in calls
+            if c[:5] == ["hold.py", "apply", CARD, "--reason", "fix-dispute"]]
+
+
 def parks(calls):
     return [c for c in calls
             if (c[:1] == ["add-label"] and "needs-human" in c)
+            or c[:2] == ["hold.py", "apply"]
             or (c[:1] in (["advance"], ["state"]) and "Triage" in c)]
 
 
@@ -412,14 +424,14 @@ class ARealDisagreementStillEscalatesTest(unittest.TestCase):
         self.assertEqual(1, len(said), said)
         self.assertTrue(said[0][2].startswith(
             "🙋 The fix agent disagrees with the reviewer's blocking finding"))
-        self.assertIn(["add-label", CARD, "needs-human"], calls)
+        self.assertTrue(held(calls), calls)
         self.assertIn(["advance", CARD, "Triage", "In Review,In Progress,Todo"], calls)
 
     def test_nothing_to_fix_against_the_open_finding_still_escalates(self):
         proc, writes, calls, _ = report([rest(QA, self.RC)], blocker=NOTHING,
                                         fetched=self.RC)
         self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
-        self.assertIn(["add-label", CARD, "needs-human"], calls)
+        self.assertTrue(held(calls), calls)
         self.assertTrue(pr_comments(writes)[0].startswith("🛑 Fix attempt 2 blocked: "))
 
     def test_an_unreadable_thread_escalates(self):
@@ -428,7 +440,7 @@ class ARealDisagreementStillEscalatesTest(unittest.TestCase):
                                         blocker=NOTHING, fetched=self.RC,
                                         thread_fails=True)
         self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
-        self.assertIn(["add-label", CARD, "needs-human"], calls)
+        self.assertTrue(held(calls), calls)
 
     def test_approved_but_red_still_escalates(self):
         """The run was sent WITH the APPROVE: it is not newer than the round."""
@@ -436,7 +448,7 @@ class ARealDisagreementStillEscalatesTest(unittest.TestCase):
         proc, writes, calls, _ = report([rest(QA, approve)], blocker=DISPUTE,
                                         fetched=approve)
         self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
-        self.assertIn(["add-label", CARD, "needs-human"], calls)
+        self.assertTrue(held(calls), calls)
 
     def test_a_conflict_round_is_not_classified(self):
         """An APPROVE says nothing about a merge conflict still standing."""

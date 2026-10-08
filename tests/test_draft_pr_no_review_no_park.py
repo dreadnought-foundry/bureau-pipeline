@@ -334,13 +334,19 @@ sys.exit(0)
 
 def _report_blocked_round(is_draft: bool) -> list[list[str]]:
     """The 10-04 shape: the fix agent disputes the finding and pushes
-    nothing. Returns every linear_ops.py call the Report step made."""
+    nothing. Returns every linear_ops.py and hold.py call the Report step
+    made."""
     with tempfile.TemporaryDirectory() as td:
         base = _checkout(td)
         linear_log = os.path.join(td, "linear.jsonl")
         with open(os.path.join(base, "scripts", "linear_ops.py"), "w") as fh:
             fh.write("#!/usr/bin/env python3\nimport json, sys\n"
                      f"open({linear_log!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n")
+        # DRE-6179: the hold goes on through the registry's writer, logged
+        # into the same file so it reads in order with the lane move.
+        with open(os.path.join(base, "scripts", "hold.py"), "w") as fh:
+            fh.write("#!/usr/bin/env python3\nimport json, sys\n"
+                     f"open({linear_log!r}, 'a').write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n")
         binary = _report_gh_stub(td, os.path.join(td, "comments.jsonl"), is_draft)
         _open_handoff(td, blocked=True)
         env = dict(os.environ, PATH=binary + os.pathsep + os.environ["PATH"],
@@ -357,6 +363,7 @@ def _report_blocked_round(is_draft: bool) -> list[list[str]]:
 def _parks(calls: list[list[str]]) -> list[list[str]]:
     return [c for c in calls
             if (c[:1] == ["add-label"] and "needs-human" in c)
+            or c[:2] == ["hold.py", "apply"]
             or (c[:1] in (["advance"], ["state"]) and "Triage" in c)]
 
 
@@ -368,7 +375,7 @@ class TheFixPathNeverParksADraftTest(unittest.TestCase):
     def test_the_same_round_on_a_ready_pull_request_parks_the_card(self):
         """The control: a ready PR's dispute still goes to a person."""
         parks = _parks(_report_blocked_round(is_draft=False))
-        self.assertIn(["add-label", CARD, "needs-human"], parks)
+        self.assertTrue([c for c in parks if c[:3] == ["hold.py", "apply", CARD]])
         self.assertTrue([c for c in parks if c[0] == "advance" and "Triage" in c])
 
 

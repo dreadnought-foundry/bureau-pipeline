@@ -112,6 +112,7 @@ from typing import NamedTuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import dead_run  # noqa: E402
+import hold  # noqa: E402
 import limit_recovery  # noqa: E402
 import linear_ops  # noqa: E402
 import plan_critic  # noqa: E402
@@ -852,8 +853,9 @@ def _fire(epic: str, found: dict, repo: str | None) -> None:
     if found.get("firing") == 2:
         # The label BEFORE the move: the relay dispatches a plan run the
         # moment an `agent:planner` card enters Triage, and the plan-gate
-        # refuses it only when the card already carries `needs-human`.
-        linear_ops.add_label(epic, dead_run.HOLD_LABEL)
+        # refuses it only when the card already carries `needs-human`. The
+        # hold goes on through the registry's writer, so it says why (DRE-6179).
+        hold.apply(epic, "epic-rereview-twice", "none", "rereview_watch.py")
         linear_ops.cmd_state(epic, plan_critic.BOUND_PARK_LANE)
         return
     if not dispatch_review(epic, repo, found["dispatch_reason"],

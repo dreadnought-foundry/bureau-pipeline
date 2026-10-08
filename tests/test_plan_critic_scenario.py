@@ -230,6 +230,18 @@ with open(os.environ["STUB_LOG"], "a") as f:
     f.write("promote " + " ".join(sys.argv[1:]) + "\\n")
 '''
 
+# The hold registry's writer (DRE-6179): every park on these paths holds the
+# epic through `hold.py apply`, which writes the `needs-human` label and then
+# its stamp. Logged as the label write it makes, so the walks still read the
+# label before the lane move, then the reason it was stamped with.
+HOLD_STUB = '''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write("add-label needs-human\\n")
+    f.write("hold " + args[0] + " reason=" + args[args.index("--reason") + 1] + "\\n")
+'''
+
 # The routing-verdict stamper (DRE-4593), stubbed for the same reason reconcile
 # is: these walks are about the two critics and what they gate, and the stamper
 # is exercised by tests/test_planner_stamps_children.py against a fake Linear.
@@ -345,6 +357,7 @@ class CriticWalk(unittest.TestCase):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
+        self._stub("hold.py", HOLD_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
         self._stub("epic_cap.py", EPIC_CAP_STUB)
         self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)
@@ -2238,6 +2251,7 @@ class ReviewReplanArtifactWalk(unittest.TestCase):
         shutil.copy(os.path.join(ROOT, "agents.yaml"),
                     os.path.join(self.pipeline, "agents.yaml"))
         self._stub("linear_ops.py", LINEAR_STUB)
+        self._stub("hold.py", HOLD_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
         self._stub("epic_cap.py", EPIC_CAP_STUB)
         self._stub("plan_child_verdicts.py", CHILD_VERDICT_STUB)

@@ -382,6 +382,7 @@ class _Sweep:
         # REPO pinned here: another test module may have set it first, and
         # `report` dispatches to the sweep's own repository.
         with mock.patch.object(rw, "linear_ops", self.linear), \
+                mock.patch.object(rw, "hold", self.linear.hold), \
                 mock.patch.object(rw.review_rerun, "main",
                                   side_effect=self._dispatch), \
                 mock.patch.dict(os.environ, {"REPO": REPO}), \
@@ -391,7 +392,7 @@ class _Sweep:
 
     def writes(self) -> list[str]:
         return [c[0] for c in self.linear.mock_calls
-                if c[0] in ("add_label", "cmd_state", "cmd_comment")]
+                if c[0] in ("hold.apply", "add_label", "cmd_state", "cmd_comment")]
 
 
 class TheReport(unittest.TestCase):
@@ -1036,7 +1037,7 @@ class HandedOffNoReview(unittest.TestCase):
         self.linear_untouched(sweep)
 
     def linear_untouched(self, sweep):
-        sweep.linear.add_label.assert_not_called()
+        sweep.linear.hold.apply.assert_not_called()
         sweep.linear.cmd_state.assert_not_called()
 
     def test_quiet_before_the_grace(self):
@@ -1050,10 +1051,11 @@ class HandedOffNoReview(unittest.TestCase):
                          now=PAST_NOTICE)
         self.assertEqual(spoke, [EPIC])
         self.assertEqual(sweep.dispatches, [])
-        sweep.linear.add_label.assert_called_once_with(EPIC, "needs-human")
+        sweep.linear.hold.apply.assert_called_once_with(
+            EPIC, "epic-rereview-twice", "none", "rereview_watch.py")
         sweep.linear.cmd_state.assert_called_once_with(EPIC, pc.BOUND_PARK_LANE)
         self.assertEqual(sweep.writes(),
-                         ["add_label", "cmd_state", "cmd_comment"])
+                         ["hold.apply", "cmd_state", "cmd_comment"])
         note = sweep.posted[0][1]
         self.assertIn(_pre(), note)
         self.assertIn(pc.REAPPROVE_HOW, note)
@@ -1098,9 +1100,9 @@ class SentBackNoReReview(unittest.TestCase):
                 self.assertEqual(spoke, [EPIC])
                 self.assertEqual(sweep.dispatches, [])
                 self.assertEqual(sweep.writes(),
-                                 ["add_label", "cmd_state", "cmd_comment"])
-                sweep.linear.add_label.assert_called_once_with(
-                    EPIC, "needs-human")
+                                 ["hold.apply", "cmd_state", "cmd_comment"])
+                sweep.linear.hold.apply.assert_called_once_with(
+                    EPIC, "epic-rereview-twice", "none", "rereview_watch.py")
                 sweep.linear.cmd_state.assert_called_once_with(
                     EPIC, pc.BOUND_PARK_LANE)
                 note = sweep.posted[0][1]
@@ -1231,7 +1233,7 @@ class InProgressSentBack(unittest.TestCase):
         self.assertIn(review_rerun.RERUN_REVIEW_ACT, body)
         for line in body.splitlines():
             self.assertNotEqual(line.strip(), review_rerun.RERUN_REVIEW_ACT)
-        sweep.linear.add_label.assert_not_called()
+        sweep.linear.hold.apply.assert_not_called()
         sweep.linear.cmd_state.assert_not_called()
 
     def test_past_the_grace_from_the_notice_it_parks_in_triage(self):
@@ -1241,8 +1243,9 @@ class InProgressSentBack(unittest.TestCase):
                          now=PAST_NOTICE)
         self.assertEqual(spoke, [EPIC])
         self.assertEqual(sweep.dispatches, [])
-        self.assertEqual(sweep.writes(), ["add_label", "cmd_state", "cmd_comment"])
-        sweep.linear.add_label.assert_called_once_with(EPIC, "needs-human")
+        self.assertEqual(sweep.writes(), ["hold.apply", "cmd_state", "cmd_comment"])
+        sweep.linear.hold.apply.assert_called_once_with(
+            EPIC, "epic-rereview-twice", "none", "rereview_watch.py")
         sweep.linear.cmd_state.assert_called_once_with(EPIC, pc.BOUND_PARK_LANE)
         note = sweep.posted[0][1]
         self.assertIn(FINDING, note)

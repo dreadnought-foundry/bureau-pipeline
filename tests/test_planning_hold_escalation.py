@@ -511,10 +511,12 @@ _LABEL_WRITERS = (
     # `hand_dead_run_to_planner`.
     ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 1),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
-    (".github/workflows/agent-fix.yml", r'add-label "\$CARD" needs-human', 2),
+    # DRE-6179 moved the agent-fix.yml and plan.yml sites onto the hold
+    # registry's writer, which writes the same label with its reason.
+    (".github/workflows/agent-fix.yml", r'hold\.py apply "\$CARD"', 2),
     # Eight since DRE-5284 (the first critic's bound parks in Triage too);
     # six since DRE-5281 deleted the activate route's two Green Light parks.
-    (".github/workflows/plan.yml", r'add-label "\$EPIC" needs-human', 6),
+    (".github/workflows/plan.yml", r'hold\.py apply "\$EPIC" --reason plan-critic-bound', 6),
 )
 
 #: The dead-run cap site — `hand_dead_run_to_planner` since DRE-6186, which both

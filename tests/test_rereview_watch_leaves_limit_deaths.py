@@ -175,6 +175,7 @@ class _Sweep:
     def __call__(self, records, now: datetime, lane: str = pc.REVIEW_LANE):
         buf = io.StringIO()
         with mock.patch.object(rw, "linear_ops", self.linear), \
+                mock.patch.object(rw, "hold", self.linear.hold), \
                 mock.patch.object(rw, "dispatch_review",
                                   side_effect=self._dispatch), \
                 mock.patch.dict(os.environ, {"REPO": REPO}), \
@@ -185,7 +186,7 @@ class _Sweep:
 
     def writes(self) -> list[str]:
         return [c[0] for c in self.linear.mock_calls
-                if c[0] in ("add_label", "cmd_state", "cmd_comment")]
+                if c[0] in ("hold.apply", "add_label", "cmd_state", "cmd_comment")]
 
 
 # --- 1. Waiting on the wall --------------------------------------------------
@@ -260,7 +261,7 @@ class PastTheReset(unittest.TestCase):
         self.assertEqual(plain["trigger_state"], review_rerun.TRIGGER_STATE_REVIEW)
         self.assertEqual(len(sweep.posted), 1)
         self.assertIn(rw.FIRST_FIRING_WORDS, sweep.posted[0][1])
-        sweep.linear.add_label.assert_not_called()
+        sweep.linear.hold.apply.assert_not_called()
         sweep.linear.cmd_state.assert_not_called()
 
 
@@ -310,8 +311,9 @@ class TheRecoveryHandedItToAPerson(unittest.TestCase):
         spoke, _out = sweep(self.records(), NOW)
         self.assertEqual(spoke, [EPIC])
         self.assertEqual(sweep.dispatched, [])
-        self.assertEqual(sweep.writes(), ["add_label", "cmd_state", "cmd_comment"])
-        sweep.linear.add_label.assert_called_once_with(EPIC, "needs-human")
+        self.assertEqual(sweep.writes(), ["hold.apply", "cmd_state", "cmd_comment"])
+        sweep.linear.hold.apply.assert_called_once_with(
+            EPIC, "epic-rereview-twice", "none", "rereview_watch.py")
         sweep.linear.cmd_state.assert_called_once_with(EPIC, "Triage")
         note = sweep.posted[0][1]
         self.assertIn("limit recovery handed", note)
