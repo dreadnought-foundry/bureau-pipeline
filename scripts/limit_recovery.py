@@ -132,6 +132,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
+import hold  # noqa: E402 — DRE-6182: the one answer to "does this reader honor the hold"
 import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import medic_retry  # noqa: E402 — the park rule's one definition (Stage 2 fix #23)
 import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
@@ -261,9 +262,10 @@ def count_assumed_deaths(card: dict, now: datetime) -> int:
 
 
 def _held(card: dict) -> bool:
-    return any(
-        (lbl.get("name") or "").lower() == dead_run.HOLD_LABEL
-        for lbl in (card.get("labels") or {}).get("nodes", [])
+    """Does this pass stand down for the card's hold? The reason decides, read
+    off the window the pass already holds for its markers (DRE-6182)."""
+    return hold.respects(
+        (card.get("labels") or {}).get("nodes", []), _bodies(card), "limit-recovery"
     )
 
 

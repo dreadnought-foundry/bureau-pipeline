@@ -158,7 +158,7 @@ import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fi
 import groom_schedule_gate  # noqa: E402 — the standing card's variable name
 import groomer  # noqa: E402
 import head_desync  # noqa: E402 — DRE-6217: a pull request GitHub left behind its branch
-import hold  # noqa: E402 — DRE-6173: ONE writer of the hold's label and its stamp
+import hold  # noqa: E402 — DRE-6173: ONE writer of the hold's label and its stamp; DRE-6182: its one reader
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -711,11 +711,16 @@ _TODO_REDISPATCH_FAILED_NOTE = "re-dispatch FAILED"
 
 
 def held(card: dict) -> bool:
-    """True if the card carries HOLD_LABEL — the sweep must not requeue, nudge,
-    or auto-promote it until a human removes the label."""
-    return any(
-        lbl["name"].lower() == HOLD_LABEL
-        for lbl in (card.get("labels") or {}).get("nodes", [])
+    """True if the sweep stands down for the card's hold — it must not
+    requeue, nudge, or auto-promote it until the hold is lifted.
+
+    The reason decides, not the bare label (DRE-6182): `hold.respects` reads
+    HOLD_LABEL and the card's live stamp off the window the board read already
+    carries, and `config/holds.json`'s `readers` says whether `sweep` honors
+    that reason. The label with no stamp, or a reason the registry does not
+    know, is held — fail closed."""
+    return hold.respects(
+        (card.get("labels") or {}).get("nodes", []), card_comment_bodies(card), "sweep"
     )
 
 
@@ -4491,14 +4496,17 @@ def branch_card(head_ref: str) -> str | None:
 
 def card_parked_for_human(identifier: str) -> bool:
     """True if the card sits in either human queue (:data:`PARKED_STATES`) OR
-    carries HOLD_LABEL — a person owes it an action either way, so no fix agent
-    may be dispatched for its PR. Fails SAFE on an unreadable card: treat as
-    parked (skip this sweep; the next one retries) rather than dispatch into a
-    possibly-parked card."""
+    holds a hold the fix loop honors — a person owes it an action either way,
+    so no fix agent may be dispatched for its PR. The hold is asked of
+    `hold.respects(…, "fix-dispatch")` (DRE-6182): the labels and the comment
+    window come back on the ONE read, so the stamp costs no request. Fails
+    SAFE on an unreadable card: treat as parked (skip this sweep; the next one
+    retries) rather than dispatch into a possibly-parked card."""
     try:
         issue = linear_ops.gql(
             """query($id: String!) { issue(id: $id) {
-                 state { name } labels { nodes { name } } } }""",
+                 state { name } labels { nodes { name } } %s } }"""
+            % linear_ops.COMMENT_WINDOW_GQL,
             {"id": identifier},
         )["issue"] or {}
     except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
@@ -4506,9 +4514,10 @@ def card_parked_for_human(identifier: str) -> bool:
         return True
     if ((issue.get("state") or {}).get("name")) in PARKED_STATES:
         return True
-    return any(
-        (lbl.get("name") or "").lower() == HOLD_LABEL
-        for lbl in (issue.get("labels") or {}).get("nodes", [])
+    return hold.respects(
+        (issue.get("labels") or {}).get("nodes", []),
+        card_comment_bodies(issue),
+        "fix-dispatch",
     )
 
 
@@ -5574,7 +5583,9 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     if card_is_epic(live, live_bodies):
         return live, "it is an epic now"
     labels = {(lbl.get("name") or "").lower() for lbl in live["labels"]["nodes"]}
-    if HOLD_LABEL in labels:
+    # The board read's own question, asked of the live card (DRE-6182), so
+    # the two reads give one answer.
+    if hold.respects(live["labels"]["nodes"], live_bodies, "sweep"):
         return live, f"it carries '{HOLD_LABEL}' now"
     before = {(lbl.get("name") or "").lower()
               for lbl in ((card.get("labels") or {}).get("nodes") or [])}
