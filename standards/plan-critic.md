@@ -257,6 +257,24 @@ one-off grammar has a second result:
 
     PLAN-CRITIC: SEND_BACK — <the worst defect in the card>
     PLAN-CRITIC: QUESTION — <the one question only the CEO can answer>
+    FINDING: <what was found, one line>
+    RECOMMENDATION: <recommended answer> — <one-line why>
+    OPTION 1 (Recommended): <label> — <effect> ⟶ <proceed|replan|close>
+    OPTION 2: <label> — <effect> ⟶ <proceed|replan|close>
+
+The three header lines ride directly under a `QUESTION`, before anything else
+(DRE-3910): what the critic found, what it would answer and why, and two to
+four choices, each ending in what choosing it does to the card. A label names
+no card number, and the one marked `(Recommended)` — or the first — is the
+recommended choice, whose label is the recommendation's answer.
+`read_result` still reads the verdict and the reason alone, and
+`read_finding`, `read_recommendation` and `read_options` read the rest. The
+CEO's escalation is the opening sentence, then the Finding, Question and
+Recommendation lines (`scripts/console_escalation.py`) — the Question is the
+reason, verbatim — and then the `escalation-choices` block when the options
+pass its validator. A line that leaks a path or a command is replaced by a
+sentence saying it is in the run log. A `SEND_BACK` carries none of these:
+it goes to the planner, not to the CEO.
 
 * **`SEND_BACK`** is a defect an agent can fix from the repository and the card
   alone — a test against files the builder cannot read, a criterion that

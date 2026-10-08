@@ -19,6 +19,13 @@ and writes its choices as JSON to a **second file beside the reason**:
 | Epic (`Plan epic`, and its next rung) | `$RUNNER_TEMP/planner-escalation.txt` | `$RUNNER_TEMP/planner-escalation-choices.json` |
 | Roll-up (`Roll-up route — split into child epics`, and its next rung) | `$RUNNER_TEMP/planner-escalation.txt` | `$RUNNER_TEMP/planner-escalation-choices.json` |
 | One-off revision (`One-off revision — the planner answers the critic`) | `$RUNNER_TEMP/one-off-question.md` | `$RUNNER_TEMP/one-off-question-choices.json` |
+| One-off critic's own question (`One-off critic — decide`) | `$RUNNER_TEMP/plan-critic-one-off.md`, the critic's result file — its `QUESTION` line | the same result file — its `OPTION` lines |
+
+The one-off critic's question is the one route whose choices are not a JSON
+file: the critic writes them as `OPTION` lines under its `QUESTION`
+(`standards/plan-critic.md`), and `scripts/plan_critic.py` builds the block
+from them whenever there are two or more the validator below accepts, and
+writes it last in the escalation text it hands the posting step (DRE-3910).
 
 The posting step hands the file to `scripts/planning_escalation.py escalate
 --choices-file <path>`. When it is valid, the writer appends it to the note as a
@@ -26,6 +33,13 @@ fenced block — the **last thing in the comment, after the closing ask** — so
 prose a Linear reader sees is byte for byte what it would be without it, and
 `scripts/hygiene_green_light.py` reads the same reason it always read.
 `planning_escalation.parse_choices` reads the block back out of a comment.
+
+Every note carries the three declared lines — Finding, Question and
+Recommendation — directly under its opening sentence, rendered by
+`scripts/console_escalation.py`: lifted from the reason when it declares them,
+completed from the block when it does not, or saying `none given — …` when
+nothing recommended anything (DRE-3909). When a block rides with the lines,
+the Recommendation line's answer is the recommended choice's label.
 
 No block is added when:
 
@@ -35,9 +49,8 @@ No block is added when:
 - the note is the `✋ escalation-stood-down` record, which asks nothing.
 
 These routes post prose only, and the console shows them without buttons: the
-one-off critic's own question, the classifier's refusal, the returned-child
-default reason the epic route's escalation step writes itself, and the
-`--transport` and `--rewrite` wordings.
+classifier's refusal, the returned-child default reason the epic route's
+escalation step writes itself, and the `--transport` and `--rewrite` wordings.
 
 ## The block
 

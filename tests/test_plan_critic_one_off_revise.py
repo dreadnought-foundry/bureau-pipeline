@@ -45,6 +45,7 @@ CONTRACT = os.path.join(ROOT, "config", "lane-contract.json")
 
 sys.path.insert(0, SCRIPTS)
 
+import console_escalation  # noqa: E402
 import linear_ops  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import plan_run  # noqa: E402
@@ -63,6 +64,21 @@ DEFECTS = [
 ]
 QUESTION_TEXT = ("should the demo repository be public, or stay private while "
                  "the pricing page is written")
+#: The planner's choices file for that question (DRE-6168's shape).
+PLANNER_CHOICES = {
+    "question": "Should the demo repository be public, or stay private?",
+    "context": "The pricing page is not written yet, and the demo repository "
+               "shows what our runs cost.",
+    "choices": [
+        {"id": "keep-it-private", "label": "keep it private",
+         "effect": "the repository stays private until the pricing page is out",
+         "outcome": "proceed"},
+        {"id": "make-it-public", "label": "make it public",
+         "effect": "anyone can read the repository today", "outcome": "proceed"},
+    ],
+    "recommended": "keep-it-private",
+    "why": "the costs read differently once the pricing page explains them",
+}
 
 
 def send_back_text(findings=DEFECTS) -> str:
@@ -77,6 +93,18 @@ def question_text(q=QUESTION_TEXT) -> str:
 
 def pipeline(*bodies) -> list[dict]:
     return [{"body": b, "authored_by_pipeline": True} for b in bodies]
+
+
+def _fits_the_contract(case, text) -> None:
+    """DRE-3910: the CEO's text is the three lines' contract, its prose is fit
+    to show once they are lifted, and without a block it ends on the
+    Recommendation line."""
+    case.assertEqual([], console_escalation.problems(text), text)
+    case.assertIsNone(
+        planning_escalation.refusal(console_escalation.split(text)[0]), text)
+    if "```" not in text:
+        case.assertTrue(text.rstrip().split("\n")[-1].startswith(
+            console_escalation.RECOMMENDATION_PREFIX), text)
 
 
 # --- The result grammar -------------------------------------------------------
@@ -178,8 +206,7 @@ class TheQuestionIsPlainEnglish(unittest.TestCase):
     def test_the_ceo_is_handed_the_question(self):
         text = pc.one_off_escalation(pc.QUESTION, QUESTION_TEXT)
         self.assertIn(QUESTION_TEXT, text)
-        self.assertIsNone(planning_escalation.refusal(text), text)
-        self.assertTrue(text.rstrip().endswith("?"), text)
+        _fits_the_contract(self, text)
 
     def test_it_does_not_offer_to_put_the_card_back_as_it_stands(self):
         """DRE-5375's closing line: an offer the CEO cannot act on."""
@@ -189,7 +216,7 @@ class TheQuestionIsPlainEnglish(unittest.TestCase):
     def test_a_question_in_jargon_costs_the_question_and_not_the_park(self):
         text = pc.one_off_escalation(
             pc.QUESTION, "should scripts/release_train.py read the tag")
-        self.assertIsNone(planning_escalation.refusal(text), text)
+        _fits_the_contract(self, text)
         self.assertNotIn("release_train.py", text)
 
     def test_no_question_can_forge_a_merge_credential(self):
@@ -345,9 +372,15 @@ class TheRevisionOutcome(unittest.TestCase):
             self.assertEqual(pc.UNFINISHED, pc.revision_outcome(
                 question="", description=d, summary=s), (d, s))
 
-    def _cli(self, question="", description="", summary=""):
+    def _cli(self, question="", description="", summary="", choices=None):
         tmp = tempfile.mkdtemp()
         files = {}
+        if choices is not None:
+            # Beside the question, as plan.yml writes the pair:
+            # `one-off-question.md` and `one-off-question-choices.json`.
+            with open(os.path.join(tmp, "question-choices.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(choices, f)
         for name, text in (("question", question), ("description", description),
                            ("summary", summary),
                            ("findings", pc.findings_block(DEFECTS))):
@@ -381,8 +414,48 @@ class TheRevisionOutcome(unittest.TestCase):
         out, esc, park = self._cli(question=QUESTION_TEXT)
         self.assertIn(f"outcome={pc.ASKED}", out)
         self.assertIn(QUESTION_TEXT, esc)
-        self.assertIsNone(planning_escalation.refusal(esc), esc)
+        _fits_the_contract(self, esc.rstrip("\n"))
         self.assertEqual("", park)
+
+    def test_the_planners_question_names_the_planner_when_it_gave_no_choices(self):
+        """DRE-3910: the revised-card site passes `who="the planner"`, so the
+        Finding and Recommendation fallbacks say whose they are."""
+        _, esc, _ = self._cli(question=QUESTION_TEXT)
+        lines = esc.rstrip("\n").split("\n")
+        self.assertIn(f"{console_escalation.QUESTION_PREFIX} {QUESTION_TEXT}",
+                      lines)
+        self.assertIn(f"{console_escalation.FINDING_PREFIX} the planner found a "
+                      "decision in this card that only the CEO can make, and "
+                      "stated no separate finding", lines)
+        self.assertIn(f"{console_escalation.RECOMMENDATION_PREFIX} none given — "
+                      "the planner stated no recommendation", lines)
+        self.assertNotIn("```", esc)
+
+    def test_the_planners_choices_complete_its_lines_and_ride_as_its_block(self):
+        """The planner's choices file sits beside its question. Its lines are
+        completed from it and the block rides in the text, so the note
+        `escalate` posts — which prefers the block the reason carries over the
+        file — recommends the planner's recommended choice and carries one
+        block."""
+        _, esc, _ = self._cli(question=QUESTION_TEXT, choices=PLANNER_CHOICES)
+        text = esc.rstrip("\n")
+        _fits_the_contract(self, text)
+        parsed = console_escalation.parse(text)
+        self.assertEqual(QUESTION_TEXT, parsed.question)
+        self.assertEqual(PLANNER_CHOICES["context"], parsed.finding)
+        self.assertEqual("keep it private", parsed.recommendation)
+        self.assertEqual(PLANNER_CHOICES["why"], parsed.why)
+        block = planning_escalation.parse_choices(text)
+        self.assertEqual([c["label"] for c in PLANNER_CHOICES["choices"]],
+                         [c["label"] for c in block["choices"]])
+        self.assertEqual(PLANNER_CHOICES["recommended"], block["recommended"])
+        # ...and the note the escalate step posts, handed the same file.
+        choices = planning_escalation.lifted_choices(text) or PLANNER_CHOICES
+        note = (planning_escalation.escalation_comment(CARD, text,
+                                                        choices=choices)
+                + planning_escalation._choices_tail(text, choices))
+        self.assertEqual([], console_escalation.problems(note), note)
+        self.assertEqual(1, note.count("```escalation-choices"), note)
 
     def test_an_unfinished_revision_parks_for_the_operator_with_the_findings(self):
         out, esc, park = self._cli()

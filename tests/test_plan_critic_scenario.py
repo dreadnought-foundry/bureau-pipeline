@@ -341,7 +341,7 @@ class CriticWalk(unittest.TestCase):
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
                      "review_rerun.py", "plan_run.py", "sanitize_untrusted.py",
-                     "plan_seam_gate.py"):
+                     "plan_seam_gate.py", "console_escalation.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)

@@ -199,11 +199,13 @@ import math
 import os
 import re
 import sys
+from collections import namedtuple
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import checkbox_marks
+import console_escalation
 import design_parity
 import execution_result
 import plan_footprint
@@ -795,6 +797,24 @@ sends the card to the only reader who can act on it (DRE-5376):
     Write the question itself, as he would answer it. The card goes to his
     decision queue with it.
 
+UNDER A QUESTION, AND BEFORE ANYTHING ELSE, say what you found, what you would
+answer and the choices he has — one line each, in plain English, no file
+paths and no code. He reads them as the card's finding, question and
+recommendation, and the choices as buttons:
+
+    {result_prefix} QUESTION — <the question itself>
+    {finding_prefix} <what you found, one line>
+    {recommendation_prefix} <your answer> — <one-line why>
+    {option_prefix} 1 (Recommended): <label> — <what choosing it does> ⟶ <outcome>
+    {option_prefix} 2: <label> — <what choosing it does> ⟶ <outcome>
+
+Two to four {option_prefix} lines. The last word of each is what choosing it
+does to the card, and it is one of {outcomes}: back to the build queue, back
+to Planning, or cancel the card. Mark the one you recommend `(Recommended)`;
+its label is your {recommendation_prefix} answer. A label is a few words and
+names no card number. A SEND_BACK carries none of these lines — it goes to the
+planner, not to him.
+
 THE RULE: if the repository and the card could settle it, it is a SEND_BACK.
 Only a judgement the CEO owns is a QUESTION. A card that holds both is a
 QUESTION first — there is no point rewriting a card whose purpose is still
@@ -876,9 +896,17 @@ def charter(stage: str, sight: str = "", prior: str = "") -> str:
         # is followed by the planner's revision, so the next read is shown
         # what the last one found (`one_off_prior_block`) and checks those
         # fixes rather than finding them again.
+        import planning_escalation  # late: it reads planning_route, which reads us
+
+        *head, last = planning_escalation.OUTCOMES
         return spec["template"].format(
             question=spec["question"],
             child_state=_CHILD_STATE_BLOCK,
+            result_prefix=RESULT_PREFIX,
+            finding_prefix=FINDING_LINE_PREFIX,
+            recommendation_prefix=RECOMMENDATION_LINE_PREFIX,
+            option_prefix=OPTION_LINE_PREFIX,
+            outcomes=f"{', '.join(head)} or {last}",
             max_rounds=_count_word(MAX_ROUNDS),
             park_lane=BOUND_PARK_LANE,
             prior=("\n" + prior.rstrip("\n") + "\n") if prior.strip() else "",
@@ -955,6 +983,115 @@ def read_result(text: str, stage: str | None = None) -> tuple[str, str]:
             return QUESTION, reason
         return NO_RESULT, reason
     return NO_RESULT, ""
+
+
+# --- What a one-off QUESTION says besides the question (DRE-3910) -----------
+#
+# Directly under a QUESTION's result line the one-off critic writes what it
+# found, what it would answer and the choices it would offer, one line each.
+# `read_result` is unchanged and still reads the verdict and the reason alone:
+# the reason IS the question, and these lines ride beside it so the CEO's
+# escalation can carry DRE-3908's three lines and the `escalation-choices`
+# block with the critic's own words in them. Only the one-off charter asks for
+# them — an epic critic's send-back goes to the planner, never to the CEO.
+#
+#     FINDING: <what was found, one line>
+#     RECOMMENDATION: <recommended answer> — <one-line why>
+#     OPTION 1 (Recommended): <label> — <effect> ⟶ <proceed|replan|close>
+
+FINDING_LINE_PREFIX = "FINDING:"
+RECOMMENDATION_LINE_PREFIX = "RECOMMENDATION:"
+OPTION_LINE_PREFIX = "OPTION"
+
+#: The separators `_RESULT_LINE` accepts, between an answer and its why and
+#: between a label and its effect. A hyphen separates only with a space on
+#: each side, so "re-run the review" stays one answer.
+_SEPARATOR = r"(?:\s*[—–]\s*|\s+--?\s+|\s*:\s+)"
+
+_RECOMMENDATION_VALUE = re.compile(
+    rf"^(?P<answer>.+?){_SEPARATOR}(?P<why>\S.*)$")
+
+_OPTION_LINE = re.compile(
+    rf"^{re.escape(OPTION_LINE_PREFIX)}\s+\d+\s*"
+    r"(?P<marked>\([Rr]ecommended\))?\s*:\s*"
+    rf"(?P<label>.+?){_SEPARATOR}(?P<effect>.+?)\s*(?:⟶|→|->)\s*"
+    r"(?P<outcome>[A-Za-z]+)\.?\s*$"
+)
+
+#: The epic's two names for what the critic recommends, exactly — a tuple, so
+#: a caller that unpacks a pair gets the pair.
+Recommendation = namedtuple("Recommendation", "recommendation recommendation_why")
+
+
+class Options(list):
+    """`read_options`' choices, in order, and the `id` of the recommended one:
+    the one marked `(Recommended)`, else the first. Empty when there are none,
+    and then nothing is recommended."""
+
+    def __init__(self, choices=(), recommended: str = ""):
+        super().__init__(choices)
+        self.recommended = recommended
+
+
+def _header_value(text: str, prefix: str) -> str | None:
+    """The first line opening with `prefix`, flattened, or None."""
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith(prefix):
+            return one_line(line[len(prefix):])
+    return None
+
+
+def read_finding(text: str) -> str:
+    """The critic's `FINDING:` line, or "" when it wrote none. A second one
+    is its working, never a second finding."""
+    return _header_value(text, FINDING_LINE_PREFIX) or ""
+
+
+def read_recommendation(text: str) -> Recommendation:
+    """The critic's `RECOMMENDATION:` line as its answer and its why, or
+    `Recommendation("", "")` when it wrote none. A line with no separator is
+    an answer with no why."""
+    value = _header_value(text, RECOMMENDATION_LINE_PREFIX)
+    if not value:
+        return Recommendation("", "")
+    m = _RECOMMENDATION_VALUE.match(value)
+    if not m:
+        return Recommendation(value, "")
+    return Recommendation(m.group("answer").strip(), m.group("why").strip())
+
+
+def _slug(label: str) -> str:
+    """A choice's `id` from its label: lowercased, every run of anything but
+    letters and digits one `-`, trimmed."""
+    return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+
+def read_options(text: str) -> Options:
+    """The critic's `OPTION` lines as choices, in the order it wrote them.
+
+    A line whose outcome is not one of `planning_escalation.OUTCOMES` is
+    skipped, and reading stops at the block's maximum, so a fifth is ignored.
+    Whether the choices make a block the console may show is the block's own
+    validator's question (`console_escalation.block`), not this reader's.
+    """
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    found: list = []
+    recommended = ""
+    for raw in (text or "").splitlines():
+        m = _OPTION_LINE.match(raw.strip())
+        if not m or m.group("outcome").lower() not in planning_escalation.OUTCOMES:
+            continue
+        label = one_line(m.group("label"))
+        found.append(console_escalation.Choice(
+            _slug(label), label, one_line(m.group("effect")),
+            m.group("outcome").lower()))
+        if m.group("marked") and not recommended:
+            recommended = found[-1].id
+        if len(found) >= planning_escalation.MAX_CHOICES:
+            break
+    return Options(found, recommended or (found[0].id if found else ""))
 
 
 def result_line(result: str, reason: str = "") -> str:
@@ -2707,9 +2844,100 @@ def every_finding_so_far(prior_findings, this_round) -> list[str]:
     return out
 
 
+#: What a one-off escalation opens with when the critic asked a question...
+ONE_OFF_QUESTION_OPENING = (
+    "This card was about to go to the build queue, and the reader that checks "
+    "work of this size found a decision in it that only you can make."
+)
+#: ...and when it decided nothing, with what happened in its own block.
+ONE_OFF_NO_RESULT_OPENING = (
+    "This card was about to go to the build queue, and the reader that checks "
+    "work of this size did not say an agent could finish it unattended."
+)
+ONE_OFF_NO_RESULT_WHAT_HAPPENED = (
+    "What happened: the reader did not answer at all, so nothing has checked "
+    "this card. We treat that as a stop rather than a yes, because after this "
+    "point the work is simply built."
+)
+
+#: The Question when the asker's own is not fit for the card — the one case a
+#: generic sentence may stand in, and only because the real one could not.
+ONE_OFF_FALLBACK_QUESTION = "How do you want this one settled?"
+
+#: A no-result has no critic to ask (DRE-3889), so its lines and its two
+#: choices are the route's own.
+NO_RESULT_FINDING = "the critic produced no result"
+NO_RESULT_QUESTION = "Re-run the review, or settle the card yourself?"
+NO_RESULT_WHY = ("the critic returned no result, and a no-result is a crash, "
+                 "not a rejection")
+NO_RESULT_CHOICES = (
+    console_escalation.Choice("re-run-the-review", "re-run the review",
+                              "the card is read again by the critic", "replan"),
+    console_escalation.Choice("settle-it-yourself", "settle it yourself",
+                              "the card goes on without the reader's answer",
+                              "proceed"),
+)
+
+
+def _not_fit(what: str, text: str) -> None:
+    """Log an agent's line that is not fit for the card, whole — the run log
+    is where the escalation text says it is."""
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    print(f"plan critic: the one-off {what} is not fit for the card — "
+          f"{planning_escalation.NOT_PLAIN_ENGLISH}\n--- it was written as "
+          f"---\n{text}", file=sys.stderr)
+
+
+def _asked_lines(question: str, finding: str, recommendation: str, why: str,
+                 options, who: str) -> console_escalation.Escalation:
+    """The three lines and the choices for an asked question, each line the
+    asker's own when it is fit to show and its stated fallback otherwise.
+
+    A block rides only beside a recommendation that may be shown: the block
+    names a recommended choice and why, and its label IS the Recommendation
+    line's answer, so with no recommendation stated there is nothing to put
+    on top. A block the validator refuses is dropped whole, so a label it
+    refused never reaches the Recommendation line either.
+    """
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    jargon = planning_escalation.jargon
+    leaked = (lambda what: f"{who}'s {what} was written in technical terms; "
+              "it is in the run log")
+    if jargon(question):
+        _not_fit("question", question)
+        question, found = ONE_OFF_FALLBACK_QUESTION, leaked("question")
+    else:
+        found = one_line(finding)
+        if not found:
+            found = (f"{who} found a decision in this card that only the CEO "
+                     "can make, and stated no separate finding")
+        elif jargon(found):
+            _not_fit("finding", found)
+            found = leaked("finding")
+    answer, because = one_line(recommendation), one_line(why)
+    choices = tuple(options or ())
+    if not answer:
+        answer, because, choices = None, f"{who} stated no recommendation", ()
+    elif jargon(f"{answer}\n{because}"):
+        _not_fit("recommendation", f"{answer} — {because}")
+        answer, because, choices = None, leaked("recommendation"), ()
+    elif not because:
+        because = f"{who} stated no reason for it"
+    esc = console_escalation.Escalation(
+        found, question, answer, because, choices,
+        getattr(options, "recommended", "") if choices else "")
+    if choices and console_escalation.block(esc) is None:
+        esc = console_escalation.Escalation(found, question, answer, because)
+    return esc
+
+
 def one_off_escalation(result: str, reason: str = "",
                        prior_send_backs: int = 0, findings=(),
-                       ran_out=None) -> str:
+                       ran_out=None, *, finding: str = "",
+                       recommendation: str = "", why: str = "", options=(),
+                       who: str = "the critic") -> str:
     """The plain-English text the CEO is handed when a one-off `escalate`s.
 
     Since DRE-5376 that is two cases and no third: the critic asked him a
@@ -2717,50 +2945,47 @@ def one_off_escalation(result: str, reason: str = "",
     the planner's (`revise`) and the bound is the operator's (`park`), so
     neither is written for him here — the decision step writes this file only
     on `escalate`. `prior_send_backs` and `findings` are kept for the callers
-    that pass them and are no longer read.
+    that pass them and are no longer read; the branch still accepts the word
+    SEND_BACK, as it always has.
 
-    `standards/comms.md`: purpose first, the question in its own block, and one
-    ask as the closing line. The question half was written by an AGENT, so the
-    same seam that guards the planner's own escalation text guards this one
-    (`planning_escalation.jargon`). A question that leaks a path or a command
-    costs the QUESTION, never the park: the raw text stays in the run log, and
-    the card still parks with something a person can answer.
+    Since DRE-3910 the text is the opening sentence and then DRE-3908's three
+    lines — Finding, Question, Recommendation — with the `escalation-choices`
+    block last when the asker gave choices the block's validator accepts
+    (`console_escalation.render_with_block`). The Question line IS the reason,
+    verbatim: the critic's charter tells it to write the question itself, and
+    a generic "settle it yourself" sentence is what this replaced. The old
+    "The question: …" paragraph and its closing ask are gone rather than kept
+    beside the lines, because they carried the same question, and one note
+    asks once (`standards/comms.md`). `finding`, `recommendation`, `why` and
+    `options` are the critic's header lines (`read_finding`,
+    `read_recommendation`, `read_options`); `who` is whose question it is, so
+    a fallback names the planner when the planner asked.
+
+    Every line was written by an AGENT, so the same seam that guards the
+    planner's own escalation text guards each one (`planning_escalation.jargon`).
+    A line that leaks a path or a command costs that line, never the park: the
+    raw text stays in the run log, and the card still parks with something a
+    person can answer.
+
+    A critic that decided nothing has no question to carry, so that text is
+    fixed: what happened, then the route's own lines and its two choices.
 
     WHEN THE READ RAN OUT OF TURNS it is a different text (DRE-4381), decided
-    by the same predicate the note on the card is decided by.
+    by the same predicate the note on the card is decided by, and unchanged.
     """
-    import planning_escalation  # late: it reads planning_route, which reads us
-
     if _ran_out_of_turns(result, reason, ran_out):
         return one_off_ran_out_request(ran_out)
 
     stated = one_line(reason)
     if result in (QUESTION, SEND_BACK) and stated:
-        if planning_escalation.jargon(stated):
-            print("plan critic: the one-off question is not fit for the card — "
-                  f"{planning_escalation.NOT_PLAIN_ENGLISH}\n--- the critic "
-                  f"wrote ---\n{stated}", file=sys.stderr)
-            asked = ("The question was written in technical terms, so it is "
-                     "not repeated here — it is in the run's own log.")
-        else:
-            asked = f"The question: {stated}"
-        return "\n\n".join([
-            "This card was about to go to the build queue, and the reader that "
-            "checks work of this size found a decision in it that only you can "
-            "make.",
-            asked,
-            "Which gets to my question: how do you want this one settled?",
-        ])
-    return "\n\n".join([
-        "This card was about to go to the build queue, and the reader that "
-        "checks work of this size did not say an agent could finish it "
-        "unattended.",
-        "What happened: the reader did not answer at all, so nothing has "
-        "checked this card. We treat that as a stop rather than a yes, "
-        "because after this point the work is simply built.",
-        "Which gets to my question: is this something you want to settle "
-        "yourself, or should we put it back in the queue as it stands?",
-    ])
+        prose = [ONE_OFF_QUESTION_OPENING]
+        esc = _asked_lines(stated, finding, recommendation, why, options, who)
+    else:
+        prose = [ONE_OFF_NO_RESULT_OPENING, ONE_OFF_NO_RESULT_WHAT_HAPPENED]
+        esc = console_escalation.Escalation(
+            NO_RESULT_FINDING, NO_RESULT_QUESTION, None, NO_RESULT_WHY,
+            NO_RESULT_CHOICES, NO_RESULT_CHOICES[0].id)
+    return "\n\n".join(prose + [console_escalation.render_with_block(esc)])
 
 
 def one_off_prior_block(findings: list[str]) -> str:
@@ -3698,13 +3923,61 @@ def _cmd_decide(args) -> int:
     # revises those, and the bound parks them for the operator.
     if (args.escalation_file and args.stage == STAGE_ONE_OFF
             and action == ESCALATE):
+        # The critic's own finding, recommendation and choices (DRE-3910),
+        # read off the same file in the same process — no step output carries
+        # them, because no step needs them.
+        said = read_recommendation(result_text)
         with open(args.escalation_file, "w", encoding="utf-8") as f:
-            f.write(one_off_escalation(result, reason, prior, items,
-                                       ran_out) + "\n")
+            f.write(one_off_escalation(
+                result, reason, prior, items, ran_out,
+                finding=read_finding(result_text),
+                recommendation=said.recommendation,
+                why=said.recommendation_why,
+                options=read_options(result_text)) + "\n")
     print(body)
     print()
     print(record)
     return 0
+
+
+def _choices_beside(question_file: str | None) -> str | None:
+    """Where the planner's choices sit beside its question: plan.yml writes
+    `one-off-question.md` and `one-off-question-choices.json` as a pair
+    (`docs/escalation-choices.md`)."""
+    if not question_file:
+        return None
+    return f"{os.path.splitext(question_file)[0]}-choices.json"
+
+
+def _planner_lines(question_file: str | None) -> dict:
+    """The planner's choices as `one_off_escalation`'s keyword arguments, or
+    none when it wrote no valid block (DRE-3910).
+
+    Its question carries no header lines, so without this its Finding and
+    Recommendation take their fallbacks. With a block they are completed from
+    it — its context, and its recommended choice with its why — and the block
+    rides in the text, so the note `escalate` posts, which prefers the block a
+    reason carries over the file it is handed, recommends in its lines the
+    choice its buttons put on top. A note whose lines said `none given` above
+    a block recommending something would say two things at once.
+    """
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    block = planning_escalation.read_choices(_choices_beside(question_file))
+    if block is None:
+        return {}
+    choices = Options(
+        (console_escalation.Choice(c["id"], c["label"], c["effect"],
+                                   c["outcome"], c.get("preview", ""))
+         for c in block["choices"]),
+        block["recommended"])
+    return {
+        "finding": block["context"],
+        "recommendation": next(c.label for c in choices
+                               if c.id == choices.recommended),
+        "why": block["why"],
+        "options": choices,
+    }
 
 
 def _cmd_revision_outcome(args) -> int:
@@ -3723,7 +3996,9 @@ def _cmd_revision_outcome(args) -> int:
                                _read(args.summary_file))
     if outcome == ASKED and args.escalation_file:
         with open(args.escalation_file, "w", encoding="utf-8") as f:
-            f.write(one_off_escalation(QUESTION, question) + "\n")
+            f.write(one_off_escalation(
+                QUESTION, question, who="the planner",
+                **_planner_lines(args.question_file)) + "\n")
     if outcome == UNFINISHED and args.park_file:
         findings = [m.group("text").strip()
                     for m in (_FURTHER_FINDING.match(line)
