@@ -65,6 +65,10 @@ ACTION = "anthropics/claude-code-action"
 # one hit it could never clear.
 RETIRED_MOVE = " ".join(("Green", "Light,", "then", "approve"))
 
+# Every park on this route holds the epic through the registry's writer, with
+# its reason (DRE-6179) — never the bare `needs-human` label.
+HOLD_WRITE = 'hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml'
+
 
 def wf_src() -> str:
     return open(WF).read()
@@ -191,7 +195,7 @@ class ASendBackRevisesThenParks(unittest.TestCase):
         park = step_named(BOUND_PARK)
         self.assertIn("steps.post1.outputs.bound == 'true'", str(park.get("if")))
         run = str(park.get("run") or "")
-        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertIn(HOLD_WRITE, run)
         self.assertIn('state "$EPIC" "Triage"', run)
         self.assertNotIn('state "$EPIC" "Green Light"', run)
 
@@ -925,8 +929,7 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
     def test_a_second_death_parks_for_an_operator(self):
         run = str(step_named(DIED).get("run") or "")
         park = run.split('"park"')[1]
-        self.assertIn("add-label", park)
-        self.assertIn("needs-human", park)
+        self.assertIn(HOLD_WRITE, park)
         self.assertIn('state "$EPIC" "Triage"', park)
         self.assertNotIn('state "$EPIC" "Green Light"', park)
         self.assertIn('cat "$PARK_NOTE"', park,
@@ -1455,8 +1458,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
                    and "steps.post1.outputs.pre_passed != 'true'" in gate_of(s)]
         self.assertEqual(reached, [REVIEW_HELD_PASS])
         run = run_of(exact_step(REVIEW_HELD_PASS))
-        self.assertIn("add-label", run)
-        self.assertIn("needs-human", run)
+        self.assertIn(HOLD_WRITE, run)
         self.assertRegex(run, TRIAGE_WRITE)
         self.assertNotRegex(run, GREEN_LIGHT_WRITE)
 
@@ -1516,8 +1518,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         for s in (bound, died):
             with self.subTest(step=s.get("name")):
                 run = run_of(s)
-                self.assertIn("add-label", run)
-                self.assertIn("needs-human", run)
+                self.assertIn(HOLD_WRITE, run)
                 self.assertRegex(run, TRIAGE_WRITE)
                 self.assertNotRegex(run, GREEN_LIGHT_WRITE)
         run = run_of(died)
@@ -1546,7 +1547,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         for s in parks:
             with self.subTest(step=s.get("name")):
                 run = run_of(s)
-                self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+                self.assertLess(run.index(HOLD_WRITE), TRIAGE_WRITE.search(run).start())
 
     def test_the_re_run_sentence_is_read_from_its_module_never_a_literal(self):
         for s in steps():
@@ -1941,9 +1942,9 @@ class TheReviewReplanCarriesThePlanArtifact(unittest.TestCase):
 
     def test_a_refused_revision_parks_in_triage_for_an_operator(self):
         run = run_of(exact_step(REVIEW_RECHECK))
-        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertIn(HOLD_WRITE, run)
         self.assertRegex(run, TRIAGE_WRITE)
-        self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+        self.assertLess(run.index(HOLD_WRITE), TRIAGE_WRITE.search(run).start())
         self.assertIn("plan_critic.REAPPROVE_HOW", run)
         self.assertNotIn(pc.REAPPROVE_HOW, run)
         self.assertNotRegex(run, GREEN_LIGHT_WRITE)
@@ -2184,9 +2185,9 @@ class ThePlanRouteHandsAPassedPlanToTheSecondCritic(unittest.TestCase):
     def test_the_park_labels_then_moves_to_triage_and_dispatches_nothing(self):
         s = exact_step(PRE_PARK)
         run = run_of(s)
-        self.assertIn('add-label "$EPIC" needs-human', run)
+        self.assertIn(HOLD_WRITE, run)
         self.assertRegex(run, TRIAGE_WRITE)
-        self.assertLess(run.index("add-label"), TRIAGE_WRITE.search(run).start())
+        self.assertLess(run.index(HOLD_WRITE), TRIAGE_WRITE.search(run).start())
         self.assertNotRegex(run, GREEN_LIGHT_WRITE)
         self.assertNotIn("review_rerun.py", run)
         self.assertIn("plan_critic.REAPPROVE_HOW", run, "read, never restated")

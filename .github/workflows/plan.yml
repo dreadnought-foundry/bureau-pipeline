@@ -3527,7 +3527,7 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           if [ -z "$NOTE" ]; then NOTE="The first critic's finding this round: ${FINDING}."; fi
-          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "🛑 Parked in Triage with needs-human for an operator — the plan goes on to neither the second critic nor Green Light until a person settles it. ${NOTE} When it is settled, ${HOW}."
@@ -4043,7 +4043,7 @@ jobs:
                 "🚨 The second critic's review could NOT be started again — the dispatch did not go through, so nothing is reading the plan. This run is red, so the medic picks it up; nothing here is yours to do."
             fi
           elif [ "$ACTION" = "park" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(cat "$PARK_NOTE")"
@@ -4175,7 +4175,7 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           THREAD="${{ runner.temp }}/held-park-thread.json"
           NOTE="${{ runner.temp }}/held-park-note.md"
-          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           # An unreadable thread is named as unreadable by the note, never as
           # "no record", so a failed read still parks with a true sentence.
@@ -4221,7 +4221,7 @@ jobs:
               exit 1
             fi
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "🛑 Parked in Triage with needs-human for an operator. The second critic could not decide on this plan ${NO_RESULTS} times on this planning attempt, so nobody has finished reading it and it does not go to Green Light. When it is settled, ${HOW}."
@@ -4724,7 +4724,7 @@ jobs:
             WHY="The re-plan finished, but ${FAILED}.${BOUNCED}"
           fi
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
-          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "🛑 Parked in Triage with needs-human for an operator. The second critic sent this plan back and the planner revised it, but the revision did not pass the plan's own gates, so it is not reviewed again and it does not go to Green Light. ${WHY} When it is settled, ${HOW}."
@@ -4859,7 +4859,7 @@ jobs:
             CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
           fi
           if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
-          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+          python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} ${CHANGED} When it is settled, ${HOW}."

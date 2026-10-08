@@ -430,7 +430,7 @@ class AgentFixWiringTest(unittest.TestCase):
         """Visible, not silent: the CEO's "needs you" queue is the whole
         difference between this and a permanent stall."""
         run = self.steps[self._index_of_step_running("unfixable_checks.py")]["run"]
-        self.assertIn("needs-human", run)
+        self.assertIn('hold.py apply "$CARD" --reason unfixable-check', run)
         self.assertIn("Triage", run)
 
     def test_the_gate_comments_on_the_pull_request(self):
@@ -634,6 +634,13 @@ class GateScenarioTest(unittest.TestCase):
             "    print(os.environ.get('STUB_CARD_HELD', '0'))\n"
             "sys.exit(code)\n"
         )
+        # DRE-6179: the hold goes on through the registry's writer, logged
+        # into the same file so its order against the park is the step's.
+        (td / ".bureau-pipeline" / "scripts" / "hold.py").write_text(
+            "#!/usr/bin/env python3\nimport json, os, sys\n"
+            f"open({str(linear_log)!r}, 'a').write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n"
+            "sys.exit(int(os.environ.get('STUB_LINEAR_EXIT', '0')))\n"
+        )
         gh = td / "bin" / "gh"
         gh.write_text(GH_STUB)
         gh.chmod(0o755)
@@ -689,8 +696,8 @@ class GateScenarioTest(unittest.TestCase):
         self.assertIn(self.HEAD[:8], posted)
         verbs = [c[0] for c in calls]
         self.assertIn("comment", verbs)
-        self.assertIn("add-label", verbs)
-        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+        self.assertIn("hold.py", verbs)
+        self.assertIn(self._hold_apply(), calls)
         self.assertTrue(any(c[0] in ("advance", "state") for c in calls))
 
     def test_the_card_note_is_the_plain_english_one(self):
@@ -716,6 +723,10 @@ class GateScenarioTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
     # -- adversarial ------------------------------------------------------
+    def _hold_apply(self):
+        return ["hold.py", "apply", "DRE-2672", "--reason", "unfixable-check",
+                "--at", self.HEAD, "--by", "agent-fix.yml"]
+
     def _hold_key(self, sha8=None):
         return f"{unfixable_checks.HOLD_MARKER} @{sha8 or self.HEAD[:8]}"
 
@@ -736,13 +747,13 @@ class GateScenarioTest(unittest.TestCase):
                          "the card was noted twice on one head")
 
     def test_the_park_is_re_applied_even_when_both_notices_already_landed(self):
-        """add-label and the park are no-ops when already applied, so they sit
+        """The label and the park are no-ops when already applied, so they sit
         behind no receipt at all — that is what makes a retry free, and it is
         how the Report step's park_for_human() has always worked."""
         _, _, _, calls = self._run(
             self._red_tdd(), thread=[self._prior_pr_hold()], card_held=1
         )
-        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+        self.assertIn(self._hold_apply(), calls)
         self.assertTrue(any(c[0] in ("advance", "state") for c in calls))
 
     # THE DEFECT the critic caught: one shared receipt let a Linear blip
@@ -759,7 +770,7 @@ class GateScenarioTest(unittest.TestCase):
         self.assertEqual(posted, "", "the PR side must still not repeat itself")
         note = [c for c in calls if c[0] == "comment"]
         self.assertEqual(len(note), 1, "the card note was never retried")
-        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+        self.assertIn(self._hold_apply(), calls)
 
     def test_a_landed_card_note_does_not_suppress_a_pr_hold_that_never_landed(self):
         """The mirror image — each side reads the side it guards."""

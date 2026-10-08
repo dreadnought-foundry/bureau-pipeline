@@ -266,7 +266,9 @@ park_for_human() {
     echo "PR #$PR is a draft — leaving $CARD where it is: no needs-human, no Triage (DRE-5801)"
     return 0
   fi
-  python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+  # The hold carries its reason and the head it stands on — the pull
+  # request's head when it was read, the run's starting head when not (DRE-6179).
+  python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason fix-dispute --at "${HEAD_NOW:-$PRE_SHA}" --by agent-fix.yml || true
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }

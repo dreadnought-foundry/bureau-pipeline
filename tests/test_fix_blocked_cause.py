@@ -42,6 +42,7 @@ from test_fix_exit_classified import (  # noqa: E402
     QA,
     card_comments,
     critic,
+    held,
     pr_comments,
     report,
     rest,
@@ -156,7 +157,7 @@ class OneCause:
         said = card_comments(calls)
         self.assertEqual(1, len(said), said)
         self.assertTrue(said[0][2].startswith(f"🙋 {cause} "), said[0][2])
-        self.assertIn(["add-label", CARD, "needs-human"], calls)
+        self.assertTrue(held(calls), calls)
         return bodies[0], said[0][2]
 
 

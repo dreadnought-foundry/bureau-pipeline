@@ -723,10 +723,13 @@ jobs:
             else
               echo "card note already posted for $SHA8 — not repeating it"
             fi
-            # Re-run every time, behind no receipt at all: both are no-ops when
-            # already applied, and that is exactly what makes a retry free. The
-            # Report step's park_for_human() has always worked this way.
-            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+            # Re-run every time, behind no receipt at all: the label and the
+            # lane move are no-ops when already applied, and that is exactly
+            # what makes a retry free. The Report step's park_for_human() has
+            # always worked this way. The hold is applied through the registry's
+            # writer, so the card carries why it is held and at which head
+            # (DRE-6179).
+            python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason unfixable-check --at "$HEAD_SHA" --by agent-fix.yml || true
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           fi
