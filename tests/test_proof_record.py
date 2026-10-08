@@ -240,6 +240,130 @@ class TestShortfall:
 
 
 # --------------------------------------------------------------------------
+# A criterion the operator accepted as overtaken (DRE-6244)
+# --------------------------------------------------------------------------
+LINEAR_DECISION = "https://linear.app/dreadnoughtfoundry/issue/DRE-1/x#comment-abc"
+GITHUB_DECISION = "https://github.com/dreadnought-foundry/agent-bureau/pull/3339#issuecomment-4242"
+OVERTAKEN = "The proof-reader is refused on the Subscriptions page"
+
+
+def accepted_record(result: str) -> str:
+    return f"""# Proof: subscriptions
+
+| Criterion | Result |
+|---|---|
+| The identity heading shows the tenant | Met — screenshot 1 |
+| The plan tab lists the plan | Observed. |
+| {OVERTAKEN} | {result} |
+| The record is merged to main | Pending |
+"""
+
+
+class TestAnAcceptedRow:
+    def rec(self, text):
+        return proof_record.Record(RECORD_PATH, text, None)
+
+    @pytest.mark.parametrize("link", [
+        LINEAR_DECISION,
+        GITHUB_DECISION,
+        "linear.app/dreadnoughtfoundry/issue/DRE-5883/proof-reader-reads#comment-9f3e2a1b",
+        "github.com/dreadnought-foundry/agent-bureau/pull/3339#issuecomment-4242",
+        f"[the decision]({LINEAR_DECISION})",
+        f"[the decision]({GITHUB_DECISION})",
+    ])
+    def test_an_accepted_row_with_a_linked_decision_passes(self, link):
+        result = f"ACCEPTED by operator decision — DRE-5883 made it a platform reader ({link})"
+        text = accepted_record(result)
+        assert proof_record.shortfall(self.rec(text)) is None
+        read = proof_record.reading(text)
+        assert read.accepted == [(OVERTAKEN, result)]
+        assert (OVERTAKEN, result) not in read.met
+        assert read.unmet == []
+
+    def test_emphasis_and_case_are_read_the_way_met_words_are(self):
+        for opening in ("**ACCEPTED by operator decision**", "Accepted by operator decision",
+                        "_accepted by operator decision_"):
+            result = f"{opening} — overtaken ({LINEAR_DECISION})"
+            assert proof_record.reading(accepted_record(result)).accepted == [(OVERTAKEN, result)]
+
+    def test_the_summary_names_the_accepted_row(self):
+        result = f"ACCEPTED by operator decision — overtaken ({LINEAR_DECISION})"
+        read = proof_record.reading(accepted_record(result))
+        assert proof_record.summary(read) == (
+            f"2 rows met, 1 accepted by operator decision: “{OVERTAKEN}”")
+
+    def test_the_summary_with_nothing_accepted_reads_as_today(self):
+        assert proof_record.summary(proof_record.reading(MET)) == "2 rows met"
+
+    def test_the_summary_names_every_accepted_row_cut_like_a_row(self):
+        long = "A criterion " + "that runs on and on " * 6
+        text = (f"| Criterion | Result |\n|---|---|\n| it ran | Met |\n"
+                f"| first overtaken | ACCEPTED by operator decision ({LINEAR_DECISION}) |\n"
+                f"| {long} | ACCEPTED by operator decision ({GITHUB_DECISION}) |\n")
+        said = proof_record.summary(proof_record.reading(text))
+        cut = " ".join(long.split())[:69].rstrip() + "…"
+        assert said == (f"1 rows met, 2 accepted by operator decision: "
+                        f"“first overtaken”; “{cut}”")
+
+    def test_a_table_of_only_accepted_rows_passes(self):
+        text = (f"| Criterion | Result |\n|---|---|\n"
+                f"| {OVERTAKEN} | ACCEPTED by operator decision ({LINEAR_DECISION}) |\n"
+                f"| The record is merged to main | Pending |\n")
+        assert proof_record.shortfall(self.rec(text)) is None
+
+    def test_the_closing_step_alone_is_still_refused(self):
+        assert "no row but its closing step" in proof_record.shortfall(self.rec(CLOSING_ONLY))
+
+    def test_an_accepted_row_with_no_link_is_held_and_says_why(self):
+        result = "ACCEPTED by operator decision — DRE-5883"
+        why = proof_record.shortfall(self.rec(accepted_record(result)))
+        assert why == (f"{RECORD_PATH} has 1 row(s) not met: “{OVERTAKEN}” reads "
+                       f"“{result}” — accepted without a linked decision")
+        read = proof_record.reading(accepted_record(result))
+        assert read.accepted == [] and read.unmet == [(OVERTAKEN, result)]
+
+    @pytest.mark.parametrize("link", [
+        "https://linear.app/dreadnoughtfoundry/issue/DRE-5883/proof-reader-reads",
+        "https://linear.app/dreadnoughtfoundry/project/x#comment-abc",
+        "https://github.com/dreadnought-foundry/agent-bureau/pull/3339",
+        "https://github.com/dreadnought-foundry/agent-bureau/issues/3339#issuecomment-4242",
+        "https://evillinear.app/dreadnoughtfoundry/issue/DRE-1/x#comment-abc",
+        "https://example.com/decision",
+    ])
+    def test_a_link_of_any_other_shape_is_no_decision(self, link):
+        result = f"ACCEPTED by operator decision ({link})"
+        why = proof_record.shortfall(self.rec(accepted_record(result)))
+        assert why is not None and "accepted without a linked decision" in why
+
+    def test_the_link_must_be_in_the_same_cell(self):
+        text = (f"| Criterion | Result | Notes |\n|---|---|---|\n"
+                f"| {OVERTAKEN} | ACCEPTED by operator decision | {LINEAR_DECISION} |\n")
+        why = proof_record.shortfall(self.rec(text))
+        assert why is not None and "accepted without a linked decision" in why
+
+    def test_a_link_alone_accepts_nothing(self):
+        result = f"Not met — but see {LINEAR_DECISION}"
+        why = proof_record.shortfall(self.rec(accepted_record(result)))
+        assert why is not None and "accepted without a linked decision" not in why
+
+    @pytest.mark.parametrize("result", [
+        "NOT MET as written",
+        "Not observed.",
+        "ACCEPTED by operator decision",
+        "**ACCEPTED by operator decision** — overtaken",
+        # every hedge tests/test_hygiene_done.py's parametrized hold cases list
+        "Met, but only for the first card", "Pass with caveats", "Yes and no",
+        "**Met** — but not on agent-bureau", "Observed only once",
+    ])
+    def test_what_held_before_still_holds(self, result):
+        why = proof_record.shortfall(self.rec(accepted_record(result)))
+        assert why is not None and OVERTAKEN in why
+
+    def test_no_word_was_added_to_the_met_words(self):
+        assert proof_record.MET_WORDS == ("met", "holds", "observed", "proven", "pass", "yes")
+
+
+# --------------------------------------------------------------------------
 # The hold-discharge reader
 # --------------------------------------------------------------------------
 def voice(kind, body):
