@@ -504,7 +504,10 @@ def park_reason(
       1. the `needs-human` label — the native "a person owns this now" marker
          every sweep already reads, and enough on its own, whatever lane the
          card is in (`dead_run.park()` writes the label first for exactly this
-         reason: it is what stops the pipeline re-dispatching);
+         reason: it is what stops the pipeline re-dispatching). Asked of
+         `hold.respects(…, "medic")` (DRE-6182): the reason on the card's
+         live stamp decides, the label with no live stamp or a reason the
+         registry does not know is held, and the sentence names the reason;
       2. the park LANE plus the hold receipt that put the card there, newer
          than the run. The receipt is required because Backlog is not by itself
          a hold — it is also where a blocked card and a PARKED routing verdict
@@ -515,9 +518,13 @@ def park_reason(
          reason: Planning is also where a hand-back and a NEEDS WORK verdict
          send a card.
     """
-    hold = dead_run.HOLD_LABEL.lower()
-    if any((name or "").strip().lower() == hold for name in labels or ()):
-        return f"the '{dead_run.HOLD_LABEL}' label is on it"
+    bodies = [receipt.get("body") or "" for receipt in receipts or ()]
+    names = [(name or "").strip() for name in labels or ()]
+    if hold.respects(names, bodies, "medic"):
+        stamp = hold.read_stamp(bodies)
+        reason, lifts = (stamp["reason"], stamp["lifts"]) if stamp else ("manual", "manual")
+        return (f"the '{dead_run.HOLD_LABEL}' label is on it — reason {reason}, "
+                f"lifts when {lifts}")
     if (state or "").strip().lower() == REPLAN_STATE.lower():
         replanned = _newest_after(receipts, REPLAN_RECEIPT_MARK, run_started_at)
         if not replanned:
