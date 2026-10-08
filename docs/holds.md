@@ -26,9 +26,10 @@ Ten reasons, five lift kinds and four readers, as exact strings:
 - **Lift kinds:** `run-started`, `repo-on-rail`, `new-head`, `unpark-marker`,
   `manual`. One more lift applies to every reason: `card-closed`, whenever the
   card is Done or Canceled. It is a rule, not a row.
-- **Readers:** `sweep` (`reconcile.held`), `fix-dispatch`
-  (`reconcile.fix_dispatch_blocked`), `medic` (`medic_retry`) and
-  `limit-recovery` (`limit_recovery`).
+- **Readers:** `sweep` (`reconcile.held`, `reconcile.live_promotion_refusal`),
+  `fix-dispatch` (`reconcile.card_parked_for_human`, asked by
+  `reconcile.fix_dispatch_blocked`), `medic` (`medic_retry.park_reason`) and
+  `limit-recovery` (`limit_recovery._held`).
 
 ## Each reason, its lift and where the lift sends the card
 
@@ -265,9 +266,30 @@ for a card:
 - a stamp with a reason the registry has no row for — yes, failing closed;
 - otherwise — whether a row carrying that reason names the reader.
 
-Today every row names all four readers, because every reader honors the bare
-label. A later card that lets a reader through for one reason changes that
-row's `readers`, and nothing else.
+Every reader asks it, with its own name (DRE-6182): `reconcile.held` and the
+sweep's live re-read before a promotion, `reconcile.live_promotion_refusal`,
+as `sweep`; `reconcile.card_parked_for_human`, which `fix_dispatch_blocked`
+asks, as `fix-dispatch` beside its unchanged lane test; `medic_retry.park_reason`
+as `medic`, whose sentence names the reason and its lift kind (`reason manual`
+for a label with no live stamp); and `limit_recovery._held` as
+`limit-recovery`. A spent stamp reaches each of them through `read_stamp`, so
+a label a person put back by hand after a lift is read as `manual`, never as
+the old stamped reason. The medic's and limit recovery's exception for a
+Linear Sync or Merge Gate rerun (`medic_retry.park_rule_applies`) is by
+workflow and stays where it is.
+
+Every row names all four readers today, so no reader's answer changed when
+they moved onto the registry. A later card that lets a reader through for one
+reason changes that row's `readers`, and nothing else.
+
+Some code still reads the bare label alone, and that is deliberate. Each of
+these refuses or reports on any hold, whatever its reason — the same
+fail-closed answer an unknown reason gets: the plan-gate
+`dedupe_dispatch.parked_for_a_person`, the medic's run-log line
+`limit_death_record.needs_a_person`, the proof dispatcher's
+`proof_dispatch.first_run`, the Triage lane's `hygiene_triage.left_for_a_person`,
+and `linear_ops.cmd_state`'s building-card guard. An exception for one of
+them is a `readers` entry and a card of its own.
 
 `hold.py reason <CARD>` prints the same answer `reason_of` gives for the live
 card, for a shell step to read. It prints nothing when the label is off and
