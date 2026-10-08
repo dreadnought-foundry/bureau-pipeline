@@ -328,23 +328,20 @@ def reference_problems(doc: dict | None = None) -> list:
                 "number"
             )
 
-    # The split-rate dimension is the one that reads a FILE rather than a
-    # receipt, so the file is checked the same way the contaminated dimension's
-    # gate is: an audit that names a ledger nobody wrote reports a rate it
-    # computed from nothing (DRE-3079).
+    # The split-rate dimension is the one that reads the split ledger rather
+    # than a receipt, so it must name one: an audit that names no ledger
+    # reports a rate it computed from nothing (DRE-3079). It is no longer
+    # checked as a file in this repo — the ledger is derived at plan time and
+    # the committed copy is retired (DRE-6056); the shipped reference still
+    # names the path it was committed at, as the historical record it is. A
+    # ledger that cannot be read is reported where it is read
+    # (`split_rate`'s `unreadable`), never here.
     split = declared.get(SPLIT_DIMENSION) or {}
     if split:
-        path = (split.get("ledger") or "").strip()
-        if not path:
+        if not (split.get("ledger") or "").strip():
             problems.append(
                 f"dimension {SPLIT_DIMENSION!r} names no ledger — the rate has "
                 "no population to be read from"
-            )
-        elif not os.path.exists(os.path.join(ROOT, path)):
-            problems.append(
-                f"dimension {SPLIT_DIMENSION!r} reads {path}, which is not in "
-                "this repo — a rate computed from a file nobody wrote is a "
-                "number with no denominator"
             )
         if "ledger_injected_at" not in split:
             problems.append(
@@ -567,8 +564,8 @@ def split_outcome(child: dict, ledger_cards: dict | None = None) -> str:
         (standards/console-honesty.md rule 1).
 
     The split signals are the ledger's, read through `split_ledger.reasons` so
-    the population here and the population in `config/split-ledger.json` cannot
-    drift apart — plus the ledger's own rows, for a card it has already read.
+    the population here and the population in the split ledger cannot drift
+    apart — plus the ledger's own rows, for a card it has already read.
     """
     identifier = child.get("identifier")
     if identifier and identifier in (ledger_cards or {}):
@@ -689,7 +686,7 @@ def render_split_rate(result: dict) -> str:
            "counts as split when the pipeline's own record says one run of it "
            "was not enough — a turn-cap death, a cancel with pieces citing it, "
            "or a hand-back to Planning. That is the split ledger's own "
-           "population (`config/split-ledger.json`), not a second definition.",
+           "population, not a second definition.",
            ""]
     if result.get("injected_at"):
         out.append(f"The ledger reached the planner on {result['injected_at']}; "
@@ -862,7 +859,7 @@ def _split_rows(children, ledger=None) -> list:
                 identifier, SPLIT_DIMENSION, "one-card", "split",
                 "the pipeline's own record says one run of this card was not "
                 "enough — a turn-cap death, a cancel with pieces citing it, or "
-                "a hand-back to Planning (config/split-ledger.json)",
+                "a hand-back to Planning (the split ledger)",
             ))
         elif outcome == "one-card":
             rows.append(_compare(
@@ -993,8 +990,10 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
     population is the same failure as a silent zero: a smaller set reported in
     the same shape.
 
-    `ledger` is the split ledger `split-rate` reads; `None` reads the shipped
-    `config/split-ledger.json` (DRE-5314).
+    `ledger` is the split ledger `split-rate` reads; `None` reads whatever
+    `split_ledger.load()` reads — `$SPLIT_LEDGER_PATH`, the ledger the plan job
+    derived — and with none, every child falls through to its own receipts
+    (DRE-5314, DRE-6056).
     """
     doc = doc if doc is not None else load()
     rows = (_footprint_rows(children) + _collision_rows(children)
@@ -1354,14 +1353,14 @@ def _stdin_json(default):
 
 
 #: `--ledger` on the two commands that read the split ledger (DRE-5314).
-LEDGER_HELP = ("read this split ledger instead of the shipped "
-               "config/split-ledger.json")
+LEDGER_HELP = ("read this split ledger instead of $SPLIT_LEDGER_PATH, the "
+               "one a plan run derives from the console's record")
 
 
 def _ledger_arg(path):
     """The ledger `--ledger` names, or `None` for the default — whatever
-    `split_ledger.load()` reads: `$SPLIT_LEDGER_PATH` when set, the shipped
-    file otherwise (DRE-6055). A path that was named and cannot be read fails
+    `split_ledger.load()` reads: `$SPLIT_LEDGER_PATH` when set, and nothing
+    otherwise — there is no shipped file (DRE-6056). A path that was named and cannot be read fails
     loudly: falling back to the default would score against a ledger nobody
     asked for."""
     return _split_ledger().load(path) if path else None

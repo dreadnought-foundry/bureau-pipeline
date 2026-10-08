@@ -148,8 +148,10 @@ of it is ever a runtime lookup.
   and the planner cannot leave the workflow without the answer; the exclusion
   names that gate in `enforced_by` and `planner_score.py check` fails if the
   workflow stops running it. `docs/planner-audit.md` records the first run.
-  The `split-rate` dimension (DRE-3079) is the one that reads a FILE rather
-  than a receipt — `split-ledger.json` below — so it names it in `ledger`,
+  The `split-rate` dimension (DRE-3079) is the one that reads the split ledger
+  rather than a receipt — see **The split ledger** below — so it names it in
+  `ledger` (the path the ledger was committed at until DRE-6056, kept as the
+  record it is; `planner_score.py check` asks only that a ledger is named),
   and `ledger_injected_at` is the date that ledger reached the planner. It is
   set: `2026-09-10T22:16:25Z` — 2026-09-10 15:16 PT — the merge of DRE-3359
   (PR #359), which is the injection that actually shipped. Bucketing is by
@@ -174,69 +176,35 @@ of it is ever a runtime lookup.
   units and capacity after the model's order; the exclusion names those
   functions in `enforces` and `groomer_score.py check` fails if
   `scripts/groomer.py` stops defining one of them.
-- **`split-ledger.json`** — every card that did not fit one run (DRE-3077),
-  derived by `python3 scripts/split_ledger.py derive` from the run receipts on
-  the board: the turn-cap deaths and what they cost, the splits and the pieces
-  they became, the hand-backs, each card's declared footprint against what its
-  pieces actually touched, and which of DRE-2893's four tells applied in
-  hindsight. **Generated, not hand-edited** — the file carries the timestamp it
-  was derived at, and `docs/split-ledger.md` is rendered from it. Since
-  DRE-3357 the derivation is a job rather than a habit: `.github/workflows/
-  split-ledger.yml` runs `derive` daily and commits both paths (and only those
-  two — it proves its staged set through `scripts/bot_branch_pr.py`). Since
-  DRE-3879 that commit lands on `bot/split-ledger` and reaches `main` through
-  **one** pull request, opened once and updated in place: branch protection
-  refuses a direct push (`GH006`), which is why the job failed every morning
-  until then. A day that derives nothing opens no pull request. Daily is
-  chosen against the READER's window, `ledger_context.LEDGER_MAX_AGE_HOURS` =
-  72, so two dropped scheduled runs still leave a ledger the planner treats as
-  fresh. A read that
-  fails records `UNKNOWN`, never `0`: the seed rows include five cards whose
-  pieces live in a repo this rail's token cannot see, and a clean-looking
-  footprint there would be composed entirely of reads that never happened.
-  **The population DISCOVERS itself** (DRE-3356) — it used to be the ten seed
-  cards DRE-3077 named and nothing else, so the history was whatever somebody
-  had remembered to type. Discovery asks the board three ways, each one a
-  receipt the pipeline already writes: a comment carrying the turn-cap tag or
-  the hold receipt, a comment opening with the hand-back receipt, and a
-  description citing the card it was cut from (the origin taken from the
-  successor's own words, kept only when `split_ledger.cites` agrees). Those
-  searches are a NET, not a verdict — a text match cannot anchor, so about
-  half of what they return is a comment QUOTING a receipt — and the row's own
-  anchored readers decide what stays. A card whose comments or successors
-  could not be READ stays either way, carrying its `UNKNOWN`s. The seeds stay
-  in whatever the search says. **Since DRE-6055 the discovery and the
-  readings run in the console, not here**: `derive` makes ONE read-door call,
-  `GET /api/v1/pipeline/split-history` (agent-bureau DRE-6054), which serves
-  the rows the console derives from its own record of the board with its copy
-  of the readers (`console/backend/split_history.py`) — derived rows only,
-  never a description or a comment body. `derive` adds each row's `url`
-  (built from the identifier) and `piece_files` (read from GitHub, as
-  before), and a door that cannot answer is a `LedgerError`, never a walk of
-  Linear. The history is bounded by **`--window-days`** on `createdAt` (90 by
-  default, recorded at the top level as `window_days`; the door serves less
-  than 91). A read the door could not make, and a card it could not place in
-  the window, are named in the file's own `source` sentence rather than
-  quietly shrinking the population. The plan job derives the ledger this way
-  once per run, on both the `plan` and the `review` route, into
-  `$RUNNER_TEMP` and exports `SPLIT_LEDGER_PATH`, which `split_ledger.load()`
-  and the planner's context read; this committed file is the fallback when
-  that derive fails. The daily job holds no read-door token (its one
-  permission is `contents: write`, and DRE-6055 widened none), so its derive
-  now cannot read the door: the run says so in one warning, publishes nothing
-  and stays green, and this file stays at its last Linear derivation — the
-  baseline DRE-6056 compares a live plan run against before it retires the
-  job and the file. Two blocks come off that window: **`rows[].created_at`** — the
-  card's Linear `createdAt` as ISO-8601 UTC or `UNKNOWN`, never `""`, which is
-  what lets a reader order "the last N splits" (`scripts/ledger_context.py`
-  sorts on it) — and **`monthly`**, one record per calendar month the window
-  touches carrying `planner_children` (cards the planner gave a parent that
-  month), `split`, `died` and `complete`. `complete` is "the window covers the
-  whole month and it ended before the derive ran": an incomplete month is a
-  PARTIAL count, not a low one, and a children count that could not be read
-  says `UNKNOWN` rather than `0`. Every field the file carried before DRE-3356
-  keeps its name and its type — the context renderer (DRE-3358) and the plan
-  critic's ledger check (DRE-3079) read them.
+- **The split ledger** — every card that did not fit one run (DRE-3077) — is
+  **no longer a file here** (DRE-6056). The CEO decided on 2026-10-06 that the
+  planner reads the split history from our own database, so the daily job that
+  derived it and committed it through a bot pull request is retired, and so is
+  the committed copy. The plan job derives it at the start of each run, on
+  both the `plan` and the `review` route, with `python3 scripts/split_ledger.py
+  derive --out "$RUNNER_TEMP/split-ledger.json"`, and exports
+  `SPLIT_LEDGER_PATH`, which `split_ledger.load()`, the planner's context and
+  the critics read. `derive` makes ONE read-door call, `GET
+  /api/v1/pipeline/split-history` (agent-bureau DRE-6054, since DRE-6055),
+  which serves the rows the console derives from its own record of the board
+  with its copy of the readers (`console/backend/split_history.py`) — derived
+  rows only, never a description or a comment body — and adds each row's `url`
+  and `piece_files` (read from GitHub; a repo this token cannot see records
+  `UNKNOWN`, never `0`). A derive that fails leaves the path unset, and with no
+  path `load()` raises `LedgerError`: every reader says the ledger could not
+  be read, never a stale file. **The population DISCOVERS itself** (DRE-3356):
+  the turn-cap and hold receipts, the hand-back receipt and a successor's
+  citation of the card it was cut from, plus the seed cards, bounded by
+  **`--window-days`** on `createdAt` (90 by default, recorded as
+  `window_days`). A read the door could not make, and a card it could not
+  place in the window, are named in the ledger's own `source` sentence. Every
+  row carries **`created_at`** (ISO-8601 UTC or `UNKNOWN`, never `""`), and
+  **`monthly`** carries one record per calendar month the window touches —
+  `planner_children`, `split`, `died` and `complete`, where an incomplete month
+  is a PARTIAL count, not a low one. Every field the ledger carried before
+  DRE-3356 keeps its name and its type, because the context renderer
+  (DRE-3358) and the plan critic's ledger check (DRE-3079) read them.
+  `docs/split-ledger-audit.md` is the historical record of the committed file.
 - **`linear-identities.json`** — the three non-human Linear users (DRE-3172,
   DRE-3628): `fleet` (`Agent-Bureau` — every sweep, planner, merge-sync, the
   relay and the console), `operator-tools` (`bureau-tools` — the operator's
@@ -255,8 +223,7 @@ of it is ever a runtime lookup.
   `LINEAR_IDENTITY` (DRE-3321), which the seam prints as the last part of its
   rate-limit refusal and its `linear-budget:` line so a dry bucket names its
   owner. `linear-sync.yml`, `plan.yml`, `agent-fix.yml` and `verify.yml`
-  declare `LINEAR_IDENTITY: fleet` at job level and `split-ledger.yml`
-  declares it on the one step that reads the board; `reconcile.yml`,
+  declare `LINEAR_IDENTITY: fleet` at job level; `reconcile.yml`,
   `agent-task.yml` and `qa-review.yml` take the word from their CALLER
   instead, as the `linear_identity` workflow_call input defaulting to `fleet`
   (DRE-3630), so a stub on its own Linear key — the sandbox's — names its own

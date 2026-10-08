@@ -296,8 +296,7 @@ jobs:
         (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
          startsWith(github.event.workflow_run.head_branch, 'repair/') ||
          startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-         github.event.workflow_run.head_branch == 'bot/standards-sync' ||
-         github.event.workflow_run.head_branch == 'bot/split-ledger') &&
+         github.event.workflow_run.head_branch == 'bot/standards-sync') &&
         ((needs.resolve.result == 'skipped' &&
           github.event.workflow_run.pull_requests[0].number) ||
          (needs.resolve.result == 'success' &&
