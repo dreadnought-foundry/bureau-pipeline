@@ -282,7 +282,8 @@ elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
   {
     echo "🙋 The agent paused for a decision before building — it judged this needs your call rather than a guess."
     echo ""
-    cat /tmp/agent-escalation.txt
+    # The three lines; a renderer that cannot run never costs the park (DRE-3911).
+    python3 .bureau-pipeline/scripts/console_escalation.py complete /tmp/agent-escalation.txt --question "Which way should this build go?" --who "the build agent" || cat /tmp/agent-escalation.txt
     echo ""
     echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **Backlog** to drop it. Run: $RUN_URL"
   } > /tmp/escalation-comment.md
