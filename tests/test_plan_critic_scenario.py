@@ -1729,7 +1729,9 @@ class CriticWalk(unittest.TestCase):
         """Which REVIEW-MODE outcome steps a decision reaches: every step gated
         on review mode that is not one of the second critic's own steps, whose
         `if:` the decision's own outputs make KNOWN true — read by the same
-        three-valued walker the planner-slot wiring tests use."""
+        three-valued walker the planner-slot wiring tests use. A step the plan
+        route runs too (the split-ledger derive, DRE-6055) is shared plumbing,
+        not an outcome, and is skipped like an activate-route step."""
         class Gates(Walk):
             def _name(self, text):
                 # A step's outcome is a fact the walk is handed, like its outputs.
@@ -1741,7 +1743,8 @@ class CriticWalk(unittest.TestCase):
         out = []
         for s in doc["jobs"]["plan"]["steps"]:
             gate = str(s.get("if") or "")
-            if (self.REVIEW_MODE not in gate) or (self.ACTIVATE_MODE in gate):
+            if (self.REVIEW_MODE not in gate) or (self.ACTIVATE_MODE in gate) \
+                    or (self.PLAN_MODE in gate):
                 continue
             if s.get("name") in SECOND_CRITIC_STEPS:
                 continue
@@ -1751,6 +1754,7 @@ class CriticWalk(unittest.TestCase):
 
     REVIEW_MODE = "steps.route.outputs.mode == 'review'"
     ACTIVATE_MODE = "steps.route.outputs.mode == 'activate'"
+    PLAN_MODE = "steps.route.outputs.mode == 'plan'"
     GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
 
     def _decided(self) -> dict:
