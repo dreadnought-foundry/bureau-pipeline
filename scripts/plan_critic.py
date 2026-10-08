@@ -3260,8 +3260,10 @@ def _death_reasons() -> tuple:
 
 
 def _ledger(ledger=None):
-    """The ledger to check against: what the caller passed, or the shipped
-    file, or `LEDGER_UNREADABLE` when it could not be read."""
+    """The ledger to check against: what the caller passed, or what
+    `split_ledger.load()` reads — this run's derived ledger when the plan job
+    exported `SPLIT_LEDGER_PATH`, the shipped file otherwise (DRE-6055) — or
+    `LEDGER_UNREADABLE` when it could not be read."""
     if ledger is LEDGER_UNREADABLE:
         return LEDGER_UNREADABLE
     if ledger is not None:

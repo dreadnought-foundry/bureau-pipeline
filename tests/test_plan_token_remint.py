@@ -164,7 +164,9 @@ class NoTokenOutlivesAModelRun(unittest.TestCase):
         # as the activate route. A consumer gated into review mode whose mint
         # was still gated on activate alone would read an EMPTY token there —
         # the positional rule above holds and the step still dies on
-        # `Bad credentials`.
+        # `Bad credentials`. A mint with no `if:` at all — the start-of-job
+        # `app` mint — runs on every route, review included (DRE-6055's
+        # split-ledger derive reads it on the plan and review routes alike).
         steps = _steps()
         consumers = [
             (i, step, step_id) for i, step, step_id in _consumers()
@@ -173,6 +175,8 @@ class NoTokenOutlivesAModelRun(unittest.TestCase):
         self.assertTrue(consumers, "no step reads a token in review mode")
         for i, step, step_id in consumers:
             mint = steps[_index_of_id(step_id)]
+            if not mint.get("if"):
+                continue
             self.assertIn(REVIEW_MODE, str(mint.get("if") or ""),
                           f"{_label(i, step)} reads `{step_id}`, which is not "
                           "minted in review mode")

@@ -205,6 +205,38 @@ class WhatItRunsTest(unittest.TestCase):
                       "job draws is read back")
 
 
+class AFailedDeriveIsNotARedRunTest(unittest.TestCase):
+    """DRE-6055: `derive` reads the console's read door, and this job holds no
+    door token, so its derive fails by design until DRE-6056 deletes the job.
+    A known failure must not turn the run red every night under the medic's
+    watch (`TheMedicWatchesItTest`), and must not publish a ledger it never
+    derived — it says so in one warning instead."""
+
+    def setUp(self):
+        self.steps = _steps(_doc())
+        derive = [s for s in self.steps
+                  if "split_ledger.py derive" in (s.get("run") or "")]
+        self.assertEqual(len(derive), 1)
+        self.derive = derive[0]
+
+    def test_the_derive_cannot_fail_the_run(self):
+        self.assertIs(self.derive.get("continue-on-error"), True)
+        self.assertTrue(self.derive.get("id"), "the publish step keys on its id")
+
+    def test_publishing_waits_on_a_derive_that_succeeded(self):
+        publish = [s for s in self.steps if "bot_branch_pr.py" in (s.get("run") or "")]
+        self.assertEqual(len(publish), 1)
+        self.assertEqual(publish[0].get("if"),
+                         f"steps.{self.derive['id']}.outcome == 'success'")
+
+    def test_a_failed_derive_says_so(self):
+        said = [s for s in self.steps
+                if s.get("if") == f"steps.{self.derive['id']}.outcome == 'failure'"]
+        self.assertEqual(len(said), 1)
+        self.assertIn("::warning::", said[0].get("run") or "")
+        self.assertIn("nothing published", said[0]["run"])
+
+
 class ItCommitsOnlyWhatItGeneratesTest(unittest.TestCase):
     def setUp(self):
         self.doc = _doc()

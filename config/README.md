@@ -175,8 +175,8 @@ of it is ever a runtime lookup.
   functions in `enforces` and `groomer_score.py check` fails if
   `scripts/groomer.py` stops defining one of them.
 - **`split-ledger.json`** — every card that did not fit one run (DRE-3077),
-  derived by `python3 scripts/split_ledger.py derive` from Linear and the run
-  receipts: the turn-cap deaths and what they cost, the splits and the pieces
+  derived by `python3 scripts/split_ledger.py derive` from the run receipts on
+  the board: the turn-cap deaths and what they cost, the splits and the pieces
   they became, the hand-backs, each card's declared footprint against what its
   pieces actually touched, and which of DRE-2893's four tells applied in
   hindsight. **Generated, not hand-edited** — the file carries the timestamp it
@@ -196,22 +196,37 @@ of it is ever a runtime lookup.
   footprint there would be composed entirely of reads that never happened.
   **The population DISCOVERS itself** (DRE-3356) — it used to be the ten seed
   cards DRE-3077 named and nothing else, so the history was whatever somebody
-  had remembered to type. `derive` now asks the board three ways, each one a
+  had remembered to type. Discovery asks the board three ways, each one a
   receipt the pipeline already writes: a comment carrying the turn-cap tag or
   the hold receipt, a comment opening with the hand-back receipt, and a
   description citing the card it was cut from (the origin taken from the
   successor's own words, kept only when `split_ledger.cites` agrees). Those
-  searches are a NET, not a verdict — Linear cannot anchor a text match, so
-  about half of what they return is a comment QUOTING a receipt — and the row's
-  own anchored readers decide what stays. A card whose comments or successors
+  searches are a NET, not a verdict — a text match cannot anchor, so about
+  half of what they return is a comment QUOTING a receipt — and the row's own
+  anchored readers decide what stays. A card whose comments or successors
   could not be READ stays either way, carrying its `UNKNOWN`s. The seeds stay
-  in whatever the search says; `--card` ADDS to the population rather than
-  replacing it. Every search is bounded by **`--window-days`** on `createdAt`
-  (90 by default, recorded at the top level as `window_days`), which is what
-  keeps a full derive inside a few hundred Linear calls — the budget
-  `scripts/check_linear_budget.py` adds up. A search that could not be read is
-  named in the file's own `source` sentence rather than quietly shrinking the
-  population. Two blocks come off that window: **`rows[].created_at`** — the
+  in whatever the search says. **Since DRE-6055 the discovery and the
+  readings run in the console, not here**: `derive` makes ONE read-door call,
+  `GET /api/v1/pipeline/split-history` (agent-bureau DRE-6054), which serves
+  the rows the console derives from its own record of the board with its copy
+  of the readers (`console/backend/split_history.py`) — derived rows only,
+  never a description or a comment body. `derive` adds each row's `url`
+  (built from the identifier) and `piece_files` (read from GitHub, as
+  before), and a door that cannot answer is a `LedgerError`, never a walk of
+  Linear. The history is bounded by **`--window-days`** on `createdAt` (90 by
+  default, recorded at the top level as `window_days`; the door serves less
+  than 91). A read the door could not make, and a card it could not place in
+  the window, are named in the file's own `source` sentence rather than
+  quietly shrinking the population. The plan job derives the ledger this way
+  once per run, on both the `plan` and the `review` route, into
+  `$RUNNER_TEMP` and exports `SPLIT_LEDGER_PATH`, which `split_ledger.load()`
+  and the planner's context read; this committed file is the fallback when
+  that derive fails. The daily job holds no read-door token (its one
+  permission is `contents: write`, and DRE-6055 widened none), so its derive
+  now cannot read the door: the run says so in one warning, publishes nothing
+  and stays green, and this file stays at its last Linear derivation — the
+  baseline DRE-6056 compares a live plan run against before it retires the
+  job and the file. Two blocks come off that window: **`rows[].created_at`** — the
   card's Linear `createdAt` as ISO-8601 UTC or `UNKNOWN`, never `""`, which is
   what lets a reader order "the last N splits" (`scripts/ledger_context.py`
   sorts on it) — and **`monthly`**, one record per calendar month the window

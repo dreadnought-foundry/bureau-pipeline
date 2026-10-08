@@ -1359,9 +1359,11 @@ LEDGER_HELP = ("read this split ledger instead of the shipped "
 
 
 def _ledger_arg(path):
-    """The ledger `--ledger` names, or `None` for the shipped file. A path
-    that was named and cannot be read fails loudly: falling back to the
-    shipped file would score against a ledger nobody asked for."""
+    """The ledger `--ledger` names, or `None` for the default — whatever
+    `split_ledger.load()` reads: `$SPLIT_LEDGER_PATH` when set, the shipped
+    file otherwise (DRE-6055). A path that was named and cannot be read fails
+    loudly: falling back to the default would score against a ledger nobody
+    asked for."""
     return _split_ledger().load(path) if path else None
 
 

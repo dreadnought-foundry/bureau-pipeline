@@ -185,6 +185,9 @@ class FakeDoor(_Server):
     `comments=all` is every stored comment, whole (`hasNextPage: false`)
     unless the card is in `incomplete_threads` — a thread the door cannot
     prove it holds whole, which the client reads as `thread-incomplete`.
+
+    `split_history` is the body `GET /split-history` answers (DRE-6054):
+    outside the lane envelope, with `since` echoed back from the query.
     """
 
     def __init__(self, world: dict | None = None, *, as_of: str = "2026-10-02T20:00:00.000Z",
@@ -200,6 +203,7 @@ class FakeDoor(_Server):
         self.routes: dict = {}
         self.fleet: tuple | None = None
         self.incomplete_threads: set[str] = set()
+        self.split_history: dict = split_history_body()
         self.requests: list[dict] = []
 
     def decline_fleet(self, reason: str | None = None, *, status: int | None = None) -> None:
@@ -266,6 +270,11 @@ class FakeDoor(_Server):
             return 200, self.envelope(
                 [{"id": "s1", "name": "Todo", "type": "unstarted"}],
                 nodes_key="workflowStates")
+        if endpoint == "/split-history":
+            # DRE-6054's rules: `since` is the one parameter and it is required.
+            if set(query) != {"since"}:
+                return 400, {"error": {"code": "BAD_REQUEST"}}
+            return 200, {**self.split_history, "since": query["since"]}
         return 404, {"error": {"code": "NOT_FOUND"}}
 
     def _shaped(self, node: dict, query: dict) -> dict:
@@ -322,6 +331,43 @@ class FakeDoor(_Server):
 
     def asked(self, endpoint: str) -> list[dict]:
         return [r for r in self.requests if r["path"].endswith(endpoint)]
+
+
+#: Every key a served split-history row carries — DRE-6054's response, exactly.
+SPLIT_HISTORY_ROW_KEYS = (
+    "card", "title", "state", "created_at", "reasons", "size", "role",
+    "declared_files", "declared_file_count", "pieces", "pieces_named",
+    "deaths", "dollars", "tells", "tell_evidence", "unreadable", "piece_repos",
+)
+
+
+def split_history_body(rows=(), *, read_at: str = "2026-10-02T20:00:00Z",
+                       since: str = "2026-07-04T20:00:00Z", children_by_month=None,
+                       unreadable=(), unknown=()) -> dict:
+    """`GET /split-history`'s answer (DRE-6054), outside the lane envelope."""
+    return {
+        "schema": SCHEMA,
+        "read_at": read_at,
+        "since": since,
+        "rows": [dict(r) for r in rows],
+        "children_by_month": dict(children_by_month or {}),
+        "unreadable": list(unreadable),
+        "unknown": [dict(u) for u in unknown],
+    }
+
+
+def split_history_row(card: str, **over) -> dict:
+    """One served row, every DRE-6054 key present."""
+    row = {
+        "card": card, "title": f"Card {card}", "state": "Canceled",
+        "created_at": "2026-09-01T00:00:00Z", "reasons": ["split"],
+        "size": "UNKNOWN", "role": "UNKNOWN", "declared_files": "UNKNOWN",
+        "declared_file_count": "UNKNOWN", "pieces": 0, "pieces_named": [],
+        "deaths": 0, "dollars": 0.0, "tells": [], "tell_evidence": {},
+        "unreadable": [], "piece_repos": {},
+    }
+    row.update(over)
+    return row
 
 
 def door_env(*, door_url: str, issuer: FakeIssuer | None = None, mode: str = "on",

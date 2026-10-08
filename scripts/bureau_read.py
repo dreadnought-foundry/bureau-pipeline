@@ -79,6 +79,12 @@ because the door serves relations when it is left out):
         `{"order": ["DRE-…", …], "set_at", "set_by", "read_at"}`. Read
         whatever the mode, and a failure never stops the door for the run
         (`planning_order()` says why).
+  GET /split-history?since=<ISO-8601>
+      — the split ledger's rows, derived by the console (DRE-6054), outside
+        the envelope below: `{"schema", "read_at", "since", "rows",
+        "children_by_month", "unreadable", "unknown"}`. Read whatever the
+        mode, with the board reads' token, max-age and refusal handling
+        (`split_history()` says why).
 
 Envelope (HTTP 200 whenever the caller is authenticated):
   {"schema": "bureau-read/1", "verdict": "FRESH"|"UNKNOWN",
@@ -523,16 +529,18 @@ def _require_max_age(name: str, value) -> int:
 
 def _get(endpoint: str, query: dict, *, max_age: int,
          relations_max_age: int | None = None, not_found_ok: bool = False,
-         refusal_ok: bool = False) -> dict:
+         refusal_ok: bool = False, any_mode: bool = False) -> dict:
     """The envelope for one read, or ReadUnknown. Counts and times everything.
 
     `refusal_ok` reads a 401, 403 or 404 as UNKNOWN for this one read and
     leaves the door in use: a scope the door does not serve this caller
-    (DRE-5848), never the door failing."""
+    (DRE-5848), never the door failing. `any_mode` asks whatever `BUREAU_READ`
+    says: a read with no Linear copy behind it has nothing to roll out
+    against (`split_history`)."""
     _require_max_age("max_age", max_age)
     if relations_max_age is not None:
         _require_max_age("relations_max_age", relations_max_age)
-    if mode() == "off":
+    if not any_mode and mode() == "off":
         raise ReadUnknown("off", f"{MODE_ENV} is off", unavailable=True)
     if _state["disabled"] is not None:
         raise ReadUnknown("unavailable", f"the door stopped answering earlier this "
@@ -884,6 +892,65 @@ def planning_order() -> PlanningOrder:
         set_by=_text_or_none(answer.get("set_by")),
         read_at=_text_or_none(answer.get("read_at")),
     )
+
+
+# ── The split history (DRE-6055) ────────────────────────────────────────────
+#: `GET /split-history?since=<ISO-8601>` — the split ledger's history, derived
+#: by the console from its own record of the board (agent-bureau DRE-6054).
+SPLIT_HISTORY_PATH = "/split-history"
+#: An hour: the ledger it replaces was refreshed once a day, and the door
+#: checks the header when it is sent rather than requiring it.
+SPLIT_HISTORY_MAX_AGE = 3600
+#: Every key of one served row — DRE-6054's response, exactly. `piece_repos`
+#: is the one key the committed ledger never carried: each piece's `repo:`
+#: slug, or None, so the pieces' pull requests can be read from GitHub.
+SPLIT_HISTORY_ROW_FIELDS = (
+    "card", "title", "state", "created_at", "reasons", "size", "role",
+    "declared_files", "declared_file_count", "pieces", "pieces_named",
+    "deaths", "dollars", "tells", "tell_evidence", "unreadable", "piece_repos",
+)
+#: The answer's own keys, each with the type it must carry.
+_SPLIT_HISTORY_SHAPE = {
+    "read_at": str, "since": str, "rows": list, "children_by_month": dict,
+    "unreadable": list, "unknown": list,
+}
+
+
+def split_history(since: str) -> dict:
+    """The split ledger's history since `since`, as the door serves it — the
+    whole answer, or ReadUnknown. Never part of one.
+
+    The board reads' token, `X-Bureau-Max-Age` and refusal handling, unchanged:
+    one failure, and the door is not asked again this run. Two differences, on
+    purpose, both shared with `planning_order`:
+
+    * It is asked whatever `BUREAU_READ` says. The mode is the board reads'
+      rollout switch against Linear, and this read has no Linear copy behind
+      it any more. It never falls back to one: that is the door's H1 rule,
+      and the reason the read moved here (DRE-6055). A caller that cannot
+      have the answer says it could not be read.
+    * The answer sits outside the lane envelope (no freshness verdict): the
+      rows are the console's own derivation, not a copy of Linear's cards.
+    """
+    if not isinstance(since, str) or not since.strip():
+        raise ValueError(f"bureau_read.split_history: since must be an ISO-8601 "
+                         f"instant, got {since!r}")
+    answer = _get(SPLIT_HISTORY_PATH, {"since": since.strip()},
+                  max_age=SPLIT_HISTORY_MAX_AGE, any_mode=True)
+    if not isinstance(answer, dict) or answer.get("schema") != SCHEMA:
+        raise _malformed(f"/split-history: schema is not {SCHEMA!r}")
+    for key, kind in _SPLIT_HISTORY_SHAPE.items():
+        if not isinstance(answer.get(key), kind):
+            raise _malformed(f"/split-history: {key} is not a {kind.__name__}")
+    for row in answer["rows"]:
+        missing = ([f for f in SPLIT_HISTORY_ROW_FIELDS if f not in row]
+                   if isinstance(row, dict) else ["<row>"])
+        if missing:
+            ident = row.get("card") if isinstance(row, dict) else None
+            raise _malformed(f"/split-history: {ident or 'a row'} lacks "
+                             f"{', '.join(missing[:5])}")
+    _state["served"] += 1
+    return answer
 
 
 # ── The shadow comparison (item 36, review M6) ──────────────────────────────
