@@ -31,7 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bureau_read  # noqa: E402
-from bureau_read_fakes import FakeDoor, FakeIssuer, card, door_env  # noqa: E402
+from bureau_read_fakes import (  # noqa: E402
+    SPLIT_HISTORY_ROW_KEYS, FakeDoor, FakeIssuer, card, door_env, split_history_body,
+    split_history_row)
 
 
 @pytest.fixture(autouse=True)
@@ -470,6 +472,124 @@ def test_workflow_states(monkeypatch):
         _point(monkeypatch, door, issuer)
         read = bureau_read.workflow_states(max_age=3600)
     assert read.nodes == [{"id": "s1", "name": "Todo", "type": "unstarted"}]
+
+
+# ── the split history (DRE-6055) ────────────────────────────────────────────
+# DRE-6054's `GET /split-history`: the split ledger's rows, derived by the
+# console from its own record. Outside the lane envelope (no freshness verdict),
+# with the door's token, max-age header and refusal rules. There is no Linear
+# copy behind it any more, so every failure is `ReadUnknown` and nothing else.
+
+SINCE = "2026-07-04T20:00:00Z"
+HISTORY = split_history_body(
+    [split_history_row("DRE-9101", pieces=1, pieces_named=["DRE-9102"],
+                       piece_repos={"DRE-9102": "bureau-pipeline"})],
+    children_by_month={"2026-07": 40, "2026-08": "UNKNOWN"},
+    unreadable=["2026-08: the children count could not be read"],
+    unknown=[{"identifier": "DRE-9200", "reason": "no stored creation date"}])
+
+
+def test_split_history_sends_since_and_returns_the_served_body(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.split_history = HISTORY
+        _point(monkeypatch, door, issuer)
+        body = bureau_read.split_history(SINCE)
+    sent = door.asked("/split-history")
+    assert len(sent) == 1
+    assert sent[0]["path"] == "/api/v1/pipeline/split-history"
+    assert sent[0]["query"] == {"since": SINCE}
+    assert sent[0]["headers"]["authorization"].startswith("Bearer ")
+    assert sent[0]["headers"]["x-bureau-max-age"] == str(bureau_read.SPLIT_HISTORY_MAX_AGE)
+    assert body == {**HISTORY, "since": SINCE}
+    assert body["rows"][0]["piece_repos"] == {"DRE-9102": "bureau-pipeline"}
+    assert "served 1 " in bureau_read.exit_line()
+
+
+def test_the_split_history_row_is_dre_6054s_row_exactly():
+    assert bureau_read.SPLIT_HISTORY_ROW_FIELDS == SPLIT_HISTORY_ROW_KEYS
+
+
+def test_split_history_is_asked_whatever_the_mode_says(monkeypatch):
+    """The mode is the board reads' rollout switch against Linear. The split
+    history has no Linear copy to shadow or fall back to, so — like the
+    planner line's order — an `off` mode does not stop the read."""
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.split_history = HISTORY
+        _point(monkeypatch, door, issuer, mode="off")
+        body = bureau_read.split_history(SINCE)
+    assert body["rows"][0]["card"] == "DRE-9101"
+    assert len(door.asked("/split-history")) == 1
+
+
+@pytest.mark.parametrize("status,reason", [
+    (400, "unavailable"), (401, "refused"), (403, "refused"), (429, "throttled"),
+    (500, "unavailable"), (503, "closed"),
+])
+def test_a_refused_split_history_is_unknown_and_stops_the_door(monkeypatch, status, reason):
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.routes["/split-history"] = (status, {"error": {"code": "X"}})
+        _point(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.split_history(SINCE)
+        assert caught.value.reason == reason and caught.value.status == status
+        with pytest.raises(bureau_read.ReadUnknown):
+            bureau_read.split_history(SINCE)
+        assert len(door.requests) == 1  # never asked again this run
+
+
+@pytest.mark.parametrize("mutilate", [
+    lambda b: b.update(schema="bureau-read/0"),
+    lambda b: b.pop("rows"),
+    lambda b: b.update(rows={"DRE-9101": {}}),
+    lambda b: b["rows"][0].pop("piece_repos"),
+    lambda b: b["rows"][0].pop("deaths"),
+    lambda b: b.update(children_by_month=[]),
+    lambda b: b.pop("unreadable"),
+    lambda b: b.update(unknown=None),
+    lambda b: b.pop("read_at"),
+])
+def test_a_split_history_outside_its_contract_is_unknown_never_partial(monkeypatch, mutilate):
+    body = split_history_body([split_history_row("DRE-9101")])
+    mutilate(body)
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.split_history = body
+        _point(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.split_history(SINCE)
+    assert caught.value.reason == "malformed"
+
+
+def test_a_split_history_that_is_not_json_is_malformed(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        door.routes["/split-history"] = (200, b"<html>")
+        _point(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.split_history(SINCE)
+    assert caught.value.reason == "malformed"
+
+
+def test_split_history_with_no_token_never_asks_the_door(monkeypatch):
+    with FakeDoor(WORLD) as door:
+        _point(monkeypatch, door, None)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.split_history(SINCE)
+        assert caught.value.reason == "no-token"
+        assert door.requests == []
+
+
+def test_a_pull_request_run_never_asks_for_the_split_history(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
+        _point(monkeypatch, door, issuer)
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.split_history(SINCE)
+        assert caught.value.reason == "event-refused"
+        assert door.requests == [] and issuer.requests == []
+
+
+def test_split_history_needs_a_since(monkeypatch):
+    with pytest.raises(ValueError):
+        bureau_read.split_history("")
 
 
 # ── the shadow comparison ───────────────────────────────────────────────────

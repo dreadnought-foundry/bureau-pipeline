@@ -1,0 +1,419 @@
+{
+  "_recorded": "The Linear path's ledger (split_ledger.collect + ledger) over the fixture cards below, recorded before DRE-6055 deleted it; `door` is the same history as DRE-6054's GET /split-history serves it.",
+  "window_days": 90,
+  "pull_requests": {
+    "DRE-9102": {
+      "number": 501,
+      "state": "MERGED",
+      "files": [
+        "scripts/a.py",
+        "tests/test_a.py"
+      ]
+    }
+  },
+  "readable": {
+    "dreadnought-foundry/bureau-pipeline": true,
+    "dreadnought-foundry/portico": false
+  },
+  "linear_path": {
+    "generated_at": "2026-09-10T00:00:00Z",
+    "window_days": 90,
+    "rows": [
+      {
+        "card": "DRE-3029",
+        "title": "A seed the board has nothing on",
+        "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3029/some-slug",
+        "state": "Done",
+        "created_at": "2026-06-20T00:00:00Z",
+        "reasons": [
+          "named-as-a-seed"
+        ],
+        "size": "UNKNOWN",
+        "role": "UNKNOWN",
+        "declared_files": "UNKNOWN",
+        "declared_file_count": "UNKNOWN",
+        "piece_files": "UNKNOWN",
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": 0,
+        "dollars": 0.0,
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        ]
+      },
+      {
+        "card": "DRE-9101",
+        "title": "The ledger reads the door and the planner reads the ledger",
+        "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-9101/some-slug",
+        "state": "Canceled",
+        "created_at": "2026-07-10T08:00:00Z",
+        "reasons": [
+          "turn-cap-death",
+          "split"
+        ],
+        "size": "L",
+        "role": "engineer",
+        "declared_files": [
+          "scripts/a.py",
+          "scripts/b.py",
+          ".github/workflows/plan.yml"
+        ],
+        "declared_file_count": 3,
+        "piece_files": [
+          "scripts/a.py",
+          "tests/test_a.py"
+        ],
+        "pieces": 3,
+        "pieces_named": [
+          "DRE-9102",
+          "DRE-9103",
+          "DRE-9104"
+        ],
+        "deaths": 2,
+        "dollars": 39.22,
+        "tells": [
+          "contracts-between-pieces",
+          "two-languages-or-tiers"
+        ],
+        "tell_evidence": {
+          "contracts-between-pieces": "'reads what' (standards/card-quality.md — \"B reads what A writes\")",
+          "two-languages-or-tiers": "the footprint spans python, workflow"
+        },
+        "unreadable": [
+          "DRE-9103: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+          "DRE-9104: the card names no repo this rail routes, so there is nowhere to look for its pull request"
+        ]
+      },
+      {
+        "card": "DRE-9105",
+        "title": "An epic in a one-off's clothing",
+        "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-9105/some-slug",
+        "state": "Planning",
+        "created_at": "2026-08-03T12:30:00Z",
+        "reasons": [
+          "handed-back"
+        ],
+        "size": "M",
+        "role": "engineer",
+        "declared_files": "UNKNOWN",
+        "declared_file_count": "UNKNOWN",
+        "piece_files": "UNKNOWN",
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": 0,
+        "dollars": 0.0,
+        "tells": [
+          "unbounded-quantifier"
+        ],
+        "tell_evidence": {
+          "unbounded-quantifier": "'Every surface' with no count of surfaces anywhere"
+        },
+        "unreadable": [
+          "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        ]
+      },
+      {
+        "card": "DRE-9106",
+        "title": "A thread nobody could read",
+        "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-9106/some-slug",
+        "state": "Backlog",
+        "created_at": "2026-08-20T00:00:00Z",
+        "reasons": [],
+        "size": "UNKNOWN",
+        "role": "UNKNOWN",
+        "declared_files": [
+          "x.py"
+        ],
+        "declared_file_count": 1,
+        "piece_files": "UNKNOWN",
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": "UNKNOWN",
+        "dollars": "UNKNOWN",
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "this card's comments could not be read: the thread is not complete"
+        ]
+      },
+      {
+        "card": "DRE-9108",
+        "title": "A death with no cost figure",
+        "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-9108/some-slug",
+        "state": "Canceled",
+        "created_at": "2026-09-02T00:00:00Z",
+        "reasons": [
+          "turn-cap-death",
+          "split"
+        ],
+        "size": "S",
+        "role": "engineer",
+        "declared_files": [
+          "scripts/c.py",
+          "scripts/d.py"
+        ],
+        "declared_file_count": 2,
+        "piece_files": "UNKNOWN",
+        "pieces": 1,
+        "pieces_named": [
+          "DRE-9109"
+        ],
+        "deaths": 1,
+        "dollars": "UNKNOWN",
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "1 of 1 dead runs posted no cost figure, so the total is not a total",
+          "DRE-9109: no merged pull request this run could read"
+        ]
+      }
+    ],
+    "monthly": [
+      {
+        "month": "2026-06",
+        "planner_children": 12,
+        "split": 0,
+        "died": 0,
+        "complete": false
+      },
+      {
+        "month": "2026-07",
+        "planner_children": 40,
+        "split": 1,
+        "died": 1,
+        "complete": true
+      },
+      {
+        "month": "2026-08",
+        "planner_children": 33,
+        "split": 0,
+        "died": 0,
+        "complete": true
+      },
+      {
+        "month": "2026-09",
+        "planner_children": "UNKNOWN",
+        "split": 1,
+        "died": 1,
+        "complete": false
+      }
+    ],
+    "rates": {
+      "cards": 5,
+      "died": 2,
+      "by_declared_files": [
+        {
+          "more_than": 1,
+          "of": 2,
+          "died": 2,
+          "cards": [
+            "DRE-9101",
+            "DRE-9108"
+          ],
+          "sentence": "cards declaring more than 1 file died 2 of 2 times"
+        },
+        {
+          "more_than": 2,
+          "of": 1,
+          "died": 1,
+          "cards": [
+            "DRE-9101"
+          ],
+          "sentence": "cards declaring more than 2 files died 1 of 1 times"
+        }
+      ],
+      "by_tell": [
+        {
+          "tell": "contracts-between-pieces",
+          "of": 1,
+          "died": 1,
+          "sentence": "cards carrying the contracts-between-pieces tell died 1 of 1 times"
+        },
+        {
+          "tell": "two-languages-or-tiers",
+          "of": 1,
+          "died": 1,
+          "sentence": "cards carrying the two-languages-or-tiers tell died 1 of 1 times"
+        },
+        {
+          "tell": "unenumerated-count",
+          "of": 0,
+          "died": 0,
+          "sentence": "cards carrying the unenumerated-count tell died 0 of 0 times"
+        },
+        {
+          "tell": "unbounded-quantifier",
+          "of": 1,
+          "died": 0,
+          "sentence": "cards carrying the unbounded-quantifier tell died 0 of 1 times"
+        }
+      ],
+      "unreadable_footprint": 2,
+      "dead_dollars": 39.22,
+      "dead_dollars_unreadable": 2
+    }
+  },
+  "door": {
+    "schema": "bureau-read/1",
+    "read_at": "2026-09-10T00:00:00Z",
+    "since": "2026-06-12T00:00:00Z",
+    "rows": [
+      {
+        "card": "DRE-3029",
+        "title": "A seed the board has nothing on",
+        "state": "Done",
+        "created_at": "2026-06-20T00:00:00Z",
+        "reasons": [
+          "named-as-a-seed"
+        ],
+        "size": "UNKNOWN",
+        "role": "UNKNOWN",
+        "declared_files": "UNKNOWN",
+        "declared_file_count": "UNKNOWN",
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": 0,
+        "dollars": 0.0,
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        ],
+        "piece_repos": {}
+      },
+      {
+        "card": "DRE-9101",
+        "title": "The ledger reads the door and the planner reads the ledger",
+        "state": "Canceled",
+        "created_at": "2026-07-10T08:00:00Z",
+        "reasons": [
+          "turn-cap-death",
+          "split"
+        ],
+        "size": "L",
+        "role": "engineer",
+        "declared_files": [
+          "scripts/a.py",
+          "scripts/b.py",
+          ".github/workflows/plan.yml"
+        ],
+        "declared_file_count": 3,
+        "pieces": 3,
+        "pieces_named": [
+          "DRE-9102",
+          "DRE-9103",
+          "DRE-9104"
+        ],
+        "deaths": 2,
+        "dollars": 39.22,
+        "tells": [
+          "contracts-between-pieces",
+          "two-languages-or-tiers"
+        ],
+        "tell_evidence": {
+          "contracts-between-pieces": "'reads what' (standards/card-quality.md — \"B reads what A writes\")",
+          "two-languages-or-tiers": "the footprint spans python, workflow"
+        },
+        "unreadable": [],
+        "piece_repos": {
+          "DRE-9102": "bureau-pipeline",
+          "DRE-9103": "portico",
+          "DRE-9104": null
+        }
+      },
+      {
+        "card": "DRE-9105",
+        "title": "An epic in a one-off's clothing",
+        "state": "Planning",
+        "created_at": "2026-08-03T12:30:00Z",
+        "reasons": [
+          "handed-back"
+        ],
+        "size": "M",
+        "role": "engineer",
+        "declared_files": "UNKNOWN",
+        "declared_file_count": "UNKNOWN",
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": 0,
+        "dollars": 0.0,
+        "tells": [
+          "unbounded-quantifier"
+        ],
+        "tell_evidence": {
+          "unbounded-quantifier": "'Every surface' with no count of surfaces anywhere"
+        },
+        "unreadable": [
+          "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        ],
+        "piece_repos": {}
+      },
+      {
+        "card": "DRE-9106",
+        "title": "A thread nobody could read",
+        "state": "Backlog",
+        "created_at": "2026-08-20T00:00:00Z",
+        "reasons": [],
+        "size": "UNKNOWN",
+        "role": "UNKNOWN",
+        "declared_files": [
+          "x.py"
+        ],
+        "declared_file_count": 1,
+        "pieces": 0,
+        "pieces_named": [],
+        "deaths": "UNKNOWN",
+        "dollars": "UNKNOWN",
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "this card's comments could not be read: the thread is not complete"
+        ],
+        "piece_repos": {}
+      },
+      {
+        "card": "DRE-9108",
+        "title": "A death with no cost figure",
+        "state": "Canceled",
+        "created_at": "2026-09-02T00:00:00Z",
+        "reasons": [
+          "turn-cap-death",
+          "split"
+        ],
+        "size": "S",
+        "role": "engineer",
+        "declared_files": [
+          "scripts/c.py",
+          "scripts/d.py"
+        ],
+        "declared_file_count": 2,
+        "pieces": 1,
+        "pieces_named": [
+          "DRE-9109"
+        ],
+        "deaths": 1,
+        "dollars": "UNKNOWN",
+        "tells": [],
+        "tell_evidence": {},
+        "unreadable": [
+          "1 of 1 dead runs posted no cost figure, so the total is not a total"
+        ],
+        "piece_repos": {
+          "DRE-9109": "bureau-pipeline"
+        }
+      }
+    ],
+    "children_by_month": {
+      "2026-06": 12,
+      "2026-07": 40,
+      "2026-08": 33,
+      "2026-09": "UNKNOWN"
+    },
+    "unreadable": [
+      "2026-09: the planner-children count could not be read, so the month says UNKNOWN rather than 0: Linear refused the count: RATELIMITED"
+    ],
+    "unknown": []
+  }
+}
