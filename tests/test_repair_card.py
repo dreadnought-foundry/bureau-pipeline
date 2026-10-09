@@ -39,6 +39,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 
+import dependabot_card  # noqa: E402
 import red_main_repair  # noqa: E402
 import repair_card  # noqa: E402
 import repair_context  # noqa: E402
@@ -119,8 +120,11 @@ class CardShapeTest(unittest.TestCase):
 
     def test_labels_carry_the_repo_the_role_and_the_marks(self):
         labels = repair_card.card_labels(SLUG)
-        for want in (f"repo:{SLUG}", "initiative:bureau", "Bug", "hand-built"):
+        for want in (f"repo:{SLUG}", "initiative:bureau", "Bug", "automation"):
             self.assertIn(want, labels)
+        # DRE-6228: automation filed this card; `hand-built` is the CEO's mark.
+        self.assertIn(dependabot_card.LABEL, labels)
+        self.assertNotIn(routing_verdict.HAND_BUILT_LABEL, labels)
         self.assertTrue(any(l.startswith("agent:") for l in labels),
                         f"a card needs a role label: {labels}")
 
@@ -251,8 +255,9 @@ class OpenCardTest(unittest.TestCase):
         made = ops.created[0]
         self.assertEqual("In Progress", made["lane"])
         self.assertEqual(SLUG, made["repo_slug"])
-        for want in ("initiative:bureau", "Bug", "hand-built"):
+        for want in ("initiative:bureau", "Bug", "automation"):
             self.assertIn(want, made["labels"])
+        self.assertNotIn("hand-built", made["labels"])
         self.assertEqual(CARD, result["card"])
         self.assertFalse(result["card_owed"])
 

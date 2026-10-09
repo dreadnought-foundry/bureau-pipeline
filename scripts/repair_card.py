@@ -44,8 +44,9 @@ Three properties, in the order they matter:
 The card `open` files promises *"closes when that pull request merges."* Three
 endings have no pull request at all: the failure was a flake and a re-run
 passed, another merge turned main green before the repair finished, or the
-repair run died without opening one. `hand-built` makes the stranded-card
-watchdog stay quiet by design, so nothing moved those cards and a person
+repair run died without opening one. The card's mark — `hand-built` then,
+`automation` since DRE-6228 — keeps the stranded-card watchdog quiet by
+design, so nothing moved those cards and a person
 cancelled them: of the last seventeen on 2026-09-20, **nine by hand**, none
 closed by the pipeline for any reason other than a merge.
 
@@ -84,6 +85,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import dependabot_card  # noqa: E402
 import github_output  # noqa: E402
 import red_main_repair  # noqa: E402
 
@@ -95,10 +97,12 @@ LANE = "In Progress"
 VERDICT = "WORKBENCH"
 
 #: Marks and filters every repair card carries beside its `repo:` label and its
-#: role. `hand-built` is what tells the stranded-card watchdog that no
-#: dispatched run is coming for this card (the repair run is not one of its
-#: dispatches), and `Bug` is what a red main is.
-FIXED_LABELS = ("initiative:bureau", "Bug", "hand-built")
+#: role. `automation` (`dependabot_card.LABEL`) says automation filed this card
+#: and the pipeline's own run owns it — no dispatched run is coming (the repair
+#: run is not one of its dispatches) — and keeps it out of the WIP base and the
+#: nudge loop. Never `hand-built`: that mark is the CEO's alone (DRE-6228).
+#: `Bug` is what a red main is.
+FIXED_LABELS = ("initiative:bureau", "Bug", dependabot_card.LABEL)
 
 #: The repairer is an engineer-tier fixer (config/models.yaml puts it on the
 #: workhorse ladder for exactly that reason), so the card carries the engineer

@@ -61,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import dependabot_card  # noqa: E402
 import github_output  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_catalog  # noqa: E402
@@ -77,11 +78,12 @@ REPO_SLUG = "bureau-pipeline"
 
 #: The record card: where the work already is, and a verdict that says the
 #: fleet has nothing to dispatch for it — `repair_card.py`'s shape, for the
-#: same reason.
+#: same reason, and the same `automation` mark (`dependabot_card.LABEL`):
+#: automation filed it, never `hand-built`, which is the CEO's alone (DRE-6228).
 RECORD_LANE = "In Progress"
 RECORD_VERDICT = "WORKBENCH"
 RECORD_LABELS = (f"repo:{REPO_SLUG}", "agent:devops", "initiative:bureau",
-                 "hand-built")
+                 dependabot_card.LABEL)
 
 #: The question card: the default create lane, where the planner reads it as a
 #: decision rather than work and parks it in Green Light for the CEO.

@@ -25,8 +25,9 @@ cause named. One action per card, the first of these that applies:
 3. **A retired-repo card.** Its `repo:<slug>` label names a slug that is not a
    key of `config/repo-map.json` (cause `retired repo <slug>`), or a repo that
    answers `archived: true` to `gh api repos/<owner>/<repo>` (cause `archived
-   repo <owner/repo>`). It is marked `reconcile.HAND_BUILT_LABEL` and parked in
-   Backlog.
+   repo <owner/repo>`). It is marked `routing_verdict.OPERATOR_STEP_LABEL` —
+   a repo that is gone is the operator's to re-point, which is an operator step,
+   and `hand-built` is the CEO's mark alone (DRE-6228) — and parked in Backlog.
 4. **A proof with an open pull request.** The title opens `PROOF:` and
    `card_pr.find` — the one "did this card produce a pull request" seam —
    answers an OPEN pull request in the card's repo. It moves to In Review, the
@@ -77,7 +78,6 @@ import hold
 import hygiene
 import linear_ops
 import prose_blockers
-import reconcile
 import routing_verdict
 
 LANE = "Triage"
@@ -240,7 +240,7 @@ def retired(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
     else:
         return None
     return [_action(card, "hygiene-triage-return", cause, evidence, ctx,
-                    [hygiene.linear_label(card, reconcile.HAND_BUILT_LABEL, True)],
+                    [hygiene.linear_label(card, routing_verdict.OPERATOR_STEP_LABEL, True)],
                     [hygiene.linear_state(card, RETURN_LANE, park=True)])]
 
 
