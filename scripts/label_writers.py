@@ -37,11 +37,14 @@ writer nothing here would see, and it is reported as such.
     write and its executor applies it later, so the plan is where the label is
     named (`DEFERRED_SEAMS`);
   * every invocation of the write layer's command line — `linear_ops.py
-    add-label`, `create --label …` — in `.github/workflows/*.yml` (read through
+    add-label`, `create --label …` — in every workflow and composite action
+    under `.github/`, `.yml` or `.yaml` (read through
     `step_shell.workflow_source`, so a step moved to a script still counts) and
-    in every `scripts/*.sh` no workflow delegates to;
+    in every `scripts/**/*.sh` no workflow delegates to;
   * every argv a Python module builds to run that command line —
-    `[sys.executable, <the write layer>, "add-label", card, label]`;
+    `[sys.executable, <the write layer>, "add-label", card, label]` — and
+    every shell string it spells one in, a literal, f-string, `+` or `%` /
+    `.format` template, its holes read as templates;
   * every `marks` list in the two vocabularies, `config/routing-verdicts.json`
     and `config/planning-shapes.json` — the stamps and the sweep apply them.
 
@@ -51,7 +54,8 @@ there — a finding names the call site that handed the label in. A parameter
 that arrives on a module's command line is read off that module's invocations
 in the workflows, the same way the write layer's are. A seam function handed
 on as a value, or reached with `getattr`, is a write whose calls cannot be
-found, and is reported UNREAD.
+found, and is reported UNREAD — as is a `**` mapping unpacked into the seam
+that is not a literal keyed by name, and a `from <seam> import *`.
 
 ## How a label is read
 
@@ -86,6 +90,14 @@ otherwise is worse than none:
   * **A collection filled through an alias.** `b = a; b.append(…)` fills `a`,
     and static reading follows names, not objects — nor a list handed to a
     function this cannot resolve.
+  * **A shell string assembled across statements.** A command line in a
+    Python string is read when one expression spells the write layer's name
+    and its subcommand together. A command whose script path sits in a
+    variable, or that is joined from pieces built elsewhere, is not seen as
+    one; an argv list that names the script is.
+  * **A composite action outside this repository.** Every workflow and
+    composite action under `.github/` is read; a step that `uses:` an action
+    from another repository runs code this cannot open.
   * **Anything past the door.** Once a write reaches Linear this module is not
     in the loop; it is a check on the source, not a refusal at run time.
 
@@ -425,8 +437,31 @@ def _label_arguments(call, params: LabelParams) -> list:
     if starred is not None and params.positions and starred <= max(params.positions):
         out += [(a.value, ()) for a in call.args[starred:] if isinstance(a, ast.Starred)]
     out += [(k.value, ()) for k in call.keywords if k.arg in params.names]
+    for unpacked in (k.value for k in call.keywords if k.arg is None):
+        if isinstance(unpacked, ast.Dict):  # `**{"label_name": …}`, read by its keys
+            out += [(v, ()) for key, v in zip(unpacked.keys, unpacked.values)
+                    if key is None or (isinstance(key, ast.Constant) and key.value in params.names)]
     if params.flags is not None and len(call.args) > params.flags:
         out.append((ast.Tuple(elts=list(call.args[params.flags:]), ctx=ast.Load()), (_FLAG,)))
+    return out
+
+
+def _unpacked_unread(call, params: LabelParams) -> list:
+    """What a `**` unpacking into a label-taking seam call hides: a mapping
+    this cannot read key by key could carry the label under its name."""
+    if not params.names:
+        return []
+    out = []
+    for keyword in call.keywords:
+        if keyword.arg is not None:
+            continue
+        value = keyword.value
+        if not isinstance(value, ast.Dict):
+            out.append(f"`**{_unparse(value)}` is unpacked into the seam, so the "
+                       "label it may carry cannot be read")
+        elif any(key is not None and not isinstance(key, ast.Constant) for key in value.keys):
+            out.append(f"`**{_unparse(value)}` is keyed at run time, so the label "
+                       "it may carry cannot be read")
     return out
 
 
@@ -537,6 +572,7 @@ class _Module:
         self.calls: list = []
         self.attributes: list = []
         self.sequences: list = []     # list and tuple displays: an argv, perhaps
+        self.star_imports: list = []  # (module, line) for every `from m import *`
         dicts: list = []
         stack = [tree]
         while stack:
@@ -558,6 +594,9 @@ class _Module:
                         alias.name.split(".")[-1]
             elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 for alias in node.names:
+                    if alias.name == "*":
+                        self.star_imports.append((node.module.split(".")[-1], node.lineno))
+                        continue
                     self.from_imports[alias.asname or alias.name] = (
                         node.module.split(".")[-1], alias.name)
         self.calls.sort(key=lambda n: (n.lineno, n.col_offset))
@@ -1473,7 +1512,14 @@ def _python_writes(repo: _Repo, params: dict, reader: _Reader):
     inside = _Reader(repo, reader.seam_names, reader.vocabulary, forward=False)
     found: list[LabelWrite] = []
     commands: set = set()
+    doors = {seam} | {module for module, _ in DEFERRED_SEAMS}
     for mod in repo.modules.values():
+        for module, line in mod.star_imports:
+            if module in doors and module != mod.name:
+                found.append(_write(
+                    f"{mod.rel}:{line}", "python", f"from {module} import *",
+                    _unknown(f"every name in {module} is imported with `*`, so its "
+                             "calls cannot be told from this module's own")))
         if mod.name != seam:
             for node in mod.attributes:
                 if _handed_on(node, mod, params, seam):
@@ -1503,10 +1549,11 @@ def _python_writes(repo: _Repo, params: dict, reader: _Reader):
             if called is None:
                 continue
             arguments = _label_arguments(node, params[called])
-            if not arguments or _executor(arguments, mod):
+            hidden = _unpacked_unread(node, params[called])
+            if not (arguments or hidden) or _executor(arguments, mod):
                 continue
             ctx = reader.ctx_at(node, mod)
-            read = _Read()
+            read = _Read(unread=hidden)
             use = inside if mod.name == seam else reader
             for argument, selector in arguments:
                 read.add(use.read(argument, ctx, selector))
@@ -1517,7 +1564,7 @@ def _python_writes(repo: _Repo, params: dict, reader: _Reader):
                 if not read.labels:
                     continue
             commands |= read.commands
-            expression = ", ".join(_unparse(a) for a, _ in arguments)
+            expression = ", ".join(_unparse(a) for a, _ in arguments) or _unparse(node)
             found.append(_write(where, "python", expression, read))
     return found, commands
 
@@ -1527,7 +1574,7 @@ def _python_writes(repo: _Repo, params: dict, reader: _Reader):
 # --------------------------------------------------------------------------- #
 
 _CONTINUATION = re.compile(r"\\\s*\n\s*")
-_INVOCATION = re.compile(r"\b(?P<module>\w+)\.py(?P<rest>(?:\\\s*\n|[^\n])*)")
+_INVOCATION = re.compile(r"\b(?P<module>\w+)\.py[\"']?(?P<rest>(?:\\\s*\n|[^\n])*)")
 _SHELL_VALUE = re.compile(r"\$\{\{.*?\}\}|\$\{[^}]*\}|\$\([^)]*\)|\$\w+|\$\{\{.*")
 
 
@@ -1574,7 +1621,7 @@ def _shell_label(word: str):
     return tuple(_SHELL_VALUE.split(word))
 
 
-def _text_writes(rel: str, how: str, text: str, lines: dict) -> list:
+def _text_writes(rel: str, how: str, text: str, lines: dict, first_line: int = 1) -> list:
     found = []
     for match in _INVOCATION.finditer(text):
         table = lines.get(match.group("module"))
@@ -1596,7 +1643,7 @@ def _text_writes(rel: str, how: str, text: str, lines: dict) -> list:
             values += [tail[i + 1] for i, word in enumerate(tail[:-1]) if word == LABEL_FLAG]
         if not values and not unread:
             continue
-        line = text.count("\n", 0, match.start()) + 1
+        line = text.count("\n", 0, match.start()) + first_line
         read = _Read({_shell_label(v) for v in values}, unread)
         found.append(_write(f"{rel}:{line}", how,
                             " ".join(shlex.quote(a) for a in args[:6]), read))
@@ -1641,9 +1688,74 @@ def _python_command_writes(repo: _Repo, reader, lines: dict) -> list:
     return found
 
 
+#: Where a string a module builds is filled in at run time — an f-string's
+#: hole, a `%` or `.format` placeholder, a value concatenated in — spelled as
+#: a shell substitution, so a label there reads as a template like any other.
+_HOLE = "${_}"
+_PLACEHOLDER = re.compile(r"\{[^{}]*\}|%(?:\([^)]*\))?[-#0 +]*\d*(?:\.\d+)?[sdirf]")
+
+
+def _built_string(node):
+    """(text, the nodes filled into it) for a string a module builds — a
+    literal, an f-string, a `+` concatenation or a `%` format — or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _PLACEHOLDER.sub(lambda _: _HOLE, node.value), []
+    if isinstance(node, ast.JoinedStr):
+        text, filled = "", []
+        for value in node.values:
+            if isinstance(value, ast.Constant):
+                text += str(value.value)
+            else:
+                text += _HOLE
+                filled.append(value)
+        return text, filled
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        left = _built_string(node.left)
+        if isinstance(node.op, ast.Mod):
+            return (left[0], left[1] + [node.right]) if left else None
+        right = _built_string(node.right)
+        if left is None and right is None:
+            return None
+        ltext, lfilled = left or (_HOLE, [node.left])
+        rtext, rfilled = right or (_HOLE, [node.right])
+        return ltext + rtext, lfilled + rfilled
+    return None
+
+
+def _python_string_writes(repo: _Repo, lines: dict) -> list:
+    """A command line a Python module spells as one string — for a shell, an
+    `os.system`, a `shell=True` — read as the workflows' are. What is filled
+    in at run time reads as a template, and a label that is nothing but one
+    is reported UNREAD."""
+    found = []
+    for mod in repo.modules.values():
+        docs = _docstrings(mod.tree)
+        stack = [mod.tree]
+        while stack:
+            node = stack.pop()
+            built = None if id(node) in docs else _built_string(node)
+            if built is None:
+                stack.extend(ast.iter_child_nodes(node))
+                continue
+            text, filled = built
+            stack.extend(filled)
+            if ".py" in text:
+                found += _text_writes(mod.rel, "python", text, lines, node.lineno)
+    return found
+
+
+def _github_yaml(root: str) -> list:
+    """Every file under `.github/` a step can run in: the workflows and the
+    composite actions, spelled `.yml` or `.yaml`, at any depth."""
+    return sorted(
+        path for ext in ("yml", "yaml")
+        for path in glob.glob(os.path.join(root, ".github", "**", f"*.{ext}"), recursive=True)
+    )
+
+
 def _delegated(root: str) -> set:
     out: set = set()
-    for path in glob.glob(os.path.join(root, ".github", "workflows", "*.yml")):
+    for path in _github_yaml(root):
         try:
             with open(path, encoding="utf-8") as fh:
                 for line in fh:
@@ -1658,14 +1770,14 @@ def _delegated(root: str) -> set:
 
 def _shell_writes(root: str, lines: dict) -> list:
     found = []
-    for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
+    for path in _github_yaml(root):
         try:
             text = step_shell.workflow_source(os.path.abspath(path), root)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         found += _text_writes(os.path.relpath(path, root), "workflow", text, lines)
     delegated = _delegated(root)
-    for path in sorted(glob.glob(os.path.join(root, "scripts", "*.sh"))):
+    for path in sorted(glob.glob(os.path.join(root, "scripts", "**", "*.sh"), recursive=True)):
         rel = os.path.relpath(path, root)
         if rel.replace(os.sep, "/") in delegated:
             continue  # read through the workflow that runs it, above
@@ -1724,6 +1836,7 @@ def writes(root: str = ROOT) -> tuple:
         found, commands = _python_writes(repo, params, reader)
         lines = _command_lines(repo, params, commands)
         found += _python_command_writes(repo, reader, lines)
+        found += _python_string_writes(repo, lines)
         found += _shell_writes(root, lines)
         found += config_writes(root)
     finally:
