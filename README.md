@@ -1420,7 +1420,13 @@ deduplicated Linear card through `linear_ops.py`, the shape
   will not fetch, a run listing GitHub declines: each is reported unknown and
   alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
   missing nightly takes the card title when both are true, because it is the
-  actionable one, but the unknown is still named in the body.
+  actionable one, but the unknown is still named in the body. A throttle is
+  not an unknown (DRE-6461): a read GitHub refuses because the installation's
+  hourly request budget is spent is listed as not read this hour, never as
+  ran, and the watcher stops reading for the rest of that run. A throttle
+  alone files no card on the hour it is seen — it is said only on the daily
+  re-confirm hour, on the same card — while a missing nightly or any other
+  unreadable subject still alarms on any hour.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
   over the roster's owners with a token minted per owner — the shape the

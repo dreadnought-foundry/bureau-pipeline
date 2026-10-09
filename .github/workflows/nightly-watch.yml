@@ -65,6 +65,13 @@
 #      the default branch: roughly one read per workflow per repo per hour,
 #      against an installation's 5,000/hour. A refusal is never retried past
 #      gh_read_retry's bounded backoff and never substituted for an answer.
+#      That hourly request budget is shared by everything the fleet does on
+#      the installation, so it can be spent by others (DRE-6461): a read
+#      GitHub refuses for it is reported as not read this hour — never as
+#      ran, never as a permission failure — and the watcher stops asking for
+#      the rest of the run, so a throttle costs one read's backoff, not one
+#      per file. A throttle alone alarms only on the daily re-confirm hour;
+#      a missing nightly or any other unreadable subject alarms on any hour.
 #   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
 #      anywhere repeats next hour, and its failure routes through the medic.
 #      `fail-fast: false` so one owner's missing installation cannot stop the
