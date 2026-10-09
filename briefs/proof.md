@@ -42,7 +42,7 @@ next planner reads them here rather than assuming them closed.
 **Read-only on every live system.** You change nothing a person or a product
 relies on.
 
-The one exception is **scratch state a criterion needs**, made only in the
+The first exception is **scratch state a criterion needs**, made only in the
 scratch space the card names (Portico's `PROOF scratch` folder, for example —
 a criterion that asks "a document uploaded there is found by search" needs one
 uploaded document). The sandbox hygiene rule: **clean up only what you
@@ -51,6 +51,12 @@ end delete exactly those ids and nothing else — never a "tidy" of the folder,
 never an id you did not make in this run. Record the deletion beside each id. A
 card that names no scratch space gets no scratch state: a criterion that would
 need some is `Not observed.` with that reason.
+
+The second exception is **the product's own hosted sign-in ration counter**,
+written only through the product's script, as the reservation that script makes
+before a sign-in (the `Never:` rule under Identities, below). Never by hand,
+never reset, never read or deleted directly — its rows expire on their own. It
+is the one live write a proof run may make, and the record names it as such.
 
 ## Identities — each named for what it is used for
 You hold exactly what the workflow hands you, and each identity makes one kind
@@ -113,19 +119,29 @@ for, and the one write it refused.
   `Not observed. the Linear request cap of <PROOF_LINEAR_REQUESTS> was reached`,
   with the number written out.
 - **AWS: only when the calling repo provides a role.** Then the workflow hands
-  you a short-lived read-only session, and through it you reach the product's
-  own scripted proof identities — Portico's `proof-reader` (DRE-5389) and
-  `proof-moderator` (DRE-5655), through `infra/scripts/proof-reader.ts`, once
-  DRE-5928 gives Portico that role. In this epic no caller provides one, so the
+  you a short-lived session bounded by the caller's own role, and through it
+  you reach the product's own scripted proof identities — Portico's
+  `proof-reader` (DRE-5389) and `proof-moderator` (DRE-5655), through
+  `infra/scripts/proof-reader.ts`. What the session may do is the role's, never
+  this brief's: what Portico's holds is five reads and one write, the hosted
+  sign-in ration counter (DRE-5928, DRE-6035). When no caller provides one, the
   Identities section records `aws: none` and every criterion that needs the
-  live product's own identities is `Not observed.` with that reason.
-- **Never:** a person's account, the CEO's account, or a sign-in typed into a
-  web page. Hosted sign-ins are rationed per machine by the product's own
-  script — three a Pacific day (DRE-5671) — and a hosted runner is a new
-  machine every run, so the ration cannot hold there. The rule that follows: a
-  dispatched run may not sign in to a hosted identity until the ration is kept
-  somewhere other than the machine. No proof in this epic signs in anywhere. A
-  dispatched run that signs in is outside this epic and has no card yet.
+  product's own identities is `Not observed.` with that reason.
+- **Never:** never a person's account, never the CEO's account, never a
+  sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
+  by the product's own script — three a Pacific day (DRE-5671) — and a hosted
+  runner is a new machine every run, so a ration counted on the machine cannot
+  hold there. The rule that follows: a run may use a hosted identity's sign-in
+  only where the product's own script holds the hosted sign-in ration, kept
+  somewhere other than the machine, and refuses the next sign-in itself when
+  the ration is spent — one count for the account, every machine included, so
+  a hosted runner's fresh machine cannot reset it. For example, Portico's
+  `infra/scripts/proof-reader.ts mcp-token` reserves one of the day's three
+  with a conditional write to a counter row in the product's own table
+  (`ration#<project>`), prints how many were spent and how many remain, and
+  refuses the fourth (DRE-6033). You sign in only through that script, never
+  by any other route. A spent ration is `Not observed.` with the script's
+  refusal line as the reason; you never wait for the next Pacific day.
 
 ## The lanes, which you never write
 The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
@@ -149,8 +165,8 @@ run of the released commit. The planner writes them as two criteria.
 - **`Local screen:`** — a browser on a local run of the released commit. This
   epic's run has no browser, so the row reads
   `Not observed. needs a browser on a local run of the released commit` —
-  never inferred from the live half. The local-screen half is outside this
-  epic and has no card yet, so the row stays `Not observed.` with that reason.
+  never inferred from the live half. Nothing hands a dispatched run a browser
+  yet, so the row stays `Not observed.` with that reason.
 
 Neither half is ever marked `Met.` on the strength of the other. A request that
 succeeds live says nothing about the screen that sends it.
@@ -174,8 +190,14 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
    never UTC.
 4. **`## Identities`** — each identity above, what you used it for in this run,
    and the one refused write (the command and GitHub's answer). `aws: none`
-   when no role was provided. Any scratch ids you created, and their deletion,
-   go here beside the identity that made them.
+   when no role was provided. Beside the AWS identity, when you signed in: the
+   ration counter's reservation, named as the run's one live write, and how
+   many hosted sign-ins were spent and how many remained, by quoting the
+   script's status line,
+   `hosted sign-in ration: <spent> of <cap> spent today (<YYYY-MM-DD> PT), <remaining> remaining`.
+   When the ration was spent: the script's refusal line, and that the run made
+   no hosted sign-in. Any scratch ids you created, and their deletion, go here
+   beside the identity that made them.
 5. **The criterion table** — `| Criterion | Result |`, one row per acceptance
    criterion on the card, in the card's order, the criterion copied in. Every
    Result opens with `Met.`, `Not met.` or `Not observed.` followed by the
