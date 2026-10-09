@@ -100,9 +100,18 @@ children are never released. MAX_WIP and the blocker checks are unchanged.
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
 "blocked-by" relations (read the same way as a card's); if any blocker epic is
-not Done, none of that epic's children promote this sweep — regardless of the
-epic's own state. And when a blocker epic reaches Done, every epic blocked-by
-it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
+neither Done nor BUILT OUT, none of that epic's children promote this sweep —
+regardless of the epic's own state. BUILT OUT (DRE-6407) is a blocker whose
+relation and own read both say In Progress, with at least one child, its
+children read to the end, no child `epic_cap.buildable()` and no open child
+epic — a proof card or a hand-built card left open does not hold.
+`_not_built_out` says which of those held it. The code dependencies ride
+card-level relations, which the card gate honors as before.
+
+The auto-advance is stricter: when a blocker epic reaches Done, every epic
+blocked-by it whose blockers are now ALL Done — built out is not enough, the
+seam rule (DRE-3244) plans against what the blocker's proof observed — is
+auto-advanced out of Backlog to Triage
 (which re-triggers the planner). Never to In Progress, so the Green Light
 human-approval gate is preserved. Both the promotion hold and the advance fail
 SAFE on unreadable relation data (don't promote / don't advance on
@@ -145,6 +154,7 @@ import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and it
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
+import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
@@ -249,6 +259,7 @@ import reviewer_down  # noqa: E402
 # that module's writer. It composes no hold body and spells none of its
 # strings.
 import reviewer_environment  # noqa: E402
+import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -457,6 +468,13 @@ REVIEW_NUDGE_CAP = int(os.environ.get("REVIEW_NUDGE_CAP", "3"))
 GATE_NUDGE_KEY = "gate-nudge"
 REVIEW_NUDGE_KEY = "review-nudge"
 REVIEW_NUDGE_CAP_KEY = "review-nudge-cap"
+# A draft is nudged by neither budget (DRE-6423): the critic skips drafts by
+# design (DRE-5801) and the merge gate never merges one, so a re-trigger there
+# is spent on nothing. The sweep says so once per head under this key, and
+# review_nudges_spent counts only the receipts after it, so marking the pull
+# request ready restarts the budget at the same head. Spelled with no `(`
+# after the head, so `_review_nudge_key` never reads it as a spend.
+REVIEW_NUDGE_DRAFT_KEY = "review-nudge-draft"
 
 # Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
 # reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
@@ -779,27 +797,45 @@ def hand_built(card: dict) -> bool:
     slots, and work no run is coming for occupies none. Same label, one
     spelling — tests/test_hand_built_not_stranded.py names every owner, so a
     reader added later is a finding at the diff.
+
+    The answer is `hand_built_reason`'s, as a boolean: one rule, so the
+    watchdog's line and this answer cannot disagree (DRE-6424).
     """
-    if proof_and_demo.is_proof(card.get("title")):
-        return True
+    return hand_built_reason(card) is not None
+
+
+def hand_built_reason(card: dict) -> str | None:
+    """Why `hand_built` answers true, in the words the watchdog prints after
+    "<card> is" — or None when it answers false (DRE-6424).
+
+    `labeled '<mark>'`, naming the person mark the card really carries as it
+    carries it; `a PROOF: card`; or `routed <VERDICT> to <lane>`. The line
+    used to print `labeled 'hand-built'` for all of them, so DRE-6364 — a
+    PROOF: card nobody had marked — was logged as wearing the CEO's mark.
+
+    A mark on the card is named first, so a proof card that does wear one is
+    logged with it: the label is really there. The verdict last, so a card in
+    any other lane is never read twice (tests/test_sweep_request_budget.py
+    counts the reads).
+    """
     marked = {m.lower() for m in routing_verdict.hand_marks()}
-    if any(
-        lbl["name"].lower() in marked
-        for lbl in (card.get("labels") or {}).get("nodes", [])
-    ):
-        return True
+    for lbl in (card.get("labels") or {}).get("nodes", []):
+        if lbl["name"].lower() in marked:
+            return f"labeled '{lbl['name']}'"
+    if proof_and_demo.is_proof(card.get("title")):
+        return "a PROOF: card"
     lane = (card.get("state") or {}).get("name")
     persons = {
         name for name in routing_verdict.verdicts()
         if routing_verdict.is_person_verdict(name)
         and routing_verdict.destination(name) == lane
     }
-    # The lane first, so a card in any other lane is never read twice
-    # (tests/test_sweep_request_budget.py counts the reads).
-    return bool(persons) and any(
-        name in persons
-        for name in routing_verdict.verdicts_on(card_comment_bodies(card))
-    )
+    if not persons:
+        return None
+    for name in routing_verdict.verdicts_on(card_comment_bodies(card)):
+        if name in persons:
+            return f"routed {name} to {lane}"
+    return None
 
 
 def counts_against_wip(card: dict) -> bool:
@@ -1602,6 +1638,19 @@ DOOR_LINEAR_LANES = tuple(lane for lane in SWEPT_LANES if lane in INTAKE_LANE + 
 DOOR_WORK_LANES = tuple(lane for lane in SWEPT_LANES if lane not in DOOR_LINEAR_LANES)
 BACKLOG_LANE = "Backlog"
 
+# The lanes a finished epic closes FROM, declared once and read by both close
+# sites — the full sweep and the merge path's `--close-only` (DRE-6410). The
+# work lanes the sweep has always closed from, and Backlog: an epic there is
+# blocked on another epic, dropped there, or dragged, and one whose every child
+# is closed with at least one Done is finished whichever it is (DRE-4819 sat
+# there with six of six Done). NOT SWEPT_LANES, which is what the sweep READS:
+# Intake, Planning and Green Light hold an epic whose plan is still being
+# written, reviewed or approved — a re-plan may be about to add children — and
+# Hand-work is a person's lane the sweep never puts an epic in. Triage and Green
+# Light are not read at all, and reading either for this would be one more
+# request per pass for a lane that holds no finished epic by design.
+EPIC_CLOSE_LANES = SWEEP_STATES + (BACKLOG_LANE,)
+
 # The lanes `move_hand_built_to_review` reads a hand-built card OUT of
 # (DRE-4356): every flow lane strictly upstream of the review lane that the
 # sweep already reads. Derived from the contract's own order — the file lists
@@ -1748,6 +1797,13 @@ _epic_records: dict[str, dict] = {}
 # unreadable epic costs one read per pass rather than one per consumer.
 _epic_record_gaps: dict[str, str] = {}
 
+# The In Progress blocker epics the promotion gate has read this pass, each in
+# `epic_cap.IN_MOTION_NODE`'s shape (DRE-6407), and why one could not be read.
+# One single-issue read per distinct blocker per pass, filled and read ONLY
+# through `_blocker_epic()`, and reset with the epic record.
+_blocker_epics: dict[str, dict] = {}
+_blocker_epic_gaps: dict[str, str] = {}
+
 # ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
 # Which cards this pass decided on the DOOR's facts rather than Linear's. Every
 # state write about one of them is from-lane-conditional (item 33), and every
@@ -1810,8 +1866,9 @@ class BoardIdle(BoardNotRead):
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
-    records (DRE-3642), its workflows listing (DRE-4378) and its in-flight build
-    runs (DRE-4830). Called once at the top of main()."""
+    records (DRE-3642) and blocker epics (DRE-6407), its workflows listing
+    (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
+    of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
@@ -1833,6 +1890,8 @@ def reset_sweep_cards() -> None:
     _build_job_unreadable.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
+    _blocker_epics.clear()
+    _blocker_epic_gaps.clear()
     _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
@@ -2436,11 +2495,13 @@ def flag_stranded() -> set[str]:
             continue  # Planning has its own rule (DRE-2736) — never these two
         if held(card):
             continue  # already in a human's queue — never spam
-        if hand_built(card):
+        reason = hand_built_reason(card)
+        if reason:
             # DRE-2524: neither class applies to work built by hand — no
-            # dispatched run is coming and nothing is being routed.
+            # dispatched run is coming and nothing is being routed. The line
+            # names why, never a label the card may not carry (DRE-6424).
             print(
-                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — no "
+                f"watchdog: {ident} is {reason} — no "
                 "dispatched run is expected, so a missing run receipt and an "
                 "off-rail repo are both normal here, not a strand"
             )
@@ -2753,9 +2814,10 @@ def flag_stalled_planning() -> set[str]:
             continue  # this rule speaks for one lane only
         if held(card):
             continue  # already in a human's queue — never spam
-        if hand_built(card):
+        reason = hand_built_reason(card)
+        if reason:
             print(
-                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — the "
+                f"watchdog: {ident} is {reason} — the "
                 "pipeline is not planning this card, so time spent in "
                 "Planning is not a strand"
             )
@@ -4500,20 +4562,16 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # the LITERAL branch, not a `bot/` prefix — auto-merge is not a permission any
 # future `bot/…` branch should inherit by name alone.
 #
-# `bot/split-ledger` joins it on the same terms (DRE-3879, CEO's signed answer
-# 2026-09-15 13:12 PT: exactly two literal names, no wildcard — the other, the
-# weekly catalog snapshot's branch, left with that job, DRE-6049). It is this
-# repo's own scheduled derivation, the daily split ledger, which used to push
-# straight to `main` and had been failing on it every run, because branch
-# protection answers GH006. It now commits to its own fixed branch and rides
-# ONE pull request through the gate, so the broad question has to own it or
-# the sweep reports the gate's own work as stranded. Card-less, so it stays
-# out of the narrow tuples exactly as the nightly sync does.
+# The two scheduled jobs' own branches that joined it on the same terms
+# (DRE-3879, CEO's signed answer 2026-09-15 13:12 PT: exactly two literal
+# names, no wildcard) left with their jobs — the weekly catalog snapshot's
+# with DRE-6049, the daily split ledger's with DRE-6056, once the planner
+# derived the ledger from the console's record at plan time. Removing them
+# narrows the list that answer set and contradicts nothing in it.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
 PIPELINE_BRANCH_PREFIXES = (
     "agent/", "repair/", "dependabot/", "bot/standards-sync",
-    "bot/split-ledger",
 )
 
 
@@ -4631,7 +4689,8 @@ def pr_for(identifier: str) -> dict | None:
     # baseRefName: the content binding (DRE-2340) compares base...head —
     # without it verdict_bound has nothing to compare and the carry never
     # fires, so the In Review sweep would re-review every carried head.
-    fields = "number,url,headRefName,state,comments,headRefOid,baseRefName"
+    # isDraft: the review lane nudges no draft (DRE-6423).
+    fields = "number,url,headRefName,state,comments,headRefOid,baseRefName,isDraft"
 
     def newest_match(out: str) -> dict | None:
         return card_pr.newest([
@@ -5136,9 +5195,39 @@ def review_nudges_spent(card: dict, tag: str, head: str) -> int:
     the tag AND the head sha, off the comments the sweep already holds — no
     request (DRE-5231). A new commit is a new key, so it re-arms the budget,
     the CRASHED_REVIEW_RETRY_CAP shape. The window is the card's fifty newest
-    comments, so the count can only read low, never high."""
+    comments, so the count can only read low, never high.
+
+    Only the receipts after the newest draft notice for this head count
+    (DRE-6423): a pull request marked ready restarts its budget at the same
+    head, and one never seen as a draft counts every receipt."""
     key = _review_nudge_key(tag, head)
-    return sum(1 for body in card_comment_bodies(card) if key in body)
+    bodies = card_comment_bodies(card)
+    noticed = _review_nudge_draft_index(bodies, head)
+    return sum(1 for body in bodies[noticed + 1:] if key in body)
+
+
+def _review_nudge_draft_index(bodies: list[str], head: str) -> int:
+    """The index of the newest draft notice for `head` in `bodies` (oldest →
+    newest), or -1 when there is none (DRE-6423)."""
+    key = f"{REVIEW_NUDGE_DRAFT_KEY} @{head}"
+    for index in range(len(bodies) - 1, -1, -1):
+        if key in bodies[index]:
+            return index
+    return -1
+
+
+def review_nudge_draft_standing(card: dict, head: str) -> bool:
+    """A draft notice for `head` stands on the card newer than its newest
+    review or gate receipt for that head, so the draft is already said
+    (DRE-6423). One with a receipt after it no longer stands: the pull
+    request was ready since, and a second trip to draft is said again."""
+    bodies = card_comment_bodies(card)
+    noticed = _review_nudge_draft_index(bodies, head)
+    if noticed < 0:
+        return False
+    keys = (_review_nudge_key(REVIEW_NUDGE_KEY, head),
+            _review_nudge_key(GATE_NUDGE_KEY, head))
+    return not any(key in body for body in bodies[noticed + 1:] for key in keys)
 
 
 #: What the merge gate's hold note opens with, after its ⏸️ badge
@@ -5158,6 +5247,34 @@ def gate_hold_note_line(pr: dict) -> str | None:
         ):
             return merge_gate.first_line(body)
     return None
+
+
+def proof_record_sent_back(card: dict, pr: dict, critic: str) -> bool:
+    """Is this a proof record the critic sent back at its head (DRE-6406)?
+    When it is, say so in one line and answer True: the review lane writes
+    nothing on it — no nudge, no receipt, no hold, no question, no park.
+
+    `critic` is `review_standing`'s reading, and only its exact
+    `REQUEST_CHANGES` counts — the same reading `proof_dispatch.rerunning`
+    makes. No gate re-trigger can change a record nothing has amended, the
+    fix agent is kept off it (`fix_dispatch_blocked`), and the proof run's
+    re-run branch is what amends it. A record with no verdict at its head
+    still reaches a person at the cap: that is how a critic that never
+    answers is found. Imported here, not at the top: proof_dispatch imports
+    this module, and the branch rule lives in its leaf."""
+    import proof_record  # noqa: PLC0415 — see fix_dispatch_blocked
+
+    if critic != "REQUEST_CHANGES" or not proof_record.proof_record_branch(
+        pr.get("headRefName")
+    ):
+        return False
+    head = pr.get("headRefOid") or ""
+    print(
+        f"review-nudge: {card['identifier']} PR #{pr['number']} is a proof record "
+        f"the critic sent back at {head[:7]} — the proof run's re-run branch owns "
+        "it (proof_dispatch.py); no nudge, no hold, no park"
+    )
+    return True
 
 
 def hand_review_nudge_to_person(
@@ -5194,7 +5311,13 @@ def hand_review_nudge_to_person(
     missing. So a blocker that did not post parks nothing: the card waits
     held In Review for the next sweep to post it, rather than leaving the
     review lane with a question no Operator decision could answer.
+
+    Never on a proof record the critic sent back at its head
+    (`proof_record_sent_back`, DRE-6406): the loop does not come here for
+    one, and neither does the held-card path finishing an older park.
     """
+    if proof_record_sent_back(card, pr, critic):
+        return
     ident = card["identifier"]
     number = pr["number"]
     head = pr.get("headRefOid") or ""
@@ -5283,6 +5406,136 @@ def review_cap_park_unfinished(card: dict) -> str | None:
     if hold.reason_of(labels, bodies) != "review-cap-spent":
         return None
     return hold.read_stamp(bodies)["at"]
+
+
+# DRE-6414: the lane the growth question is created in — the CEO's "needs you"
+# queue. The QUESTION goes there, on a card of its own; the epic never does,
+# because a Green Light epic stops promoting its children and a move back to
+# In Progress reads as a fresh green light.
+EPIC_GROWTH_LANE = "Green Light"
+# Where the sweep closes a question the CEO answered.
+EPIC_GROWTH_CLOSED_LANE = "Done"
+
+
+def ask_epic_growth_question(epic: str, report: dict) -> str:
+    """The epic has grown past the size the CEO approved: ask him, once, on a
+    card of its own in Green Light, and record the asking on the epic
+    (DRE-6414).
+
+    The card is CREATED in Green Light in the one write that mints it, as the
+    fleet-outage card is created in Triage (DRE-5292): `no-code` and no
+    `agent:*` role, so no run is ever dispatched for it, and no parent — a
+    child of the epic would be one more card in it, and would be promoted.
+    Its description is `epic_growth.body`, the three declared lines. The epic
+    stays In Progress and keeps promoting: nothing is paused, labeled or held.
+
+    The marker is the `open` line on the epic's growth record, and while it
+    stands nothing is asked again. A card created on a pass that died, or
+    whose record write was contended, carries no line yet — so an open card
+    by this epic's title prefix that no line names is that card, and is
+    recorded rather than asked twice. Returns the question card.
+    """
+    approved, running = report["approved"], report["current"]
+    asked = mid_epic._now()
+    named = {q["id"] for q in report.get("questions") or []}
+    found = linear_ops.find_open_prefix(epic_growth.title_prefix(epic))
+    if found and found["identifier"] not in named:
+        question = found["identifier"]
+        print(f"epic-growth: {epic} question {question} was created and never "
+              "recorded — recording it, not asking twice")
+    else:
+        issue = linear_ops.create_card(
+            epic_growth.title(epic, approved, running),
+            epic_growth.body(epic, approved, running, report.get("joined") or []),
+            repo_slug=REPO_SLUG,
+            labels=(linear_ops.NO_CODE_LABEL,),
+            lane=EPIC_GROWTH_LANE,
+        )
+        question = issue["identifier"]
+    recorded = mid_epic.refresh_epic_growth(linear_ops, epic, question={
+        "id": question, "asked": asked, "at": running,
+        "status": mid_epic.QUESTION_OPEN, "settled": None,
+    })
+    if recorded.get("contended"):
+        print(f"epic-growth: {epic} question {question} not recorded on the "
+              f"epic — {recorded['contended']}; the next sweep records it")
+    print(f"epic-growth: {epic} grew past its green light — approved at "
+          f"{approved} cards, running {running}; asked {question} in "
+          f"{EPIC_GROWTH_LANE}")
+    return question
+
+
+def settle_epic_growth_question(epic: str, question: dict,
+                                approved: int | None) -> str | None:
+    """Read the CEO's answer to the open growth question and act on it
+    (DRE-6414). Returns the outcome, or None while the question is open.
+    `approved` is the size the question was asked against, for the
+    amendment's line.
+
+    One read of the question card's thread, the whole of it, and his newest
+    signed comment since it was asked decides (`epic_growth.answer`, the
+    qualifying rule `green_light_reply` uses):
+
+      * `re-approve` — the card is closed `Done` under one closing comment
+        and the record's line becomes `re-approved`, so the next question is
+        measured from the count he answered at. The epic stays In Progress.
+      * `split` — a mid-epic amendment is filed on the epic
+        (`mid_epic.discovery`), which moves it to Planning for a re-plan
+        along its seam; then the card closes the same way and the line
+        becomes `split`.
+      * his words neither rule reads, or a console answer that was refused or
+        could not be checked — left for a person, with one line, and nothing
+        is asked again.
+      * no answer, and the card has left Green Light — closed, canceled or
+        dragged anywhere by hand: the question is withdrawn. Nothing is moved
+        or posted; the record's line changes, and the next question is
+        measured from the count this one was asked at.
+
+    The closing comment is read back off the thread before anything is
+    written: a pass that filed the amendment and stopped before settling the
+    record files no second one, and posts no second comment.
+    """
+    import green_light_reply  # noqa: PLC0415 — the CEO's declared Linear ids
+
+    ident = question["id"]
+    nodes, viewer = linear_ops._thread_and_viewer(
+        ident, "body", "user", "createdAt", whole=True)
+    voices = spoken_thread.voices(nodes, viewer, card=ident)
+    outcome = epic_growth.answer(nodes, voices, green_light_reply.ceo_user_ids(),
+                                 after=question["asked"])
+    now = mid_epic._now()
+    if outcome == epic_growth.UNREADABLE:
+        print(f"epic-growth: {epic} question {ident} answered in words this "
+              "cannot read — left")
+        return None
+    if outcome is None:
+        lane = (linear_ops.get_issue(ident, fresh=True).get("state") or {}).get("name")
+        if lane in mid_epic.GREEN_LIGHT_LANES:
+            return None
+        mid_epic.refresh_epic_growth(linear_ops, epic, question=dict(
+            question, status=mid_epic.QUESTION_WITHDRAWN, settled=now))
+        print(f"epic-growth: {epic} question {ident} left {EPIC_GROWTH_LANE} "
+              f"({lane}) unanswered — withdrawn at {question['at']} cards")
+        return mid_epic.QUESTION_WITHDRAWN
+    closed = any(epic_growth.CLOSING_MARK in (node.get("body") or "") for node in nodes)
+    if outcome == epic_growth.SPLIT and not closed:
+        mid_epic.discovery(
+            linear_ops, epic, kind=mid_epic.AMENDMENT,
+            because=epic_growth.split_because(
+                approved if approved is not None else "an unknown size",
+                question["at"], ident),
+        )
+    if not closed:
+        linear_ops.cmd_comment(ident, epic_growth.closing_comment(
+            outcome, epic=epic, running=question["at"], at=_pt(now)))
+    linear_ops.cmd_state(ident, EPIC_GROWTH_CLOSED_LANE)
+    status = (mid_epic.QUESTION_RE_APPROVED if outcome == epic_growth.RE_APPROVE
+              else mid_epic.QUESTION_SPLIT)
+    mid_epic.refresh_epic_growth(linear_ops, epic, question=dict(
+        question, status=status, settled=now))
+    print(f"epic-growth: {epic} question {ident} answered {outcome} at "
+          f"{question['at']} cards — closed")
+    return status
 
 
 def review_standing(pr: dict) -> tuple[str, str, str]:
@@ -5978,7 +6231,93 @@ def _fetch_epic_relations(epic_identifier: str) -> dict | None:
     }
 
 
-def epic_blockers_unmet(epic_identifier: str) -> bool:
+#: The promotion gate's read of an In Progress blocker (DRE-6407): the shape
+#: `epic_cap.buildable()` and `counts_against_cap()` already read, children
+#: page `hasNextPage` included. Its own single-issue read, never a widening of
+#: `EPIC_RECORD_GQL` — that page is weighed against the 5,000-node yardstick
+#: and `tests/test_growth_rides_the_record.py` pins the weight.
+_BLOCKER_EPIC_QUERY = """query($id: String!) { issue(id: $id) {%s
+         } }""" % epic_cap.IN_MOTION_NODE
+
+
+def _blocker_epic(identifier: str) -> dict | None:
+    """The blocker epic, read once per pass; None when it could not be read,
+    with the reason in `_blocker_epic_gaps`. Isolated like
+    `_read_one_epic_record`: an unreadable blocker holds the epics it blocks,
+    and is never asked for twice in a pass."""
+    if identifier in _blocker_epics:
+        return _blocker_epics[identifier]
+    if identifier in _blocker_epic_gaps:
+        return None
+    try:
+        issue = (linear_ops.gql(_BLOCKER_EPIC_QUERY, {"id": identifier}) or {}).get("issue")
+    except Exception as e:  # noqa: BLE001 — the reason travels to the epic-gate line
+        _blocker_epic_gaps[identifier] = str(e) or type(e).__name__
+        return None
+    if not issue:
+        _blocker_epic_gaps[identifier] = "Linear returned no issue for it"
+        return None
+    _blocker_epics[identifier] = issue
+    return issue
+
+
+def _not_built_out(blocker: str, state: str) -> str | None:
+    """Why blocker epic `blocker` is not BUILT OUT, or None when it is
+    (DRE-6407).
+
+    Built out is `epic_cap.counts_against_cap(record, count_rollup_parents=True)`
+    false for an In Progress epic with children: no child `buildable()` — the
+    one definition, DRE-5918's — no open child epic, and a children page read
+    to the end. The roll-up flag is pinned true here, never read off
+    `config/epic-cap.json`: how the cap counts a parent is a cap accounting
+    choice, and a roll-up parent is never built out before it is Done.
+
+    The state comes off the relation, so a blocker that has built nothing —
+    Backlog, Planning, Green Light — costs no read.
+    """
+    if state != epic_cap.IN_PROGRESS:
+        return f"its state is {state}, not {epic_cap.IN_PROGRESS}"
+    record = _blocker_epic(blocker)
+    if record is None:
+        return f"its children could not be read: {_blocker_epic_gaps.get(blocker)}"
+    children = epic_cap._children(record)
+    in_progress = epic_cap._state(record) == epic_cap.IN_PROGRESS
+    if in_progress and children and not epic_cap.counts_against_cap(
+        record, count_rollup_parents=True
+    ):
+        return None
+    # Held: the first of the five that failed, naming the child where there is one.
+    if not in_progress:
+        return (f"its state now reads {epic_cap._state(record) or 'unknown'}, "
+                f"not {epic_cap.IN_PROGRESS}")
+    if not children:
+        return "it has no children"
+    left = [c.get("identifier") or "?" for c in children if epic_cap.buildable(c)]
+    if left:
+        return f"a buildable child is open: {', '.join(left)}"
+    if epic_cap._truncated(record.get("children")):
+        return "its children page was not read to the end"
+    epics = [c.get("identifier") or "?" for c in children
+             if epic_cap._is_open(c) and epic_cap._child_is_epic(c)]
+    return f"an open child epic: {', '.join(epics) or 'unnamed'}"
+
+
+def _open_children(blocker: str) -> str:
+    """The children a built-out blocker still has open, each with why it does
+    not hold: a proof, or a person's mark."""
+    named = []
+    for child in epic_cap._children(_blocker_epics.get(blocker)):
+        if not epic_cap._is_open(child):
+            continue
+        labels = {(n.get("name") or "").lower()
+                  for n in ((child.get("labels") or {}).get("nodes") or [])}
+        why = (["PROOF"] if proof_and_demo.is_proof(child.get("title") or "") else []) + \
+            sorted(labels.intersection(epic_cap.unbuilt_labels()))
+        named.append(" ".join([child.get("identifier") or "?", *why]))
+    return ", ".join(named) or "none"
+
+
+def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = True) -> bool:
     """True if EPIC `epic_identifier` may not release its children this sweep
     (DRE-1772, epic-level gate).
 
@@ -5986,7 +6325,8 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
 
       * a formal `blocks` relation to something that is not terminal — an
         ordinary, correct dependency. The relation carries its blocker's state
-        inline, so a relation blocker needs no extra read to evaluate;
+        inline, so a relation blocker needs no extra read to evaluate — except
+        an In Progress one under the promotion gate's rule, below;
       * a PROSE DEFECT (DRE-2676) — the description declares a dependency the
         board holds no relation for. That is not a dependency, it is a sentence
         that is wrong, and the sweep will not release work under an epic that
@@ -6000,6 +6340,19 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
     to Triage to trigger the planner and a planning run cannot fix a sentence.
     The epic's escalation is time: `_report_epic_prose_defect` turns the run red
     once the defect has stood for PROSE_DEFECT_RED_MINUTES.
+
+    Two rules for an unfinished blocker, one per caller (DRE-6407), each named
+    on the `epic-gate:` line:
+
+      * `release_at_build_done=True` — the promotion gate. It releases the
+        children of an epic the CEO already approved, so an In Progress
+        blocker counts as cleared once it is BUILT OUT (`_not_built_out`):
+        the proof those cards would otherwise wait on confirms the blocker's
+        own work, not theirs, and a card that really needs an earlier one
+        carries a card-level `blockedBy` relation the card gate still reads;
+      * `release_at_build_done=False` — the auto-advance. Its dependent is an
+        epic still to be PLANNED, against what the blocker's proof observed
+        (the seam, DRE-3244), so every blocker must be Done, as before.
 
     Fails SAFE: if the epic's relation data can't be read, returns True (treat
     as blocked, do not promote).
@@ -6035,13 +6388,33 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         return True
     states = prose_blockers.blocker_states(epic)
     held = sorted(prose_blockers.relation_blockers(epic))  # sorted: deterministic
-    if held:
+    if not held:
+        return False
+    if not release_at_build_done:
         named = "; ".join(f"{blocker} ({states[blocker]})" for blocker in held)
         print(
             f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-            f"relation on {named} — not Done"
+            f"relation on {named} — not Done, and this epic **waits for Done** "
+            "(still to be planned)"
         )
         return True
+    # Every blocker is asked, not just the first: each is one read per pass at
+    # most, and the log then names every one that holds.
+    unbuilt = {blocker: _not_built_out(blocker, states[blocker]) for blocker in held}
+    for blocker, why in unbuilt.items():
+        if why is not None:
+            print(
+                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+                f"relation on {blocker} ({states[blocker]}) — **not built out**: {why}"
+            )
+    if any(why is not None for why in unbuilt.values()):
+        return True
+    for blocker in held:
+        print(
+            f"epic-gate: {epic_identifier} is **released at build-done**: "
+            f"{blocker} ({states[blocker]}) has no buildable child left — open: "
+            f"{_open_children(blocker)}"
+        )
     return False
 
 
@@ -6125,7 +6498,9 @@ def advance_unblocked_epics(done_epic: str) -> None:
     for dep in sorted(dependents):
         if card_state(dep) != "Backlog":
             continue  # idempotent: only ever advance a still-Backlog epic
-        if epic_blockers_unmet(dep):
+        # The strict rule, asked for by name (DRE-6407): `dep` is still to be
+        # planned, so an In Progress blocker holds it whatever is left to build.
+        if epic_blockers_unmet(dep, release_at_build_done=False):
             continue  # another blocker epic isn't Done yet — hold
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
@@ -6477,7 +6852,9 @@ def takes_no_slot(bodies) -> bool:
     )
 
 
-def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
+def promote_ready(
+    active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
+) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
     Two gates, because there are two ways a card can have been approved
@@ -6491,6 +6868,13 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
     whole-Backlog read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
+
+    `close_epics` — the full sweep's — closes this repo's finished epics among
+    the candidates first, off the same list (DRE-6410): Backlog is one of
+    `EPIC_CLOSE_LANES`, and this is the pass's one read of it, made after
+    `carry_epics_out_of_todo` (DRE-5347). Their children come off the pass's
+    epic record, one paged request for them all, and an epic it closes is no
+    longer a candidate.
 
     THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
     dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
@@ -6541,6 +6925,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
     )
+    if close_epics:
+        closed = set(
+            close_finished_epics(closable_epics(candidates, BACKLOG_LANE)) or ()
+        )
+        candidates = [c for c in candidates if c["identifier"] not in closed]
     # ONE read for every epic this gate will ask about (DRE-3642), before the
     # loop rather than inside it: `epic_gate` above already made it one read
     # per EPIC per sweep, and on a board with nine active epics that was still
@@ -6611,13 +7000,21 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 "promoted by humans, never by the sweep; skipping"
             )
             continue
-        if HOLD_LABEL in labels:
+        # The hold's REASON decides, not the bare label (DRE-6182, DRE-6427):
+        # the registry's answer, asked the way `live_promotion_refusal` asks
+        # it. A card held as an operator step is one the sweep does not stand
+        # down for — it goes on through the gates below, and is lifted just
+        # before the move. Asked of `hold` directly and never through the
+        # module-level `held()`: this function binds a local `held` (the
+        # blockers message below), so that name here is UnboundLocalError.
+        if hold.respects(labels, bodies, "sweep"):
             # A deliberately held card is exactly what "why is this not moving"
             # is asking about, so it says so (DRE-1403 held it, DRE-2918 made
             # the hold legible).
             print(
                 f"promotion: {card['identifier']} is held for a human "
-                f"('{HOLD_LABEL}' label) — never auto-promoted; skipping"
+                f"('{HOLD_LABEL}' label, reason={hold.reason_of(labels, bodies)}) "
+                "— never auto-promoted; skipping"
             )
             continue
         parent = card.get("parent")
@@ -6906,6 +7303,19 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # OPERATOR. The lane is never spelled here — a person's card landing in
         # Todo is what made Todo read as a stuck build queue (DRE-5240).
         destination = routing_verdict.destination(verdict)
+        # A card still wearing the hold here is held as an operator step —
+        # every other reason stood the sweep down above (DRE-6427). It is
+        # lifted only on its way to where an operator step lands (Hand-work,
+        # read off the vocabulary): routed anywhere else (a FLEET verdict on a
+        # held card), the hold and the verdict disagree about whose turn it
+        # is, and a person reads that, not the sweep.
+        lift_hold = HOLD_LABEL in labels
+        if lift_hold and destination != routing_verdict.destination("OPERATOR"):
+            print(
+                f"promotion: {card['identifier']} is held as an operator step "
+                f"but routed {verdict} → {destination}; a person reads it — skipping"
+            )
+            continue
         try:
             # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
             # hand-built card alone BECAUSE of the label, so a card that lands
@@ -6917,6 +7327,14 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 for label in routing_verdict.card_marks(verdict, card.get("title")):
                     if label.lower() not in labels:
                         linear_ops.add_label(card["identifier"], label)
+            # Then the lift, before the move (DRE-6427): the label off and the
+            # lift line on. Decided by the blockers gate above, so `lift_due`
+            # — which answers None for this reason by design — is not asked.
+            # A run that dies after this leaves an unheld OPERATOR card in
+            # Backlog, which the next sweep carries like any other.
+            if lift_hold:
+                hold.lift(card["identifier"], hold.BLOCKERS_TERMINAL, "reconcile.py",
+                          reason=hold.OPERATOR_STEP_REASON)
             linear_ops.cmd_advance(card["identifier"], destination, "Backlog")
             # The receipt names what actually approved this card, and — for the
             # two verdicts nothing is dispatched for — whose turn it now is.
@@ -6927,6 +7345,11 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                 if parent
                 else "no parent epic, a FLEET verdict, and all blockers Done."
             )
+            if lift_hold:
+                reason += (
+                    f" Its `{HOLD_LABEL}` hold (reason={hold.OPERATOR_STEP_REASON}) "
+                    "was lifted: every blocker is terminal."
+                )
             linear_ops.cmd_comment(
                 card["identifier"],
                 f"🧹 Auto-promoted Backlog → {destination}: {reason}",
@@ -6968,9 +7391,14 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
-    """An In Progress epic whose children are all terminal closes itself.
-    Returns the epics it closed: on the merge path a close is the moment a
-    slot in the epic cap opens, and the next waiting epic starts (DRE-5152).
+    """An epic whose children are all terminal closes itself — from Todo,
+    In Progress, In Review or Backlog, the lanes `EPIC_CLOSE_LANES` declares,
+    and from no other (DRE-6410). The callers choose the epics by lane: the
+    full sweep hands over the work lanes' epics off its board read and
+    Backlog's off the promotion phase's read, the merge path its parent when
+    it sits in one of them. Returns the epics it closed: on the merge path a
+    close is the moment a slot in the epic cap opens, and the next waiting
+    epic starts (DRE-5152).
 
     Per-epic isolation (DRE-3148): this was the one Linear call in the sweep
     with no guard, so a single `TimeoutError` from Linear killed the whole
@@ -7005,7 +7433,12 @@ def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
 
 def _close_epic_if_finished(epic: str) -> bool:
     """Close `epic` if every child is closed and one is Done; True when it
-    closed."""
+    closed. Every child Canceled and none Done is not a completion, in any
+    lane.
+
+    The test is the same whichever lane the epic sits in, and the lanes it is
+    asked about are `EPIC_CLOSE_LANES` — Todo, In Progress, In Review and
+    Backlog — chosen by the callers of `close_finished_epics` (DRE-6410)."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -11687,6 +12120,12 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     unapproved one with no single decision being wrong. Riding the sweep that
     already runs is what makes it visible without anyone remembering to look.
 
+    Far past the approval the CEO is asked (DRE-6414): an epic past the
+    threshold in `config/epic-growth.json` with no growth question open gets
+    one (`ask_epic_growth_question`), and an open one is settled on his
+    answer (`settle_epic_growth_question`) — after the refresh, never on an
+    idle pass, and never off a refresh that reported `contended`.
+
     A read that fails prints and moves on: a KPI is never worth failing a sweep
     for, and one epic's unreadable history must not cost the others theirs.
 
@@ -11727,6 +12166,22 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
             # so and carries on — before DRE-3343 this raised, and one full epic
             # took the whole phase down with it.
             print(f"epic-growth: {epic} took no comment — {report['capped']}")
+        # The growth question (DRE-6414): an open one is settled on his answer,
+        # and an epic past the threshold with none open is asked. Never on an
+        # idle pass, and never off a contended refresh — its numbers came from
+        # a read already known to be stale.
+        if not _idle_pass and not report.get("contended"):
+            try:
+                open_question = next(
+                    (q for q in report.get("questions") or []
+                     if q.get("status") == mid_epic.QUESTION_OPEN), None)
+                if open_question is not None:
+                    settle_epic_growth_question(epic, open_question, report.get("approved"))
+                elif epic_growth.crossed(report.get("approved"), report.get("current")):
+                    ask_epic_growth_question(epic, report)
+            except Exception as exc:  # noqa: BLE001 — one epic's question never ends the phase
+                _write_failures.append(f"epic-growth question on {epic}: {exc}")
+                print(f"ERROR: epic-growth: {epic} question — {exc}", file=sys.stderr)
         total = report.get("comments")
         if total is None:
             continue
@@ -11756,6 +12211,15 @@ def repo_epics(active: list[dict]) -> set[str]:
     """
     mine = [c for c in active if card_repo(c) == REPO_SLUG]
     return {c["identifier"] for c in mine if card_is_epic(c)}
+
+
+def closable_epics(cards: list[dict], lane: str) -> set[str]:
+    """This repo's epics among `cards`, all read from `lane`, when that lane is
+    one an epic closes from (`EPIC_CLOSE_LANES`, DRE-6410) — otherwise none.
+
+    The lane is the read's, not the card's: `backlog_children`' Linear query
+    selects no lane, because every row it returns is in Backlog."""
+    return repo_epics(cards) if lane in EPIC_CLOSE_LANES else set()
 
 
 def rereview_watch_scope(epics) -> tuple[set[str], Callable[[str], str | None]]:
@@ -12690,12 +13154,14 @@ def main(
             # (DRE-3236): that is the only epic this merge can have finished,
             # and the gate that chose this pass already read that it has. The
             # parent is closed wherever it is labelled — the same close its own
-            # repo's cron would make — and only from a lane the cron sweeps.
+            # repo's cron would make — and only from a lane the cron closes
+            # from: `EPIC_CLOSE_LANES`, the one constant both sites read
+            # (DRE-6410). Backlog among them, and Planning not.
             scope = merged_card_scope()
             if scope is not None:
                 epics = (
                     {scope.parent}
-                    if scope.parent and scope.parent_state in SWEPT_LANES
+                    if scope.parent and scope.parent_state in EPIC_CLOSE_LANES
                     else set()
                 )
                 closed = set(close_finished_epics(epics) or ())
@@ -13018,8 +13484,15 @@ def main(
                 active_count=wip_count(mine),
                 candidates=backlog_children(only=scope.dependents),
             )
-        else:
+        elif promote_only:
             promote_ready(active_count=wip_count(mine))
+        else:
+            # A finished epic in Backlog closes off the Backlog read promotion
+            # makes anyway (DRE-6410) — the full sweep's alone, so the gate
+            # path stays the gate. The active epics closed above, before
+            # `start_queued_epics`; a Backlog close opens its slot in the cap
+            # for the next pass to fill.
+            promote_ready(active_count=wip_count(mine), close_epics=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()
@@ -13268,7 +13741,32 @@ def main(
                 # what it holds on (DRE-5228); the sweep reports only what it
                 # can read off the thread and that no merge followed.
                 head = pr.get("headRefOid") or ""
+                if pr.get("isDraft"):
+                    # DRE-6423: the critic skips a draft by design (DRE-5801)
+                    # and the gate never merges one, so neither budget is
+                    # spent here and a draft at the cap is not handed to a
+                    # person. Said once per head; review_nudges_spent counts
+                    # only the receipts after it, so ready restarts the count.
+                    if review_nudge_draft_standing(card, head):
+                        print(f"review-nudge: {ident} PR #{pr['number']} is a "
+                              "draft — already said, nothing spent")
+                    else:
+                        linear_ops.cmd_comment(
+                            ident,
+                            f"🧹 Reconcile: {REVIEW_NUDGE_DRAFT_KEY} @{head} — "
+                            f"PR #{pr['number']} is a draft, and "
+                            "the critic skips a draft by design, so no review "
+                            "or merge-gate re-trigger is spent on it. Nothing "
+                            "is counted here until it is marked ready; this "
+                            f"head's budget then starts again at 0/{REVIEW_NUDGE_CAP}.",
+                        )
+                    continue
                 tag, critic, verifier = review_standing(pr)
+                if proof_record_sent_back(card, pr, critic):
+                    # DRE-6406: the proof run's re-run branch amends it; a
+                    # gate re-trigger cannot, and the park would put a
+                    # question in front of the CEO that is not his.
+                    continue
                 bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)
                 if spent >= REVIEW_NUDGE_CAP:

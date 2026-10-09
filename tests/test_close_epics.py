@@ -304,3 +304,243 @@ def test_roll_up_in_backlog_is_never_promoted(monkeypatch, capsys):
         f"promotion: {ROLL_UP} is an epic — epics are promoted by humans, "
         "never by the sweep; skipping"
     ) in out
+
+
+# ---------------------------------------------------------------------------
+# DRE-6410: an epic whose children are all closed closes from Backlog too.
+# DRE-4819 sat in Backlog with all six children Done and nothing closed it: the
+# full sweep only handed the closer the epics in Todo, In Progress and In
+# Review, and the merge path refused its parent's lane. The lanes an epic
+# closes from are declared once, `EPIC_CLOSE_LANES`, and read at both sites.
+# ---------------------------------------------------------------------------
+import ast  # noqa: E402
+import inspect  # noqa: E402
+
+import pytest  # noqa: E402
+
+import merge_sweep_gate  # noqa: E402
+import test_sweep_request_budget as budget  # noqa: E402
+import validate_card  # noqa: E402
+
+FINISHED = ("Done", "Canceled", "Done")
+EPIC = "DRE-4819"
+
+
+@pytest.fixture
+def board_pins(monkeypatch):
+    """The pins `test_sweep_request_budget` applies to every one of its
+    sweeps, here only for the tests that run one."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    monkeypatch.setattr(
+        validate_card, "VALID_SLUGS", {"agent-bureau", "atlas", "bureau-pipeline"})
+    monkeypatch.setattr(
+        reconcile, "live_rail_slugs",
+        lambda: frozenset({"agent-bureau", "atlas", "bureau-pipeline"}), raising=False)
+    monkeypatch.delenv("MERGED_CARD", raising=False)
+    for ledger in (reconcile._write_failures, reconcile._read_failures,
+                   reconcile._stale_defects):
+        ledger.clear()
+    yield
+    for ledger in (reconcile._write_failures, reconcile._read_failures,
+                   reconcile._stale_defects):
+        ledger.clear()
+
+
+def _board(lane: str | None, kids=FINISHED) -> budget.EpicBoard:
+    """The budget's fixed board, plus EPIC in `lane` (None: no epic at all)."""
+    active, backlog = budget._fixed_board()
+    if lane is None:
+        return budget.EpicBoard(active=active, backlog=backlog)
+    epic = budget._epic(EPIC, state=lane)
+    if lane == reconcile.BACKLOG_LANE:
+        backlog = backlog + [epic]
+    else:
+        active = active + [epic]
+    return budget.EpicBoard(active=active, backlog=backlog, kids={EPIC: kids})
+
+
+def _sweep(fake):
+    """One full sweep over `fake`; what it moved, said, and advanced."""
+    advance = MagicMock()
+    try:
+        budget._run_closing_sweep(fake, advance=advance)
+    except SystemExit:  # a red sweep still ran every phase
+        pass
+    return fake.state, fake.comment, advance
+
+
+def _closed(state) -> bool:
+    return (EPIC, "Done") in [c.args for c in state.call_args_list]
+
+
+def test_a_finished_epic_in_backlog_is_closed_by_one_full_sweep(board_pins):
+    """The epic is in Backlog and in no swept lane — the shape that stayed
+    open — and one full sweep closes it with the same receipt and advances
+    the chain behind it."""
+    fake = _board(reconcile.BACKLOG_LANE)
+    assert all(c["identifier"] != EPIC for c in fake.active)
+    state, comment, advance = _sweep(fake)
+    assert _closed(state), state.call_args_list
+    bodies = [c.args[1] for c in comment.call_args_list if c.args[0] == EPIC]
+    assert any(
+        b.startswith("🏁 Epic complete: all 3 children are closed (2 done).")
+        for b in bodies
+    ), bodies
+    advance.assert_any_call(EPIC)
+
+
+def test_a_backlog_epic_with_an_open_child_stays_open(board_pins):
+    state, comment, advance = _sweep(_board(reconcile.BACKLOG_LANE,
+                                            kids=("Done", "In Progress")))
+    assert not _closed(state)
+    advance.assert_not_called()
+
+
+def test_a_backlog_epic_whose_children_are_all_canceled_stays_open(board_pins):
+    """Every child Canceled and none Done is not a completion — in Backlog as
+    in every other lane."""
+    state, _, advance = _sweep(_board(reconcile.BACKLOG_LANE,
+                                      kids=("Canceled", "Canceled")))
+    assert not _closed(state)
+    advance.assert_not_called()
+
+
+@pytest.mark.parametrize("lane", ["Todo", "In Progress", "In Review"])
+def test_a_finished_epic_in_a_sweep_lane_still_closes(board_pins, lane):
+    """Guard the guard: the same fixture, in the lanes the sweep has always
+    closed from, closes — so the refusals below are the lane's and not a
+    harness that never sees a write."""
+    state, _, advance = _sweep(_board(lane))
+    assert _closed(state), state.call_args_list
+    advance.assert_any_call(EPIC)
+
+
+@pytest.mark.parametrize(
+    "lane", ["Intake", "Planning", "Green Light", "Triage", "Hand-work"])
+def test_a_finished_epic_outside_the_close_lanes_is_left_alone(board_pins, lane):
+    """Intake, Planning and Green Light hold an epic whose plan is in motion;
+    Triage and Green Light are not read by the sweep at all, and Hand-work is
+    a person's. None is closed — and closing from Backlog buys no read of
+    Green Light or Triage."""
+    state, _, advance = _sweep(_board(lane))
+    assert not _closed(state)
+    advance.assert_not_called()
+
+    without = _board(None)
+    _sweep(without)
+    with_epic = _board(lane)
+    _sweep(with_epic)
+    lanes_read = lambda f: [tuple(v["states"]) for v in f.board_variables]  # noqa: E731
+    assert lanes_read(with_epic) == lanes_read(without)
+    assert not any("Triage" in lanes for lanes in lanes_read(with_epic))
+    assert sum("Green Light" in lanes for lanes in lanes_read(with_epic)) == 1, (
+        "the planner line's Green Light read is the only one")
+
+
+class MergeBoard(budget.EpicBoard):
+    """An `EpicBoard` that also answers the merge gate's read of the merged
+    card (`merge_sweep_gate.QUERY`) — its parent, in `parent_state`."""
+
+    def __init__(self, merged, parent_state, kids=FINISHED):
+        super().__init__(kids={EPIC: kids})
+        self.merged, self.parent_state, self.parent_kids = merged, parent_state, kids
+
+    def gql(self, query, variables=None):
+        if query != merge_sweep_gate.QUERY:
+            return super().gql(query, variables)
+        self.queries.append(query)
+        return {"issue": {
+            "identifier": self.merged, "state": {"name": "Done"},
+            "relations": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+            "parent": {
+                "identifier": EPIC, "state": {"name": self.parent_state},
+                "children": {"pageInfo": {"hasNextPage": False}, "nodes": [
+                    {"identifier": f"{EPIC}-kid-{n}", "state": {"name": s}}
+                    for n, s in enumerate(self.parent_kids)
+                ]},
+            },
+        }}
+
+
+def _merge_close(monkeypatch, parent_state):
+    """`main(close_only=True)` the way linear-sync runs it after a merge."""
+    monkeypatch.setenv("MERGED_CARD", "DRE-4826")
+    fake = MergeBoard("DRE-4826", parent_state)
+    advance = MagicMock()
+    with budget._linear(fake), \
+            patch.object(reconcile, "start_queued_epics"), \
+            patch.object(reconcile, "advance_unblocked_epics", advance), \
+            patch.object(reconcile.linear_ops, "cmd_state") as state, \
+            patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile.main(close_only=True)
+    return state, advance
+
+
+def test_the_merge_path_closes_a_finished_parent_in_backlog(board_pins, monkeypatch):
+    """DRE-4819's last child closed on a merge: this is the site that would
+    have closed it."""
+    state, advance = _merge_close(monkeypatch, reconcile.BACKLOG_LANE)
+    assert _closed(state), state.call_args_list
+    advance.assert_called_once_with(EPIC)
+
+
+def test_the_merge_path_closes_nothing_whose_parent_is_in_planning(board_pins, monkeypatch):
+    """Planning is a lane the cron never closes from, so a merge does not
+    either — the two sites read one constant."""
+    state, advance = _merge_close(monkeypatch, "Planning")
+    assert not _closed(state)
+    advance.assert_not_called()
+
+
+def test_epic_close_lanes_are_the_sweep_lanes_and_backlog():
+    assert reconcile.EPIC_CLOSE_LANES == reconcile.SWEEP_STATES + (reconcile.BACKLOG_LANE,)
+    assert set(reconcile.EPIC_CLOSE_LANES) == {"Todo", "In Progress", "In Review", "Backlog"}
+
+
+def test_both_sites_read_epic_close_lanes(board_pins, monkeypatch):
+    """Take Backlog out of the one constant and NEITHER site closes from it —
+    so both read it, and neither keeps a lane list of its own."""
+    monkeypatch.setattr(reconcile, "EPIC_CLOSE_LANES", reconcile.SWEEP_STATES)
+    state, _, _ = _sweep(_board(reconcile.BACKLOG_LANE))
+    assert not _closed(state), "the full sweep closed from a lane the constant left out"
+    state, _ = _merge_close(monkeypatch, reconcile.BACKLOG_LANE)
+    assert not _closed(state), "the merge path closed from a lane the constant left out"
+
+
+def test_the_merge_path_no_longer_reads_swept_lanes_for_the_close():
+    """The text of the `--close-only` branch: it names EPIC_CLOSE_LANES, and
+    SWEPT_LANES — the union the cron READS, Intake, Planning and Hand-work
+    among it — is not what it closes from."""
+    tree = ast.parse(inspect.getsource(reconcile.main.__wrapped__))
+    branch = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+        and node.test.id == "close_only"
+    )
+    names = {n.id for n in ast.walk(branch) if isinstance(n, ast.Name)}
+    assert "EPIC_CLOSE_LANES" in names
+    assert "SWEPT_LANES" not in names
+
+
+def test_the_docstrings_name_the_lanes_an_epic_closes_from():
+    for fn in (reconcile.close_finished_epics, reconcile._close_epic_if_finished):
+        doc = fn.__doc__ or ""
+        assert "EPIC_CLOSE_LANES" in doc, fn.__name__
+        for lane in ("Todo", "In Progress", "In Review", "Backlog"):
+            assert lane in doc, (fn.__name__, lane)
+
+
+def test_the_lane_contract_says_a_finished_epic_leaves_backlog():
+    """The contract is what the board's lanes are read from, so the Backlog
+    exit names the close; `docs/lane-contract.md` is rendered from it and
+    `tests/test_planning_classify.py` holds the render."""
+    import json
+
+    contract = json.loads(
+        (Path(__file__).resolve().parent.parent / "config" / "lane-contract.json")
+        .read_text(encoding="utf-8"))
+    backlog = next(l for l in contract["lanes"] if l["name"] == "Backlog")
+    assert (
+        "An epic here whose children are all closed, with at least one Done, "
+        "is closed by the sweep"
+    ) in backlog["clauses"]["exit"]["text"]

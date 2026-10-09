@@ -263,16 +263,19 @@ def test_the_close_skips_an_epic_absent_from_the_record_out_loud(capsys):
 def test_the_gate_reads_relations_off_the_record():
     """The epic-level gate's own read (DRE-1772), off the same record: an epic
     held by a formal `blockedBy` relation is still held, for no read of its
-    own."""
+    own. The In Progress blocker costs its one single-issue read (DRE-6407),
+    and it holds because that read shows a build card still open in Backlog
+    — said here, never left to an unstubbed read failing."""
     fake = FakeLinear([
-        _record("DRE-700"),
+        _record("DRE-700", children=("Backlog",)),
         _record("DRE-701", blocked_by=(("DRE-700", "In Progress"),)),
     ])
     with patch.object(linear_ops, "gql", side_effect=fake.gql):
         reconcile.epic_records(["DRE-700", "DRE-701"])
         assert reconcile.epic_blockers_unmet("DRE-701") is True
         assert reconcile.epic_blockers_unmet("DRE-700") is False
-    assert fake.requests == 1, [q for q, _ in fake.queries]
+    assert fake.batched == 1, [q for q, _ in fake.queries]
+    assert fake.per_epic == 1, [q for q, _ in fake.queries]
 
 
 def test_the_close_and_the_gate_share_one_read():

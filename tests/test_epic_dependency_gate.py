@@ -76,9 +76,30 @@ def _child(identifier="DRE-900", parent="DRE-800", parent_state="In Progress"):
 # ---------------------------------------------------------------------------
 # Behavior 1: epic-level gate — epic_blockers_unmet(epic_identifier)
 # ---------------------------------------------------------------------------
+def _in_progress_blocker_with_a_card_left(identifier="DRE-700"):
+    """Epic A's single-issue read (DRE-6407): In Progress with a build card
+    still open in Backlog — not built out, so it holds under either rule. Said
+    explicitly, so a hold never passes on an unstubbed read that failed."""
+    return {"issue": {
+        "identifier": identifier,
+        "title": f"[EPIC] {identifier}",
+        "state": {"name": "In Progress"},
+        "children": {
+            "nodes": [{
+                "identifier": "DRE-701", "title": "a build card",
+                "state": {"name": "Backlog"},
+                "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                "children": {"nodes": []},
+            }],
+            "pageInfo": {"hasNextPage": False},
+        },
+    }}
+
+
 def test_epic_with_unmet_blocker_epic_reports_unmet():
-    """Epic B blocked-by epic A (A is In Progress, not Done) → B's blockers
-    are unmet. (Relation read via the epic's inverseRelations, like cards.)"""
+    """Epic B blocked-by epic A (A is In Progress, a build card still open) →
+    B's blockers are unmet. (Relation read via the epic's inverseRelations,
+    like cards.)"""
     epic_b = {
         "identifier": "DRE-800",
         "description": "**Repo:** agent-bureau\nepic B",
@@ -86,7 +107,9 @@ def test_epic_with_unmet_blocker_epic_reports_unmet():
             "nodes": [{"type": "blocks", "issue": {"identifier": "DRE-700", "state": {"name": "In Progress"}}}]
         },
     }
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic_b):
+    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic_b), \
+        patch.object(reconcile.linear_ops, "gql",
+                     return_value=_in_progress_blocker_with_a_card_left()):
         assert reconcile.epic_blockers_unmet("DRE-800") is True
 
 

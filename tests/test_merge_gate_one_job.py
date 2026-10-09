@@ -301,7 +301,9 @@ class LegFilterTest(unittest.TestCase):
         self.assertFalse(evaluate_runs(event))
 
     def test_ci_on_a_hand_named_branch_does_not_wake_the_gate(self):
-        for branch in ("fix/typo", "feature/x", "bot/anything-else", "main"):
+        # The split-ledger job's branch lost its entry with the job (DRE-6056).
+        for branch in ("fix/typo", "feature/x", "bot/anything-else", "main",
+                       "bot/" + "split-ledger"):
             with self.subTest(branch=branch):
                 event = workflow_run_event(branch, pr=PR)
                 self.assertFalse(resolve_runs(event))
@@ -310,7 +312,7 @@ class LegFilterTest(unittest.TestCase):
     def test_ci_on_every_gated_branch_shape_wakes_the_gate(self):
         for branch in (
             "agent/DRE-1-x", "repair/red-main-1", "dependabot/pip/x-1.2",
-            "bot/standards-sync", "bot/split-ledger",
+            "bot/standards-sync",
         ):
             with self.subTest(branch=branch):
                 self.assertTrue(evaluate_runs(workflow_run_event(branch, pr=PR)))

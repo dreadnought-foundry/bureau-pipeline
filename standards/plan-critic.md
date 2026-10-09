@@ -113,8 +113,9 @@ hidden for security"), so a list that exists only inside the turn cannot be
 checked against the verdict that followed.
 
 **The same list checks each footprint against the deaths already on the board**
-(DRE-3079). `config/split-ledger.json` records every card that did not fit one
-run — what it declared, what its split pieces actually touched, how many
+(DRE-3079). The split ledger — derived from the console's record at the start
+of each plan run (DRE-6055), no longer a committed file (DRE-6056) — records
+every card that did not fit one run — what it declared, what its split pieces actually touched, how many
 turn-cap deaths it cost, which of DRE-2893's tells applied. A child sharing
 **two or more** files with a row that DIED is a finding naming that row; a
 child carrying a tell the ledger has watched kill cards is another, quoting the
@@ -122,7 +123,8 @@ ledger's own rate and the phrase that fired the tell. One shared file is the
 ordinary state of this repo, so it is not a match — a check that fires on every
 card is the five false findings above wearing a new name.
 
-A ledger that **could not be read is its own finding**, never an empty list:
+A ledger that **could not be read is its own finding**, never an empty list —
+and a run whose derive failed has no ledger at all, so it gets that finding:
 "checked against nine death rows and matched none" and "never opened the
 ledger" are different facts, and only the first clears a plan
 (`standards/console-honesty.md` rule 1). The posted note carries the row count
@@ -288,7 +290,14 @@ it goes to the planner, not to the CEO.
   does not finish parks the card in `Triage` with the findings.
 * **`QUESTION`** is a decision only the CEO owns — a price, a policy, what to
   make public, a choice between two defensible options. The decision is
-  `escalate`, and the card parks in `Green Light` with the question.
+  `escalate`, and the card parks in `Green Light` with the question. The
+  finding is classified first (`scripts/send_back_class.py`, read off the
+  `FINDING:` line, else the question). A `QUESTION` whose finding names
+  something the card must say goes back to the planner's rewrite, like a
+  `SEND_BACK`, and nothing is written to `Green Light` (DRE-6359). A
+  `QUESTION` whose finding is a decision, or that the classifier cannot place,
+  goes to the CEO. The round is recorded as the `SEND_BACK` it was decided as,
+  with the finding as its reason, and the note beside it quotes the question.
 
 The rule the critic is given: if the repository and the card could settle it,
 it is a `SEND_BACK`. A card holding both is a `QUESTION` first. `QUESTION` is
@@ -333,7 +342,8 @@ revision loop did not converge — and **the card parks in `Triage`**, the
 operator's defect queue, with every finding raised so far named in one place so
 one rewrite can answer all of them. Never in `Green Light`: a loop that does not
 converge is a defect, not a decision, the same rule the lane contract states
-for a plan at either critic's bound. A `QUESTION` spends nothing — it is a
+for a plan at either critic's bound. A `QUESTION` read as a revision spends a
+round like a `SEND_BACK`, and one left with the CEO spends nothing — it is a
 decision, not a failed revision. A crash still escalates and still spends
 nothing — a round the critic never decided is not a failed round — and a PASS
 still moves the card whatever the count is, because a rewritten card that now

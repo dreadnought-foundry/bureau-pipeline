@@ -144,3 +144,64 @@ def test_promote_only_write_failures_exit_nonzero():
                 reconcile.main(promote_only=True)
     finally:
         reconcile._write_failures.clear()
+
+
+def _backlog_card(identifier, *, epic):
+    return {
+        "identifier": identifier,
+        "title": f"[EPIC] {identifier}" if epic else "work",
+        "description": "**Repo:** agent-bureau\nwork",
+        "children": {"nodes": [{"id": "kid-1"}] if epic else []},
+        "labels": {"nodes": []},
+        "parent": None,
+    }
+
+
+def test_full_sweep_asks_promotion_to_close_backlog_epics(monkeypatch):
+    """DRE-6410: the full sweep's promotion closes this repo's finished
+    Backlog epics; the event-driven gate's does not."""
+    mocks = _phase_mocks()
+    with patch.multiple(reconcile, **mocks):
+        reconcile.main()
+    assert mocks["promote_ready"].call_args.kwargs.get("close_epics") is True
+
+
+def test_promote_only_closes_no_backlog_epic():
+    """The event-driven gate is promotion alone: it closes nothing, Backlog
+    epics included — the full sweep and `--close-only` are the closers."""
+    mocks = _phase_mocks()
+    with patch.multiple(reconcile, **mocks):
+        reconcile.main(promote_only=True)
+    assert not mocks["promote_ready"].call_args.kwargs.get("close_epics")
+    mocks["close_finished_epics"].assert_not_called()
+
+
+def test_promotion_closes_backlog_epics_off_its_one_backlog_read(monkeypatch, capsys):
+    """Backlog is read ONCE: the finished epics are closed off that list and
+    the same list, less what closed, is what the gate walks."""
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    epic, one_off = _backlog_card("DRE-5", epic=True), _backlog_card("DRE-6", epic=False)
+    theirs = dict(_backlog_card("DRE-7", epic=True), description="**Repo:** atlas\nwork")
+    read = MagicMock(return_value=[epic, one_off, theirs])
+    close = MagicMock(side_effect=lambda epics: set(epics) & {"DRE-5"})
+    with patch.object(reconcile, "backlog_children", read), \
+            patch.object(reconcile, "close_finished_epics", close), \
+            patch.object(reconcile.linear_ops, "gql", return_value={}), \
+            patch.object(reconcile.linear_ops, "cmd_advance"), \
+            patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile.promote_ready(0, close_epics=True)
+    read.assert_called_once_with()
+    close.assert_called_once_with({"DRE-5"})
+    out = capsys.readouterr().out
+    assert "DRE-5 is an epic" not in out, "a closed epic is no longer a candidate"
+
+
+def test_promotion_without_the_flag_closes_nothing(monkeypatch):
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
+    read = MagicMock(return_value=[_backlog_card("DRE-5", epic=True)])
+    close = MagicMock(return_value=set())
+    with patch.object(reconcile, "backlog_children", read), \
+            patch.object(reconcile, "close_finished_epics", close), \
+            patch.object(reconcile.linear_ops, "gql", return_value={}):
+        reconcile.promote_ready(0)
+    close.assert_not_called()

@@ -1,0 +1,7 @@
+{
+  "ratio": 2,
+  "minimum_added": 10,
+  "decided": "2026-10-09",
+  "decided_by": "DRE-6414's own example, not a CEO decision — changing either number is an ordinary edit to this file",
+  "why": "An epic has crossed when it is running more than `ratio` times the size the CEO approved AND at least `minimum_added` more cards than that: more than double, and at least ten more. DRE-4721 was approved at 10 and ran 50; DRE-5577 at 17 and ran 41. Both cross; an epic approved at 10 running 20, or at 4 running 9, does not. scripts/epic_growth.py is the one reader."
+}

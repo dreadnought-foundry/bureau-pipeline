@@ -106,7 +106,7 @@ def reference(**overrides) -> dict:
                 "values": ["one-card", "split"],
                 "why": "the split ledger's own population — a turn-cap death, "
                        "a split or a hand-back",
-                "ledger": "config/split-ledger.json",
+                "ledger": "the split ledger, derived at plan time",
                 "ledger_injected_at": None,
                 "ledger_injected_why": "DRE-3078 injects it; until then every "
                                        "month is before",
@@ -580,7 +580,7 @@ def ledger(*cards):
 
 
 #: The ledger every test passes when the split ledger is not what it is
-#: testing (DRE-5314). `config/split-ledger.json` is regenerated every night,
+#: testing (DRE-5314). The live ledger changes with every derive,
 #: and a row naming a fixture card would score it `split` — so a test that
 #: read the live file asserted whatever last night's run wrote.
 #: `TheLiveLedgerCannotChangeTheseScores` holds every test here to it.
@@ -730,15 +730,22 @@ class SplitRateTest(unittest.TestCase):
 
     def test_the_reference_names_the_ledger_and_when_it_was_injected(self):
         block = planner_score.dimensions()["split-rate"]
-        self.assertEqual(block["ledger"], "config/split-ledger.json")
-        self.assertTrue((ROOT / block["ledger"]).exists())
+        self.assertTrue(block["ledger"].strip())
         self.assertIn("ledger_injected_at", block)
 
     def test_a_reference_that_names_no_ledger_is_refused(self):
         loose = reference()
-        loose["dimensions"]["split-rate"]["ledger"] = "config/nope.json"
+        loose["dimensions"]["split-rate"]["ledger"] = ""
         problems = planner_score.reference_problems(loose)
-        self.assertTrue(any("nope.json" in p for p in problems), problems)
+        self.assertTrue(any("names no ledger" in p for p in problems), problems)
+
+    def test_the_named_ledger_need_not_be_a_file_in_this_repo(self):
+        """Since DRE-6056 the ledger is derived at plan time, never committed:
+        the shipped reference still names the path it was committed at (a
+        historical record, never edited), and that is not a problem."""
+        loose = reference()
+        loose["dimensions"]["split-rate"]["ledger"] = "config/nope.json"
+        self.assertEqual(planner_score.reference_problems(loose), [])
 
     def test_an_injection_date_that_is_not_a_date_is_refused(self):
         loose = reference()
@@ -852,7 +859,7 @@ def _runs_the_cli(source: str) -> bool:
 
 
 class TheLiveLedgerCannotChangeTheseScores(unittest.TestCase):
-    """DRE-5314. `config/split-ledger.json` is regenerated every night, and a
+    """DRE-5314. The live ledger changes with every derive, and a
     row naming a card makes `split-rate` score that card `split`. So a test
     that scored against the live file asserted whatever last night's run
     wrote. This class writes a row for every card this module's fixtures name
@@ -880,7 +887,9 @@ class TheLiveLedgerCannotChangeTheseScores(unittest.TestCase):
                 self.default_reads.append(path)
             return real_load(path)
 
-        for patch in (mock.patch.object(split_ledger, "LEDGER_PATH", self.path),
+        # The default read is `$SPLIT_LEDGER_PATH` — the one the plan job
+        # exports — since there is no committed ledger (DRE-6056).
+        for patch in (mock.patch.dict(os.environ, {"SPLIT_LEDGER_PATH": self.path}),
                       mock.patch.object(split_ledger, "load", load)):
             patch.start()
             self.addCleanup(patch.stop)
@@ -1182,12 +1191,14 @@ class TheReplayIsRetiredTest(unittest.TestCase):
                     if "replay" in line.lower()]
         self.assertEqual(mentions, [])
 
-    def test_only_the_split_ledger_workflow_runs_the_scorer(self):
+    def test_no_workflow_runs_the_scorer(self):
+        """The daily ledger job only named it in a comment, and that job is
+        retired too (DRE-6056); the scorer is a hand-run tool."""
         workflows = ROOT / ".github" / "workflows"
         callers = sorted(
             path.name for path in workflows.glob("*.yml")
             if "planner_score" in step_shell.workflow_source(path))
-        self.assertEqual(callers, ["split-ledger.yml"])
+        self.assertEqual(callers, [])
 
 
 # --------------------------------------------------------------------------

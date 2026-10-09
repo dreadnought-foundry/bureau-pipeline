@@ -1,10 +1,11 @@
 """The split ledger, derived (DRE-3077).
 
 `scripts/split_ledger.py derive` reads every turn-cap death, split and hand-back
-out of Linear and the run receipts and writes `config/split-ledger.json`, with
-`docs/split-ledger.md` rendered from it. This is piece 1 of 3 of DRE-3022 and
-owes nothing to the other two: nothing here injects the ledger into the planner
-and nothing scores against it.
+into one ledger document. This is piece 1 of 3 of DRE-3022 and owes nothing to
+the other two: nothing here injects the ledger into the planner and nothing
+scores against it. Since DRE-6056 the ledger is no longer committed: the plan
+job derives it from the read door at the start of each run, and
+`tests/test_split_ledger_retired.py` holds the retired job gone.
 
 What these tests pin, and why each one exists:
 
@@ -19,9 +20,7 @@ What these tests pin, and why each one exists:
     token cannot read, a successor search that raised, a death whose receipt
     carries no cost figure, a card with no size or role label. Each asserts the
     literal `UNKNOWN` and asserts the field is NOT `0`/`[]`.
-  * **The committed artifacts.** `config/split-ledger.json` carries at least the
-    ten seed rows the card names, and `docs/split-ledger.md` IS the render of
-    that file — the same discipline `docs/routing-verdicts.md` is held to.
+  * **The seed cards.** The ten cards the card names stay in the population.
 
 DRE-3356 adds three things and these tests pin each of them:
 
@@ -40,8 +39,8 @@ DRE-3356 adds three things and these tests pin each of them:
     rather than `0` when the read failed.
 
 And one test guards the contract DRE-3022's other children read: every field
-`config/split-ledger.json` carried before this card still has its name and its
-type.
+the ledger carried before DRE-3356 still has its name and its type, in the
+ledger `derive` writes from the door today.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_split_ledger.py -v
 """
@@ -65,8 +64,6 @@ import dead_run  # noqa: E402
 import split_ledger  # noqa: E402
 import step_shell  # noqa: E402
 
-LEDGER = ROOT / "config" / "split-ledger.json"
-DOC = ROOT / "docs" / "split-ledger.md"
 CONFIG_README = ROOT / "config" / "README.md"
 
 # The ten cards the card names as seed rows. Written out rather than read from
@@ -521,63 +518,12 @@ def test_the_rates_summarise_deaths_by_tell():
 
 
 # --------------------------------------------------------------------------- #
-# the render                                                                   #
-# --------------------------------------------------------------------------- #
-
-
-def test_the_render_shows_every_row_and_its_unknowns():
-    doc = split_ledger.ledger(
-        [_record(successors=None, successors_unreadable="refused")],
-        generated_at="2026-09-04T00:00:00Z")
-    text = split_ledger.render_markdown(doc)
-    assert "DRE-3022" in text
-    assert "2026-09-04T00:00:00Z" in text
-    assert split_ledger.UNKNOWN in text
-
-
-def test_the_render_prints_the_rate_sentences():
-    doc = split_ledger.ledger([_record()], generated_at="2026-09-04T00:00:00Z")
-    text = split_ledger.render_markdown(doc)
-    for band in doc["rates"]["by_declared_files"]:
-        assert band["sentence"] in text
-
-
-# --------------------------------------------------------------------------- #
-# the committed artifacts                                                      #
+# the seed cards                                                               #
 # --------------------------------------------------------------------------- #
 
 
 def test_the_seed_cards_are_the_ten_the_card_names():
     assert set(SEEDS) <= set(split_ledger.SEED_CARDS)
-
-
-def test_the_committed_ledger_carries_at_least_the_ten_seed_rows():
-    doc = json.loads(LEDGER.read_text(encoding="utf-8"))
-    rows = {row["card"]: row for row in doc["rows"]}
-    missing = [card for card in SEEDS if card not in rows]
-    assert not missing, f"config/split-ledger.json is missing {missing}"
-    assert doc["generated_at"]
-
-
-def test_every_committed_row_carries_every_field():
-    doc = json.loads(LEDGER.read_text(encoding="utf-8"))
-    for row in doc["rows"]:
-        for field in ("card", "size", "role", "declared_files", "piece_files",
-                      "pieces", "deaths", "dollars", "tells", "reasons"):
-            assert field in row, f"{row.get('card')} has no {field}"
-
-
-def test_the_committed_document_is_the_render_of_the_committed_ledger():
-    doc = json.loads(LEDGER.read_text(encoding="utf-8"))
-    assert DOC.read_text(encoding="utf-8") == split_ledger.render_markdown(doc), (
-        "docs/split-ledger.md is stale — regenerate it with "
-        "`python3 scripts/split_ledger.py derive`"
-    )
-
-
-def test_the_document_says_how_it_is_generated():
-    head = DOC.read_text(encoding="utf-8").splitlines()[:10]
-    assert any("split_ledger.py derive" in line for line in head)
 
 
 # --------------------------------------------------------------------------- #
@@ -734,40 +680,12 @@ def test_a_children_count_the_door_could_not_read_is_unknown_never_zero():
 
 
 # --------------------------------------------------------------------------- #
-# DRE-3356 — the render                                                        #
+# DRE-3356 — the contract                                                      #
 # --------------------------------------------------------------------------- #
 
-
-def test_the_render_shows_the_by_month_table():
-    doc = split_ledger.ledger(
-        [_record(created_at="2026-07-14T00:00:00Z")],
-        generated_at="2026-09-10T00:00:00Z", window_days=90,
-        children_by_month={"2026-07": 228})
-    text = split_ledger.render_markdown(doc)
-    assert "## By month" in text
-    assert "| 2026-07 | 228 |" in text
-
-
-def test_the_render_prints_the_creation_date_of_every_row():
-    doc = split_ledger.ledger(
-        [_record(created_at="2026-07-14T09:00:00Z")],
-        generated_at="2026-09-10T00:00:00Z")
-    text = split_ledger.render_markdown(doc)
-    assert "2026-07-14T09:00:00Z" in text
-
-
-def test_the_render_says_the_window_it_was_derived_over():
-    doc = split_ledger.ledger([_record()], generated_at="2026-09-10T00:00:00Z",
-                              window_days=45)
-    assert "45" in split_ledger.render_markdown(doc)
-
-
-# --------------------------------------------------------------------------- #
-# DRE-3356 — the committed artifacts and the contract                          #
-# --------------------------------------------------------------------------- #
-
-#: Every field `config/split-ledger.json` carried on `main` before this card,
-#: with the type it carried. Written out rather than derived: this is the
+#: Every field the committed ledger carried on `main` before DRE-3356, with
+#: the type it carried. Since DRE-6056 nothing is committed, so the contract is
+#: held against the ledger `derive` writes from the door (below). Written out rather than derived: this is the
 #: contract DRE-3022's other children read (the context renderer DRE-3358 and
 #: the plan critic's ledger check DRE-3079), and a list computed from the file
 #: under test would agree with whatever the file happens to say.
@@ -794,12 +712,7 @@ CONTRACT_BAND = {"more_than": int, "of": int, "died": int, "cards": list,
 CONTRACT_TELL_BAND = {"tell": str, "of": int, "died": int, "sentence": str}
 
 
-def _committed() -> dict:
-    return json.loads(LEDGER.read_text(encoding="utf-8"))
-
-
-def test_the_committed_ledger_keeps_every_field_name_and_type_it_had():
-    doc = _committed()
+def _holds_the_contract(doc: dict) -> None:
     for field, kind in CONTRACT_TOP_LEVEL.items():
         assert field in doc, f"the ledger lost {field}"
         assert isinstance(doc[field], kind), f"{field} changed type"
@@ -814,29 +727,11 @@ def test_the_committed_ledger_keeps_every_field_name_and_type_it_had():
     for band in doc["rates"]["by_tell"]:
         for field, kind in CONTRACT_TELL_BAND.items():
             assert isinstance(band.get(field), kind), f"by_tell.{field}"
-
-
-def test_the_committed_ledger_has_more_than_the_ten_seed_rows():
-    """The population discovered itself. Ten rows is what `--card`-less derive
-    used to produce, and it is the number this card exists to beat."""
-    doc = _committed()
-    assert len(doc["rows"]) > len(SEEDS), (
-        f"the committed ledger still has {len(doc['rows'])} rows — derive did "
-        "not discover a population")
-
-
-def test_every_committed_row_is_dated():
-    for row in _committed()["rows"]:
-        assert "created_at" in row, f"{row.get('card')} has no created_at"
-        assert isinstance(row["created_at"], str)
-        assert row["created_at"] != ""
-
-
-def test_the_committed_ledger_carries_its_window_and_its_months():
-    doc = _committed()
+    for row in doc["rows"]:
+        assert isinstance(row.get("created_at"), str), row.get("card")
+        assert row["created_at"] != "", row.get("card")
     assert isinstance(doc["window_days"], int)
-    assert isinstance(doc["monthly"], list)
-    assert doc["monthly"], "the committed ledger has no monthly block"
+    assert doc["monthly"], "the ledger has no monthly block"
     assert [r["month"] for r in doc["monthly"]] == sorted(
         r["month"] for r in doc["monthly"])
     for record in doc["monthly"]:
@@ -847,9 +742,10 @@ def test_the_committed_ledger_carries_its_window_and_its_months():
 def test_the_config_readme_describes_discovery_the_window_and_the_new_blocks():
     """A change that contradicts a document updates that document in the same
     PR (`standards/engineering.md`). The registry entry said the ledger reads
-    the ten cards it was told about."""
+    the ten cards it was told about; since DRE-6056 it says where the ledger
+    went when it stopped being a file here."""
     text = CONFIG_README.read_text(encoding="utf-8")
-    entry = text.split("**`split-ledger.json`**", 1)[1].split("- **`", 1)[0]
+    entry = text.split("- **The split ledger**", 1)[1].split("- **`", 1)[0]
     for phrase in ("discover", "window", "monthly", "created_at"):
         assert phrase in entry.lower(), (
             f"config/README.md's split-ledger entry never mentions {phrase}")
@@ -898,16 +794,6 @@ def test_a_candidate_whose_successor_search_failed_stays_too():
                      created_at="2026-08-01T00:00:00Z")
     doc = split_ledger.ledger([unread], generated_at="2026-09-10T00:00:00Z")
     assert [r["card"] for r in doc["rows"]] == ["DRE-8003"]
-
-
-def test_every_committed_row_says_why_it_is_there():
-    """The ledger is "every card that did not fit one run". A row that answers
-    none of the three ways, and was not named as a seed, is a candidate the
-    search proposed and the readers never confirmed."""
-    for row in _committed()["rows"]:
-        assert row["reasons"] or split_ledger.UNKNOWN in (
-            row["deaths"], row["pieces"]), (
-            f"{row['card']} is in the ledger for no readable reason")
 
 
 # --------------------------------------------------------------------------- #
@@ -974,7 +860,7 @@ def github(monkeypatch):
 
 def _derive(tmp_path, *extra) -> dict:
     out = tmp_path / "split-ledger.json"
-    assert split_ledger.main(["derive", "--out", str(out), "--no-doc", *extra]) == 0
+    assert split_ledger.main(["derive", "--out", str(out), *extra]) == 0
     return json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -992,6 +878,21 @@ def test_the_door_path_writes_what_the_linear_path_wrote(door, github, tmp_path)
     assert doc["rates"] == old["rates"]
     assert doc["generated_at"] == old["generated_at"]
     assert doc["window_days"] == old["window_days"]
+
+
+def test_the_derived_ledger_keeps_every_field_name_and_type_it_had(door, github,
+                                                                  tmp_path):
+    _holds_the_contract(_derive(tmp_path))
+
+
+def test_every_derived_row_says_why_it_is_there(door, github, tmp_path):
+    """The ledger is "every card that did not fit one run". A row that answers
+    none of the three ways, and was not named as a seed, is a candidate the
+    search proposed and the readers never confirmed."""
+    for row in _derive(tmp_path)["rows"]:
+        assert row["reasons"] or split_ledger.UNKNOWN in (
+            row["deaths"], row["pieces"]), (
+            f"{row['card']} is in the ledger for no readable reason")
 
 
 def test_the_url_is_built_from_the_identifier(door, github, tmp_path):
@@ -1089,7 +990,7 @@ def test_a_door_unknown_never_falls_back_to_linear(door, monkeypatch):
 def test_the_cli_says_could_not_be_read_and_writes_nothing(door, tmp_path, capsys):
     door.routes["/split-history"] = (503, {"error": {"code": "DOOR_CLOSED"}})
     out = tmp_path / "split-ledger.json"
-    assert split_ledger.main(["derive", "--out", str(out), "--no-doc"]) != 0
+    assert split_ledger.main(["derive", "--out", str(out)]) != 0
     assert not out.exists()
     assert "could not be read" in capsys.readouterr().err
 
@@ -1120,16 +1021,11 @@ def test_the_derive_prints_one_summary_line_naming_every_row(door, github,
         assert row["card"] in lines[0]
 
 
-def test_no_doc_skips_the_markdown_and_the_default_writes_it(door, github,
-                                                            tmp_path):
-    out, md = tmp_path / "ledger.json", tmp_path / "ledger.md"
-    assert split_ledger.main(["derive", "--out", str(out), "--doc", str(md),
-                              "--no-doc"]) == 0
-    assert out.exists() and not md.exists()
-    bureau_read.reset_for_tests()
-    assert split_ledger.main(["derive", "--out", str(out), "--doc", str(md)]) == 0
-    doc = json.loads(out.read_text(encoding="utf-8"))
-    assert md.read_text(encoding="utf-8") == split_ledger.render_markdown(doc)
+def test_derive_writes_the_ledger_and_nothing_beside_it(door, github, tmp_path):
+    """No markdown render rides along any more (DRE-6056): the one file named
+    by `--out` is the whole output."""
+    _derive(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["split-ledger.json"]
 
 
 def test_load_reads_split_ledger_path_when_it_is_set(tmp_path, monkeypatch):
@@ -1140,18 +1036,25 @@ def test_load_reads_split_ledger_path_when_it_is_set(tmp_path, monkeypatch):
     assert split_ledger.load()["marker"] == "derived"
 
 
-def test_load_reads_the_committed_ledger_when_split_ledger_path_is_unset(
+def test_load_with_split_ledger_path_unset_raises_never_reads_a_stale_file(
         monkeypatch):
+    """There is no committed fallback (DRE-6056): every reader renders
+    "could not be read" rather than last month's history."""
     monkeypatch.delenv("SPLIT_LEDGER_PATH", raising=False)
-    assert split_ledger.load() == _committed()
+    with pytest.raises(split_ledger.LedgerError, match="SPLIT_LEDGER_PATH"):
+        split_ledger.load()
     monkeypatch.setenv("SPLIT_LEDGER_PATH", "")
-    assert split_ledger.load() == _committed()
+    with pytest.raises(split_ledger.LedgerError, match="SPLIT_LEDGER_PATH"):
+        split_ledger.load()
 
 
 def test_an_explicit_path_still_wins_over_split_ledger_path(tmp_path,
                                                            monkeypatch):
+    named = tmp_path / "named.json"
+    named.write_text(json.dumps({"rows": [], "marker": "named"}),
+                     encoding="utf-8")
     monkeypatch.setenv("SPLIT_LEDGER_PATH", str(tmp_path / "absent.json"))
-    assert split_ledger.load(str(LEDGER)) == _committed()
+    assert split_ledger.load(str(named))["marker"] == "named"
 
 
 SCRIPT = ROOT / "scripts" / "split_ledger.py"
