@@ -2475,7 +2475,7 @@ def proof_close_note(
     (`proof_evidence_gap`, over the same `record` and `voices`).
 
     Opens `✅ Merged: <url>` like every merge receipt, so the readers that key
-    on it (`hand_work_migration.MERGED_RECEIPT`) still find it; then the PT
+    on it still find it; then the PT
     merge time and the sha the critic approved; then what its criterion
     table held — the rows met, and every row the operator accepted by
     decision, by its criterion (`proof_record.summary`, DRE-6244). It never

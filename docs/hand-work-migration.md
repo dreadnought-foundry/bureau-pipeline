@@ -12,8 +12,11 @@ were already sitting in Todo when that changed.
 
 ## How to run it
 
-Run each step from a bureau-pipeline checkout on `main`, with the operator's
-Linear key. Read the output of each step before running the next.
+**The script has been rewritten.** On 2026-10-09 `scripts/hand_work_migration.py`
+became the hand-built migration (DRE-6230), which takes every automatically
+applied `hand-built` off once — see [`hand-built-migration.md`](hand-built-migration.md).
+The commands below, and the four classes after them, are the record of the
+first migration as it ran; the `--only` switch no longer exists.
 
 ```
 python3 scripts/hand_work_migration.py census                 # Todo, each card with its class and what will happen

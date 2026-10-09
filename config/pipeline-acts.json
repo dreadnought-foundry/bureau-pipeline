@@ -1212,10 +1212,17 @@
     },
     {
       "file": "scripts/hand_work_migration.py",
-      "anchor": "ops.cmd_comment(ident, migration_note(row))",
+      "anchor": "ops.cmd_comment(ident, migration_note(row, done))",
       "kind": "not-an-act",
-      "means": "The one-time Hand-work migration tells each person card it moved from Todo to Hand-work, and why (DRE-5323). The comment opens `🧳 hand-work-migration:`.",
-      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The migration is a one-shot move an operator runs by hand (`hand_work_migration.py run --apply`), the same shape as the backlog cutover's move note; its opener is what the proof card reads to tell a migrated card from a sweep-moved one."
+      "means": "The one-time hand-built migration tells each card it changed what it did — label removed, label added, verdict restamped, moved to Backlog or moved to Planning — and the rule it followed, quoting the CEO's rule of 2026-10-07 (DRE-6230). The comment opens `🧳 hand-built-migration:`.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The migration is a one-shot pass an operator runs by hand (`hand_work_migration.py run --apply`), the same shape as the backlog cutover's move note and the Hand-work migration's note this row replaces; its only reader is a person looking at the card."
+    },
+    {
+      "file": "scripts/hand_work_migration.py",
+      "anchor": "ops.cmd_comment(ident, retirement)",
+      "kind": "not-an-act",
+      "means": "The note that retires a migrated code card's live routing verdicts before the hand-built migration restamps it FLEET (DRE-6230). It opens `🪦 verdict-retired:` and names each verdict by `retired:<fingerprint>`, as the planning exit's note does, but says the migration retired it and the card never went back to Planning — composed by `hand_work_migration.retirement_note`, not by the planning exit's `routing_verdict.retirement_comment`.",
+      "why": "Part of the routing verdict's own record, not an act: `routing_verdict.verdicts_on` reads it to know which verdict comments no longer count, the same as the planning exit's row for the note it composes. A trailer from a second registry on the same comment would let two vocabularies answer for it."
     },
     {
       "file": "scripts/break_glass.py",
