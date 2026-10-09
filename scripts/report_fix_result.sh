@@ -349,9 +349,9 @@ if [ -n "$LOCAL" ] && [ -n "$PRE_SHA" ] && [ -n "$POST_SHA" ] && [ "$LOCAL" != "
   else ROUTE=overtaken; fi
 fi
 echo "fix route: ${ROUTE:-by the handoff files} (runner ${LOCAL:0:8}, pull request ${POST_SHA:0:8}, started ${PRE_SHA:0:8})"
-# The first line of the agent's blocker, its note and never its exit here.
+# The first line of the agent's blocker, its note and never its exit here; an absent one reads empty.
 NOTE_FILE=$(mktemp)
-[ "$BLOCKED_RC" -eq 0 ] && printf '%s' "$BLOCKER" > "$NOTE_FILE"
+printf '%s' "$BLOCKER" > "$NOTE_FILE"
 NOTE_LINE=$(sed '/^[[:space:]]*$/d' "$NOTE_FILE" | head -1)
 KEPT="This run kept no copy of the work — its log is $RUN_URL."
 [ -n "$RESCUE_PATCH" ] && KEPT="The work is saved in artifact $RESCUE_ARTIFACT on $RUN_URL."
