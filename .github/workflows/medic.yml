@@ -77,6 +77,17 @@
 # unrecognized machine is refused by the retry gate itself (medic_retry.py):
 # the same work on the same size of machine dies the same way.
 #
+# SIXTH EXCEPTION (DRE-6467): A STANDING CARD DEFECT. The Reconcile sweep goes
+# red on purpose when a card defect it reported is still standing (its
+# `_stale_defects` ledger — an epic's prose-blocker defect two hours old,
+# DRE-2676), and that red run IS the escalation. Read as `normal` it cost a
+# second full sweep on attempt 1 and a paid diagnosis on attempt 2, every
+# fifteen minutes, for an alarm working as designed. So on class
+# `standing_defect` the medic neither retries (the rerun reports the same
+# defect) nor diagnoses (there is no crash to diagnose): one ::notice::, and
+# the medic run ENDS GREEN. The sweep's own run stays red — a board that is
+# stuck must still say so.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -118,7 +129,7 @@ jobs:
     if: (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out')
     # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). Every
     # job in this file but `diagnose` is a sub-minute script — the classifier,
-    # one `gh run rerun`, and six that write a note or a receipt and end — and
+    # one `gh run rerun`, and seven that write a note or a receipt and end — and
     # until now each drew from the same `BUREAU_RUNS_ON` pool as the 20-minute
     # agent, critic and verifier jobs: on 2026-09-18 at 13:47 PT the mini's six
     # runners were all busy, 38 jobs were queued, the oldest reviews had waited
@@ -140,7 +151,7 @@ jobs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
       # DRE-2488/DRE-2923: the failure's class — environment_crash |
       # stalled_no_stream | out_of_memory | critic_infra_crash | upstream_5xx |
-      # linear_ratelimited | normal. The classifier prints both lines;
+      # linear_ratelimited | standing_defect | normal. The classifier prints both lines;
       # infra_crash stays as-is so the DRE-1921 gates below are untouched.
       class: ${{ steps.c.outputs.class }}
       # DRE-2954: the retry gate — is this failure one the medic's single
@@ -396,6 +407,7 @@ jobs:
       needs.classify.outputs.infra_crash != 'true' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
+      needs.classify.outputs.class != 'standing_defect' &&
       needs.classify.outputs.limit != 'true' &&
       needs.classify.outputs.retry != 'false'
     # The short lane, same as `classify` above (DRE-4276).
@@ -685,6 +697,33 @@ jobs:
         run: |
           echo "::notice::Linear rate limit — the workspace request quota is exhausted, so ${FAILED_WORKFLOW} could not finish. This is a transient, self-healing condition, NOT a defect in the estate: not retrying (the retry deepens the limit) and not diagnosing (there is no defect to find). The quota refills on its own and the workflow runs again. Failed run: ${RUN_URL}"
 
+  # Standing card defect (DRE-6467). The sweep is red because a card defect it
+  # reported is still standing and nothing it tried failed — the alarm working
+  # as designed, not a crash. There is nothing to retry (the rerun reports the
+  # same defect, at the price of a second round of Linear reads) and nothing to
+  # diagnose (a diagnosis agent would spend up to twenty minutes of Claude to
+  # repeat the ERROR lines). One ::notice::, and this job ENDS GREEN. The
+  # Reconcile run itself stays red: that red is the escalation, and a person
+  # fixing the card is what clears it. No attempt gate, for the same reason as
+  # upstream_outage above: a notice is a per-run annotation.
+  standing_defect:
+    needs: classify
+    if: >
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
+      needs.classify.outputs.class == 'standing_defect'
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - name: Note the standing card defect — no rerun, no diagnosis
+        env:
+          # env, not inline ${{ }} (DRE-1996): keep run-supplied text out of
+          # the shell line.
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "::notice::Standing card defect — ${FAILED_WORKFLOW} is red because a card defect it reported is still standing, and nothing the sweep tried failed. This is the alarm, not a crash: not retrying (the rerun reports the same defect) and not diagnosing (there is no crash to diagnose). The ERROR lines in the failed run name the cards, and a person must act on them; the run goes green once they are fixed. Failed run: ${RUN_URL}"
+
   # The second identical death, held (DRE-3430). The one automatic retry above
   # is untouched for this class: a transient blip deserves it, and the second
   # death of the same run at the same commit is the PROOF that the environment
@@ -763,6 +802,7 @@ jobs:
       needs.classify.outputs.class != 'out_of_memory' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
+      needs.classify.outputs.class != 'standing_defect' &&
       needs.classify.outputs.limit != 'true'
     # NOT the short lane (DRE-4276): this is the one job in the file that
     # spends a Claude run — the diagnosis agent below, up to twenty minutes

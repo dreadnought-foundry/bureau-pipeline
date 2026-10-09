@@ -74,8 +74,9 @@ SHORT_VAR = "BUREAU_SHORT_RUNS_ON"
 
 # Every short job of the five files, named. DRE-3887's criterion was "a test
 # pins that list"; DRE-4276 adds the two sweeps to it and DRE-4606 the release
-# train's two decision jobs. The medic's eight script jobs — the classifier,
-# the one retry, and the six that write a note or a receipt and end — are each
+# train's two decision jobs. The medic's nine script jobs — the classifier,
+# the one retry, and the seven that write a note or a receipt and end (DRE-6467
+# added `standing_defect`) — are each
 # `timeout-minutes: 5` and call nothing but `gh` and `python3`; reconcile's
 # `sweep` is `reconcile.py` and nothing else; the train's `wait` and `plan`
 # are `release_train.py` and nothing else, over the caller's own `github.token`
@@ -95,6 +96,7 @@ SHORT_JOBS = {
         "backoff",
         "upstream_outage",
         "linear_rate_limited",
+        "standing_defect",
         "environment_hold",
     },
     "release-train.yml": {"wait", "plan"},

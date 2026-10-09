@@ -1,0 +1,6 @@
+sweep	Sweep	2026-10-09T16:45:02.1234567Z Run python3 .bureau-pipeline/scripts/reconcile.py
+sweep	Sweep	2026-10-09T16:45:41.2234567Z promote: WIP 0+0/8 — nothing promoted
+sweep	Sweep	2026-10-09T16:45:52.3234567Z ERROR: DRE-4101: a prose blocker declaring DRE-4099 with no blockedBy relation has stood for 2.4h
+sweep	Sweep	2026-10-09T16:45:53.4234567Z ERROR: DRE-4150: a prose blocker declaring DRE-4120, DRE-4121 with no blockedBy relation has stood for 3.1h
+sweep	Sweep	2026-10-09T16:46:01.5234567Z reconcile: 0 write / 0 read failure(s), 2 unfixed card defect(s) — see ERROR lines above
+sweep	Sweep	2026-10-09T16:46:01.6234567Z ##[error]Process completed with exit code 1.

@@ -24,7 +24,9 @@ or read the hold. Both now do, through this module:
    says so. `summary` renders the reading as both PROOF closes post it.
    `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
    row waits on, which the proof dispatch holds on instead of a re-run.
-3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`.
+3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
+   `open_holds_at` is the same reading with each hold's time, for the PROOF
+   close (DRE-6489).
 4. **The record finder**, new: the ONE `.md` file the pull request ADDS under
    `docs/` or `architecture/` (`find_record`, over `gh pr view --json files`),
    read at a given sha through the contents API (`fetch`). No match, or two, is
@@ -267,18 +269,25 @@ def open_holds(voices: list) -> list:
     operator's holds; only his signed answer discharges one naming the CEO's
     press. An unsigned claim to be his answer discharges nothing, and nor does
     one whose signature could not be checked (DRE-4153)."""
+    return [line for line, _ in open_holds_at(voices)]
+
+
+def open_holds_at(voices: list) -> list:
+    """`open_holds`, each as `(first line, createdAt)` — the PROOF close
+    weighs a hold against the merge's time (DRE-6489); the dispatcher reads
+    `open_holds` and never the time."""
     held: list = []
     for voice in voices:
         body = (voice.body or "").lstrip()
         if body.startswith(HOLD_MARK):
-            held.append(_first_line(body))
+            held.append((_first_line(body), voice.created_at))
         elif voice.kind == spoken_thread.UNCHECKED:
             continue  # neither his answer nor a refused one: it discharges nothing
         elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
-            held = [h for h in held if CEO_PRESS not in h]
+            held = [h for h in held if CEO_PRESS not in h[0]]
         elif (body.startswith(OBSERVED_MARK)
               and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
-            held = [h for h in held if CEO_PRESS in h]
+            held = [h for h in held if CEO_PRESS in h[0]]
     return held
 
 
