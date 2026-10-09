@@ -161,7 +161,7 @@
       "path": "scripts/backlog_cutover.py"
     },
     "hand_work_migration.py": {
-      "what": "the one-time move of a person's work out of Todo into Hand-work (DRE-5323) — run by hand, dry first; moves only cards marked hand-built or no-code, and names any epic or finished card it finds without writing to it; and moves a code card out of Hand-work, to Planning or to Backlog (DRE-6230)",
+      "what": "the one-time move of a person's work out of Todo into Hand-work (DRE-5323) — run by hand, dry first; moves only cards marked hand-built or no-code, and names any epic or finished card it finds without writing to it; and moves a code card out of Hand-work, to Planning or to Backlog (DRE-6230); and the operator-backlog pass, which moves an operator step held `manual` with nothing left to wait on from Backlog to Hand-work (DRE-6429)",
       "path": "scripts/hand_work_migration.py"
     },
     "release-train.yml": {
@@ -517,7 +517,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares — `operator-step` and `no-code` on an OPERATOR card, none on a WORKBENCH card, and never the CEO's `hand-built` (DRE-6227) — BEFORE the move (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; the one-time migration that moved the person cards already in Todo (DRE-5323), and that also moves a code card OUT of this lane — to Planning when it has had no critic pass, to Backlog carrying a fresh FLEET verdict when it has (DRE-6230); and the person working it, who closes an OPERATOR card Done. And the proof run returning a card the CEO answered from Green Light, after posting the discharge record (DRE-5925).",
+          "text": "The sweep, which moves a WORKBENCH or OPERATOR card here — stamping the marks its verdict declares — `operator-step` and `no-code` on an OPERATOR card, none on a WORKBENCH card, and never the CEO's `hand-built` (DRE-6227) — BEFORE the move (DRE-3385, DRE-5322) — and carries it to In Review once its pull request opens; the guarded write layer every automated move goes through; the one-time migration that moved the person cards already in Todo (DRE-5323), and that also moves a code card OUT of this lane — to Planning when it has had no critic pass, to Backlog carrying a fresh FLEET verdict when it has (DRE-6230), and whose operator-backlog pass carries an operator step held `manual` with every blocker terminal here from Backlog, stamped OPERATOR when it had no verdict (DRE-6429); and the person working it, who closes an OPERATOR card Done. And the proof run returning a card the CEO answered from Green Light, after posting the discharge record (DRE-5925).",
           "who": ["reconcile.py", "linear_ops.py", "hand_work_migration.py", "proof-task.yml", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
