@@ -838,3 +838,17 @@ class TestTheApprovedSize:
         mid_epic.refresh_epic_growth(ops, "DRE-5577", question=self._q("re-approved", 25))
         report = mid_epic.refresh_epic_growth(ops, "DRE-5577")
         assert (report["green_lit"], report["approved"], report["current"]) == (10, 25, 25)
+
+
+class TestADiscoveryRecordReplacesAnUnrecordedLine:
+    def test_the_filers_because_wins(self):
+        # The sweep named DRE-900 before its filer's record write landed.
+        ops = _GrowthEpic("The plan.", 3, 1)
+        mid_epic.refresh_epic_growth(ops, "DRE-5577")
+        assert mid_epic.parse_artifact(ops.description)["additions"][0][
+            "because"].startswith("unrecorded:")
+        report = mid_epic.refresh_epic_growth(
+            ops, "DRE-5577", add={"id": "DRE-900", "because": "a second call site"})
+        assert mid_epic.parse_artifact(ops.description)["additions"] == [
+            {"id": "DRE-900", "because": "a second call site"}]
+        assert [j["route"] for j in report["joined"]] == ["addition"]

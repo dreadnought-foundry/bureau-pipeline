@@ -200,10 +200,15 @@ class TestTheIncident:
 
         assert len(ops.writes) == 2, ops.writes
         first, last = ops.writes
-        assert recorded(first) == ["DRE-6157", "DRE-6160"], "B's write"
+        # B's write also names DRE-6161, which already joined, as unrecorded
+        # (DRE-6414); A's rebuilt write replaces that with its own record.
+        assert recorded(first) == ["DRE-6157", "DRE-6160", "DRE-6161"], "B's write"
         assert set(recorded(last)) == {"DRE-6157", "DRE-6160", "DRE-6161"}, (
             "A wrote from a fresh read, not over B"
         )
+        additions = mid_epic.parse_artifact(last)["additions"]
+        assert [a["because"] for a in additions if a["id"] == "DRE-6161"] == [
+            because("DRE-6161")], "the filer's record, not the unrecorded line"
 
 
 # ===========================================================================

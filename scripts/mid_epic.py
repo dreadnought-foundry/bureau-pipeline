@@ -928,8 +928,15 @@ def _build_growth(epic: str, issue: dict, add, amend, question=None) -> dict:
     artifact = parse_artifact(description)
     additions = list(artifact["additions"])
     amendments = list(artifact["amendments"])
-    if add and add["id"] not in {a["id"] for a in additions}:
-        additions.append(add)
+    if add:
+        # A discovery's own record replaces an `unrecorded:` line for the same
+        # card (DRE-6414): the sweep can read the card between `cmd_subissue`
+        # and this write, and name it before its filer does.
+        additions = [a for a in additions
+                     if not (a["id"] == add["id"]
+                             and a["because"].startswith(f"{UNRECORDED}:"))]
+        if add["id"] not in {a["id"] for a in additions}:
+            additions.append(add)
     if amend:
         # A copy: a rebuild must start from the motion as the caller gave it,
         # not as an earlier attempt's re-approval left it.
