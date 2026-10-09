@@ -52,9 +52,16 @@ every reconcile run.
 
 A repo the token cannot read prints UNKNOWN, never 0: a zero that means
 "could not look" would hide exactly the repo that is spending. A run whose
-log cannot be fetched (still in progress, or expired) is skipped and counted
-in the `skipped` note. A line that says `window rolled` or `unknown` is a run
-seen with a spend that cannot be known; it counts as a run, not as 0 spent.
+log `gh` cannot return (still in progress, or expired) is read again, up to
+3 attempts with a short back-off between them (DRE-3242): a run that has only
+just finished usually reads on the second look. One still unreadable after
+the last attempt is named in the footer as `<slug> <run id>`, and the last
+thing `gh` said about it goes to stderr. An empty log — `gh` answers rc 0
+with no output for a completed run whose every job was skipped — is not
+retried, since a second look returns the same nothing; it is in no row and
+is counted in its own `empty log` note. A line that says `window rolled` or
+`unknown` is a run seen with a spend that cannot be known; it counts as a
+run, not as 0 spent.
 
 Never writes anything: `gh run list` and `gh run view --log` are its only
 calls. Usage:
@@ -69,6 +76,7 @@ import json
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -107,6 +115,14 @@ _CALLS_BUCKET_RE = re.compile(r"[(;]\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 UNDECLARED = "undeclared"
 
 UNKNOWN = "UNKNOWN"
+
+# How many times a run's log is asked for before it is named unreadable, and
+# the pause between two asks (DRE-3242): two pauses, well under half a minute
+# per run. `_sleep` is the one seam the back-off goes through, so a test sets
+# it to nothing and never sleeps.
+LOG_ATTEMPTS = 3
+LOG_BACKOFF_SECONDS = 5.0
+_sleep = time.sleep
 
 
 def load_repo_map() -> dict[str, str]:
@@ -248,9 +264,12 @@ def aggregate(observations) -> list[dict]:
 
 
 def render_table(rows: list[dict], unknown_repos: list[str], *,
-                 hours: float = 1, skipped: int = 0) -> str:
+                 hours: float = 1, skipped: list[tuple[str, int]] = (),
+                 empty: int = 0) -> str:
     """The table, as text: one row per (repo, workflow), UNKNOWN rows for the
-    repos the token could not read, a grand total last."""
+    repos the token could not read, a grand total last. `skipped` is each run
+    whose log was still unreadable after every attempt, as `(slug, run id)`,
+    and is named in the footer; `empty` counts the runs whose log was empty."""
     header = f"{'repo':<20} {'workflow':<32} {'runs':>5} {'spent':>7} {'max/run':>8}"
     lines = [f"linear budget, last {hours:g}h", header, "-" * len(header)]
     for r in rows:
@@ -271,7 +290,11 @@ def render_table(rows: list[dict], unknown_repos: list[str], *,
     if unknown_repos:
         tail += f"   (+ {len(unknown_repos)} repo(s) UNKNOWN)"
     if skipped:
-        tail += f"   ({skipped} run(s) skipped: log not available)"
+        named = ", ".join(f"{slug} {run_id}" for slug, run_id in skipped)
+        tail += (f"   ({len(skipped)} run(s) skipped: log not available after "
+                 f"{LOG_ATTEMPTS} attempts — {named})")
+    if empty:
+        tail += f"   ({empty} run(s) empty log: no job ran)"
     lines.append(tail)
     return "\n".join(lines)
 
@@ -304,13 +327,23 @@ def _runs_since(repo: str, since: datetime) -> list[dict] | None:
     return out
 
 
-def _run_log(repo: str, run_id: int) -> str | None:
-    """The run's full log, or None when there is none to read: a nonzero rc
-    (still in progress, expired), or an EMPTY log — `gh` answers rc 0 with no
-    output for a run whose every job was skipped or has not started, and that
-    is not a run that spent anything, so it is skipped rather than counted."""
-    p = _gh("run", "view", str(run_id), "-R", repo, "--log")
-    return p.stdout if p.returncode == 0 and p.stdout.strip() else None
+def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
+    """The run's full log and "", or None and why there is none to read.
+
+    A nonzero rc — `run <id> is still in progress`, or `log not found` for an
+    expired one — is asked again, up to LOG_ATTEMPTS reads with a back-off
+    between them; still nonzero after the last, the reason is the last thing
+    `gh` said. An EMPTY log — rc 0 with no output, a completed run whose
+    every job was skipped — is not asked again, since there was never
+    anything to read: it is None and "", and the caller counts it apart."""
+    p = None
+    for attempt in range(LOG_ATTEMPTS):
+        if attempt:
+            _sleep(LOG_BACKOFF_SECONDS)
+        p = _gh("run", "view", str(run_id), "-R", repo, "--log")
+        if p.returncode == 0:
+            return (p.stdout, "") if p.stdout.strip() else (None, "")
+    return None, (p.stderr.strip() or p.stdout.strip() or f"rc={p.returncode}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,21 +355,27 @@ def main(argv: list[str] | None = None) -> int:
 
     observations: list[tuple[str, str, str]] = []
     unknown_repos: list[str] = []
-    skipped = 0
+    skipped: list[tuple[str, int]] = []
+    empty = 0
     for slug, repo in sorted(load_repo_map().items()):
         runs = _runs_since(repo, since)
         if runs is None:
             unknown_repos.append(slug)
             continue
         for run in runs:
-            log = _run_log(repo, run["databaseId"])
+            log, why = _run_log(repo, run["databaseId"])
+            if log is None and why:
+                print(f"{repo}: gh run view {run['databaseId']} failed after "
+                      f"{LOG_ATTEMPTS} attempts: {why[:200]}", file=sys.stderr)
+                skipped.append((slug, run["databaseId"]))
+                continue
             if log is None:
-                skipped += 1
+                empty += 1
                 continue
             observations.append((slug, run["workflowName"], log))
 
     print(render_table(aggregate(observations), unknown_repos,
-                       hours=args.hours, skipped=skipped))
+                       hours=args.hours, skipped=skipped, empty=empty))
     return 0
 
 
