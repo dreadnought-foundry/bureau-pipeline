@@ -100,9 +100,18 @@ children are never released. MAX_WIP and the blocker checks are unchanged.
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
 "blocked-by" relations (read the same way as a card's); if any blocker epic is
-not Done, none of that epic's children promote this sweep — regardless of the
-epic's own state. And when a blocker epic reaches Done, every epic blocked-by
-it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
+neither Done nor BUILT OUT, none of that epic's children promote this sweep —
+regardless of the epic's own state. BUILT OUT (DRE-6407) is a blocker whose
+relation and own read both say In Progress, with at least one child, its
+children read to the end, no child `epic_cap.buildable()` and no open child
+epic — a proof card or a hand-built card left open does not hold.
+`_not_built_out` says which of those held it. The code dependencies ride
+card-level relations, which the card gate honors as before.
+
+The auto-advance is stricter: when a blocker epic reaches Done, every epic
+blocked-by it whose blockers are now ALL Done — built out is not enough, the
+seam rule (DRE-3244) plans against what the blocker's proof observed — is
+auto-advanced out of Backlog to Triage
 (which re-triggers the planner). Never to In Progress, so the Green Light
 human-approval gate is preserved. Both the promotion hold and the advance fail
 SAFE on unreadable relation data (don't promote / don't advance on

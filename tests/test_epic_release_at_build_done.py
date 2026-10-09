@@ -314,6 +314,19 @@ def test_an_unapproved_blocker_holds_without_a_read(capsys, lane):
     assert fake.blocker_reads == []
 
 
+@pytest.mark.parametrize("lane", ["Backlog", "Planning", "Green Light"])
+def test_a_blocker_whose_own_read_is_not_in_progress_holds(capsys, lane):
+    """The relation says In Progress, the blocker's own read says it moved back:
+    the read wins, and a stale relation releases nothing."""
+    fake = FakeLinear(
+        [_w_record((B, "In Progress"))],
+        [_blocker(B, [_kid("DRE-701", "Done"), _kid("DRE-702", "Done"), _proof()],
+                  state=lane)],
+    )
+    _assert_held(capsys, fake, f"its state now reads {lane}", "not In Progress")
+    assert fake.blocker_reads == [B]
+
+
 def test_an_unreadable_blocker_holds_with_the_reason(capsys):
     fake = FakeLinear(
         [_w_record((B, "In Progress"))], [B_BUILT_OUT],
