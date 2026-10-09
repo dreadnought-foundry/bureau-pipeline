@@ -92,10 +92,16 @@ HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
 REASONS = (
     "stranded-no-run", "no-route", "review-cap-spent", "dead-run-cap",
     "turn-cap-park", "epic-rereview-twice", "plan-critic-bound", "fix-dispute",
-    "unfixable-check", "manual",
+    "unfixable-check", "operator-step", "manual",
 )
-LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker", "manual")
+LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker",
+              "blockers-terminal", "manual")
 READERS = ("sweep", "fix-dispatch", "medic", "limit-recovery")
+
+#: A planner-filed operator step: a person does it once its blockers are
+#: Done (DRE-6426). Lifted when every blockedBy relation is terminal.
+OPERATOR_STEP_REASON = "operator-step"
+BLOCKERS_TERMINAL = "blockers-terminal"
 
 #: The lift kind of each reason, fixed by the contract. A row that names
 #: another fails `check` by name — the file cannot vote itself a looser lift.
@@ -109,8 +115,16 @@ CONTRACT_LIFTS = {
     "turn-cap-park": "unpark-marker",
     "epic-rereview-twice": "manual",
     "plan-critic-bound": "manual",
+    OPERATOR_STEP_REASON: BLOCKERS_TERMINAL,
     "manual": "manual",
 }
+
+#: A reason whose lift a reader makes itself. That reader is the lifter and
+#: never a reader of it: a row carrying the reason that names it fails
+#: `check`, so `respects(..., <lifter>)` can only answer False once a row
+#: exists. The sweep's promotion gate reads the blockers off the card's
+#: relations and calls `lift` (DRE-6427).
+LIFTERS = {OPERATOR_STEP_REASON: "sweep"}
 
 #: The one universal lift: every reason, when the card is Done or Canceled.
 CARD_CLOSED = "card-closed"
@@ -322,7 +336,12 @@ def lift_due(stamp: dict | None, *, lane: str, labels, pr_head: str | None,
     lifts and a stamped slug that later joined the rail does not;
     `run-started` on a 🧠 or ⏳ run receipt newer than the stamp;
     `unpark-marker` on a `dead-run-budget-reset` marker newer than it. A
-    `manual` reason, or one outside the vocabulary, never lifts here."""
+    `manual` reason, or one outside the vocabulary, never lifts here.
+
+    Nor does `blockers-terminal` (`operator-step`): no caller passes the
+    card's blockers — the hygiene lane never asks about it — so the sweep's
+    promotion gate is its only lifter, reading the blockedBy relations
+    itself and calling `lift` (DRE-6427). It falls through to None."""
     if lane in CLOSED_LANES:
         return CARD_CLOSED
     if not stamp:
@@ -738,6 +757,11 @@ def problems(doc: dict | None = None, root: str | None = None) -> list:
             elif CONTRACT_LIFTS.get(reason) and lifts != CONTRACT_LIFTS[reason]:
                 found.append(f"{name} carries {reason} with lifts={lifts}; the "
                              f"contract fixes lifts={CONTRACT_LIFTS[reason]}")
+            lifter = LIFTERS.get(reason)
+            if lifter and lifter in (row.get("readers") or []):
+                found.append(f"{name} carries {reason} and names {lifter} as a "
+                             f"reader — {lifter} lifts {reason}, it never stands "
+                             "down for it")
             found += _tried_first_problems(name, entry.get("tried_first"), corpus)
         hits = [s for s in sites if row_matches(row, s)]
         if len(hits) != 1:
