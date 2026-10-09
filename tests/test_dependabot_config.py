@@ -1,10 +1,12 @@
 """RED-first tests for DRE-2039 — bureau-pipeline's own dependabot.yml.
 
 Live extraction over .github/dependabot.yml (same pattern as the other
-config-pinning suites — no copied fixtures): weekly cadence, minor+patch
+config-pinning suites — no copied fixtures): monthly cadence, minor+patch
 GROUPED per ecosystem (pip, github-actions) so routine bumps arrive as one
-gate-mergeable PR each, majors falling out as separate single-dependency
-PRs the merge gate routes to a human (test_merge_gate_dependabot.py).
+gate-mergeable PR each, and every major ignored for `"*"` so none is filed
+automatically — the fleet's one house shape (DRE-3829, CEO 2026-09-13). A
+major lands only through a deliberate upgrade card; should one ever arrive,
+the merge gate still routes it to a human (test_merge_gate_dependabot.py).
 
 Also pins the pip MANIFEST wiring: Dependabot can only bump pins that
 exist, and a bumped pin only means something if CI installs from it — so
@@ -89,13 +91,33 @@ class DependabotConfigTest(unittest.TestCase):
         self.assertTrue(CONFIG.exists(), f"{CONFIG} missing")
         self.assertIsInstance(yaml.safe_load(CONFIG.read_text()), dict)
 
-    def test_both_ecosystems_update_weekly(self):
+    def test_every_entry_updates_monthly(self):
+        """DRE-3829 — the fleet's one Dependabot shape (CEO, 2026-09-13) runs
+        monthly. Asked of EVERY entry, so an ecosystem added later inherits
+        the cadence instead of drifting onto its own."""
         updates = updates_by_ecosystem()
         for eco in ("pip", "github-actions"):
             self.assertIn(eco, updates, f"no {eco} update entry")
+        for eco, update in updates.items():
             self.assertEqual(
-                updates[eco].get("schedule", {}).get("interval"), "weekly",
-                f"{eco}: cadence must be weekly",
+                update.get("schedule", {}).get("interval"), "monthly",
+                f"{eco}: cadence must be monthly — the house shape every "
+                "fleet repo runs (agent-bureau scripts/dependabot_shape.py)",
+            )
+
+    def test_every_entry_ignores_majors_for_every_dependency(self):
+        """DRE-3829 — the house shape files no major automatically: each
+        entry carries `"*"` + semver-major, so a major lands only through a
+        deliberate upgrade card. Without it every rejected major re-files at
+        the next rung down (DRE-2064, ~19 PRs). Asked of EVERY entry, so the
+        next ecosystem added cannot drift."""
+        house_rule = {"dependency-name": "*", "update-types": [MAJOR_IGNORE_TYPE]}
+        for eco, update in updates_by_ecosystem().items():
+            self.assertIn(
+                house_rule,
+                [dict(rule) for rule in update.get("ignore") or []],
+                f"{eco}: no ignore rule for dependency-name \"*\" covering "
+                f"{MAJOR_IGNORE_TYPE} — a major would be auto-filed",
             )
 
     def test_each_ecosystem_groups_minor_and_patch_only(self):
@@ -121,7 +143,7 @@ class DependabotConfigTest(unittest.TestCase):
 
     def test_each_ecosystem_caps_open_prs_at_five(self):
         """DRE-2049 (live: agent-bureau's first sweep opened 27 PRs at once):
-        every ecosystem bounds its open PRs so a weekly sweep arrives as a
+        every ecosystem bounds its open PRs so a monthly sweep arrives as a
         reviewable set, not a flood — dependabot holds the rest back until
         slots free up."""
         updates = updates_by_ecosystem()

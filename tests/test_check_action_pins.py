@@ -335,7 +335,8 @@ class DependabotMajorIgnoreTest(unittest.TestCase):
     Not a new policy: agent-bureau's `.github/dependabot.yml` already runs it
     and this repo's `docs/dependabot-major-rejection.md` describes the template.
     A SHA pin makes every vendor release a PR, so without this a major arrives
-    weekly and burns a critic review per rung of the walk-down.
+    every sweep and burns a critic review per rung of the walk-down. The sweep
+    is monthly since DRE-3829, the fleet's one Dependabot shape.
     """
 
     def _github_actions_entry(self):
@@ -354,9 +355,9 @@ class DependabotMajorIgnoreTest(unittest.TestCase):
             f"the DRE-2064 house major-ignore shape is missing: {ignore}",
         )
 
-    def test_the_entry_stays_weekly_and_grouped_minor_plus_patch(self):
+    def test_the_entry_stays_monthly_and_grouped_minor_plus_patch(self):
         entry = self._github_actions_entry()
-        self.assertEqual(entry.get("schedule", {}).get("interval"), "weekly")
+        self.assertEqual(entry.get("schedule", {}).get("interval"), "monthly")
         groups = entry.get("groups") or {}
         self.assertEqual(len(groups), 1, groups)
         (group,) = groups.values()
