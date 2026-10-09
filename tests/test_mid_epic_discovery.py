@@ -959,7 +959,8 @@ def _stamping_into(ops):
     stack = contextlib.ExitStack()
     for name, verb in (("comment_bodies", ops.comment_bodies),
                        ("cmd_comment", ops.cmd_comment),
-                       ("add_label", ops.add_label)):
+                       ("add_label", ops.add_label),
+                       ("get_issue", ops.get_issue)):
         stack.enter_context(patch.object(linear_ops, name, side_effect=verb))
     return stack
 
@@ -1065,6 +1066,11 @@ class _FakeOps:
     def add_label(self, identifier, label):
         self.labels.append((identifier, label))
         self.log.append(("label", identifier, label))
+
+    def get_issue(self, identifier, **_):
+        """The one card read `stamp_card` makes — its title decides the marks
+        (DRE-6225)."""
+        return next(c for c in self.created if c["identifier"] == identifier)
 
     def count_comments(self, identifier, needle, **kw):
         return sum(1 for i, b in self.comments if i == identifier and needle in b)

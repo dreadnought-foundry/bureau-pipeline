@@ -186,11 +186,25 @@ PLANNING_LANE = "Planning"
 RETIRED_TAG = "verdict-retired"
 RETIRED_MARK = "🪦"
 
+# The CEO's mark (DRE-6225): a person builds this card, and nothing is
+# dispatched at it. His rule of 2026-10-07 is that it is his alone and nothing
+# automatic applies it, so the pipeline READS it and never writes it. Declared
+# once, here; `reconcile.HAND_BUILT_LABEL` and `critic_score.CONTAMINATED_MARK`
+# alias it rather than spelling it again.
+HAND_BUILT_LABEL = "hand-built"
+
+# The operator marker the vocabulary will carry on OPERATOR's `marks` once the
+# sibling card flips `config/routing-verdicts.json`. Declared before the file
+# carries it, so a reader can name it before the flip and the flip is data.
+OPERATOR_STEP_LABEL = "operator-step"
+
 # The labels a retirement takes off with the verdict that put them on, when
-# the new verdict does not put them on too. `hand-built` alone: it is the mark
-# that silences the sweeps, so a stale one is a card nothing builds and nothing
-# reports. `no-code` stays, because a person may mean it on its own.
-RETIREMENT_LIFTS = ("hand-built",)
+# the new verdict does not put them on too — the shipped file's answer, kept for
+# existing readers. The rule is `retirement_lifts()`, which reads the
+# vocabulary: a person's marker is the mark that silences the sweeps, so a
+# stale one is a card nothing builds and nothing reports. `no-code` stays,
+# because a person may mean it on its own.
+RETIREMENT_LIFTS = (HAND_BUILT_LABEL,)
 
 # The lanes the sweep promotes a Backlog card INTO are READ, not declared
 # (DRE-5321). Until then one constant said `Todo`, because THREE of the five
@@ -402,6 +416,81 @@ def marks(name: str, doc: dict | None = None) -> tuple:
     """The labels the stamp applies — the signals the rest of the pipeline
     already reads, never a new parallel vocabulary."""
     return tuple(record(name, doc)["marks"])
+
+
+def is_person_verdict(name: str, doc: dict | None = None) -> bool:
+    """The verdict's accountable actor is a human (DRE-6225) — the card is a
+    person's, and no run is dispatched at it.
+
+    Read off the actor, never off a mark: "needs a person" used to be asked as
+    "is `hand-built` in this verdict's marks", and the flip of OPERATOR's
+    marker to `operator-step` would have quietly answered no.
+    """
+    import planning_route
+
+    return actor(name, doc) in planning_route.HUMAN_ACTORS
+
+
+def person_marks(doc: dict | None = None) -> tuple:
+    """Every label meaning "a person does this and no run is dispatched"
+    (DRE-6225): the `marks` of every verdict a person acts on, in the file's
+    order, each once, plus `HAND_BUILT_LABEL`, which the CEO applies by hand
+    whatever the vocabulary marks.
+
+    The one place that answer is spelled. Today `("hand-built", "no-code")`;
+    after the flip `("operator-step", "no-code", "hand-built")`. A card
+    carrying `no-code` and nothing else is not thereby a person's — that is
+    `hand_marks`.
+    """
+    out: list = []
+    for name in verdicts(doc):
+        if is_person_verdict(name, doc):
+            out.extend(m for m in marks(name, doc) if m not in out)
+    if HAND_BUILT_LABEL not in out:
+        out.append(HAND_BUILT_LABEL)
+    return tuple(out)
+
+
+def hand_marks(doc: dict | None = None) -> tuple:
+    """The person marks that say on their own that a person builds the card
+    (DRE-6225): `person_marks(doc)` without `no-code`. `("hand-built",)`
+    today, `("operator-step", "hand-built")` after the flip.
+
+    `no-code` alone is not one. It says the deliverable is live operator work,
+    and a run may still author the runbook for it
+    (`linear_ops.auto_done_skip_reason`); the sweep files its own alarm cards
+    with it too. `reconcile.counts_against_wip` reads it apart for that
+    reason, and `reconcile.hand_built` reads these.
+    """
+    import linear_ops
+
+    return tuple(m for m in person_marks(doc) if m != linear_ops.NO_CODE_LABEL)
+
+
+def retirement_lifts(doc: dict | None = None) -> tuple:
+    """What a retirement takes off when the new verdict does not put it on
+    too: `hand_marks(doc)` — `no-code` stays, because a person may mean it on
+    its own. `("hand-built",)` today, `("operator-step", "hand-built")` after
+    the flip."""
+    return hand_marks(doc)
+
+
+def card_marks(name: str, title: str | None, doc: dict | None = None) -> tuple:
+    """The marks the stamp and the sweep apply to THIS card (DRE-6225) — the
+    one rule both writers read, so they cannot disagree.
+
+    `marks(name, doc)` for any card but a proof. A proof card is taken by the
+    proof run, not the operator, so it never receives a person marker: of the
+    verdict's marks only `no-code` survives. Which titles are proofs is
+    `proof_and_demo.is_proof`'s to say — one reader of that title convention.
+    """
+    import linear_ops
+    import proof_and_demo
+
+    declared = marks(name, doc)
+    if not proof_and_demo.is_proof(title or ""):
+        return declared
+    return tuple(m for m in declared if m == linear_ops.NO_CODE_LABEL)
 
 
 def title_conventions(doc: dict | None = None) -> tuple:
@@ -1093,7 +1182,7 @@ def retirement_comment(comment_nodes, entered_at: str | None, *,
         written = _pacific(node.get("createdAt"), "at a time Linear did not report")
         lines.append(
             f"- **{name}**, written {written} — `retired:{fingerprint(node.get('body'))}`")
-    lifted = ", ".join(f"`{m}`" for m in RETIREMENT_LIFTS)
+    lifted = ", ".join(f"`{m}`" for m in retirement_lifts(doc))
     lines += [
         "",
         f"Retired on {_pacific(now, 'an unknown time')} by Planning's exit. A "
@@ -1108,15 +1197,15 @@ def retirement_comment(comment_nodes, entered_at: str | None, *,
 
 def lifted_marks(retired, new: str | None, doc: dict | None = None) -> tuple:
     """The labels to take off a card whose `retired` verdicts are replaced by
-    `new` (None when nothing replaces them): each of `RETIREMENT_LIFTS` that a
-    retired verdict put on and the new one does not.
+    `new` (None when nothing replaces them): each of `retirement_lifts(doc)`
+    that a retired verdict put on and the new one does not.
 
     A `hand-built` on a card whose retired verdict never applied it is a
     person's own, for another reason, and is not the pipeline's to remove.
     """
     applied = {mark for name in retired or () for mark in marks(name, doc)}
     kept = set(marks(new, doc)) if new else set()
-    return tuple(m for m in RETIREMENT_LIFTS if m in applied and m not in kept)
+    return tuple(m for m in retirement_lifts(doc) if m in applied and m not in kept)
 
 
 def _read_state_history(identifier: str) -> list:
@@ -1142,7 +1231,8 @@ def lane_moves(identifier: str) -> list | None:
         return None
 
 
-def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
+def hand_built_promotion(name: str, doc: dict | None = None, *,
+                         title: str | None = None) -> str | None:
     """What the promotion receipt says for a verdict a PERSON acts on — None
     for the one verdict a run is dispatched at.
 
@@ -1153,7 +1243,9 @@ def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     whoever's turn it actually is has no way to tell.
 
     The marks are named because they are applied in the same breath: the reader
-    can see that the labels which keep the fleet off this card are on it.
+    can see that the labels which keep the fleet off this card are on it —
+    the card's own, `card_marks(name, title)`, so a proof card's receipt names
+    `no-code` alone (DRE-6225).
 
     So is the lane it lands in, read off the vocabulary — `Hand-work` today,
     never a lane restated here. Since DRE-5322 the promoter writes that same
@@ -1165,7 +1257,7 @@ def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
     if is_promotable(name, doc):
         return None
     entry = record(name, doc)
-    marked = ", ".join(f"`{m}`" for m in marks(name, doc))
+    marked = ", ".join(f"`{m}`" for m in card_marks(name, title, doc))
     return (
         f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn in "
         f"{destination(name, doc)} — a person builds this; nothing was dispatched."
@@ -1659,9 +1751,15 @@ def render_markdown(doc: dict | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def stamp_card(identifier: str, name: str, why: str) -> int:
+def stamp_card(identifier: str, name: str, why: str, *,
+               title: str | None = None) -> int:
     """Write `name` onto `identifier`: the verdict comment plus the labels the
-    verdict declares. Returns 0 when it wrote, 1 when it refused.
+    card receives (`card_marks`). Returns 0 when it wrote, 1 when it refused.
+
+    The marks depend on the card's title — a proof card never receives a
+    person marker (DRE-6225) — so a caller that does not pass `title` has the
+    card read here, once, before anything is written: its callers keep calling
+    with three arguments.
 
     THE one write path, and it has two callers: this module's `stamp`
     subcommand, and `proof_and_demo.py`, which stamps the two cards it already
@@ -1675,8 +1773,10 @@ def stamp_card(identifier: str, name: str, why: str) -> int:
     if refusal is not None:
         print(f"refusing to stamp {identifier}: {refusal}", file=sys.stderr)
         return 1
+    if title is None:
+        title = (linear_ops.get_issue(identifier) or {}).get("title") or ""
     linear_ops.cmd_comment(identifier, verdict_comment(name, why))
-    for label in marks(name):
+    for label in card_marks(name, title):
         linear_ops.add_label(identifier, label)
     print(
         f"stamped {identifier} {name} → {destination(name)} "

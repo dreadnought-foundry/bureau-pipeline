@@ -394,8 +394,11 @@ def test_R6_a_dead_run_requeue_on_door_data_is_from_lane_conditional(monkeypatch
     with door_at(monkeypatch, stuck), wired(linear), contextlib.ExitStack() as stack:
         _nudge_stubs(stack)
         reconcile.main()
+    # Every hand mark the vocabulary declares is a door the requeue refuses
+    # (DRE-6225) — `hand-built` alone under today's file, never `no-code`.
     assert linear.writes == [("state", "DRE-301", "Todo", (), ("In Progress",),
-                              ("needs-human", "hand-built"))]
+                              ("needs-human", *reconcile.routing_verdict.hand_marks()))]
+    assert reconcile.routing_verdict.hand_marks() == ("hand-built",)
     assert any(reconcile.DEAD_TAG in body for _i, body in linear.comments)
 
 
