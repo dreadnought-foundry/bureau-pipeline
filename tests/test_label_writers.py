@@ -256,7 +256,40 @@ class EveryDoorIsWatched(unittest.TestCase):
             "def go(card):\n"
             "    tag(card, 'hand-built')\n",
         )
-        self.assertTrue(_named(found, rogue), found)
+        self.assertTrue(_named(found, f"handed in at scripts/{rogue}:7"), found)
+
+    def test_the_seam_imported_under_another_name_is_still_the_seam(self):
+        rogue = "zz_label_probe_alias.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "from linear_ops import add_label as tag\n\n"
+            "def go(card):\n"
+            "    tag(card, 'hand-built')\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:4"), found)
+
+    def test_the_seam_reached_by_getattr_is_reported_unread(self):
+        rogue = "zz_label_probe_getattr.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import linear_ops\n\n"
+            "def go(card, which):\n"
+            "    getattr(linear_ops, which)(card, 'x')\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:4"), found)
+
+    def test_python_running_the_write_layers_command_line_is_named(self):
+        rogue = "zz_label_probe_argv.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import os\n"
+            "import subprocess\n"
+            "import sys\n\n"
+            "_OPS = os.path.join(os.path.dirname(__file__), 'linear_ops.py')\n\n"
+            "def go(card):\n"
+            "    subprocess.run([sys.executable, _OPS, 'add-label', card, 'hand-built'])\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:8"), found)
 
     def test_a_helper_whose_label_is_safe_everywhere_passes(self):
         rogue = "zz_label_probe_helper_ok.py"

@@ -437,8 +437,8 @@ def person_marks(doc: dict | None = None) -> tuple:
     order, each once, plus `HAND_BUILT_LABEL`, which the CEO applies by hand
     whatever the vocabulary marks.
 
-    The one place that answer is spelled: `("operator-step", "no-code",
-    "hand-built")` since DRE-6227 flipped OPERATOR's marks. A card
+    The one place that answer is spelled: `('operator-step', 'no-code',
+    'hand-built')` since DRE-6227 flipped OPERATOR's marks. A card
     carrying `no-code` and nothing else is not thereby a person's — that is
     `hand_marks`.
     """
@@ -453,8 +453,8 @@ def person_marks(doc: dict | None = None) -> tuple:
 
 def hand_marks(doc: dict | None = None) -> tuple:
     """The person marks that say on their own that a person builds the card
-    (DRE-6225): `person_marks(doc)` without `no-code`. `("operator-step",
-    "hand-built")` since DRE-6227.
+    (DRE-6225): `person_marks(doc)` without `no-code`. `('operator-step',
+    'hand-built')` since DRE-6227.
 
     `no-code` alone is not one. It says the deliverable is live operator work,
     and a run may still author the runbook for it
@@ -470,7 +470,7 @@ def hand_marks(doc: dict | None = None) -> tuple:
 def retirement_lifts(doc: dict | None = None) -> tuple:
     """What a retirement takes off when the new verdict does not put it on
     too: `hand_marks(doc)` — `no-code` stays, because a person may mean it on
-    its own. `("operator-step", "hand-built")` since DRE-6227 — though no
+    its own. `('operator-step', 'hand-built')` since DRE-6227 — though no
     verdict applies `hand-built` any more, so only `operator-step` is ever
     lifted by `lifted_marks`."""
     return hand_marks(doc)
