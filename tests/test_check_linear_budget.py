@@ -97,7 +97,10 @@ def test_render_table_prints_unknown_for_an_unreadable_repo_and_a_grand_total():
             ("portico", "Medic", _log("linear-budget: 880 → 879 (spent 1 this run; window resets 16:00 PT)")),
         ]
     )
-    text = clb.render_table(rows, ["deltasolv"], hours=2, skipped=3)
+    text = clb.render_table(
+        rows, ["deltasolv"], hours=2,
+        skipped=[("atlas", 34310166200), ("portico", 34310170001)], empty=4,
+    )
     lines = text.splitlines()
     assert lines[0] == "linear budget, last 2h"
     assert "deltasolv" in text and "UNKNOWN" in text
@@ -105,7 +108,9 @@ def test_render_table_prints_unknown_for_an_unreadable_repo_and_a_grand_total():
     total_line = lines[-1]
     assert total_line.startswith("TOTAL") and " 21" in total_line
     assert "1 repo(s) UNKNOWN" in total_line
-    assert "3 run(s) skipped" in total_line
+    assert ("(2 run(s) skipped: log not available after 3 attempts — "
+            "atlas 34310166200, portico 34310170001)") in total_line
+    assert "(4 run(s) empty log: no job ran)" in total_line
     # sorted: atlas (20) above portico (1)
     assert text.index("atlas") < text.index("portico")
 
@@ -503,3 +508,131 @@ def test_a_split_process_covers_its_one_budget_line(monkeypatch):
     rows = clb.aggregate([("atlas", "Agent Plan", log)])
     got = {r["budget"]: r["total"] for r in rows}
     assert got == {"planner-oauth": 40, "": 11, "undeclared": 5}
+
+
+# ── DRE-3242: a run whose log is not yet retrievable is retried, then named ──
+# `gh run view --log` answers nonzero for a run still queued or running, and a
+# look a few seconds later usually succeeds. On 2026-09-05 at 17:20 PT a single
+# read dropped 136 of 222 runs into a bare count. Each run is now read up to
+# three times, an exit-0 empty log (every job skipped) is its own note and
+# never retried, and a run still unreadable is named. These drive `main` off a
+# fake standing in for `_gh` — no live `gh` — and the back-off off a recorder.
+
+import json as _json  # noqa: E402
+import subprocess  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+import pytest  # noqa: E402
+
+_IN_PROGRESS = ("run {id} is still in progress; logs will be available when it "
+                "is complete")
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """The back-off seam, set to zero for every test in this file: the delays
+    asked for are recorded and nothing sleeps."""
+    asked: list[float] = []
+    monkeypatch.setattr(clb, "_sleep", asked.append, raising=False)
+    return asked
+
+
+class _FakeGh:
+    """Stands in for `_gh`. `run list` answers each repo's runs, created now;
+    `run view <id> --log` answers the next of that run's scripted replies,
+    each `(rc, stdout, stderr)`, repeating the last one."""
+
+    def __init__(self, runs: dict[str, list[tuple[int, str]]],
+                 replies: dict[int, list[tuple[int, str, str]]]):
+        self.runs, self.replies = runs, replies
+        self.views: dict[int, int] = {}
+
+    def __call__(self, *args: str) -> subprocess.CompletedProcess:
+        if args[:2] == ("run", "list"):
+            repo = args[args.index("-R") + 1]
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            out = [{"databaseId": rid, "workflowName": wf, "createdAt": now}
+                   for rid, wf in self.runs.get(repo, [])]
+            return subprocess.CompletedProcess(args, 0, _json.dumps(out), "")
+        assert args[:2] == ("run", "view") and "--log" in args, args
+        rid = int(args[2])
+        n = self.views[rid] = self.views.get(rid, 0) + 1
+        script = self.replies[rid]
+        rc, out, err = script[min(n, len(script)) - 1]
+        return subprocess.CompletedProcess(args, rc, out, err)
+
+
+def _drive(monkeypatch, capsys, fake: _FakeGh,
+           repo_map: dict[str, str]) -> tuple[str, str]:
+    monkeypatch.setattr(clb, "_gh", fake)
+    monkeypatch.setattr(clb, "load_repo_map", lambda: repo_map)
+    assert clb.main(["--hours", "1"]) == 0
+    got = capsys.readouterr()
+    return got.out, got.err
+
+
+_SPENT_20 = "linear-budget: 900 → 880 (spent 20 this run; window resets 16:00 PT; budget: fleet)"
+
+
+def test_a_run_still_in_progress_is_read_again_and_counted(monkeypatch, capsys, _no_sleep):
+    """Nonzero twice — `still in progress` — then the log: the run is counted
+    in its row, the footer says nothing was skipped, and `run view` was called
+    exactly three times for it, with a short back-off between the reads."""
+    rid = 34310166200
+    busy = (1, "", _IN_PROGRESS.format(id=rid))
+    fake = _FakeGh({"o/atlas": [(rid, "Reconcile")]},
+                   {rid: [busy, busy, (0, _log(_SPENT_20), "")]})
+    out, _err = _drive(monkeypatch, capsys, fake, {"atlas": "o/atlas"})
+    assert fake.views[rid] == 3
+    row = next(line for line in out.splitlines() if line.startswith("atlas"))
+    assert row.split()[2:4] == ["1", "20"]
+    assert out.splitlines()[-1].split()[:3] == ["TOTAL", "1", "20"]
+    assert "skipped" not in out and "empty log" not in out
+    assert len(_no_sleep) == 2 and 0 < sum(_no_sleep) < 30
+
+
+def test_a_run_never_readable_is_named_after_three_attempts(monkeypatch, capsys, _no_sleep):
+    """Nonzero every time: the reads stop at three, the run is counted in the
+    skipped number and named `<slug> <run id>`, and the last thing `gh` said
+    for it goes to stderr."""
+    gone, fine = 34310170001, 34310170002
+    fake = _FakeGh(
+        {"o/atlas": [(fine, "Medic")], "o/portico": [(gone, "Reconcile")]},
+        {gone: [(1, "", "log not found: 34310170001")],
+         fine: [(0, _log(_SPENT_20), "")]},
+    )
+    out, err = _drive(monkeypatch, capsys, fake,
+                      {"atlas": "o/atlas", "portico": "o/portico"})
+    assert fake.views == {fine: 1, gone: 3}
+    tail = out.splitlines()[-1]
+    assert tail.split()[:3] == ["TOTAL", "1", "20"]
+    assert ("(1 run(s) skipped: log not available after 3 attempts — "
+            "portico 34310170001)") in tail
+    assert "empty log" not in tail
+    assert "34310170001" in err and "log not found: 34310170001" in err
+    assert len(_no_sleep) == 2
+
+
+def test_an_empty_log_is_read_once_and_noted_on_its_own(monkeypatch, capsys, _no_sleep):
+    """Exit 0 and nothing printed: a completed run whose every job was
+    skipped. A second look returns the same nothing, so there is one read; it
+    is not a run in any row and not in the "log not available" count — it is
+    counted in its own note."""
+    rid = 34310180000
+    fake = _FakeGh({"o/atlas": [(rid, "Agent Task")]}, {rid: [(0, "", "")]})
+    out, err = _drive(monkeypatch, capsys, fake, {"atlas": "o/atlas"})
+    assert fake.views == {rid: 1}
+    assert _no_sleep == []
+    tail = out.splitlines()[-1]
+    assert tail.split()[:3] == ["TOTAL", "0", "0"]
+    assert "skipped" not in out
+    assert "(1 run(s) empty log: no job ran)" in tail
+    assert err == ""
+
+
+def test_the_docstring_no_longer_says_an_unreadable_run_is_skipped():
+    """The module says what it does: a run whose log cannot be read is retried
+    and then named, not quietly skipped into a count."""
+    doc = " ".join(clb.__doc__.split())
+    assert "is skipped and counted in the `skipped` note" not in doc
+    assert "named" in doc and "empty log" in doc
