@@ -107,6 +107,15 @@ def region(additions=("* (none)",), amendments=("* (none)",), green_lit=7, curre
     ])
 
 
+def steady_description() -> str:
+    """DRE-3164's record once its gap is filled (DRE-6414): the two cards that
+    joined after the green light named as `unrecorded:`, in Linear's
+    rendering — the record a steady epic carries from its second sweep on."""
+    ops = _Epic(live_description(), seven_then_two())
+    mid_epic.refresh_epic_growth(ops, EPIC)
+    return ops.description
+
+
 def seven_then_two():
     """DRE-3164's roster as its record states it: seven cards at the green
     light, two since."""
@@ -192,26 +201,39 @@ class TestTheLiveShapeConverges:
         assert parsed["additions"] == [] and parsed["amendments"] == []
         assert "\n\n* (none)\n" in live_description()
 
+    # The capture is itself a record gap (DRE-6414): green-lit at 7, running
+    # 9, and "(none)" where the two cards that joined should be named. The
+    # first refresh names them, once, as `unrecorded:`; from then on the
+    # record Linear re-renders is the record it states.
+
     def test_the_region_linear_re_rendered_is_not_rewritten(self):
         ops = _Epic(live_description(), seven_then_two())
         report = mid_epic.refresh_epic_growth(ops, EPIC)
         assert (report["green_lit"], report["current"]) == (7, 9)
-        assert ops.writes == [], (
-            "the record says green-lit at 7, running 9, nothing added, nothing "
+        assert len(ops.writes) == 1, "the record gap is filled once"
+        assert [a["id"] for a in mid_epic.parse_artifact(ops.description)["additions"]] \
+            == ["DRE-3301", "DRE-3302"]
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        assert len(ops.writes) == 1, (
+            "the record says green-lit at 7, running 9, two joined, nothing "
             "amended — and so does Linear's copy of it; rewriting it only "
             "changes `-` back to `*` and spends two requests doing so"
         )
 
     def test_a_steady_epic_costs_no_write_on_any_sweep(self):
         ops = _Epic(live_description(), seven_then_two())
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        written = len(ops.writes)
         for _ in range(4):
             mid_epic.refresh_epic_growth(ops, EPIC)
-        assert ops.writes == []
+        assert len(ops.writes) == written
 
     def test_the_epic_body_is_left_exactly_as_linear_has_it(self):
         ops = _Epic(live_description(), seven_then_two())
         mid_epic.refresh_epic_growth(ops, EPIC)
-        assert ops.description == live_description()
+        settled = ops.description
+        mid_epic.refresh_epic_growth(ops, EPIC)
+        assert ops.description == settled
 
     def test_a_record_written_once_converges_after_linear_re_renders_it(self):
         """The first sweep of a new epic writes its record; Linear re-renders
@@ -246,7 +268,8 @@ class TestAGenuineChangeStillWrites:
             ops, EPIC, add={"id": "DRE-3301", "because": "a second call site"}
         )
         assert len(ops.writes) == 1
-        assert mid_epic.parse_artifact(ops.description)["additions"] == [
+        additions = mid_epic.parse_artifact(ops.description)["additions"]
+        assert [a for a in additions if a["id"] == "DRE-3301"] == [
             {"id": "DRE-3301", "because": "a second call site"}
         ]
 
@@ -331,19 +354,19 @@ class TestLinearsBulletsAreRead:
 # ===========================================================================
 class TestTheRecordCanBeHandedIn:
     def test_refresh_reads_nothing_when_handed_the_record(self):
-        ops = _Epic(live_description(), seven_then_two())
+        ops = _Epic(steady_description(), seven_then_two())
         report = mid_epic.refresh_epic_growth(ops, EPIC, issue=ops.record())
         assert ops.reads == []
         assert (report["green_lit"], report["current"]) == (7, 9)
         assert ops.writes == []
 
     def test_last_green_light_reads_nothing_when_handed_the_record(self):
-        ops = _Epic(live_description(), seven_then_two())
+        ops = _Epic(steady_description(), seven_then_two())
         assert mid_epic.last_green_light(ops, EPIC, issue=ops.record()) == GREEN_LIGHT
         assert ops.reads == []
 
     def test_without_a_record_both_read_as_they_always_have(self):
-        ops = _Epic(live_description(), seven_then_two())
+        ops = _Epic(steady_description(), seven_then_two())
         mid_epic.refresh_epic_growth(ops, EPIC)
         assert mid_epic.last_green_light(ops, EPIC) == GREEN_LIGHT
         assert len(ops.reads) == 2
@@ -351,7 +374,7 @@ class TestTheRecordCanBeHandedIn:
     def test_a_first_page_that_is_the_last_is_the_count(self):
         page = {"nodes": [{"id": f"c{n}"} for n in range(40)],
                 "pageInfo": {"hasNextPage": False, "endCursor": "c39"}}
-        ops = _Epic(live_description(), seven_then_two(), uuid="uuid-3164",
+        ops = _Epic(steady_description(), seven_then_two(), uuid="uuid-3164",
                     comment_page=page)
         report = mid_epic.refresh_epic_growth(ops, EPIC, issue=ops.record())
         assert report["comments"] == 40
@@ -362,7 +385,7 @@ class TestTheRecordCanBeHandedIn:
         is paged, never read off a first page that says there is more."""
         page = {"nodes": [{"id": f"c{n}"} for n in range(250)],
                 "pageInfo": {"hasNextPage": True, "endCursor": "c249"}}
-        ops = _Epic(live_description(), seven_then_two(), uuid="uuid-3164",
+        ops = _Epic(steady_description(), seven_then_two(), uuid="uuid-3164",
                     comment_page=page, total_comments=1850)
         report = mid_epic.refresh_epic_growth(ops, EPIC, issue=ops.record())
         assert report["comments"] == 1850
@@ -377,7 +400,7 @@ class TestTheSweepPath:
         """Through the real `linear_ops` module, every request counted: the
         epic's read and its one comment page — no `get_issue`, no
         `issueUpdate`. Before this it was four requests an epic, every pass."""
-        epic = _Epic(live_description(), seven_then_two(), uuid="uuid-3164")
+        epic = _Epic(steady_description(), seven_then_two(), uuid="uuid-3164")
         sent: list[str] = []
 
         def gql(query, variables=None):

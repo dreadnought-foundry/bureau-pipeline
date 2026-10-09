@@ -54,6 +54,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import code_owner_hold  # noqa: E402
 import console_escalation  # noqa: E402
+import epic_growth  # noqa: E402
 import green_light_rows  # noqa: E402
 import lane_contract  # noqa: E402
 import planning_escalation  # noqa: E402
@@ -66,7 +67,7 @@ from test_no_unplanned_ready_lane_writer import _Staged  # noqa: E402
 # --------------------------------------------------------------------------- #
 
 #: The decision kinds: a row that asks the CEO to choose, held to the lines.
-DECISION_KINDS = ("question", "agent-escalation")
+DECISION_KINDS = ("question", "agent-escalation", "epic-growth")
 
 #: The kinds that are not questions, each with the reason it is excluded.
 EXCLUDED_KINDS = {
@@ -246,6 +247,22 @@ def _review_cap_question() -> None:
         assert esc.recommendation is not None
 
 
+def _epic_growth_question() -> None:
+    """`reconcile.py#ask_epic_growth_question` (DRE-6414): the sweep's question
+    about an epic grown past its green light is the card's description,
+    `epic_growth.body` — on both of its recommendations, with the joined cards
+    named by route, and with none."""
+    joined = [
+        {"id": "DRE-900", "route": "addition", "because": "a second call site"},
+        {"id": "DRE-901", "route": "unrecorded",
+         "because": "unrecorded: joined 2026-10-03 11:30 PT with no discovery record"},
+    ]
+    for approved, running, cards in ((10, 25, joined), (10, 50, joined), (17, 41, [])):
+        esc = assert_declares_the_lines(
+            epic_growth.body("DRE-4721", approved, running, cards))
+        assert esc.recommendation in (epic_growth.RE_APPROVE, epic_growth.SPLIT)
+
+
 def _step_lines(write) -> list:
     """The write's own step, from its first line up to the write line, read
     through `step_shell.workflow_source` and then as the shell reads it."""
@@ -304,6 +321,7 @@ CASES = {
     "planning_escalation.py#escalate": _question_notes,
     "code_owner_hold.py#park": _code_owner_note,
     "reconcile.py#hand_review_nudge_to_person": _review_cap_question,
+    "reconcile.py#ask_epic_growth_question": _epic_growth_question,
     "agent-task.yml#Report result to Linear":
         _workflow_case("agent-task.yml#Report result to Linear"),
     "proof-task.yml#Report proof result to Linear":

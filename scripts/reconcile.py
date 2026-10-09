@@ -154,6 +154,7 @@ import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and it
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
+import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
@@ -258,6 +259,7 @@ import reviewer_down  # noqa: E402
 # that module's writer. It composes no hold body and spells none of its
 # strings.
 import reviewer_environment  # noqa: E402
+import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -5391,6 +5393,136 @@ def review_cap_park_unfinished(card: dict) -> str | None:
     if hold.reason_of(labels, bodies) != "review-cap-spent":
         return None
     return hold.read_stamp(bodies)["at"]
+
+
+# DRE-6414: the lane the growth question is created in — the CEO's "needs you"
+# queue. The QUESTION goes there, on a card of its own; the epic never does,
+# because a Green Light epic stops promoting its children and a move back to
+# In Progress reads as a fresh green light.
+EPIC_GROWTH_LANE = "Green Light"
+# Where the sweep closes a question the CEO answered.
+EPIC_GROWTH_CLOSED_LANE = "Done"
+
+
+def ask_epic_growth_question(epic: str, report: dict) -> str:
+    """The epic has grown past the size the CEO approved: ask him, once, on a
+    card of its own in Green Light, and record the asking on the epic
+    (DRE-6414).
+
+    The card is CREATED in Green Light in the one write that mints it, as the
+    fleet-outage card is created in Triage (DRE-5292): `no-code` and no
+    `agent:*` role, so no run is ever dispatched for it, and no parent — a
+    child of the epic would be one more card in it, and would be promoted.
+    Its description is `epic_growth.body`, the three declared lines. The epic
+    stays In Progress and keeps promoting: nothing is paused, labeled or held.
+
+    The marker is the `open` line on the epic's growth record, and while it
+    stands nothing is asked again. A card created on a pass that died, or
+    whose record write was contended, carries no line yet — so an open card
+    by this epic's title prefix that no line names is that card, and is
+    recorded rather than asked twice. Returns the question card.
+    """
+    approved, running = report["approved"], report["current"]
+    asked = mid_epic._now()
+    named = {q["id"] for q in report.get("questions") or []}
+    found = linear_ops.find_open_prefix(epic_growth.title_prefix(epic))
+    if found and found["identifier"] not in named:
+        question = found["identifier"]
+        print(f"epic-growth: {epic} question {question} was created and never "
+              "recorded — recording it, not asking twice")
+    else:
+        issue = linear_ops.create_card(
+            epic_growth.title(epic, approved, running),
+            epic_growth.body(epic, approved, running, report.get("joined") or []),
+            repo_slug=REPO_SLUG,
+            labels=(linear_ops.NO_CODE_LABEL,),
+            lane=EPIC_GROWTH_LANE,
+        )
+        question = issue["identifier"]
+    recorded = mid_epic.refresh_epic_growth(linear_ops, epic, question={
+        "id": question, "asked": asked, "at": running,
+        "status": mid_epic.QUESTION_OPEN, "settled": None,
+    })
+    if recorded.get("contended"):
+        print(f"epic-growth: {epic} question {question} not recorded on the "
+              f"epic — {recorded['contended']}; the next sweep records it")
+    print(f"epic-growth: {epic} grew past its green light — approved at "
+          f"{approved} cards, running {running}; asked {question} in "
+          f"{EPIC_GROWTH_LANE}")
+    return question
+
+
+def settle_epic_growth_question(epic: str, question: dict,
+                                approved: int | None) -> str | None:
+    """Read the CEO's answer to the open growth question and act on it
+    (DRE-6414). Returns the outcome, or None while the question is open.
+    `approved` is the size the question was asked against, for the
+    amendment's line.
+
+    One read of the question card's thread, the whole of it, and his newest
+    signed comment since it was asked decides (`epic_growth.answer`, the
+    qualifying rule `green_light_reply` uses):
+
+      * `re-approve` — the card is closed `Done` under one closing comment
+        and the record's line becomes `re-approved`, so the next question is
+        measured from the count he answered at. The epic stays In Progress.
+      * `split` — a mid-epic amendment is filed on the epic
+        (`mid_epic.discovery`), which moves it to Planning for a re-plan
+        along its seam; then the card closes the same way and the line
+        becomes `split`.
+      * his words neither rule reads, or a console answer that was refused or
+        could not be checked — left for a person, with one line, and nothing
+        is asked again.
+      * no answer, and the card has left Green Light — closed, canceled or
+        dragged anywhere by hand: the question is withdrawn. Nothing is moved
+        or posted; the record's line changes, and the next question is
+        measured from the count this one was asked at.
+
+    The closing comment is read back off the thread before anything is
+    written: a pass that filed the amendment and stopped before settling the
+    record files no second one, and posts no second comment.
+    """
+    import green_light_reply  # noqa: PLC0415 — the CEO's declared Linear ids
+
+    ident = question["id"]
+    nodes, viewer = linear_ops._thread_and_viewer(
+        ident, "body", "user", "createdAt", whole=True)
+    voices = spoken_thread.voices(nodes, viewer, card=ident)
+    outcome = epic_growth.answer(nodes, voices, green_light_reply.ceo_user_ids(),
+                                 after=question["asked"])
+    now = mid_epic._now()
+    if outcome == epic_growth.UNREADABLE:
+        print(f"epic-growth: {epic} question {ident} answered in words this "
+              "cannot read — left")
+        return None
+    if outcome is None:
+        lane = (linear_ops.get_issue(ident, fresh=True).get("state") or {}).get("name")
+        if lane in mid_epic.GREEN_LIGHT_LANES:
+            return None
+        mid_epic.refresh_epic_growth(linear_ops, epic, question=dict(
+            question, status=mid_epic.QUESTION_WITHDRAWN, settled=now))
+        print(f"epic-growth: {epic} question {ident} left {EPIC_GROWTH_LANE} "
+              f"({lane}) unanswered — withdrawn at {question['at']} cards")
+        return mid_epic.QUESTION_WITHDRAWN
+    closed = any(epic_growth.CLOSING_MARK in (node.get("body") or "") for node in nodes)
+    if outcome == epic_growth.SPLIT and not closed:
+        mid_epic.discovery(
+            linear_ops, epic, kind=mid_epic.AMENDMENT,
+            because=epic_growth.split_because(
+                approved if approved is not None else "an unknown size",
+                question["at"], ident),
+        )
+    if not closed:
+        linear_ops.cmd_comment(ident, epic_growth.closing_comment(
+            outcome, epic=epic, running=question["at"], at=_pt(now)))
+    linear_ops.cmd_state(ident, EPIC_GROWTH_CLOSED_LANE)
+    status = (mid_epic.QUESTION_RE_APPROVED if outcome == epic_growth.RE_APPROVE
+              else mid_epic.QUESTION_SPLIT)
+    mid_epic.refresh_epic_growth(linear_ops, epic, question=dict(
+        question, status=status, settled=now))
+    print(f"epic-growth: {epic} question {ident} answered {outcome} at "
+          f"{question['at']} cards — closed")
+    return status
 
 
 def review_standing(pr: dict) -> tuple[str, str, str]:
@@ -11917,6 +12049,12 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     unapproved one with no single decision being wrong. Riding the sweep that
     already runs is what makes it visible without anyone remembering to look.
 
+    Far past the approval the CEO is asked (DRE-6414): an epic past the
+    threshold in `config/epic-growth.json` with no growth question open gets
+    one (`ask_epic_growth_question`), and an open one is settled on his
+    answer (`settle_epic_growth_question`) — after the refresh, never on an
+    idle pass, and never off a refresh that reported `contended`.
+
     A read that fails prints and moves on: a KPI is never worth failing a sweep
     for, and one epic's unreadable history must not cost the others theirs.
 
@@ -11957,6 +12095,22 @@ def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
             # so and carries on — before DRE-3343 this raised, and one full epic
             # took the whole phase down with it.
             print(f"epic-growth: {epic} took no comment — {report['capped']}")
+        # The growth question (DRE-6414): an open one is settled on his answer,
+        # and an epic past the threshold with none open is asked. Never on an
+        # idle pass, and never off a contended refresh — its numbers came from
+        # a read already known to be stale.
+        if not _idle_pass and not report.get("contended"):
+            try:
+                open_question = next(
+                    (q for q in report.get("questions") or []
+                     if q.get("status") == mid_epic.QUESTION_OPEN), None)
+                if open_question is not None:
+                    settle_epic_growth_question(epic, open_question, report.get("approved"))
+                elif epic_growth.crossed(report.get("approved"), report.get("current")):
+                    ask_epic_growth_question(epic, report)
+            except Exception as exc:  # noqa: BLE001 — one epic's question never ends the phase
+                _write_failures.append(f"epic-growth question on {epic}: {exc}")
+                print(f"ERROR: epic-growth: {epic} question — {exc}", file=sys.stderr)
         total = report.get("comments")
         if total is None:
             continue
