@@ -106,8 +106,10 @@ line but no receipt, because a hand-off would close the marker and stop the
 recovery. An unknown age is never stale, and neither is a marker whose
 stated reset is still ahead (a day out, on a weekly cap): the re-entry is
 coming, and a hand-off would close the marker before it did. Only a held
-card is handed off before its reset. The marker's own paragraph names the
-clock.
+card is handed off before its reset. A Planning review death's clock runs
+from the later of the marker and its reset, because the watcher asks for the
+review only once the reset has passed: a reset that only just arrived has not
+yet given the watcher its turn. The marker's own paragraph names the clock.
 
 ## The writes are injected, and why
 
@@ -497,15 +499,22 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # DRE-4208: the clock, read off the marker's own comment node. An
         # unknown age is never stale.
         age = marker_age_minutes(marker_node(card), now)
-        stood = age is not None and age >= LIMIT_DEATH_CLOCK_MINUTES
         # Stage 2 fix #23: a hold stops agent work, not bookkeeping. Asked
         # after the marker is read because the answer depends on its stage.
         # A held card is exempt from being re-entered, never from being
         # noticed: past the clock it is handed to a person below.
         held = _held(card) and hold_blocks_stage(marker.get("stage") or "")
+        watchers = marker.get("stage") == "review" and _lane(card) == PLANNING_LANE
+        # The watcher asks for the review only once the reset has passed, so
+        # its clock runs from the later of the marker and the reset: a reset
+        # that has only just arrived has not yet given it its turn. A held
+        # card keeps the marker's own age — nothing re-enters it.
+        clock = age
+        if watchers and not held and age is not None and marker.get("reset") is not None:
+            clock = min(age, (now - marker["reset"]).total_seconds() / 60)
+        stood = clock is not None and clock >= LIMIT_DEATH_CLOCK_MINUTES
         if held and not stood:
             continue
-        watchers = marker.get("stage") == "review" and _lane(card) == PLANNING_LANE
         reason = handoff_reason(card, marker, assumed_deaths=count_assumed_deaths(card, now))
         # A stated reset still to come is a real wait however long the marker
         # has stood: this sweep (or the watcher) answers it when it arrives,
@@ -526,7 +535,7 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             # Told once, and the receipt closes the marker — no WIP spent, and
             # the card is the sweep's again next pass.
             lops.cmd_comment(ident, handoff_receipt(marker, reason))
-            lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('. ')[0]}")
+            lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('. ')[0].rstrip('.')}")
             if alarm:
                 lines.append(alarm)
             continue

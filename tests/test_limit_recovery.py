@@ -1109,7 +1109,10 @@ def _rows():
         "handoff": (lambda age: _clock_card(marker(reset=None), age), {}),
         "held": (lambda age: _clock_card(marker(kind="linear", reset=None), age,
                                          labels=(dead_run.HOLD_LABEL,)), {}),
-        "watcher": (lambda age: _clock_card(_review_death(), age, lane="Planning"), {}),
+        # The watcher's clock runs from its reset, so the row's reset passed a
+        # whole clock ago: the watcher has had its turn.
+        "watcher": (lambda age: _clock_card(_review_death(minutes_ago=STOOD * 60), age,
+                                            lane="Planning"), {}),
         "room": (lambda age: _clock_card(_due(), age), {}),
         "no-room": (lambda age: _clock_card(_due(), age), {"wip_room": 0}),
         "no-trigger": (lambda age: _clock_card(_waiting_on_switch(), age), {}),
@@ -1313,6 +1316,62 @@ def test_a_watcher_s_review_death_with_its_reset_still_ahead_is_not_handed_off()
     lines = s.recover([_clock_card(late, STOOD, lane="Planning")], now=NOW)
     assert s.comments == [] and _errors(lines) == []
     assert "is the re-review watcher's" in lines[0]
+
+
+def _just_reset(minutes_ago=5):
+    reset = (NOW - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"🪦 limit-death: kind=claude stage=review reset={reset} run=777"
+
+
+def test_a_watcher_s_review_death_just_past_its_reset_is_not_handed_off():
+    """A stated reset more than the clock after the marker: the first sweep
+    after it is the first the watcher could act on, so the watcher has not
+    failed to come — its clock runs from the reset."""
+    s = Seams()
+    lines = s.recover([_clock_card(_just_reset(), 16, lane="Planning")], now=NOW)
+    assert s.comments == [] and _errors(lines) == []
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert "is the re-review watcher's" in lines[0]
+
+
+def test_a_watcher_s_review_death_is_handed_off_a_clock_after_its_reset():
+    card = _clock_card(_just_reset(), 16, lane="Planning")
+    s = Seams()
+    hours = limit_recovery.LIMIT_DEATH_CLOCK_MINUTES / 60
+    s.recover([card], now=NOW + timedelta(hours=hours) - timedelta(minutes=10))
+    assert s.comments == []
+    lines = s.recover([card], now=NOW + timedelta(hours=hours))
+    assert len(s.comments) == 1
+    body = s.comments[0][1]
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert f"{limit_recovery.STOOD_PHRASE} 22.0 hours" in body, "the age is the marker's own"
+    errors = _errors(lines)
+    assert len(errors) == 1 and errors[0].startswith(_stood_error())
+
+
+def test_a_held_watcher_s_review_death_keeps_the_marker_s_own_clock():
+    """Nothing re-enters a held card, so its clock is the marker's age."""
+    s = Seams()
+    lines = s.recover([_clock_card(_just_reset(), 16, lane="Planning",
+                                   labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert len(_errors(lines)) == 1
+
+
+def test_the_review_marker_says_the_plan_review_clock_runs_from_the_reset():
+    for kwargs in ({}, {"reset_assumed": True}):
+        body = dead_run.limit_marker("claude", "review", RESET, RUN, **kwargs)
+        assert "of the reset, for an epic's plan review" in body
+        assert body.rstrip().endswith("a person must act.")
+    assert "of the reset" not in dead_run.limit_marker("claude", "build", RESET, RUN)
+
+
+def test_a_reason_s_closing_period_is_not_printed_in_the_handed_off_line(monkeypatch):
+    monkeypatch.setattr(limit_recovery, "handoff_reason",
+                        lambda *a, **kw: "the run named nothing.")
+    s = Seams()
+    lines = s.recover([_clock_card(marker(reset=None), FRESH)], now=NOW)
+    assert lines == ["limit-recovery: DRE-4208 handed to a human — the run named nothing"]
 
 
 def test_a_held_card_waiting_on_a_later_reset_is_still_noticed():
