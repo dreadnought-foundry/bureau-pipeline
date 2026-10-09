@@ -94,6 +94,12 @@ class _Board:
         self.labels: list[str] = []
         self.state = "In Review"
         self.pr_notes: list[str] = []
+        # How many pull request notes GitHub refuses next (`_post_pr_note`
+        # answers False), whether the run dies at the next one instead, and
+        # the opening of a card comment the run dies writing.
+        self.refuse_pr_notes = 0
+        self.die_on_pr_note = False
+        self.die_on_comment: str | None = None
 
     def card(self):
         return {
@@ -115,6 +121,8 @@ class _Board:
 
         def comment(ident, body, *_flags):
             assert ident == IDENT
+            if self.die_on_comment and body.startswith(self.die_on_comment):
+                raise RuntimeError("the run died writing a card comment")
             posted.append(body)
             self.comments.append(body)
 
@@ -129,6 +137,11 @@ class _Board:
                 self.state = to
 
         def pr_note(number, body):
+            if self.die_on_pr_note:
+                raise RuntimeError("the run died before the blocker posted")
+            if self.refuse_pr_notes:
+                self.refuse_pr_notes -= 1
+                return False
             # Posted as the worker bot, so the next sweep's pull request
             # carries it the way GitHub would.
             self.pr_notes.append(body)

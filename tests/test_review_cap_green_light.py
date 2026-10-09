@@ -19,7 +19,10 @@ label on the card, means nothing is written a second time.
 WHAT THIS PINS, one section per acceptance criterion of the card:
 
   1. The order of the writes, and a second sweep over the same head writing
-     nothing; the read door's live lane gating the first write.
+     nothing; the read door's live lane gating the first write; a blocker
+     that did not post parking nothing; and a park that stopped after its
+     hold — the run died, or the blocker did not post — finished by the next
+     sweep, which writes only what is missing.
   2. The real `fix_context` readers over a REST thread holding the posted
      blocker and a person's decision: PROCEED with it, SKIP `no-blocker`
      without it.
@@ -173,8 +176,41 @@ class TestTheParkWritesInOrder:
         again = _card(
             labels=(reconcile.HOLD_LABEL,),
             extra=[{"body": b, "createdAt": "2026-09-30T01:00:00Z"} for b in bodies])
+        again["state"] = {"name": "Green Light"}
         log = _Writes().run(again, _pr_with(_qa(GATE_NOTE), _worker(blocker)))
         assert log == []
+
+    def test_held_and_asked_but_still_in_review_only_moves(self):
+        # The run died between the blocker and the move: everything is said,
+        # and the park is the one write left.
+        first = _Writes().run(_card(), _pr_with(_qa(GATE_NOTE)))
+        bodies = [entry[2] for entry in first if entry[0] == "comment"]
+        blocker = next(entry[2] for entry in first if entry[0] == "pr")
+        stopped = _card(
+            labels=(reconcile.HOLD_LABEL,),
+            extra=[{"body": b, "createdAt": "2026-09-30T01:00:00Z"} for b in bodies])
+        log = _Writes().run(stopped, _pr_with(_qa(GATE_NOTE), _worker(blocker)))
+        assert log == [("advance", IDENT, "Green Light", reconcile.REVIEW_LANE)]
+
+    def test_a_blocker_that_did_not_post_does_not_park(self):
+        # `_post_pr_note` records a failed post and answers False. Parked
+        # anyway, the card would leave the review lane with no blocker for a
+        # person's Operator decision to answer, and no sweep would retry it.
+        log: list = []
+        with patch.object(reconcile.linear_ops, "add_label",
+                          side_effect=lambda i, n: log.append(("label", i, n))), \
+             patch.object(reconcile.linear_ops, "cmd_comment",
+                          side_effect=lambda i, b, *f: log.append(("comment", i, b))), \
+             patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+             patch.object(reconcile, "_post_pr_note",
+                          side_effect=lambda n, b: log.append(("pr", n, b)) and False), \
+             patch.object(reconcile, "age_minutes", return_value=375):
+            reconcile.hand_review_nudge_to_person(
+                _card(), _pr_with(_qa(GATE_NOTE)), reconcile.GATE_NUDGE_KEY,
+                "APPROVE", "FAIL")
+        assert [entry[0] for entry in log] == [
+            "label", "comment", "comment", "pr"], log
+        advance.assert_not_called()
 
     def test_a_key_quoted_by_a_person_is_not_the_blocker(self):
         # Only the worker bot's own comment counts as asked; a person quoting
@@ -211,6 +247,98 @@ class TestTheParkWritesInOrder:
             log = _Writes().run(_card(), _pr_with())
         assert [entry[0] for entry in log] == [
             "label", "comment", "comment", "pr", "advance"], log
+
+
+class TestAnUnfinishedParkIsFinished:
+    """The whole sweep, twice: the first stops part-way after the hold, and
+    the next — which skips every other held card — finishes the park and
+    repeats nothing the first one wrote."""
+
+    def _spent_board(self):
+        board = _Board()
+        for n in range(1, 4):
+            board.comments.append(_receipt(reconcile.GATE_NUDGE_KEY, n)["body"])
+        return board, _pr(critic="APPROVE", verifier="FAIL")
+
+    def _held_in_review(self, board):
+        assert board.state == reconcile.REVIEW_LANE
+        assert reconcile.held(board.card())
+        assert reconcile.review_cap_park_unfinished(board.card()) == HEAD
+
+    def _parked_once(self, board):
+        assert board.state == "Green Light"
+        assert [b for b in board.comments if b.startswith("🔒 hold:")] == [STAMP]
+        assert len([b for b in board.comments
+                    if b.startswith(f"🚨 review-nudge-cap PR #{NUMBER} @{HEAD}:")]) == 1
+        assert len(board.pr_notes) == 1
+        assert board.pr_notes[0] == review_cap_question.pr_blocker(
+            # _Board's age_minutes answers 999.
+            **_evidence(gate_note_line=None, hours=999 / 60))
+
+    def test_a_run_that_died_right_after_the_hold_is_finished(self):
+        board, pr = self._spent_board()
+        board.die_on_comment = "🚨 review-nudge-cap"
+        with pytest.raises(RuntimeError):
+            board.sweep(pr)
+        self._held_in_review(board)
+        assert board.pr_notes == []
+        board.die_on_comment = None
+        nudge, cmd_state, posted = board.sweep(pr)
+        nudge.assert_not_called()
+        cmd_state.assert_not_called()
+        # The question only: the hold it died after is not written twice.
+        assert len(posted) == 1, posted
+        assert posted[0].startswith(f"🚨 review-nudge-cap PR #{NUMBER} @{HEAD}:")
+        self._parked_once(board)
+
+    def test_a_blocker_that_did_not_post_is_posted_and_parked_next_sweep(self):
+        board, pr = self._spent_board()
+        board.refuse_pr_notes = 1
+        board.sweep(pr)
+        self._held_in_review(board)
+        assert board.pr_notes == []
+        _, _, posted = board.sweep(pr)
+        assert posted == []  # the hold and the question are not repeated
+        self._parked_once(board)
+
+    def test_a_run_that_died_at_the_blocker_is_finished(self):
+        board, pr = self._spent_board()
+        board.die_on_pr_note = True
+        with pytest.raises(RuntimeError):
+            board.sweep(pr)
+        self._held_in_review(board)
+        board.die_on_pr_note = False
+        board.sweep(pr)
+        self._parked_once(board)
+
+    def test_a_parked_card_is_not_touched_again(self):
+        board, pr = self._spent_board()
+        board.sweep(pr)
+        self._parked_once(board)
+        before = (list(board.comments), list(board.pr_notes), board.state)
+        _, _, posted = board.sweep(pr)
+        assert posted == []
+        assert (board.comments, board.pr_notes, board.state) == before
+
+    def test_a_new_head_leaves_the_unfinished_park_to_the_holds_lane(self):
+        board, pr = self._spent_board()
+        board.refuse_pr_notes = 1
+        board.sweep(pr)
+        self._held_in_review(board)
+        nudge, _, posted = board.sweep(_pr(head="c" * 40, critic="APPROVE",
+                                          verifier="FAIL"))
+        nudge.assert_not_called()
+        assert posted == [] and board.pr_notes == []
+        assert board.state == reconcile.REVIEW_LANE
+
+    def test_a_persons_hold_in_review_is_not_parked(self):
+        board, pr = self._spent_board()
+        board.labels.append(reconcile.HOLD_LABEL)  # no stamp: a person's hold
+        assert reconcile.review_cap_park_unfinished(board.card()) is None
+        nudge, _, posted = board.sweep(pr)
+        nudge.assert_not_called()
+        assert posted == [] and board.pr_notes == []
+        assert board.state == reconcile.REVIEW_LANE
 
 
 # --------------------------------------------------------------------------- #
