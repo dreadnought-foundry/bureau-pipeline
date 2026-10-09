@@ -193,8 +193,11 @@ class _Card:
             self.comment_reads.append("bodies")
             return list(self.comments)
 
-        def timeline(identifier):
-            self.comment_reads.append("timeline")
+        def timeline(identifier, whole_thread=False):
+            # The earlier-answer block's own read pages the whole thread
+            # (DRE-6358); the stub has no window, so only the record differs.
+            self.comment_reads.append(
+                "timeline-whole" if whole_thread else "timeline")
             records = []
             for body, at in zip(self.comments, self.stamps):
                 record = {"body": body}
@@ -507,7 +510,10 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
         card = _dre_3604(lane=planning_escalation.ORIGIN,
                          commented_at=_moments_ago())
         _escalate(card, DRE_3604, "--transport")
-        assert card.comment_reads == ["timeline"], (
+        # The earlier-answer block's whole-thread read (DRE-6358) is its own,
+        # and is not the read `moved_on` makes.
+        assert [r for r in card.comment_reads if r != "timeline-whole"] == [
+            "timeline"], (
             "the escalation read the untimed bodies; every verdict is stale to it"
         )
 
@@ -1302,6 +1308,11 @@ CLOSING_ASK = (
     "should not do this at all."
 )
 WHY_HEADING = "**Why it needs you:**"
+#: How each form of the earlier-answer block opens (DRE-6358).
+PRIOR_ANSWER_OPENINGS = (
+    "Your earlier answer on this card, ", "Your earlier answers on this card: ",
+    "There is no earlier signed answer from you on this card.",
+    "Whether you answered on this card before could not be checked — ")
 PREFIXES = (console_escalation.FINDING_PREFIX, console_escalation.QUESTION_PREFIX,
             console_escalation.RECOMMENDATION_PREFIX)
 
@@ -1350,11 +1361,17 @@ def _value(note: str, prefix: str) -> str:
 
 def _assert_lines_open_the_note(note: str) -> None:
     """The three lines, in order, each on its own line, directly under the
-    opening sentence and its blank line, and above the reason."""
+    opening sentence and its blank line, and above the reason. A posted note
+    carries the earlier-answer block between them (DRE-6358): one line, then
+    a blank one."""
     lines = note.split("\n")
     assert lines[1] == "", note
     assert [line.split(":", 1)[0] + ":" for line in lines[2:5]] == list(PREFIXES), note
     assert lines[5] == "", note
+    if not lines[6].startswith(WHY_HEADING):
+        assert lines[6].startswith(PRIOR_ANSWER_OPENINGS), note
+        assert lines[7] == "", note
+        lines = lines[:6] + lines[8:]
     assert lines[6].startswith(WHY_HEADING), note
     for prefix in PREFIXES:
         assert note.count(prefix) == 1, (prefix, note)
@@ -1471,7 +1488,12 @@ class TestTheLinesAreCompletedWhenNothingDeclaredThem:
         assert _value(note, console_escalation.FINDING_PREFIX) == (
             "This one is a judgement call about who we are selling to, not a "
             "piece of work an agent can finish.")
-        assert _value(note, console_escalation.QUESTION_PREFIX) == ORDINARY_QUESTION
+        # The completed Question names the Finding (DRE-6358), so two findings
+        # never read as one question asked twice.
+        assert _value(note, console_escalation.QUESTION_PREFIX) == (
+            "Do you want to settle this yourself — This one is a judgement call "
+            "about who we are selling to, not a piece of work an agent can "
+            "finish — or should we put the card back in the queue as it stands?")
         assert _line(note, console_escalation.RECOMMENDATION_PREFIX) == NONE_GIVEN_LINE
         assert console_escalation.problems(note) == []
         assert note.split("\n")[-1] == CLOSING_ASK
