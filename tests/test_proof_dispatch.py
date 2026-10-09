@@ -60,7 +60,11 @@ PERSON = "a-person"
 #: A comment the fake `voices` reads as console-signed — the real reader
 #: checks a signature; this suite only needs to know which comments passed.
 SIGNED = "console-signed"
-NOW = datetime(2026, 10, 6, 17, 0, tzinfo=timezone.utc)   # 10:00 PT
+#: 10:30 PT. Its turn begins the proof ring at its front for any ring under
+#: two hundred (`proof_dispatch._turned`), so the oldest-first and cap pins
+#: read from the front — an edit to it must keep that, or they move for no
+#: visible reason (DRE-6464).
+NOW = datetime(2026, 10, 6, 17, 30, tzinfo=timezone.utc)
 WORKFLOW = ROOT / ".github" / "workflows" / "reconcile.yml"
 STEP = "Dispatch proof runs"
 
@@ -739,6 +743,36 @@ def test_three_that_cannot_run_ahead_of_an_eligible_one_dispatch_it_within_two_p
     for n in range(2):
         before = len(board.reads)
         h.sweep(now=NOW + (turn + n) * PASS)
+        assert len(_candidates_read(board, before)) <= proof_dispatch.PROOF_CANDIDATES_PER_PASS
+        if h.fired:
+            break
+    assert [f[0] for f in h.fired] == ["DRE-6042"], _lines(capsys)
+
+
+def _behind(blocked: int, eligible: str = "DRE-6042") -> Board:
+    """`blocked` first runs with an open blocker, each costing a read, all
+    entered before an eligible card at the back of the ring."""
+    cards = [lane_card(f"DRE-57{10 + i}", entered=3000 - i) for i in range(blocked)]
+    return Board(hand=[*cards, lane_card(eligible, entered=100)],
+                 details={c["identifier"]: detail(blockers={"DRE-6125": "In Progress"})
+                          for c in cards})
+
+
+@pytest.mark.parametrize("ring", [6, 7, 12])
+@pytest.mark.parametrize("every", [1, 2, 3, 4])
+@pytest.mark.parametrize("turn", range(4))
+def test_the_ring_comes_round_on_any_steady_cadence(
+        monkeypatch, capsys, ring, every, turn):
+    """Passes every turn, every second turn — a `*/15` cron that only lands
+    at :07 and :37 — every third or every fourth: the eligible card at the
+    back of a ring of 6, 7 or 12 is dispatched within twelve passes. A fixed
+    stride of three read the same windows forever on a ring of 6 or 12 when
+    the passes fell every second turn."""
+    board = _behind(ring - 1)
+    h = Harness(monkeypatch, board)
+    for n in range(12):
+        before = len(board.reads)
+        h.sweep(now=NOW + (turn + n * every) * PASS)
         assert len(_candidates_read(board, before)) <= proof_dispatch.PROOF_CANDIDATES_PER_PASS
         if h.fired:
             break
