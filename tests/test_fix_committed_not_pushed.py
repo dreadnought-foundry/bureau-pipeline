@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
 RECEIPT_PATHS = ("/tmp/act-fix-blocked.md", "/tmp/act-fix-pushed.md",
                  "/tmp/act-fix-refuted.md", "/tmp/act-fix-refuted-capped.md",
-                 "/tmp/fix-nothing-to-fix.md")
+                 "/tmp/fix-nothing-to-fix.md", "/tmp/act-fix-refused-again.md")
 
 
 def _git(td: str, *args: str) -> str:
@@ -317,7 +317,8 @@ class TheWordingTest(unittest.TestCase):
             self.assertIn(fact, body)
 
     def test_the_mechanisms_are_the_four_that_exist(self):
-        body = self.body()
+        # GitHub's own words are quoted data, not a mechanism the body names.
+        body = self.body(error="")
         for named in ("`Push rescue`", ARTIFACT, "`deliver-rescue`", "reconcile sweep"):
             self.assertIn(named, body)
         for claimed in ("re-mint", "delivers a committed branch", "medic",

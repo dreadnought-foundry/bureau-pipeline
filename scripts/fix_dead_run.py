@@ -14,6 +14,13 @@ Called from agent-fix.yml's Report step when the head SHA did not advance:
     python3 fix_dead_run.py decide <execution-json-path> \
         --comments-json <pr-comments-json> [--run-url U]
 
+and, when the run committed a fix GitHub refused to take (DRE-6351):
+
+    python3 fix_dead_run.py committed-not-pushed \
+        --comments-json <pr-comments-json> --head <PRE_SHA>
+
+which prints `restart` or `hold` against COMMITTED_NOT_PUSHED_RESTARTS.
+
 The retry cap is scoped to CONSECUTIVE deaths since the last successful push
 (consecutive_prior_deaths), not every death marker the PR ever carried — a
 recovered outage episode must not pre-exhaust the cap for a fresh one.
@@ -81,8 +88,21 @@ OUTAGE_TAG = "fix-run-model-death"
 # DEAD_TAG/RESET_TAG in dead_run.py, counting is substring-based — neither tag
 # may contain the other, and tests/test_turn_exhaustion_not_outage.py pins it.
 TURN_CAP_TAG = "fix-run-turn-exhaustion"
+# A fix run that finished its fix and had the push refused (DRE-6351): the
+# commit is on the runner and the branch is where the run started. The
+# Report posts it with `head still at <sha8>` on its first line, and both
+# the Report and the reconcile sweep (DRE-6352) count it per head. The sweep
+# re-dispatches the fix loop once when the branch has not moved for
+# COMMITTED_NOT_PUSHED_WAIT_MINUTES, and a second refusal on the same head is
+# the cap (COMMITTED_NOT_PUSHED_RESTARTS) — a hold for a person.
+COMMITTED_NOT_PUSHED_TAG = "fix-run-committed-not-pushed"
+COMMITTED_NOT_PUSHED_WAIT_MINUTES = 30
+COMMITTED_NOT_PUSHED_RESTARTS = 1
 # Both retry markers, for the reconcile sweep: the newest worker-bot comment
-# carrying either one is a promised retry nothing else will fire.
+# carrying either one is a promised retry nothing else will fire. The
+# committed-not-pushed tag is deliberately NOT one: retry_dead_fix_runs would
+# re-dispatch a fresh agent on the next sweep while the delivery is still
+# replaying the patch.
 RETRY_MARKERS = (OUTAGE_TAG, TURN_CAP_TAG)
 # Substring shared by BOTH worker-bot push markers ("🔧 Fix attempt N pushed…"
 # and "🔀 Conflict resolution round N pushed…"). A push means the branch moved
@@ -142,6 +162,28 @@ def consecutive_prior_deaths(
     return consecutive_prior_markers(
         comments, OUTAGE_TAG, worker_login=worker_login
     )
+
+
+def committed_not_pushed_markers(
+    comments: list | None, head: str, *, worker_login: str = WORKER_LOGIN
+) -> int:
+    """Worker-bot committed-not-pushed markers for `head` (DRE-6351).
+
+    Read off the FIRST line only — the tag and `head still at <head[:8]>` —
+    so a comment quoting a marker further down is not one, and only the
+    worker bot's count (DRE-1995): a planted marker would spend the one
+    restart and park a fix that is still being delivered."""
+    if not head:
+        return 0
+    key = f"head still at {head[:8]}"
+    count = 0
+    for comment in comments or []:
+        if _comment_login(comment).removesuffix("[bot]") != worker_login:
+            continue
+        first = ((comment.get("body") or "").splitlines() or [""])[0]
+        if COMMITTED_NOT_PUSHED_TAG in first and key in first:
+            count += 1
+    return count
 
 
 def _load_comments(path: str) -> list:
@@ -253,6 +295,29 @@ def decide(
     )
 
 
+def _committed_not_pushed(rest: list[str]) -> int:
+    """`committed-not-pushed --comments-json PATH --head SHA` (DRE-6351).
+
+    Prints `restart` while fewer than COMMITTED_NOT_PUSHED_RESTARTS markers
+    stand for this head, `hold` once one does. An unreadable thread reads as
+    no markers, so the fix is handed to the delivery rather than parked."""
+    def value(flag: str) -> str:
+        if flag in rest:
+            i = rest.index(flag)
+            if i + 1 < len(rest):
+                return rest[i + 1]
+        return ""
+    head = value("--head")
+    if not head:
+        print("usage: fix_dead_run.py committed-not-pushed "
+              "--comments-json PATH --head SHA")
+        return 2
+    comments = _load_comments(value("--comments-json"))
+    standing = committed_not_pushed_markers(comments, head)
+    print("hold" if standing >= COMMITTED_NOT_PUSHED_RESTARTS else "restart")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
@@ -268,6 +333,8 @@ def main(argv: list[str]) -> int:
 
     Prints the action on line 1, then a blank line, then the comment body.
     """
+    if argv and argv[0] == "committed-not-pushed":
+        return _committed_not_pushed(argv[1:])
     if not argv or argv[0] != "decide":
         print("usage: fix_dead_run.py decide <execution-json-path> "
               "[<prior_deaths>] [--comments-json PATH] [--run-url U]")
