@@ -151,6 +151,20 @@ of it is ever a runtime lookup.
   or two sites, when a row names a lift kind the contract does not fix for its
   reason, or when a `tried_first` receipt occurs nowhere under `scripts/` or
   `.github/workflows/`. `docs/holds.md` is the page a person reads.
+- **`switches.json`** — every pipeline switch (DRE-6434): a repository
+  variable a reusable workflow reads from `vars.*` and treats as live only when
+  it is exactly `true`. In `holds.json`'s shape — a `_readme`, `version`, the
+  contract's `companion_suffix` (`_OFF_UNTIL`: a switch that is off says why in
+  `<SWITCH>_OFF_UNTIL`, naming the `DRE-<n>` cards it waits on),
+  `alarm_after_hours` (read by the sibling that alarms on a reason that has
+  cleared), then `switches`, one row per switch: `name`, `reader` (the
+  workflow file that reads it), `step` (the step name in that file) and
+  `means` (one sentence). Read only through `scripts/switch_reason.py`, which
+  also composes the one line every reader prints about a switch.
+  `python3 scripts/switch_reason.py check` DISCOVERS every `vars.<NAME>_LIVE`
+  read under `.github/workflows/` and fails, by name, on a read with no row
+  and on a row whose `reader` does not read `vars.<name>` inside its `step` —
+  the list is derived from the workflows, never restated.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
