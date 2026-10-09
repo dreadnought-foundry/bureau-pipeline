@@ -30,6 +30,7 @@ Pinned here, over a fixture board:
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import stat
 import subprocess
@@ -48,6 +49,7 @@ import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_dispatch  # noqa: E402
+import proof_record  # noqa: E402
 import proof_release  # noqa: E402
 import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
@@ -193,7 +195,8 @@ class Harness:
     """One pass: the board, the stubbed readings, and the recorded writes."""
 
     def __init__(self, monkeypatch, board, *, states=None, release="ready",
-                 release_lines=None, fire_ok=True, prs=None, records=None):
+                 release_lines=None, fire_ok=True, prs=None, records=None,
+                 texts=None):
         self.board = board
         self.states = states or {}
         self.release_state = release
@@ -204,6 +207,8 @@ class Harness:
         self.prs = prs
         self.records = records or {}
         self.record_reads: list = []
+        self.texts = texts or {}
+        self.text_reads: list = []
         self.posted: list = []
         self.holds: list = []
         self.order: list = []
@@ -242,6 +247,16 @@ class Harness:
             raise got
         return got
 
+    def read_record(self, pr, head):
+        """The record at `head`, as `proof_record.fetch` answers: never
+        raises, a record not read is one with no text and the reason."""
+        self.text_reads.append((pr.get("number"), head))
+        got = self.texts.get(pr.get("number"))
+        if got is None or isinstance(got, Exception):
+            why = f"{RECORD_PATH} could not be read at {head}: {got or 'no fixture'}"
+            return proof_record.Record(RECORD_PATH, None, why)
+        return proof_record.Record(RECORD_PATH, got, None)
+
     def fire(self, card, repo, *, reason=None, event=None):
         self.order.append(("fire", card["identifier"]))
         self.fired.append((card["identifier"], repo, reason, event))
@@ -252,7 +267,7 @@ class Harness:
             REPO, SLUG, live=live, linear=self.board, read=lambda path: None,
             find_pr=self.find_pr, run_state=self.run_state,
             release=self.release, fire=self.fire, voices=fake_voices, now=now,
-            find_record=self.find_record)
+            find_record=self.find_record, read_record=self.read_record)
 
 
 def _lines(capsys) -> list:
@@ -1228,6 +1243,7 @@ HEAD = "c0ffee1" + "0" * 33
 SHA7 = HEAD[:7]
 OLD_HEAD = "abc1234" + "f" * 33
 QA_BOT = "agent-bureau-qa-bot"
+RECORD_PATH = "docs/proof-dre-5930.md"
 RERUN = f"re-run after the critic's findings at {SHA7}"
 RERUN_HELD = ("the record was sent back twice after re-observation",
               "an operator reading the critic's findings and the two re-run "
@@ -1245,6 +1261,7 @@ def record(*verdicts, ident="DRE-5930", opened: float = 2400, head: str = HEAD,
     return {"number": 900, "url": f"https://github.com/{REPO}/pull/900",
             "headRefName": branch or f"agent/{ident}-proof-record",
             "state": pr_state, "headRefOid": head, "createdAt": _at(opened),
+            "files": [{"path": RECORD_PATH, "changeType": "ADDED"}],
             "comments": [{"author": {"login": "agent-bureau-bot"},
                           "createdAt": _at(opened), "body": "opened"},
                          *verdicts]}
@@ -1770,3 +1787,311 @@ def test_a_review_cap_park_costs_no_linear_read_beyond_the_return_branchs(
     assert f"would: dispatch DRE-5930 — {RERUN}" in _lines(capsys)
     assert len(calls) == 3, calls
     assert len([q for q in calls if "issues(" in q]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# the re-run after the merge gate's decline of an approved record (DRE-6488)   #
+# --------------------------------------------------------------------------- #
+
+GATE_RERUN = f"re-run after the gate's decline at {SHA7}"
+GATE_HELD = ("the gate declined the record twice after re-observation",
+             "an operator reading the gate's declined note and the two re-run "
+             "receipts")
+GATE_UNANSWERED = ("the re-run finished and the gate's decline still stands at "
+                   "the record's head",
+                   "an operator reading the gate's declined note and the "
+                   "re-run's thread")
+NOT_MET_ROW = ("The release tag moves to the merged commit",
+               "Not met. the tag still names v41")
+WAITING_ROW = ("The release tag moves to the merged commit",
+               "Not observed. waiting for the 2026-10-14 release: the tag moves")
+BROWSER_ROW = ("The console renders the card as waiting for proof",
+               "Not observed. needs a browser on a local run of the released commit")
+MET_ROW = ("The sweep reads the gate's note", "Met. the 12:07 PT pass read it")
+
+
+def gate_note(minutes_ago: float, *, sha: str = HEAD, reason: str | None = None,
+              login: str = QA_BOT) -> dict:
+    reason = reason or (f"proof record not proven: {RECORD_PATH} has 1 row(s) "
+                        "not met: “The release tag moves to the merged commit” "
+                        "reads “Not met. the tag still names v41” (DRE-6141)")
+    return {"author": {"login": login}, "createdAt": _at(minutes_ago),
+            "body": f"⏸️ Merge gate: declined @{sha} — {reason}\n\nNot merged. "
+                    "The gate looks again on the next CI completion, review or "
+                    "sweep, and merges once nothing holds it."}
+
+
+def record_md(*rows) -> str:
+    table = "\n".join(f"| {c} | {r} |" for c, r in rows)
+    return ("# PROOF record — DRE-5930: observed live (epic DRE-5920)\n\n"
+            "**Status: FAIL.**\n\n| Criterion | Result |\n|---|---|\n"
+            f"{table}\n| The CEO closes this card after reading the record | "
+            "Open: the CEO's step |\n")
+
+
+def gate_rerun_receipt(minutes_ago: float, n: int) -> dict:
+    return receipt(minutes_ago, reason=f"re-run after the gate's decline at "
+                                       f"{OLD_HEAD[:7]}", count=f"re-run {n} of 2")
+
+
+def _declined(*, approve: dict | None = None, note: dict | None = None, **kw) -> dict:
+    """A record pull request the critic approved and the gate declined, both
+    at the head unless told otherwise."""
+    return record(approve or verdict("APPROVE", 100), note or gate_note(90), **kw)
+
+
+def _gate_pass(monkeypatch, *, thread, pr, text=None, run="finished", live=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr},
+                texts={900: record_md(MET_ROW, NOT_MET_ROW) if text is None else text},
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally, writes
+
+
+def test_gate_an_approved_record_the_gate_declined_at_its_head_is_re_run_once(
+        monkeypatch, capsys):
+    h, tally, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined())
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    assert len(h.posted) == 1
+    body = h.posted[0][1]
+    first = body.split("\n", 1)[0]
+    assert first.startswith("🔬 proof-run: dispatched a proof run at ")
+    assert first.endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    parsed = proof_run_state.receipt(body)
+    assert parsed.reason == GATE_RERUN and parsed.count == "re-run 1 of 2"
+    assert pipeline_act.read_trailer(body)["act"] == "proof-run-dispatched"
+    # The record was read at the head, and nothing moved.
+    assert h.text_reads == [(900, HEAD)]
+    assert writes.log == [] and h.release_calls == []
+
+
+def test_gate_the_reason_constant_sits_beside_the_critics():
+    assert proof_dispatch.GATE_RERUN_REASON.format(sha7=SHA7) == GATE_RERUN
+    assert proof_dispatch.RERUN_COUNT == "re-run {n} of 2"
+    assert "files" in proof_dispatch.RECORD_FIELDS.split(",")
+
+
+def _gate_nothing_cases():
+    return {
+        "note-on-an-earlier-head": (
+            _declined(note=gate_note(90, sha=OLD_HEAD)), f"{OLD_HEAD[:7]}"),
+        "note-with-another-reason": (
+            _declined(note=gate_note(90, reason="What's new: the line is missing")),
+            "not a proof-record decline"),
+        "note-by-another-login": (
+            _declined(note=gate_note(90, login="mallory")), "no decline note"),
+        "no-note-at-all": (record(verdict("APPROVE", 100)), "no decline note"),
+        "approve-from-an-earlier-head": (
+            _declined(approve=verdict("APPROVE", 100, sha=OLD_HEAD)),
+            f"APPROVE from earlier head {OLD_HEAD[:7]}"),
+        "record-unreadable-at-the-head": (
+            _declined(), "could not be read"),
+    }
+
+
+@pytest.mark.parametrize("case", list(_gate_nothing_cases()))
+def test_gate_dispatches_nothing_and_says_why(monkeypatch, capsys, case):
+    pr, why = _gate_nothing_cases()[case]
+    text = RuntimeError("HTTP 404") if case == "record-unreadable-at-the-head" else None
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=pr, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any("re-run" in line and why in line for line in lines), lines
+
+
+def test_gate_a_request_changes_at_the_head_is_the_critics_re_run_not_the_gates(
+        monkeypatch, capsys):
+    """Both stand at the head: the critic's trigger keeps precedence, and the
+    record is not read for it."""
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(),
+                         pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
+    assert [f[2] for f in h.fired] == [RERUN]
+    assert h.text_reads == []
+
+
+def test_gate_a_review_cap_park_on_the_head_is_re_run_the_same_way(monkeypatch, capsys):
+    board =Board(green=[_capped_card(_capped())], threads={"DRE-5930": _capped()})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                texts={900: record_md(NOT_MET_ROW)},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    assert writes.log == []
+
+
+def test_gate_a_review_cap_park_on_an_older_head_is_the_holds_lanes(monkeypatch, capsys):
+    board = Board(green=[_capped_card(_capped(head=OLD_HEAD))],
+                  threads={"DRE-5930": _capped(head=OLD_HEAD)})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                texts={900: record_md(NOT_MET_ROW)},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert any("holds lane" in line and OLD_HEAD[:7] in line for line in lines), lines
+
+
+@pytest.mark.parametrize("first, second", [
+    (rerun_receipt, gate_rerun_receipt), (gate_rerun_receipt, rerun_receipt)])
+def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
+        monkeypatch, capsys, first, second):
+    """One critic re-run and one gate re-run, in either order, spend the one
+    budget of two: the gate's next decline holds once and never a third."""
+    spent = (first(1500, 1), comment("⏳ 5/5 amended", 1400),
+             second(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*spent), pr=_declined())
+    out = capsys.readouterr().out
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert tally.held == 1 and "3 of 2" not in out
+
+    # The next pass names the hold it posted and posts nothing.
+    h, tally, _ = _gate_pass(monkeypatch, pr=_declined(),
+                             thread=_sent_back(*spent, hold(*GATE_HELD, 50)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the gate declined the record twice after "
+               "re-observation" in line for line in lines), lines
+    assert tally.held == 1
+
+
+def test_gate_a_critic_re_run_spends_one_of_the_gates_two(monkeypatch, capsys):
+    thread = _sent_back(rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400))
+    h, _, _ = _gate_pass(monkeypatch, thread=thread, pr=_declined())
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 2 of 2)")
+
+
+def test_gate_a_re_run_that_finished_with_the_decline_at_the_head_holds_once(
+        monkeypatch, capsys):
+    done = (gate_rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*done), pr=_declined())
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_UNANSWERED)]
+    assert tally.held == 1
+
+    capsys.readouterr()
+    h, _, _ = _gate_pass(monkeypatch, pr=_declined(),
+                         thread=_sent_back(*done, hold(*GATE_UNANSWERED, 10)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the re-run finished and the gate's decline"
+               in line for line in lines), lines
+
+
+@pytest.mark.parametrize("run", ["dead", "never-started"])
+def test_gate_a_re_run_that_died_or_never_started_is_sent_again_and_counted(
+        monkeypatch, capsys, run):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(gate_rerun_receipt(50, 1)),
+                         pr=_declined(), run=run)
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 2 of 2)")
+
+
+def test_gate_a_newer_re_run_still_running_is_not_sent_again(monkeypatch, capsys):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(gate_rerun_receipt(50, 1)),
+                         pr=_declined(), run="running")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+
+
+WAITING = (proof_record._cut(WAITING_ROW[0], 70),
+           "the 2026-10-14 release: the tag moves")
+
+
+def test_gate_a_row_waiting_on_an_event_holds_instead_of_a_re_run(monkeypatch, capsys):
+    h, tally, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                                  text=record_md(MET_ROW, WAITING_ROW))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *WAITING)]
+    assert tally.held == 1 and writes.log == []
+    line = linear_ops.proof_waiting_line(*WAITING)
+    assert line == ("🔬 proof-waiting: The release tag moves to the merged commit "
+                    "— needs the 2026-10-14 release: the tag moves")
+    for half in WAITING:
+        assert linear_ops.proof_text_refusal(half, "half") is None
+
+    # The next pass names the hold and posts nothing.
+    capsys.readouterr()
+    held = _sent_back(hold(*WAITING, 60))
+    h, tally, _ = _gate_pass(monkeypatch, thread=held, pr=_declined(),
+                             text=record_md(MET_ROW, WAITING_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any(f"held by {line}" in l for l in lines), lines
+
+    # The operator observes the event: the record is re-run to re-observe it.
+    observed = _sent_back(hold(*WAITING, 60), comment(linear_ops.proof_observed_line(
+        "the 2026-10-14 release was cut at 10:02 PT"), 30, PERSON))
+    h, _, _ = _gate_pass(monkeypatch, thread=observed, pr=_declined(),
+                         text=record_md(MET_ROW, WAITING_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+
+
+def test_gate_the_hold_names_every_waiting_row_in_table_order_and_wins(
+        monkeypatch, capsys):
+    long = ("The nightly full run on main reports green to the fleet watcher "
+            "within the hour of its cron")
+    rows = (NOT_MET_ROW, (long, "Not observed. Waiting For the 02:07 PT nightly"),
+            BROWSER_ROW, WAITING_ROW)
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                         text=record_md(*rows))
+    assert h.fired == []
+    cut = proof_record._cut(long, 70)
+    assert len(cut) == 70 and cut.endswith("…")
+    assert h.holds == [("DRE-5930", f"{cut}; {WAITING[0]}",
+                        f"the 02:07 PT nightly; {WAITING[1]}")]
+
+
+def test_gate_a_row_a_re_run_may_re_observe_is_re_run_not_held(monkeypatch, capsys):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                         text=record_md(MET_ROW, BROWSER_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+
+
+def test_gate_the_dry_run_prints_would_and_writes_nothing(monkeypatch, capsys):
+    h, _, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                              text=record_md(WAITING_ROW), live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: hold DRE-5930 — {WAITING[0]}" in lines
+
+    h, _, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                              live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: dispatch DRE-5930 — {GATE_RERUN}" in lines
+
+
+def test_gate_the_record_is_read_at_the_head_off_the_pull_requests_files(
+        monkeypatch, capsys):
+    """The production read: `proof_record.fetch` over the pull request's
+    `files`, at its head, through the sweep's GitHub read seam."""
+    import base64
+
+    import reconcile
+
+    asked: list = []
+    text = record_md(WAITING_ROW)
+
+    def gh_read(*args):
+        asked.append(args)
+        return json.dumps({"encoding": "base64",
+                           "content": base64.b64encode(text.encode()).decode()})
+
+    monkeypatch.setattr(reconcile, "gh_read", gh_read)
+    board = Board(review=[_review()], threads={"DRE-5930": _sent_back()})
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: None,
+        find_pr=h.find_pr, run_state=h.run_state, release=h.release,
+        fire=h.fire, voices=fake_voices, now=NOW, find_record=h.find_record)
+    assert asked == [("api", f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}")]
+    assert h.holds == [("DRE-5930", *WAITING)] and h.fired == []
