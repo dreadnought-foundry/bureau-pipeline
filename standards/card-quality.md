@@ -276,16 +276,25 @@ filed and who builds it, in every repo.
 
 **Why a hand-filed card is safe from the fleet.** Nothing dispatches a card
 from Intake: the relay dispatches only from `Todo`, and the one promoter into
-`Todo` is the sweep acting on a FLEET verdict, which this card never carries.
-The groomer never proposes a `hand-built` card for a batch
-(`groom_verify_agent.exclusion`, DRE-5306). The sweep's stranded watchdog and
-its nudge loop skip a `hand-built` card with no pull request (DRE-2524) — only
-the alarm for hand-built work idle with no branch and no pull request still
-fires. The label is the person's own, applied on the CEO's explicit words, never
-by automation reading text: the standard already recognizes a `hand-built` no
-verdict applied as "a person's own" (DRE-4884). This is not a way past
-`Planning` — the card is never planned, routed or promoted, and the pipeline
-first touches it at the pull request.
+`Todo` is the sweep acting on a FLEET verdict, which a card left in Intake never
+gets. If the groomer's batch lists a `hand-built` card, verification drops it
+from the batch and leaves it where it is (`groom_verify_agent.exclusion`,
+DRE-5306). The sweep's stranded watchdog and its nudge loop skip a `hand-built`
+card with no pull request (DRE-2524) — only the alarm for hand-built work idle
+with no branch and no pull request still fires. The label is the person's own,
+applied on the CEO's explicit words, never by automation reading text: the
+standard already recognizes a `hand-built` no verdict applied as "a person's
+own" (DRE-4884).
+
+**The one route out of Intake: Urgent.** The sweep's Urgent fast path
+(`reconcile.advance_urgent_intake`, DRE-4150) moves an Intake card raised to
+Urgent, or filed at it, to Planning, and it does not read the `hand-built`
+label. In Planning the card is classified like any other and can be routed
+FLEET, which dispatches an agent onto work the session is already building. So
+a `hand-built` card is never filed at Urgent or raised to it. If the fast path
+moves one anyway, move it back to Intake: the fast path moves a card once and
+leaves one a person put back where they put it. This rule is guidance only;
+no code checks it.
 
 **What is guidance and what is checked.** Building it now, in a
 worktree-isolated helper, and shipping it through the normal pull request path

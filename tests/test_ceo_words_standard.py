@@ -146,6 +146,27 @@ def test_states_why_a_hand_filed_card_is_safe_from_the_fleet():
     assert "DRE-2524" in section and _loose("stranded watchdog").search(section)
 
 
+def test_names_the_urgent_fast_path_as_the_route_out_of_intake():
+    """`reconcile.advance_urgent_intake` reads no `hand-built` label, so an
+    Urgent hand-built card IS planned and can be routed FLEET. The section must
+    say so and must not promise the card is never planned."""
+    section = _section()
+    assert "advance_urgent_intake" in section, (
+        "the section does not name the Urgent fast path that can move a "
+        "hand-built Intake card to Planning"
+    )
+    assert _loose("never filed at Urgent or raised to it").search(section)
+    assert _loose("move it back to Intake").search(section)
+    assert _loose("no code checks it").search(section)
+    assert not _loose("never planned, routed or promoted").search(section), (
+        "the section promises a hand-built card is never planned, but the "
+        "Urgent fast path plans it"
+    )
+    # The groomer's batch can list the card; verification is what drops it.
+    assert _loose("verification drops it from the batch").search(section)
+    assert not _loose("The groomer never proposes").search(section)
+
+
 def test_states_build_conduct_is_guidance_nothing_checks():
     section = _section()
     assert _loose("is guidance to the session").search(section)
