@@ -12,7 +12,11 @@ WHAT THIS PINS, one section per acceptance criterion:
      A marker comment is the record; two different verdicts on one card is a
      conflict the reader raises rather than resolves, and the one write path
      refuses to add a second.
-  2. A card whose acceptance names an INTERACTIVE FLOW routes WORKBENCH.
+  2. A card whose acceptance names an interactive flow or live state no longer
+     routes WORKBENCH (DRE-6227): the `interactive` signal is retired, so such
+     a card routes FLEET or to a judgement call. A criterion met only by
+     watching the change run after it ships is a proof observation or a
+     follow-up card, never a reason to hold the build.
   3. A card whose acceptance names only STATIC VISUAL FIDELITY routes FLEET —
      `qa-review.yml` screenshots the changed screens and hands the critic both
      images (`visual_qa_context.py`), so a static comparison is FLEET-checkable.
@@ -130,12 +134,17 @@ class TestTheFiveRoutes:
                       if routing_verdict.is_promotable(v)]
         assert promotable == ["FLEET"]
 
-    def test_the_human_routes_carry_the_mark_that_stops_the_sweep(self):
-        """WORKBENCH and OPERATOR land in a work lane owned by a person. The
-        `hand-built` label is what already tells the sweep no dispatched run is
-        coming (DRE-2524) — reuse it rather than invent a second signal."""
-        for name in ("WORKBENCH", "OPERATOR"):
-            assert reconcile.HAND_BUILT_LABEL in routing_verdict.marks(name)
+    def test_no_route_marks_the_ceo_s_label(self):
+        """`hand-built` is the CEO's mark: applied only when he asks for it, and
+        nothing automatic applies it (his rule of 2026-10-07, DRE-6227). So no
+        verdict's marks carry it. OPERATOR carries `operator-step`, the
+        vocabulary's own marker, which the sweep reads as a person's card
+        (`routing_verdict.hand_marks`); WORKBENCH carries nothing."""
+        for name in routing_verdict.verdicts():
+            assert reconcile.HAND_BUILT_LABEL not in routing_verdict.marks(name), name
+        assert routing_verdict.marks("OPERATOR")[0] == routing_verdict.OPERATOR_STEP_LABEL
+        assert routing_verdict.OPERATOR_STEP_LABEL in routing_verdict.hand_marks()
+        assert routing_verdict.marks("WORKBENCH") == ()
         assert routing_verdict.marks("FLEET") == ()
 
     def test_an_operator_card_is_also_marked_no_code(self):
@@ -443,10 +452,14 @@ Widen alembic_version.
 
 
 class TestTheAcceptanceCriteriaAreTheRule:
-    def test_an_interactive_flow_routes_workbench(self):
+    def test_an_interactive_flow_is_no_longer_routed_to_a_person(self):
+        """DRE-6227: the `interactive` signal sent six code cards in a week to
+        Hand-work on a phrase. A criterion that names a flow is now read like
+        any other: it names no rendered outcome, so it is a judgement call."""
         decision = routing_verdict.route("Refresh the session", INTERACTIVE_CARD, [])
-        assert decision.verdict == "WORKBENCH"
-        assert decision.source == "criteria"
+        assert decision.verdict is None
+        assert decision.source == "judgement"
+        assert decision.needs_model is True
 
     def test_static_visual_fidelity_routes_fleet(self):
         """`qa-review.yml` runs a visual-QA stage (DRE-1481): it installs
@@ -497,14 +510,15 @@ class TestTheAcceptanceCriteriaAreTheRule:
         assert routing_verdict.acceptance_criteria(card) == []
 
     def test_only_checkbox_items_count_as_criteria(self):
-        """Prose that happens to describe a flow is not the card's stated exit
-        condition — the same mention-versus-declaration line DRE-2670 turned on."""
+        """Prose that happens to state a rendered outcome is not the card's
+        stated exit condition — the same mention-versus-declaration line
+        DRE-2670 turned on."""
         card = (
-            "Users sign in and then walk through the wizard by hand today.\n\n"
+            "The wizard renders a blank step today.\n\n"
             "## Acceptance criteria\n"
             "- [ ] the wizard state machine has unit tests\n"
         )
-        assert routing_verdict.route("Wizard state machine", card, []).verdict != "WORKBENCH"
+        assert routing_verdict.route("Wizard state machine", card, []).verdict is None
 
     @pytest.mark.parametrize(
         "criterion",
@@ -517,9 +531,14 @@ class TestTheAcceptanceCriteriaAreTheRule:
             "- [ ] the invite flow is driven by hand and the email arrives",
         ],
     )
-    def test_live_state_and_interactive_criteria_all_route_workbench(self, criterion):
+    def test_live_state_and_interactive_criteria_route_fleet_or_judgement(self, criterion):
+        """Each of these routed WORKBENCH until DRE-6227. Watching a change run
+        after it ships is a proof observation or a follow-up card, never a
+        reason to hold the build."""
         card = f"## Acceptance criteria\n{criterion}\n"
-        assert routing_verdict.route("A card", card, []).verdict == "WORKBENCH"
+        decision = routing_verdict.route("A card", card, [])
+        assert decision.verdict in ("FLEET", None), decision.reason
+        assert decision.verdict != "WORKBENCH"
 
     @pytest.mark.parametrize(
         "criterion",
@@ -669,10 +688,12 @@ class TestParkedIsNeverStalled:
 #
 # DRE-3385 separated the two questions this class used to run together. The
 # sweep carries a card to the lane its verdict names, and WORKBENCH/OPERATOR
-# name `Hand-work` (DRE-5322; `Todo` before) — so they are promoted, marked `hand-built`, and no run is sent
-# at them. What "must not be dispatched" protects is the RUN, and that is now
-# the marks plus the relay's own guard (DRE-3341), not the card being left in a
-# lane nothing ever moves it out of.
+# name `Hand-work` (DRE-5322; `Todo` before) — so they are promoted, marked with
+# their verdict's own marks (`operator-step` + `no-code` for OPERATOR, none for
+# WORKBENCH since DRE-6227), and no run is sent at them. What "must not be
+# dispatched" protects is the RUN, and that is now the lane plus the relay's own
+# guard (DRE-3341), not the card being left in a lane nothing ever moves it out
+# of.
 # ===========================================================================
 class TestThePromoterRoutesOnTheVerdict:
     def test_a_fleet_card_promotes(self):
@@ -989,12 +1010,14 @@ class TestTheRouteIsWrittenDown:
         assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
         # Todo names all three routes the sweep carries, and says where each
         # goes: FLEET here, WORKBENCH and OPERATOR to Hand-work (DRE-5322),
-        # whose entrance is the clause that asks for the person's mark.
+        # whose entrance is the clause that names the person's mark —
+        # `operator-step` since DRE-6227, never `hand-built`.
         for name in ("FLEET", "WORKBENCH", "OPERATOR"):
             assert name in todo["clauses"]["entrance"]["text"]
         assert "Hand-work" in todo["clauses"]["entrance"]["text"]
         hand_work = lane_contract.lane("Hand-work", contract=contract)
-        assert reconcile.HAND_BUILT_LABEL in hand_work["clauses"]["entrance"]["text"]
+        assert (f"`{routing_verdict.OPERATOR_STEP_LABEL}`"
+                in hand_work["clauses"]["entrance"]["text"])
 
     def test_no_claim_is_made_that_a_specific_card_proved_the_need(self):
         """DRE-2695 was cited as a card that "could not have closed". It closed:

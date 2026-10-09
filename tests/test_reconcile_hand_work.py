@@ -10,8 +10,10 @@ makes the promoter go where the verdict says.
 WHAT IS UNDER TEST:
   * `promote_ready` advances to `routing_verdict.destination(verdict)`: a
     WORKBENCH card to Hand-work, marks first, one advance, the receipt
-    `🧹 Auto-promoted Backlog → Hand-work: …`, no WIP slot; OPERATOR also
-    `no-code`; FLEET still to Todo, spending a slot.
+    `🧹 Auto-promoted Backlog → Hand-work: …`, no WIP slot; OPERATOR marked
+    `operator-step` and `no-code`, WORKBENCH marked nothing, and neither ever
+    `hand-built`, the CEO's own mark (DRE-6227); FLEET still to Todo,
+    spending a slot.
   * Hand-work is watched, never nudged: in `WATCHDOG_LANES` and
     `HAND_BUILT_REVIEW_LANES`, not in `SWEEP_STATES`. A hand-built card there
     with no pull request is left alone by the nudge loop and by
@@ -59,6 +61,7 @@ import test_operator_card_promotion as promo  # noqa: E402
 
 HAND_WORK = "Hand-work"
 HAND_BUILT = "hand-built"
+OPERATOR_STEP = "operator-step"
 
 
 @pytest.fixture(autouse=True)
@@ -111,18 +114,21 @@ class TestThePromoterReadsTheDestination:
             assert reconcile.promote_ready(active_count=0) == 1
         assert calls == [("DRE-3385", HAND_WORK, "Backlog")]
 
-    def test_hand_built_is_stamped_before_the_state_write(self):
+    def test_a_workbench_card_is_stamped_nothing_and_moved(self):
+        """WORKBENCH declares no marks since DRE-6227: `hand-built` is the
+        CEO's mark, and nothing automatic applies it."""
         board = promo._Board(promo._card(comments=[promo.WORKBENCH]))
         board.promote()
         kinds = [(k, w) for k, i, w in board.writes if i == "DRE-3385"]
-        assert kinds == [("label", HAND_BUILT), ("advance", HAND_WORK)]
+        assert kinds == [("advance", HAND_WORK)]
 
-    def test_an_operator_card_also_carries_no_code(self):
+    def test_an_operator_card_is_stamped_operator_step_and_no_code_before_the_move(self):
         board = promo._Board(promo._card(comments=[promo.OPERATOR]))
         board.promote()
         kinds = [(k, w) for k, i, w in board.writes if i == "DRE-3385"]
-        assert kinds == [("label", HAND_BUILT), ("label", linear_ops.NO_CODE_LABEL),
+        assert kinds == [("label", OPERATOR_STEP), ("label", linear_ops.NO_CODE_LABEL),
                          ("advance", HAND_WORK)]
+        assert ("label", HAND_BUILT) not in kinds
 
     def test_the_receipt_names_hand_work(self):
         board = promo._Board(promo._card(comments=[promo.WORKBENCH]))

@@ -1,0 +1,206 @@
+{
+  "_readme": [
+    "The six cards the `interactive` signal sent to Hand-work although every one of them was code an agent builds (DRE-6227).",
+    "",
+    "`criteria_verdict` routed a card WORKBENCH the moment one `- [ ]` line held one of ten phrases, and WORKBENCH marked it `hand-built`, so the sweep carried buildable code to the person-work lane where nobody builds it. It matched a button label (DRE-6164), a board column's name (DRE-5960), a post-deploy note (DRE-6166), the proof brief's own wording (DRE-6043), a two-line mypy fix (DRE-5952) and a token check (DRE-6143).",
+    "",
+    "The CEO's rule, 2026-10-07: `hand-built` is applied only when he asks for it, and nothing automatic applies it.",
+    "",
+    "Per card: the phrase its `🧭 routing-verdict` comment quoted, that comment's Why line, and its acceptance criteria read verbatim from Linear on the build day (`linear_ops.py description`, through `routing_verdict.acceptance_criteria`). For the four cards an operator reworded by hand on 2026-10-07 to get them out of Hand-work, `restored` holds the same criteria with the quoted phrase put back into the line the reword took it from, flagged `reconstructed: true` — the card text before the reword is not kept by Linear, so it is rebuilt from the operator's own note of what changed. DRE-6143 and DRE-5952 were moved, not reworded.",
+    "",
+    "tests/test_routing_hand_work_instances.py routes every card both ways under the shipped vocabulary, and re-adds the retired signal to an in-memory copy to prove each restored card still carries the phrase it was routed on."
+  ],
+  "read_on": "2026-10-09",
+  "source": "Linear, dreadnoughtfoundry workspace (team DRE), read through scripts/linear_ops.py",
+  "rule": {
+    "who": "the CEO",
+    "on": "2026-10-07",
+    "says": "`hand-built` is applied only when he asks for it, and nothing automatic applies it."
+  },
+  "cards": [
+    {
+      "identifier": "DRE-6143",
+      "title": "bureau-pipeline: a proof run's read-only GitHub token reaches every repo in the caller's organization and reads variables where the installation grants them, and the brief lets it read Linear under a stated request cap",
+      "labels": [
+        "agent:engineer",
+        "initiative:bureau",
+        "repo:bureau-pipeline"
+      ],
+      "quoted_phrase": "sign in",
+      "verdict_why": "**Why:** a criterion says 'sign in' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "Test first: `ReadOnlyIdentityTest` asserts that `Mint the read-only proof identity` (id `reader`) and `Mint the read-only proof identity without variables` (id `reader_narrow`) each use `actions/create-github-app-token` at today's sha with its version comment, pass `owner: ${{ github.repository_owner }}`, pass no `repositories:` input, draw `app-id` and `private-key` from `steps.readpool`, are `continue-on-error`, and ask only for permissions whose value is `read`; that `reader` asks for exactly contents, actions, pull-requests, metadata and variables; that `reader_narrow` asks for exactly those four without variables and carries `if: steps.reader.outcome != 'success'`; that `Hand the read-only proof identity to the agent` (id `readtoken`) comes after both mints, holds exactly `${{ steps.reader.outputs.token || steps.reader_narrow.outputs.token }}` in its env, writes `token=` to `$GITHUB_OUTPUT`, and has no `${{` in its `run:`; and that every agent step holds `GH_READ_TOKEN: ${{ steps.readtoken.outputs.token }}` and comes after `readtoken`. It fails on today's file.",
+        "Neither mint asks for a `write` permission, and the test refuses one in either step.",
+        "`Record the read-only proof identity` writes the five-permission line when the first mint succeeded, the four-permission line with `(variables:read not granted to this installation)` when only the second did, and today's refused line when neither did. Each success line names the App slug and the owner. The test derives the expected permission text from each mint step's own `permission-*` inputs rather than restating it, and the `READ_PERMISSIONS` and `GITHUB_SUMMARY` constants are gone.",
+        "Every existing test passes, except these five in `tests/test_proof_task_workflow.py`, which are updated to the new wording as follows: `test_the_mint_is_read_only_by_its_permissions` checks both mints' permission sets as in the first criterion; `test_the_mint_draws_from_the_read_pool` checks both mints; `test_the_agent_holds_it_as_gh_read_token_and_it_comes_first` checks `${{ steps.readtoken.outputs.token }}`; `test_the_summary_line_names_the_app_and_the_permissions` checks the derived lines of the third criterion; and `test_a_refused_mint_costs_the_rows_never_the_run` checks `continue-on-error` on both mints and keeps its refused-line and prompt assertions. The module docstring no longer says \"four\". Among the tests that pass with no edit are all of `tests/test_agents_registry.py`, `tests/test_check_action_pins.py`, `tests/test_workflow_expression_budget.py`, and `ProofBriefTest.test_the_identities_and_what_each_may_do`.",
+        "The PR body names the operator follow-up: grant `variables: read` to each of the four pool Apps' installations. Nothing in the workflow or the tests depends on that grant having happened.",
+        "`PROOF_LINEAR_REQUESTS` is set to `\"40\"` on all three agent steps, with its reason in a comment. The prompt's `LINEAR_API_KEY` bullet, identical on all three steps, allows reading cards (never writing them) up to `PROOF_LINEAR_REQUESTS` requests in all.",
+        "`briefs/proof.md`'s Linear bullet states the read allowance (which commands, what may be read, and never a write to any card beyond the heartbeats, receipts and escalation); the cap by the name `PROOF_LINEAR_REQUESTS`, and that it counts every request the run's own invocations make, its own heartbeats and receipts included; the counting rule (sum `N` over the run's `linear-calls:` lines, each `process:` token counted once); that at the cap reads stop while owed writes are still made; the `linear requests: <N> of <PROOF_LINEAR_REQUESTS>` line in the record's `## Identities` section; and that a row past the cap is `Not observed. the Linear request cap of <PROOF_LINEAR_REQUESTS> was reached`. A new `ProofBriefTest` method pins `PROOF_LINEAR_REQUESTS`, `linear-calls:`, `linear requests:` and that `Not observed.` text.",
+        "`briefs/proof.md`'s GitHub-observed bullet states which repos the read token reaches (every repository in the caller's organization that the selected App's installation covers) and which it does not (atlas and deltasolv, in other organizations); that a `403` on `gh variable get` means the installation does not grant `variables: read`, and the row says so; and it names the record line rather than listing permissions. A second new `ProofBriefTest` method pins `variables: read` and the other-organization rule. The `Never:` bullet and the AWS bullet have no diff.",
+        "The `proof` entry's comment in `agents.yaml` no longer lists the four permissions. `PROOF_LINEAR_REQUESTS` is a plain value, not a credential, so the roster's `credentials:` list is unchanged.",
+        "Tests run with `GITHUB_ACTIONS=true`, empty AWS credentials and `LINEAR_API_KEY=test`, and no test touches Linear or GitHub over the network."
+      ],
+      "reworded": false,
+      "note": "Moved to Todo by hand on 2026-10-07 16:10 PT, not reworded. The 'sign in' the verdict quoted was in the criteria of the attempt the verdict was written on (08:41 PT); the planner's revision and the operator's rewrite that answered the pre-approval critic took the live-check wording out before the card was moved, so the criteria read today no longer carry it, and there is no hand reword to reverse."
+    },
+    {
+      "identifier": "DRE-5952",
+      "title": "deltasolv: the backend type-checks against SQLAlchemy 2.1, so the requirement can move to <2.2 and Dependabot's PR #244 can close",
+      "labels": [
+        "Bug",
+        "agent:engineer",
+        "repo:deltasolv"
+      ],
+      "quoted_phrase": "by hand",
+      "verdict_why": "**Why:** a criterion says 'by hand' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "The backend requirement for `sqlalchemy` in `pyproject.toml` reads `>=2.0,<2.2`, the comment above it no longer says to stay on the 2.0 line, and CI's \"Type-check\" step (`mypy`) passes with SQLAlchemy 2.1 installed.",
+        "`TimeEntryStore.list_for_member` in `time_tracking_store.py` and `Query.time_entries` in `resolvers/time_tracking.py` type correctly without `# type: ignore`, and the existing time-tracking tests (`tests/test_time_tracking_store.py`, `tests/test_time_tracking_resolver.py`) pass unchanged.",
+        "No entry in `.github/dependabot.yml` carries a `labels` key, `tests/test_dependabot_config.py` asserts that instead of requiring one, and the PR body states that the `dependencies` label is left to Dependabot's default rather than created by hand."
+      ],
+      "reworded": false,
+      "note": "Moved, not reworded. Its third criterion still carries 'by hand' — in a sentence about the PR body, 'rather than created by hand' — which is the phrase the verdict quoted."
+    },
+    {
+      "identifier": "DRE-6164",
+      "title": "portico: Continue with Google always shows Google's account chooser, and the \"not shared with you\" page names the account you are signed in as",
+      "labels": [
+        "agent:engineer",
+        "initiative:bureau",
+        "repo:portico"
+      ],
+      "quoted_phrase": "sign in",
+      "verdict_why": "**Why:** a criterion says 'sign in' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "Pressing Continue with Google on `auth-gate.html` sends the browser to Cognito's authorize URL with `identity_provider=Google` and a `prompt` that makes Google show its account chooser. A test pins the URL the button builds.",
+        "The `EB_LINKED_RETRY` retry, in both `comments.js` and `authCore.ts`, builds its authorize URL **without** `prompt`. A test pins that it stays silent.",
+        "`buildAuthorizeUrl` in `authCore.ts` builds the same URL as the widget for the same inputs, and `authCore.conformance.test.ts` checks both copies, so changing one without the other fails.",
+        "The `prompt` the button sends is `select_account`, the value seen forwarded to Google on 2026-10-07 09:32 PT, and a test pins it. The CEO's own case (a Cognito session already open from another portal in the same pool) is checked by the operator after release, as the follow-up below, and does not gate the merge.",
+        "The denied page (`auth-gate.html?denied=1`) reads \"You're signed in as <email>\" from the stored id token, HTML-escaped. With no readable token it shows today's wording, not a blank or the word \"undefined\".",
+        "On the denied page, the switch-account link followed by Continue with Google builds the authorize URL with the same chooser `prompt`, so Google asks which account to use instead of reusing the last one. A test pins it.",
+        "The existing widget and SPA auth suites pass, including `infra/test/signin_form_otp.test.ts` and `widget_logout.test.ts`."
+      ],
+      "reworded": true,
+      "restored": {
+        "reconstructed": true,
+        "line": 5,
+        "reworded_by": "Operator helper, 2026-10-07 16:18 PT",
+        "how": "The reword renamed the denied page's button, whose label carried 'sign in', as 'the switch-account link'. The label's exact words were not recorded on the card, so the restored line puts the quoted phrase back as that label.",
+        "criteria": [
+          "Pressing Continue with Google on `auth-gate.html` sends the browser to Cognito's authorize URL with `identity_provider=Google` and a `prompt` that makes Google show its account chooser. A test pins the URL the button builds.",
+          "The `EB_LINKED_RETRY` retry, in both `comments.js` and `authCore.ts`, builds its authorize URL **without** `prompt`. A test pins that it stays silent.",
+          "`buildAuthorizeUrl` in `authCore.ts` builds the same URL as the widget for the same inputs, and `authCore.conformance.test.ts` checks both copies, so changing one without the other fails.",
+          "The `prompt` the button sends is `select_account`, the value seen forwarded to Google on 2026-10-07 09:32 PT, and a test pins it. The CEO's own case (a Cognito session already open from another portal in the same pool) is checked by the operator after release, as the follow-up below, and does not gate the merge.",
+          "The denied page (`auth-gate.html?denied=1`) reads \"You're signed in as <email>\" from the stored id token, HTML-escaped. With no readable token it shows today's wording, not a blank or the word \"undefined\".",
+          "On the denied page, the “Sign in with another account” link followed by Continue with Google builds the authorize URL with the same chooser `prompt`, so Google asks which account to use instead of reusing the last one. A test pins it.",
+          "The existing widget and SPA auth suites pass, including `infra/test/signin_form_otp.test.ts` and `widget_logout.test.ts`."
+        ]
+      }
+    },
+    {
+      "identifier": "DRE-6166",
+      "title": "agent-bureau: a release row lists only the pull requests that changed that surface — relay v25 showed 191 cards for one relay change",
+      "labels": [
+        "Bug",
+        "agent:engineer",
+        "initiative:bureau",
+        "repo:agent-bureau"
+      ],
+      "quoted_phrase": "on the live",
+      "verdict_why": "**Why:** a criterion says 'on the live' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "A test folds a `relay` release through `fold_release_fact` whose stored push chain carries three merged pull requests (written to `record_release_carried` by the existing walk, `carried_source = 'record'`), then runs `filter_carried_by_path` with a fake reader whose files put only one of the three under `cloud/relay/`. `release_history(store, surface=\"relay\")` then lists exactly that one pull request, `carried_source` is still `record`, and a `record_task` row `release-carried-by-path/<deployment_id>` exists. This is the already-recorded-release case (relay v25's).",
+        "A test: running the pass a second time over the same store makes zero reader calls and changes no row.",
+        "A test: a release whose files read raises, and one where a pull request's files fill 30 full pages, each end with no carried rows, `carried_source = 'unknown'`, and a `carried_reason` naming the pull request; neither ends as an empty `record` list.",
+        "A test: a `pipeline-channel` release and a release of a surface missing from `surface_paths` keep every carried row and cause no reader call.",
+        "A test: a pull request whose only matching file is a rename's `previous_filename` under `cloud/relay/` is kept.",
+        "A test: while another holder holds the `release-carried-by-path` lease, a pass makes no reader call and changes no row.",
+        "`tests/test_record_releases.py` (including its import pin), `tests/test_starters.py` and `tests/test_record_store_connection.py` pass with the new starter declared."
+      ],
+      "reworded": true,
+      "restored": {
+        "reconstructed": true,
+        "line": 7,
+        "reworded_by": "Operator helper, 2026-10-07 16:19 PT",
+        "how": "The reword took the last criterion out of the checkbox list and wrote it below the criteria as an operator follow-up after release. The restored line puts it back as the last checkbox, in the follow-up's own words, with the 'on the live' it was routed on.",
+        "criteria": [
+          "A test folds a `relay` release through `fold_release_fact` whose stored push chain carries three merged pull requests (written to `record_release_carried` by the existing walk, `carried_source = 'record'`), then runs `filter_carried_by_path` with a fake reader whose files put only one of the three under `cloud/relay/`. `release_history(store, surface=\"relay\")` then lists exactly that one pull request, `carried_source` is still `record`, and a `record_task` row `release-carried-by-path/<deployment_id>` exists. This is the already-recorded-release case (relay v25's).",
+          "A test: running the pass a second time over the same store makes zero reader calls and changes no row.",
+          "A test: a release whose files read raises, and one where a pull request's files fill 30 full pages, each end with no carried rows, `carried_source = 'unknown'`, and a `carried_reason` naming the pull request; neither ends as an empty `record` list.",
+          "A test: a `pipeline-channel` release and a release of a surface missing from `surface_paths` keep every carried row and cause no reader call.",
+          "A test: a pull request whose only matching file is a rename's `previous_filename` under `cloud/relay/` is kept.",
+          "A test: while another holder holds the `release-carried-by-path` lease, a pass makes no reader call and changes no row.",
+          "`tests/test_record_releases.py` (including its import pin), `tests/test_starters.py` and `tests/test_record_store_connection.py` pass with the new starter declared.",
+          "After release, the operator confirms on the live console that the relay v25 row reads 1 card (DRE-6115) and records it on this card (deferred: needs the deploy)."
+        ]
+      }
+    },
+    {
+      "identifier": "DRE-5960",
+      "title": "agent-bureau: the Overview board disagrees with Linear in two places — a Green Light card missing from the Green Light column, and an epic's panel chip saying Building while the epic stands in In production",
+      "labels": [
+        "Bug",
+        "agent:engineer",
+        "initiative:bureau",
+        "repo:agent-bureau"
+      ],
+      "quoted_phrase": "in production",
+      "verdict_why": "**Why:** a criterion says 'in production' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "A test with a Green Light-lane card that is the child of an epic drawn in Building ([DRE-5849](https://linear.app/dreadnoughtfoundry/issue/DRE-5849/agent-bureau-our-database-holds-whole-comment-threads-past-50-comments)'s shape) shows the card in the board's Green Light column, and the epic still draws in Building.",
+        "A test shows a child in any other lane (for example Backlog) of an epic drawn in Building still folds into the epic and is not drawn on its own ([DRE-5597](https://linear.app/dreadnoughtfoundry/issue/DRE-5597/agent-bureau-the-boards-reads-and-model-the-overviewboard-and)'s rule kept for other lanes).",
+        "A test shows an epic the board draws in its shipped-work column (the column named in point 2 above) carries that column's own name as its panel chip, not \"Building\", and a test shows the chip follows the board's column for each column an epic can be drawn in."
+      ],
+      "reworded": true,
+      "restored": {
+        "reconstructed": true,
+        "line": 2,
+        "reworded_by": "Operator helper, 2026-10-07 16:19 PT",
+        "how": "The reword replaced the board column's quoted name, \"In production\", with 'its shipped-work column (the column named in point 2 above)' in the third criterion. The restored line puts the column's name back.",
+        "criteria": [
+          "A test with a Green Light-lane card that is the child of an epic drawn in Building ([DRE-5849](https://linear.app/dreadnoughtfoundry/issue/DRE-5849/agent-bureau-our-database-holds-whole-comment-threads-past-50-comments)'s shape) shows the card in the board's Green Light column, and the epic still draws in Building.",
+          "A test shows a child in any other lane (for example Backlog) of an epic drawn in Building still folds into the epic and is not drawn on its own ([DRE-5597](https://linear.app/dreadnoughtfoundry/issue/DRE-5597/agent-bureau-the-boards-reads-and-model-the-overviewboard-and)'s rule kept for other lanes).",
+          "A test shows an epic the board draws in its \"In production\" column carries that column's own name as its panel chip, not \"Building\", and a test shows the chip follows the board's column for each column an epic can be drawn in."
+        ]
+      }
+    },
+    {
+      "identifier": "DRE-6043",
+      "title": "bureau-pipeline: the proof brief admits a hosted sign-in against a product's off-machine ration, and that ration's counter as the run's one live write",
+      "labels": [
+        "agent:engineer",
+        "initiative:bureau",
+        "repo:bureau-pipeline"
+      ],
+      "quoted_phrase": "sign in",
+      "verdict_why": "**Why:** a child of the epic, routed by the planning run off the card itself: a criterion says 'sign in' — The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+      "criteria": [
+        "RED first: `tests/test_assemble_context.py::ProofBriefTest::test_the_identities_and_what_each_may_do` asserts the brief contains `kept somewhere other than the machine`, `hosted sign-in ration:` and `one live write`, asserts `no card yet` does not appear anywhere in the brief, and still asserts `aws: none`, `## Identities`, `GH_TOKEN=$GH_READ_TOKEN gh api`, `GH_READ_TOKEN`, `GH_TOKEN` and `LINEAR_API_KEY`; it fails against the brief as it stands.",
+        "`briefs/proof.md`'s `Never:` bullet says a run may use a hosted identity's sign-in only where the product's own script keeps the ration off the machine and refuses the next sign-in itself, names Portico's `proof-reader.ts mcp-token` and its `ration#<project>` counter as the example, keeps \"never a person's account, never the CEO's account, never a sign-in typed into a web page by the run itself\", and no longer contains \"No proof in this epic signs in anywhere\" or \"has no card yet\".",
+        "The **What you may touch** section names the product's ration counter, written only through the product's script, as the one live write a run may make beside scratch state; the AWS bullet describes the session as bounded by the caller's role (Portico: five reads and one write) and keeps `aws: none` for a caller that provides none; the `## Identities` item of **The record** says the run states how many hosted sign-ins it spent and how many remained by quoting the status line, or the refusal line and that it made no hosted sign-in.",
+        "The `Local screen:` bullet under **The two halves of an on-screen step** no longer contains \"has no card yet\" and ends with the sentence \"Nothing hands a dispatched run a browser yet, so the row stays `Not observed.` with that reason.\"; it still contains `Not observed. needs a browser on a local run of the released commit`, `Local screen:`, `Live request:` and \"never inferred from the live half\" unchanged; `grep -c \"no card yet\" briefs/proof.md` prints 0.",
+        "`.github/workflows/proof-task.yml` has no diff on the branch; `python3 -m pytest tests/test_assemble_context.py tests/test_proof_task_workflow.py tests/test_agents_registry.py -q` is green with `test_the_identities_and_what_each_may_do` the only test whose source changed, and the brief still spells none of the three verdict markers `standards/untrusted-content.md` names (`ProofBriefTest.test_it_emits_no_verdict_marker` stays green unmodified).",
+        "The wording is product-agnostic: the rule is stated for \"the product's own script\" and Portico appears only as the example; `grep -o \"Portico\" briefs/proof.md | wc -l` prints at most 5 (it prints 3 on `main`, and this card adds at most two mentions: the `Never:` bullet's example and the AWS bullet's \"what Portico's holds\" clause)."
+      ],
+      "reworded": true,
+      "restored": {
+        "reconstructed": true,
+        "line": 1,
+        "lines": [
+          1,
+          2
+        ],
+        "reworded_by": "Operator helper, 2026-10-07 16:20 PT",
+        "how": "The reword changed two phrases, and the card says which: criterion 2's 'may sign in to a hosted identity' became 'may use a hosted identity's sign-in', and criterion 3's 'that it did not sign in' became 'that it made no hosted sign-in'. Both are restored word for word.",
+        "criteria": [
+          "RED first: `tests/test_assemble_context.py::ProofBriefTest::test_the_identities_and_what_each_may_do` asserts the brief contains `kept somewhere other than the machine`, `hosted sign-in ration:` and `one live write`, asserts `no card yet` does not appear anywhere in the brief, and still asserts `aws: none`, `## Identities`, `GH_TOKEN=$GH_READ_TOKEN gh api`, `GH_READ_TOKEN`, `GH_TOKEN` and `LINEAR_API_KEY`; it fails against the brief as it stands.",
+          "`briefs/proof.md`'s `Never:` bullet says a run may sign in to a hosted identity only where the product's own script keeps the ration off the machine and refuses the next sign-in itself, names Portico's `proof-reader.ts mcp-token` and its `ration#<project>` counter as the example, keeps \"never a person's account, never the CEO's account, never a sign-in typed into a web page by the run itself\", and no longer contains \"No proof in this epic signs in anywhere\" or \"has no card yet\".",
+          "The **What you may touch** section names the product's ration counter, written only through the product's script, as the one live write a run may make beside scratch state; the AWS bullet describes the session as bounded by the caller's role (Portico: five reads and one write) and keeps `aws: none` for a caller that provides none; the `## Identities` item of **The record** says the run states how many hosted sign-ins it spent and how many remained by quoting the status line, or the refusal line and that it did not sign in.",
+          "The `Local screen:` bullet under **The two halves of an on-screen step** no longer contains \"has no card yet\" and ends with the sentence \"Nothing hands a dispatched run a browser yet, so the row stays `Not observed.` with that reason.\"; it still contains `Not observed. needs a browser on a local run of the released commit`, `Local screen:`, `Live request:` and \"never inferred from the live half\" unchanged; `grep -c \"no card yet\" briefs/proof.md` prints 0.",
+          "`.github/workflows/proof-task.yml` has no diff on the branch; `python3 -m pytest tests/test_assemble_context.py tests/test_proof_task_workflow.py tests/test_agents_registry.py -q` is green with `test_the_identities_and_what_each_may_do` the only test whose source changed, and the brief still spells none of the three verdict markers `standards/untrusted-content.md` names (`ProofBriefTest.test_it_emits_no_verdict_marker` stays green unmodified).",
+          "The wording is product-agnostic: the rule is stated for \"the product's own script\" and Portico appears only as the example; `grep -o \"Portico\" briefs/proof.md | wc -l` prints at most 5 (it prints 3 on `main`, and this card adds at most two mentions: the `Never:` bullet's example and the AWS bullet's \"what Portico's holds\" clause)."
+        ]
+      }
+    }
+  ]
+}

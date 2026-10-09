@@ -281,6 +281,20 @@ def test_an_eligible_card_is_dispatched_once_with_the_proof_event(monkeypatch, c
     assert h.order == [("fire", "DRE-5930"), ("comment", "DRE-5930")]
 
 
+def test_a_proof_wearing_only_agent_ops_and_no_code_is_a_first_run_candidate(monkeypatch, capsys):
+    """DRE-6227: the stamp puts `no-code` alone on a proof card, and nothing
+    automatic applies `hand-built` or a proof's `operator-step` any more. A
+    Hand-work proof carrying neither is still the proof run's to start."""
+    card = lane_card("DRE-5930", labels=("no-code",))
+    names = {node["name"] for node in card["labels"]["nodes"]}
+    assert names == {f"repo:{SLUG}", "agent:ops", "no-code"}
+    board = Board(hand=[card])
+    h = Harness(monkeypatch, board)
+    tally = h.sweep()
+    assert h.fired == [("DRE-5930", REPO, "first proof run", "proof-execute")]
+    assert tally.dispatched == 1
+
+
 def test_the_receipt_is_posted_only_after_a_confirmed_dispatch(monkeypatch, capsys):
     board = Board(hand=[lane_card("DRE-5930")])
     h = Harness(monkeypatch, board, fire_ok=False)

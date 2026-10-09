@@ -10,7 +10,12 @@
     "of its nine phrases appear in ZERO of the 1,561 carded issues in this",
     "workspace, so real UI cards fell through to a model. The remedy is not a",
     "longer guessed list — it is that a phrase may only be in the vocabulary if a",
-    "real card contains it, which is what this file records and the tests enforce."
+    "real card contains it, which is what this file records and the tests enforce.",
+    "",
+    "DRE-6227 retired the `interactive` signal: its ten attestations stay below,",
+    "each marked `retired`, as the record of why the phrase was read, and the two",
+    "real cards it decided (DRE-2695, DRE-2308) now route to a judgement call. What",
+    "each one expected until then is kept beside the new expectation."
   ],
   "read_on": "2026-08-31",
   "source": "Linear, dreadnoughtfoundry workspace (team DRE) — every issue, read through scripts/linear_ops.py; criteria extracted with routing_verdict.acceptance_criteria()",
@@ -135,6 +140,7 @@
       ]
     },
     "sign in": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 14,
       "examples": [
         {
@@ -152,6 +158,7 @@
       ]
     },
     "sign out": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 3,
       "examples": [
         {
@@ -165,6 +172,7 @@
       ]
     },
     "log in": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 2,
       "examples": [
         {
@@ -192,6 +200,7 @@
       ]
     },
     "in production": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 26,
       "examples": [
         {
@@ -205,6 +214,7 @@
       ]
     },
     "against the live": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 7,
       "examples": [
         {
@@ -218,6 +228,7 @@
       ]
     },
     "on the live": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 8,
       "examples": [
         {
@@ -231,6 +242,7 @@
       ]
     },
     "in the live product": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 1,
       "examples": [
         {
@@ -240,6 +252,7 @@
       ]
     },
     "verified live": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 8,
       "examples": [
         {
@@ -257,6 +270,7 @@
       ]
     },
     "by hand": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 24,
       "examples": [
         {
@@ -270,6 +284,7 @@
       ]
     },
     "manually": {
+      "retired": "DRE-6227, 2026-10-07: the interactive signal is retired. The CEO's rule is that hand-built is applied only when he asks for it and nothing automatic applies it, and this phrase routed code cards to Hand-work on a word. Kept as the record of why it was read.",
       "cards": 10,
       "examples": [
         {
@@ -394,8 +409,13 @@
     {
       "identifier": "DRE-2695",
       "title": "The console signs you out every hour — Cognito issues a 30-day refresh token and nothing keeps it",
-      "why_this_card": "The interactive control. DRE-2724's other live observation, and it must keep routing WORKBENCH after the visual half is widened.",
+      "why_this_card": "The interactive control. DRE-2724's other live observation, and it must keep routing WORKBENCH after the visual half is widened. Since DRE-6227 retired the interactive signal it routes to a judgement call, and the WORKBENCH it was picked for is kept as expect_until_dre_6227.",
       "expect": {
+        "verdict": null,
+        "source": "judgement",
+        "needs_model": true
+      },
+      "expect_until_dre_6227": {
         "verdict": "WORKBENCH",
         "source": "criteria",
         "needs_model": false
@@ -405,8 +425,13 @@
     {
       "identifier": "DRE-2308",
       "title": "Unlayered handoff reset beats every Tailwind text utility — dark ink on green buttons app-wide",
-      "why_this_card": "The adversarial case for the widening: a criterion that states a rendered outcome AND live-product verification. Interactive wins, or a card that needs a person routes to the fleet.",
+      "why_this_card": "The adversarial case for the widening: a criterion that states a rendered outcome AND live-product verification. Interactive wins, or a card that needs a person routes to the fleet. Since DRE-6227 retired the interactive signal it routes to a judgement call, and the WORKBENCH it was picked for is kept as expect_until_dre_6227.",
       "expect": {
+        "verdict": null,
+        "source": "judgement",
+        "needs_model": true
+      },
+      "expect_until_dre_6227": {
         "verdict": "WORKBENCH",
         "source": "criteria",
         "needs_model": false

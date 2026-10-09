@@ -142,7 +142,8 @@ class TestTheHandWorkEntry:
         # DRE-5323 added the one-time migration that moved the person cards
         # already in Todo when the sweep started carrying them here.
         # DRE-5925 added the proof run, returning a card the CEO answered from
-        # Green Light.
+        # Green Light. DRE-6230's migration also moves a code card OUT of the
+        # lane, and its writer sentence says so.
         who = raw_lane(shipped(), HAND_WORK)["clauses"]["writers"]["who"]
         assert who == ["reconcile.py", "linear_ops.py", "hand_work_migration.py",
                        "proof-task.yml", "operator"]
@@ -157,11 +158,16 @@ class TestTheHandWorkEntry:
     def test_its_clauses_state_the_rule(self):
         clauses = raw_lane(shipped(), HAND_WORK)["clauses"]
         entrance = clauses["entrance"]["text"]
+        # DRE-6227: the sweep stamps `operator-step` + `no-code` on OPERATOR,
+        # nothing on WORKBENCH, and never `hand-built` — the CEO's own mark.
         for phrase in ("WORKBENCH", "OPERATOR", "config/routing-verdicts.json",
-                       "`hand-built`", "`no-code`", "before the move",
+                       "`operator-step`", "`no-code`", "before the move",
+                       "only when he asks for it", "nothing automatic applies it",
                        "WIP cap", "stall window", "never reported as stalled",
                        "An epic never enters"):
             assert phrase in entrance, phrase
+        writers = clauses["writers"]["text"]
+        assert "OUT of this lane" in writers and "DRE-6230" in writers
         exit_text = clauses["exit"]["text"]
         for phrase in ("pull request", "In Review", "OPERATOR", "Done"):
             assert phrase in exit_text, phrase

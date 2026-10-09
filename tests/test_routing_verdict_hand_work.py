@@ -3,7 +3,9 @@
 A person's work gets the person's lane. Todo is the build button: a card that
 enters it makes the relay dispatch a run. Since DRE-3385 the sweep has carried
 WORKBENCH and OPERATOR cards into Todo marked `hand-built`, so one lane meant
-both "about to build" and "waiting on a person, for days". DRE-5320 made
+both "about to build" and "waiting on a person, for days". (Since DRE-6227 no
+verdict marks `hand-built`: OPERATOR marks `operator-step` + `no-code`, and
+WORKBENCH marks nothing.) DRE-5320 made
 `Hand-work` a live lane; this card points the two verdicts whose actor is a
 person at it.
 
@@ -64,9 +66,10 @@ class TestTheDestinations:
     def test_fleet_still_lands_in_todo(self):
         assert routing_verdict.destination("FLEET") == "Todo"
 
-    def test_the_marks_actor_and_promotable_are_unchanged(self):
-        assert routing_verdict.marks("WORKBENCH") == ("hand-built",)
-        assert routing_verdict.marks("OPERATOR") == ("hand-built", "no-code")
+    def test_the_marks_are_the_vocabulary_s_own_and_actor_and_promotable_are_unchanged(self):
+        # DRE-6227: `hand-built` is the CEO's mark and no verdict applies it.
+        assert routing_verdict.marks("WORKBENCH") == ()
+        assert routing_verdict.marks("OPERATOR") == ("operator-step", "no-code")
         for name in ("WORKBENCH", "OPERATOR"):
             assert routing_verdict.actor(name) == "operator"
             assert routing_verdict.is_promotable(name) is False
