@@ -604,6 +604,41 @@ def test_load_prices_reads_the_committed_file():
     assert declared[FABLE51]["input"] == 10.0
 
 
+def test_haiku_5_5_is_priced_excluded_and_on_nothing(live_config):
+    # DRE-6288, the CEO's signed answer of 2026-10-08: "go ahead and add it but
+    # we are not using it currently". Recorded with its base-tier price, held
+    # off every ladder by `excluded:`, and so never asked about again.
+    haiku = "claude-haiku-5-5"
+    declared = ma.load_prices(PRICES_PATH)
+    assert haiku in declared
+    assert declared[haiku]["input"] == 0.10
+    assert declared[haiku]["output"] == 0.50
+    assert str(declared[haiku].get("source", "")).strip()
+
+    excluded = {
+        entry["model"] if isinstance(entry, dict) else entry
+        for entry in live_config["excluded"]
+    }
+    assert haiku in excluded
+
+    ladder_ids = {
+        rung["model"] if isinstance(rung, dict) else rung
+        for rungs in live_config["ladders"].values()
+        for rung in rungs
+    }
+    assert haiku not in ladder_ids
+    assert haiku not in live_config["effort"]
+    for rule in live_config["review_separation"]["rules"]:
+        assert haiku not in (rule["built_on"], rule["reviewers_use"])
+
+    decisions = ma.classify_catalog(
+        [model(haiku, "2026-10-07T00:00:00Z", "Claude Haiku 5.5")],
+        live_config,
+        declared,
+    )
+    assert decisions == [], "the adoption rule must not ask about it again"
+
+
 # --------------------------------------------------------------------------- #
 # 5. The CLI surface — classify, and nothing else                             #
 # --------------------------------------------------------------------------- #
