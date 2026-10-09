@@ -428,15 +428,16 @@ def claimed_verdict(comment_bodies) -> str | None:
 def claimed_route(verdict: str | None) -> str | None:
     """A routing verdict read as *who did this card turn out to need*.
 
-    FLEET is the one verdict that is dispatched; every other one is marked
-    `hand-built` by the vocabulary and means a person. Derived from the marks
-    rather than listed here, so a sixth verdict cannot quietly read as
-    dispatchable.
+    A verdict a person acts on means a person; any other is dispatchable.
+    Derived from the verdict's actor (`routing_verdict.is_person_verdict`,
+    DRE-6225) rather than listed here or read off a mark, so neither a sixth
+    verdict nor the OPERATOR marker moving to `operator-step` can quietly read
+    as dispatchable.
     """
     if not verdict:
         return None
     return ("needs-a-person"
-            if "hand-built" in routing_verdict.marks(verdict)
+            if routing_verdict.is_person_verdict(verdict)
             else "dispatchable")
 
 

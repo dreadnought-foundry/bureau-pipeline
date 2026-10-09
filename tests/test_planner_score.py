@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -495,6 +496,23 @@ class RoutingTest(unittest.TestCase):
         row = [r for r in result["rows"] if r["dimension"] == "routing"][0]
         self.assertEqual(row["claimed"], "needs-a-person")
         self.assertEqual(row["outcome"], "agree")
+
+    def test_the_claimed_route_survives_the_operator_marker_flip(self):
+        """DRE-6225: once OPERATOR marks `operator-step` instead of
+        `hand-built`, a reader asking for the string would call it
+        dispatchable. The route is read off who the verdict's actor is."""
+        flipped = copy.deepcopy(routing_verdict.load())
+        for record in flipped["verdicts"]:
+            if record["name"] == "OPERATOR":
+                record["marks"] = ["operator-step", "no-code"]
+            if record["name"] == "WORKBENCH":
+                record["marks"] = []
+        for doc in (routing_verdict.load(), flipped):
+            with unittest.mock.patch.object(routing_verdict, "load",
+                                            lambda path=None, d=doc: d):
+                self.assertEqual(planner_score.claimed_route("OPERATOR"), "needs-a-person")
+                self.assertEqual(planner_score.claimed_route("WORKBENCH"), "needs-a-person")
+                self.assertEqual(planner_score.claimed_route("FLEET"), "dispatchable")
 
 
 class ApprovalTest(unittest.TestCase):

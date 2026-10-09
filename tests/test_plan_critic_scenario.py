@@ -161,6 +161,20 @@ def add_label(identifier, label):
     log("card-mark " + identifier + " " + label)
 
 
+# The one label `routing_verdict.card_marks` keeps on a proof card (DRE-6225).
+NO_CODE_LABEL = "no-code"
+
+
+def get_issue(identifier, **_):
+    """The card read `stamp_card` makes for the title its marks depend on
+    (DRE-6225) — answered off the same records `children-detail` serves."""
+    records = (json.loads(os.environ["STUB_DETAIL"]) if os.environ.get("STUB_DETAIL")
+               else [])
+    title = next((r.get("title") for r in records
+                  if r.get("identifier") == identifier), identifier)
+    return {"identifier": identifier, "title": title}
+
+
 def main():
     cmd, *args = sys.argv[1:]
     if cmd == "dump-comments":

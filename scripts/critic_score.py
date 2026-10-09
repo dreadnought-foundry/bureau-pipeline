@@ -88,11 +88,15 @@ FULL_READ = "full"
 #: What Linear's list API silently cuts every description down to.
 LIST_API_CAP = 500
 
-#: The contaminated dimension, named after the label the routing vocabulary
-#: marks for it. The identity is checked, not assumed: `reference_problems`
-#: refuses a contaminated dimension no verdict marks, so the exclusion can
-#: never drift away from the thing it excludes.
-CONTAMINATED_MARK = "hand-built"
+#: The contaminated dimension, named after the CEO's mark — who builds the
+#: card. An alias of `routing_verdict.HAND_BUILT_LABEL`, never a second
+#: spelling (DRE-6225): the dimension keeps its historical name while the
+#: verdicts it covers are read off `routing_verdict.is_person_verdict`, so the
+#: OPERATOR marker moving to `operator-step` changes nothing here. The identity
+#: is checked, not assumed: `reference_problems` refuses a contaminated
+#: dimension no verdict gives a person, so the exclusion can never drift away
+#: from the thing it excludes.
+CONTAMINATED_MARK = routing_verdict.HAND_BUILT_LABEL
 
 #: The axis everything else is scored on.
 DEFAULT_DIMENSION = "buildability"
@@ -197,17 +201,17 @@ def reference_problems(doc: dict | None = None) -> list:
 
     marked = [
         name for name in routing_verdict.verdicts()
-        if CONTAMINATED_MARK in routing_verdict.marks(name)
+        if routing_verdict.is_person_verdict(name)
     ]
     if not marked:
         problems.append(
-            f"no routing verdict marks {CONTAMINATED_MARK!r}, so the excluded "
-            "dimension names nothing the critic actually reads"
+            f"no routing verdict gives a person the card, so the excluded "
+            f"{CONTAMINATED_MARK!r} dimension names nothing the critic actually reads"
         )
     for name in marked:
         if judgement_of(name) != judgement_of("FLEET"):
             problems.append(
-                f"the verdict {name!r} marks {CONTAMINATED_MARK!r} but does not "
+                f"the verdict {name!r} gives a person the card but does not "
                 f"collapse with FLEET on the {DEFAULT_DIMENSION!r} axis — the "
                 "exclusion would be scoring the contaminated dimension under "
                 "another name"
@@ -346,7 +350,7 @@ def judgement_of(verdict: str | None, dimension: str = DEFAULT_DIMENSION,
     On the default axis FLEET, WORKBENCH and OPERATOR collapse into one value:
     what separates them is WHO builds the card, which is the contaminated
     dimension. That collapse IS the exclusion, and `reference_problems` checks
-    it covers exactly the verdicts the vocabulary marks `hand-built`.
+    it covers exactly the verdicts a person acts on (`is_person_verdict`).
 
     PARKED is the one verdict that answers something else entirely, so it
     returns a value no dimension declares (`OFF_AXIS_VALUES`) and `score()`
@@ -361,7 +365,7 @@ def judgement_of(verdict: str | None, dimension: str = DEFAULT_DIMENSION,
         return None
     if dimension == CONTAMINATED_MARK:
         return ("needs-a-person"
-                if CONTAMINATED_MARK in routing_verdict.marks(verdict)
+                if routing_verdict.is_person_verdict(verdict)
                 else "dispatchable")
     if verdict == "NEEDS WORK":
         return "not-buildable"

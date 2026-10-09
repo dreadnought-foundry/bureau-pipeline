@@ -367,6 +367,72 @@ def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     assert _call_owners("hand_built") == _HAND_BUILT_OWNERS
 
 
+def _attribute_call_owners(module: str, name: str) -> set[str]:
+    """The functions that call `module.name` anywhere in reconcile.py."""
+    tree = ast.parse(_SOURCE)
+    funcs = [
+        n for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+    def owner_of(lineno: int) -> str:
+        best = None
+        for f in funcs:
+            if f.lineno <= lineno <= (f.end_lineno or f.lineno):
+                if best is None or f.lineno > best.lineno:
+                    best = f
+        return best.name if best else "<module>"
+
+    return {
+        owner_of(n.lineno)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == name
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == module
+    }
+
+
+#: WHO OWNS THE SPELLING (DRE-6225). "A person builds this, nothing is
+#: dispatched" is read off the routing vocabulary's hand marks —
+#: `routing_verdict.hand_marks()`, its person marks but `no-code` — and never
+#: off a string spelled here, so the flip of OPERATOR's marker to
+#: `operator-step` is a data change. Three readers: `hand_built` (every owner
+#: above reads it through that one function), and the door guards in
+#: `flag_stranded` and `main()`'s nudge loop, which refuse a move into Todo
+#: once a person's mark is on the card.
+_HAND_MARKS_OWNERS = {"hand_built", "flag_stranded", "main"}
+
+#: Every person mark, `no-code` included, is read nowhere here: `no-code`
+#: alone is not a person's card, and a `PROOF:` card is read by its title.
+_PERSON_MARKS_OWNERS: set[str] = set()
+
+#: And the marks the sweep APPLIES are the card's, not the verdict's: one rule,
+#: `routing_verdict.card_marks`, read by the promotion and the stamp alike.
+_CARD_MARKS_OWNERS = {"promote_ready"}
+
+
+def test_the_person_marks_are_read_off_the_vocabulary():
+    assert _attribute_call_owners("routing_verdict", "hand_marks") == _HAND_MARKS_OWNERS
+    assert _attribute_call_owners("routing_verdict", "person_marks") == _PERSON_MARKS_OWNERS
+    assert _attribute_call_owners("routing_verdict", "card_marks") == _CARD_MARKS_OWNERS
+    assert _attribute_call_owners("routing_verdict", "marks") == set(), (
+        "the sweep applies `card_marks`, never a verdict's raw `marks`"
+    )
+
+
+def test_the_label_is_never_spelled_in_reconcile():
+    """`HAND_BUILT_LABEL` is `routing_verdict.HAND_BUILT_LABEL`; a literal here
+    would be a second spelling the vocabulary cannot move."""
+    literals = [
+        n.lineno for n in ast.walk(ast.parse(_SOURCE))
+        if isinstance(n, ast.Constant) and n.value == HAND_BUILT
+    ]
+    assert literals == []
+    assert reconcile.HAND_BUILT_LABEL is reconcile.routing_verdict.HAND_BUILT_LABEL
+
+
 def test_the_owner_sweep_can_actually_see_a_call():
     """Guard the guard: a detector that matches nothing would pass forever.
 
@@ -376,6 +442,7 @@ def test_the_owner_sweep_can_actually_see_a_call():
         "the Intake count consulted a label — it reports how big the lane is, "
         "and a count with an exemption answers a question nobody asked"
     )
+    assert "promote_ready" in _attribute_call_owners("linear_ops", "add_label")
 
 
 # --------------------------------------------------------------------------
