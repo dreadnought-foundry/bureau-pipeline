@@ -87,6 +87,25 @@ handed to a person. The hand-off closes the marker and the count starts over
 behind it; a comment with no `createdAt` is not counted, so an unknown age
 never hands a card off.
 
+## Every marker has a clock (DRE-4208)
+
+DRE-3682 stood five days on a Linear classify marker with nothing under it:
+a waiting card printed `is waiting until …` on every pass, a held card was
+skipped silently, and a Planning review death was left to a watcher nothing
+checked had come. So every marker's age is read off its own comment node
+(`marker_node`, `marker_age_minutes` — the node's `createdAt`, through
+`_created`), and one that has stood LIMIT_DEATH_CLOCK_MINUTES (six hours; the
+Claude window is five) with no re-entry this pass can make gets ONE hand-off
+receipt whose reason opens on STOOD_PHRASE, plus an `ERROR:` line the sweep
+files as a standing defect, never a write failure. That covers a card still
+waiting on its trigger, a held card (exempt from being re-entered, never from
+being noticed) and a Planning review death the watcher never answered. A card
+whose trigger has fired is re-entered as before — the re-entry answers the
+clock — or, with no WIP room, keeps its `ready` line and gains an `ERROR:`
+line but no receipt, because a hand-off would close the marker and stop the
+recovery. An unknown age is never stale. The marker's own paragraph names
+the clock.
+
 ## The writes are injected, and why
 
 The lane contract (DRE-2859, `ready_lane_writers.py`) attributes a lane write
@@ -157,6 +176,12 @@ BUILD_LANE = "Todo"
 # deaths inside this many hours is a wall that is not the five-hour window.
 CLAUDE_ASSUMED_DEATHS_MAX = 3
 CLAUDE_ASSUMED_SPAN_HOURS = 24
+# The clock on every marker (DRE-4208): one definition, in dead_run, because
+# the marker's own paragraph names it too.
+LIMIT_DEATH_CLOCK_MINUTES = dead_run.LIMIT_DEATH_CLOCK_MINUTES
+# The clock's hand-off reason and its red-run line both open on this phrase,
+# and the sweep routes the line to its standing-defect ledger by it.
+STOOD_PHRASE = "the limit-death marker has stood"
 _COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
                 "eight", "nine")
 
@@ -240,6 +265,29 @@ def _created(node: dict) -> datetime | None:
         return None
 
 
+def marker_node(card: dict) -> dict | None:
+    """The comment node the card's waiting marker was parsed from — the walk
+    `waiting()` makes, over nodes instead of bodies — so it is None exactly
+    when `waiting(_bodies(card))` is (DRE-4208)."""
+    newest = None
+    for node in linear_ops.window_nodes(card.get("comments")):
+        body = node.get("body") or ""
+        if dead_run.parse_limit_marker(body) is not None:
+            newest = node
+        elif is_receipt(body):
+            newest = None
+    return newest
+
+
+def marker_age_minutes(node: dict | None, now: datetime) -> float | None:
+    """How long the marker has stood, or None when its node carries no
+    readable `createdAt` — an unknown age is never stale (DRE-4208)."""
+    created = _created(node) if node is not None else None
+    if created is None:
+        return None
+    return (now - created).total_seconds() / 60
+
+
 def count_assumed_deaths(card: dict, now: datetime) -> int:
     """How many assumed-clock Claude deaths the card's window holds that were
     created within the last CLAUDE_ASSUMED_SPAN_HOURS and after the newest
@@ -301,6 +349,42 @@ def _needs_rerun(card: dict, marker: dict) -> bool:
     return stage in PLANNING_STAGES and _lane(card) not in (PLANNING_LANE, *REPLAN_FROM)
 
 
+def _way_back(card: dict, stage: str) -> str:
+    """What a person does to bring the card back by hand."""
+    if stage == "review" and _lane(card) == PLANNING_LANE:
+        # The second critic's review: a re-run keeps its run id, which the
+        # medic has already marked, so a re-run is the one way NOT back.
+        return (f"the second critic's review comes back as a fresh run: "
+                f"the re-review watcher asks for it on its own, or a "
+                f"person posts `{review_rerun.RERUN_REVIEW_ACT}` on the "
+                f"epic. Not Re-run failed jobs: a re-run keeps the dead "
+                f"run's id, and a second death on it is never marked")
+    return ("a person re-enters the card by hand: Intake then "
+            "Planning for a classify or plan stage, Todo for a build, "
+            "and Re-run failed jobs for a fix, review or sync run")
+
+
+def _stood(age: float) -> str:
+    return f"{STOOD_PHRASE} {age / 60:.1f} hours"
+
+
+def stood_reason(card: dict, marker: dict, age: float, *, held: bool) -> str:
+    """The clock's hand-off reason (DRE-4208): it opens on STOOD_PHRASE and
+    the age, says what kept the card from coming back, and the way back."""
+    stage = marker.get("stage") or ""
+    if held:
+        why = (f"the card is held for a person ({dead_run.HOLD_LABEL}), so this "
+               f"sweep never re-enters the {stage} stage")
+    elif stage == "review" and _lane(card) == PLANNING_LANE:
+        why = "the re-review watcher has not asked for the review again"
+    else:
+        why = f"nothing has brought it back ({_until(marker)})"
+    hours = f"{LIMIT_DEATH_CLOCK_MINUTES / 60:g}"
+    return (f"{_stood(age)}, past the {hours}-hour clock its own paragraph "
+            f"named, and {why}. A person must act. Once the account can run "
+            f"again, {_way_back(card, stage)}")
+
+
 def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str | None:
     """Why nothing here can ever bring this card back — the ONE sentence a
     person is told — or None when a trigger and a re-entry both exist.
@@ -314,23 +398,11 @@ def handoff_reason(card: dict, marker: dict, *, assumed_deaths: int = 0) -> str 
             and assumed_deaths >= CLAUDE_ASSUMED_DEATHS_MAX):
         times = (_COUNT_WORDS[assumed_deaths] if assumed_deaths < len(_COUNT_WORDS)
                  else str(assumed_deaths))
-        if stage == "review" and _lane(card) == PLANNING_LANE:
-            # The second critic's review: a re-run keeps its run id, which the
-            # medic has already marked, so a re-run is the one way NOT back.
-            way_back = (f"the second critic's review comes back as a fresh run: "
-                        f"the re-review watcher asks for it on its own, or a "
-                        f"person posts `{review_rerun.RERUN_REVIEW_ACT}` on the "
-                        f"epic. Not Re-run failed jobs: a re-run keeps the dead "
-                        f"run's id, and a second death on it is never marked")
-        else:
-            way_back = ("a person re-enters the card by hand: Intake then "
-                        "Planning for a classify or plan stage, Todo for a build, "
-                        "and Re-run failed jobs for a fix, review or sync run")
         return (f"the run has died {times} times in a day on a Claude limit that "
                 f"named no reset time, each time brought back on an assumed "
                 f"five-hour clock, and a wall still standing after that is not the "
                 f"five-hour usage window. Once the account can run again, "
-                f"{way_back}")
+                f"{_way_back(card, stage)}")
     if _needs_rerun(card, marker) and not (marker.get("run") or "").isdigit():
         return (f"the marker names no GitHub run to re-run, so the failed {stage} "
                 f"run has to be re-run by hand (Actions → Re-run failed jobs), or "
@@ -419,20 +491,39 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         marker = waiting(_bodies(card))
         if marker is None:
             continue
+        # DRE-4208: the clock, read off the marker's own comment node. An
+        # unknown age is never stale.
+        age = marker_age_minutes(marker_node(card), now)
+        stood = age is not None and age >= LIMIT_DEATH_CLOCK_MINUTES
         # Stage 2 fix #23: a hold stops agent work, not bookkeeping. Asked
         # after the marker is read because the answer depends on its stage.
-        if _held(card) and hold_blocks_stage(marker.get("stage") or ""):
+        # A held card is exempt from being re-entered, never from being
+        # noticed: past the clock it is handed to a person below.
+        held = _held(card) and hold_blocks_stage(marker.get("stage") or "")
+        if held and not stood:
             continue
+        watchers = marker.get("stage") == "review" and _lane(card) == PLANNING_LANE
         reason = handoff_reason(card, marker, assumed_deaths=count_assumed_deaths(card, now))
+        alarm = None
+        if (reason is None and stood
+                and (held or watchers or trigger(marker, now, active_account) is None)):
+            # Past the clock with no re-entry this pass can make: the hand-off
+            # is the clock's, and the run goes red on a standing defect.
+            reason = stood_reason(card, marker, age, held=held)
+            alarm = (f"ERROR: {RECOVERY_TAG} {ident}: {_stood(age)} "
+                     f"({marker['kind']} limit, {marker['stage']} stage) — handed "
+                     f"to a person")
         if reason is not None:
-            # Told once, and the receipt closes the marker — no WIP spent, no
-            # ERROR line, and the card is the sweep's again next pass.
+            # Told once, and the receipt closes the marker — no WIP spent, and
+            # the card is the sweep's again next pass.
             lops.cmd_comment(ident, handoff_receipt(marker, reason))
-            lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('.')[0]}")
+            lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('. ')[0]}")
+            if alarm:
+                lines.append(alarm)
             continue
         # DRE-5640: the second critic's review is re-entered by the re-review
         # watcher as a fresh run, never re-run here (see the module docstring).
-        if marker.get("stage") == "review" and _lane(card) == PLANNING_LANE:
+        if watchers:
             lines.append(f"{RECOVERY_TAG}: {ident} review death ({marker['kind']} limit) "
                          f"is the re-review watcher's — it waits out the marker's reset, "
                          f"then asks for the review again")
@@ -445,6 +536,11 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         if room <= 0:
             lines.append(f"{RECOVERY_TAG}: {ident} is ready ({why}) but the WIP room "
                          f"is spent this pass — next sweep")
+            if stood:
+                # No hand-off: it would close the marker and stop the recovery.
+                lines.append(f"ERROR: {RECOVERY_TAG} {ident}: {_stood(age)} "
+                             f"({marker['kind']} limit, {marker['stage']} stage) — "
+                             f"ready, waiting on WIP room")
             continue
         try:
             what = _reenter(card, marker, rerun=rerun, move=move, dispatch=dispatch)

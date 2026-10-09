@@ -184,6 +184,11 @@ import credential_rotation  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
+# The clock on every limit-death marker (DRE-4208): a marker nothing has
+# brought back within this many minutes is handed to a person out loud by
+# limit_recovery, and the marker's own paragraph names it. Six hours, because
+# the Claude usage window is five: a reset five hours out is a real wait.
+LIMIT_DEATH_CLOCK_MINUTES = int(os.environ.get("LIMIT_DEATH_CLOCK_MINUTES", "360"))
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
 
 # Turn exhaustion's own budget tag and cap (DRE-2312). The string discipline
@@ -511,6 +516,11 @@ def pacific(when: datetime) -> str:
         return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _clock_hours() -> str:
+    """LIMIT_DEATH_CLOCK_MINUTES in hours, as the marker says it: `6`, `1.5`."""
+    return f"{LIMIT_DEATH_CLOCK_MINUTES / 60:g}"
+
+
 def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
                  account: str | None = None, reset_assumed: bool = False) -> str:
     """The ONE comment a limit death leaves. Line one is the machine-readable
@@ -520,7 +530,12 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
 
     `reset_assumed` (DRE-5455) marks a Claude reset the run never stated:
     the line ends ` assumed=yes`, after `account=` when there is one. It means
-    nothing without a reset, and nothing on a Linear death."""
+    nothing without a reset, and nothing on a Linear death.
+
+    Every paragraph that promises a re-entry ends on the clock (DRE-4208):
+    LIMIT_DEATH_CLOCK_MINUTES, rendered in hours, after which the sweep says
+    so on the card and a person must act. The one that already hands the card
+    to a person gains nothing."""
     assumed = bool(reset_assumed and reset and kind == "claude")
     reset_field = reset.astimezone(UTC).strftime(_ISO_Z) if reset else "unknown"
     first = f"{LIMIT_MARK} kind={kind} stage={stage} reset={reset_field} run={run_id or 'unknown'}"
@@ -560,6 +575,11 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
         back += (
             f" The marker records the account {account}: a change of that "
             f"account brings the card back sooner."
+        )
+    if reset or kind == "linear" or account:
+        back += (
+            f" If nothing has brought the card back within {_clock_hours()} hours "
+            f"of this marker, the sweep says so on the card and a person must act."
         )
     paragraph = (
         f"This run hit {wall} during the {stage} stage and stopped there. That "
