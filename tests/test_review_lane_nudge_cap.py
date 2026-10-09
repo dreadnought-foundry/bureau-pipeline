@@ -65,11 +65,11 @@ def _qa(body):
             "createdAt": "2026-09-30T00:00:00Z"}
 
 
-def _pr(head=HEAD, critic=None, verifier=None, reviewed=None):
+def _pr(head=HEAD, critic=None, verifier=None, reviewed=None, draft=False):
     """An open PR whose qa-bot thread carries the given verdict tokens, bound
     to `reviewed` (default `head`). No baseRefName, so the content carry is
     never asked about and verdict_bound reads the sha binding alone unless a
-    test patches the carry in."""
+    test patches the carry in. `draft` is GitHub's isDraft (DRE-6423)."""
     reviewed = reviewed or head
     comments = []
     if critic:
@@ -82,6 +82,7 @@ def _pr(head=HEAD, critic=None, verifier=None, reviewed=None):
         "state": "OPEN",
         "comments": comments,
         "headRefOid": head,
+        "isDraft": draft,
     }
 
 
@@ -395,6 +396,169 @@ class TestTheCapIsOffAtZero:
         assert "REVIEW_NUDGE_CAP is 0 — the cap is off" in capsys.readouterr().out
 
 
+def _review_receipt(n, head=HEAD):
+    """A review-nudge receipt as the sweep writes it."""
+    return (f"🧹 Reconcile: review-nudge @{head} ({n}/3) — no critic verdict "
+            "bound to this head after 2h; review re-triggered.")
+
+
+def _draft_notices(bodies, head=HEAD):
+    return [b for b in bodies if f"review-nudge-draft @{head}" in b]
+
+
+def _spends(bodies, tag, head=HEAD):
+    return [b for b in bodies if f"{tag} @{head} (" in b]
+
+
+class TestTheDraftFlagIsAsked:
+    """pr_for asks GitHub for isDraft, on both of its reads (DRE-6423)."""
+
+    def test_both_reads_carry_is_draft(self):
+        with patch.object(reconcile, "gh_read", return_value="[]") as gh_read:
+            assert reconcile.pr_for(IDENT) is None
+        assert gh_read.call_count == 2
+        for call in gh_read.call_args_list:
+            args = list(call.args)
+            fields = args[args.index("--json") + 1].split(",")
+            assert "isDraft" in fields, fields
+            assert "baseRefName" in fields, fields
+
+
+class TestTheDraftKeyIsNotASpend:
+    def test_the_key_is_declared_beside_the_others(self):
+        assert reconcile.REVIEW_NUDGE_DRAFT_KEY == "review-nudge-draft"
+        source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
+        block = source[source.index('REVIEW_NUDGE_KEY = "review-nudge"'):]
+        block = block[:block.index("\n\n")]
+        assert 'REVIEW_NUDGE_DRAFT_KEY = "review-nudge-draft"' in block
+
+    def test_neither_the_spend_nor_the_cap_key_matches_the_notice(self):
+        board = _Board()
+        board.sweep(_pr(draft=True))
+        notice = _draft_notices(board.comments)[0]
+        assert reconcile._review_nudge_key("review-nudge", HEAD) not in notice
+        assert reconcile._review_nudge_key("gate-nudge", HEAD) not in notice
+        assert f"review-nudge-cap @{HEAD}" not in notice
+        for marker in VERDICT_MARKERS:
+            assert marker not in notice
+
+
+class TestADraftIsNotNudged:
+    """The critic skips a draft by design (DRE-5801), so a re-trigger on one
+    is spent on a review that never runs (DRE-6423)."""
+
+    def test_no_verdict_three_sweeps_one_notice_nothing_spent(self):
+        board = _Board()
+        pr = _pr(draft=True)
+        for _ in range(3):
+            nudge, cmd_state, _ = board.sweep(pr)
+            nudge.assert_not_called()
+            cmd_state.assert_not_called()
+        assert _spends(board.comments, "review-nudge") == []
+        notices = _draft_notices(board.comments)
+        assert len(notices) == 1, board.comments
+        assert "draft" in notices[0] and "ready" in notices[0]
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert board.state == "In Review"
+        assert board.pr_notes == []
+
+    def test_a_bound_verdict_on_a_draft_does_not_re_trigger_the_gate(self):
+        board = _Board()
+        pr = _pr(critic="APPROVE", verifier="FAIL", draft=True)
+        for _ in range(4):
+            nudge, cmd_state, _ = board.sweep(pr)
+            nudge.assert_not_called()
+            cmd_state.assert_not_called()
+        assert _spends(board.comments, "gate-nudge") == []
+        assert len(_draft_notices(board.comments)) == 1
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert board.state == "In Review"
+
+    def test_a_draft_already_at_the_cap_is_not_handed_to_a_person(self):
+        board = _Board()
+        board.comments = [_review_receipt(n) for n in (1, 2, 3)]
+        nudge, cmd_state, posted = board.sweep(_pr(draft=True))
+        nudge.assert_not_called()
+        cmd_state.assert_not_called()
+        assert _cap_notices(posted) == [] and _stamps(posted) == []
+        assert len(_draft_notices(posted)) == 1
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert board.state == "In Review"
+        assert board.pr_notes == []
+
+
+class TestMarkedReadyTheBudgetRestarts:
+    def test_three_receipts_then_a_draft_notice_then_ready_reads_one_of_three(self):
+        board = _Board()
+        board.comments = [_review_receipt(n) for n in (1, 2, 3)]
+        board.sweep(_pr(draft=True))  # writes the notice
+        assert len(_draft_notices(board.comments)) == 1
+
+        nudge, cmd_state, posted = board.sweep(_pr())
+        nudge.assert_called_once_with("qa-review.yml", 42)
+        cmd_state.assert_not_called()
+        assert len(posted) == 1, posted
+        assert f"review-nudge @{HEAD} (1/3)" in posted[0]
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert board.state == "In Review"
+
+    def test_a_notice_already_standing_restarts_the_count(self):
+        board = _Board()
+        board.comments = [_review_receipt(n) for n in (1, 2, 3)] + [
+            f"🧹 Reconcile: review-nudge-draft @{HEAD} — a draft."
+        ]
+        nudge, _, posted = board.sweep(_pr())
+        nudge.assert_called_once_with("qa-review.yml", 42)
+        assert f"review-nudge @{HEAD} (1/3)" in posted[0]
+        assert reconcile.HOLD_LABEL not in board.labels
+
+    def test_back_to_draft_after_a_spend_is_noticed_again(self):
+        # A receipt newer than the notice means the notice no longer stands:
+        # a second trip to draft is said once more, and restarts the count.
+        board = _Board()
+        board.sweep(_pr(draft=True))
+        board.sweep(_pr())
+        board.sweep(_pr())
+        assert len(_spends(board.comments, "review-nudge")) == 2
+        board.sweep(_pr(draft=True))
+        board.sweep(_pr(draft=True))
+        assert len(_draft_notices(board.comments)) == 2
+        _, _, posted = board.sweep(_pr())
+        assert f"review-nudge @{HEAD} (1/3)" in posted[0]
+
+    def test_a_notice_on_another_head_does_not_restart_this_one(self):
+        board = _Board()
+        board.comments = [
+            f"🧹 Reconcile: review-nudge-draft @{OLD_HEAD} — a draft.",
+            *[_review_receipt(n) for n in (1, 2, 3)],
+        ]
+        assert reconcile.review_nudges_spent(
+            board.card(), "review-nudge", HEAD) == 3
+
+    def test_receipts_before_the_notice_do_not_count(self):
+        board = _Board()
+        board.comments = [
+            _review_receipt(1), _review_receipt(2),
+            f"🧹 Reconcile: review-nudge-draft @{HEAD} — a draft.",
+            _review_receipt(1),
+        ]
+        assert reconcile.review_nudges_spent(
+            board.card(), "review-nudge", HEAD) == 1
+        assert reconcile.review_nudges_spent(
+            board.card(), "gate-nudge", HEAD) == 0
+
+
+class TestReadyWithNoNoticeIsHeldAsToday:
+    def test_three_receipts_and_no_notice_hand_off(self):
+        board = _Board()
+        board.comments = [_review_receipt(n) for n in (1, 2, 3)]
+        nudge, _, posted = board.sweep(_pr())
+        nudge.assert_not_called()
+        assert len(_cap_notices(posted)) == 1
+        assert reconcile.HOLD_LABEL in board.labels
+        assert board.state == "Green Light"
+
+
 class TestTheReceiptsCarryNoVerdictMarker:
     def test_no_body_the_sweep_wrote_reads_as_a_verdict(self):
         gate, review = _Board(), _Board()
@@ -431,6 +595,16 @@ class TestTheActRegistry:
         assert "no critic verdict after" not in anchors
         assert "Re-triggering again would not change that" not in anchors
 
+    def test_the_draft_notice_is_declared(self):
+        # DRE-6423: the one card comment a draft gets, once per head.
+        entries = [
+            entry for entry in self._registry()["unconverted"]
+            if entry.get("file") == "scripts/reconcile.py"
+            and entry.get("anchor") == "the critic skips a draft"
+        ]
+        assert len(entries) == 1, entries
+        assert "DRE-6423" in entries[0]["means"]
+
     def test_every_receipt_site_is_accounted_for(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "check_act_receipts.py")],
@@ -451,6 +625,9 @@ class TestTheDocumentation:
         assert "`Green Light`" in section
         assert "Operator decision" in section
         assert "new head" in section
+        # DRE-6423: a draft spends nothing, and ready restarts the budget.
+        assert "`review-nudge-draft`" in section
+        assert "marked ready" in section
 
     def test_the_branch_comment_leaves_the_hold_note_to_the_gate(self):
         source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")

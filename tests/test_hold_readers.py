@@ -389,9 +389,13 @@ LABEL_ALONE = {
 
 #: `hygiene_triage` imports `hold` for its no-route row (DRE-6190, which
 #: landed after this card was written): the holds lane's own reading of what
-#: lifts a no-route hold, not a reader that stands down for one. The other
-#: four import nothing of it.
-IMPORTS_HOLD_FOR_ITS_OWN_LANE = {"scripts/hygiene_triage.py"}
+#: lifts a no-route hold, not a reader that stands down for one.
+#: `proof_dispatch` imports it for its re-run branch (DRE-6406), which reads
+#: the sweep's `review-cap-spent` park to find a Green Light candidate — a
+#: reading of which card is its, not a stand-down; its `first_run` still
+#: reads the label alone, and the test above holds it to that. The other
+#: three import nothing of it.
+IMPORTS_HOLD_FOR_ITS_OWN_LANE = {"scripts/hygiene_triage.py", "scripts/proof_dispatch.py"}
 
 
 def _tree(rel):
@@ -416,7 +420,7 @@ class TestTheLabelAloneReadsStay:
     @pytest.mark.parametrize("rel", sorted(LABEL_ALONE))
     def test_no_hold_import(self, rel):
         if rel in IMPORTS_HOLD_FOR_ITS_OWN_LANE:
-            pytest.skip("imports hold for its own lane's no-route row (DRE-6190)")
+            pytest.skip("imports hold for its own lane's reading (DRE-6190, DRE-6406)")
         assert not _imports_hold(_tree(rel)), f"{rel} imports hold"
 
     @pytest.mark.parametrize("rel,name", [(rel, name) for rel, names in

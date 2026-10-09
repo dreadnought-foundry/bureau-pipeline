@@ -70,6 +70,15 @@ asks `hold.py reason` first, and the sweep's `_release_card` asks
 both stand down — the sweep posts only its answer note — and the card waits in
 Green Light, still held, for the fix's new head to lift it back to In Review.
 
+A proof record the critic sent back never reaches this cap (DRE-6406). On a pull
+request on an `agent/DRE-<n>-proof-record` branch whose critic verdict at the
+head is `REQUEST_CHANGES`, the sweep re-triggers nothing, writes no
+`review-cap-spent` stamp and parks nothing: the fix agent is kept off a record,
+and the proof run's re-run branch (`scripts/proof_dispatch.py`) is what amends
+it. A record already parked under the stamp is read by that branch in Green
+Light too, and the amended record's new head lifts the stamp here as for any
+other card. A record with no verdict at its head is nudged and capped as before.
+
 ### `stranded-no-run` waits on a person's re-send
 
 This is the one reason whose lift waits on something a person does. The sweep

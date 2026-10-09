@@ -1529,3 +1529,210 @@ def test_rerun_is_not_starved_behind_three_first_runs_that_cannot_run(
         if h.fired:
             break
     assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")], _lines(capsys)
+
+
+# --------------------------------------------------------------------------- #
+# the re-run reads a record the sweep parked on its review cap (DRE-6406)      #
+# --------------------------------------------------------------------------- #
+
+
+def review_cap_stamp(minutes_ago: float, head: str = HEAD) -> dict:
+    return comment(f"🔒 hold: reason=review-cap-spent at={head} lifts=new-head "
+                   "by=reconcile.py", minutes_ago)
+
+
+def _capped(*extra, head: str = HEAD) -> list:
+    """A record sent back, then the sweep's review-cap park on `head`."""
+    return _sent_back(review_cap_stamp(300, head),
+                      comment(f"🚨 review-nudge-cap PR #900 @{head}: a question", 299),
+                      *extra)
+
+
+def _capped_card(nodes, ident="DRE-5930", labels=("needs-human",)) -> dict:
+    return lane_card(ident, state="Green Light", labels=labels, window=nodes)
+
+
+class _LaneWrites:
+    """Every lane, label and lift write the pass could make — it makes none."""
+
+    def __init__(self, monkeypatch):
+        self.log: list = []
+        for name in ("cmd_advance", "cmd_state", "add_label", "remove_label"):
+            monkeypatch.setattr(linear_ops, name,
+                                lambda *a, _n=name, **k: self.log.append((_n, a)))
+
+
+def _capped_pass(monkeypatch, *, thread, pr, run="finished", live=True,
+                 labels=("needs-human",), window=None, green=()):
+    board = Board(green=[_capped_card(thread if window is None else window,
+                                      labels=labels), *green],
+                  threads={"DRE-5930": thread})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr},
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally, board, writes
+
+
+def test_a_review_cap_park_on_a_sent_back_record_is_re_run_in_place(monkeypatch, capsys):
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(), pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    assert len(h.posted) == 1
+    first = h.posted[0][1].split("\n", 1)[0]
+    assert first.startswith("🔬 proof-run: dispatched a proof run at ")
+    assert first.endswith(f" — {RERUN} (re-run 1 of 2)")
+    # Nothing moved, nothing labelled, nothing lifted: the new head does that.
+    assert writes.log == []
+    assert not any(body.startswith("🔓") for _, body in h.posted)
+
+
+def test_a_review_cap_park_with_two_re_runs_spent_gets_the_one_hold(monkeypatch, capsys):
+    spent = (rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(*spent), pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert tally.held == 1 and writes.log == []
+
+    # The hold is said once: the next pass reads it and names it.
+    capsys.readouterr()
+    thread = _capped(*spent, hold(*RERUN_HELD, 100))
+    h, _, _, _ = _capped_pass(monkeypatch, thread=thread,
+                              pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the record was sent back twice" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+
+def test_a_park_on_a_head_the_record_has_left_is_the_holds_lanes(monkeypatch, capsys):
+    # The record moved on and the critic sent the new head back too; the
+    # stamp is on the old one. The holds lane lifts it and returns the card.
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(head=OLD_HEAD),
+        pr=record(verdict("REQUEST_CHANGES", 400)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert writes.log == []
+    assert any("re-run" in line and "holds lane" in line and OLD_HEAD[:7] in line
+               and SHA7 in line for line in lines), lines
+
+
+def test_a_label_over_a_spent_stamp_is_a_persons_and_costs_no_read(monkeypatch, capsys):
+    import hold as hold_module
+
+    lifted = comment(hold_module.lift_line("review-cap-spent", "new-head",
+                                           "hygiene_holds.py"), 200)
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_capped(lifted),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_label_with_no_stamp_at_all_is_not_a_candidate(monkeypatch, capsys):
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_sent_back(),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_stamp_without_the_label_is_not_a_candidate(monkeypatch, capsys):
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_capped(), labels=(),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_partial_window_is_decided_on_the_whole_thread(monkeypatch, capsys):
+    # The lane read's window is the newest few comments and carries no stamp;
+    # the whole thread does, so the card is read and re-run.
+    thread = _capped(comment("chatter", 50))
+    window = [comment("chatter", 50)]
+    board = Board(green=[_capped_card(window)], threads={"DRE-5930": thread})
+    board.lanes["Green Light"][0]["comments"]["pageInfo"]["hasNextPage"] = True
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert [f[2] for f in h.fired] == [RERUN]
+
+    # And a whole thread whose hold is not the sweep's park is refused.
+    capsys.readouterr()
+    board = Board(green=[_capped_card(window)],
+                  threads={"DRE-5930": _sent_back(comment("chatter", 50))})
+    board.lanes["Green Light"][0]["comments"]["pageInfo"]["hasNextPage"] = True
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert h.fired == []
+    assert any("review-cap" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+
+def test_a_park_on_the_ceos_press_is_the_return_branchs_only(monkeypatch, capsys):
+    # Both shapes at once: his answered press AND the sweep's stamp. The
+    # return takes it, and the re-run never reads it.
+    nodes = sorted(_parked() + [review_cap_stamp(500)], key=lambda c: c["createdAt"])
+    board = Board(green=[_capped_card(nodes)], threads={"DRE-5930": nodes})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished")})
+    h.sweep()
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert [f[2].startswith("re-run after the CEO's answer") for f in h.fired] == [True]
+    assert h.record_reads == []
+    assert not any("deferred" in line or "re-run:" in line for line in lines), lines
+
+
+def test_a_review_cap_park_in_the_dry_run_prints_would_and_writes_nothing(
+        monkeypatch, capsys):
+    h, _, _, writes = _capped_pass(monkeypatch, thread=_capped(), live=False,
+                                   pr=record(verdict("REQUEST_CHANGES", 400)))
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: dispatch DRE-5930 — {RERUN}" in lines
+
+
+def test_a_review_cap_park_costs_no_linear_read_beyond_the_return_branchs(
+        monkeypatch, capsys):
+    """The real readers over a counting transport: the board read and the
+    Green Light read the return branch already makes, then the candidate's
+    one thread read — three requests, and the Green Light list is read once."""
+    import reconcile
+
+    monkeypatch.delenv("BUREAU_READ", raising=False)
+    thread = _capped()
+    green = [_capped_card(thread),
+             lane_card("DRE-5999", title="[EPIC] a plan", state="Green Light")]
+    calls: list = []
+
+    def gql(query, variables=None):
+        calls.append(query)
+        variables = variables or {}
+        if "issues(" in query:
+            states = set(variables.get("states") or ())
+            nodes = [c for c in green if c["state"]["name"] in states]
+            return {"issues": {"nodes": nodes,
+                               "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "viewer { id }" in query and "comments" in query:
+            return {"viewer": {"id": VIEWER}, "issue": {"comments": {
+                "nodes": list(reversed(thread)),
+                "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+        raise AssertionError(f"unexpected query {query[:80]}")
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    reconcile.reset_sweep_cards()
+    h = Harness(monkeypatch, Board(),
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=False, read=lambda path: None, find_pr=h.find_pr,
+        run_state=h.run_state, release=h.release, fire=h.fire,
+        voices=fake_voices, now=NOW, find_record=h.find_record)
+    assert f"would: dispatch DRE-5930 — {RERUN}" in _lines(capsys)
+    assert len(calls) == 3, calls
+    assert len([q for q in calls if "issues(" in q]) == 2
