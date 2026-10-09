@@ -27,8 +27,10 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_hold_registry.py -v
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,9 +56,10 @@ OTHER_SHA = "b" * 40
 REASONS = (
     "stranded-no-run", "no-route", "review-cap-spent", "dead-run-cap",
     "turn-cap-park", "epic-rereview-twice", "plan-critic-bound", "fix-dispute",
-    "unfixable-check", "manual",
+    "unfixable-check", "operator-step", "manual",
 )
-LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker", "manual")
+LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker",
+              "blockers-terminal", "manual")
 READERS = ("sweep", "fix-dispatch", "medic", "limit-recovery")
 CONTRACT = {
     "stranded-no-run": "run-started",
@@ -68,11 +71,15 @@ CONTRACT = {
     "turn-cap-park": "unpark-marker",
     "epic-rereview-twice": "manual",
     "plan-critic-bound": "manual",
+    "operator-step": "blockers-terminal",
     "manual": "manual",
 }
 NEW_HEAD = ("review-cap-spent", "fix-dispute", "unfixable-check")
 NONE_QUALIFIED = tuple(r for r in REASONS if r not in NEW_HEAD and r != "no-route")
 MANUAL_LIFT = ("manual", "epic-rereview-twice", "plan-critic-bound")
+#: Reasons in the vocabulary whose writers land with later cards: the
+#: operator step's create seam and its one-time pass (DRE-6429).
+AWAITING_WRITERS = {"operator-step"}
 
 
 def _real_doc() -> dict:
@@ -138,7 +145,8 @@ class TestTheRealTree:
 
     def test_every_reason_in_the_vocabulary_has_a_writer(self):
         written = {e["reason"] for r in _real_doc()["sites"] for e in r["reasons"]}
-        assert written == set(REASONS)
+        assert written <= set(REASONS)
+        assert set(REASONS) - written <= AWAITING_WRITERS
 
     def test_the_vocabulary_is_the_contracts(self):
         assert tuple(hold.reasons()) == REASONS
@@ -510,8 +518,8 @@ class TestStampLine:
         assert "at=repo:none" in hold.stamp_line("no-route", "repo:none", "scripts/r.py")
 
     @pytest.mark.parametrize("reason", NONE_QUALIFIED)
-    def test_the_other_six_refuse_anything_but_none(self, reason):
-        assert len(NONE_QUALIFIED) == 6
+    def test_the_other_seven_refuse_anything_but_none(self, reason):
+        assert len(NONE_QUALIFIED) == 7
         for at in (SHA, "repo:portico"):
             with pytest.raises(ValueError):
                 hold.stamp_line(reason, at, "scripts/reconcile.py")
@@ -727,6 +735,150 @@ class TestLiftDue:
         assert hold.lift_due(stamp, lane="Backlog", labels=["needs-human"],
                              pr_head=OTHER_SHA, rail_slugs={"x"},
                              bodies=[stamp["line"], RESET]) is None
+
+
+# --------------------------------------------------------------------------- #
+# operator-step: a person's step, lifted when its blockers are terminal        #
+# --------------------------------------------------------------------------- #
+
+OPERATOR_STAMP = ("🔒 hold: reason=operator-step at=none lifts=blockers-terminal "
+                  "by=linear_ops.py")
+
+OPERATOR_WRITER = '''
+import hold
+
+def file_step(ident):
+    print("an operator step for", ident)
+    hold.apply(ident, hold.OPERATOR_STEP_REASON, None, "linear_ops.py")
+'''
+
+
+class TestOperatorStep:
+    """DRE-6426: the reason a planner-filed operator step carries, and its
+    lift — every blocker terminal, read by the sweep's promotion gate."""
+
+    def test_the_constants(self):
+        assert hold.OPERATOR_STEP_REASON == "operator-step"
+        assert hold.BLOCKERS_TERMINAL == "blockers-terminal"
+        assert hold.OPERATOR_STEP_REASON in hold.REASONS
+        assert hold.BLOCKERS_TERMINAL in hold.LIFT_KINDS
+        assert hold.CONTRACT_LIFTS["operator-step"] == "blockers-terminal"
+        assert hold.LIFTERS == {"operator-step": "sweep"}
+
+    def test_the_stamp_byte_for_byte(self):
+        assert hold.stamp_line("operator-step", None, "linear_ops.py") == OPERATOR_STAMP
+        assert hold.stamp_line("operator-step", "none", "linear_ops.py") == OPERATOR_STAMP
+
+    @pytest.mark.parametrize("at", ["abc", SHA, "repo:portico"])
+    def test_the_stamp_refuses_any_qualifier_but_none(self, at):
+        with pytest.raises(ValueError):
+            hold.stamp_line("operator-step", at, "linear_ops.py")
+
+    def test_the_lift_line_byte_for_byte(self):
+        assert hold.lift_line(hold.OPERATOR_STEP_REASON, hold.BLOCKERS_TERMINAL,
+                              "linear_ops.py") == (
+            "🔓 hold lifted: reason=operator-step because=blockers-terminal "
+            "by=linear_ops.py"
+        )
+
+    def test_reason_of_reads_the_stamp_and_manual_without_it(self):
+        labels = ["needs-human", "no-code"]
+        assert hold.reason_of(labels, ["talk", OPERATOR_STAMP]) == "operator-step"
+        assert hold.reason_of(labels, ["talk"]) == "manual"
+
+    def test_lift_due_never_lifts_it_outside_done_or_canceled(self):
+        # The sweep's promotion gate is this reason's only lifter (DRE-6427):
+        # it reads the blockers off the card's relations and calls hold.lift
+        # itself. Neither caller of lift_due passes blockers, so lift_due
+        # meeting every other kind's fact still answers None.
+        stamp = hold.read_stamp([OPERATOR_STAMP])
+        for lane in ("Backlog", "Todo", "Triage", "Hand-work", "In Review"):
+            assert hold.lift_due(
+                stamp, lane=lane, labels=["needs-human", "repo:portico"],
+                pr_head=OTHER_SHA, rail_slugs={"portico"},
+                bodies=[OPERATOR_STAMP, RESET, "🧠 model-attempt", "⏳ 1/5 plan"],
+            ) is None
+
+    @pytest.mark.parametrize("lane", ["Done", "Canceled"])
+    def test_lift_due_answers_card_closed_in_a_closed_lane(self, lane):
+        stamp = hold.read_stamp([OPERATOR_STAMP])
+        assert hold.lift_due(stamp, lane=lane, labels=["needs-human"], pr_head=None,
+                             rail_slugs=set(), bodies=[OPERATOR_STAMP]) == "card-closed"
+
+    def test_lift_due_keeps_its_signature(self):
+        params = inspect.signature(hold.lift_due).parameters
+        assert [(p.name, p.kind) for p in params.values()] == [
+            ("stamp", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            ("lane", inspect.Parameter.KEYWORD_ONLY),
+            ("labels", inspect.Parameter.KEYWORD_ONLY),
+            ("pr_head", inspect.Parameter.KEYWORD_ONLY),
+            ("rail_slugs", inspect.Parameter.KEYWORD_ONLY),
+            ("bodies", inspect.Parameter.KEYWORD_ONLY),
+        ]
+        assert all(p.default is inspect.Parameter.empty for p in params.values())
+
+    def test_the_lift_due_docstring_says_the_sweep_lifts_it(self):
+        doc = " ".join(hold.lift_due.__doc__.split())
+        assert "blockers-terminal" in doc and "sweep" in doc
+
+    def test_the_hygiene_lane_does_not_ask_lift_due_about_it(self):
+        import hygiene_holds
+
+        assert "blockers-terminal" not in hygiene_holds.OPEN_LIFTS
+
+    def test_a_row_naming_the_sweep_as_a_reader_is_red_by_row(self, tmp_path):
+        root = _tree(tmp_path, {"scripts/a.py": OPERATOR_WRITER})
+        row = _row("scripts/a.py", "file_step", "an operator step",
+                   reason="operator-step", lifts="blockers-terminal")
+        found = hold.problems(_doc([row]), root=root)
+        assert any("'an operator step'" in p and "sweep" in p for p in found), found
+
+    def test_the_same_row_without_the_sweep_is_clean(self, tmp_path):
+        root = _tree(tmp_path, {"scripts/a.py": OPERATOR_WRITER})
+        row = _row("scripts/a.py", "file_step", "an operator step",
+                   reason="operator-step", lifts="blockers-terminal")
+        row["readers"] = ["fix-dispatch", "medic", "limit-recovery"]
+        doc = _doc([row])
+        assert hold.problems(doc, root=root) == []
+        assert [s.scope for s in hold.discover(root=root)] == ["file_step"]
+        bodies = [OPERATOR_STAMP]
+        assert hold.respects(["needs-human"], bodies, "sweep", doc=doc) is False
+        for reader in ("fix-dispatch", "medic", "limit-recovery"):
+            assert hold.respects(["needs-human"], bodies, reader, doc=doc) is True
+
+    def test_the_registry_file_mirrors_it(self):
+        doc = _real_doc()
+        entry = doc["reasons"]["operator-step"]
+        assert entry["lifts"] == "blockers-terminal"
+        assert entry["why"].strip()
+        assert entry["lift_sends"] == "Backlog to Hand-work"
+        kind = doc["lift_kinds"]["blockers-terminal"]
+        for phrase in ("blockedBy", "Done", "Canceled", "Duplicate", "promotion gate"):
+            assert phrase in kind, phrase
+        assert "operator-step" in doc["readers"]["sweep"]
+        assert "lifts" in doc["readers"]["sweep"]
+
+    def test_the_page_lists_it(self):
+        text = (ROOT / "docs" / "holds.md").read_text(encoding="utf-8")
+        vocabulary = text.split("## The vocabulary", 1)[1].split("\n## ", 1)[0]
+        reasons_item = vocabulary.split("- **Reasons:**", 1)[1].split("- **", 1)[0]
+        kinds_item = vocabulary.split("- **Lift kinds:**", 1)[1].split("- **", 1)[0]
+        assert "`operator-step`" in reasons_item
+        assert "`blockers-terminal`" in kinds_item
+        rows = [line for line in text.splitlines()
+                if line.startswith("| `operator-step` | `blockers-terminal` |")]
+        assert len(rows) == 1 and rows[0].rstrip(" |").endswith("Backlog → Hand-work"), rows
+        assert "the sweep lifts `operator-step`" in " ".join(text.split())
+
+    def test_the_page_counts_the_vocabulary_off_the_file(self):
+        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                 "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+                 "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
+        text = (ROOT / "docs" / "holds.md").read_text(encoding="utf-8")
+        match = re.search(r"(\w+) reasons, (\w+) lift kinds and (\w+) readers", text)
+        assert match, "the vocabulary-count sentence is gone"
+        counts = [words[w.lower()] for w in match.groups()]
+        assert counts == [len(hold.reasons()), len(hold.lift_kinds()), len(hold.readers())]
 
 
 # --------------------------------------------------------------------------- #
