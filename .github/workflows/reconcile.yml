@@ -429,6 +429,8 @@ jobs:
           GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          # DRE-6439: a dry pass names why it is dry — the switch's off line.
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
@@ -443,7 +445,7 @@ jobs:
           STATUS=0
           python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
           BUDGET=$(grep '^linear-budget:' proof-dispatch.log || true)
-          SUMMARY=$(grep -E '^(proof-dispatch: eligible|would:)' proof-dispatch.log || true)
+          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|would:)' proof-dispatch.log || true)
           {
             echo "### Proof-run dispatch — spend"
             echo
