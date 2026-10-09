@@ -284,9 +284,15 @@ class TestThePairIsNotHandedToTheFleet:
         build is the proof of its own siblings' work."""
         board = _Board(*_pair_in_backlog())
         board.promote()
+        # The proof card receives `card_marks` (DRE-6225): the proof run takes
+        # it, not the operator, so `no-code` alone — still a person mark to
+        # `reconcile.hand_built`. The legacy demo card receives every mark.
+        titles = {c["identifier"]: c["title"] for c in _planner_output()}
         for identifier in (PROOF, DEMO):
             assert board.labels_on(identifier) == list(
-                routing_verdict.marks("OPERATOR"))
+                routing_verdict.card_marks("OPERATOR", titles[identifier]))
+        assert board.labels_on(PROOF) == ["no-code"]
+        assert board.labels_on(DEMO) == list(routing_verdict.marks("OPERATOR"))
 
     def test_the_receipt_names_the_verdict_and_says_nothing_ran(self, capsys):
         board = _Board(*_pair_in_backlog())

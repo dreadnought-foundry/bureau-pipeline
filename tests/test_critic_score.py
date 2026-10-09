@@ -30,6 +30,7 @@ import copy
 import os
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -185,19 +186,44 @@ class ContaminationTest(unittest.TestCase):
 
     def test_every_verdict_that_marks_hand_built_collapses_with_fleet(self):
         """The exclusion is only honest if the distinction it drops is exactly
-        the one the vocabulary marks `hand-built`. A sixth verdict marking it
-        while meaning something else would be scored as buildability."""
+        the one the vocabulary gives a person. A sixth verdict a person acts on
+        while meaning something else would be scored as buildability.
+
+        Read off `is_person_verdict` since DRE-6225, never off the string: the
+        OPERATOR marker is moving to `operator-step`, and the dimension is who
+        builds the card, not which label says so."""
         marked = [
             name for name in routing_verdict.verdicts()
-            if critic_score.CONTAMINATED_MARK in routing_verdict.marks(name)
+            if routing_verdict.is_person_verdict(name)
         ]
-        self.assertTrue(marked, "the vocabulary marks no verdict hand-built")
+        self.assertTrue(marked, "the vocabulary gives no verdict to a person")
         for name in marked:
             self.assertEqual(
                 critic_score.judgement_of(name), critic_score.judgement_of("FLEET"),
                 f"{name} marks hand-built but does not collapse with FLEET",
             )
         self.assertEqual(critic_score.judgement_of("NEEDS WORK"), "not-buildable")
+
+    def test_the_contaminated_dimension_survives_the_operator_marker_flip(self):
+        """DRE-6225: OPERATOR's marks become `operator-step` + `no-code` and
+        WORKBENCH's none. The dimension keeps its historical name, and both
+        still read as needing a person, with nothing for the check to refuse."""
+        self.assertIs(critic_score.CONTAMINATED_MARK, routing_verdict.HAND_BUILT_LABEL)
+        flipped = copy.deepcopy(routing_verdict.load())
+        for record in flipped["verdicts"]:
+            if record["name"] == "OPERATOR":
+                record["marks"] = ["operator-step", "no-code"]
+            if record["name"] == "WORKBENCH":
+                record["marks"] = []
+        for doc in (routing_verdict.load(), flipped):
+            with unittest.mock.patch.object(routing_verdict, "load",
+                                            lambda path=None, d=doc: d):
+                for name in ("OPERATOR", "WORKBENCH"):
+                    self.assertEqual(critic_score.judgement_of(name, "hand-built"),
+                                     "needs-a-person", name)
+                self.assertEqual(critic_score.judgement_of("FLEET", "hand-built"),
+                                 "dispatchable")
+                self.assertEqual(critic_score.reference_problems(), [])
 
 
 # --------------------------------------------------------------------------

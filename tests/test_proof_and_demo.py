@@ -622,11 +622,16 @@ class TestTheStampIsWritten:
     def _write(self, children, existing=()):
         posted: list[tuple[str, str]] = []
         labelled: list[tuple[str, str]] = []
+        # The stamp reads the card's title itself (DRE-6225) — `card_marks`
+        # needs it, and this caller passes three arguments.
+        titles = {c["identifier"]: c["title"] for c in children}
         with patch.object(linear_ops, "comment_bodies", return_value=list(existing)), \
                 patch.object(linear_ops, "cmd_comment",
                              side_effect=lambda i, b: posted.append((i, b))), \
                 patch.object(linear_ops, "add_label",
-                             side_effect=lambda i, l: labelled.append((i, l))):
+                             side_effect=lambda i, l: labelled.append((i, l))), \
+                patch.object(linear_ops, "get_issue",
+                             side_effect=lambda i, **_: {"title": titles[i]}):
             written = proof_and_demo.write_stamps(children)
         return written, posted, labelled
 
@@ -637,13 +642,15 @@ class TestTheStampIsWritten:
         for identifier, body in posted:
             assert routing_verdict.verdict_on([body]) == "OPERATOR", identifier
 
-    def test_it_applies_the_marks_the_verdict_declares(self):
-        """`hand-built` is what stops the sweep dispatching a competing run —
-        the signal `reconcile.hand_built` already reads."""
+    def test_it_applies_the_marks_the_card_receives(self):
+        """A proof card is taken by the proof run, not the operator, so it
+        never receives a person marker (DRE-6225): `no-code` alone, which
+        `reconcile.hand_built` reads as a person mark all the same."""
         _, _, labelled = self._write(_plan())
         applied = [l for i, l in labelled if i == "DRE-9091"]
-        assert applied == list(routing_verdict.marks("OPERATOR"))
-        assert "hand-built" in applied
+        assert applied == list(routing_verdict.card_marks(
+            "OPERATOR", "PROOF: the gate refused a real epic"))
+        assert applied == ["no-code"]
 
     def test_it_never_writes_a_second_verdict_onto_a_card(self):
         """A card leaving Planning carries exactly one, and a re-planned epic
