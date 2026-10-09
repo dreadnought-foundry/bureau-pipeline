@@ -6,5 +6,4 @@ throwaway base proof/DRE-4911-staging-base. It is deleted with the branch.
 
 
 def test_two_plus_two():
-    # The right value is 4. This assertion is wrong on purpose.
-    assert 2 + 2 == 5
+    assert 2 + 2 == 4
