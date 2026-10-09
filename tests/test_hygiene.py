@@ -730,14 +730,16 @@ class TestGuard:
         with pytest.raises(hygiene.Forbidden):
             hygiene.guard(hygiene.linear_state(c, "Done"), context())
 
-    def test_the_operator_only_label_is_refused(self):
+    # `hand-built` is the CEO's own mark, refused at the label seam (DRE-6361).
+    @pytest.mark.parametrize("label", ["break-glass", "hand-built"])
+    def test_the_operator_only_label_is_refused(self, label):
         with pytest.raises(hygiene.Forbidden):
             hygiene.guard(hygiene.linear_label(card("DRE-1", "Todo", "portico"),
-                                               "break-glass", True), context())
+                                               label, True), context())
 
     def test_an_ordinary_label_passes(self):
         hygiene.guard(hygiene.linear_label(card("DRE-1", "Todo", "portico"),
-                                           "hand-built", True), context())
+                                           "operator-step", True), context())
 
     def test_a_card_outside_this_legs_scope_is_refused(self):
         with pytest.raises(hygiene.Forbidden):

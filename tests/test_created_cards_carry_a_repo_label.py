@@ -222,9 +222,17 @@ class TheCreateSeamTakesLabelsAndALane(unittest.TestCase):
 
     def test_extra_labels_ride_alongside_the_repo_label(self):
         _create(self.fake, "Pipeline failure: ci", self.body_file,
-                "--repo", "atlas", "--label", "Bug", "--label", "hand-built")
+                "--repo", "atlas", "--label", "Bug", "--label", "automation")
         self.assertEqual(self.fake.label_names(),
-                         ["repo:atlas", "Bug", "hand-built"])
+                         ["repo:atlas", "Bug", "automation"])
+
+    def test_a_label_no_agent_may_apply_is_refused_before_the_create(self):
+        # The CEO's mark is refused at this seam (DRE-6361), and the repair
+        # card's own `automation` mark is not.
+        with self.assertRaises(linear_ops.LinearError):
+            _create(self.fake, "Pipeline failure: ci", self.body_file,
+                    "--repo", "atlas", "--label", "Bug", "--label", "hand-built")
+        self.assertIsNone(self.fake.created)
 
     def test_a_lane_may_be_named_and_planning_stays_the_default(self):
         _create(self.fake, "Pipeline failure: ci", self.body_file,
