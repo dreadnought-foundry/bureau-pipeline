@@ -100,9 +100,18 @@ children are never released. MAX_WIP and the blocker checks are unchanged.
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
 "blocked-by" relations (read the same way as a card's); if any blocker epic is
-not Done, none of that epic's children promote this sweep — regardless of the
-epic's own state. And when a blocker epic reaches Done, every epic blocked-by
-it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
+neither Done nor BUILT OUT, none of that epic's children promote this sweep —
+regardless of the epic's own state. BUILT OUT (DRE-6407) is a blocker whose
+relation and own read both say In Progress, with at least one child, its
+children read to the end, no child `epic_cap.buildable()` and no open child
+epic — a proof card or a hand-built card left open does not hold.
+`_not_built_out` says which of those held it. The code dependencies ride
+card-level relations, which the card gate honors as before.
+
+The auto-advance is stricter: when a blocker epic reaches Done, every epic
+blocked-by it whose blockers are now ALL Done — built out is not enough, the
+seam rule (DRE-3244) plans against what the blocker's proof observed — is
+auto-advanced out of Backlog to Triage
 (which re-triggers the planner). Never to In Progress, so the Green Light
 human-approval gate is preserved. Both the promotion hold and the advance fail
 SAFE on unreadable relation data (don't promote / don't advance on
@@ -1773,6 +1782,13 @@ _epic_records: dict[str, dict] = {}
 # unreadable epic costs one read per pass rather than one per consumer.
 _epic_record_gaps: dict[str, str] = {}
 
+# The In Progress blocker epics the promotion gate has read this pass, each in
+# `epic_cap.IN_MOTION_NODE`'s shape (DRE-6407), and why one could not be read.
+# One single-issue read per distinct blocker per pass, filled and read ONLY
+# through `_blocker_epic()`, and reset with the epic record.
+_blocker_epics: dict[str, dict] = {}
+_blocker_epic_gaps: dict[str, str] = {}
+
 # ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
 # Which cards this pass decided on the DOOR's facts rather than Linear's. Every
 # state write about one of them is from-lane-conditional (item 33), and every
@@ -1835,8 +1851,9 @@ class BoardIdle(BoardNotRead):
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
-    records (DRE-3642), its workflows listing (DRE-4378) and its in-flight build
-    runs (DRE-4830). Called once at the top of main()."""
+    records (DRE-3642) and blocker epics (DRE-6407), its workflows listing
+    (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
+    of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
     _swept_cards = None
@@ -1858,6 +1875,8 @@ def reset_sweep_cards() -> None:
     _build_job_unreadable.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
+    _blocker_epics.clear()
+    _blocker_epic_gaps.clear()
     _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
@@ -6067,7 +6086,93 @@ def _fetch_epic_relations(epic_identifier: str) -> dict | None:
     }
 
 
-def epic_blockers_unmet(epic_identifier: str) -> bool:
+#: The promotion gate's read of an In Progress blocker (DRE-6407): the shape
+#: `epic_cap.buildable()` and `counts_against_cap()` already read, children
+#: page `hasNextPage` included. Its own single-issue read, never a widening of
+#: `EPIC_RECORD_GQL` — that page is weighed against the 5,000-node yardstick
+#: and `tests/test_growth_rides_the_record.py` pins the weight.
+_BLOCKER_EPIC_QUERY = """query($id: String!) { issue(id: $id) {%s
+         } }""" % epic_cap.IN_MOTION_NODE
+
+
+def _blocker_epic(identifier: str) -> dict | None:
+    """The blocker epic, read once per pass; None when it could not be read,
+    with the reason in `_blocker_epic_gaps`. Isolated like
+    `_read_one_epic_record`: an unreadable blocker holds the epics it blocks,
+    and is never asked for twice in a pass."""
+    if identifier in _blocker_epics:
+        return _blocker_epics[identifier]
+    if identifier in _blocker_epic_gaps:
+        return None
+    try:
+        issue = (linear_ops.gql(_BLOCKER_EPIC_QUERY, {"id": identifier}) or {}).get("issue")
+    except Exception as e:  # noqa: BLE001 — the reason travels to the epic-gate line
+        _blocker_epic_gaps[identifier] = str(e) or type(e).__name__
+        return None
+    if not issue:
+        _blocker_epic_gaps[identifier] = "Linear returned no issue for it"
+        return None
+    _blocker_epics[identifier] = issue
+    return issue
+
+
+def _not_built_out(blocker: str, state: str) -> str | None:
+    """Why blocker epic `blocker` is not BUILT OUT, or None when it is
+    (DRE-6407).
+
+    Built out is `epic_cap.counts_against_cap(record, count_rollup_parents=True)`
+    false for an In Progress epic with children: no child `buildable()` — the
+    one definition, DRE-5918's — no open child epic, and a children page read
+    to the end. The roll-up flag is pinned true here, never read off
+    `config/epic-cap.json`: how the cap counts a parent is a cap accounting
+    choice, and a roll-up parent is never built out before it is Done.
+
+    The state comes off the relation, so a blocker that has built nothing —
+    Backlog, Planning, Green Light — costs no read.
+    """
+    if state != epic_cap.IN_PROGRESS:
+        return f"its state is {state}, not {epic_cap.IN_PROGRESS}"
+    record = _blocker_epic(blocker)
+    if record is None:
+        return f"its children could not be read: {_blocker_epic_gaps.get(blocker)}"
+    children = epic_cap._children(record)
+    in_progress = epic_cap._state(record) == epic_cap.IN_PROGRESS
+    if in_progress and children and not epic_cap.counts_against_cap(
+        record, count_rollup_parents=True
+    ):
+        return None
+    # Held: the first of the five that failed, naming the child where there is one.
+    if not in_progress:
+        return (f"its state now reads {epic_cap._state(record) or 'unknown'}, "
+                f"not {epic_cap.IN_PROGRESS}")
+    if not children:
+        return "it has no children"
+    left = [c.get("identifier") or "?" for c in children if epic_cap.buildable(c)]
+    if left:
+        return f"a buildable child is open: {', '.join(left)}"
+    if epic_cap._truncated(record.get("children")):
+        return "its children page was not read to the end"
+    epics = [c.get("identifier") or "?" for c in children
+             if epic_cap._is_open(c) and epic_cap._child_is_epic(c)]
+    return f"an open child epic: {', '.join(epics) or 'unnamed'}"
+
+
+def _open_children(blocker: str) -> str:
+    """The children a built-out blocker still has open, each with why it does
+    not hold: a proof, or a person's mark."""
+    named = []
+    for child in epic_cap._children(_blocker_epics.get(blocker)):
+        if not epic_cap._is_open(child):
+            continue
+        labels = {(n.get("name") or "").lower()
+                  for n in ((child.get("labels") or {}).get("nodes") or [])}
+        why = (["PROOF"] if proof_and_demo.is_proof(child.get("title") or "") else []) + \
+            sorted(labels.intersection(epic_cap.unbuilt_labels()))
+        named.append(" ".join([child.get("identifier") or "?", *why]))
+    return ", ".join(named) or "none"
+
+
+def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = True) -> bool:
     """True if EPIC `epic_identifier` may not release its children this sweep
     (DRE-1772, epic-level gate).
 
@@ -6075,7 +6180,8 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
 
       * a formal `blocks` relation to something that is not terminal — an
         ordinary, correct dependency. The relation carries its blocker's state
-        inline, so a relation blocker needs no extra read to evaluate;
+        inline, so a relation blocker needs no extra read to evaluate — except
+        an In Progress one under the promotion gate's rule, below;
       * a PROSE DEFECT (DRE-2676) — the description declares a dependency the
         board holds no relation for. That is not a dependency, it is a sentence
         that is wrong, and the sweep will not release work under an epic that
@@ -6089,6 +6195,19 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
     to Triage to trigger the planner and a planning run cannot fix a sentence.
     The epic's escalation is time: `_report_epic_prose_defect` turns the run red
     once the defect has stood for PROSE_DEFECT_RED_MINUTES.
+
+    Two rules for an unfinished blocker, one per caller (DRE-6407), each named
+    on the `epic-gate:` line:
+
+      * `release_at_build_done=True` — the promotion gate. It releases the
+        children of an epic the CEO already approved, so an In Progress
+        blocker counts as cleared once it is BUILT OUT (`_not_built_out`):
+        the proof those cards would otherwise wait on confirms the blocker's
+        own work, not theirs, and a card that really needs an earlier one
+        carries a card-level `blockedBy` relation the card gate still reads;
+      * `release_at_build_done=False` — the auto-advance. Its dependent is an
+        epic still to be PLANNED, against what the blocker's proof observed
+        (the seam, DRE-3244), so every blocker must be Done, as before.
 
     Fails SAFE: if the epic's relation data can't be read, returns True (treat
     as blocked, do not promote).
@@ -6124,13 +6243,33 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         return True
     states = prose_blockers.blocker_states(epic)
     held = sorted(prose_blockers.relation_blockers(epic))  # sorted: deterministic
-    if held:
+    if not held:
+        return False
+    if not release_at_build_done:
         named = "; ".join(f"{blocker} ({states[blocker]})" for blocker in held)
         print(
             f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-            f"relation on {named} — not Done"
+            f"relation on {named} — not Done, and this epic **waits for Done** "
+            "(still to be planned)"
         )
         return True
+    # Every blocker is asked, not just the first: each is one read per pass at
+    # most, and the log then names every one that holds.
+    unbuilt = {blocker: _not_built_out(blocker, states[blocker]) for blocker in held}
+    for blocker, why in unbuilt.items():
+        if why is not None:
+            print(
+                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+                f"relation on {blocker} ({states[blocker]}) — **not built out**: {why}"
+            )
+    if any(why is not None for why in unbuilt.values()):
+        return True
+    for blocker in held:
+        print(
+            f"epic-gate: {epic_identifier} is **released at build-done**: "
+            f"{blocker} ({states[blocker]}) has no buildable child left — open: "
+            f"{_open_children(blocker)}"
+        )
     return False
 
 
@@ -6214,7 +6353,9 @@ def advance_unblocked_epics(done_epic: str) -> None:
     for dep in sorted(dependents):
         if card_state(dep) != "Backlog":
             continue  # idempotent: only ever advance a still-Backlog epic
-        if epic_blockers_unmet(dep):
+        # The strict rule, asked for by name (DRE-6407): `dep` is still to be
+        # planned, so an In Progress blocker holds it whatever is left to build.
+        if epic_blockers_unmet(dep, release_at_build_done=False):
             continue  # another blocker epic isn't Done yet — hold
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
