@@ -129,7 +129,7 @@ jobs:
     if: (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out')
     # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). Every
     # job in this file but `diagnose` is a sub-minute script — the classifier,
-    # one `gh run rerun`, and six that write a note or a receipt and end — and
+    # one `gh run rerun`, and seven that write a note or a receipt and end — and
     # until now each drew from the same `BUREAU_RUNS_ON` pool as the 20-minute
     # agent, critic and verifier jobs: on 2026-09-18 at 13:47 PT the mini's six
     # runners were all busy, 38 jobs were queued, the oldest reviews had waited
