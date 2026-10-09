@@ -671,7 +671,7 @@ def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
     backlog_epics = {
         int(c["identifier"].split("-")[1]) for c in replay.fake.cards.values()
         if (c.get("state") or {}).get("name") == "Backlog"
-        and reconcile.card_repo(c) == reconcile.REPO_SLUG and reconcile.card_is_epic(c)
+        and reconcile.card_repo(c) == SLUG and reconcile.card_is_epic(c)
     }
     assert backlog_epics, "the board holds no Backlog epic — the second page proves nothing"
     assert len(batched) == 2, f"{len(batched)} batched epic read(s) in one pass"
