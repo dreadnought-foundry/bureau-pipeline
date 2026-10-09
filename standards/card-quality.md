@@ -761,6 +761,17 @@ shape the classifier stamps for this is `roll-up`.
 The parent's plan for a seam is short: its children in order, and the detail
 belongs in each child's own artifact, written when its turn comes.
 
+**When the epic behind a blocker moves (DRE-6407).** Two rules, one per moment.
+An epic still waiting to be planned is planned only when its blocker is Done,
+proof included — the sweep's auto-advance `waits for Done`, because that plan is
+written against what the proof observed. An epic the CEO has already approved,
+its cards written, is `released at build-done`: once its blocker has no
+buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
+not marked for a person) and no open child epic, even with the blocker's proof
+still open. Card-level `blockedBy` relations are still read, so a card that
+really needs an earlier card waits for it; a blocker with work left is `not
+built out` and holds. The sweep's `epic-gate:` line names the rule.
+
 **The pre-approval critic treats a seam inside one epic as a mechanical
 send-back**, in exactly these words:
 
