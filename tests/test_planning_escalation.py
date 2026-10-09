@@ -228,7 +228,7 @@ class _Card:
         ), patch.object(
             linear_ops, "get_issue", side_effect=read,
         ), patch.object(
-            linear_ops, "lane_history", side_effect=lane_history, create=True,
+            linear_ops, "lane_history", side_effect=lane_history,
         ), patch.object(
             linear_ops, "count_comments",
             side_effect=lambda i, needle, **kw: sum(
@@ -1039,7 +1039,7 @@ class TestACardBackInPlanningIsAskedAgain:
         card = _dre_4710()
 
         def run():
-            with patch.object(linear_ops, "lane_history", create=True,
+            with patch.object(linear_ops, "lane_history",
                               side_effect=linear_ops.LinearError("history refused")):
                 return planning_escalation.escalate(linear_ops, DRE_4710, CONSENT_WHY)
 
