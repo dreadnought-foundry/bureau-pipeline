@@ -116,10 +116,16 @@ first, a card held, blocked or unreadable kept its slot, and on 2026-10-09
 three of them kept DRE-6042 — whose claim is that the sweep starts it with no
 person — out of every pass until Sunday. The phase writes nothing for a card
 it refuses, so a pass cannot know what the last one read; it knows the clock.
-Each `PASS_MINUTES` turn begins the ring `PROOF_CANDIDATES_PER_PASS` places
-further on (`_turned`), so what one pass read and refused is at the back of
-the next. A pass that runs late or twice in a turn only repeats or skips a
-window — the ring still comes round. The bound is unchanged.
+Each `PASS_MINUTES` turn begins the ring at its own place on it (`_turned`):
+the turn's golden-ratio fraction of the ring, so consecutive turns step about
+0.618 of the way round and a ring of up to four is read whole within two
+passes. A fixed stride of three was the first answer and it was wrong: with
+passes landing every second turn — a cron that only fires at :07 and :37 — a
+ring of six or twelve read the same windows forever. The golden step is odd
+in the turn, so on any steady cadence of whole turns, every turn or every
+fourth alike, every place on the ring comes up and every candidate is read.
+A pass that runs late, twice in a turn or not at all only changes which turn
+it reads. The bound is unchanged.
 
 ## The dry run
 
@@ -401,16 +407,25 @@ def _turn(now: datetime) -> int:
     return int(now.timestamp() // (PASS_MINUTES * 60))
 
 
+#: ⌊2³² / φ⌋, odd — Knuth's multiplicative hash: a turn's golden-ratio
+#: fraction of the ring, in 32 bits.
+_GOLDEN = 2654435769
+
+
 def _turned(ring: list, now: datetime) -> list:
-    """`ring` begun `PROOF_CANDIDATES_PER_PASS` places further on each turn
-    (DRE-6464), so the candidates one pass read and refused are at the back
-    of the next pass's queue rather than at its front. Two consecutive turns
-    read six places, so up to six candidates that need a read are each read
-    within two passes, and every one is reached within ⌈n / 3⌉ — however
-    many at the front cannot run yet."""
+    """`ring` begun at this turn's place on it (DRE-6464), so the candidates
+    one pass read and refused are not the next pass's front. The place is the
+    turn's golden-ratio fraction of the ring: consecutive turns step about
+    0.618 of the way round, so a ring of up to four is read whole within two
+    passes, whatever the turn. Because the multiplier is odd, on a steady
+    cadence of k turns the start takes every 32-bit fraction a multiple of
+    2^v apart (2^v the largest power of two in k), so every place on a ring
+    under 2³² / k comes up — every turn, every second or every fourth alike.
+    A fixed stride of three did not: at every second turn a ring of six or
+    twelve read the same windows forever."""
     if not ring:
         return ring
-    start = (_turn(now) * PROOF_CANDIDATES_PER_PASS) % len(ring)
+    start = (_turn(now) * _GOLDEN % 2 ** 32) * len(ring) >> 32
     return ring[start:] + ring[:start]
 
 
