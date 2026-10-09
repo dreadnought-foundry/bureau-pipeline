@@ -261,6 +261,47 @@ The vocabulary is data (`config/routing-verdicts.json` in bureau-pipeline) and
 bound to the lane contract, so a route with no destination or no actor fails the
 check rather than becoming a dead end.
 
+## The CEO's words, and where the card goes (DRE-6219)
+
+The CEO, 2026-10-07: "Build it and let everyone know when i say built it, I'm
+saying this is a hand built card." Two phrases of his decide where a card is
+filed and who builds it, in every repo.
+
+| The CEO says | The card | Who builds it |
+| -- | -- | -- |
+| **"build it"**, after approving a design or a fix | Filed in **Intake**, the only first lane the lane contract allows, by the person he said it to, carrying the `hand-built` label. His approval, the PT time and the mockup link go on the card. It is never put in Hand-work by hand: that lane is entered only on a WORKBENCH or OPERATOR routing verdict, and the sweep is the writer that carries a card there (`config/lane-contract.json`, Hand-work entrance). | The session he said it to. The card stays in Intake while the work is built and never waits for the groomer, Planning or the fleet. When the pull request opens, the review workflow or the sweep's hand-built-to-review move (`reconcile.move_hand_built_to_review`) carries the card to In Review (DRE-4179, DRE-4356), and the merge closes it (`linear_ops.py card-done`). |
+| **"put it into planning"** | Filed in **Intake**, then moved to **Planning** by the same person as a second write — a human is a permitted writer of Planning — so the history shows the Intake step. | Planning classifies it, as for any other card. |
+
+**Anything else he files follows the normal rule, which is Intake first.**
+
+**Why a hand-filed card is safe from the fleet.** Nothing dispatches a card
+from Intake: the relay dispatches only from `Todo`, and the one promoter into
+`Todo` is the sweep acting on a FLEET verdict, which a card left in Intake never
+gets. If the groomer's batch lists a `hand-built` card, verification drops it
+from the batch and leaves it where it is (`groom_verify_agent.exclusion`,
+DRE-5306). The sweep's stranded watchdog and its nudge loop skip a `hand-built`
+card with no pull request (DRE-2524) — only the alarm for hand-built work idle
+with no branch and no pull request still fires. The label is the person's own,
+applied on the CEO's explicit words, never by automation reading text: the
+standard already recognizes a `hand-built` no verdict applied as "a person's
+own" (DRE-4884).
+
+**The one route out of Intake: Urgent.** The sweep's Urgent fast path
+(`reconcile.advance_urgent_intake`, DRE-4150) moves an Intake card raised to
+Urgent, or filed at it, to Planning, and it does not read the `hand-built`
+label. In Planning the card is classified like any other and can be routed
+FLEET, which dispatches an agent onto work the session is already building. So
+a `hand-built` card is never filed at Urgent or raised to it. If the fast path
+moves one anyway, move it back to Intake: the fast path moves a card once and
+leaves one a person put back where they put it. This rule is guidance only;
+no code checks it.
+
+**What is guidance and what is checked.** Building it now, in a
+worktree-isolated helper, and shipping it through the normal pull request path
+is guidance to the session. Nothing in the pipeline checks it. What the pipeline
+does check begins at the pull request: the TDD commit order, the critic's
+verdict and the merge gate, the same as for any card.
+
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).
 `[EPIC]` in the title OR having children ⇒ the gate infers `agent:planner`. The
