@@ -234,7 +234,7 @@ lives entirely in the receipt, and the pull request stays exactly where it was.
 has to have been read and parsed and not contain the fix stub. An unreadable or
 empty listing proves nothing, so the dispatch is attempted and its failure is
 still loud — the DRE-2525 line, unmoved. The listing is read at most once per
-sweep (`reconcile._workflows_listing`), shared by all five dispatch sites and
+sweep (`reconcile._workflows_listing`), shared by all six dispatch sites and
 the busy-guard.
 
 ## The row that records a roll-up's split — `🧩 roll-up-split` (DRE-4717)

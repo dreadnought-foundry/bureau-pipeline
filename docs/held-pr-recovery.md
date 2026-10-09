@@ -158,10 +158,10 @@ even when it finds nothing.
 
 ## …and the repo that has no fix agent at all (DRE-4378)
 
-All four routes above, plus the conflict sweep, end in `gh workflow run` on
+All five routes above, plus the conflict sweep, end in `gh workflow run` on
 this repo's fix stub. Some repos do not have one — `bureau-harness` is the
 sandbox, and a fix agent loose on its pull requests is exactly what it must not
-have. Before any of the five dispatches, the sweep asks one question once per
+have. Before any of the six dispatches, the sweep asks one question once per
 pass: **does this repo's `.github/workflows` listing, read and parsed, contain
 the fix stub?**
 

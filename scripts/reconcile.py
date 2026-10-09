@@ -1270,7 +1270,7 @@ def workflow_on_default_branch(workflow: str) -> bool | None:
     used to pay none. One per sweep, not one per pull request and not one per
     site — the listing is memoised for the pass (`_workflows_listing`) and
     every caller answers out of it, so a repo with no fix stub, which 404s the
-    Actions read at all five dispatch sites, still reads the listing once.
+    Actions read at all six dispatch sites, still reads the listing once.
 
     Silent gh() by design — this helper HAS its own fallback (None), and it
     reads the contents API, not the Actions API the AST guard in
@@ -1304,7 +1304,7 @@ def _actions_runs_busy(workflow: str) -> bool:
     hide a real permission failure, which is the same mistake pointing the
     other way.
 
-    The five dispatch sites now draw the same distinction (DRE-4378). This
+    The six dispatch sites now draw the same distinction (DRE-4378). This
     docstring used to say they deliberately did not, because "a repo with no
     fix agent and a stuck pull request is a real problem and must not be
     swallowed by this quieting". Right about the problem, wrong about the
@@ -1419,7 +1419,7 @@ def fix_agent_absent() -> bool:
     does not contain `fix_workflow()`. An unreadable, empty or unparseable
     listing proves nothing and answers False, so the caller dispatches and
     fails loudly exactly as it does today — the DRE-2525 line, in the one place
-    the five dispatch sites now share.
+    the six dispatch sites now share.
 
     The listing itself is memoised for the pass (`_workflows_listing`), so a
     sweep over a repo with no stub pays one contents read for all five sites
@@ -1431,12 +1431,12 @@ def fix_agent_absent() -> bool:
 def fix_agent_absent_hold(pr: dict) -> bool:
     """True when `pr` must NOT be dispatched because this repo has no fix agent.
 
-    The one guard the five dispatch sites — the conflict sweep,
+    The one guard the six dispatch sites — the conflict sweep,
     `fix_approved_but_red`, `retry_dead_fix_runs`,
-    `redispatch_standing_verdicts` and the answered-blocker restart — ask
-    immediately before `gh workflow run`, and the sixth,
-    `redispatch_committed_not_pushed` (DRE-6352), asks it too. Two lines at each site, one reading
-    here: the sixth site somebody adds inherits it by asking the same question.
+    `redispatch_standing_verdicts`, the answered-blocker restart and
+    `redispatch_committed_not_pushed` (DRE-6352) — ask immediately before
+    `gh workflow run`. Two lines at each site, one reading here: the seventh
+    site somebody adds inherits it by asking the same question.
 
     On a provable absence: nothing is dispatched, nothing is recorded as a
     write failure, and the pull request gets the `fix-agent-absent` hold ONCE
