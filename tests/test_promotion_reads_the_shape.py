@@ -54,6 +54,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 
 import planning_shape  # noqa: E402
+import promotion_stall  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
@@ -164,7 +165,11 @@ def _clear_write_failures():
 
 
 def _lines_naming(capsys, identifier):
-    return [ln for ln in capsys.readouterr().out.splitlines() if identifier in ln]
+    """The card's own lines. The idle-board line (DRE-4210) is the sweep's,
+    said once after the loop and naming the lowest card standing, so it is
+    not one of them."""
+    return [ln for ln in capsys.readouterr().out.splitlines() if identifier in ln
+            and not ln.startswith(promotion_stall.IDLE_LINE_OPENER)]
 
 
 # ===========================================================================

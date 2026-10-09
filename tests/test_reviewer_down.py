@@ -92,12 +92,15 @@ class TestTheActRow(unittest.TestCase):
         self.assertIsNone(self.row["cadence_s"])
         self.assertTrue((self.row["cadence_why"] or "").strip())
 
-    def test_the_row_is_the_last_entry_so_it_never_races_the_sibling(self):
+    def test_the_row_lands_after_the_sibling_so_it_never_races_it(self):
         """DRE-3428's `reviewer-environment-hold` had to land first — this card
-        appends AFTER it, so the two never rewrite the same lines."""
+        appends AFTER it, so the two never rewrite the same lines. Later cards
+        append after this row in turn, so it is pinned after its sibling, not
+        as the registry's last entry forever."""
         names = pipeline_act.acts()
-        self.assertEqual(names[-1], rd.ACT)
         self.assertIn("reviewer-environment-hold", names)
+        self.assertGreater(names.index(rd.ACT),
+                           names.index("reviewer-environment-hold"))
 
     def test_the_emits_anchor_pins_the_receipt_writer(self):
         self.assertEqual(self.row["emits"],
