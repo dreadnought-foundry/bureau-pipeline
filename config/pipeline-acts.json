@@ -867,7 +867,7 @@
       "tag": "hyg-triage-returned",
       "adopted": true,
       "kind": "recovery",
-      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked hand-built and parked — is returned to Backlog, never Todo.",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Backlog, never Todo.",
       "state": "unchanged",
       "next_actor": "reconcile.py",
       "discharges": null,
