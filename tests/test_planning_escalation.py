@@ -143,10 +143,15 @@ class _Card:
     alike cannot seed one) — `MISSING` for a record with no `createdAt` key.
     `comments` stays a list of BODIES either way — the `count_comments` stub
     and the vocabulary readers below read it as such.
+
+    `history` is the card's lane moves, `(lane, created_at)` oldest first, as
+    Linear's issue history records them (DRE-6490). A move made here is added
+    to it, stamped now, and `lane_history` answers it newest first — the order
+    `history(first: n)` answers in.
     """
 
     def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN,
-                 commented_at: str = A_SPENT_ATTEMPT_AT):
+                 commented_at: str = A_SPENT_ATTEMPT_AT, history=()):
         self.comments: list[str] = []
         #: One entry per comment: its own time, or None for `commented_at`.
         self.stamps: list = []
@@ -166,6 +171,9 @@ class _Card:
         #: Which comment read each caller made — `"bodies"` (untimed) or
         #: `"timeline"` (timestamped). DRE-4124 turns on the difference.
         self.comment_reads: list[str] = []
+        self.history: list[tuple[str, str]] = list(history)
+        #: How many times the card's lane history was read.
+        self.history_reads = 0
 
     def run(self, fn):
         def post(identifier, body):
@@ -178,6 +186,12 @@ class _Card:
             self.states.append((identifier, lane))
             self.events.append("state")
             self.lane = lane
+            self.history.append((lane, _moments_ago()))
+
+        def lane_history(identifier, **kw):
+            self.history_reads += 1
+            return [{"createdAt": at, "toState": {"name": lane}}
+                    for lane, at in reversed(self.history)]
 
         def read(identifier, **kw):
             self.reads.append(dict(kw))
@@ -213,6 +227,8 @@ class _Card:
             linear_ops, "cmd_state", side_effect=move,
         ), patch.object(
             linear_ops, "get_issue", side_effect=read,
+        ), patch.object(
+            linear_ops, "lane_history", side_effect=lane_history, create=True,
         ), patch.object(
             linear_ops, "count_comments",
             side_effect=lambda i, needle, **kw: sum(
@@ -406,12 +422,17 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
     def test_a_retry_re_asserts_the_move_and_writes_no_second_note(self):
         """The rule the move was written for: a crash between the note and the
         move converges on the retry. The card is then in the destination — the
-        planning segment still — so the move is re-asserted, once more."""
-        card = _Card()
+        planning segment still — so the move is re-asserted, once more.
+
+        DRE-6490: the card's last entry into Planning is OLDER than the note,
+        so the note is this attempt's — and the first call's own move into
+        Green Light, newer than the note, opens no attempt."""
+        card = _Card(history=[(planning_escalation.ORIGIN, "2026-09-08T10:00:00-07:00")])
         _escalate(card)
         assert card.lane == planning_escalation.destination()
         first = list(card.posted)
         _escalate(card)
+        assert card.history_reads == 1, "the retry did not read where the card has been"
         assert card.posted == first
         assert card.states == [
             (CARD, planning_escalation.destination()),
@@ -760,9 +781,27 @@ class TestASecondEscalationOutOfAFreshAttempt:
         assert card.posted == []
         assert card.states == [(DRE_2428, planning_escalation.destination())]
 
-    def test_a_card_never_re_planned_keeps_the_once_per_card_reading(self):
-        """No boundary anywhere: every receipt counts, exactly as before."""
-        card = _dre_2428((_receipt(), FIRST_ESCALATION_AT))
+    def test_a_card_never_re_planned_is_asked_again_once_it_is_back_in_planning(self):
+        """No boundary anywhere, but the card was answered and moved back to
+        Planning after the receipt (DRE-6490): the receipt is a spent
+        attempt's, and the question is asked again before the move."""
+        card = _Card(
+            comments=[(_receipt(), FIRST_ESCALATION_AT)],
+            history=[(planning_escalation.destination(), FIRST_ESCALATION_AT),
+                     (planning_escalation.ORIGIN, "2026-09-18T09:20:00-07:00")],
+        )
+        assert _escalate(card, DRE_2428) == 0
+        assert len(_escalation_notes(card)) == 1
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+        assert card.events.index("comment") < card.events.index("state")
+
+    def test_a_card_never_re_planned_and_not_back_in_planning_is_not_asked_twice(self):
+        """No boundary, and no entry into Planning since the receipt: the
+        receipt is still this attempt's — one question per attempt."""
+        card = _Card(
+            comments=[(_receipt(), FIRST_ESCALATION_AT)],
+            history=[(planning_escalation.ORIGIN, "2026-09-17T18:00:00-07:00")],
+        )
         assert _escalate(card, DRE_2428) == 0
         assert card.posted == []
         assert card.states == [(DRE_2428, planning_escalation.destination())]
@@ -877,6 +916,153 @@ class TestASecondEscalationOutOfAFreshAttempt:
         note = card.bodies()
         assert planning_escalation.STOOD_DOWN_TAG in note
         assert "is withdrawn" not in note
+
+
+# ===========================================================================
+# 1d. A card back in Planning since its note is asked again (DRE-6490)
+# ===========================================================================
+#
+# The DRE-4710 timeline, 2026-10-08 PT, is the regression fixture. The card
+# was refused by the planning classifier, whose route never posts a
+# `plan-cycle:` boundary, so the once-per-attempt reading had nothing to scope
+# by and every refusal after the first was a silent park:
+#
+#   12:07  run 37829472481 — the first refusal: the note, then Green Light
+#   12:23  the CEO answered from the console; the card went back to Planning
+#   12:24  run 37831600618 — refused again: `already escalated`, no note,
+#          Green Light. The first silent park
+#   18:22  the CEO answered again; the card went back to Planning
+#   18:23  run 37869470616 — the same path: Green Light at 18:23:26 with no
+#          note. The second silent park, the one DRE-6201's read found
+#
+# The minutes are the card's; the seconds, where the card gives none, are the
+# fixture's. No `plan-cycle:` record exists anywhere on DRE-4710.
+DRE_4710 = "DRE-4710"
+DRE_4710_ENTERED_PLANNING_AT = "2026-10-08T11:58:00-07:00"
+DRE_4710_FIRST_NOTE_AT = "2026-10-08T12:07:12-07:00"
+DRE_4710_FIRST_PARK_AT = "2026-10-08T12:07:13-07:00"
+DRE_4710_FIRST_ANSWER_AT = "2026-10-08T12:23:05-07:00"
+DRE_4710_SILENT_PARK_AT = "2026-10-08T12:24:40-07:00"
+DRE_4710_SECOND_ANSWER_AT = "2026-10-08T18:22:10-07:00"
+CONSENT_WHY = (
+    "Whether customers must agree before another party sees their details is "
+    "a policy call about our customers, not a piece of work an agent can "
+    "finish."
+)
+
+
+def _dre_4710_history(*, second_answer: bool = True) -> list:
+    """The card's lane moves, oldest first, as Linear's history holds them."""
+    green_light = planning_escalation.destination()
+    moves = [
+        (planning_escalation.ORIGIN, DRE_4710_ENTERED_PLANNING_AT),
+        (green_light, DRE_4710_FIRST_PARK_AT),
+        (planning_escalation.ORIGIN, DRE_4710_FIRST_ANSWER_AT),
+    ]
+    if second_answer:
+        moves += [(green_light, DRE_4710_SILENT_PARK_AT),
+                  (planning_escalation.ORIGIN, DRE_4710_SECOND_ANSWER_AT)]
+    return moves
+
+
+def _dre_4710(*, second_answer: bool = True, comments=None) -> _Card:
+    """DRE-4710 as the classifier's run found it: in Planning, its one note
+    from the 12:07 refusal on the thread, and no boundary anywhere."""
+    if comments is None:
+        comments = [(planning_escalation.escalation_comment(DRE_4710, CONSENT_WHY),
+                     DRE_4710_FIRST_NOTE_AT)]
+    return _Card(comments=comments, history=_dre_4710_history(second_answer=second_answer))
+
+
+class TestACardBackInPlanningIsAskedAgain:
+    def test_the_fixture_is_the_timeline(self):
+        """No boundary on the thread, the 12:07 note older than both of the
+        CEO's answers, and the note itself carrying the three lines."""
+        card = _dre_4710()
+        assert not any(c.startswith(plan_critic.CYCLE_PREFIX) for c in card.comments)
+        assert _seconds_between(DRE_4710_FIRST_NOTE_AT, DRE_4710_FIRST_ANSWER_AT) > 0
+        assert _seconds_between(DRE_4710_FIRST_ANSWER_AT, DRE_4710_SECOND_ANSWER_AT) > 0
+        assert console_escalation.problems(card.comments[0]) == []
+
+    @pytest.mark.parametrize("second_answer", [False, True],
+                             ids=["12:24-run", "18:23-run"])
+    def test_dre_4710_a_refusal_after_the_ceos_answer_posts_a_fresh_note(
+            self, second_answer):
+        """Both silent parks, re-run: the card carries a note, no boundary, and
+        has entered Planning since that note. A fresh note is posted — the
+        three lines, whole — and only then is the card moved."""
+        card = _dre_4710(second_answer=second_answer)
+        assert _escalate(card, DRE_4710) == 0
+        notes = _escalation_notes(card)
+        assert len(notes) == 1, "the card was moved with no note — a silent park"
+        assert console_escalation.problems(notes[0]) == []
+        assert card.states == [(DRE_4710, planning_escalation.destination())]
+        assert card.events.index("comment") < card.events.index("state")
+
+    def test_a_retry_inside_the_attempt_converges(self):
+        """The fresh note is newer than the card's last entry into Planning:
+        a second run on the same attempt posts nothing and re-asserts the move."""
+        card = _dre_4710()
+        _escalate(card, DRE_4710)
+        assert len(_escalation_notes(card)) == 1
+        card.stamps[-1] = _moments_ago()  # Linear stamps the fresh note now
+        _escalate(card, DRE_4710)
+        assert len(_escalation_notes(card)) == 1, "a retry turned one question into two"
+        assert card.states == [(DRE_4710, planning_escalation.destination())] * 2
+
+    def test_the_parks_own_move_opens_no_attempt(self):
+        """An entry into the destination is the escalation's own move, inside
+        the segment it parks in — not the card coming back to be planned."""
+        card = _dre_4710(second_answer=False)
+        card.history.append((planning_escalation.destination(), "2026-10-08T12:30:00-07:00"))
+        card.comments.append(
+            planning_escalation.escalation_comment(DRE_4710, CONSENT_WHY))
+        card.stamps.append("2026-10-08T12:29:59-07:00")
+        _escalate(card, DRE_4710)
+        assert card.posted == []
+        assert card.states == [(DRE_4710, planning_escalation.destination())]
+
+    @pytest.mark.parametrize("bad_time", [MISSING, "", "not a time"],
+                             ids=["no-createdAt-key", "empty", "garbage"])
+    def test_a_note_with_no_readable_time_is_a_spent_attempts_once_back(self, bad_time):
+        """A note that cannot be placed against the entry into Planning is
+        not this attempt's: a duplicate question is the cheap failure, a card
+        in the queue with nothing to answer is not."""
+        card = _dre_4710(comments=[
+            (planning_escalation.escalation_comment(DRE_4710, CONSENT_WHY), bad_time)])
+        _escalate(card, DRE_4710)
+        assert len(_escalation_notes(card)) == 1
+
+    def test_an_unreadable_history_asks_again(self):
+        """A history read that fails cannot say the note is this attempt's —
+        the question is asked again rather than the card parked silently."""
+        card = _dre_4710()
+
+        def run():
+            with patch.object(linear_ops, "lane_history", create=True,
+                              side_effect=linear_ops.LinearError("history refused")):
+                return planning_escalation.escalate(linear_ops, DRE_4710, CONSENT_WHY)
+
+        outcome = card.run(run)
+        assert outcome.parked and outcome.posted
+        assert len(_escalation_notes(card)) == 1
+
+    def test_a_card_with_no_prior_note_reads_no_history(self):
+        """The ordinary first park is unchanged and costs no extra request."""
+        card = _Card()
+        _escalate(card)
+        assert card.history_reads == 0
+        assert len(_escalation_notes(card)) == 1
+
+    def test_the_stand_down_is_unchanged(self):
+        """A card that has left the segment is stood down as before — no move,
+        no fresh question, whatever its history says."""
+        card = _dre_4710()
+        card.lane = "In Progress"
+        _escalate(card, DRE_4710)
+        assert card.states == []
+        assert _escalation_notes(card) == []
+        assert planning_escalation.STOOD_DOWN_TAG in card.bodies()
 
 
 # ===========================================================================
