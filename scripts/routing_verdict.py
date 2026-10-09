@@ -438,7 +438,9 @@ def person_marks(doc: dict | None = None) -> tuple:
     whatever the vocabulary marks.
 
     The one place that answer is spelled. Today `("hand-built", "no-code")`;
-    after the flip `("operator-step", "no-code", "hand-built")`.
+    after the flip `("operator-step", "no-code", "hand-built")`. A card
+    carrying `no-code` and nothing else is not thereby a person's — that is
+    `hand_marks`.
     """
     out: list = []
     for name in verdicts(doc):
@@ -449,14 +451,28 @@ def person_marks(doc: dict | None = None) -> tuple:
     return tuple(out)
 
 
-def retirement_lifts(doc: dict | None = None) -> tuple:
-    """What a retirement takes off when the new verdict does not put it on
-    too: `person_marks(doc)` without `no-code`, which a person may mean on its
-    own. `("hand-built",)` today, `("operator-step", "hand-built")` after the
-    flip."""
+def hand_marks(doc: dict | None = None) -> tuple:
+    """The person marks that say on their own that a person builds the card
+    (DRE-6225): `person_marks(doc)` without `no-code`. `("hand-built",)`
+    today, `("operator-step", "hand-built")` after the flip.
+
+    `no-code` alone is not one. It says the deliverable is live operator work,
+    and a run may still author the runbook for it
+    (`linear_ops.auto_done_skip_reason`); the sweep files its own alarm cards
+    with it too. `reconcile.counts_against_wip` reads it apart for that
+    reason, and `reconcile.hand_built` reads these.
+    """
     import linear_ops
 
     return tuple(m for m in person_marks(doc) if m != linear_ops.NO_CODE_LABEL)
+
+
+def retirement_lifts(doc: dict | None = None) -> tuple:
+    """What a retirement takes off when the new verdict does not put it on
+    too: `hand_marks(doc)` — `no-code` stays, because a person may mean it on
+    its own. `("hand-built",)` today, `("operator-step", "hand-built")` after
+    the flip."""
+    return hand_marks(doc)
 
 
 def card_marks(name: str, title: str | None, doc: dict | None = None) -> tuple:

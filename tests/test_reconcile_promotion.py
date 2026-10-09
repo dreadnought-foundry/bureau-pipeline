@@ -285,8 +285,9 @@ class TestThePairIsNotHandedToTheFleet:
         board = _Board(*_pair_in_backlog())
         board.promote()
         # The proof card receives `card_marks` (DRE-6225): the proof run takes
-        # it, not the operator, so `no-code` alone — still a person mark to
-        # `reconcile.hand_built`. The legacy demo card receives every mark.
+        # it, not the operator, so `no-code` alone — a person's card to
+        # `reconcile.hand_built` because it is a proof, never because of
+        # `no-code` alone. The legacy demo card receives every mark.
         titles = {c["identifier"]: c["title"] for c in _planner_output()}
         for identifier in (PROOF, DEMO):
             assert board.labels_on(identifier) == list(
@@ -347,9 +348,11 @@ class TestTheGateStillPromotesWork:
         assert board.labels_on(WORK[0]) == []
         for identifier in (PROOF, DEMO):
             assert board.lane_of(identifier) == routing_verdict.destination("OPERATOR")
-            # A person mark, not necessarily `hand-built`: the proof card
-            # receives `no-code` alone (DRE-6225).
-            assert reconcile.hand_built({"labels": {"nodes": [
+            # A person's card, not necessarily `hand-built`: the proof card
+            # receives `no-code` alone, and reads as a person's because its
+            # title is a proof's (DRE-6225).
+            title = {c["identifier"]: c["title"] for c in _planner_output()}[identifier]
+            assert reconcile.hand_built({"title": title, "labels": {"nodes": [
                 {"name": n} for n in board.labels_on(identifier)]}})
 
 

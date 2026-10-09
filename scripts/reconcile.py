@@ -211,6 +211,9 @@ import review_cap_question  # noqa: E402
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
 import prose_blockers  # noqa: E402
+# DRE-6225: ONE reader of the `PROOF:` title — a proof card receives no person
+# marker, so `hand_built` reads it as a person's card by its title.
+import proof_and_demo  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -699,9 +702,9 @@ GROOM_CARD_ENV = groom_schedule_gate.CARD_VARIABLE
 # long as that counterpart exists.
 #
 # ONE SPELLING (DRE-6225). The label is the routing vocabulary's, aliased here
-# and never spelled again, and `hand_built` reads every one of the
-# vocabulary's person marks (`routing_verdict.person_marks`), so the OPERATOR
-# marker moving to `operator-step` is a data change.
+# and never spelled again, and `hand_built` reads the vocabulary's hand marks
+# (`routing_verdict.hand_marks` — its person marks but `no-code`), so the
+# OPERATOR marker moving to `operator-step` is a data change.
 HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
@@ -738,10 +741,18 @@ def held(card: dict) -> bool:
 
 
 def hand_built(card: dict) -> bool:
-    """True if the card carries a person mark (DRE-2524) — any of
-    `routing_verdict.person_marks()`, compared lower-cased (DRE-6225):
-    HAND_BUILT_LABEL, and every mark the vocabulary gives a verdict a person
-    acts on.
+    """True if the card carries a person's mark (DRE-2524) — any of
+    `routing_verdict.hand_marks()`, compared lower-cased (DRE-6225):
+    HAND_BUILT_LABEL, and every mark but `no-code` the vocabulary gives a
+    verdict a person acts on. `no-code` alone is not a person's card — a run
+    may author its runbook, and `counts_against_wip` reads it apart.
+
+    And a `PROOF:` card (`proof_and_demo.is_proof`) whatever it carries. It
+    receives no person marker (`routing_verdict.card_marks`: `no-code` alone
+    on OPERATOR, nothing on WORKBENCH), because the proof run takes it and
+    `proof_dispatch` — never this sweep — starts that run; and a proof card
+    may not route FLEET (`proof_and_demo` rule 3). So the sweep leaves it as
+    it did when every proof card wore `hand-built`.
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
@@ -761,7 +772,9 @@ def hand_built(card: dict) -> bool:
     spelling — tests/test_hand_built_not_stranded.py names every owner, so a
     reader added later is a finding at the diff.
     """
-    marked = {m.lower() for m in routing_verdict.person_marks()}
+    if proof_and_demo.is_proof(card.get("title")):
+        return True
+    marked = {m.lower() for m in routing_verdict.hand_marks()}
     return any(
         lbl["name"].lower() in marked
         for lbl in (card.get("labels") or {}).get("nodes", [])
@@ -2549,7 +2562,7 @@ def flag_stranded() -> set[str]:
             # A write in three parts — the receipt, the hold, the lane — so a
             # card the door's read put here is read live once first: one that
             # left its lane since gets none of them (item 33).
-            if not _door_lane_still(card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())):
+            if not _door_lane_still(card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())):
                 continue
         linear_ops.cmd_comment(ident, pipeline_act.receipt(
             "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
@@ -13056,7 +13069,7 @@ def main(
                         # 33): requeued only if still In Progress and still
                         # neither held nor hand-built — no receipt otherwise.
                         if linear_ops.cmd_state(ident, "Todo", **_door_guard(
-                            card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())
+                            card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())
                         )) is False and _door_guard(card):
                             continue
                         linear_ops.cmd_comment(
@@ -13120,7 +13133,7 @@ def main(
                         continue
                 else:
                     if linear_ops.cmd_state(ident, "Todo", **_door_guard(
-                        card, labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())
+                        card, labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())
                     )) is False and _door_guard(card):
                         continue
                     linear_ops.cmd_comment(

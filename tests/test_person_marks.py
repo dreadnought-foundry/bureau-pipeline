@@ -141,6 +141,22 @@ class TestPersonMarks:
         assert routing_verdict.is_person_verdict(name) is expected
 
 
+class TestHandMarks:
+    """The person marks that on their own say a person builds the card:
+    `no-code` is not one, so a card carrying it alone is read as it was
+    before this card."""
+
+    def test_the_shipped_file(self):
+        assert routing_verdict.hand_marks() == (HAND_BUILT,)
+
+    def test_the_flipped_file(self, flipped):
+        assert routing_verdict.hand_marks() == (OPERATOR_STEP, HAND_BUILT)
+
+    def test_no_code_is_never_one(self, vocabulary):
+        assert NO_CODE in routing_verdict.person_marks()
+        assert NO_CODE not in routing_verdict.hand_marks()
+
+
 class TestRetirementLifts:
     def test_the_shipped_file(self):
         assert routing_verdict.retirement_lifts() == (HAND_BUILT,)
@@ -148,6 +164,9 @@ class TestRetirementLifts:
 
     def test_the_flipped_file(self, flipped):
         assert routing_verdict.retirement_lifts() == (OPERATOR_STEP, HAND_BUILT)
+
+    def test_it_is_the_hand_marks(self, vocabulary):
+        assert routing_verdict.retirement_lifts() == routing_verdict.hand_marks()
 
     def test_a_retirement_after_the_flip_lifts_operator_step(self, flipped):
         assert routing_verdict.lifted_marks(["OPERATOR"], "FLEET") == (OPERATOR_STEP,)
@@ -302,11 +321,11 @@ def _iso(minutes_ago: float) -> str:
         "+00:00", "Z")
 
 
-def _card(labels, identifier="DRE-6301", state="Hand-work"):
+def _card(labels, identifier="DRE-6301", state="Hand-work", title="rotate the key"):
     return {
         "id": f"uuid-{identifier}",
         "identifier": identifier,
-        "title": "rotate the key",
+        "title": title,
         "description": "work",
         "updatedAt": _iso(999),
         "state": {"name": state},
@@ -355,13 +374,95 @@ class TestHandBuilt:
         assert flagged == set()
         comment.assert_not_called()
 
-    def test_the_door_guards_read_person_marks(self, flipped):
+    def test_the_door_guards_read_hand_marks(self, flipped):
         """`labels_absent` on the nudge loop's moves into Todo is the
-        vocabulary's person marks, so a card a person took in the meantime is
-        never moved back into the build queue."""
+        vocabulary's hand marks, so a card a person took in the meantime is
+        never moved back into the build queue — and a `no-code` card is."""
         source = (ROOT / "scripts" / "reconcile.py").read_text()
         assert "labels_absent=(HOLD_LABEL, HAND_BUILT_LABEL)" not in source
-        assert source.count("labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())") >= 3
+        assert "labels_absent=(HOLD_LABEL, *routing_verdict.person_marks())" not in source
+        assert source.count("labels_absent=(HOLD_LABEL, *routing_verdict.hand_marks())") == 3
+
+
+# --------------------------------------------------------------------------
+# `no-code` alone is not a person's card — it was not before this card either
+# --------------------------------------------------------------------------
+_RUNBOOK = ["repo:portico", "agent:ops", NO_CODE]
+
+
+class TestNoCodeAloneIsNotAPersonsCard:
+    """`no-code` says the deliverable is live operator work, and a run may
+    still author its runbook (`linear_ops.auto_done_skip_reason`). Before this
+    card `hand_built` read `hand-built` alone, so a card carrying `no-code` and
+    nothing else was alarmed, redispatched and requeued like any other — and
+    it still is, under both vocabularies."""
+
+    def test_hand_built_is_false(self, vocabulary):
+        assert not reconcile.hand_built(_card(_RUNBOOK))
+        assert not reconcile.hand_built(_card(["repo:portico", "No-Code"]))
+
+    def test_a_proof_card_is_a_persons_by_its_title(self, vocabulary):
+        """A proof card receives no person marker (`card_marks`): `no-code`
+        alone on OPERATOR, nothing on WORKBENCH. The proof run takes it, so
+        the sweep leaves it as it did when every proof card wore
+        `hand-built`."""
+        assert reconcile.hand_built(
+            _card(["repo:portico", "agent:ops", NO_CODE], title="PROOF: it held"))
+        assert reconcile.hand_built(
+            _card(["repo:portico", NO_CODE], title="  proof: lower case"))
+        assert reconcile.hand_built(_card(["repo:portico"], title="PROOF: it held"))
+        assert not reconcile.hand_built(
+            _card(["repo:portico", NO_CODE], title="Write the PROOF: record"))
+
+    @pytest.mark.parametrize("verdict", ["OPERATOR", "WORKBENCH"])
+    def test_a_promoted_proof_card_in_hand_work_is_not_stranded(self, vocabulary, verdict):
+        marks = list(routing_verdict.card_marks(verdict, "PROOF: the gate held"))
+        flagged, comment = _watchdog([_card(
+            ["repo:portico", *marks], title="PROOF: the gate held")])
+        assert flagged == set()
+        comment.assert_not_called()
+
+    def test_the_watchdog_still_flags_it(self, vocabulary):
+        flagged, comment = _watchdog([_card(_RUNBOOK, state="Todo")])
+        assert flagged == {"DRE-6301"}
+        assert "no agent run" in comment.call_args_list[0].args[1]
+
+    def test_no_work_never_landed_notice(self, vocabulary):
+        """The idle notice says the card is labelled `hand-built`; on a card
+        that carries `no-code` alone that would be false, so none is posted."""
+        posted = []
+        with patch.object(reconcile, "active_cards",
+                          return_value=[_card(_RUNBOOK, state="Todo")]), \
+                patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
+                patch.object(reconcile.linear_ops, "cmd_comment",
+                             side_effect=lambda i, b: posted.append((i, b))):
+            reconcile._flag_hand_built_idle([], set())
+        assert posted == []
+
+    def test_the_notice_control(self, vocabulary):
+        """Control: the same card wearing the CEO's mark is reported."""
+        posted = []
+        card = _card([*_RUNBOOK, HAND_BUILT], state="Todo")
+        with patch.object(reconcile, "active_cards", return_value=[card]), \
+                patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
+                patch.object(reconcile.linear_ops, "cmd_comment",
+                             side_effect=lambda i, b: posted.append((i, b))):
+            reconcile._flag_hand_built_idle([], set())
+        assert [i for i, _b in posted] == ["DRE-6301"]
+
+    def test_the_nudge_loop_still_redispatches_it(self, vocabulary):
+        import test_hand_built_not_stranded as harness
+
+        s = harness._run_sweep([_card(_RUNBOOK, state="Todo")])
+        s.redispatch.assert_called_once()
+        assert any(reconcile._TODO_REDISPATCH_NOTE in c.args[1]
+                   for c in s.cmd_comment.call_args_list)
+
+    def test_the_nudge_loop_still_requeues_its_dead_run(self, vocabulary):
+        import test_hand_built_not_stranded as harness
+
+        s = harness._run_sweep([_card(_RUNBOOK, state="In Progress")])
+        s.cmd_state.assert_called_once_with("DRE-6301", "Todo")
 
 
 # --------------------------------------------------------------------------

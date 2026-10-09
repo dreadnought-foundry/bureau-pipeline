@@ -395,13 +395,18 @@ def _attribute_call_owners(module: str, name: str) -> set[str]:
 
 
 #: WHO OWNS THE SPELLING (DRE-6225). "A person builds this, nothing is
-#: dispatched" is read off the routing vocabulary's person marks —
-#: `routing_verdict.person_marks()` — and never off a string spelled here, so
-#: the flip of OPERATOR's marker to `operator-step` is a data change. Three
-#: readers: `hand_built` (every owner above reads it through that one
-#: function), and the door guards in `flag_stranded` and `main()`'s nudge loop,
-#: which refuse a move into Todo once a person's mark is on the card.
-_PERSON_MARKS_OWNERS = {"hand_built", "flag_stranded", "main"}
+#: dispatched" is read off the routing vocabulary's hand marks —
+#: `routing_verdict.hand_marks()`, its person marks but `no-code` — and never
+#: off a string spelled here, so the flip of OPERATOR's marker to
+#: `operator-step` is a data change. Three readers: `hand_built` (every owner
+#: above reads it through that one function), and the door guards in
+#: `flag_stranded` and `main()`'s nudge loop, which refuse a move into Todo
+#: once a person's mark is on the card.
+_HAND_MARKS_OWNERS = {"hand_built", "flag_stranded", "main"}
+
+#: Every person mark, `no-code` included, is read nowhere here: `no-code`
+#: alone is not a person's card, and a `PROOF:` card is read by its title.
+_PERSON_MARKS_OWNERS: set[str] = set()
 
 #: And the marks the sweep APPLIES are the card's, not the verdict's: one rule,
 #: `routing_verdict.card_marks`, read by the promotion and the stamp alike.
@@ -409,6 +414,7 @@ _CARD_MARKS_OWNERS = {"promote_ready"}
 
 
 def test_the_person_marks_are_read_off_the_vocabulary():
+    assert _attribute_call_owners("routing_verdict", "hand_marks") == _HAND_MARKS_OWNERS
     assert _attribute_call_owners("routing_verdict", "person_marks") == _PERSON_MARKS_OWNERS
     assert _attribute_call_owners("routing_verdict", "card_marks") == _CARD_MARKS_OWNERS
     assert _attribute_call_owners("routing_verdict", "marks") == set(), (
