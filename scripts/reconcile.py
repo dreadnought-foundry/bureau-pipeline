@@ -779,27 +779,45 @@ def hand_built(card: dict) -> bool:
     slots, and work no run is coming for occupies none. Same label, one
     spelling — tests/test_hand_built_not_stranded.py names every owner, so a
     reader added later is a finding at the diff.
+
+    The answer is `hand_built_reason`'s, as a boolean: one rule, so the
+    watchdog's line and this answer cannot disagree (DRE-6424).
     """
-    if proof_and_demo.is_proof(card.get("title")):
-        return True
+    return hand_built_reason(card) is not None
+
+
+def hand_built_reason(card: dict) -> str | None:
+    """Why `hand_built` answers true, in the words the watchdog prints after
+    "<card> is" — or None when it answers false (DRE-6424).
+
+    `labeled '<mark>'`, naming the person mark the card really carries as it
+    carries it; `a PROOF: card`; or `routed <VERDICT> to <lane>`. The line
+    used to print `labeled 'hand-built'` for all of them, so DRE-6364 — a
+    PROOF: card nobody had marked — was logged as wearing the CEO's mark.
+
+    A mark on the card is named first, so a proof card that does wear one is
+    logged with it: the label is really there. The verdict last, so a card in
+    any other lane is never read twice (tests/test_sweep_request_budget.py
+    counts the reads).
+    """
     marked = {m.lower() for m in routing_verdict.hand_marks()}
-    if any(
-        lbl["name"].lower() in marked
-        for lbl in (card.get("labels") or {}).get("nodes", [])
-    ):
-        return True
+    for lbl in (card.get("labels") or {}).get("nodes", []):
+        if lbl["name"].lower() in marked:
+            return f"labeled '{lbl['name']}'"
+    if proof_and_demo.is_proof(card.get("title")):
+        return "a PROOF: card"
     lane = (card.get("state") or {}).get("name")
     persons = {
         name for name in routing_verdict.verdicts()
         if routing_verdict.is_person_verdict(name)
         and routing_verdict.destination(name) == lane
     }
-    # The lane first, so a card in any other lane is never read twice
-    # (tests/test_sweep_request_budget.py counts the reads).
-    return bool(persons) and any(
-        name in persons
-        for name in routing_verdict.verdicts_on(card_comment_bodies(card))
-    )
+    if not persons:
+        return None
+    for name in routing_verdict.verdicts_on(card_comment_bodies(card)):
+        if name in persons:
+            return f"routed {name} to {lane}"
+    return None
 
 
 def counts_against_wip(card: dict) -> bool:
@@ -2436,11 +2454,13 @@ def flag_stranded() -> set[str]:
             continue  # Planning has its own rule (DRE-2736) — never these two
         if held(card):
             continue  # already in a human's queue — never spam
-        if hand_built(card):
+        reason = hand_built_reason(card)
+        if reason:
             # DRE-2524: neither class applies to work built by hand — no
-            # dispatched run is coming and nothing is being routed.
+            # dispatched run is coming and nothing is being routed. The line
+            # names why, never a label the card may not carry (DRE-6424).
             print(
-                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — no "
+                f"watchdog: {ident} is {reason} — no "
                 "dispatched run is expected, so a missing run receipt and an "
                 "off-rail repo are both normal here, not a strand"
             )
@@ -2753,9 +2773,10 @@ def flag_stalled_planning() -> set[str]:
             continue  # this rule speaks for one lane only
         if held(card):
             continue  # already in a human's queue — never spam
-        if hand_built(card):
+        reason = hand_built_reason(card)
+        if reason:
             print(
-                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — the "
+                f"watchdog: {ident} is {reason} — the "
                 "pipeline is not planning this card, so time spent in "
                 "Planning is not a strand"
             )
