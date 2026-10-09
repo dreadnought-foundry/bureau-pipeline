@@ -282,7 +282,11 @@ def test_relation_hold_is_not_logged_as_prose(capsys):
             ]
         },
     }
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic):
+    # DRE-700's own read (DRE-6407) fails, said here rather than left to an
+    # unstubbed read: an In Progress blocker that cannot be read holds.
+    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), \
+        patch.object(reconcile.linear_ops, "gql",
+                     side_effect=reconcile.linear_ops.LinearError("Linear timed out")):
         assert reconcile.epic_blockers_unmet("DRE-800") is True
     out = capsys.readouterr().out
     assert "DRE-700" in out
