@@ -1017,6 +1017,70 @@ def test_main_runs_the_dry_run_when_the_variable_is_unset(monkeypatch, capsys):
     assert any(l.startswith("linear-budget:") for l in _lines(capsys))
 
 
+# The dry run names why it is dry (DRE-6439): the switch's own line from
+# `switch_reason.off_line`, composed from the environment alone.
+
+SWITCH_LINE = "proof-dispatch: PROOF_DISPATCH_LIVE"
+
+
+def _main_over(monkeypatch, *, switch=None, until=None):
+    """`main()` over the harness's board, the switch and its companion as given."""
+    for name, value in (("PROOF_DISPATCH_LIVE", switch),
+                        ("PROOF_DISPATCH_LIVE_OFF_UNTIL", until)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    monkeypatch.setenv("REPO", REPO)
+    monkeypatch.setenv("REPO_SLUG", SLUG)
+    board = Board(hand=[lane_card("DRE-5930")])
+    h = Harness(monkeypatch, board)
+    real = proof_dispatch.sweep
+
+    def over_the_board(repo, slug, *, live):
+        return real(repo, slug, live=live, linear=board, read=lambda path: None,
+                    find_pr=h.find_pr, run_state=h.run_state, release=h.release,
+                    fire=h.fire, voices=fake_voices, now=NOW,
+                    find_record=h.find_record)
+
+    monkeypatch.setattr(proof_dispatch, "sweep", over_the_board)
+    assert proof_dispatch.main([]) == 0
+    return h, board
+
+
+def test_the_dry_run_names_the_switch_and_the_cards_it_waits_on(monkeypatch, capsys):
+    h, board = _main_over(monkeypatch, until="DRE-6141, DRE-6142, DRE-6143")
+    lines = _lines(capsys)
+    line = ("proof-dispatch: PROOF_DISPATCH_LIVE is off — until DRE-6141, "
+            "DRE-6142, DRE-6143 land")
+    assert lines.count(line) == 1
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == [line]
+    would = [i for i, l in enumerate(lines) if l.startswith("would:")]
+    assert would and lines.index(line) < would[0]
+    tally = next(l for l in lines if l.startswith("proof-dispatch: eligible"))
+    assert tally.endswith("(dry run)")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    # No Linear read is added: the same pass, run straight, reads the same.
+    straight = Board(hand=[lane_card("DRE-5930")])
+    Harness(monkeypatch, straight).sweep(live=False)
+    assert board.reads == straight.reads
+
+
+def test_the_dry_run_with_no_companion_says_no_reason_given(monkeypatch, capsys):
+    _main_over(monkeypatch)
+    lines = _lines(capsys)
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == [
+        "proof-dispatch: PROOF_DISPATCH_LIVE is off — no reason given"]
+
+
+def test_a_live_pass_prints_no_switch_line(monkeypatch, capsys):
+    h, _ = _main_over(monkeypatch, switch="true", until="DRE-6141")
+    lines = _lines(capsys)
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == []
+    assert h.fired and next(
+        l for l in lines if l.startswith("proof-dispatch: eligible")).endswith("(live)")
+
+
 # --------------------------------------------------------------------------- #
 # the read bound                                                               #
 # --------------------------------------------------------------------------- #
@@ -1133,7 +1197,26 @@ def test_the_step_carries_the_sweeps_env_and_the_switch():
                  "BUREAU_PIPELINE_REF"):
         assert env[name] == sweep["env"][name], name
     assert env["PROOF_DISPATCH_LIVE"] == "${{ vars.PROOF_DISPATCH_LIVE }}"
+    assert env["PROOF_DISPATCH_LIVE_OFF_UNTIL"] == "${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}"
     assert "REPO_SLUG" in _step()["run"]
+
+
+def test_the_summary_grep_lifts_the_switch_the_tally_and_the_would_lines(tmp_path):
+    grep = next(line.strip() for line in _step()["run"].splitlines()
+                if line.strip().startswith("SUMMARY="))
+    log = [
+        "proof-dispatch: PROOF_DISPATCH_LIVE is off — until DRE-6141 land",
+        "proof-dispatch: DRE-5930 — eligible: first proof run (1 of 2)",
+        "would: dispatch DRE-5930 — first proof run",
+        "proof-dispatch: eligible 1, dispatched 0, deferred 0 (dry run)",
+        "linear-budget: 4 request(s)",
+    ]
+    (tmp_path / "proof-dispatch.log").write_text("\n".join(log) + "\n",
+                                                 encoding="utf-8")
+    done = subprocess.run(["bash", "-e", "-c", f"{grep}\nprintf '%s\\n' \"$SUMMARY\""],
+                          cwd=tmp_path, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [log[0], log[2], log[3]]
 
 
 def test_the_stub_is_tested_before_any_python():
