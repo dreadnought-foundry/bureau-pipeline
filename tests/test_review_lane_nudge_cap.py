@@ -10,8 +10,10 @@ APPROVE, green CI and a Verifier FAIL is the live case — the gate runs, decide
 
 The cap is the CRASHED_REVIEW_RETRY_CAP shape: the card's own receipts are
 counted per tag AND per head sha, a new commit re-arms the budget, and at the
-cap nothing is dispatched — `needs-human` goes on and one `🚨 review-nudge-cap`
-notice says what stands and the way back.
+cap nothing is dispatched — `needs-human` goes on with its `🔒 hold:` stamp,
+one `🚨 review-nudge-cap` question says what stands and the way back, and the
+card is parked In Review → Green Light (DRE-6181,
+tests/test_review_cap_green_light.py).
 
 The sweep is driven the way test_lane_fold_in_review.py drives it — the real
 `main()` — over a board that remembers what each sweep posted and labelled, so
@@ -84,17 +86,20 @@ def _pr(head=HEAD, critic=None, verifier=None, reviewed=None):
 
 
 class _Board:
-    """One card that remembers every comment and label the sweep wrote."""
+    """One card that remembers every comment, label and lane move the sweep
+    wrote, and the pull request notes it posted (DRE-6181)."""
 
     def __init__(self):
         self.comments: list[str] = []  # oldest -> newest
         self.labels: list[str] = []
+        self.state = "In Review"
+        self.pr_notes: list[str] = []
 
     def card(self):
         return {
             "identifier": IDENT,
             "description": "**Repo:** agent-bureau\nwork",
-            "state": {"name": "In Review"},
+            "state": {"name": self.state},
             "labels": {"nodes": [{"name": n} for n in self.labels]},
             "updatedAt": "2026-09-30T00:00:00Z",
             # The API's order — newest first; window_nodes reverses it.
@@ -118,6 +123,19 @@ class _Board:
             if name not in self.labels:
                 self.labels.append(name)
 
+        def advance(ident, to, from_csv, *_flags, **_kw):
+            assert ident == IDENT
+            if self.state in from_csv.split(","):
+                self.state = to
+
+        def pr_note(number, body):
+            # Posted as the worker bot, so the next sweep's pull request
+            # carries it the way GitHub would.
+            self.pr_notes.append(body)
+            pr["comments"].append({"author": {"login": reconcile.WORKER_BOT_LOGIN},
+                                   "body": body})
+            return True
+
         mocks = {
             "unstick_conflicts": MagicMock(),
             "retrigger_dead_heads": MagicMock(),
@@ -136,11 +154,14 @@ class _Board:
             # subprocess per read that makes a five-sweep test take a minute.
             "gh": MagicMock(return_value=""),
             "report_fix_concurrency": MagicMock(),
+            "_post_pr_note": MagicMock(side_effect=pr_note),
         }
         with patch.multiple(reconcile, **mocks), patch.object(
             reconcile.linear_ops, "cmd_comment", side_effect=comment
         ), patch.object(
             reconcile.linear_ops, "add_label", side_effect=label
+        ), patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=advance
         ), patch.object(reconcile.linear_ops, "cmd_state") as cmd_state:
             reconcile.main()
         self.last_pr_for = mocks["pr_for"]
@@ -149,6 +170,10 @@ class _Board:
 
 def _cap_notices(bodies):
     return [b for b in bodies if "🚨 review-nudge-cap" in b]
+
+
+def _stamps(bodies):
+    return [b for b in bodies if b.startswith("🔒 hold: reason=review-cap-spent")]
 
 
 class TestTheCapConstant:
@@ -181,20 +206,22 @@ class TestTheGateNudgeIsCapped:
             assert "merge gate re-triggered" in receipt
             assert reconcile.HOLD_LABEL not in board.labels
 
-        # Sweep 4: the budget for this head is spent.
+        # Sweep 4: the budget for this head is spent — held, asked, parked.
         nudge, cmd_state, posted = board.sweep(pr)
         nudge.assert_not_called()
-        cmd_state.assert_not_called()  # stays In Review: its PR is open
+        cmd_state.assert_not_called()
+        assert board.state == "Green Light"  # DRE-6181: the CEO's queue
         assert reconcile.HOLD_LABEL in board.labels
+        assert len(_stamps(posted)) == 1, posted
         notices = _cap_notices(posted)
         assert len(notices) == 1, posted
-        assert len(posted) == 1, posted
+        assert len(posted) == 2, posted  # the stamp, then the question
         notice = notices[0]
         assert notice.startswith(f"🚨 review-nudge-cap PR #42 @{HEAD}:")
         assert "critic APPROVE" in notice and "verifier FAIL" in notice
         assert "3 re-trigger" in notice
         assert "declined" in notice
-        assert reconcile.HOLD_LABEL in notice
+        assert len(board.pr_notes) == 1
 
         # Sweep 5: held — the sweep does not even look the PR up.
         nudge, cmd_state, posted = board.sweep(pr)
@@ -270,6 +297,7 @@ class TestTheReviewNudgeIsCapped:
         nudge, cmd_state, posted = board.sweep(pr)
         nudge.assert_not_called()
         cmd_state.assert_not_called()
+        assert board.state == "Green Light"
         assert reconcile.HOLD_LABEL in board.labels
         assert len(_cap_notices(posted)) == 1
         assert _cap_notices(posted)[0].startswith(
@@ -320,13 +348,18 @@ class TestTheNoticeIsPostedOncePerHead:
         for _ in range(4):
             board.sweep(pr)
         assert len(_cap_notices(board.comments)) == 1
-        board.labels.remove(reconcile.HOLD_LABEL)  # a person, nothing pushed
+        # A person, nothing pushed: the label off, the card back In Review.
+        board.labels.remove(reconcile.HOLD_LABEL)
+        board.state = "In Review"
 
         nudge, _, posted = board.sweep(pr)
         nudge.assert_not_called()
         assert reconcile.HOLD_LABEL in board.labels
+        assert len(_stamps(posted)) == 1  # re-held under its reason
+        assert board.state == "Green Light"  # and re-parked
         assert _cap_notices(posted) == []
         assert len(_cap_notices(board.comments)) == 1
+        assert len(board.pr_notes) == 1
 
 
 class TestTheCapIsOffAtZero:
@@ -340,6 +373,7 @@ class TestTheCapIsOffAtZero:
         )
         nudge.assert_not_called()
         cmd_state.assert_not_called()
+        assert board.state == "Green Light"
         assert reconcile.HOLD_LABEL in board.labels
         assert len(_cap_notices(posted)) == 1
         assert "REVIEW_NUDGE_CAP is 0 — the cap is off" in capsys.readouterr().out
@@ -351,8 +385,10 @@ class TestTheReceiptsCarryNoVerdictMarker:
         for _ in range(4):
             gate.sweep(_pr(critic="APPROVE", verifier="FAIL"))
             review.sweep(_pr())
-        bodies = gate.comments + review.comments
-        assert len(bodies) == 8  # three receipts and one notice, each
+        bodies = (gate.comments + review.comments
+                  + gate.pr_notes + review.pr_notes)
+        # Three receipts, a stamp and a question each, and one blocker each.
+        assert len(bodies) == 12
         for body in bodies:
             for marker in VERDICT_MARKERS:
                 assert marker not in body, body
@@ -370,10 +406,14 @@ class TestTheActRegistry:
         ]
         gate = anchors.index("has not merged it; merge gate re-triggered")
         assert anchors[gate + 1] == "no critic verdict bound to this head after"
-        assert anchors[gate + 2] == "Re-triggering again would not change that"
+        # DRE-6181: the question and the pull request blocker replaced the
+        # bare notice.
+        assert anchors[gate + 2] == "cmd_comment(ident, review_question)"
+        assert anchors[gate + 3] == "_post_pr_note(number, review_blocker)"
         # The old wording is gone, not left beside the new.
         assert "verdict present but merge never happened" not in anchors
         assert "no critic verdict after" not in anchors
+        assert "Re-triggering again would not change that" not in anchors
 
     def test_every_receipt_site_is_accounted_for(self):
         result = subprocess.run(
@@ -391,7 +431,10 @@ class TestTheDocumentation:
         section = text[start:end]
         assert "REVIEW_NUDGE_CAP" in section
         assert "`needs-human`" in section
-        assert "removes the `needs-human` label" in section
+        # DRE-6181: parked in Green Light, back on a new head.
+        assert "`Green Light`" in section
+        assert "Operator decision" in section
+        assert "new head" in section
 
     def test_the_branch_comment_leaves_the_hold_note_to_the_gate(self):
         source = (ROOT / "scripts" / "reconcile.py").read_text(encoding="utf-8")
