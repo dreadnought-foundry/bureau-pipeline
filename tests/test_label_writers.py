@@ -51,12 +51,15 @@ class _Staged:
         self.text = text
 
     def __enter__(self):
+        self.made = [p for p in self.path.parents if not p.exists()]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(self.text, encoding="utf-8")
         return self.path
 
     def __exit__(self, *exc):
         self.path.unlink(missing_ok=True)
+        for directory in self.made:  # innermost first: only what this made
+            directory.rmdir()
         return False
 
 
@@ -149,6 +152,8 @@ class TheMarkIsReadNeverDeclared(unittest.TestCase):
         self.assertIn("CANNOT SEE", doc)
         self.assertIn("hand write in Linear", doc)
         self.assertIn("run time", doc)
+        self.assertIn("shell string", doc)
+        self.assertIn("composite action", doc)
 
 
 class ANewWriterOfTheMarkIsNamed(unittest.TestCase):
@@ -331,6 +336,107 @@ class EveryDoorIsWatched(unittest.TestCase):
             "            --repo bureau-pipeline --label hand-built\n",
         )
         self.assertTrue(_named(found, rogue), found)
+
+    def test_python_running_the_command_line_as_one_shell_string_is_named(self):
+        rogue = "zz_label_probe_shellstr.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import subprocess\n\n"
+            "def go(card):\n"
+            "    subprocess.run(f\"python3 scripts/linear_ops.py add-label {card} hand-built\",\n"
+            "                   shell=True)\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:4"), found)
+
+    def test_a_shell_string_whose_label_is_filled_in_is_reported_unread(self):
+        rogue = "zz_label_probe_shellstr_hole.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import os\n\n"
+            "def go(card, label):\n"
+            "    os.system('python3 scripts/linear_ops.py add-label %s %s' % (card, label))\n\n"
+            "def run(card):\n"
+            "    go(card, 'hand-' + 'built')\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:4"), found)
+
+    def test_a_composite_action_that_adds_the_mark_is_named(self):
+        rogue = ".github/actions/zz-label-probe/action.yml"
+        found = self._problems_with(
+            rogue,
+            "name: Probe\n"
+            "runs:\n"
+            "  using: composite\n"
+            "  steps:\n"
+            "    - shell: bash\n"
+            "      run: python3 \"$PIPELINE_DIR/scripts/linear_ops.py\" add-label DRE-1 hand-built\n",
+        )
+        self.assertTrue(_named(found, rogue), found)
+
+    def test_a_workflow_spelled_yaml_is_read(self):
+        rogue = "zz-label-probe.yaml"
+        found = self._problems_with(
+            f".github/workflows/{rogue}",
+            "name: Probe\n"
+            "on: workflow_dispatch\n"
+            "jobs:\n"
+            "  go:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: python3 scripts/linear_ops.py add-label \"$CARD\" hand-built\n",
+        )
+        self.assertTrue(_named(found, rogue), found)
+
+    def test_a_shell_script_in_a_subdirectory_is_read(self):
+        rogue = "scripts/zz_label_probe_dir/probe.sh"
+        found = self._problems_with(
+            rogue,
+            "#!/usr/bin/env bash\n"
+            "python3 scripts/linear_ops.py add-label \"$CARD\" hand-built\n",
+        )
+        self.assertTrue(_named(found, rogue), found)
+
+    def test_the_mark_unpacked_from_a_mapping_is_named(self):
+        rogue = "zz_label_probe_kw.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import linear_ops\n\n"
+            "def go(card):\n"
+            "    linear_ops.add_label(card, **{'label_name': 'hand-built'})\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:4"), found)
+
+    def test_a_label_unpacked_from_keywords_it_cannot_read_is_reported_unread(self):
+        rogue = "zz_label_probe_kwargs.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import json\n"
+            "import linear_ops\n\n"
+            "def go(card, raw):\n"
+            "    linear_ops.add_label(card, **json.loads(raw))\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:5"), found)
+
+    def test_a_label_unpacked_from_arguments_it_cannot_read_is_reported_unread(self):
+        rogue = "zz_label_probe_args.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "import os\n"
+            "import linear_ops\n\n"
+            "def go():\n"
+            "    linear_ops.add_label(*os.environ['ARGS'].split())\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}:5"), found)
+
+    def test_the_seam_imported_with_a_star_is_reported_unread(self):
+        rogue = "zz_label_probe_star.py"
+        found = self._problems_with(
+            f"scripts/{rogue}",
+            "from linear_ops import *\n\n"
+            "def go(card):\n"
+            "    add_label(card, 'hand-built')\n",
+        )
+        self.assertTrue(_named(found, f"scripts/{rogue}"), found)
 
     def test_a_vocabulary_mark_of_hand_built_is_named(self):
         doc = {"verdicts": [{"name": "WORKBENCH", "marks": ["hand-built"]},
