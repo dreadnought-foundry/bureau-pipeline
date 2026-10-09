@@ -37,11 +37,12 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_dispatch_dedupe.py 
 """
 from __future__ import annotations
 
+import copy
 import os
 import re
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import pytest
 import yaml
@@ -676,6 +677,161 @@ def test_the_seed_incident_is_cited_where_the_component_is_described():
     assert "34281711446" in text, (
         "cite the run whose log carries the move, not just the card"
     )
+
+
+# --------------------------------------------------------------------------
+# A discarded dispatch writes no lane (DRE-6468). The epic's first criterion:
+# a plan dispatch the guard refuses leaves the card in whatever lane it is
+# in, because the refused run writes no lane at all. Two halves — the refusing
+# path itself moves nothing, and no step able to write a lane runs after it.
+# --------------------------------------------------------------------------
+_LANE_AND_LABEL_WRITERS = (
+    "cmd_state", "guarded_state_write", "add_label", "remove_label",
+)
+
+
+@pytest.mark.parametrize(
+    "siblings,lane",
+    [
+        # (a) a run was in flight when this dispatch arrived; the lane agrees.
+        ([_run("34279893974", "2026-09-08T21:19:00Z", "2026-09-08T21:52:45Z")],
+         "Planning"),
+        # (b) nothing in flight, but the lane has moved on.
+        ([], "Green Light"),
+    ],
+    ids=["run-in-flight", "lane-moved-on"],
+)
+def test_a_refused_plan_dispatch_writes_no_lane_and_says_so_once(
+    _gh_output, siblings, lane
+):
+    """DRE-4059's duplicate of 2026-10-08 20:22 PT was refused 37 seconds
+    after the parking run's move, and its receipt reads `This run planned
+    nothing and moved no lane`. That sentence is only true if the refusing
+    path has no lane or label write in it — patched here to record, and
+    asserted never called."""
+    with patch.object(dedupe_dispatch, "_plan_siblings", return_value=siblings), \
+         patch.object(dedupe_dispatch, "_current_lane", return_value=lane), \
+         patch.object(dedupe_dispatch.linear_ops, "cmd_comment") as receipt, \
+         patch.multiple(dedupe_dispatch.linear_ops,
+                        **{n: DEFAULT for n in _LANE_AND_LABEL_WRITERS}) as writers:
+        dedupe_dispatch.cmd_plan_gate("DRE-3244")
+    assert "skip=true" in _gh_output.read_text()
+    assert {n: m.call_count for n, m in writers.items()} == {
+        n: 0 for n in _LANE_AND_LABEL_WRITERS
+    }, "a refused dispatch wrote a lane or a label"
+    receipt.assert_called_once()
+    assert "moved no lane" in receipt.call_args[0][1]
+
+    # The module has no lane writer to misuse in the first place.
+    source = (ROOT / "scripts" / "dedupe_dispatch.py").read_text()
+    calls = [c for c in ("cmd_state(", "guarded_state_write(", ".state(",
+                         "add_label(") if c in source]
+    assert calls == [], f"dedupe_dispatch.py calls a lane writer: {calls}"
+
+
+# The lane-writing commands `plan.yml` names at `main` 5c15fea, matched as
+# substrings of a step's `run` text.
+LANE_WRITING_COMMANDS = (
+    "linear_ops.py state",
+    "planning_route.py exit",
+    "planning_escalation.py",  # `escalate` and `park-unread` both write one
+    "hold.py apply",
+    "epic_split.py activate",
+    "reconcile.py",
+    # The Green Light writer DRE-6455 and DRE-6456 add to seven park steps
+    # after this card lands. At 5c15fea it matches no step, which is not a
+    # failure: it is listed so the writer is inside this gate the day it lands.
+    "plan_bound.py exit",
+)
+
+_SKIP_CLAUSE = re.compile(r"steps\.dedupe\.outputs\.skip\s*!=\s*'true'")
+_STEP_REF = re.compile(r"steps\.([A-Za-z0-9_-]+)\.(?:outputs|outcome|conclusion)\b")
+
+
+def _ungated_lane_writers(steps):
+    """Names of the steps after the guard whose `run` names a lane-writing
+    command and that could run on a refused dispatch. A step is gated when
+    its `if:` carries the skip clause, or when every step it references is
+    itself gated. No `if:`, no reference, a cycle, or an id that is not a
+    step after the guard (the guard's own, one before it, an unknown one)
+    is not gated."""
+    guard = [s.get("id") for s in steps].index("dedupe")
+    after = steps[guard + 1:]
+    by_id = {s["id"]: s for s in after if s.get("id")}
+
+    def gated(step, seen):
+        if "if" not in step:
+            return False
+        cond = str(step["if"])
+        if _SKIP_CLAUSE.search(cond):
+            return True
+        refs = _STEP_REF.findall(cond)
+        return bool(refs) and all(
+            ref not in seen and ref in by_id
+            and gated(by_id[ref], seen | {ref})
+            for ref in refs
+        )
+
+    writers = [s for s in after
+               if any(c in (s.get("run") or "") for c in LANE_WRITING_COMMANDS)]
+    assert writers, "no lane-writing step found — the walk read nothing"
+    return [s.get("name") for s in writers
+            if not gated(s, frozenset({s.get("id")}) - {None})]
+
+
+def test_every_lane_writer_in_the_planner_runs_behind_the_skip():
+    """No step that can write a lane runs on a refused dispatch: each one
+    carries the skip condition itself, or hangs off steps that do. The
+    guard and the steps before it are excluded by position, as in
+    test_no_step_after_the_guard_runs_unconditionally."""
+    assert "plan_bound.py exit" in LANE_WRITING_COMMANDS, (
+        "the Green Light writer DRE-6455/DRE-6456 add must stay in the gate"
+    )
+    ungated = _ungated_lane_writers(_steps())
+    assert ungated == [], (
+        f"lane writers that would run on a refused dispatch: {ungated}"
+    )
+
+
+def _strip_skip(steps, name):
+    step = next(s for s in steps if s.get("name") == name)
+    stripped = re.sub(r"\s*&&\s*" + _SKIP_CLAUSE.pattern, "", step["if"])
+    assert stripped != step["if"], f"{name!r} carries no skip clause to strip"
+    step["if"] = stripped
+    return steps
+
+
+def _add_unconditional_bound_park(steps):
+    steps.append({"name": "Park — the bound, unconditionally",
+                  "run": "python3 .bureau-pipeline/scripts/plan_bound.py exit "
+                         "\"$IDENT\""})
+    return steps
+
+
+def _if_true(steps, name):
+    step = next(s for s in steps if s.get("name") == name)
+    step["if"] = True
+    return steps
+
+
+@pytest.mark.parametrize(
+    "mutate,leaked",
+    [
+        (lambda s: _strip_skip(s, "Route — plan or activate"),
+         "Route — plan or activate"),
+        (_add_unconditional_bound_park, "Park — the bound, unconditionally"),
+        (lambda s: _if_true(s, "Epic → Green Light — both critics passed"),
+         "Epic → Green Light — both critics passed"),
+    ],
+    ids=["route-loses-the-skip", "plan-bound-exit-with-no-if",
+         "a-writer-if-replaced-by-true"],
+)
+def test_the_walk_names_a_lane_writer_that_leaks_past_the_skip(mutate, leaked):
+    """The walk above, proved against copies of the workflow that leak: it
+    must fail them, naming the step — including a `plan_bound.py exit` step
+    that does not exist yet."""
+    ungated = _ungated_lane_writers(mutate(copy.deepcopy(_steps())))
+    assert leaked in ungated
 
 
 if __name__ == "__main__":
