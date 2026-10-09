@@ -9328,16 +9328,14 @@ def redispatch_committed_not_pushed() -> None:
     wait = fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES
     restarts = fix_dead_run.COMMITTED_NOT_PUSHED_RESTARTS
     candidates = waiting = capped = dispatched = 0
-    try:
-        prs = json.loads(gh(
-            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-            "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
-        ) or "[]")
-    except ValueError:
+    # The sweep's one open-PR listing (the same thirty, a superset of the
+    # fields): read once for every PR-side backstop, and None — recorded
+    # loudly by the listing itself — when it could not be read.
+    prs = _open_pr_listing()
+    if prs is None:
         print("committed-not-pushed: the open pull requests could not be read")
-        prs = []
     busy = None  # asked once, and only when a pull request is due a dispatch
-    for pr in prs:
+    for pr in prs or []:
         if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
         worker = [c for c in pr.get("comments") or [] if is_worker_bot_comment(c)]

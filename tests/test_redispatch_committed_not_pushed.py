@@ -159,7 +159,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
             if args[:2] == ("run", "list"):
                 return json.dumps([{"status": "in_progress"}] if busy else [])
             if args[:2] == ("pr", "list"):
-                return json.dumps(prs)
+                return prs if isinstance(prs, str) else json.dumps(prs)
             if args[0] == "api" and "/comments" in args[-1]:
                 if thread is not None:
                     return json.dumps(thread)
@@ -169,6 +169,8 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
             return ""
 
         before = list(reconcile._read_failures), list(reconcile._write_failures)
+        # The open-PR listing is the sweep's memo: one sweep, one read.
+        reconcile.reset_sweep_cards()
         try:
             with mock.patch.dict(os.environ, {"GH_DISPATCH_TOKEN": ""}), \
                     mock.patch.object(reconcile, "gh", side_effect=gh), \
@@ -187,6 +189,7 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
         finally:
             del reconcile._read_failures[len(before[0]):]
             del reconcile._write_failures[len(before[1]):]
+            reconcile.reset_sweep_cards()
         return calls, notes, log
 
     # ---------------------------------------------------------------- the act
@@ -355,6 +358,14 @@ class CommittedNotPushedSweepTest(unittest.TestCase):
     def test_a_non_card_branch_does_not_dispatch(self):
         calls, _, _ = self.sweep([pr_payload(DRE_4883, branch="dependabot/pip/x")])
         self.assertEqual(calls, [])
+
+    def test_an_unreadable_listing_dispatches_nothing_and_still_prints(self):
+        # The shared listing answers None, never [], on a failed read — and
+        # records it loudly itself; this route says so and counts nothing.
+        calls, _, log = self.sweep("not json")
+        self.assertEqual(calls, [])
+        self.assertIn("could not be read", log)
+        self.assertEqual(summary(log), (0, 0, 0, 0), log)
 
     def test_a_sweep_with_no_candidates_still_prints_the_summary(self):
         _, _, log = self.sweep([])
