@@ -236,6 +236,80 @@ def test_the_marks_are_the_pipelines_own_strings():
 
 
 # --------------------------------------------------------------------------
+# the person marks are the vocabulary's (DRE-6226)
+# --------------------------------------------------------------------------
+def _flipped(monkeypatch) -> None:
+    """The vocabulary with OPERATOR's marker flipped in memory — `operator-step`
+    + `no-code` — the shape `tests/test_person_marks.py` proves the flip with."""
+    import copy
+
+    import routing_verdict
+    doc = copy.deepcopy(routing_verdict.load())
+    for record in doc["verdicts"]:
+        if record["name"] == "OPERATOR":
+            record["marks"] = ["operator-step", "no-code"]
+        if record["name"] == "WORKBENCH":
+            record["marks"] = []
+    monkeypatch.setattr(routing_verdict, "load", lambda path=None: doc)
+
+
+def test_the_ceos_mark_is_the_routing_vocabularys_own():
+    import routing_verdict
+    assert epic_cap.HAND_BUILT_LABEL is routing_verdict.HAND_BUILT_LABEL
+
+
+@pytest.mark.parametrize("label", ["operator-step", "Operator-Step", "hand-built", "no-code"])
+def test_an_operator_step_child_holds_no_slot_once_the_vocabulary_marks_it(monkeypatch, label):
+    _flipped(monkeypatch)
+    child = _child("DRE-3", "bureau-pipeline: a deploy", labels=(label,))
+    assert not epic_cap.buildable(child)
+    assert not _counts(_epic("DRE-100", DONE_PLAIN, child))
+
+
+def test_the_unbuilt_labels_are_read_off_the_vocabulary_at_read_time(monkeypatch):
+    import routing_verdict
+    assert epic_cap.UNBUILT_LABELS == routing_verdict.person_marks()
+    _flipped(monkeypatch)
+    assert set(epic_cap.UNBUILT_LABELS) == {"operator-step", "no-code", "hand-built"}
+
+
+#: The three readers DRE-6226 points at `routing_verdict.person_marks`.
+PERSON_MARK_READERS = ("epic_cap.py", "hygiene_done.py", "groom_verify_agent.py")
+
+
+def _code_strings(path: Path) -> list:
+    """Every string constant in the module that is not a docstring."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstrings.add(id(body[0].value))
+    return [node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and id(node) not in docstrings]
+
+
+@pytest.mark.parametrize("module", PERSON_MARK_READERS)
+def test_no_reader_spells_the_ceos_mark_itself(module):
+    path = ROOT / "scripts" / module
+    text = path.read_text(encoding="utf-8")
+    quoted = [q for q in ('"hand-built"', "'hand-built'") if q in text]
+    assert quoted == [], module
+    # Nor inside a longer string, a regex alternative included.
+    assert not [s for s in _code_strings(path) if "hand-built" in s]
+
+
+def test_an_operator_step_child_is_a_build_under_the_shipped_vocabulary():
+    # Today the file does not mark OPERATOR `operator-step`, so the label is
+    # nobody's mark yet — the reader follows the data, not the string.
+    child = _child("DRE-3", "bureau-pipeline: a deploy", labels=("operator-step",))
+    assert epic_cap.buildable(child)
+
+
+# --------------------------------------------------------------------------
 # the receipts still read true
 # --------------------------------------------------------------------------
 def test_the_queued_receipt_says_a_slot_opens_when_building_ends_not_when_the_epic_closes():
