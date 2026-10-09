@@ -6770,6 +6770,31 @@ def epic_thread(epic: str) -> list | None:
         return None
 
 
+def whole_epic_thread(epic: str, window: list | None) -> list | None:
+    """The epic's thread for the epic cap's promotion hold (DRE-6493): the
+    whole of it, never the fifty-comment window `epic_thread` may have read.
+
+    The hold looks for ONE start note, written once, on an epic that has not
+    moved a child — so markers pile up on top of it, and once fifty follow
+    it a windowed read would hold every child for good (the window cost two
+    approved epics on 2026-10-02, DRE-5639). A window shorter than fifty is
+    the whole thread already, and inside a pass the whole read is the
+    cache's. None when the window was unreadable or the whole read fails —
+    the hold abstains on it, as `epic_thread` explains.
+    """
+    if window is None or len(window) < linear_ops.COMMENT_WINDOW:
+        return window
+    try:
+        return linear_ops.comment_records(epic, whole_thread=True)
+    except Exception as exc:  # noqa: BLE001 — an unreadable thread is unknown
+        print(
+            f"epic-cap: could not read {epic}'s whole thread ({exc}) — "
+            "the cap's promotion hold abstains on this epic this sweep",
+            file=sys.stderr,
+        )
+        return None
+
+
 #: The fields `comment_records` reads off every comment: a cached thread that
 #: lacks one is not a thread the gate can be served from.
 _EPIC_THREAD_FIELDS = ("body", "user", "createdAt")
@@ -6935,6 +6960,9 @@ def promote_ready(
     # per epic per sweep. `None` means the read FAILED, which is not the same
     # fact as an epic with no comments and must not be cached as one.
     post_critic: dict[str, list | None] = {}
+    # The same thread whole, for the epic cap's hold (DRE-6493) — read past
+    # the window only for an epic whose window is full, once per sweep.
+    cap_thread: dict[str, list | None] = {}
     candidates = sorted(
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
@@ -7203,11 +7231,14 @@ def promote_ready(
                     # once, and a child promoted first made rule 1 start the
                     # epic past the cap. Logged at once; said on the card after
                     # the activate route's window, as the second critic's is.
+                    if epic_id not in cap_thread:
+                        cap_thread[epic_id] = whole_epic_thread(
+                            epic_id, post_critic[epic_id])
                     refusal = epic_cap.promotion_refusal(
                         card["identifier"],
                         epic_id,
                         epic_records([epic_id]).get(epic_id),
-                        post_critic[epic_id],
+                        cap_thread[epic_id],
                         green_light[epic_id],
                     )
                     if refusal is not None:

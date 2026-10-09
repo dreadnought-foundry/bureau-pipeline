@@ -119,6 +119,7 @@ class _Approval:
         self.thread = list(_passed_thread() if thread is None else thread)
         self.minutes = minutes_since_approval
         self.posted: list[tuple[str, str]] = []
+        self.whole_reads = 0
 
     # --- the board ------------------------------------------------------- #
     def record(self) -> dict:
@@ -138,6 +139,14 @@ class _Approval:
                 for i, lane in self.lanes.items()
             ]},
         }
+
+    def comment_records(self, epic: str, *, whole_thread: bool = False) -> list[dict]:
+        """Linear's read: the fifty newest outside a pass, unless asked for
+        the whole thread."""
+        if whole_thread:
+            self.whole_reads += 1
+            return list(self.thread)
+        return list(self.thread[-reconcile.linear_ops.COMMENT_WINDOW:])
 
     def in_backlog(self) -> list[dict]:
         cards = []
@@ -164,7 +173,7 @@ class _Approval:
         ), patch.object(
             reconcile.mid_epic, "last_green_light", return_value=self.green_light
         ), patch.object(
-            reconcile.linear_ops, "comment_records", side_effect=lambda e: list(self.thread)
+            reconcile.linear_ops, "comment_records", side_effect=self.comment_records
         ), patch.object(
             reconcile, "age_minutes", return_value=self.minutes
         ), patch.object(
@@ -322,10 +331,13 @@ class TestWhatRecordsTheStart:
                              "created_at": ACTIVATED_AT})
         assert board.sweep() == 0
 
-    def test_an_unreadable_thread_holds_rather_than_starts(self):
+    def test_an_unreadable_thread_abstains_rather_than_freezes(self):
+        """As `reconcile.epic_thread` does: a failed read is not a missing
+        start, and holding on it would freeze every epic's children."""
         record = _Approval().record()
-        refusal = epic_cap.promotion_refusal(WORK[0], EPIC, record, None, APPROVED_AT)
-        assert refusal is not None and epic_cap.UNDECIDED_TAG in refusal
+        assert epic_cap.promotion_refusal(WORK[0], EPIC, record, None, APPROVED_AT) is None
+        assert epic_cap.promotion_refusal(
+            WORK[0], EPIC, record, _passed_thread(), APPROVED_AT) is not None
 
     def test_an_unread_epic_record_abstains_the_epic_gate_holds_it(self):
         assert epic_cap.promotion_refusal(
@@ -367,3 +379,61 @@ class TestTheHoldIsSaidOnTheCardOnlyWhenOverdue:
         # The way out is the act the relay reads on an In Progress epic.
         import review_rerun
         assert review_rerun.RERUN_REVIEW_ACT in posted[0]
+
+
+# --------------------------------------------------------------------------- #
+# the start is read off the whole thread, never the fifty-comment window       #
+# --------------------------------------------------------------------------- #
+
+def _markers_after_the_start(n: int) -> list[dict]:
+    return [_pipeline(f"🔎 plan marker {k}", "2026-10-06T01:00:00.000Z") for k in range(n)]
+
+
+class TestTheStartIsReadOffTheWholeThread:
+    """An activated epic waiting on an upstream epic moves no child, and
+    markers pile up on top of its one start note. Once fifty follow it the
+    note leaves the window; the hold must still see it (DRE-5639)."""
+
+    @pytest.fixture(autouse=True)
+    def _second_critic_passed(self):
+        """The second critic's PASS is older than the start, so it leaves the
+        window too. Its gate is not this card's — held open, as the sweep's
+        other gates are, so the hold under test is the only one standing."""
+        with patch.object(reconcile.plan_critic, "promotion_refusal", return_value=None):
+            yield
+
+    def _board(self, after: int) -> _Approval:
+        board = _Approval()
+        board.activate()
+        board.thread.extend(_markers_after_the_start(after))
+        return board
+
+    def test_a_start_past_the_window_still_releases_the_children(self):
+        board = self._board(reconcile.linear_ops.COMMENT_WINDOW + 10)
+        # Non-vacuity: the window the sweep's first read gets has no start.
+        window = board.comment_records(EPIC)
+        assert not epic_cap.start_on_record(window, APPROVED_AT)
+        assert board.sweep() == 3
+        assert [board.lanes[i] for i in WORK] == ["Todo"] * 3
+        assert not [b for _, b in board.posted if epic_cap.UNDECIDED_TAG in b]
+
+    def test_the_whole_thread_is_read_once_per_epic_per_sweep(self):
+        board = self._board(reconcile.linear_ops.COMMENT_WINDOW + 10)
+        board.sweep()
+        assert board.whole_reads == 1
+
+    def test_a_thread_inside_the_window_is_not_read_again(self):
+        board = self._board(5)
+        assert board.sweep() == 3
+        assert board.whole_reads == 0
+
+    def test_an_unreadable_whole_thread_abstains(self):
+        window = _passed_thread() + _markers_after_the_start(
+            reconcile.linear_ops.COMMENT_WINDOW)
+
+        def fails(epic, **_kw):
+            raise RuntimeError("Linear is down")
+
+        with patch.object(reconcile.linear_ops, "comment_records", side_effect=fails):
+            assert reconcile.whole_epic_thread(EPIC, window) is None
+        assert reconcile.whole_epic_thread(EPIC, None) is None

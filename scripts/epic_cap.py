@@ -522,14 +522,20 @@ def promotion_refusal(identifier: str, epic: str, record: dict | None,
 
     An epic with a child out of Backlog has run, and is never held here. An
     unread record abstains: the epic gate already holds a child whose epic
-    Linear did not answer. An unread thread (None) holds — the cap's answer
-    is unknown, and a start is what is being asked for."""
+    Linear did not answer. An unread thread (None) abstains too, for the
+    reason `reconcile.epic_thread` gives: holding every child of every
+    epic on a failed read would freeze the board, and the hold cannot tell
+    a missing start from one it could not see.
+
+    `thread` must be the WHOLE thread (`reconcile.whole_epic_thread`): the
+    start is written once, and an epic that has not moved a child piles
+    critic and plan markers on top of it until it leaves the fifty-comment
+    window — a hold read off the window would never lift (DRE-5639)."""
     if record is None or _state(record) != IN_PROGRESS or activated_before(record):
         return None
-    if thread is not None and start_on_record(thread, green_lit_at):
+    if thread is None or start_on_record(thread, green_lit_at):
         return None
-    why = ("its thread could not be read" if thread is None else
-           f"no start is on record since it was approved ({green_lit_at or 'time unknown'})")
+    why = f"no start is on record since it was approved ({green_lit_at or 'time unknown'})"
     return (
         f"⏸️ {UNDECIDED_TAG}: {identifier} waits in Backlog — its epic {epic} "
         f"is In Progress, but the epic cap has not decided whether it starts or "
