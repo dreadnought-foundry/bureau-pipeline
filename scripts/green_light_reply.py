@@ -107,7 +107,7 @@ GREEN_LIGHT_REPLY_CANDIDATES_PER_PASS = 3
 #: The repository variable that turns the dry run off — `true` and nothing else.
 LIVE_VARIABLE = "GREEN_LIGHT_REPLY_LIVE"
 
-#: The CEO's Linear user ids, as data. Ships empty.
+#: The CEO's Linear user ids, as data. The operator declares them (DRE-6498).
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "green-light-reply.json"
 
 #: The receipt's opener, and what this phase reads back off it.

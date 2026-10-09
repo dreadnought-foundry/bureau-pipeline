@@ -13,6 +13,10 @@ Pinned here, over a fixture board:
     posted only after a confirmed dispatch;
   * one dispatch per pass, oldest first; the second dispatch on
     `never-started` and on `dead`; the hold after two;
+  * a proof that cannot run yet does not keep the front (DRE-6464): a hold
+    the lane read shows is named every pass at no read, and the rest begin
+    at the pass's turn, so an eligible card behind three that cannot run is
+    dispatched within two passes, under the same read bound;
   * the return after the CEO's signed answer, served before a first run;
   * the re-run after the critic's findings (DRE-5931): its trigger, its
     budget of two counted apart from the first run's, its three stops, the
@@ -26,6 +30,7 @@ Pinned here, over a fixture board:
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import stat
 import subprocess
@@ -44,6 +49,7 @@ import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_dispatch  # noqa: E402
+import proof_record  # noqa: E402
 import proof_release  # noqa: E402
 import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
@@ -56,7 +62,11 @@ PERSON = "a-person"
 #: A comment the fake `voices` reads as console-signed — the real reader
 #: checks a signature; this suite only needs to know which comments passed.
 SIGNED = "console-signed"
-NOW = datetime(2026, 10, 6, 17, 0, tzinfo=timezone.utc)   # 10:00 PT
+#: 10:30 PT. Its turn begins the proof ring at its front for any ring under
+#: two hundred (`proof_dispatch._turned`), so the oldest-first and cap pins
+#: read from the front — an edit to it must keep that, or they move for no
+#: visible reason (DRE-6464).
+NOW = datetime(2026, 10, 6, 17, 30, tzinfo=timezone.utc)
 WORKFLOW = ROOT / ".github" / "workflows" / "reconcile.yml"
 STEP = "Dispatch proof runs"
 
@@ -185,7 +195,8 @@ class Harness:
     """One pass: the board, the stubbed readings, and the recorded writes."""
 
     def __init__(self, monkeypatch, board, *, states=None, release="ready",
-                 release_lines=None, fire_ok=True, prs=None, records=None):
+                 release_lines=None, fire_ok=True, prs=None, records=None,
+                 texts=None):
         self.board = board
         self.states = states or {}
         self.release_state = release
@@ -196,6 +207,8 @@ class Harness:
         self.prs = prs
         self.records = records or {}
         self.record_reads: list = []
+        self.texts = texts or {}
+        self.text_reads: list = []
         self.posted: list = []
         self.holds: list = []
         self.order: list = []
@@ -234,17 +247,27 @@ class Harness:
             raise got
         return got
 
+    def read_record(self, pr, head):
+        """The record at `head`, as `proof_record.fetch` answers: never
+        raises, a record not read is one with no text and the reason."""
+        self.text_reads.append((pr.get("number"), head))
+        got = self.texts.get(pr.get("number"))
+        if got is None or isinstance(got, Exception):
+            why = f"{RECORD_PATH} could not be read at {head}: {got or 'no fixture'}"
+            return proof_record.Record(RECORD_PATH, None, why)
+        return proof_record.Record(RECORD_PATH, got, None)
+
     def fire(self, card, repo, *, reason=None, event=None):
         self.order.append(("fire", card["identifier"]))
         self.fired.append((card["identifier"], repo, reason, event))
         return (True, "") if self.fire_ok else (False, "gh api refused: HTTP 403")
 
-    def sweep(self, *, live=True):
+    def sweep(self, *, live=True, now=NOW):
         return proof_dispatch.sweep(
             REPO, SLUG, live=live, linear=self.board, read=lambda path: None,
             find_pr=self.find_pr, run_state=self.run_state,
-            release=self.release, fire=self.fire, voices=fake_voices, now=NOW,
-            find_record=self.find_record)
+            release=self.release, fire=self.fire, voices=fake_voices, now=now,
+            find_record=self.find_record, read_record=self.read_record)
 
 
 def _lines(capsys) -> list:
@@ -363,6 +386,85 @@ def test_condition_3_relations_not_read_to_the_end_refuse(monkeypatch, capsys):
     assert any("condition 3" in line for line in _about(_lines(capsys), "DRE-5930"))
 
 
+# A proof is blocked by every other card in its epic, so a big epic's proof
+# fills the first relation page (DRE-6416: DRE-6274 held 21, all terminal, and
+# was refused on every pass). `LinearReads.card` reads such a page to the end.
+
+def _relation(ident: str, state_name: str) -> dict:
+    return {"type": "blocks", "issue": {"identifier": ident, "state": {"name": state_name}}}
+
+
+class PagedLinear:
+    """`linear_ops.gql` for the real `LinearReads.card`: the card's read
+    returns a full first page of Done blockers, and the top-up read returns
+    `rest` — or raises `fail`."""
+
+    def __init__(self, rest=(), fail=None):
+        self.rest, self.fail = list(rest), fail
+        self.topups: list = []
+
+    def __call__(self, query, variables=None):
+        if query == proof_dispatch.CARD_QUERY:
+            first = [_relation(f"DRE-60{i:02d}", "Done")
+                     for i in range(proof_dispatch.reconcile.INVERSE_PAGE)]
+            issue = detail()  # the query asks for no identifier
+            issue["inverseRelations"] = {
+                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-20"},
+                "nodes": first}
+            return {"issue": issue}
+        self.topups.append(dict(variables or {}))
+        if self.fail:
+            raise self.fail
+        return {"issue": {"inverseRelations": {
+            "pageInfo": {"hasNextPage": False, "endCursor": "cursor-end"},
+            "nodes": self.rest}}}
+
+
+class LiveCardBoard(Board):
+    """The fixture board, with each card's relations read by the production
+    `LinearReads.card` over the stubbed `linear_ops.gql`."""
+
+    def card(self, ident):
+        self.reads.append(("card", ident))
+        return proof_dispatch.LinearReads().card(ident)
+
+
+def _paged(monkeypatch, gql) -> Harness:
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    monkeypatch.setattr(proof_dispatch.reconcile, "_inverse_topup_refused", [])
+    return Harness(monkeypatch, LiveCardBoard(hand=[lane_card("DRE-5930")]))
+
+
+def test_condition_3_a_full_first_page_is_read_to_the_end_and_passes(monkeypatch, capsys):
+    gql = PagedLinear(rest=[_relation("DRE-6020", "Done")])
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert gql.topups == [{"id": "DRE-5930", "after": "cursor-20"}]
+    assert not any("condition 3" in line for line in _about(_lines(capsys), "DRE-5930"))
+    assert h.fired == [("DRE-5930", REPO, "first proof run", "proof-execute")]
+
+
+def test_condition_3_an_open_blocker_on_the_second_page_is_named(monkeypatch, capsys):
+    gql = PagedLinear(rest=[_relation("DRE-6020", "In Review")])
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert h.fired == []
+    refusal = [line for line in _about(_lines(capsys), "DRE-5930") if "condition 3" in line]
+    assert refusal and "not every blocker is terminal" in refusal[0]
+    assert "DRE-6020 is In Review" in refusal[0]
+    assert "could not be read to the end" not in refusal[0]
+
+
+def test_condition_3_a_failed_top_up_read_stays_unknown_never_eligible(monkeypatch, capsys):
+    gql = PagedLinear(fail=RuntimeError("HTTP 502"))
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert gql.topups, "the rest of the full page was never asked for"
+    assert h.fired == []
+    refusal = [line for line in _about(_lines(capsys), "DRE-5930") if "condition 3" in line]
+    assert refusal and "could not be read to the end" in refusal[0]
+
+
 def test_condition_4_needs_human_holds(monkeypatch, capsys):
     board = Board(hand=[lane_card("DRE-5930", labels=("needs-human",))])
     h = Harness(monkeypatch, board)
@@ -371,6 +473,8 @@ def test_condition_4_needs_human_holds(monkeypatch, capsys):
     assert tally.held == 1
     assert any("condition 4" in line and "needs-human" in line
                for line in _about(_lines(capsys), "DRE-5930"))
+    # The label is on the lane read: naming it spends no candidate read.
+    assert [r for r in board.reads if r[0] != "lane"] == []
 
 
 def test_condition_4_an_undischarged_proof_waiting_blocks_a_first_run(monkeypatch, capsys):
@@ -586,11 +690,195 @@ def test_the_candidate_cap_defers_the_rest(monkeypatch, capsys):
     assert read == ["DRE-5950", "DRE-5951", "DRE-5952"]
     assert proof_dispatch.PROOF_CANDIDATES_PER_PASS == 3
     for ident in ("DRE-5953", "DRE-5954"):
-        assert any("deferred — candidate cap, read next pass" in l
+        assert any("deferred — candidate cap, read on a later pass" in l
                    for l in _about(lines, ident))
     assert tally.deferred == 2 and tally.running == 3
     summary = [l for l in lines if l.startswith("proof-dispatch: eligible")]
     assert summary and "deferred 2" in summary[0] and "running 3" in summary[0]
+
+
+# --------------------------------------------------------------------------- #
+# a proof that cannot run yet does not keep the front (DRE-6464)              #
+# --------------------------------------------------------------------------- #
+
+#: One pass every quarter hour — the stubs' `*/15` cron.
+PASS = timedelta(minutes=15)
+
+
+def _shown_held(ident: str, entered: float) -> dict:
+    """A first-run candidate whose lane window carries an undischarged hold."""
+    return lane_card(ident, window=[
+        promoted(entered),
+        hold(f"{ident} waits for Sunday's edition", "the edition to land",
+             entered - 10)])
+
+
+def _three_blocked(eligible: str = "DRE-6042") -> Board:
+    """The 2026-10-09 front of the queue: relations not read to the end, an
+    open blocker, and a hold the lane window does not show — each costing a
+    read — entered before an eligible fourth."""
+    unseen = [promoted(2000), hold("held beyond the window", "the operator",
+                                   1990)]
+    return Board(
+        hand=[lane_card("DRE-5407", entered=3000),
+              lane_card("DRE-5409", entered=2500),
+              lane_card("DRE-5830", entered=2000),
+              lane_card(eligible, entered=100)],
+        details={"DRE-5407": detail(partial=True),
+                 "DRE-5409": detail(blockers={"DRE-6125": "In Progress"})},
+        threads={"DRE-5830": unseen})
+
+
+def _threads(cards) -> dict:
+    """Each card's thread, the same comments its lane window shows."""
+    return {c["identifier"]: linear_ops.window_nodes(c["comments"]) for c in cards}
+
+
+def _three_held(eligible: str = "DRE-6042") -> Board:
+    held = [_shown_held("DRE-5407", 3000), _shown_held("DRE-5409", 2500),
+            _shown_held("DRE-5830", 2000)]
+    return Board(hand=[*held, lane_card(eligible, entered=100)],
+                 threads=_threads(held))
+
+
+def _candidates_read(board: Board, since: int = 0) -> set:
+    return {ident for kind, ident in board.reads[since:] if kind != "lane"}
+
+
+@pytest.mark.parametrize("front", [_three_blocked, _three_held],
+                         ids=["blocked", "held"])
+@pytest.mark.parametrize("turn", range(4))
+def test_three_that_cannot_run_ahead_of_an_eligible_one_dispatch_it_within_two_passes(
+        monkeypatch, capsys, front, turn):
+    """Whatever turn the first pass lands on, the fourth card — the one that
+    can run — is dispatched by the second pass, and no pass reads more than
+    `PROOF_CANDIDATES_PER_PASS` candidates."""
+    board = front()
+    h = Harness(monkeypatch, board)
+    for n in range(2):
+        before = len(board.reads)
+        h.sweep(now=NOW + (turn + n) * PASS)
+        assert len(_candidates_read(board, before)) <= proof_dispatch.PROOF_CANDIDATES_PER_PASS
+        if h.fired:
+            break
+    assert [f[0] for f in h.fired] == ["DRE-6042"], _lines(capsys)
+
+
+def _behind(blocked: int, eligible: str = "DRE-6042") -> Board:
+    """`blocked` first runs with an open blocker, each costing a read, all
+    entered before an eligible card at the back of the ring."""
+    cards = [lane_card(f"DRE-57{10 + i}", entered=3000 - i) for i in range(blocked)]
+    return Board(hand=[*cards, lane_card(eligible, entered=100)],
+                 details={c["identifier"]: detail(blockers={"DRE-6125": "In Progress"})
+                          for c in cards})
+
+
+@pytest.mark.parametrize("ring", [6, 7, 12])
+@pytest.mark.parametrize("every", [1, 2, 3, 4])
+@pytest.mark.parametrize("turn", range(4))
+def test_the_ring_comes_round_on_any_steady_cadence(
+        monkeypatch, capsys, ring, every, turn):
+    """Passes every turn, every second turn — a `*/15` cron that only lands
+    at :07 and :37 — every third or every fourth: the eligible card at the
+    back of a ring of 6, 7 or 12 is dispatched within twelve passes. A fixed
+    stride of three read the same windows forever on a ring of 6 or 12 when
+    the passes fell every second turn."""
+    board = _behind(ring - 1)
+    h = Harness(monkeypatch, board)
+    for n in range(12):
+        before = len(board.reads)
+        h.sweep(now=NOW + (turn + n * every) * PASS)
+        assert len(_candidates_read(board, before)) <= proof_dispatch.PROOF_CANDIDATES_PER_PASS
+        if h.fired:
+            break
+    assert [f[0] for f in h.fired] == ["DRE-6042"], _lines(capsys)
+
+
+def test_a_held_candidate_is_named_on_its_line_every_pass_at_no_read(monkeypatch, capsys):
+    """Four held cards and two that cannot be dispatched: every pass names
+    every hold — past the cap and after the one dispatch alike — and none of
+    them is read."""
+    held = [_shown_held(f"DRE-58{30 + i}", 4000 - 100 * i) for i in range(4)]
+    board = Board(hand=[*held, lane_card("DRE-5941", entered=50),
+                        lane_card("DRE-5942", entered=40)],
+                  threads=_threads(held))
+    h = Harness(monkeypatch, board,
+                states={"DRE-5941": state("running"), "DRE-5942": state("running")})
+    for n in range(4):
+        before = len(board.reads)
+        tally = h.sweep(now=NOW + n * PASS)
+        lines = _lines(capsys)
+        for card in held:
+            ident = card["identifier"]
+            named = [l for l in _about(lines, ident)
+                     if "condition 4 (hold): held by 🔬 proof-waiting:" in l
+                     and f"{ident} waits for Sunday's edition" in l]
+            assert named, (n, ident, lines)
+            assert not any("deferred" in l for l in _about(lines, ident))
+        assert tally.held == 4
+        assert not _candidates_read(board, before) & {c["identifier"] for c in held}
+
+
+def test_a_hold_the_window_shows_discharged_is_left_to_the_thread_read(monkeypatch, capsys):
+    """A later `🔬 proof-observed` in the window may discharge the hold: the
+    lane read names nothing, the thread decides, and the card is dispatched."""
+    nodes = [promoted(600),
+             hold("being observed by hand", "the operator's record pull request", 300),
+             comment(linear_ops.proof_observed_line("seen live at 09:00 PT"), 60)]
+    board = Board(hand=[lane_card("DRE-5930", window=nodes)],
+                  threads={"DRE-5930": nodes})
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert [f[0] for f in h.fired] == ["DRE-5930"]
+
+
+def test_a_ceo_press_hold_the_window_shows_answered_is_left_to_the_thread_read(
+        monkeypatch, capsys):
+    nodes = [promoted(600), ceo_press_hold(300), answer(60)]
+    board = Board(hand=[lane_card("DRE-5930", window=nodes)],
+                  threads={"DRE-5930": nodes})
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert [f[0] for f in h.fired] == ["DRE-5930"]
+
+
+@pytest.mark.parametrize("turn", range(6))
+def test_the_read_bound_is_unchanged_whatever_the_turn(monkeypatch, capsys, turn):
+    """The real readers over a counting transport, a board with held and
+    blocked candidates and more: still at most 2 + 2 × 3 requests a pass."""
+    import reconcile
+
+    monkeypatch.delenv("BUREAU_READ", raising=False)
+    cards = ([lane_card(f"DRE-59{60 + i}", entered=1000 - i) for i in range(5)]
+             + [_shown_held(f"DRE-58{30 + i}", 2000 - i) for i in range(3)])
+    calls: list = []
+
+    def gql(query, variables=None):
+        calls.append(query)
+        variables = variables or {}
+        if "issues(" in query:
+            states = set(variables.get("states") or ())
+            nodes = [c for c in cards if c["state"]["name"] in states]
+            return {"issues": {"nodes": nodes,
+                               "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "viewer { id }" in query and "comments" in query:
+            return {"viewer": {"id": VIEWER}, "issue": {"comments": {
+                "nodes": [promoted(600)],
+                "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+        if "inverseRelations" in query:
+            return {"issue": detail(blockers={"DRE-6125": "In Progress"})}
+        raise AssertionError(f"unexpected query {query[:80]}")
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    reconcile.reset_sweep_cards()
+    h = Harness(monkeypatch, Board())
+    tally = proof_dispatch.sweep(
+        REPO, SLUG, live=True, read=lambda path: None, find_pr=h.find_pr,
+        run_state=h.run_state, release=h.release, fire=h.fire,
+        voices=fake_voices, now=NOW + turn * PASS)
+    assert len(calls) <= 2 + 2 * proof_dispatch.PROOF_CANDIDATES_PER_PASS, calls
+    assert tally.refused == proof_dispatch.PROOF_CANDIDATES_PER_PASS
+    assert tally.held == 3 and tally.deferred == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -744,6 +1032,71 @@ def test_main_runs_the_dry_run_when_the_variable_is_unset(monkeypatch, capsys):
     assert any(l.startswith("linear-budget:") for l in _lines(capsys))
 
 
+# The dry run names why it is dry (DRE-6439): the switch's own line from
+# `switch_reason.off_line`, composed from the environment alone.
+
+SWITCH_LINE = "proof-dispatch: PROOF_DISPATCH_LIVE"
+
+
+def _main_over(monkeypatch, *, switch=None, until=None):
+    """`main()` over the harness's board, the switch and its companion as given."""
+    for name, value in (("PROOF_DISPATCH_LIVE", switch),
+                        ("PROOF_DISPATCH_LIVE_OFF_UNTIL", until)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    monkeypatch.setenv("REPO", REPO)
+    monkeypatch.setenv("REPO_SLUG", SLUG)
+    board = Board(hand=[lane_card("DRE-5930")])
+    h = Harness(monkeypatch, board)
+    real = proof_dispatch.sweep
+
+    def over_the_board(repo, slug, *, live):
+        return real(repo, slug, live=live, linear=board, read=lambda path: None,
+                    find_pr=h.find_pr, run_state=h.run_state, release=h.release,
+                    fire=h.fire, voices=fake_voices, now=NOW,
+                    find_record=h.find_record)
+
+    monkeypatch.setattr(proof_dispatch, "sweep", over_the_board)
+    assert proof_dispatch.main([]) == 0
+    return h, board
+
+
+def test_the_dry_run_names_the_switch_and_the_cards_it_waits_on(monkeypatch, capsys):
+    # The same pass run straight, for its read log: `main()` adds no read.
+    straight = Board(hand=[lane_card("DRE-5930")])
+    Harness(monkeypatch, straight).sweep(live=False)
+    capsys.readouterr()
+    h, board = _main_over(monkeypatch, until="DRE-6141, DRE-6142, DRE-6143")
+    lines = _lines(capsys)
+    line = ("proof-dispatch: PROOF_DISPATCH_LIVE is off — until DRE-6141, "
+            "DRE-6142, DRE-6143 land")
+    assert lines.count(line) == 1
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == [line]
+    would = [i for i, l in enumerate(lines) if l.startswith("would:")]
+    assert would and lines.index(line) < would[0]
+    tally = next(l for l in lines if l.startswith("proof-dispatch: eligible"))
+    assert tally.endswith("(dry run)")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert board.reads == straight.reads
+
+
+def test_the_dry_run_with_no_companion_says_no_reason_given(monkeypatch, capsys):
+    _main_over(monkeypatch)
+    lines = _lines(capsys)
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == [
+        "proof-dispatch: PROOF_DISPATCH_LIVE is off — no reason given"]
+
+
+def test_a_live_pass_prints_no_switch_line(monkeypatch, capsys):
+    h, _ = _main_over(monkeypatch, switch="true", until="DRE-6141")
+    lines = _lines(capsys)
+    assert [l for l in lines if l.startswith(SWITCH_LINE)] == []
+    assert h.fired and next(
+        l for l in lines if l.startswith("proof-dispatch: eligible")).endswith("(live)")
+
+
 # --------------------------------------------------------------------------- #
 # the read bound                                                               #
 # --------------------------------------------------------------------------- #
@@ -788,7 +1141,7 @@ def test_five_candidates_cost_at_most_eight_linear_reads(monkeypatch, capsys):
     lines = _lines(capsys)
     assert len(calls) <= 8, calls
     assert len(calls) == 2 + 2 * proof_dispatch.PROOF_CANDIDATES_PER_PASS
-    deferred = [l for l in lines if "deferred — candidate cap, read next pass" in l]
+    deferred = [l for l in lines if "deferred — candidate cap, read on a later pass" in l]
     assert len(deferred) == 2 and tally.deferred == 2
 
 
@@ -860,7 +1213,26 @@ def test_the_step_carries_the_sweeps_env_and_the_switch():
                  "BUREAU_PIPELINE_REF"):
         assert env[name] == sweep["env"][name], name
     assert env["PROOF_DISPATCH_LIVE"] == "${{ vars.PROOF_DISPATCH_LIVE }}"
+    assert env["PROOF_DISPATCH_LIVE_OFF_UNTIL"] == "${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}"
     assert "REPO_SLUG" in _step()["run"]
+
+
+def test_the_summary_grep_lifts_the_switch_the_tally_and_the_would_lines(tmp_path):
+    grep = next(line.strip() for line in _step()["run"].splitlines()
+                if line.strip().startswith("SUMMARY="))
+    log = [
+        "proof-dispatch: PROOF_DISPATCH_LIVE is off — until DRE-6141 land",
+        "proof-dispatch: DRE-5930 — eligible: first proof run (1 of 2)",
+        "would: dispatch DRE-5930 — first proof run",
+        "proof-dispatch: eligible 1, dispatched 0, deferred 0 (dry run)",
+        "linear-budget: 4 request(s)",
+    ]
+    (tmp_path / "proof-dispatch.log").write_text("\n".join(log) + "\n",
+                                                 encoding="utf-8")
+    done = subprocess.run(["bash", "-e", "-c", f"{grep}\nprintf '%s\\n' \"$SUMMARY\""],
+                          cwd=tmp_path, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [log[0], log[2], log[3]]
 
 
 def test_the_stub_is_tested_before_any_python():
@@ -955,6 +1327,7 @@ HEAD = "c0ffee1" + "0" * 33
 SHA7 = HEAD[:7]
 OLD_HEAD = "abc1234" + "f" * 33
 QA_BOT = "agent-bureau-qa-bot"
+RECORD_PATH = "docs/proof-dre-5930.md"
 RERUN = f"re-run after the critic's findings at {SHA7}"
 RERUN_HELD = ("the record was sent back twice after re-observation",
               "an operator reading the critic's findings and the two re-run "
@@ -972,6 +1345,7 @@ def record(*verdicts, ident="DRE-5930", opened: float = 2400, head: str = HEAD,
     return {"number": 900, "url": f"https://github.com/{REPO}/pull/900",
             "headRefName": branch or f"agent/{ident}-proof-record",
             "state": pr_state, "headRefOid": head, "createdAt": _at(opened),
+            "files": [{"path": RECORD_PATH, "changeType": "ADDED"}],
             "comments": [{"author": {"login": "agent-bureau-bot"},
                           "createdAt": _at(opened), "body": "opened"},
                          *verdicts]}
@@ -1270,3 +1644,538 @@ def test_an_in_review_card_that_is_not_ours_costs_nothing(monkeypatch, capsys):
     h.sweep()
     assert h.fired == [] and h.record_reads == []
     assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+@pytest.mark.parametrize("turn", range(4))
+def test_rerun_is_not_starved_behind_three_first_runs_that_cannot_run(
+        monkeypatch, capsys, turn):
+    """Three blocked first runs no longer keep the re-run behind them out of
+    every pass: the critic's findings are answered within two passes."""
+    board = _three_blocked()
+    board.lanes["Hand-work"] = board.lanes["Hand-work"][:3]
+    board.lanes["In Review"] = [_review()]
+    board.threads["DRE-5930"] = _sent_back()
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 100))},
+                states={"DRE-5930": state("finished", dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    for n in range(2):
+        h.sweep(now=NOW + (turn + n) * PASS)
+        if h.fired:
+            break
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")], _lines(capsys)
+
+
+# --------------------------------------------------------------------------- #
+# the re-run reads a record the sweep parked on its review cap (DRE-6406)      #
+# --------------------------------------------------------------------------- #
+
+
+def review_cap_stamp(minutes_ago: float, head: str = HEAD) -> dict:
+    return comment(f"🔒 hold: reason=review-cap-spent at={head} lifts=new-head "
+                   "by=reconcile.py", minutes_ago)
+
+
+def _capped(*extra, head: str = HEAD) -> list:
+    """A record sent back, then the sweep's review-cap park on `head`."""
+    return _sent_back(review_cap_stamp(300, head),
+                      comment(f"🚨 review-nudge-cap PR #900 @{head}: a question", 299),
+                      *extra)
+
+
+def _capped_card(nodes, ident="DRE-5930", labels=("needs-human",)) -> dict:
+    return lane_card(ident, state="Green Light", labels=labels, window=nodes)
+
+
+class _LaneWrites:
+    """Every lane, label and lift write the pass could make — it makes none."""
+
+    def __init__(self, monkeypatch):
+        self.log: list = []
+        for name in ("cmd_advance", "cmd_state", "add_label", "remove_label"):
+            monkeypatch.setattr(linear_ops, name,
+                                lambda *a, _n=name, **k: self.log.append((_n, a)))
+
+
+def _capped_pass(monkeypatch, *, thread, pr, run="finished", live=True,
+                 labels=("needs-human",), window=None, green=()):
+    board = Board(green=[_capped_card(thread if window is None else window,
+                                      labels=labels), *green],
+                  threads={"DRE-5930": thread})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr},
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally, board, writes
+
+
+def test_a_review_cap_park_on_a_sent_back_record_is_re_run_in_place(monkeypatch, capsys):
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(), pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    assert len(h.posted) == 1
+    first = h.posted[0][1].split("\n", 1)[0]
+    assert first.startswith("🔬 proof-run: dispatched a proof run at ")
+    assert first.endswith(f" — {RERUN} (re-run 1 of 2)")
+    # Nothing moved, nothing labelled, nothing lifted: the new head does that.
+    assert writes.log == []
+    assert not any(body.startswith("🔓") for _, body in h.posted)
+
+
+def test_a_review_cap_park_with_two_re_runs_spent_gets_the_one_hold(monkeypatch, capsys):
+    spent = (rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(*spent), pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *RERUN_HELD)]
+    assert tally.held == 1 and writes.log == []
+
+    # The hold is said once: the next pass reads it and names it.
+    capsys.readouterr()
+    thread = _capped(*spent, hold(*RERUN_HELD, 100))
+    h, _, _, _ = _capped_pass(monkeypatch, thread=thread,
+                              pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the record was sent back twice" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+
+def test_a_park_on_a_head_the_record_has_left_is_the_holds_lanes(monkeypatch, capsys):
+    # The record moved on and the critic sent the new head back too; the
+    # stamp is on the old one. The holds lane lifts it and returns the card.
+    h, tally, _, writes = _capped_pass(
+        monkeypatch, thread=_capped(head=OLD_HEAD),
+        pr=record(verdict("REQUEST_CHANGES", 400)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert writes.log == []
+    assert any("re-run" in line and "holds lane" in line and OLD_HEAD[:7] in line
+               and SHA7 in line for line in lines), lines
+
+
+def test_a_label_over_a_spent_stamp_is_a_persons_and_costs_no_read(monkeypatch, capsys):
+    import hold as hold_module
+
+    lifted = comment(hold_module.lift_line("review-cap-spent", "new-head",
+                                           "hygiene_holds.py"), 200)
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_capped(lifted),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_label_with_no_stamp_at_all_is_not_a_candidate(monkeypatch, capsys):
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_sent_back(),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_stamp_without_the_label_is_not_a_candidate(monkeypatch, capsys):
+    h, _, board, _ = _capped_pass(monkeypatch, thread=_capped(), labels=(),
+                                  pr=record(verdict("REQUEST_CHANGES", 400)))
+    assert h.fired == [] and h.record_reads == []
+    assert [r for r in board.reads if r[0] != "lane"] == []
+
+
+def test_a_partial_window_is_decided_on_the_whole_thread(monkeypatch, capsys):
+    # The lane read's window is the newest few comments and carries no stamp;
+    # the whole thread does, so the card is read and re-run.
+    thread = _capped(comment("chatter", 50))
+    window = [comment("chatter", 50)]
+    board = Board(green=[_capped_card(window)], threads={"DRE-5930": thread})
+    board.lanes["Green Light"][0]["comments"]["pageInfo"]["hasNextPage"] = True
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert [f[2] for f in h.fired] == [RERUN]
+
+    # And a whole thread whose hold is not the sweep's park is refused.
+    capsys.readouterr()
+    board = Board(green=[_capped_card(window)],
+                  threads={"DRE-5930": _sent_back(comment("chatter", 50))})
+    board.lanes["Green Light"][0]["comments"]["pageInfo"]["hasNextPage"] = True
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert h.fired == []
+    assert any("review-cap" in line
+               for line in _about(_lines(capsys), "DRE-5930"))
+
+
+def test_a_park_on_the_ceos_press_is_the_return_branchs_only(monkeypatch, capsys):
+    # Both shapes at once: his answered press AND the sweep's stamp. The
+    # return takes it, and the re-run never reads it.
+    nodes = sorted(_parked() + [review_cap_stamp(500)], key=lambda c: c["createdAt"])
+    board = Board(green=[_capped_card(nodes)], threads={"DRE-5930": nodes})
+    h = Harness(monkeypatch, board,
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished")})
+    h.sweep()
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert [f[2].startswith("re-run after the CEO's answer") for f in h.fired] == [True]
+    assert h.record_reads == []
+    assert not any("deferred" in line or "re-run:" in line for line in lines), lines
+
+
+def test_a_review_cap_park_in_the_dry_run_prints_would_and_writes_nothing(
+        monkeypatch, capsys):
+    h, _, _, writes = _capped_pass(monkeypatch, thread=_capped(), live=False,
+                                   pr=record(verdict("REQUEST_CHANGES", 400)))
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: dispatch DRE-5930 — {RERUN}" in lines
+
+
+def test_a_review_cap_park_costs_no_linear_read_beyond_the_return_branchs(
+        monkeypatch, capsys):
+    """The real readers over a counting transport: the board read and the
+    Green Light read the return branch already makes, then the candidate's
+    one thread read — three requests, and the Green Light list is read once."""
+    import reconcile
+
+    monkeypatch.delenv("BUREAU_READ", raising=False)
+    thread = _capped()
+    green = [_capped_card(thread),
+             lane_card("DRE-5999", title="[EPIC] a plan", state="Green Light")]
+    calls: list = []
+
+    def gql(query, variables=None):
+        calls.append(query)
+        variables = variables or {}
+        if "issues(" in query:
+            states = set(variables.get("states") or ())
+            nodes = [c for c in green if c["state"]["name"] in states]
+            return {"issues": {"nodes": nodes,
+                               "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "viewer { id }" in query and "comments" in query:
+            return {"viewer": {"id": VIEWER}, "issue": {"comments": {
+                "nodes": list(reversed(thread)),
+                "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+        raise AssertionError(f"unexpected query {query[:80]}")
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    reconcile.reset_sweep_cards()
+    h = Harness(monkeypatch, Board(),
+                records={"DRE-5930": record(verdict("REQUEST_CHANGES", 400))},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=False, read=lambda path: None, find_pr=h.find_pr,
+        run_state=h.run_state, release=h.release, fire=h.fire,
+        voices=fake_voices, now=NOW, find_record=h.find_record)
+    assert f"would: dispatch DRE-5930 — {RERUN}" in _lines(capsys)
+    assert len(calls) == 3, calls
+    assert len([q for q in calls if "issues(" in q]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# the re-run after the merge gate's decline of an approved record (DRE-6488)   #
+# --------------------------------------------------------------------------- #
+
+GATE_RERUN = f"re-run after the gate's decline at {SHA7}"
+GATE_HELD = ("the gate declined the record twice after re-observation",
+             "an operator reading the gate's declined note and the two re-run "
+             "receipts")
+GATE_UNANSWERED = ("the re-run finished and the gate's decline still stands at "
+                   "the record's head",
+                   "an operator reading the gate's declined note and the "
+                   "re-run's thread")
+NOT_MET_ROW = ("The release tag moves to the merged commit",
+               "Not met. the tag still names v41")
+WAITING_ROW = ("The release tag moves to the merged commit",
+               "Not observed. waiting for the 2026-10-14 release: the tag moves")
+BROWSER_ROW = ("The console renders the card as waiting for proof",
+               "Not observed. needs a browser on a local run of the released commit")
+MET_ROW = ("The sweep reads the gate's note", "Met. the 12:07 PT pass read it")
+
+
+def gate_note(minutes_ago: float, *, sha: str = HEAD, reason: str | None = None,
+              login: str = QA_BOT) -> dict:
+    reason = reason or (f"proof record not proven: {RECORD_PATH} has 1 row(s) "
+                        "not met: “The release tag moves to the merged commit” "
+                        "reads “Not met. the tag still names v41” (DRE-6141)")
+    return {"author": {"login": login}, "createdAt": _at(minutes_ago),
+            "body": f"⏸️ Merge gate: declined @{sha} — {reason}\n\nNot merged. "
+                    "The gate looks again on the next CI completion, review or "
+                    "sweep, and merges once nothing holds it."}
+
+
+def record_md(*rows) -> str:
+    table = "\n".join(f"| {c} | {r} |" for c, r in rows)
+    return ("# PROOF record — DRE-5930: observed live (epic DRE-5920)\n\n"
+            "**Status: FAIL.**\n\n| Criterion | Result |\n|---|---|\n"
+            f"{table}\n| The CEO closes this card after reading the record | "
+            "Open: the CEO's step |\n")
+
+
+def gate_rerun_receipt(minutes_ago: float, n: int) -> dict:
+    return receipt(minutes_ago, reason=f"re-run after the gate's decline at "
+                                       f"{OLD_HEAD[:7]}", count=f"re-run {n} of 2")
+
+
+def _declined(*, approve: dict | None = None, note: dict | None = None, **kw) -> dict:
+    """A record pull request the critic approved and the gate declined, both
+    at the head unless told otherwise."""
+    return record(approve or verdict("APPROVE", 100), note or gate_note(90), **kw)
+
+
+def _gate_pass(monkeypatch, *, thread, pr, text=None, run="finished", live=True):
+    board = Board(review=[_review()], threads={"DRE-5930": thread})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": pr},
+                texts={900: record_md(MET_ROW, NOT_MET_ROW) if text is None else text},
+                states={"DRE-5930": state(run, dispatches=1,
+                                          record={"number": 900, "state": "open"})})
+    tally = h.sweep(live=live)
+    return h, tally, writes
+
+
+def test_gate_an_approved_record_the_gate_declined_at_its_head_is_re_run_once(
+        monkeypatch, capsys):
+    h, tally, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined())
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == []
+    assert len(h.posted) == 1
+    body = h.posted[0][1]
+    first = body.split("\n", 1)[0]
+    assert first.startswith("🔬 proof-run: dispatched a proof run at ")
+    assert first.endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    parsed = proof_run_state.receipt(body)
+    assert parsed.reason == GATE_RERUN and parsed.count == "re-run 1 of 2"
+    assert pipeline_act.read_trailer(body)["act"] == "proof-run-dispatched"
+    # The record was read at the head, and nothing moved.
+    assert h.text_reads == [(900, HEAD)]
+    assert writes.log == [] and h.release_calls == []
+
+
+def test_gate_the_reason_constant_sits_beside_the_critics():
+    assert proof_dispatch.GATE_RERUN_REASON.format(sha7=SHA7) == GATE_RERUN
+    assert proof_dispatch.RERUN_COUNT == "re-run {n} of 2"
+    assert "files" in proof_dispatch.RECORD_FIELDS.split(",")
+
+
+def _gate_nothing_cases():
+    return {
+        "note-on-an-earlier-head": (
+            _declined(note=gate_note(90, sha=OLD_HEAD)), f"{OLD_HEAD[:7]}"),
+        "note-with-another-reason": (
+            _declined(note=gate_note(90, reason="What's new: the line is missing")),
+            "not a proof-record decline"),
+        "note-by-another-login": (
+            _declined(note=gate_note(90, login="mallory")), "no decline note"),
+        "no-note-at-all": (record(verdict("APPROVE", 100)), "no decline note"),
+        "approve-from-an-earlier-head": (
+            _declined(approve=verdict("APPROVE", 100, sha=OLD_HEAD)),
+            f"APPROVE from earlier head {OLD_HEAD[:7]}"),
+        "record-unreadable-at-the-head": (
+            _declined(), "could not be read"),
+    }
+
+
+@pytest.mark.parametrize("case", list(_gate_nothing_cases()))
+def test_gate_dispatches_nothing_and_says_why(monkeypatch, capsys, case):
+    pr, why = _gate_nothing_cases()[case]
+    text = RuntimeError("HTTP 404") if case == "record-unreadable-at-the-head" else None
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=pr, text=text)
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any("re-run" in line and why in line for line in lines), lines
+
+
+def test_gate_a_request_changes_at_the_head_is_the_critics_re_run_not_the_gates(
+        monkeypatch, capsys):
+    """Both stand at the head: the critic's trigger keeps precedence, and the
+    record is not read for it."""
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(),
+                         pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
+    assert [f[2] for f in h.fired] == [RERUN]
+    assert h.text_reads == []
+
+
+def test_gate_a_review_cap_park_on_the_head_is_re_run_the_same_way(monkeypatch, capsys):
+    board =Board(green=[_capped_card(_capped())], threads={"DRE-5930": _capped()})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                texts={900: record_md(NOT_MET_ROW)},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+    assert writes.log == []
+
+
+def test_gate_a_review_cap_park_on_an_older_head_is_the_holds_lanes(monkeypatch, capsys):
+    board = Board(green=[_capped_card(_capped(head=OLD_HEAD))],
+                  threads={"DRE-5930": _capped(head=OLD_HEAD)})
+    writes = _LaneWrites(monkeypatch)
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                texts={900: record_md(NOT_MET_ROW)},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    h.sweep()
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert any("holds lane" in line and OLD_HEAD[:7] in line for line in lines), lines
+
+
+@pytest.mark.parametrize("first, second", [
+    (rerun_receipt, gate_rerun_receipt), (gate_rerun_receipt, rerun_receipt)])
+def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
+        monkeypatch, capsys, first, second):
+    """One critic re-run and one gate re-run, in either order, spend the one
+    budget of two: the gate's next decline holds once and never a third."""
+    spent = (first(1500, 1), comment("⏳ 5/5 amended", 1400),
+             second(800, 2), comment("⏳ 5/5 amended", 700))
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*spent), pr=_declined())
+    out = capsys.readouterr().out
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_HELD)]
+    assert tally.held == 1 and "3 of 2" not in out
+
+    # The next pass names the hold it posted and posts nothing.
+    h, tally, _ = _gate_pass(monkeypatch, pr=_declined(),
+                             thread=_sent_back(*spent, hold(*GATE_HELD, 50)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the gate declined the record twice after "
+               "re-observation" in line for line in lines), lines
+    assert tally.held == 1
+
+
+def test_gate_a_critic_re_run_spends_one_of_the_gates_two(monkeypatch, capsys):
+    thread = _sent_back(rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400))
+    h, _, _ = _gate_pass(monkeypatch, thread=thread, pr=_declined())
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 2 of 2)")
+
+
+def test_gate_a_re_run_that_finished_with_the_decline_at_the_head_holds_once(
+        monkeypatch, capsys):
+    done = (gate_rerun_receipt(50, 1), comment("⏳ 5/5 record amended", 20))
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*done), pr=_declined())
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_UNANSWERED)]
+    assert tally.held == 1
+
+    capsys.readouterr()
+    h, _, _ = _gate_pass(monkeypatch, pr=_declined(),
+                         thread=_sent_back(*done, hold(*GATE_UNANSWERED, 10)))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.holds == [] and h.posted == []
+    assert any("held by 🔬 proof-waiting: the re-run finished and the gate's decline"
+               in line for line in lines), lines
+
+
+@pytest.mark.parametrize("run", ["dead", "never-started"])
+def test_gate_a_re_run_that_died_or_never_started_is_sent_again_and_counted(
+        monkeypatch, capsys, run):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(gate_rerun_receipt(50, 1)),
+                         pr=_declined(), run=run)
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 2 of 2)")
+
+
+def test_gate_a_newer_re_run_still_running_is_not_sent_again(monkeypatch, capsys):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(gate_rerun_receipt(50, 1)),
+                         pr=_declined(), run="running")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+
+
+WAITING = (proof_record._cut(WAITING_ROW[0], 70),
+           "the 2026-10-14 release: the tag moves")
+
+
+def test_gate_a_row_waiting_on_an_event_holds_instead_of_a_re_run(monkeypatch, capsys):
+    h, tally, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                                  text=record_md(MET_ROW, WAITING_ROW))
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *WAITING)]
+    assert tally.held == 1 and writes.log == []
+    line = linear_ops.proof_waiting_line(*WAITING)
+    assert line == ("🔬 proof-waiting: The release tag moves to the merged commit "
+                    "— needs the 2026-10-14 release: the tag moves")
+    for half in WAITING:
+        assert linear_ops.proof_text_refusal(half, "half") is None
+
+    # The next pass names the hold and posts nothing.
+    capsys.readouterr()
+    held = _sent_back(hold(*WAITING, 60))
+    h, tally, _ = _gate_pass(monkeypatch, thread=held, pr=_declined(),
+                             text=record_md(MET_ROW, WAITING_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == [] and h.holds == []
+    assert any(f"held by {line}" in l for l in lines), lines
+
+    # The operator observes the event: the record is re-run to re-observe it.
+    observed = _sent_back(hold(*WAITING, 60), comment(linear_ops.proof_observed_line(
+        "the 2026-10-14 release was cut at 10:02 PT"), 30, PERSON))
+    h, _, _ = _gate_pass(monkeypatch, thread=observed, pr=_declined(),
+                         text=record_md(MET_ROW, WAITING_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+    assert h.posted[0][1].split("\n", 1)[0].endswith(f" — {GATE_RERUN} (re-run 1 of 2)")
+
+
+def test_gate_the_hold_names_every_waiting_row_in_table_order_and_wins(
+        monkeypatch, capsys):
+    long = ("The nightly full run on main reports green to the fleet watcher "
+            "within the hour of its cron")
+    rows = (NOT_MET_ROW, (long, "Not observed. Waiting For the 02:07 PT nightly"),
+            BROWSER_ROW, WAITING_ROW)
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                         text=record_md(*rows))
+    assert h.fired == []
+    cut = proof_record._cut(long, 70)
+    assert len(cut) == 70 and cut.endswith("…")
+    assert h.holds == [("DRE-5930", f"{cut}; {WAITING[0]}",
+                        f"the 02:07 PT nightly; {WAITING[1]}")]
+
+
+def test_gate_a_row_a_re_run_may_re_observe_is_re_run_not_held(monkeypatch, capsys):
+    h, _, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                         text=record_md(MET_ROW, BROWSER_ROW))
+    assert [f[2] for f in h.fired] == [GATE_RERUN] and h.holds == []
+
+
+def test_gate_the_dry_run_prints_would_and_writes_nothing(monkeypatch, capsys):
+    h, _, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                              text=record_md(WAITING_ROW), live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: hold DRE-5930 — {WAITING[0]}" in lines
+
+    h, _, writes = _gate_pass(monkeypatch, thread=_sent_back(), pr=_declined(),
+                              live=False)
+    lines = _lines(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and writes.log == []
+    assert f"would: dispatch DRE-5930 — {GATE_RERUN}" in lines
+
+
+def test_gate_the_record_is_read_at_the_head_off_the_pull_requests_files(
+        monkeypatch, capsys):
+    """The production read: `proof_record.fetch` over the pull request's
+    `files`, at its head, through the sweep's GitHub read seam."""
+    import base64
+
+    import reconcile
+
+    asked: list = []
+    text = record_md(WAITING_ROW)
+
+    def gh_read(*args):
+        asked.append(args)
+        return json.dumps({"encoding": "base64",
+                           "content": base64.b64encode(text.encode()).decode()})
+
+    monkeypatch.setattr(reconcile, "gh_read", gh_read)
+    board = Board(review=[_review()], threads={"DRE-5930": _sent_back()})
+    h = Harness(monkeypatch, board, records={"DRE-5930": _declined()},
+                states={"DRE-5930": state("finished", dispatches=1)})
+    proof_dispatch.sweep(
+        REPO, SLUG, live=True, linear=board, read=lambda path: None,
+        find_pr=h.find_pr, run_state=h.run_state, release=h.release,
+        fire=h.fire, voices=fake_voices, now=NOW, find_record=h.find_record)
+    assert asked == [("api", f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}")]
+    assert h.holds == [("DRE-5930", *WAITING)] and h.fired == []

@@ -417,13 +417,26 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: `green_light_reply.py` sends a Green Light plan back on the CEO's comment,
 #: and an unchecked answer after his newest counted one holds the dispatch
 #: and says so (DRE-6138).
+#: `epic_growth.py` reads the CEO's answer to the sweep's growth question, and
+#: an unchecked one is left for a person and settles nothing (DRE-6414).
+#: `planning_escalation.py` says on every park whether the CEO answered on the
+#: card before, and an unchecked answer with none of his after it says the
+#: check could not run — never that he did not answer (DRE-6358).
+#: `answer_into_card.py` copies the CEO's answers into the card, and an
+#: unchecked one is never copied and writes nothing (DRE-6357).
 OTHER_READERS = {
+    "answer_into_card.py": "tests/test_answer_into_card.py::"
+    "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
+    "epic_growth.py": "tests/test_epic_growth.py::"
+    "test_a_withheld_console_answer_is_left_for_a_person",
     "green_light_reply.py": "tests/test_green_light_reply.py::"
     "test_an_unchecked_answer_after_his_holds_the_dispatch_and_says_why",
     "groom_verify_agent.py": "tests/test_groom_verify_agent.py::"
     "test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text",
     "groom_priority.py": "tests/test_groom_priority.py::"
     "test_an_unchecked_console_confirmation_keeps_the_band_and_names_the_card",
+    "planning_escalation.py": "tests/test_planning_escalation_prior_answer.py::"
+    "test_an_unchecked_answer_is_the_third_form_naming_the_key",
     "proof_dispatch.py": "tests/test_proof_dispatch.py::"
     "test_an_unchecked_console_answer_neither_returns_nor_discharges_and_says_why",
     "proof_record.py": "tests/test_proof_record.py::"

@@ -39,16 +39,18 @@ python3 scripts/planner_score.py split-rate --month 2026-09
 
 **How often did a planner-created child have to be split, month by month?** A
 child counts as split when the pipeline's own record says one run of it was not
-enough. That population is `config/split-ledger.json`'s, read through
+enough. That population is the split ledger's, read through
 `split_ledger.reasons` — not a second definition, so the ledger and the rate
 can never disagree about what "did not fit one run" means. It is WIDER than the
 `size` row above, which reads the turn-cap receipt and nothing else: a card
 handed back to Planning as an epic never hit the cap and agrees on `size`,
 while being the clearest split there is.
 
-`split-rate` and `score` both take `--ledger <path>` to read another ledger
-instead; without it they read the shipped file. The tests pass their own,
-because the shipped file is regenerated every night (DRE-5314).
+`split-rate` and `score` both take `--ledger <path>` to read a ledger;
+without it they read `$SPLIT_LEDGER_PATH`, the one a plan run derives from the
+console's record, and with neither each child is read off its own receipts —
+no ledger is committed any more (DRE-6056). The tests pass their own, because
+the live ledger changes with every derive (DRE-5314).
 
 Four answers per card, and the last two are the load-bearing ones: `split`,
 `one-card`, `pending` (the card has not finished, so the question was never put

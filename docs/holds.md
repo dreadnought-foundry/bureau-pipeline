@@ -18,13 +18,13 @@ one to `hold.apply`.
 
 ## The vocabulary
 
-Ten reasons, five lift kinds and four readers, as exact strings:
+Eleven reasons, six lift kinds and four readers, as exact strings:
 
 - **Reasons:** `stranded-no-run`, `no-route`, `review-cap-spent`,
   `dead-run-cap`, `turn-cap-park`, `epic-rereview-twice`, `plan-critic-bound`,
-  `fix-dispute`, `unfixable-check`, `manual`.
+  `fix-dispute`, `unfixable-check`, `operator-step`, `manual`.
 - **Lift kinds:** `run-started`, `repo-on-rail`, `new-head`, `unpark-marker`,
-  `manual`. One more lift applies to every reason: `card-closed`, whenever the
+  `blockers-terminal`, `manual`. One more lift applies to every reason: `card-closed`, whenever the
   card is Done or Canceled. It is a rule, not a row.
 - **Readers:** `sweep` (`reconcile.held`, `reconcile.live_promotion_refusal`),
   `fix-dispatch` (`reconcile.card_parked_for_human`, asked by
@@ -36,7 +36,8 @@ Ten reasons, five lift kinds and four readers, as exact strings:
 The lift kind of each reason is fixed by the contract. `hold.py check` holds
 every row to it, so a row cannot give itself a looser lift. The last column is
 the hygiene lane's third write (DRE-6273), made after the label comes off and
-the receipt is posted.
+the receipt is posted — save for `operator-step`, which the sweep lifts and
+moves itself (below).
 
 | Reason | Lifts by | Why | Where the lift sends the card |
 | -- | -- | -- | -- |
@@ -49,6 +50,7 @@ the receipt is posted.
 | `plan-critic-bound` | `manual` | Every bound park ends in Triage for an operator, and the way back is the same person's act. | Nothing moves |
 | `fix-dispute` | `new-head` | The fix loop's budget was spent on one head. A new head runs the review, the gate and the fix loop again. | Triage → In Review |
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
+| `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Backlog → Hand-work |
 | `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
@@ -69,6 +71,40 @@ asks `hold.py reason` first, and the sweep's `_release_card` asks
 `hold.reason_of` before it writes the label or the lane. On `review-cap-spent`
 both stand down — the sweep posts only its answer note — and the card waits in
 Green Light, still held, for the fix's new head to lift it back to In Review.
+
+A proof record the critic sent back never reaches this cap (DRE-6406). On a pull
+request on an `agent/DRE-<n>-proof-record` branch whose critic verdict at the
+head is `REQUEST_CHANGES`, the sweep re-triggers nothing, writes no
+`review-cap-spent` stamp and parks nothing: the fix agent is kept off a record,
+and the proof run's re-run branch (`scripts/proof_dispatch.py`) is what amends
+it. A record already parked under the stamp is read by that branch in Green
+Light too, and the amended record's new head lifts the stamp here as for any
+other card. A record with no verdict at its head is nudged and capped as before.
+
+### `operator-step` is lifted by the sweep
+
+A planner files an operator step — something a person does once the cards
+before it are finished — held from birth. Without a stamp its label reads
+`manual`, and nothing a sweep can read says a `manual` hold is over, so the
+card sat in Backlog forever (DRE-6408). The stamp names the reason instead:
+
+    🔒 hold: reason=operator-step at=none lifts=blockers-terminal by=<writer-file>
+
+The lift is met when every `blockedBy` relation of the card is Done, Canceled
+or Duplicate. Those relations are read only by the sweep's promotion gate
+(DRE-6427), so the sweep lifts `operator-step` rather than standing down for
+it: it calls `hold.lift` with `blockers-terminal` and carries the card from
+Backlog to Hand-work. The one-time pass over the cards already parked (DRE-6429)
+lifts the same way.
+
+`hold.lift_due` is not taught the lift kind and answers None for it outside
+Done or Canceled — none of its callers passes the card's blockers — and the
+hygiene lane does not ask about it (`hygiene_holds.OPEN_LIFTS`). A sweep that
+lifts a hold is no reader of it, so `hold.py check` refuses a row carrying
+`operator-step` that names `sweep` among its readers (`hold.LIFTERS`). Its
+rows name `fix-dispatch`, `medic` and `limit-recovery`. The create seam is its
+writer: `linear_ops.py subissue` and `oneoff` mark a card filed `needs-human` +
+`no-code` with `operator-step` and stamp it `by=linear_ops.py` (DRE-6428).
 
 ### `stranded-no-run` waits on a person's re-send
 
@@ -111,7 +147,7 @@ pipeline's own Linear identity, right after the label:
 
 The qualifier follows the lift kind: the full head sha for `review-cap-spent`,
 `fix-dispute` and `unfixable-check`, `repo:<slug>` for `no-route`, and `none`
-for the other six. `hold.stamp_line` refuses any other pairing, so a wrong
+for the other seven. `hold.stamp_line` refuses any other pairing, so a wrong
 qualifier fails at the writer and never at the lift. `hold.py apply` exits 2 on
 the same input before it writes anything. A writer that lands the label itself
 posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
@@ -234,9 +270,10 @@ Done or Canceled is left alone like any other open hold.
 
 **What it leaves.** A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
 label with no stamp — is lifted only in Done or Canceled. Anywhere else it waits
-for a person, and the lane writes nothing on it. A label standing over a spent
-stamp is the same person's hold, and the summary names it once as `held
-manual` so somebody sees the label came back.
+for a person, and the lane writes nothing on it. An `operator-step` hold outside
+Done or Canceled is the sweep's to lift, and the lane leaves it too. A label
+standing over a spent stamp is the same person's hold, and the summary names
+it once as `held manual` so somebody sees the label came back.
 
 **One reset, one lift.** A budget reset retires the stamp it follows, so the
 label over it reads `manual`. A fresh `dead-run-cap` or `turn-cap-park` stamp
@@ -284,7 +321,11 @@ for a label with no live stamp); and `limit_recovery._held` as
 a label a person put back by hand after a lift is read as `manual`, never as
 the old stamped reason. The medic's and limit recovery's exception for a
 Linear Sync or Merge Gate rerun (`medic_retry.park_rule_applies`) is by
-workflow and stays where it is.
+workflow and stays where it is. A hold stops limit recovery re-entering a
+card, never noticing it: a held card whose limit-death marker has stood past
+`dead_run.LIMIT_DEATH_CLOCK_MINUTES` gets one `⚠️ limit-recovery:` hand-off
+receipt and turns the sweep red as a standing defect, with no label or lane
+change (DRE-4208).
 
 Every row names all four readers today, so no reader's answer changed when
 they moved onto the registry. A later card that lets a reader through for one
@@ -295,7 +336,9 @@ these refuses or reports on any hold, whatever its reason — the same
 fail-closed answer an unknown reason gets: the plan-gate
 `dedupe_dispatch.parked_for_a_person`, the medic's run-log line
 `limit_death_record.needs_a_person`, the proof dispatcher's
-`proof_dispatch.first_run`, the Triage lane's `hygiene_triage.left_for_a_person`,
+`proof_dispatch.first_run` and `proof_dispatch.held_on_the_lane` (which names
+the label off the lane read at no request, DRE-6464), the Triage lane's
+`hygiene_triage.left_for_a_person`,
 and `linear_ops.cmd_state`'s building-card guard. An exception for one of
 them is a `readers` entry and a card of its own.
 
@@ -330,8 +373,10 @@ the code: a call to `add_label` with the hold label, a call to `dead_run.park`
 and a `hold.apply` call. In `.github/workflows/*.yml` and `scripts/*.sh` it
 reads the text: `add-label <card> needs-human`, `--label needs-human` and
 `hold.py apply`. `linear_ops.py`'s create commands take the label as an argument
-from their caller, so they are not a site. A card they create already held reads
-`manual`.
+from their caller, so the label write at creation is not a site. A card
+`create` makes already held reads `manual`. `subissue` and `oneoff` stamp a card
+the planner files `needs-human` + `no-code` as an operator step, and that stamp
+is a site, `_file_operator_hold` (DRE-6428).
 
 ## Every writer, and what is tried first
 
@@ -356,6 +401,7 @@ without a person before it holds.
 | `.github/workflows/agent-fix.yml` · Escalate checks the loop structurally cannot fix | `unfixable-check-hold` | `unfixable-check` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix run itself, which read the check |
 | `.github/workflows/agent-fix.yml` · Report (`park_for_human` in `scripts/report_fix_result.sh`) | `park_for_human` | `fix-dispute` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | The fix loop's rounds, up to its budget |
 | `scripts/model_adoption_actions.py` · `<module>` (`QUESTION_LABELS`) | `The question card` | `manual` | `manual` | sweep, fix-dispatch, medic, limit-recovery | None — a person, or a writer creating a card already held, chose it |
+| `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 
 `scripts/dead_run.py`'s site is `dead_run.py park`, which the build run's Report
 step (`scripts/report_agent_result.sh`) calls when either budget is spent.
@@ -378,6 +424,7 @@ records.
 | `plan-critic-bound` | The pipeline's own second chance before each park: a revision round after a send-back, a re-run at a higher turn ceiling after a turn-cap death, a second ask after no result. | The round record `plan-critic: stage=<stage> round=<n>`, composed in `plan_critic.py` as `{MARKER_PREFIX} stage={stage} round=`, and the 🔁 notices |
 | `fix-dispute` | The fix loop's rounds on the pull request, up to its budget. | `Fix budget exhausted` |
 | `unfixable-check` | The fix run itself, which read the red check and found nothing to fix. | `unfixable-check-hold @` |
+| `operator-step` | None — the step is a person's by design, and it waits only on its blockers. | — |
 | `manual` | None — a person, or a writer creating a card already held, chose it. | — |
 
 ## The merge gate does not read the hold

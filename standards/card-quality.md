@@ -349,9 +349,15 @@ request adds under `docs/` or `architecture/`. The merge gate holds the pull
 request open unless every judged row of its criterion table is met. It also
 holds when there is no table, no judged row, or no record it can read. The
 close refuses on the same reading of the record at the merged head, and it also
-refuses while a `🔬 proof-waiting` hold stands that nothing discharged. A
-refused card stays open under the `🔒 Merged — card deliberately left open`
-comment.
+refuses while a `🔬 proof-waiting` hold stands that nothing discharged.
+An approved, all-met record that merged overrides an operator's
+`🔬 proof-waiting` hold posted before the merge — the proof dispatcher's own
+holds and one typed with `linear_ops.py proof-waiting` — because the merged
+record is the observation the hold was waiting for (DRE-6489). Two holds
+still stand: one naming the CEO's press, until his signed console answer,
+and one posted after the merge. A refused card stays open under the
+`🔒 Merged — card deliberately left open` comment, which names what refused
+it, such as the standing hold or the unmet row.
 
 **A criterion a later decision overtook is accepted, not met (DRE-6244).** The
 CEO decided on 2026-10-07 that a record may carry a row the operator accepted
@@ -760,6 +766,17 @@ shape the classifier stamps for this is `roll-up`.
 
 The parent's plan for a seam is short: its children in order, and the detail
 belongs in each child's own artifact, written when its turn comes.
+
+**When the epic behind a blocker moves (DRE-6407).** Two rules, one per moment.
+An epic still waiting to be planned is planned only when its blocker is Done,
+proof included — the sweep's auto-advance `waits for Done`, because that plan is
+written against what the proof observed. An epic the CEO has already approved,
+its cards written, is `released at build-done`: once its blocker has no
+buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
+not marked for a person) and no open child epic, even with the blocker's proof
+still open. Card-level `blockedBy` relations are still read, so a card that
+really needs an earlier card waits for it; a blocker with work left is `not
+built out` and holds. The sweep's `epic-gate:` line names the rule.
 
 **The pre-approval critic treats a seam inside one epic as a mechanical
 send-back**, in exactly these words:

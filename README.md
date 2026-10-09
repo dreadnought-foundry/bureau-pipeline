@@ -558,7 +558,7 @@ land wherever that repo's CI lands.
 
 | lane | variable | what rides it | how long a job takes |
 |---|---|---|---|
-| short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276); and release-train's `wait` and `plan` (DRE-4606) | seconds to a couple of minutes, and no model call at all — except release-train's `wait`, which is a SLEEP of up to seventy minutes and is on this lane for that very reason; see the rule below |
+| short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; medic's nine script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `standing_defect`, `environment_hold` (DRE-4276, DRE-6467); and release-train's `wait` and `plan` (DRE-4606) | seconds to a couple of minutes, and no model call at all — except release-train's `wait`, which is a SLEEP of up to seventy minutes and is on this lane for that very reason; see the rule below |
 | build | `BUREAU_CI_RUNS_ON` | exactly these three, by name: agent-task's `execute`, agent-fix's `fix` and qa-review's `review` (DRE-4846) — the jobs that run the product's own test suite, so they are bounded by that suite and belong on whatever class the repo runs CI on | up to 120 minutes each, and the memory is the binding limit rather than the clock: seven of these were SIGKILLed on a 2 GB runner at 17-26 minutes |
 | long | `BUREAU_RUNS_ON` | the default: **every reusable job the two rows above do not name.** Not enumerated here on purpose — a list would be wrong the day the next reusable lands; `test_reusable_jobs_read_the_callers_runner_variable` is the live enumeration and it fails on any job that reads none of the variables | the Claude jobs run minutes to an hour; the rest are scripts, and they sit on this lane because nothing has moved them, not because they are slow |
 
@@ -832,6 +832,13 @@ pull request as a fix-loop blocker, and parks the card `In Review` →
 their words and the fix it pushes is that head; the holds lane then lifts the
 hold and returns the card to `In Review`, and the new commit re-arms the
 budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
+
+A draft pull request spends neither budget (DRE-6423): the critic skips drafts
+by design (DRE-5801) and the merge gate never merges one, so the sweep
+re-triggers nothing, holds nothing — not even a draft already at the cap — and
+says so once per head with a `review-nudge-draft` comment on the card. Only the
+receipts after that comment count, so once the pull request is marked ready the
+budget for the same head starts again from zero.
 
 ## The plan artifact (DRE-2720)
 
@@ -1413,7 +1420,13 @@ deduplicated Linear card through `linear_ops.py`, the shape
   will not fetch, a run listing GitHub declines: each is reported unknown and
   alarms, never as "nightly ok" (`standards/console-honesty.md` rules 1-3). A
   missing nightly takes the card title when both are true, because it is the
-  actionable one, but the unknown is still named in the body.
+  actionable one, but the unknown is still named in the body. A throttle is
+  not an unknown (DRE-6461): a read GitHub refuses because the installation's
+  hourly request budget is spent is listed as not read this hour, never as
+  ran, and the watcher stops reading for the rest of that run. A throttle
+  alone files no card on the hour it is seen — it is said only on the daily
+  re-confirm hour, on the same card — while a missing nightly or any other
+  unreadable subject still alarms on any hour.
 - **One token per owner.** An App installation token is scoped to one
   installation and the roster spans three owners, so the watch job is a matrix
   over the roster's owners with a token minted per owner — the shape the

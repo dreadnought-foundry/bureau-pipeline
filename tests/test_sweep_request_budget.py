@@ -534,3 +534,135 @@ def test_the_budget_does_not_move_when_the_board_triples():
         f"a board of 12 active cards cost {small} request(s) and one of 36 "
         f"cost {large} — the sweep still scales with the board"
     )
+
+
+# --------------------------------------------------------------------------
+# 7: a finished epic in Backlog closes off the Backlog read the pass already
+#    makes (DRE-6410)
+# --------------------------------------------------------------------------
+# The close reads its epics' children off the pass's epic record
+# (`reconcile.epic_records`), one paged request for up to EPIC_RECORD_PAGE
+# epics. The Backlog itself is read once, by the promotion phase, and the
+# Backlog epics are closed off that same list — so a board with Backlog epics of
+# this repo costs the record page for them and nothing else.
+_EPIC_RECORD_READ = "history(first: 50)"
+
+
+def _epic(identifier, state="Backlog", labels=("repo:agent-bureau",)):
+    """An epic in the shape the board and Backlog reads return it: one child
+    node is all `children(first: 1)` selects, and all `card_is_epic` asks."""
+    card = _card(identifier, state=state, labels=labels, minutes_stale=600.0)
+    card["title"] = f"[EPIC] {identifier}: a container, never built"
+    card["children"] = {"nodes": [{"id": f"kid-of-{identifier}"}]}
+    card["parent"] = None
+    return card
+
+
+class EpicBoard(FakeLinear):
+    """`FakeLinear` that also answers the epic record, from `kids`: each epic's
+    children's lanes. The record carries the epic's own lane, read off the
+    board the epic sits on."""
+
+    def __init__(self, active=(), backlog=(), kids=None):
+        super().__init__(active=active, backlog=backlog)
+        self.kids = dict(kids or {})
+
+    @property
+    def epic_record_reads(self) -> int:
+        return sum(1 for q in self.queries if _EPIC_RECORD_READ in q)
+
+    @property
+    def backlog_reads(self) -> int:
+        """The Backlog lane's own read — `backlog_children`'s. The Intake
+        blocker notice's read names Backlog too, beside the work lanes, and
+        is a board read of its own (DRE-4152)."""
+        return sum(1 for q in self.queries if _BACKLOG_READ in q and _BOARD_READ not in q)
+
+    def gql(self, query, variables=None):
+        if _EPIC_RECORD_READ not in query:
+            return super().gql(query, variables)
+        self.queries.append(query)
+        numbers = {int(n) for n in (variables or {}).get("numbers") or ()}
+        lanes = {c["identifier"]: c["state"]["name"] for c in self.active + self.backlog}
+        nodes = [
+            {
+                "id": f"uuid-{ident}",
+                "identifier": ident,
+                "description": "epic",
+                "state": {"name": lanes.get(ident, "Backlog")},
+                "children": {"nodes": [
+                    {"identifier": f"{ident}-kid-{n}", "createdAt": _iso(600.0),
+                     "state": {"name": s}}
+                    for n, s in enumerate(states)
+                ]},
+                "history": {"nodes": []},
+                "inverseRelations": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            }
+            for ident, states in self.kids.items()
+            if int(ident.split("-")[1]) in numbers
+        ]
+        return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+
+
+def _run_closing_sweep(fake, *, advance=None) -> EpicBoard:
+    """`_run_sweep` with the epic close REAL — the phase under test — and the
+    chain advance it makes on a close recorded rather than read. The state
+    and comment writes are left on the fake, as `fake.state` and
+    `fake.comment`."""
+    with contextlib.ExitStack() as stack:
+        for m in _sweep_mocks():
+            if m.attribute != "close_finished_epics":
+                stack.enter_context(m)
+        stack.enter_context(mock.patch.object(reconcile, "MAX_WIP", 1000))
+        stack.enter_context(mock.patch.object(
+            reconcile, "advance_unblocked_epics", advance or mock.MagicMock()))
+        stack.enter_context(_linear(fake))
+        # Inside `_linear`, which stubs the writes too: these are the ones read.
+        fake.state = stack.enter_context(mock.patch.object(linear_ops, "cmd_state"))
+        fake.comment = stack.enter_context(mock.patch.object(linear_ops, "cmd_comment"))
+        reconcile.main()
+    return fake
+
+
+def _board_with_backlog_epics(count: int, kids=("Done", "In Progress")) -> EpicBoard:
+    """The budget's fixed board plus `count` Backlog epics of this repo, each
+    with a child still open — so the record is read and nothing is written."""
+    active, backlog = _fixed_board()
+    epics = [_epic(f"DRE-{8800 + n}") for n in range(count)]
+    return EpicBoard(active=active, backlog=backlog + epics,
+                     kids={e["identifier"]: kids for e in epics})
+
+
+def test_the_board_with_no_backlog_epic_stays_at_the_budget():
+    fake = _run_closing_sweep(_board_with_backlog_epics(0))
+    assert fake.requests <= SWEEP_REQUEST_BUDGET, fake.queries
+    assert fake.epic_record_reads == 0
+
+
+def test_backlog_epics_cost_one_record_page_and_the_same_page_for_eight():
+    """Two Backlog epics of this repo: exactly one request more than the same
+    board with none — the epic-record page — and eight cost the same one."""
+    none = _run_closing_sweep(_board_with_backlog_epics(0)).requests
+    two = _run_closing_sweep(_board_with_backlog_epics(2))
+    eight = _run_closing_sweep(_board_with_backlog_epics(reconcile.EPIC_RECORD_PAGE))
+    assert two.epic_record_reads == 1, two.queries
+    assert two.requests == none + 1, (none, two.requests)
+    assert eight.requests == two.requests, (two.requests, eight.requests)
+
+
+def test_a_full_sweep_reads_backlog_exactly_once_with_backlog_epics():
+    """The close is made off the promotion phase's own Backlog read, never a
+    second read of the lane."""
+    fake = _run_closing_sweep(_board_with_backlog_epics(2))
+    assert fake.backlog_reads == 1, fake.queries
+
+
+def test_another_repos_backlog_epic_costs_nothing():
+    active, backlog = _fixed_board()
+    theirs = _epic("DRE-8850", labels=("repo:atlas",))
+    none = _run_closing_sweep(EpicBoard(active=active, backlog=backlog)).requests
+    fake = _run_closing_sweep(EpicBoard(active=active, backlog=backlog + [theirs],
+                                        kids={"DRE-8850": ("Done",)}))
+    assert fake.epic_record_reads == 0
+    assert fake.requests == none

@@ -32,6 +32,9 @@ WHAT THIS PINS, one section per acceptance criterion of the card:
   4. REVIEW_NUDGE_CAP=0 parks on the first stale sweep with `cap=0`.
   5. The lane contract declares the park, and the two new comment sites are
      declared `not-an-act`.
+  6. A proof record the critic sent back at its head is the proof run's
+     (DRE-6406): the sweep nudges nothing, holds nothing and parks nothing on
+     it, in the loop and in the park itself.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_review_cap_green_light.py -v
 """
@@ -482,6 +485,124 @@ class TestTheTwoNewCommentSitesAreDeclared:
             capture_output=True, text=True, cwd=ROOT,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+# --------------------------------------------------------------------------- #
+# 6. a proof record the critic sent back is the proof run's (DRE-6406)         #
+# --------------------------------------------------------------------------- #
+
+RECORD_BRANCH = f"agent/{IDENT}-proof-record"
+OLD_HEAD = "b" * 40
+#: What the one line the sweep prints on a sent-back record names.
+OWNER = "the proof run's re-run branch owns it"
+
+
+def _record(**kw):
+    """`_pr`, on the card's proof-record branch."""
+    pr = _pr(**kw)
+    pr["headRefName"] = RECORD_BRANCH
+    return pr
+
+
+def _owned(out: str) -> list:
+    return [line for line in out.splitlines()
+            if OWNER in line and IDENT in line and f"#{NUMBER}" in line]
+
+
+class TestASentBackProofRecordIsTheProofRuns:
+    """The sweep stands down on a proof record whose critic verdict at the
+    head is exactly REQUEST_CHANGES: no nudge, no receipt, no hold, no
+    question, no park — one line per pass naming whose it is."""
+
+    def test_four_sweeps_past_the_window_write_nothing(self, capsys):
+        board = _Board()
+        pr = _record(critic="REQUEST_CHANGES")
+        for _ in range(4):
+            nudge, cmd_state, posted = board.sweep(pr)
+            out = capsys.readouterr().out
+            nudge.assert_not_called()
+            cmd_state.assert_not_called()
+            assert posted == [], posted
+            assert board.comments == [] and board.pr_notes == []
+            assert board.labels == []
+            assert board.state == reconcile.REVIEW_LANE
+            assert len(_owned(out)) == 1, out
+
+    def test_a_verdict_from_an_earlier_head_still_gets_the_review_nudge(self, capsys):
+        board = _Board()
+        pr = _record(critic="REQUEST_CHANGES", reviewed=OLD_HEAD)
+        nudge, _, posted = board.sweep(pr)
+        nudge.assert_called_once_with(reconcile.review_workflow(), NUMBER)
+        assert len(posted) == 1, posted
+        assert f"{reconcile.REVIEW_NUDGE_KEY} @{HEAD} (1/3)" in posted[0]
+        assert _owned(capsys.readouterr().out) == []
+
+    def test_no_verdict_at_all_still_reaches_a_person_at_the_cap(self):
+        # DRE-5643's shape: the critic never answered on this head. The
+        # backstop is how that reaches a person, and it stays.
+        board = _Board()
+        pr = _record()
+        for n in (1, 2, 3):
+            _, _, posted = board.sweep(pr)
+            assert f"{reconcile.REVIEW_NUDGE_KEY} @{HEAD} ({n}/3)" in posted[0]
+        board.sweep(pr)
+        assert board.state == "Green Light"
+        assert reconcile.HOLD_LABEL in board.labels
+
+    def test_an_approve_at_the_head_is_the_merge_gates_as_today(self):
+        board = _Board()
+        nudge, _, posted = board.sweep(_record(critic="APPROVE"))
+        nudge.assert_called_once_with(reconcile.gate_workflow(), NUMBER)
+        assert f"{reconcile.GATE_NUDGE_KEY} @{HEAD} (1/3)" in posted[0]
+
+    def test_a_code_pull_request_sent_back_is_still_nudged(self):
+        board = _Board()
+        nudge, _, posted = board.sweep(_pr(critic="REQUEST_CHANGES"))
+        nudge.assert_called_once_with(reconcile.gate_workflow(), NUMBER)
+        assert f"{reconcile.GATE_NUDGE_KEY} @{HEAD} (1/3)" in posted[0]
+
+
+def _held_card():
+    """In Review under the sweep's own review-cap stamp on HEAD — a park
+    that stopped after its hold."""
+    return _card(labels=(reconcile.HOLD_LABEL,),
+                 extra=[{"body": STAMP, "createdAt": "2026-09-30T01:00:00Z"}])
+
+
+class TestTheParkItselfStandsDown:
+    def test_a_held_record_sent_back_at_the_head_writes_nothing(self, capsys):
+        pr = {**_pr_with(), "headRefName": RECORD_BRANCH}
+        log = _Writes().run(_held_card(), pr, critic="REQUEST_CHANGES")
+        assert log == []
+        assert len(_owned(capsys.readouterr().out)) == 1
+
+    def test_an_unheld_record_sent_back_writes_nothing_either(self):
+        pr = {**_pr_with(), "headRefName": RECORD_BRANCH}
+        assert _Writes().run(_card(), pr, critic="REQUEST_CHANGES") == []
+
+    def test_a_code_pull_request_on_the_same_path_still_parks(self):
+        pr = {**_pr_with(), "headRefName": f"agent/{IDENT}-build"}
+        log = _Writes().run(_held_card(), pr, critic="REQUEST_CHANGES")
+        assert log[-1] == ("advance", IDENT, "Green Light", reconcile.REVIEW_LANE)
+        assert ("pr", NUMBER) == log[-2][:2]
+
+    def test_a_record_with_no_verdict_at_its_head_still_parks(self):
+        pr = {**_pr_with(), "headRefName": RECORD_BRANCH}
+        log = _Writes().run(_held_card(), pr, tag=reconcile.REVIEW_NUDGE_KEY,
+                            critic=f"REQUEST_CHANGES from earlier head {OLD_HEAD[:7]}")
+        assert log[-1] == ("advance", IDENT, "Green Light", reconcile.REVIEW_LANE)
+
+    def test_the_held_card_path_of_the_sweep_does_not_finish_the_park(self, capsys):
+        board = _Board()
+        board.labels.append(reconcile.HOLD_LABEL)
+        board.comments.append(STAMP)
+        assert reconcile.review_cap_park_unfinished(board.card()) == HEAD
+        nudge, cmd_state, posted = board.sweep(_record(critic="REQUEST_CHANGES"))
+        nudge.assert_not_called()
+        cmd_state.assert_not_called()
+        assert posted == [] and board.pr_notes == []
+        assert board.state == reconcile.REVIEW_LANE
+        assert len(_owned(capsys.readouterr().out)) == 1
 
 
 if __name__ == "__main__":

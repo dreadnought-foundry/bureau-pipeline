@@ -970,10 +970,11 @@ class NotOnDefaultBranchTest(unittest.TestCase):
         self.assertEqual(readings, [])
 
     def test_every_other_refusal_of_the_file_stays_unknown(self):
-        """A 403, a 5xx, a throttle, or an answer that will not parse: none of
-        them says the file is absent, so each stays UNKNOWN and alarms."""
-        cases = {name: _gh_fails(stderr, rate_limited=(name == "throttle"))
-                 for name, stderr in REFUSALS.items()}
+        """A 403, a 5xx, or an answer that will not parse: none of them says
+        the file is absent, so each stays UNKNOWN and alarms. A throttle is
+        not absent either, and has its own reading (DRE-6461, ThrottleTest)."""
+        cases = {name: _gh_fails(stderr)
+                 for name, stderr in REFUSALS.items() if name != "throttle"}
         cases["not JSON"] = lambda: "<!DOCTYPE html><title>Unicorn</title>"
         cases["empty"] = lambda: ""
         for name, gh in cases.items():
@@ -1003,7 +1004,7 @@ class NotOnDefaultBranchTest(unittest.TestCase):
             })
         self.assertEqual(_states(readings),
                          {"dreadnought-foundry/agent-bureau · CI":
-                          nightly_watch.UNKNOWN})
+                          nightly_watch.THROTTLED})
 
     def test_only_a_404_sets_the_not_found_flag(self):
         with mock.patch.object(nightly_watch, "gh_read",
@@ -1019,6 +1020,334 @@ class NotOnDefaultBranchTest(unittest.TestCase):
                 with self.assertRaises(nightly_watch.Unreadable) as caught:
                     nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
                 self.assertFalse(caught.exception.not_found)
+
+
+# --------------------------------------------------------------------------- #
+# 3d. a throttle is its own reading, and stops the reading (DRE-6461)          #
+# --------------------------------------------------------------------------- #
+
+
+class _ThrottledAt(FakeGitHub):
+    """FakeGitHub, except the first read `where` picks is refused the way
+    watch run 37974687752 was refused — through the REAL `_gh_api`, with the
+    gh CLI's own throttle on stderr — and so is every read after it, the way
+    an empty hourly bucket refuses everything until it resets."""
+
+    def __init__(self, repos, where):
+        super().__init__(repos)
+        self.where = where
+        self.spent = False
+
+    def __call__(self, path):
+        if not (self.spent or self.where(path)):
+            return super().__call__(path)
+        self.spent = True
+        self.paths.append(path)
+        refused = _gh_fails(REFUSALS["throttle"], rate_limited=True)
+        with mock.patch.object(nightly_watch, "gh_read",
+                               lambda args, log=None: refused()):
+            return nightly_watch._gh_api(path)
+
+
+def _blocks(detail):
+    """The verdict body's blocks, by their heading line."""
+    return {block.split("\n", 1)[0]: block for block in detail.split("\n\n")}
+
+
+THROTTLED_BLOCK = ("Not read this hour (GitHub's hourly request budget for "
+                   "this installation was spent):")
+
+
+class ThrottleTest(unittest.TestCase):
+    """Watch run 37974687752: GitHub refused eight workflow-file reads in
+    agent-bureau-demo in a row with `API rate limit exceeded for installation
+    ID 123249480`. That is the installation's hourly budget, spent by the
+    fleet, not a permission the App lacks — and the watcher filed an alarm
+    card blaming the installation, and paid a minute of backoff per refused
+    file. A throttle is its own reading, the watcher stops asking at the
+    first one, and a throttle alone is said only on the daily re-confirm
+    hour."""
+
+    DEMO = "dreadnought-foundry/agent-bureau-demo"
+    PORTICO = "dreadnought-foundry/portico"
+
+    def _assert_throttle_sentence(self, detail):
+        self.assertIn("hourly request budget", detail)
+        self.assertIn("installation", detail)
+        self.assertNotIn("App", detail)
+        self.assertNotIn("permission", detail.lower())
+
+    def test_throttled_is_its_own_state(self):
+        self.assertEqual(nightly_watch.THROTTLED, "throttled")
+        self.assertNotEqual(nightly_watch.THROTTLED, nightly_watch.UNKNOWN)
+        self.assertNotIn(nightly_watch.THROTTLED, nightly_watch.ALARMING)
+
+    def test_every_watcher_read_refused_for_the_budget_is_throttled(self):
+        """The repo, the workflow list, the workflow file, the run listing and
+        the last-changed commit: a throttle on any of them is THROTTLED at the
+        narrowest subject the watcher can name, never UNKNOWN."""
+        repo_subject = self.PORTICO
+        workflow_subject = f"{self.PORTICO} · CI"
+        cases = {
+            "repo": (lambda p: p == f"repos/{self.PORTICO}", {}, repo_subject),
+            "workflow list": (lambda p: "/actions/workflows?" in p, {},
+                              repo_subject),
+            "workflow file": (lambda p: "/contents/" in p, {}, workflow_subject),
+            "run listing": (lambda p: "/runs?" in p, {}, workflow_subject),
+            # No schedule run yet, so the last-changed commit is read.
+            "last-changed commit": (lambda p: "/commits?" in p,
+                                    {"runs": {}}, workflow_subject),
+        }
+        for name, (where, extra, subject) in cases.items():
+            with self.subTest(read=name):
+                repo = {"workflows": {".github/workflows/ci.yml":
+                                      ("CI", NIGHTLY_CI)},
+                        "runs": {"ci.yml": run_record(hours_ago=2)}}
+                repo.update(extra)
+                api = _ThrottledAt({self.PORTICO: FakeRepo(**repo)}, where)
+                readings = nightly_watch.collect(
+                    api, roster={"portico": self.PORTICO}, now=NOW)
+                self.assertEqual(_states(readings),
+                                 {subject: nightly_watch.THROTTLED})
+                self.assertTrue(api.spent, "the throttle was never reached")
+                self._assert_throttle_sentence(readings[0].detail)
+
+    def test_the_throttle_fixture_is_throttled_and_the_rest_stay_unknown(self):
+        """`REFUSALS["throttle"]`, read through the real `_gh_api`, is
+        throttled; a permission 403, a 5xx and an unparseable file stay
+        UNKNOWN exactly as before."""
+        cases = {name: _gh_fails(stderr, rate_limited=(name == "throttle"))
+                 for name, stderr in REFUSALS.items()}
+        cases["not JSON"] = lambda: "<!DOCTYPE html><title>Unicorn</title>"
+        expected = {"throttle": nightly_watch.THROTTLED}
+        for name, gh in cases.items():
+            with self.subTest(refusal=name):
+                readings = _GhAnswers(contents=gh).collect({
+                    "dreadnought-foundry/agent-bureau": FakeRepo(
+                        workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                        runs={"ci.yml": run_record(hours_ago=2)}),
+                })
+                self.assertEqual(
+                    _states(readings),
+                    {"dreadnought-foundry/agent-bureau · CI":
+                     expected.get(name, nightly_watch.UNKNOWN)})
+
+    def test_an_unparseable_file_stays_unknown(self):
+        readings, _ = _collect({
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", BROKEN)}),
+        })
+        self.assertEqual(_states(readings),
+                         {f"{self.PORTICO} · CI": nightly_watch.UNKNOWN})
+
+    def test_only_a_throttle_sets_the_throttled_flag(self):
+        for name, stderr in {**REFUSALS, "404": NOT_FOUND}.items():
+            with self.subTest(refusal=name), mock.patch.object(
+                    nightly_watch, "gh_read",
+                    lambda args, log=None, s=stderr, n=name: _gh_fails(
+                        s, rate_limited=(n == "throttle"))()):
+                with self.assertRaises(nightly_watch.Unreadable) as caught:
+                    nightly_watch._gh_api("repos/o/r/contents/x.yml?ref=main")
+                self.assertIs(caught.exception.throttled, name == "throttle")
+                if name == "throttle":
+                    self.assertFalse(caught.exception.not_found)
+
+    def test_once_throttled_the_watcher_stops_asking(self):
+        """The run that filed DRE-6461, in miniature: agent-bureau reads
+        cleanly, then the demo repo's second workflow file is refused. Not one
+        more read goes out for this owner — the refused one is the last call
+        the reader sees — and everything not yet read is named THROTTLED: the
+        demo repo's remaining listed workflows, and each repo after it in the
+        roster."""
+        repos = {
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+            self.DEMO: FakeRepo(
+                workflows={
+                    ".github/workflows/a.yml": ("CI", NIGHTLY_CI),
+                    ".github/workflows/b.yml": ("Merge Gate", PR_ONLY_CI),
+                    ".github/workflows/c.yml": ("Plan", SWEEP),
+                    ".github/workflows/d.yml": ("QA Review", NIGHTLY_CI),
+                },
+                runs={"a.yml": run_record(hours_ago=2),
+                      "d.yml": run_record(hours_ago=2)}),
+            "dreadnought-foundry/bureau-pipeline": FakeRepo(
+                workflows={".github/workflows/tests.yml":
+                           ("Pipeline Tests", PIPELINE_TESTS_NIGHTLY)},
+                runs={"tests.yml": run_record(hours_ago=2)}),
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+        }
+        refused = f"repos/{self.DEMO}/contents/.github/workflows/b.yml"
+        api = _ThrottledAt(repos, lambda p: p.startswith(refused))
+        readings = nightly_watch.collect(
+            api, roster={name.split("/")[-1]: name for name in repos}, now=NOW)
+
+        self.assertTrue(api.paths[-1].startswith(refused), api.paths)
+        self.assertEqual(sum(p.startswith(refused) for p in api.paths), 1)
+        self.assertEqual(_states(readings), {
+            "dreadnought-foundry/agent-bureau · CI": nightly_watch.OK,
+            f"{self.DEMO} · CI": nightly_watch.OK,
+            f"{self.DEMO} · Merge Gate": nightly_watch.THROTTLED,
+            f"{self.DEMO} · Plan": nightly_watch.THROTTLED,
+            f"{self.DEMO} · QA Review": nightly_watch.THROTTLED,
+            "dreadnought-foundry/bureau-pipeline": nightly_watch.THROTTLED,
+            self.PORTICO: nightly_watch.THROTTLED,
+        })
+        self.assertFalse([p for p in api.paths
+                          if "bureau-pipeline" in p or "portico" in p])
+        for reading in readings:
+            if reading.state == nightly_watch.THROTTLED:
+                self._assert_throttle_sentence(reading.detail)
+
+    def test_a_throttle_on_the_repo_read_stops_every_later_repo(self):
+        repos = {
+            "dreadnought-foundry/agent-bureau": FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+            self.PORTICO: FakeRepo(
+                workflows={".github/workflows/ci.yml": ("CI", NIGHTLY_CI)},
+                runs={"ci.yml": run_record(hours_ago=2)}),
+        }
+        api = _ThrottledAt(repos, lambda p: True)
+        readings = nightly_watch.collect(
+            api, roster={name.split("/")[-1]: name for name in repos}, now=NOW)
+        self.assertEqual(len(api.paths), 1)
+        self.assertEqual(_states(readings), {
+            "dreadnought-foundry/agent-bureau": nightly_watch.THROTTLED,
+            self.PORTICO: nightly_watch.THROTTLED,
+        })
+
+    def _throttled(self, subject="d · CI"):
+        return nightly_watch.Reading(
+            subject, nightly_watch.THROTTLED,
+            f"{subject}: not read this hour — GitHub's hourly request budget "
+            f"for this installation was spent.")
+
+    def test_throttled_readings_have_their_own_block_and_never_pass(self):
+        ok = nightly_watch.Reading("a · CI", nightly_watch.OK, "a · CI: nightly ok")
+        throttled = self._throttled()
+        verdict = nightly_watch.evaluate([ok, throttled],
+                                         owner="dreadnought-foundry",
+                                         speak_throttled=False)
+        blocks = _blocks(verdict.detail)
+        self.assertIn(THROTTLED_BLOCK, blocks)
+        self.assertIn(throttled.detail, blocks[THROTTLED_BLOCK])
+        self.assertIn("Ran:", blocks)
+        self.assertNotIn(throttled.detail, blocks["Ran:"])
+        self.assertNotIn("Every nightly this watcher can see has run",
+                         verdict.headline)
+
+    def test_a_throttle_alone_files_no_card_on_an_ordinary_hour(self):
+        readings = [nightly_watch.Reading("a · CI", nightly_watch.OK, "ok"),
+                    self._throttled()]
+        verdict = nightly_watch.evaluate(readings, owner="dreadnought-foundry",
+                                         speak_throttled=False)
+        self.assertFalse(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.THROTTLED)
+        self.assertEqual(verdict.title, "")
+        self.assertNotIn("\n", verdict.headline)
+
+    def test_a_throttle_is_said_on_the_re_confirm_hour_without_blaming_the_app(self):
+        readings = [nightly_watch.Reading("a · CI", nightly_watch.OK, "ok"),
+                    self._throttled()]
+        verdict = nightly_watch.evaluate(readings, owner="dreadnought-foundry",
+                                         speak_throttled=True)
+        self.assertTrue(verdict.alarm)
+        self.assertEqual(verdict.state, nightly_watch.THROTTLED)
+        self.assertEqual(verdict.title, nightly_watch.title_for(
+            nightly_watch.UNKNOWN_TITLE, "dreadnought-foundry"))
+        self.assertNotIn("App", verdict.detail)
+        self.assertNotIn("permission", verdict.detail.lower())
+        self.assertIn("hourly request budget", verdict.detail)
+        self.assertNotIn("\n", verdict.headline)
+
+    def test_a_missing_nightly_still_alarms_every_hour_beside_a_throttle(self):
+        late = nightly_watch.Reading("a · CI", nightly_watch.LATE, "a · CI: late")
+        throttled = self._throttled("dreadnought-foundry/portico")
+        for speak in (False, True):
+            with self.subTest(speak_throttled=speak):
+                verdict = nightly_watch.evaluate(
+                    [late, throttled], owner="dreadnought-foundry",
+                    speak_throttled=speak)
+                self.assertTrue(verdict.alarm)
+                self.assertEqual(verdict.state, nightly_watch.MISSING)
+                self.assertEqual(verdict.title, nightly_watch.title_for(
+                    nightly_watch.MISSING_TITLE, "dreadnought-foundry"))
+                self.assertIn(throttled.detail,
+                              _blocks(verdict.detail)[THROTTLED_BLOCK])
+
+    def test_a_real_unknown_still_alarms_every_hour_beside_a_throttle(self):
+        unknown = nightly_watch.Reading(
+            "dreadnought-foundry/portico", nightly_watch.UNKNOWN,
+            "dreadnought-foundry/portico: UNKNOWN — GitHub said: "
+            + REFUSALS["403"])
+        throttled = self._throttled()
+        for speak in (False, True):
+            with self.subTest(speak_throttled=speak):
+                verdict = nightly_watch.evaluate(
+                    [unknown, throttled], owner="dreadnought-foundry",
+                    speak_throttled=speak)
+                self.assertTrue(verdict.alarm)
+                self.assertEqual(verdict.state, nightly_watch.UNKNOWN)
+                self.assertEqual(verdict.title, nightly_watch.title_for(
+                    nightly_watch.UNKNOWN_TITLE, "dreadnought-foundry"))
+                self.assertIn(throttled.detail,
+                              _blocks(verdict.detail)[THROTTLED_BLOCK])
+
+    def _watch(self, now):
+        """`main(["watch", …])` over a fleet whose only bad reading is a
+        throttle — the job's own path — returning its GITHUB_OUTPUT."""
+        readings = [nightly_watch.Reading("a · CI", nightly_watch.OK, "ok"),
+                    self._throttled()]
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "output"
+            out.write_text("")
+            with mock.patch.object(nightly_watch, "roster",
+                                   lambda *args: {}), \
+                    mock.patch.object(nightly_watch, "collect",
+                                      lambda api, **kw: readings), \
+                    mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(out)}), \
+                    mock.patch("sys.stdout"):
+                nightly_watch.main(["watch", "--owner", "dreadnought-foundry",
+                                    "--now", now])
+            return dict(line.split("=", 1)
+                        for line in out.read_text().splitlines())
+
+    def test_the_job_speaks_of_a_throttle_only_on_the_re_confirm_hour(self):
+        hour = nightly_watch.RECONFIRM_HOUR_UTC
+        speaking = f"2026-10-09T{hour:02d}:23:00Z"
+        ordinary = f"2026-10-09T{(hour + 11) % 24:02d}:23:00Z"
+        self.assertTrue(nightly_watch.should_reconfirm(speaking))
+        self.assertFalse(nightly_watch.should_reconfirm(ordinary))
+        quiet = self._watch(ordinary)
+        self.assertEqual(quiet["alarm"], "false")
+        self.assertEqual(quiet["state"], nightly_watch.THROTTLED)
+        said = self._watch(speaking)
+        self.assertEqual(said["alarm"], "true")
+        self.assertEqual(said["state"], nightly_watch.THROTTLED)
+
+    def test_the_derivation_states_the_throttle_rule(self):
+        derivation = nightly_watch.DERIVATION
+        self.assertIn("hourly request budget", derivation)
+        self.assertIn("not read this hour", derivation)
+        self.assertNotIn("App", derivation)
+
+    def test_the_workflow_q4_note_states_the_throttle_rule(self):
+        text = WATCH_WORKFLOW.read_text()
+        q4 = text[text.index("#   Q4"):text.index("#   Q5")]
+        self.assertIn("hourly request budget", q4)
+        self.assertIn("stops", q4)
+        self.assertIn("re-confirm", q4)
+
+    def test_the_readme_bullet_states_the_throttle_rule(self):
+        text = (ROOT / "README.md").read_text()
+        start = text.index("- **UNKNOWN never passes.**")
+        bullet = text[start:text.index("\n- **", start)]
+        self.assertIn("hourly request budget", bullet)
+        self.assertIn("re-confirm", bullet)
 
 
 # --------------------------------------------------------------------------- #

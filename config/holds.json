@@ -48,6 +48,11 @@
       "why": "The red check was read on one head (its receipt is keyed unfixable-check-hold @<sha8>); a new head is read again.",
       "lift_sends": "Triage to In Review"
     },
+    "operator-step": {
+      "lifts": "blockers-terminal",
+      "why": "A planner-filed operator step is a person's to do once the work before it is finished; the card's blockedBy relations say when, and the sweep's promotion gate reads them and lifts the hold itself. Without its stamp the label would read manual and sit in Backlog forever (DRE-6408).",
+      "lift_sends": "Backlog to Hand-work"
+    },
     "manual": {
       "lifts": "manual",
       "why": "A person chose it, or a writer created the card already held; nothing a sweep can read says it is over.",
@@ -59,13 +64,14 @@
     "repo-on-rail": "Every repo: label the card wears now names a key of config/repo-map.json.",
     "new-head": "The open pull request's head differs from the stamped sha.",
     "unpark-marker": "A dead-run-budget-reset marker newer than the stamp.",
+    "blockers-terminal": "Every blockedBy relation of the card is Done, Canceled or Duplicate, read off the card's relations by the sweep's promotion gate.",
     "manual": "Nothing a sweep can read: only card-closed or a person lifts it."
   },
   "universal_lift": {
     "card-closed": "Lifts every reason, and a label with no stamp, when the card is Done or Canceled."
   },
   "readers": {
-    "sweep": "reconcile.held(): the sweep skips a held card entirely — no requeue, no nudge, no dispatch.",
+    "sweep": "reconcile.held(): the sweep skips a held card entirely — no requeue, no nudge, no dispatch. The one exception is operator-step: the sweep lifts it rather than standing down for it, its promotion gate reading the card's blockers (DRE-6427), so no row carrying operator-step may name the sweep.",
     "fix-dispatch": "reconcile.fix_dispatch_blocked(): the fix agent is kept off the held card's pull request.",
     "medic": "medic_retry: the medic refuses its one automatic retry of a held card's build, fix, plan or review run.",
     "limit-recovery": "limit_recovery: a held card's stages are not re-entered, save its sync bookkeeping."
@@ -389,6 +395,24 @@
       ],
       "readers": [
         "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
+      "file": "scripts/linear_ops.py",
+      "scope": "_file_operator_hold",
+      "anchor": "filed as an operator step",
+      "note": "The create seam (`subissue`, `oneoff`): a card the planner files `needs-human` + `no-code` is marked `operator-step` and stamped, so the sweep lifts it once its blockers are terminal (DRE-6428).",
+      "reasons": [
+        {
+          "reason": "operator-step",
+          "lifts": "blockers-terminal",
+          "tried_first": "none — the card is filed held by design; the sweep lifts it when every blocker is terminal"
+        }
+      ],
+      "readers": [
         "fix-dispatch",
         "medic",
         "limit-recovery"

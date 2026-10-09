@@ -25,14 +25,15 @@ What is pinned, and why each half could break silently:
   4. **THE STEP CANNOT DIE.** The whole point of the renderer's UNKNOWN block is
      that a missing ledger or a repo with no `.mulch/` is context the planner is
      told about, never a failed plan run. That is not read off the YAML — the
-     step's own script is RUN, in a throwaway checkout with `split-ledger.json`
+     step's own script is RUN, in a throwaway checkout with no ledger derived
      and `.mulch/` absent, and asserted to exit 0 with both STATUS lines UNKNOWN.
   5. **THE LEDGER IS DERIVED ONCE PER RUN (DRE-6055).** A step before the
      context step derives the ledger from the read door into
      `$RUNNER_TEMP/split-ledger.json` and exports `SPLIT_LEDGER_PATH`, and the
      renderer reads that path when it is set. A derive that fails leaves the
-     path unset, says so in one line and fails nothing: the committed file is
-     the fallback. Both halves are RUN, against a fake door, not read off YAML.
+     path unset, says so in one line and fails nothing. There is no committed
+     fallback since DRE-6056: an unset path renders "could not be read". Both
+     halves are RUN, against a fake door, not read off YAML.
   6. **THE BRIEF.** The section, where it sits, the four tells named from
      `split_ledger.TELLS`, the `ledger-check` block, its four keys, and the rule
      that an UNKNOWN status is written into every record rather than omitted —
@@ -77,8 +78,9 @@ CONTEXT = ".bureau-pipeline/agent-context.md"
 MULCH = ".mulch/expertise/planning.jsonl"
 
 #: The ledger the planner reads (DRE-6055): the one this run derived from the
-#: read door when the derive exported it, the committed file otherwise.
-LEDGER_ARG = '--ledger "${SPLIT_LEDGER_PATH:-.bureau-pipeline/config/split-ledger.json}"'
+#: read door when the derive exported it. Nothing otherwise — the committed
+#: fallback is retired (DRE-6056), so an unset path renders "could not be read".
+LEDGER_ARG = '--ledger "${SPLIT_LEDGER_PATH:-}"'
 
 #: The command the card's contract spells out, exactly.
 COMMAND = (f"python3 .bureau-pipeline/scripts/{RENDER} {LEDGER_ARG} "
@@ -124,12 +126,9 @@ def render_line(script: str) -> str:
 
 def fake_checkout(tmp: str) -> str:
     """A pipeline checkout at `tmp/.bureau-pipeline` with everything the step
-    reads EXCEPT `config/split-ledger.json`, and no `.mulch/` beside it.
-
-    Symlinked rather than copied so the scripts under test are this repo's, and
-    `ledger_context` resolves its ledger off the symlinked path (`abspath` does
-    not follow symlinks) — which is the whole point: the ledger is missing here
-    and present in the real checkout.
+    reads, and no `.mulch/` beside it. Symlinked rather than copied so the
+    scripts under test are this repo's. No ledger is in it, as none is in the
+    real checkout since DRE-6056: the derive step writes one to `$RUNNER_TEMP`.
     """
     pipeline = os.path.join(tmp, ".bureau-pipeline")
     os.makedirs(pipeline)
@@ -138,8 +137,6 @@ def fake_checkout(tmp: str) -> str:
     config = os.path.join(pipeline, "config")
     os.makedirs(config)
     for entry in os.listdir(os.path.join(ROOT, "config")):
-        if entry == "split-ledger.json":
-            continue
         os.symlink(os.path.join(ROOT, "config", entry),
                    os.path.join(config, entry))
     return pipeline
@@ -239,10 +236,7 @@ class LedgerReachesThePlannerTest(unittest.TestCase):
         # command anywhere in the script fails the step here too.
         script = planner_context_step()["run"]
         with tempfile.TemporaryDirectory() as tmp:
-            pipeline = fake_checkout(tmp)
-            self.assertFalse(
-                os.path.exists(os.path.join(pipeline, "config",
-                                            "split-ledger.json")))
+            fake_checkout(tmp)
             self.assertFalse(os.path.exists(os.path.join(tmp, ".mulch")))
             proc = run_step(script, tmp, without_ledger_env())
             self.assertEqual(
@@ -262,7 +256,7 @@ class LedgerReachesThePlannerTest(unittest.TestCase):
 
 DERIVE_STEP = "Split ledger — derive it from the read door"
 DERIVE = ('python3 .bureau-pipeline/scripts/split_ledger.py derive '
-          '--out "$RUNNER_TEMP/split-ledger.json" --no-doc')
+          '--out "$RUNNER_TEMP/split-ledger.json"')
 DERIVED = "split-ledger.json"
 
 
@@ -336,8 +330,8 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
     def test_the_derive_is_on_both_routes_that_read_the_ledger(self):
         # `plan` reads it for the planner's context and the first critic's
         # mechanical findings; `review` reads it for the revised plan's
-        # mechanical findings. A route left out reads the committed file,
-        # which nothing refreshes any more (split-ledger.yml).
+        # mechanical findings. A route left out reads no ledger at all, and
+        # every finding it owes says the ledger could not be read.
         gate = derive_step().get("if", "")
         for mode in ("plan", "review"):
             self.assertIn(f"steps.route.outputs.mode == '{mode}'", gate)
@@ -348,10 +342,10 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
         self.assertIn("steps.route.outputs.mode == 'review'",
                       review_mechanical_step().get("if", ""))
 
-    def test_the_derive_writes_to_runner_temp_and_skips_the_render(self):
+    def test_the_derive_writes_to_runner_temp(self):
         lines = logical_lines(derive_step()["run"])
-        self.assertTrue(any(DERIVE in line for line in lines),
-                        f"the step must run {DERIVE!r}")
+        self.assertTrue(any(line.endswith(DERIVE + "; then") for line in lines),
+                        f"the step must run {DERIVE!r}, and nothing more")
 
     def test_the_derive_exports_split_ledger_path(self):
         script = derive_step()["run"]
@@ -434,8 +428,7 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
         # The second critic's revised-plan findings check each child's
         # footprint against the ledger's death rows. Run the derive, then the
         # review step itself with what the derive exported: the row the door
-        # served — and that the committed file has never held — is the one
-        # the epic's note names.
+        # served is the one the epic's note names.
         epic = "DRE-9500"
         files = ["scripts/ledger_a.py", "scripts/ledger_b.py"]
         with tempfile.TemporaryDirectory() as tmp, FakeIssuer() as issuer, \
@@ -481,23 +474,21 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
         self.assertIn("1 death row(s)", note)
         self.assertNotIn("could not be read", note)
 
-    def test_the_context_step_reads_the_committed_ledger_without_the_path(self):
-        # The fallback is the pipeline checkout's committed file, spelled the
-        # way `ledger_context.LEDGER_PATH` resolves it from that checkout.
+    def test_without_the_path_the_context_step_says_could_not_be_read(self):
+        # No committed fallback (DRE-6056): a run whose derive failed tells the
+        # planner the ledger could not be read, never last month's history —
+        # and still exits 0.
         line = render_line(planner_context_step()["run"])
         self.assertIn(LEDGER_ARG, line)
-        committed = os.path.join(".bureau-pipeline",
-                                 os.path.relpath(lc.LEDGER_PATH, ROOT))
-        self.assertIn(f":-{committed}}}", LEDGER_ARG)
         with tempfile.TemporaryDirectory() as tmp:
-            pipeline = fake_checkout(tmp)
-            os.symlink(lc.LEDGER_PATH,
-                       os.path.join(pipeline, "config", "split-ledger.json"))
+            fake_checkout(tmp)
             proc = run_step(planner_context_step()["run"], tmp, without_ledger_env())
             self.assertEqual(proc.returncode, 0, proc.stderr)
         status = [l for l in proc.stdout.splitlines() if l.startswith(lc.LEDGER_STATUS)]
         self.assertEqual(len(status), 1, proc.stdout)
-        self.assertNotIn("missing", status[0])
+        self.assertTrue(status[0].startswith(f"{lc.LEDGER_STATUS} {lc.UNKNOWN} — "),
+                        status[0])
+        self.assertIn("could not be read", status[0])
 
 
 class BriefSizesAgainstTheLedgerTest(unittest.TestCase):

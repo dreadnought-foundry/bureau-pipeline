@@ -26,9 +26,11 @@ re-derived here.
 A first-run candidate is in `Hand-work`, and it stays there for the whole run
 (DRE-5924): what keeps this phase from dispatching twice at a running card is
 the run-state reading (condition 5), not a lane. A card in `Green Light` is
-read only by the return branch. A card in `In Review` has an open record pull
-request and is read only by the re-run branch, which moves nothing: the card
-stays in `In Review` while its record is amended.
+read by the return branch when it is parked on the CEO's press, and by the
+re-run branch when its hold is the sweep's review-cap park (DRE-6406) — never
+by both: the return is taken first. A card in `In Review` has an open record
+pull request and is read only by the re-run branch. The re-run branch moves
+nothing: the card stays in the lane it is in while its record is amended.
 
 ## A first run — every condition read, in order; the first that fails is named
 
@@ -44,6 +46,14 @@ stays in `In Review` while its record is amended.
      did not finish; after two, one hold, and never again.
   7. The release carrying the siblings' merges is `ready` — `waiting` and
      `unknown` both wait.
+
+One exception to the order, and it costs nothing (DRE-6464): condition 4 is
+read first, off the lane read, where the lane read already answers it — a
+`needs-human` label, or a `🔬 proof-waiting` hold the card's comment window
+shows with no `🔬 proof-observed` line and no console answer after it. That
+card is named on its line every pass and spends none of the candidate reads.
+A hold the window shows something after, or does not show at all, is the
+thread read's to decide, in order, as before.
 
 ## The return after the CEO's answer
 
@@ -76,22 +86,85 @@ one hold, and the card is left for an operator.
 Conditions 2, 3 and 7 are not read for it: the record is open on the release
 its first run read.
 
+## The re-run after the gate's decline (DRE-6488)
+
+A record the critic APPROVED can still be held: the merge gate declines any
+proof record with a row not met (DRE-6141), and before this nothing picked it
+up again. The same branch, the same lanes and the same stops read a second
+trigger, only when the critic's standing verdict at the head is `APPROVE`
+(its `REQUEST_CHANGES` keeps precedence): the gate's newest hold note on the
+pull request — qa-bot only, anchored on its first line, as
+`reconcile.gate_hold_note_line` reads it — declining the record at the head
+with a reason that opens `proof record not proven:`. A note on an earlier
+head, or with any other reason, is not it. The rows are read off the record
+at the head (`proof_record.fetch` over the pull request's `files`), never off
+the note; a record not read there is refused. Then, after the stops:
+
+  1. A row reading `Not observed. waiting for <the event>`
+     (`proof_record.row_waiting`) holds the card on one `🔬 proof-waiting`
+     naming the waiting rows and their events, and nothing is dispatched. The
+     operator's `🔬 proof-observed` discharges it, and the next pass re-runs.
+  2. Otherwise the run is dispatched, `re-run after the gate's decline at
+     <sha7>`, under the same rule for a newer receipt as the critic's.
+  3. The one budget: two re-runs per record pull request, whichever trigger
+     spent them. After two, one hold; a re-run that finished with the decline
+     still at the head, one hold. Never a third guess.
+
+A `Green Light` PROOF card is read the same way when its live hold is the
+sweep's review-cap park — `needs-human` with a `🔒 hold: reason=review-cap-spent`
+stamp, read off the lane read's window, the whole thread when the window is
+partial (DRE-6406). A record parked there before the sweep stood down on a
+sent-back record waits on nothing else. One more refusal is named for it: the
+stamp's `at` must be the record's head, because on a newer head the holds lane
+lifts the stamp and returns the card to `In Review` itself. Nothing here moves
+the card, lifts the stamp or touches the label: the re-run's amended record is
+the new head, and the holds lane does the rest. A label over a spent stamp, or
+over none, is a person's hold and is not read.
+
 ## The bound
 
 At most one dispatch per pass — the return first, then first runs oldest
-first, then re-runs — and at most `PROOF_CANDIDATES_PER_PASS` candidates read:
+first and re-runs after them, as one ring begun at the pass's turn — and at
+most `PROOF_CANDIDATES_PER_PASS` candidates read:
 two Linear reads for the three lanes (the sweep's board read serves
-`Hand-work` and `In Review` together), then at most two per candidate (the
+`Hand-work` and `In Review` together, and one `Green Light` read serves the
+return and the re-run), then at most two per candidate (the
 card's epic and relations, and its thread; a re-run reads only its thread).
-Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait. Its
+Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait — plus,
+for a card whose first relation page is full, up to
+`reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). Its
 `linear-budget:` trailer is its own, lifted into the step summary.
+
+THE TURN (DRE-6464). The bound once read the same three every pass: oldest
+first, a card held, blocked or unreadable kept its slot, and on 2026-10-09
+three of them kept DRE-6042 — whose claim is that the sweep starts it with no
+person — out of every pass until Sunday. The phase writes nothing for a card
+it refuses, so a pass cannot know what the last one read; it knows the clock.
+Each `PASS_MINUTES` turn begins the ring at its own place on it (`_turned`):
+the turn's golden-ratio fraction of the ring, so consecutive turns step about
+0.618 of the way round and a ring of up to four is read whole within two
+passes. A fixed stride of three was the first answer and it was wrong: with
+passes landing every second turn — a cron that only fires at :07 and :37 — a
+ring of six or twelve read the same windows forever. The golden step is odd
+in the turn, so on any steady cadence of whole turns, every turn or every
+fourth alike, every place on the ring comes up and every candidate is read.
+A pass that runs late, twice in a turn or not at all only changes which turn
+it reads. The bound is unchanged.
 
 ## The dry run
 
 Unless `PROOF_DISPATCH_LIVE` is exactly `true`, the phase prints `would:`
 lines and writes nothing — no dispatch, no receipt, no hold.
 
-CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`):
+A dry pass first says why it is dry (DRE-6439): one line, the switch's own
+`switch_reason.off_line` after the prefix, before any `would:` line — off
+until the cards its `PROOF_DISPATCH_LIVE_OFF_UNTIL` companion names land, off
+with no reason given, or off for a reason that names no card. It is composed
+from the environment alone and costs no read; each named card's state is the
+`Read the switches` step's job (DRE-6436). A live pass prints nothing of it.
+
+CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`,
+`PROOF_DISPATCH_LIVE_OFF_UNTIL`):
 
     proof_dispatch.py
 """
@@ -109,11 +182,13 @@ from typing import Callable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import card_pr  # noqa: E402
+import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
 import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_and_demo  # noqa: E402
+import proof_record  # noqa: E402 — the record at the head, read as the gate reads it
 import proof_release  # noqa: E402
 # The branch rule and the hold reader live once, in the leaf the merge gate and
 # the PROOF close read too (DRE-6141) — moved, not copied.
@@ -128,6 +203,7 @@ import proof_run_state  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
 import spoken_thread  # noqa: E402
+import switch_reason  # noqa: E402 — the dry run's off line (DRE-6439)
 
 #: Opens every line this phase prints.
 PREFIX = "proof-dispatch:"
@@ -136,8 +212,14 @@ PREFIX = "proof-dispatch:"
 #: off this line, and `proof_run_state.RECEIPT_MARKER` reads it back.
 PROOF_RUN_TAG = "proof-run"
 
-#: How many candidates one pass reads, oldest first; the rest wait a pass.
+#: How many candidates one pass reads, from its turn's place in the queue;
+#: the rest wait for a later pass.
 PROOF_CANDIDATES_PER_PASS = 3
+
+#: The sweep's cadence — the stubs' `*/15` cron — which numbers a pass's
+#: turn. The phase writes nothing for a card it refuses, so the clock is the
+#: only thing one pass shares with the last (DRE-6464).
+PASS_MINUTES = 15
 
 #: The repository variable that turns the dry run off — `true` and nothing else.
 LIVE_VARIABLE = "PROOF_DISPATCH_LIVE"
@@ -169,12 +251,22 @@ RETURN_REASON = "re-run after the CEO's answer at {at}"
 FIRST_COUNT = "dispatch {n} of 2"
 RETURN_COUNT = "after the CEO's answer"
 RERUN_REASON = "re-run after the critic's findings at {sha7}"
+GATE_RERUN_REASON = "re-run after the gate's decline at {sha7}"
 RERUN_COUNT = "re-run {n} of 2"
 
 #: The re-run budget: per record pull request, apart from the first run's.
 RERUN_BUDGET = 2
 #: What the critic's newest verdict at the head must say for a re-run.
 SENT_BACK = "REQUEST_CHANGES"
+#: ...and for the gate's trigger (DRE-6488): the critic approved the record,
+#: and the gate declined it at the same head.
+APPROVED = "APPROVE"
+#: The reason the merge gate writes when it holds a proof record
+#: (`merge_gate.evaluate_proof_record`). Any other reason is not the trigger.
+NOT_PROVEN = "proof record not proven:"
+#: The one hold a `Green Light` re-run candidate carries: the sweep's park at
+#: its review cap (DRE-6406). A person's label, or any other reason, is not it.
+REVIEW_CAP = "review-cap-spent"
 
 #: The hold after two first-run dispatches that did not finish.
 EXHAUSTED_OBSERVED = "the proof run did not finish after two dispatches"
@@ -194,6 +286,14 @@ RERUN_UNANSWERED_OBSERVED = ("the re-run finished and the critic's findings "
                              "still stand at the record's head")
 RERUN_UNANSWERED_NEEDS = ("an operator reading the critic's findings and the "
                           "re-run's thread")
+#: The same two holds when the gate's decline is what stands (DRE-6488).
+GATE_EXHAUSTED_OBSERVED = "the gate declined the record twice after re-observation"
+GATE_EXHAUSTED_NEEDS = ("an operator reading the gate's declined note and the two "
+                        "re-run receipts")
+GATE_UNANSWERED_OBSERVED = ("the re-run finished and the gate's decline still "
+                            "stands at the record's head")
+GATE_UNANSWERED_NEEDS = ("an operator reading the gate's declined note and the "
+                         "re-run's thread")
 
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
 #: time on the lane read that says when the card entered the lane.
@@ -202,8 +302,9 @@ PROMOTED_MARK = f"🧹 Auto-promoted Backlog → {FIRST_RUN_LANE}"
 #: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha.
 PR_FIELDS = "number,url,headRefName,state,mergeCommit"
 #: The fields the re-run reads off the record pull request: its head, when it
-#: opened, and the comments the critic's verdict is read from.
-RECORD_FIELDS = "number,url,headRefName,state,headRefOid,createdAt,comments"
+#: opened, the comments the critic's verdict and the gate's note are read
+#: from, and the files the record is found among (DRE-6488).
+RECORD_FIELDS = "number,url,headRefName,state,headRefOid,createdAt,comments,files"
 
 #: The card's epic, its siblings and its blocking relations, in one read.
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
@@ -214,6 +315,9 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
            } }""" % reconcile.INVERSE_RELATIONS_GQL
 
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
+#: The gate's hold note's first line (`evaluate_and_merge.sh`):
+#: `⏸️ Merge gate: declined @<sha> — <reason>`.
+_DECLINED = re.compile(rf"{reconcile.GATE_HOLD_NOTE_MARKER} @(?P<sha>[0-9a-f]+) — (?P<reason>.*)")
 
 
 def _when(stamp) -> datetime | None:
@@ -244,6 +348,11 @@ class LinearReads:
         issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
         if not issue:
             raise LookupError(f"Linear answered no card for {identifier}")
+        # A proof is blocked by every other card in its epic, so a big epic's
+        # fills the first page: read it to the end, as the sweep does
+        # (DRE-6416). A failed read leaves it UNKNOWN, and condition 3 refuses.
+        issue.setdefault("identifier", identifier)
+        reconcile.complete_inverse_relations([issue])
         return issue
 
     def thread(self, identifier: str):
@@ -263,6 +372,14 @@ def merged_pr(identifier: str, repo: str) -> dict | None:
     reads it."""
     return card_pr.find(identifier, repo=repo, fields=PR_FIELDS,
                         run=lambda args: reconcile.gh_read(*args))
+
+
+def record_at(repo: str, pr: dict, head: str) -> proof_record.Record:
+    """The record the pull request adds, read at `head` — the reader and the
+    finder the merge gate uses, through the sweep's GitHub read seam. Never
+    raises: a record not found or not read has no text and says why."""
+    return proof_record.fetch(repo, pr.get("files"), head,
+                              gh=lambda args: reconcile.gh_read(*args))
 
 
 def record_pr(identifier: str, repo: str) -> dict | None:
@@ -341,9 +458,67 @@ def _entered(card: dict) -> str:
     return (stamps[-1] if stamps else "") or card.get("updatedAt") or ""
 
 
+def _gate_hold_note(pr: dict) -> dict | None:
+    """The gate's newest hold note on the pull request, with its time — read
+    as `reconcile.gate_hold_note_line` reads it: qa-bot only and anchored on
+    the first line, so a person quoting the note is not it."""
+    for comment in reversed(pr.get("comments") or []):
+        if (reconcile.is_qa_bot_comment(comment) and merge_gate.opens_with_marker(
+                comment.get("body") or "", reconcile.GATE_HOLD_NOTE_MARKER)):
+            return comment
+    return None
+
+
+@dataclass(frozen=True)
+class _Trigger:
+    """What stands at the record's head and sends it back to the proof run:
+    the critic's findings (DRE-5931) or the gate's decline (DRE-6488)."""
+    at: datetime        # when it was posted; a receipt after it answers it
+    reason: str         # the dispatch reason, before `sha7`
+    stands: str         # what still stands, for the lines
+    answer: tuple       # what a newer receipt answered, and what it is newer than
+    again: str          # what the budget line says happened again
+    exhausted: tuple    # the hold after two re-runs
+    unanswered: tuple   # the hold after a re-run that finished
+    gate: bool = False  # the record's rows are read only for the gate's
+
+
 def _number(card: dict) -> int:
     digits = (card.get("identifier") or "").rsplit("-", 1)[-1]
     return int(digits) if digits.isdigit() else 0
+
+
+def _turn(now: datetime) -> int:
+    """This pass's number on the sweep's clock."""
+    return int(now.timestamp() // (PASS_MINUTES * 60))
+
+
+#: ⌊2³² / φ⌋, odd — Knuth's multiplicative hash: a turn's golden-ratio
+#: fraction of the ring, in 32 bits.
+_GOLDEN = 2654435769
+
+
+def _turned(ring: list, now: datetime) -> list:
+    """`ring` begun at this turn's place on it (DRE-6464), so the candidates
+    one pass read and refused are not the next pass's front. The place is the
+    turn's golden-ratio fraction of the ring: consecutive turns step about
+    0.618 of the way round, so a ring of up to four is read whole within two
+    passes, whatever the turn. Because the multiplier is odd, on a steady
+    cadence of k turns the start takes every 32-bit fraction a multiple of
+    2^v apart (2^v the largest power of two in k), so every place on a ring
+    under 2³² / k comes up — every turn, every second or every fourth alike.
+    A fixed stride of three did not: at every second turn a ring of six or
+    twelve read the same windows forever."""
+    if not ring:
+        return ring
+    start = (_turn(now) * _GOLDEN % 2 ** 32) * len(ring) >> 32
+    return ring[start:] + ring[:start]
+
+
+#: The voices after a hold that cannot discharge it: anything else — a
+#: `🔬 proof-observed` line or a console answer of any reading — leaves the
+#: hold to the thread read.
+_INERT = (spoken_thread.PIPELINE, spoken_thread.PERSON, spoken_thread.UNKNOWN)
 
 
 def _answered_after_park(voices: list) -> tuple | None:
@@ -376,10 +551,10 @@ UNCHECKED_NOTE = ("a console answer after it COULD NOT BE CHECKED (the "
 
 class _Pass:
     def __init__(self, repo, slug, *, live, linear, read, find_pr, run_state,
-                 release, fire, voices, now, find_record):
+                 release, fire, voices, now, find_record, read_record):
         self.repo, self.slug, self.live = repo, slug, live
         self.linear, self.read, self.find_pr = linear, read, find_pr
-        self.find_record = find_record
+        self.find_record, self.read_record = find_record, read_record
         self.run_state, self.release, self.fire = run_state, release, fire
         self.voices, self.now = voices, now
         self.tally = Tally()
@@ -421,6 +596,30 @@ class _Pass:
         return comments, viewer, voices
 
     # -- a first run -------------------------------------------------------- #
+
+    def held_on_the_lane(self, card: dict) -> str | None:
+        """Condition 4 off the lane read, at no request (DRE-6464): a
+        `needs-human` label, or a `🔬 proof-waiting` hold the card's comment
+        window shows with nothing after it that could discharge it — the
+        refusal line `first_run` would name. None leaves the card to the
+        reads. The window is the newest comments, so anything after a hold it
+        shows is in it; a hold older than the window is the reads' to find."""
+        if "needs-human" in _labels(card):
+            return "it carries needs-human"
+        window = linear_ops.window_nodes(card.get("comments"))
+        try:
+            voices = self.voices(window, None, card=card["identifier"])
+        except Exception:  # noqa: BLE001 — unread rules nothing out
+            return None
+        marks = [i for i, v in enumerate(voices)
+                 if (v.body or "").lstrip().startswith(HOLD_MARK)]
+        if not marks:
+            return None
+        if any(v.kind not in _INERT
+               or (v.body or "").lstrip().startswith(OBSERVED_MARK)
+               for v in voices[marks[-1] + 1:]):
+            return None
+        return f"held by {_first_line(voices[marks[-1]].body)}"
 
     def first_run(self, card: dict) -> tuple:
         """`(reason, count)` for an eligible first-run candidate, or raises
@@ -566,9 +765,46 @@ class _Pass:
     # -- the re-run after the critic's findings (DRE-5931) ------------------ #
 
     def is_rerun(self, card: dict) -> bool:
-        """A PROOF card of this repo in `In Review`, at no request."""
-        return (_ours(card, self.slug)
-                and (card.get("state") or {}).get("name") == RERUN_LANE)
+        """A PROOF card of this repo in `In Review` — or in `Green Light`
+        under the sweep's review-cap park (DRE-6406) — at no request.
+
+        The park is read off the lane read's own comment window: the label
+        with a live `review-cap-spent` stamp. A label over a spent stamp, or
+        over none, is a person's hold and is not read — unless the window is
+        partial and the stamp may lie beyond it, when the whole thread
+        decides (`rerunning`), as it does for `is_return`."""
+        if not _ours(card, self.slug):
+            return False
+        lane = (card.get("state") or {}).get("name")
+        if lane == RERUN_LANE:
+            return True
+        if lane != RETURN_LANE:
+            return False
+        window = linear_ops.window_nodes(card.get("comments"))
+        reason = hold.reason_of((card.get("labels") or {}).get("nodes") or [],
+                                [c.get("body") or "" for c in window])
+        return reason == REVIEW_CAP or (
+            reason == "manual" and linear_ops.window_is_partial(card.get("comments")))
+
+    def _parked_on(self, card: dict, comments: list, number, head: str) -> None:
+        """For a `Green Light` card, the one refusal an `In Review` card does
+        not have: the sweep's review-cap stamp, read off the whole thread,
+        must be on the record's current head. On an older head the holds lane
+        lifts it and returns the card to `In Review` (`hygiene_holds.RETURNS`)
+        — that card is its, and nothing is dispatched here."""
+        if (card.get("state") or {}).get("name") != RETURN_LANE:
+            return
+        bodies = [c.get("body") or "" for c in comments]
+        labels = (card.get("labels") or {}).get("nodes") or []
+        if hold.reason_of(labels, bodies) != REVIEW_CAP:
+            raise _Refused("re-run: its Green Light hold is not the sweep's "
+                           "review-cap park — a person's, not read here")
+        at = (hold.read_stamp(bodies) or {}).get("at") or ""
+        if at != head:
+            raise _Refused(f"re-run: the review-cap park is on {at[:7]}, and "
+                           f"#{number}'s head is now {head[:7]} — the holds lane "
+                           "lifts it on that new head and returns the card to "
+                           f"{RERUN_LANE}; nothing dispatched", "held")
 
     def rerunning(self, card: dict) -> tuple:
         """`(reason, count)` for a record the critic sent back, or raises
@@ -590,15 +826,16 @@ class _Pass:
         verdicts = reconcile.critic_comments(pr)
         standing = reconcile.standing_verdict(verdicts, merge_gate.CRITIC_MARKER,
                                               head)
-        if standing != SENT_BACK:
+        if standing == SENT_BACK:
+            trigger = self._sent_back(verdicts, number)
+        elif standing == APPROVED:
+            trigger = self._declined(pr, number, head)
+        else:
             raise _Refused(f"re-run: the critic's newest verdict on #{number} "
                            f"at {head[:7]} is {standing} — nothing to answer")
-        sent_back = _when(verdicts[-1].get("createdAt"))
-        if sent_back is None:
-            raise _Refused(f"re-run: the critic's verdict on #{number} has no "
-                           "time to read the receipts against")
 
         comments, viewer, voices = self._thread(card)
+        self._parked_on(card, comments, number, head)
         holds = _open_holds(voices)
         if holds:
             note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
@@ -610,36 +847,119 @@ class _Pass:
             raise _Refused(f"re-run: a run is in flight or unreadable — {why}",
                            "running")
 
+        if trigger.gate:
+            self._waiting(ident, voices, trigger,
+                          self._unmet_at_head(pr, number, head), head)
+
         # A receipt with no readable time is read as the newer, and counted:
         # unread never answers "nothing has been sent" or "budget left".
         receipts = [(_when(v.created_at), r) for v in voices
                     if v.kind == spoken_thread.PIPELINE
                     and (r := proof_run_state.receipt(v.body or "")) is not None]
-        newer = [r for when, r in receipts if when is None or when > sent_back]
+        newer = [r for when, r in receipts if when is None or when > trigger.at]
         if newer and got.state == "finished":
-            self._hold_once(ident, voices, RERUN_UNANSWERED_OBSERVED,
-                            RERUN_UNANSWERED_NEEDS)
+            self._hold_once(ident, voices, *trigger.unanswered)
             raise _Refused(f"re-run: the run after the proof-run receipt of "
-                           f"{newer[-1].at} reads finished, and the critic's "
-                           f"REQUEST_CHANGES still stands at {head[:7]} — held "
+                           f"{newer[-1].at} reads finished, and "
+                           f"{trigger.stands} still stands at {head[:7]} — held "
                            f"for an operator: {why}", "held")
         if newer and got.state not in RERUN_AGAIN:
-            raise _Refused(f"re-run: the findings at {head[:7]} are answered — "
-                           f"the proof-run receipt of {newer[-1].at} is newer "
-                           f"than the verdict and its run reads {got.state}: "
-                           f"{why}")
+            raise _Refused(f"re-run: {trigger.answer[0]} at {head[:7]} is "
+                           f"answered — the proof-run receipt of {newer[-1].at} "
+                           f"is newer than {trigger.answer[1]} and its run reads "
+                           f"{got.state}: {why}")
+        # One budget, whichever reader held the record: every `re-run`
+        # receipt since the pull request opened counts (DRE-6488).
         opened = _when(pr.get("createdAt"))
         spent = sum(1 for when, r in receipts
                     if r.count.startswith("re-run")
                     and (opened is None or when is None or when > opened))
         if spent >= RERUN_BUDGET:
-            self._hold_once(ident, voices, RERUN_EXHAUSTED_OBSERVED,
-                            RERUN_EXHAUSTED_NEEDS)
+            self._hold_once(ident, voices, *trigger.exhausted)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
-                           "it opened and the critic sent it back again; never "
-                           "a third", "held")
-        return (RERUN_REASON.format(sha7=head[:7]),
+                           f"it opened and {trigger.again}; never a third", "held")
+        return (trigger.reason.format(sha7=head[:7]),
                 RERUN_COUNT.format(n=spent + 1))
+
+    def _sent_back(self, verdicts: list, number) -> _Trigger:
+        """The critic's trigger: its `REQUEST_CHANGES` at the head."""
+        sent_back = _when(verdicts[-1].get("createdAt"))
+        if sent_back is None:
+            raise _Refused(f"re-run: the critic's verdict on #{number} has no "
+                           "time to read the receipts against")
+        return _Trigger(sent_back, RERUN_REASON, "the critic's REQUEST_CHANGES",
+                        ("the findings", "the verdict"),
+                        "the critic sent it back again",
+                        (RERUN_EXHAUSTED_OBSERVED, RERUN_EXHAUSTED_NEEDS),
+                        (RERUN_UNANSWERED_OBSERVED, RERUN_UNANSWERED_NEEDS))
+
+    def _declined(self, pr: dict, number, head: str) -> _Trigger:
+        """The gate's trigger (DRE-6488): with the critic's `APPROVE` at the
+        head, the gate's newest hold note declines the record AT that head
+        as not proven. A note on an earlier head is already answered — the
+        gate reads every new head itself — and any other reason is not this."""
+        note = _gate_hold_note(pr)
+        if note is None:
+            raise _Refused(f"re-run: the critic's newest verdict on #{number} at "
+                           f"{head[:7]} is APPROVE and the gate has posted no "
+                           "decline note on it — nothing to answer")
+        line = merge_gate.first_line(note.get("body"))
+        found = _DECLINED.search(line)
+        reason = found.group("reason") if found else line
+        if not reason.startswith(NOT_PROVEN):
+            raise _Refused(f"re-run: the gate's newest hold note on #{number} is "
+                           f"not a proof-record decline — "
+                           f"“{proof_record._cut(reason, 80)}”; nothing to answer")
+        sha = found.group("sha")
+        if sha != head:
+            raise _Refused(f"re-run: the gate's decline on #{number} is at "
+                           f"{sha[:7]}, and its head is now {head[:7]} — the "
+                           "critic's next verdict and the gate's next reading "
+                           "answer the new head; nothing to answer")
+        declined = _when(note.get("createdAt"))
+        if declined is None:
+            raise _Refused(f"re-run: the gate's decline on #{number} has no "
+                           "time to read the receipts against")
+        return _Trigger(declined, GATE_RERUN_REASON, "the gate's decline",
+                        ("the decline", "the gate's note"),
+                        "the gate declined it again",
+                        (GATE_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_NEEDS),
+                        (GATE_UNANSWERED_OBSERVED, GATE_UNANSWERED_NEEDS), gate=True)
+
+    def _unmet_at_head(self, pr: dict, number, head: str) -> list:
+        """The record's unmet rows at the head, by the reader the gate held
+        on — never the note's quotation. Unread never answers "re-run"."""
+        try:
+            found = self.read_record(pr, head)
+        except Exception as error:  # noqa: BLE001
+            found = proof_record.Record(None, None, str(error))
+        if found is None or found.text is None:
+            detail = getattr(found, "detail", None) or "nothing was read"
+            raise _Refused(f"re-run: the record on #{number} could not be read "
+                           f"at {head[:7]} — {detail}; nothing dispatched")
+        return proof_record.reading(found.text).unmet
+
+    def _waiting(self, ident: str, voices: list, trigger: _Trigger,
+                 unmet: list, head: str) -> None:
+        """Behavior 1 (DRE-6488): a row waiting on an event holds the card
+        instead of a re-run, which could not make the record merge while it
+        stands. Posted once per decline: a hold posted after this note and
+        since discharged by the operator's `🔬 proof-observed` leaves the
+        record to a re-run that re-observes every row."""
+        waiting = [(criterion, event) for criterion, result in unmet
+                   if (event := proof_record.row_waiting(result))]
+        if not waiting:
+            return
+        observed = "; ".join(proof_record._cut(c, 70) for c, _ in waiting)
+        needs = "; ".join(event for _, event in waiting)
+        line = linear_ops.proof_waiting_line(observed, needs)
+        posted = [_when(v.created_at) for v in voices
+                  if _first_line(v.body).startswith(line)]
+        if any(when is None or when > trigger.at for when in posted):
+            return
+        self._hold(ident, observed, needs)
+        raise _Refused(f"re-run: {len(waiting)} row(s) of the record at "
+                       f"{head[:7]} wait on an event — held for {needs}", "held")
 
     # -- the dispatch --------------------------------------------------------- #
 
@@ -674,10 +994,12 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
           run_state: Callable | None = None, release: Callable | None = None,
           fire: Callable | None = None, voices: Callable | None = None,
           now: datetime | None = None,
-          find_record: Callable | None = None) -> Tally:
-    """One pass: the return first, then first runs oldest first, then
-    re-runs; at most `PROOF_CANDIDATES_PER_PASS` candidates read and one
-    dispatch."""
+          find_record: Callable | None = None,
+          read_record: Callable | None = None) -> Tally:
+    """One pass: the return first, then first runs oldest first and re-runs,
+    begun at this pass's turn; at most `PROOF_CANDIDATES_PER_PASS` candidates
+    read and one dispatch. A first run held on the lane read is named every
+    pass and read by none."""
     one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
                 read=read or github_read,
                 find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
@@ -686,11 +1008,16 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                 fire=fire or plan_run.fire,
                 voices=voices or spoken_thread.voices,
                 now=now or datetime.now(timezone.utc),
-                find_record=find_record or (lambda ident: record_pr(ident, repo)))
+                find_record=find_record or (lambda ident: record_pr(ident, repo)),
+                read_record=read_record or (lambda pr, head: record_at(repo, pr, head)))
     tally = one.tally
 
-    returns = [c for c in one.linear.lane(RETURN_LANE) if one.is_return(c)]
-    first = []
+    # One Green Light read serves both branches; a card the return takes is
+    # never also a re-run candidate (DRE-6406).
+    green = one.linear.lane(RETURN_LANE)
+    returns = [c for c in green if one.is_return(c)]
+    returning = {c["identifier"] for c in returns}
+    first, held = [], []
     for card in one.linear.lane(FIRST_RUN_LANE):
         if not proof_and_demo.is_proof(card.get("title") or ""):
             continue
@@ -700,14 +1027,29 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                                      f"{slug_on_card or 'no repo'}, not {slug}")
             tally.refused += 1
             continue
+        why = one.held_on_the_lane(card)
+        if why:
+            held.append((card, why))
+            continue
         first.append(card)
     first.sort(key=lambda c: (_entered(c), _number(c)))
-    reruns = sorted((c for c in one.linear.lane(RERUN_LANE) if one.is_rerun(c)),
+    held.sort(key=lambda pair: (_entered(pair[0]), _number(pair[0])))
+    reruns = sorted((c for c in one.linear.lane(RERUN_LANE) + [
+                        c for c in green if c["identifier"] not in returning]
+                     if one.is_rerun(c)),
                     key=_number)
 
-    queue = ([(c, one.returning) for c in returns]
-             + [(c, one.first_run) for c in first]
-             + [(c, one.rerunning) for c in reruns])
+    # A hold the lane read shows is named every pass and spends no read: the
+    # sweep log says why each card waits without it keeping a slot (DRE-6464).
+    for card, why in held:
+        _say(card["identifier"], f"condition 4 (hold): {why}")
+        tally.held += 1
+
+    # The candidates that need a read share one ring, begun at this pass's
+    # turn; the return, one per signed answer, keeps the front.
+    ring = ([(c, one.first_run) for c in first]
+            + [(c, one.rerunning) for c in reruns])
+    queue = [(c, one.returning) for c in returns] + _turned(ring, one.now)
     read, tried = 0, False
     for card, decide in queue:
         ident = card["identifier"]
@@ -716,7 +1058,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
             tally.deferred += 1
             continue
         if read >= PROOF_CANDIDATES_PER_PASS:
-            _say(ident, "deferred — candidate cap, read next pass")
+            _say(ident, "deferred — candidate cap, read on a later pass")
             tally.deferred += 1
             continue
         read += 1
@@ -742,6 +1084,8 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     live = is_live()
+    if not live:
+        print(f"{PREFIX} {switch_reason.off_line(LIVE_VARIABLE, os.environ)}")
     try:
         tally = sweep(repo, slug, live=live)
     except reconcile.BoardHeld as held:

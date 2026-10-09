@@ -202,7 +202,7 @@ class TestTheRuleIsOff:
 # 4. machine-written branches owe no line
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("branch", [
-    "dependabot/npm_and_yarn/x", "repair/DRE-1-abc", "bot/split-ledger",
+    "dependabot/npm_and_yarn/x", "repair/DRE-1-abc", "bot/standards-sync",
 ])
 def test_an_exempt_branch_is_not_held_by_this_condition(cutover, branch):
     d = decide(body=LINELESS, branch=branch)
@@ -210,7 +210,7 @@ def test_an_exempt_branch_is_not_held_by_this_condition(cutover, branch):
 
 
 def test_the_exempt_branches_merge_where_nothing_else_holds(cutover):
-    for branch in ("repair/DRE-1-abc", "bot/split-ledger"):
+    for branch in ("repair/DRE-1-abc", "bot/standards-sync"):
         assert decide(body=LINELESS, branch=branch).action == "merge"
 
 

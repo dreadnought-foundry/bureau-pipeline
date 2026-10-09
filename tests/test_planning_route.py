@@ -485,6 +485,11 @@ class _Card:
             # `tests/test_verdict_retirement.py` covers the ones that were.
             routing_verdict, "lane_moves", side_effect=lambda i: [],
         ), patch.object(
+            # The escalation reads it too, once a note is on the thread, to
+            # tell this attempt's note from a spent one (DRE-6490) — the same
+            # card, never moved INTO Planning, so no attempt opens there.
+            linear_ops, "lane_history", side_effect=lambda i, **_kw: [],
+        ), patch.object(
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(
             linear_ops, "add_label",

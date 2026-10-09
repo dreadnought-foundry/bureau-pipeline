@@ -208,18 +208,42 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
 A row you could not observe says `Not observed.` and why. It is never dropped,
 and never hedged into `Met` — "met, as far as I could tell" is `Not observed.`
 
+**A row that can be observed only once an event happens is written as waiting
+for it (DRE-6488).** When the criterion can be observed once something happens
+that no one on this card has to cause — a release not yet cut, a date not yet
+reached, a scheduled run that has not fired — the Result reads
+
+    Not observed. waiting for <the event>: <what it would show>
+
+and names the event. A capability the run lacks — no browser on a local run,
+`aws: none`, a spent sign-in ration, the Linear request cap, a repository the
+read token cannot reach — is written as above, never as `waiting for`. The
+sweep reads this shape and nothing else: a record the gate declines with a
+waiting row is held with `🔬 proof-waiting` naming the event, and is re-run
+once the operator records that it happened; any other unmet row is re-run.
+
 **A record with any row not met does not merge (DRE-6141).** The merge gate
 reads the table at your pull request's head and holds it open while any judged
 row reads `Not observed.` or `Not met.` — the closing row is not judged. The
 card cannot close either: its close reads the same table, and it also refuses
-while a `🔬 proof-waiting` hold stands that nothing discharged. Write the
+while a `🔬 proof-waiting` hold stands that nothing discharged.
+An approved, all-met record that merged overrides an operator's
+`🔬 proof-waiting` hold posted before the merge — the proof dispatcher's own
+holds and one typed with `linear_ops.py proof-waiting` — because the merged
+record is the observation the hold was waiting for (DRE-6489). Two holds
+still stand: one naming the CEO's press, until his signed console answer,
+and one posted after the merge. Write the
 record exactly as you saw it anyway, open its pull request, and let the gate
 hold it. The hold is the right outcome for a proof that saw nothing. A held
 record is amended in place by the next run (resume, below), and the gate reads
 it again on every new head, so a record whose rows are all met merges with
 nobody involved. For a press only the CEO can make, the park below is what
-brings that next run. For any other row, nothing re-runs the record by itself.
-It waits, held, for a person. Never reword a row to get it merged.
+brings that next run. For any other row, the sweep sends the record back to a
+proof run once the critic has approved it and the gate has declined it at its
+head — at most twice per record pull request, counted with the critic's
+send-backs, then held for an operator (DRE-6488); a row waiting for an event
+is held until the operator records the event instead. Never reword a row to
+get it merged.
 
 **A criterion a later decision overtook is accepted by the operator, never by
 you (DRE-6244).** An accepted row is used only when a criterion has been

@@ -81,7 +81,9 @@ to get wrong:
   comes to YOU (DRE-5376): revise that card in place — never re-file it — so
   every finding is answered, and say per finding what you changed. The critic
   reads it again. Only a decision the CEO owns goes to him, as one plain-English
-  question.
+  question. A card carrying a `## Decisions from the CEO` block is carrying the
+  pipeline's copy of his signed answers: keep that block where it is, word for
+  word, and write the rest of the card to agree with it.
 
 ## Classifying the card itself (DRE-3029)
 
@@ -126,6 +128,12 @@ Four rules decide it, in this order:
 One fact outranks all four, and the card states it: **a card that already has
 children is an epic**, whatever its body says. Children are cards that ship
 separately, which is what the word means; nothing with them is one pull request.
+
+**A decision the CEO already signed is settled.** A card whose body carries
+a `## Decisions from the CEO` block has had its decision made and signed: the
+pipeline copied his verified console answers there, and the signature stays on
+his comment. Read the words under that heading as settled, and do not answer
+`decision: true` for a question those words already answer (DRE-6357).
 
 **Refuse rather than guess.** If two shapes both fit, if none does, or if the
 body is a decision, you escalate — you never pick the one that seems likeliest.
@@ -359,9 +367,11 @@ the plan afterwards needs to know.
   the secret", "raise the org Actions budget") must be labeled `needs-human` +
   `no-code` + `agent:devops` — NOT `agent:engineer`. An engineer agent has no
   AWS creds and cannot verify or execute it, so it would loop and end in a
-  blocker; the `needs-human` label tells the reconcile sweep and promotion gate
-  to leave it for the operator, and `no-code` is what says there is no diff in
-  it — the create seam refuses `needs-human` without `no-code` (DRE-3512). Use
+  blocker. The create seam adds `operator-step` to such a card and stamps the
+  hold `operator-step` — the sweep lifts it once every blocker is terminal and
+  carries the card to Hand-work, the operator's queue (DRE-6408). `no-code` is
+  what says there is no diff in it — the create seam refuses `needs-human`
+  without `no-code` (DRE-3512). Use
   judgment: if the card's deliverable is a diff in a product repo, it's
   `agent:engineer`; if it's an action only a human/operator can take and
   verify, it's `needs-human` + `no-code` + `agent:devops`.

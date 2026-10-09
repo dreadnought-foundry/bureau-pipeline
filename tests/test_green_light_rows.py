@@ -198,6 +198,7 @@ ESCALATE = ("scripts/planning_escalation.py", "escalate")
 CMD_EXIT = ("scripts/planning_route.py", "_cmd_exit")
 PARK = ("scripts/code_owner_hold.py", "park")
 REVIEW_CAP = ("scripts/reconcile.py", "hand_review_nudge_to_person")
+EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 
 
 # --------------------------------------------------------------------------- #
@@ -258,8 +259,8 @@ class TestTheRepositoryPasses:
     def test_the_callers_found_are_exactly_the_ones_declared(self):
         contract = _contract()
         declared = _declared(contract)
-        assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP}
-        counts = {ESCALATE: 6, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1}
+        assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH}
+        counts = {ESCALATE: 6, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -594,6 +595,43 @@ class TestTheAgentEscalationGate:
         })
         found = grl.problems(str(root), contract)
         assert _named(found, "zz-esc.yml#Escalate", "agent-escalation"), found
+
+
+@pytest.mark.usefixtures("declared_callers")
+class TestTheEpicGrowthQuestion:
+    """The sweep's question about an epic grown past the size the CEO approved
+    (DRE-6414): a `no-code` card of its own, created in Green Light by one
+    function and no other."""
+
+    UNIT = "reconcile.py#ask_epic_growth_question"
+
+    def test_the_site_is_discovered_and_declared_as_its_own_kind(self):
+        assert grl.EPIC_GROWTH_SITE == self.UNIT
+        assert "epic-growth" in grl.kinds()
+        records = [r for r in grl.arrivals() if r["kind"] == "epic-growth"]
+        assert [(r["where"], r["writer"], r["card"], r["callers"]) for r in records] == [
+            (self.UNIT, "reconcile.py", "DRE-6414", ["reconcile.py#report_epic_growth"])]
+        assert self.UNIT in {unit for _, unit in grl.green_light_writes()}
+        assert grl._gate_problems(records[0], [], str(ROOT), grl.lane_name()) == []
+
+    def test_an_epic_growth_row_anywhere_else_fails_by_word(self):
+        contract = _contract()
+        _entrance(contract)["arrivals"].append({
+            "kind": "epic-growth", "writer": "reconcile.py",
+            "where": "reconcile.py#flag_stalled_planning", "evidence": "x",
+            "card": "DRE-0",
+        })
+        found = grl.problems(contract=contract)
+        assert _named(found, "reconcile.py#flag_stalled_planning", "epic-growth",
+                      self.UNIT), found
+
+    def test_an_undeclared_question_fails_by_location(self, tmp_path):
+        root = _copy_repo(tmp_path)
+        contract = _contract()
+        _entrance(contract)["arrivals"] = [
+            r for r in _entrance(contract)["arrivals"] if r["where"] != self.UNIT]
+        found = grl.problems(str(root), contract)
+        assert _named(found, self.UNIT, "no arrival on its entrance declares it"), found
 
 
 @pytest.mark.usefixtures("declared_callers")

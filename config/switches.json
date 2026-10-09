@@ -1,0 +1,26 @@
+{
+  "_readme": "Every pipeline switch (DRE-6434): a repository variable a reusable workflow reads from `vars.*` and treats as live only when it is exactly `true`. Read through scripts/switch_reason.py; `python3 scripts/switch_reason.py check` holds this file to the tree — every `vars.<NAME>_LIVE` read under .github/workflows/ must be a row, and every row's `reader` must read `vars.<name>` inside its `step`. A switch that is off says why in its companion variable, `<name>` + `companion_suffix`, naming the DRE-<n> cards it waits on; the sibling that alarms reads `alarm_after_hours`.",
+  "version": 1,
+  "companion_suffix": "_OFF_UNTIL",
+  "alarm_after_hours": 12,
+  "switches": [
+    {
+      "name": "PROOF_DISPATCH_LIVE",
+      "reader": ".github/workflows/reconcile.yml",
+      "step": "Dispatch proof runs",
+      "means": "The sweep dispatches a proof run at each PROOF card whose epic's build cards are Done and released, instead of printing what it would dispatch."
+    },
+    {
+      "name": "GREEN_LIGHT_REPLY_LIVE",
+      "reader": ".github/workflows/reconcile.yml",
+      "step": "Reply to the CEO's Green Light comments",
+      "means": "A comment the CEO leaves on an epic waiting in Green Light sends the plan back for a review, instead of the sweep printing what it would do."
+    },
+    {
+      "name": "HYGIENE_LIVE",
+      "reader": ".github/workflows/hygiene.yml",
+      "step": "Decide dry run",
+      "means": "The scheduled hygiene run writes to the board, instead of running dry."
+    }
+  ]
+}

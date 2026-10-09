@@ -429,6 +429,8 @@ jobs:
           GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          # DRE-6439: a dry pass names why it is dry — the switch's off line.
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
@@ -443,7 +445,7 @@ jobs:
           STATUS=0
           python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
           BUDGET=$(grep '^linear-budget:' proof-dispatch.log || true)
-          SUMMARY=$(grep -E '^(proof-dispatch: eligible|would:)' proof-dispatch.log || true)
+          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|would:)' proof-dispatch.log || true)
           {
             echo "### Proof-run dispatch — spend"
             echo
@@ -485,6 +487,50 @@ jobs:
           SUMMARY=$(grep -E '^(green-light-reply: green light|would:)' green-light-reply.log || true)
           {
             echo "### Green Light reply — spend"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then printf '%s\n' "$SUMMARY"; fi
+            if [ -n "$BUDGET" ]; then
+              printf '%s\n' "$BUDGET"
+            else
+              echo "no linear-budget: line — the phase exited before its trailer, so its spend is unknown"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
+      # DRE-6436: every switch in config/switches.json, read on every full
+      # pass — on, or off with its reason and each named card's state, or off
+      # with no reason given. It prints and reads; it posts nothing. Each
+      # switch and its `_OFF_UNTIL` companion is plumbed from the caller's
+      # variables, and a catalog row with no plumbing here fails
+      # tests/test_switch_reason.py by name (docs/switches.md).
+      - name: Read the switches
+        if: inputs.sweep_reason == ''
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          GREEN_LIGHT_REPLY_LIVE: ${{ vars.GREEN_LIGHT_REPLY_LIVE }}
+          GREEN_LIGHT_REPLY_LIVE_OFF_UNTIL: ${{ vars.GREEN_LIGHT_REPLY_LIVE_OFF_UNTIL }}
+          HYGIENE_LIVE: ${{ vars.HYGIENE_LIVE }}
+          HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/switch_reason.py 2>&1 | tee switches.log || STATUS=$?
+          BUDGET=$(grep '^linear-budget:' switches.log || true)
+          SUMMARY=$(grep '^switches:' switches.log || true)
+          {
+            echo "### Switches — spend"
             echo
             echo '```'
             if [ -n "$SUMMARY" ]; then printf '%s\n' "$SUMMARY"; fi
