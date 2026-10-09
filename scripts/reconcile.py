@@ -6719,6 +6719,20 @@ def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
         return True
 
 
+def undecided_hold_is_overdue(green_lit_at: str | None) -> bool:
+    """Should the epic cap's hold (DRE-6493) be posted to the card, or only
+    logged? The activate route asks the cap and writes its note within
+    minutes of the approval, so inside `POST_CRITIC_GRACE_MINUTES` the hold
+    is the race this gate exists for and says nothing on the card. An
+    unreadable green light speaks — unknown must not silence a refusal."""
+    if not green_lit_at:
+        return True
+    try:
+        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+    except ValueError:
+        return True
+
+
 def epic_thread(epic: str) -> list | None:
     """The epic's comment thread WITH authorship, or None when Linear cannot
     say (DRE-3059).
@@ -7184,6 +7198,22 @@ def promote_ready(
                         refusal_tag, green_light[epic_id],
                         [r.get("body") or "" for r in post_critic[epic_id] or []])
                 else:
+                    # The cap's decision, asked before any child moves
+                    # (DRE-6493): the relay sends this sweep and `plan.yml` at
+                    # once, and a child promoted first made rule 1 start the
+                    # epic past the cap. Logged at once; said on the card after
+                    # the activate route's window, as the second critic's is.
+                    refusal = epic_cap.promotion_refusal(
+                        card["identifier"],
+                        epic_id,
+                        epic_records([epic_id]).get(epic_id),
+                        post_critic[epic_id],
+                        green_light[epic_id],
+                    )
+                    if refusal is not None:
+                        refusal_tag = epic_cap.UNDECIDED_TAG
+                        surface_refusal = undecided_hold_is_overdue(green_light[epic_id])
+                if refusal is None:
                     refusal = mid_epic.promotion_refusal(
                         card["identifier"],
                         card.get("createdAt"),
