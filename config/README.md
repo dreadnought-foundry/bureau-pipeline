@@ -164,7 +164,11 @@ of it is ever a runtime lookup.
   `python3 scripts/switch_reason.py check` DISCOVERS every `vars.<NAME>_LIVE`
   read under `.github/workflows/` and fails, by name, on a read with no row
   and on a row whose `reader` does not read `vars.<name>` inside its `step` —
-  the list is derived from the workflows, never restated.
+  the list is derived from the workflows, never restated. The sweep's
+  `Read the switches` step prints every row on every full pass (DRE-6436), so
+  a row added here also owes that step its variable and its `_OFF_UNTIL`
+  companion — `tests/test_switch_reason.py` fails by name until it has them.
+  `docs/switches.md` is the page a person reads.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.

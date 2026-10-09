@@ -530,7 +530,7 @@ def _unplumbed(step: dict, rows: list) -> list:
 class TestStep:
     def test_it_is_the_last_step_of_the_sweep_job_on_a_full_pass(self):
         step = _read_step()
-        assert _steps()[-1] is step
+        assert _steps()[-1]["name"] == READ_STEP
         assert step["if"] == "inputs.sweep_reason == ''"
 
     def test_it_carries_the_sweeps_env(self):
