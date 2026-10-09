@@ -62,6 +62,14 @@ second way back: an **Operator decision** comment starts the fix agent directly
 label off, `reason_of` answers nothing, so the hygiene lane never meets that
 card.
 
+A review cap is the exception (DRE-6247). An Operator decision on a card parked
+in Green Light under a live `review-cap-spent` stamp starts the fix agent the
+same way, but neither restart takes the label off: the fix run's Announce step
+asks `hold.py reason` first, and the sweep's `_release_card` asks
+`hold.reason_of` before it writes the label or the lane. On `review-cap-spent`
+both stand down — the sweep posts only its answer note — and the card waits in
+Green Light, still held, for the fix's new head to lift it back to In Review.
+
 ### `stranded-no-run` waits on a person's re-send
 
 This is the one reason whose lift waits on something a person does. The sweep
