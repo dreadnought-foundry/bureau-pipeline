@@ -214,16 +214,16 @@ Sending a card back says its routing is in question. When it leaves Planning
 again, the exit retires every verdict written before the card re-entered and
 stamps the one it reads now. The retirement is a `🪦 verdict-retired` comment
 naming the verdict, when it was written and when the card came back. The old
-comment stays as the record, and nothing routes on it. A `hand-built` the old
-verdict put on comes off unless the new verdict puts it on too. A `hand-built`
-the retired verdict never applied is a person's own, and stays. Two live
-verdicts on one card are still refused.
+comment stays as the record, and nothing routes on it. An `operator-step` the
+old verdict put on comes off unless the new verdict puts it on too. No verdict
+applies `hand-built` (DRE-6227), so a `hand-built` on the card is a person's
+own, and stays. Two live verdicts on one card are still refused.
 
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
-| **WORKBENCH** | Needs an interactive flow or live system state | `Hand-work`, marked `hand-built` — the sweep promotes it and stamps the mark; the operator works it there, at an interactive session. Nothing is dispatched. |
-| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `hand-built` + `no-code` — same move, same person, and no code is produced. |
+| **WORKBENCH** | A person works it at an interactive session, against live system state | `Hand-work`, with no mark — kept for historical demo cards and the pipeline's own record cards (`repair_card`, `model_adoption_actions`); the acceptance criteria never produce it (DRE-6227). Nothing is dispatched. |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` — the sweep promotes it and stamps the marks; the operator does the step there, and no code is produced. Nothing is dispatched. |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
 | **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |
 
@@ -233,10 +233,14 @@ precedence: an explicit role label (`agent:ops`, `no-code`), then the title
 convention **anchored at the start of the title**, then the criteria rule; only
 what survives all three is a judgement call worth asking a model about.
 
-**Split the visual case carefully.** Static visual fidelity is FLEET-checkable —
-`qa-review.yml` screenshots the changed screens and hands the critic both the
-design PNG and the render. Interactive or live-state behaviour is WORKBENCH.
-Screenshotting a screen is not driving a flow. The signal reads the phrases
+**Precedence 3 reads static visual fidelity only (DRE-6227).** Static visual
+fidelity is FLEET-checkable — `qa-review.yml` screenshots the changed screens
+and hands the critic both the design PNG and the render. No criterion phrase
+routes a card WORKBENCH any more: "sign in", "by hand" and "in production" once
+did, and in one week they sent six cards of buildable code to a lane where
+nobody builds them. A criterion that can only be met by watching the change run
+after it ships is a proof observation, or a follow-up card under DRE-3075's
+two-cards shape (below) — never a hold on the build. The signal reads the phrases
 real cards write — `renders`, `rendered`, `design tokens`, each one naming the
 cards it was read from — after DRE-2831 found the shipped list matching phrases
 nobody writes and sending real UI cards to a model. It still does not decide
@@ -386,7 +390,7 @@ screen behavior on the local run, **and** the request it makes succeeding live.
 Either half alone proves nothing — a screen that works locally can still send
 a request the live system refuses, and a request seen live says nothing about
 the screen that sends it. The five conditions below do not change, and the
-proof still routes `WORKBENCH` or `OPERATOR`, never `FLEET`.
+proof never routes `FLEET`: its `agent:ops` label routes it `OPERATOR`.
 
 **The pipeline starts the proof run itself (DRE-5920).** When an epic's last
 build card is Done and the release carrying those merges is live — read off
@@ -400,8 +404,8 @@ of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
 agent's `hyg-proof-closed` receipt (DRE-5365), so the CEO reads the merged
 record and nothing waits on him. The closing line on the card (condition 5)
 names who reads the record, not who moves the card, and stays verbatim. The
-card still routes `WORKBENCH` or `OPERATOR` and the five conditions do not
-change: the run does the operator's observing, and the operator and the CEO
+card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
+do not change: the run does the operator's observing, and the operator and the CEO
 stay the accountable readers. A criterion only the CEO's own login can satisfy
 is written on the card in the words `needs the CEO's press: <the press>`; a run
 that meets one records everything else, parks the card once in Green Light
@@ -414,11 +418,12 @@ convention that drifts:
 1. It is the epic's **last child**.
 2. It is **blocked by every other child**, as real Linear `blockedBy`
    relations. Prose is not a relation and the gate reads the relation.
-3. **It may not carry `FLEET`** — it routes to `WORKBENCH` or `OPERATOR`,
+3. **It may not carry `FLEET`** — its `agent:ops` label routes it `OPERATOR`,
    because a proof the fleet can close by merging its own code is not a proof.
    The whole value is that something other than the builder confirms it. The
-   pair of acceptable verdicts is derived from `config/routing-verdicts.json`
-   (the verdicts whose accountable actor is a human), never restated in code.
+   acceptable verdicts are derived from `config/routing-verdicts.json` (the
+   verdicts whose accountable actor is a human, `WORKBENCH` beside `OPERATOR`
+   today), never restated in code.
 4. **It may not wear a build role** (DRE-3039) — `agent:engineer`,
    `agent:frontend`, `agent:devops`, `agent:database-architect`. A role a build
    run is dispatched for is a card the fleet picks up, and the thing it would
@@ -434,17 +439,29 @@ convention that drifts:
 
 **And the check writes the verdict it computes onto the card** — the same
 `🧭 routing-verdict` comment every other verdict uses, so
-`routing_verdict.promotion_refusal` reads it and the sweep hands the card to
-the person who confirms it: to `Hand-work`, the person-work lane, marked
-`hand-built` (plus `no-code` for OPERATOR), with nothing dispatched (DRE-3385,
-DRE-5321). Those marks are the protection,
-and only the stamp produces them. It used to compute the verdict, print it and
-stamp nothing, and a verdictless child promoted exactly as it always had: the
-card was dispatched to a build agent the moment its siblings reached Done
-(DRE-3039). One writer, the one that already knows the answer. A legacy
-epic's second closing child is stamped only where its own verdict is one a
-human acts on — nothing checks that child any more, and writing `FLEET` onto an
-unchecked card would send the fleet at it rather than keep the fleet off it.
+`routing_verdict.promotion_refusal` reads it and the sweep carries the card to
+`Hand-work`, the person-work lane, marked `no-code`, with no build run
+dispatched (DRE-3385, DRE-5321). The proof dispatch starts the proof run there
+(`scripts/proof_dispatch.py`, DRE-5926). A proof card receives no person's mark
+(`routing_verdict.card_marks`), because the proof run takes it, not the
+operator. **Its protection is its `no-code` and the proof dispatch**, and only
+the stamp produces the verdict they follow. It used to compute the verdict,
+print it and stamp nothing, and a verdictless child promoted exactly as it
+always had: the card was dispatched to a build agent the moment its siblings
+reached Done (DRE-3039). One writer, the one that already knows the answer. A
+legacy epic's second closing child is stamped only where its own verdict is one
+a human acts on — nothing checks that child any more, and writing `FLEET` onto
+an unchecked card would send the fleet at it rather than keep the fleet off it.
+
+**`hand-built` is the CEO's mark, and nothing automatic applies it.** The CEO,
+2026-10-07: "Hand-built cards are typically when I tell them, 'Hey do that by
+hand.' It shouldn't come from anybody else." So `hand-built` goes on a card
+only when he asks for it. The pipeline reads it — the sweep, the groomer and the
+epic cap all leave a `hand-built` card to the person building it — and never
+writes it: no verdict marks it, and no stamp or sweep puts it on (DRE-6227).
+Before that rule the sweep wore it onto buildable code six times in one week. An
+operator step carries `operator-step` instead, the mark OPERATOR applies beside
+`no-code`, and buildable code is FLEET.
 
 An epic missing the card is bounced back to `Planning` with the reason
 named, the same way an epic with invalid children is. The enforcer is

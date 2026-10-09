@@ -4,9 +4,9 @@
 When an epic's last build card is Done and the release carrying its merges is
 live, this phase starts the proof run at the epic's `PROOF:` card, the way the
 sweep starts builds. Nothing did before: a PROOF card routes OPERATOR, lands in
-`Hand-work` marked `hand-built` and `no-code`, and `Hand-work` is not a lane
-the sweep's nudge loop reads (`reconcile.SWEEP_STATES`), so the card waited
-for a person. On 2026-10-05, 13 of the 17 epics counted against the epic cap
+`Hand-work` carrying `no-code` (`routing_verdict.card_marks`), and `Hand-work`
+is not a lane the sweep's nudge loop reads (`reconcile.SWEEP_STATES`), so the
+card waited for a person. On 2026-10-05, 13 of the 17 epics counted against the epic cap
 were waiting on exactly that.
 
 Its own module and its own step in `reconcile.yml` (`Dispatch proof runs`,

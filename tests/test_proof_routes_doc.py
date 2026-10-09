@@ -87,7 +87,7 @@ class StandardTest(unittest.TestCase):
         self.assertSays("the request it makes succeeding live")
 
     def test_the_routing_and_the_five_conditions_are_unchanged(self):
-        self.assertSays("never `FLEET`")
+        self.assertSays("proof never routes `FLEET`")
         numbered = re.findall(r"^(\d+)\. ", self.section, re.M)
         self.assertEqual(numbered, ["1", "2", "3", "4", "5"],
                          "the proof section carries exactly the five conditions")
@@ -123,8 +123,10 @@ class StandardTest(unittest.TestCase):
         self.assertSays("parks the card once in Green Light")
         self.assertSays("nobody chases it")
 
-    def test_the_proof_still_routes_workbench_or_operator(self):
-        self.assertSays("The card still routes `WORKBENCH` or `OPERATOR`")
+    def test_the_proof_still_routes_operator(self):
+        """DRE-6229: the proof's `agent:ops` label routes it OPERATOR — the
+        standard no longer says "WORKBENCH or OPERATOR"."""
+        self.assertSays("The card still routes `OPERATOR`, by its `agent:ops` label")
         self.assertSays("the five conditions do not change")
 
 

@@ -45,8 +45,11 @@ Intake → Planning → Green Light → Backlog → Todo → Hand-work → In Pr
   the CEO moves ONLY the epic to `In Progress`.
 - **`Backlog`** — process-controlled: a card here carries a routing verdict, and
   the sweep promotes every card whose verdict it carries — FLEET to `Todo` for a
-  dispatched run, WORKBENCH and OPERATOR to `Hand-work` marked `hand-built` for
-  a person (DRE-3385, DRE-5321). PARKED stays, and a card carrying no verdict at all is refused.
+  dispatched run, WORKBENCH and OPERATOR to `Hand-work` for a person, stamping
+  each verdict's own marks: `operator-step` + `no-code` for OPERATOR, none for
+  WORKBENCH (DRE-3385, DRE-5321, DRE-6227). `hand-built` is the CEO's mark,
+  applied only when he asks, and nothing automatic writes it. PARKED stays,
+  and a card carrying no verdict at all is refused.
   So is a card sent back since its verdict — one that has been in Intake,
   Green Light, Triage or a closed lane since — because a verdict approves one
   trip through Planning (`stale-verdict`, DRE-4962).
