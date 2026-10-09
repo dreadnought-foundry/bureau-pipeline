@@ -132,7 +132,15 @@ it reads. The bound is unchanged.
 Unless `PROOF_DISPATCH_LIVE` is exactly `true`, the phase prints `would:`
 lines and writes nothing — no dispatch, no receipt, no hold.
 
-CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`):
+A dry pass first says why it is dry (DRE-6439): one line, the switch's own
+`switch_reason.off_line` after the prefix, before any `would:` line — off
+until the cards its `PROOF_DISPATCH_LIVE_OFF_UNTIL` companion names land, off
+with no reason given, or off for a reason that names no card. It is composed
+from the environment alone and costs no read; each named card's state is the
+`Read the switches` step's job (DRE-6436). A live pass prints nothing of it.
+
+CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`,
+`PROOF_DISPATCH_LIVE_OFF_UNTIL`):
 
     proof_dispatch.py
 """
@@ -170,6 +178,7 @@ import proof_run_state  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
 import spoken_thread  # noqa: E402
+import switch_reason  # noqa: E402 — the dry run's off line (DRE-6439)
 
 #: Opens every line this phase prints.
 PREFIX = "proof-dispatch:"
@@ -913,6 +922,8 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     live = is_live()
+    if not live:
+        print(f"{PREFIX} {switch_reason.off_line(LIVE_VARIABLE, os.environ)}")
     try:
         tally = sweep(repo, slug, live=live)
     except reconcile.BoardHeld as held:
