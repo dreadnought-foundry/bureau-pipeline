@@ -22,7 +22,8 @@ and the four subcommands here are everything around it.
     repo mapped through `config/repo-map.json`; and the matrix the workflow
     fans out over. It also decides which cards are EXCLUDED without
     judgement (DRE-5306): a parent epic with an open child, a `hand-built`
-    card, a card moved into Intake from another lane in the last
+    card (or one carrying any hand mark the routing vocabulary declares,
+    DRE-6226), a card moved into Intake from another lane in the last
     `EXCLUDE_DAYS` days, a card whose board context could not be read, and
     (DRE-5746) a card whose repo is not a key of `config/repo-map.json`.
     An excluded card gets no agent, its verdict is `excluded`, and `apply`
@@ -92,6 +93,7 @@ import groom_verify  # noqa: E402 — the spare count and source names
 import groomer  # noqa: E402 — proposal_id, assert_disjoint
 import linear_ops  # noqa: E402 — the Linear read `targets` makes
 import planning_classify  # noqa: E402 — which model answered
+import routing_verdict  # noqa: E402 — the person marks (DRE-6226)
 import sanitize_untrusted  # noqa: E402 — the fence, made mechanical
 import spoken_thread  # noqa: E402 — the one reader of who said a comment
 
@@ -169,14 +171,26 @@ VIEWER_UNREAD = "the pipeline's own Linear identity could not be read"
 #: fifth, `UNMAPPED`, off the repo map (DRE-5746). Decided in `targets`,
 #: never by the model.
 EXCLUDE_EPIC = "parent epic with {n} open {children}"
-#: The label `reconcile.HAND_BUILT_LABEL` names: a person builds this card.
-HAND_BUILT = "hand-built"
+#: The CEO's mark, the routing vocabulary's own constant (DRE-6226): a
+#: person builds this card. `exclusion` reads every hand mark, this one among
+#: them, off `routing_verdict.hand_marks`.
+HAND_BUILT = routing_verdict.HAND_BUILT_LABEL
 EXCLUDE_MOVED = "moved into Intake on {day}"
 EXCLUDE_UNREAD = "board context unread: {why}"
-_EXCLUSION_RE = re.compile(
-    r"(parent epic with [1-9]\d* open (child|children)|hand-built"
-    r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*"
-    r"|repo not in config/repo-map\.json: \S+)")
+
+
+def _exclusion_re() -> re.Pattern:
+    """The five reasons' exact shape. The label reason is whichever hand mark
+    `exclusion` found, read off the vocabulary each time (DRE-6226), so
+    `operator-step` is a reason the moment OPERATOR is marked with it. Read as
+    `_EXCLUSION_RE`, the name it has always had."""
+    marks = "|".join(re.escape(m.lower()) for m in routing_verdict.hand_marks())
+    return re.compile(
+        r"(parent epic with [1-9]\d* open (child|children)|" + marks
+        + r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*"
+        r"|repo not in config/repo-map\.json: \S+)")
+
+
 INTAKE = "Intake"
 #: `prepare`'s whole output for an excluded card, and the prefix of the
 #: `not-now` and `sequence` reason `apply` writes for one.
@@ -250,7 +264,7 @@ def _fenced(text: str) -> str:
 
 def is_exclusion(reason) -> bool:
     """Is this one of the five exclusion reasons, in its exact shape?"""
-    return isinstance(reason, str) and bool(_EXCLUSION_RE.fullmatch(reason))
+    return isinstance(reason, str) and bool(_exclusion_re().fullmatch(reason))
 
 
 def is_unverified_reason(reason) -> bool:
@@ -441,8 +455,10 @@ def exclusion(issue: dict, *, now: datetime) -> str | None:
     if n:
         return EXCLUDE_EPIC.format(n=n, children="child" if n == 1
                                    else "children")
-    if HAND_BUILT in {label.get("name") for label in _nodes(issue, "labels")}:
-        return HAND_BUILT
+    labels = {(label.get("name") or "").lower() for label in _nodes(issue, "labels")}
+    for mark in routing_verdict.hand_marks():
+        if mark.lower() in labels:
+            return mark.lower()
     # The newest move INTO Intake from another lane, whoever's key made it:
     # nothing can tell the console's move for the CEO from a workflow's.
     into = [at for at, node in _moves(issue)
@@ -1221,6 +1237,16 @@ def _run(args, *, lops) -> int:
           + (f"; not posted — {block['not_posted_why']}"
              if block["not_posted_why"] else ""))
     return 0
+
+
+def __getattr__(name: str):
+    """`groom_verify_agent._EXCLUSION_RE` — the name readers have always used
+    (PEP 562), built from `_exclusion_re` on each read so the vocabulary
+    decides it (DRE-6226). Anything else is the AttributeError it would have
+    been."""
+    if name == "_EXCLUSION_RE":
+        return _exclusion_re()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":                                  # pragma: no cover

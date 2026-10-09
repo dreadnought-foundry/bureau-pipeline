@@ -130,6 +130,19 @@ def lefts(items, target=None):
             and (target is None or i.target == target)]
 
 
+def _flip_operator_marker(monkeypatch) -> None:
+    """The routing vocabulary with OPERATOR's marker flipped in memory —
+    `operator-step` + `no-code` — the shape `tests/test_person_marks.py` uses."""
+    import routing_verdict
+    doc = copy.deepcopy(routing_verdict.load())
+    for record in doc["verdicts"]:
+        if record["name"] == "OPERATOR":
+            record["marks"] = ["operator-step", "no-code"]
+        if record["name"] == "WORKBENCH":
+            record["marks"] = []
+    monkeypatch.setattr(routing_verdict, "load", lambda path=None: doc)
+
+
 def card_of(doc, ident):
     return next(c for cards in doc["lanes"].values() for c in cards
                 if c["identifier"] == ident)
@@ -747,6 +760,26 @@ class TestATodoCardWithNoRun:
         card_of(doc, "DRE-9107")["labels"]["nodes"].append({"name": "hand-built"})
         items, _ctx, _gh = plan(doc)
         assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
+
+    def test_an_operator_step_card_is_a_persons_once_the_vocabulary_marks_it(self, monkeypatch):
+        # DRE-6226: the mark is read off the routing vocabulary, so OPERATOR's
+        # marker flipping to `operator-step` is a data change for this rule.
+        _flip_operator_marker(monkeypatch)
+        for label in ("operator-step", "Operator-Step", "hand-built"):
+            doc = fixture()
+            card_of(doc, "DRE-9107")["labels"]["nodes"].append({"name": label})
+            items, _ctx, _gh = plan(doc)
+            assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == [], label
+
+    def test_no_code_alone_is_still_a_build_card(self, monkeypatch):
+        # `no-code` alone is not a person's card — the sweep still re-dispatches
+        # it (`reconcile.hand_built` reads `routing_verdict.hand_marks`), so a
+        # re-dispatch with no run is still named.
+        _flip_operator_marker(monkeypatch)
+        doc = fixture()
+        card_of(doc, "DRE-9107")["labels"]["nodes"].append({"name": "no-code"})
+        items, _ctx, _gh = plan(doc)
+        assert [a.target for a in actions(items, "DRE-9107")] == ["DRE-9107"]
 
     def test_only_todo_is_read_for_this_rule(self):
         doc = fixture()

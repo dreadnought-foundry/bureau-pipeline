@@ -1130,6 +1130,57 @@ def test_each_exclusion_drops_the_card_from_judgement(tmp_path, case):
     _assert_excluded_through_the_job(tmp_path, targets, "DRE-101", reason)
 
 
+def _flip_operator_marker(monkeypatch) -> None:
+    """The routing vocabulary with OPERATOR's marker flipped in memory —
+    `operator-step` + `no-code` — the shape `tests/test_person_marks.py` uses."""
+    import copy
+
+    import routing_verdict
+    doc = copy.deepcopy(routing_verdict.load())
+    for record in doc["verdicts"]:
+        if record["name"] == "OPERATOR":
+            record["marks"] = ["operator-step", "no-code"]
+        if record["name"] == "WORKBENCH":
+            record["marks"] = []
+    monkeypatch.setattr(routing_verdict, "load", lambda path=None: doc)
+
+
+@pytest.mark.parametrize("label, reason", [
+    ("operator-step", "operator-step"),
+    ("Operator-Step", "operator-step"),
+    ("hand-built", "hand-built"),
+])
+def test_a_person_mark_excludes_the_card_by_its_own_name(monkeypatch, label, reason):
+    # DRE-6226: the marks are the routing vocabulary's, so OPERATOR's marker
+    # flipping to `operator-step` is a data change for the groomer too.
+    _flip_operator_marker(monkeypatch)
+    issue = issue_node("DRE-101", labels=("repo:portico", label))
+    assert gva.exclusion(issue, now=datetime.now(timezone.utc)) == reason
+    assert gva.is_exclusion(reason)
+    assert gva._EXCLUSION_RE.fullmatch(reason)
+
+
+@pytest.mark.parametrize("labels", [
+    ("repo:portico", "agent:engineer"),
+    # `no-code` alone is not a person's card (`routing_verdict.hand_marks`).
+    ("repo:portico", "no-code"),
+])
+def test_a_card_with_no_hand_mark_is_not_excluded_on_labels(monkeypatch, labels):
+    _flip_operator_marker(monkeypatch)
+    issue = issue_node("DRE-101", labels=labels)
+    assert gva.exclusion(issue, now=datetime.now(timezone.utc)) is None
+    assert not gva.is_exclusion("no-code")
+
+
+def test_the_exclusion_shape_follows_the_vocabulary(monkeypatch):
+    assert gva.is_exclusion("hand-built")
+    assert not gva.is_exclusion("operator-step")
+    _flip_operator_marker(monkeypatch)
+    assert gva.is_exclusion("hand-built") and gva.is_exclusion("operator-step")
+    assert gva._EXCLUSION_RE.fullmatch("operator-step")
+    assert not gva.is_exclusion("operator-steps")
+
+
 def _assert_excluded_through_the_job(tmp_path, targets, card_id, reason):
     """`prepare` writes the one line, and `verdict` says `excluded` with the
     reason whatever the raw file says and whatever the step did."""
