@@ -164,9 +164,17 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: under its WIP cap has far fewer. Each target's thread comes off the pass's
 #: cache, so no per-card read. 45 + 2 = 47.
 #:
+#: It was 47 until DRE-6410 (measured 2026-10-09: 48) closed a finished epic
+#: from Backlog too. The Backlog epics come off the promotion phase's own
+#: Backlog read, which is not a new read, and their children off the pass's
+#: epic record: one more paged request, for every Backlog epic of this repo at
+#: once (`EPIC_RECORD_PAGE` of them to a page). It cannot ride the active
+#: epics' page, because Backlog is read after the carry on purpose (DRE-5347)
+#: and the active close runs before it. 47 + 1 = 48.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 47
+REAL_BOARD_SWEEP_BUDGET = 48
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -657,7 +665,18 @@ def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
         v for q, v in replay.fake.queries
         if "$numbers" in q and "inverseRelations" in q
     ]
-    assert len(batched) == 1, f"{len(batched)} batched epic read(s) in one pass"
+    # Two since DRE-6410, and never more: the active epics' page, and the
+    # page for this repo's Backlog epics, which are known only once promotion
+    # reads Backlog after the carry. Each is ONE read for all its epics.
+    backlog_epics = {
+        int(c["identifier"].split("-")[1]) for c in replay.fake.cards.values()
+        if (c.get("state") or {}).get("name") == "Backlog"
+        and reconcile.card_repo(c) == SLUG and reconcile.card_is_epic(c)
+    }
+    assert backlog_epics, "the board holds no Backlog epic — the second page proves nothing"
+    assert len(batched) == 2, f"{len(batched)} batched epic read(s) in one pass"
+    assert {int(n) for n in batched[1]["numbers"]} <= backlog_epics, (
+        "the second batched read is the Backlog epics' page and nothing else")
     assert len(batched[0]["numbers"]) >= 9, (
         f"the record was read for {len(batched[0]['numbers'])} epic(s) — the "
         "2026-09-12 board had nine active, and a one-epic batch proves nothing"
