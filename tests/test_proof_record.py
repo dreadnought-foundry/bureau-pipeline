@@ -364,6 +364,47 @@ class TestAnAcceptedRow:
 
 
 # --------------------------------------------------------------------------
+# A row waiting on a later event (DRE-6488)
+# --------------------------------------------------------------------------
+class TestARowWaitingOnAnEvent:
+    @pytest.mark.parametrize("result, event", [
+        ("Not observed. waiting for the 2026-10-14 release: the tag moves",
+         "the 2026-10-14 release: the tag moves"),
+        ("NOT OBSERVED. Waiting For the nightly run at 02:07 PT",
+         "the nightly run at 02:07 PT"),
+        ("**Not observed.** *waiting for* the 2026-10-20 date: the reminder fires",
+         "the 2026-10-20 date: the reminder fires"),
+        ("Not observed.  waiting for\tthe scheduled sweep", "the scheduled sweep"),
+    ])
+    def test_the_event_is_named_after_waiting_for(self, result, event):
+        assert proof_record.row_waiting(result) == event
+
+    @pytest.mark.parametrize("result", [
+        "Not observed. needs a browser on a local run of the released commit",
+        "Not observed. aws: none — waiting for a role is not an event",
+        "Not observed. the Linear request cap of 40 was reached",
+        "Not met. waiting for the release did not help",
+        "Not met.",
+        "Met. waiting for nothing",
+        "Met.",
+        "ACCEPTED by operator decision — overtaken "
+        "(https://linear.app/dreadnoughtfoundry/issue/DRE-6000/x#comment-abc)",
+        "Not observed. waiting for",
+        "waiting for the 2026-10-14 release",
+        "",
+    ])
+    def test_nothing_else_is_a_waiting_row(self, result):
+        assert proof_record.row_waiting(result) is None
+
+    def test_the_brief_carries_the_shape_beside_its_not_observed_paragraph(self):
+        brief = (ROOT / "briefs" / "proof.md").read_text(encoding="utf-8")
+        record = brief.split("## The record", 1)[1].split("\n## ", 1)[0]
+        assert "Not observed. waiting for <the event>" in record
+        at = record.index("A row you could not observe says `Not observed.`")
+        assert record.index("Not observed. waiting for <the event>") > at
+
+
+# --------------------------------------------------------------------------
 # The hold-discharge reader
 # --------------------------------------------------------------------------
 def voice(kind, body):
