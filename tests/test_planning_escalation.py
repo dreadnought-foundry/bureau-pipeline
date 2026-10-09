@@ -190,7 +190,8 @@ class _Card:
 
         def lane_history(identifier, **kw):
             self.history_reads += 1
-            return [{"createdAt": at, "toState": {"name": lane}}
+            return [{"toState": {"name": lane},
+                     **({} if at is MISSING else {"createdAt": at})}
                     for lane, at in reversed(self.history)]
 
         def read(identifier, **kw):
@@ -1046,6 +1047,44 @@ class TestACardBackInPlanningIsAskedAgain:
         outcome = card.run(run)
         assert outcome.parked and outcome.posted
         assert len(_escalation_notes(card)) == 1
+
+    @pytest.mark.parametrize("bad_time", [MISSING, None, ""],
+                             ids=["no-createdAt-key", "null", "empty"])
+    def test_a_return_to_planning_with_no_readable_time_asks_again(self, bad_time):
+        """The card's newest entry into Planning is in the history, but its
+        time cannot be read. That is a return the note cannot be placed
+        against — a spent attempt, not "no return at all", which would print
+        `already escalated` and park the card with nothing on it."""
+        history = _dre_4710_history(second_answer=False)
+        history[-1] = (history[-1][0], bad_time)
+        card = _Card(comments=[(planning_escalation.escalation_comment(DRE_4710, CONSENT_WHY),
+                                DRE_4710_FIRST_NOTE_AT)], history=history)
+        _escalate(card, DRE_4710)
+        assert len(_escalation_notes(card)) == 1, "the card was moved with no note — a silent park"
+        assert card.states == [(DRE_4710, planning_escalation.destination())]
+
+    def test_lane_history_keeps_only_lane_moves_newest_first(self):
+        """`lane_history` asks for the newest `first` entries and drops every
+        entry that is not a lane move, in Linear's order — read against the
+        shape Linear actually answered for DRE-5034."""
+        recorded = json.loads((ROOT / "tests" / "fixtures"
+                               / "dre-5034-history-2026-09-29.json").read_text(encoding="utf-8"))
+        nodes = recorded["history_first_12"]
+        queries = []
+
+        def gql(query, variables):
+            queries.append((query, variables))
+            return {"issue": {"history": {"nodes": nodes}}}
+
+        with patch.object(linear_ops, "gql", side_effect=gql):
+            moves = linear_ops.lane_history("DRE-5034", first=12)
+        assert [m["createdAt"] for m in moves] == [
+            n["createdAt"] for n in nodes if n.get("toState")]
+        assert all(m["toState"]["name"] for m in moves)
+        assert len(moves) < len(nodes), "the fixture carries no non-lane entry to drop"
+        query, variables = queries[0]
+        assert "history(first: 12)" in query
+        assert variables == {"id": "DRE-5034"}
 
     def test_a_card_with_no_prior_note_reads_no_history(self):
         """The ordinary first park is unchanged and costs no extra request."""

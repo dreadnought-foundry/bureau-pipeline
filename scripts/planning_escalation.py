@@ -1085,14 +1085,15 @@ def back_in_planning_at(history, contract: dict | None = None) -> str | None:
     that counts is an entry into the escalation's segment
     (`in_escalation_segment`) other than the destination: a move into the lane
     the card parks in is this module's own move, and the CEO's answer is the
-    move OUT of it, back to where the card is planned.
+    move OUT of it, back to where the card is planned. That move with no time
+    on it answers `""`: the card did come back, at a time nobody can read.
     """
     lane = destination()
     for node in history or ():
         name = ((node or {}).get("toState") or {}).get("name") or ""
         name = lane_contract.aliases(contract).get(name, name)
         if name != lane and in_escalation_segment(name, contract):
-            return node.get("createdAt")
+            return node.get("createdAt") or ""
     return None
 
 
@@ -1109,9 +1110,10 @@ def _asked_this_attempt(linear_ops, identifier: str, records) -> int:
     nothing on it. A note older than that return is a spent attempt's.
 
     The history is read only when there is a note to place, so the ordinary
-    first park costs no request. A note whose time cannot be read, or a
-    history that cannot be, counts as spent — the same direction DRE-4223
-    resolves: a duplicate question is the cheap failure.
+    first park costs no request. A note whose time cannot be read, a return
+    to Planning whose time cannot be, or a history that cannot be read at
+    all, counts as spent — the same direction DRE-4223 resolves: a duplicate
+    question is the cheap failure.
     """
     notes = [r for r in _this_attempt(records) if ESCALATION_TAG in _body(r)]
     if not notes:
@@ -1124,6 +1126,10 @@ def _asked_this_attempt(linear_ops, identifier: str, records) -> int:
         return 0
     if since is None:
         return len(notes)
+    if not since:
+        # Back in Planning at a time that cannot be read: `_stale` reads an
+        # empty attempt as no attempt at all, so it is settled here.
+        return 0
     return sum(1 for note in notes if not _stale(note, since))
 
 
