@@ -45,6 +45,14 @@ stays in `In Review` while its record is amended.
   7. The release carrying the siblings' merges is `ready` — `waiting` and
      `unknown` both wait.
 
+One exception to the order, and it costs nothing (DRE-6464): condition 4 is
+read first, off the lane read, where the lane read already answers it — a
+`needs-human` label, or a `🔬 proof-waiting` hold the card's comment window
+shows with no `🔬 proof-observed` line and no console answer after it. That
+card is named on its line every pass and spends none of the candidate reads.
+A hold the window shows something after, or does not show at all, is the
+thread read's to decide, in order, as before.
+
 ## The return after the CEO's answer
 
 A `Green Light` PROOF card whose newest hold names `the CEO's press`, with a
@@ -79,7 +87,8 @@ its first run read.
 ## The bound
 
 At most one dispatch per pass — the return first, then first runs oldest
-first, then re-runs — and at most `PROOF_CANDIDATES_PER_PASS` candidates read:
+first and re-runs after them, as one ring begun at the pass's turn — and at
+most `PROOF_CANDIDATES_PER_PASS` candidates read:
 two Linear reads for the three lanes (the sweep's board read serves
 `Hand-work` and `In Review` together), then at most two per candidate (the
 card's epic and relations, and its thread; a re-run reads only its thread).
@@ -87,6 +96,16 @@ Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait — plus,
 for a card whose first relation page is full, up to
 `reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). Its
 `linear-budget:` trailer is its own, lifted into the step summary.
+
+THE TURN (DRE-6464). The bound once read the same three every pass: oldest
+first, a card held, blocked or unreadable kept its slot, and on 2026-10-09
+three of them kept DRE-6042 — whose claim is that the sweep starts it with no
+person — out of every pass until Sunday. The phase writes nothing for a card
+it refuses, so a pass cannot know what the last one read; it knows the clock.
+Each `PASS_MINUTES` turn begins the ring `PROOF_CANDIDATES_PER_PASS` places
+further on (`_turned`), so what one pass read and refused is at the back of
+the next. A pass that runs late or twice in a turn only repeats or skips a
+window — the ring still comes round. The bound is unchanged.
 
 ## The dry run
 
@@ -138,8 +157,14 @@ PREFIX = "proof-dispatch:"
 #: off this line, and `proof_run_state.RECEIPT_MARKER` reads it back.
 PROOF_RUN_TAG = "proof-run"
 
-#: How many candidates one pass reads, oldest first; the rest wait a pass.
+#: How many candidates one pass reads, from its turn's place in the queue;
+#: the rest wait for a later pass.
 PROOF_CANDIDATES_PER_PASS = 3
+
+#: The sweep's cadence — the stubs' `*/15` cron — which numbers a pass's
+#: turn. The phase writes nothing for a card it refuses, so the clock is the
+#: only thing one pass shares with the last (DRE-6464).
+PASS_MINUTES = 15
 
 #: The repository variable that turns the dry run off — `true` and nothing else.
 LIVE_VARIABLE = "PROOF_DISPATCH_LIVE"
@@ -353,6 +378,30 @@ def _number(card: dict) -> int:
     return int(digits) if digits.isdigit() else 0
 
 
+def _turn(now: datetime) -> int:
+    """This pass's number on the sweep's clock."""
+    return int(now.timestamp() // (PASS_MINUTES * 60))
+
+
+def _turned(ring: list, now: datetime) -> list:
+    """`ring` begun `PROOF_CANDIDATES_PER_PASS` places further on each turn
+    (DRE-6464), so the candidates one pass read and refused are at the back
+    of the next pass's queue rather than at its front. Two consecutive turns
+    read six places, so up to six candidates that need a read are each read
+    within two passes, and every one is reached within ⌈n / 3⌉ — however
+    many at the front cannot run yet."""
+    if not ring:
+        return ring
+    start = (_turn(now) * PROOF_CANDIDATES_PER_PASS) % len(ring)
+    return ring[start:] + ring[:start]
+
+
+#: The voices after a hold that cannot discharge it: anything else — a
+#: `🔬 proof-observed` line or a console answer of any reading — leaves the
+#: hold to the thread read.
+_INERT = (spoken_thread.PIPELINE, spoken_thread.PERSON, spoken_thread.UNKNOWN)
+
+
 def _answered_after_park(voices: list) -> tuple | None:
     """`(index, voice)` of his newest signed answer after the newest
     `🔬 proof-waiting` hold, when that hold names the CEO's press — else None."""
@@ -428,6 +477,30 @@ class _Pass:
         return comments, viewer, voices
 
     # -- a first run -------------------------------------------------------- #
+
+    def held_on_the_lane(self, card: dict) -> str | None:
+        """Condition 4 off the lane read, at no request (DRE-6464): a
+        `needs-human` label, or a `🔬 proof-waiting` hold the card's comment
+        window shows with nothing after it that could discharge it — the
+        refusal line `first_run` would name. None leaves the card to the
+        reads. The window is the newest comments, so anything after a hold it
+        shows is in it; a hold older than the window is the reads' to find."""
+        if "needs-human" in _labels(card):
+            return "it carries needs-human"
+        window = linear_ops.window_nodes(card.get("comments"))
+        try:
+            voices = self.voices(window, None, card=card["identifier"])
+        except Exception:  # noqa: BLE001 — unread rules nothing out
+            return None
+        marks = [i for i, v in enumerate(voices)
+                 if (v.body or "").lstrip().startswith(HOLD_MARK)]
+        if not marks:
+            return None
+        if any(v.kind not in _INERT
+               or (v.body or "").lstrip().startswith(OBSERVED_MARK)
+               for v in voices[marks[-1] + 1:]):
+            return None
+        return f"held by {_first_line(voices[marks[-1]].body)}"
 
     def first_run(self, card: dict) -> tuple:
         """`(reason, count)` for an eligible first-run candidate, or raises
@@ -682,9 +755,10 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
           fire: Callable | None = None, voices: Callable | None = None,
           now: datetime | None = None,
           find_record: Callable | None = None) -> Tally:
-    """One pass: the return first, then first runs oldest first, then
-    re-runs; at most `PROOF_CANDIDATES_PER_PASS` candidates read and one
-    dispatch."""
+    """One pass: the return first, then first runs oldest first and re-runs,
+    begun at this pass's turn; at most `PROOF_CANDIDATES_PER_PASS` candidates
+    read and one dispatch. A first run held on the lane read is named every
+    pass and read by none."""
     one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
                 read=read or github_read,
                 find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
@@ -697,7 +771,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
     tally = one.tally
 
     returns = [c for c in one.linear.lane(RETURN_LANE) if one.is_return(c)]
-    first = []
+    first, held = [], []
     for card in one.linear.lane(FIRST_RUN_LANE):
         if not proof_and_demo.is_proof(card.get("title") or ""):
             continue
@@ -707,14 +781,27 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                                      f"{slug_on_card or 'no repo'}, not {slug}")
             tally.refused += 1
             continue
+        why = one.held_on_the_lane(card)
+        if why:
+            held.append((card, why))
+            continue
         first.append(card)
     first.sort(key=lambda c: (_entered(c), _number(c)))
+    held.sort(key=lambda pair: (_entered(pair[0]), _number(pair[0])))
     reruns = sorted((c for c in one.linear.lane(RERUN_LANE) if one.is_rerun(c)),
                     key=_number)
 
-    queue = ([(c, one.returning) for c in returns]
-             + [(c, one.first_run) for c in first]
-             + [(c, one.rerunning) for c in reruns])
+    # A hold the lane read shows is named every pass and spends no read: the
+    # sweep log says why each card waits without it keeping a slot (DRE-6464).
+    for card, why in held:
+        _say(card["identifier"], f"condition 4 (hold): {why}")
+        tally.held += 1
+
+    # The candidates that need a read share one ring, begun at this pass's
+    # turn; the return, one per signed answer, keeps the front.
+    ring = ([(c, one.first_run) for c in first]
+            + [(c, one.rerunning) for c in reruns])
+    queue = [(c, one.returning) for c in returns] + _turned(ring, one.now)
     read, tried = 0, False
     for card, decide in queue:
         ident = card["identifier"]
@@ -723,7 +810,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
             tally.deferred += 1
             continue
         if read >= PROOF_CANDIDATES_PER_PASS:
-            _say(ident, "deferred — candidate cap, read next pass")
+            _say(ident, "deferred — candidate cap, read on a later pass")
             tally.deferred += 1
             continue
         read += 1

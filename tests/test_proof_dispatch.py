@@ -13,6 +13,10 @@ Pinned here, over a fixture board:
     posted only after a confirmed dispatch;
   * one dispatch per pass, oldest first; the second dispatch on
     `never-started` and on `dead`; the hold after two;
+  * a proof that cannot run yet does not keep the front (DRE-6464): a hold
+    the lane read shows is named every pass at no read, and the rest begin
+    at the pass's turn, so an eligible card behind three that cannot run is
+    dispatched within two passes, under the same read bound;
   * the return after the CEO's signed answer, served before a first run;
   * the re-run after the critic's findings (DRE-5931): its trigger, its
     budget of two counted apart from the first run's, its three stops, the

@@ -382,7 +382,7 @@ class TestTheRestOfParkReasonStands:
 LABEL_ALONE = {
     "scripts/dedupe_dispatch.py": ("parked_for_a_person",),
     "scripts/limit_death_record.py": ("needs_a_person",),
-    "scripts/proof_dispatch.py": ("first_run",),
+    "scripts/proof_dispatch.py": ("first_run", "held_on_the_lane"),
     "scripts/hygiene_triage.py": ("left_for_a_person",),
     "scripts/linear_ops.py": ("cmd_state", "_held_state_move"),
 }
