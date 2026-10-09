@@ -384,8 +384,7 @@ class PagedLinear:
         if query == proof_dispatch.CARD_QUERY:
             first = [_relation(f"DRE-60{i:02d}", "Done")
                      for i in range(proof_dispatch.reconcile.INVERSE_PAGE)]
-            issue = detail()
-            issue["identifier"] = variables["id"]
+            issue = detail()  # the query asks for no identifier
             issue["inverseRelations"] = {
                 "pageInfo": {"hasNextPage": True, "endCursor": "cursor-20"},
                 "nodes": first}
@@ -417,7 +416,7 @@ def test_condition_3_a_full_first_page_is_read_to_the_end_and_passes(monkeypatch
     gql = PagedLinear(rest=[_relation("DRE-6020", "Done")])
     h = _paged(monkeypatch, gql)
     h.sweep()
-    assert gql.topups and gql.topups[0]["after"] == "cursor-20"
+    assert gql.topups == [{"id": "DRE-5930", "after": "cursor-20"}]
     assert not any("condition 3" in line for line in _about(_lines(capsys), "DRE-5930"))
     assert h.fired == [("DRE-5930", REPO, "first proof run", "proof-execute")]
 
