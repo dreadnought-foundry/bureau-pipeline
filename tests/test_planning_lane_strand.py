@@ -318,6 +318,13 @@ class _Board:
     def add_label(self, ident, label):
         self.card["labels"]["nodes"].append({"name": label})
 
+    def cmd_advance(self, ident, to_state, from_states_csv, *flags, held=False):
+        # The no-route move to Triage (DRE-6190). Unstubbed, it reached live
+        # Linear and left its 401 in reconcile's module-level write failures
+        # for whichever test ran main() next in the same process.
+        if self.card["state"]["name"] in from_states_csv.split(","):
+            self.move(to_state)
+
     # --- the board's own verbs -------------------------------------------
     def move(self, state, minutes_stale=0.0):
         self.card["state"]["name"] = state
@@ -339,6 +346,8 @@ class _Board:
             reconcile.linear_ops, "cmd_comment", side_effect=self.cmd_comment
         ), patch.object(
             reconcile.linear_ops, "add_label", side_effect=self.add_label
+        ), patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=self.cmd_advance
         ):
             return reconcile.flag_stranded()
 

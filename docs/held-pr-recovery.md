@@ -115,9 +115,9 @@ answer buys real work rather than a repeat of the hold it was written against.
 If that attempt does not satisfy the critic, the loop holds again and asks for
 another answer.
 
-## The sweep's four fix-loop recovery routes
+## The sweep's five fix-loop recovery routes
 
-The answered-blocker restart above is one of four. Each reads the PULL
+The answered-blocker restart above is one of five. Each reads the PULL
 REQUEST's own state — never a report, never a run listing — backs off while a
 fix run is in flight, honours a human-parked card, leaves `DIRTY` PRs to the
 conflict sweep, and dispatches at most once per sweep.
@@ -128,6 +128,7 @@ conflict sweep, and dispatches at most once per sweep.
 | dead-fix-run | The last fix run died of a model/API error or ran out of turns, and its trigger was consumed | `dead fix run: …` |
 | answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
 | standing-verdict | A blocking verdict — the critic's REQUEST_CHANGES or, since DRE-5230, the Verifier's FAIL — binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
+| committed-not-pushed | The last fix run finished its fix and GitHub refused the push (the worker bot's `fix-run-committed-not-pushed` comment, DRE-6351), the branch is still at the head that comment names, 30 minutes have passed, and no more than one such comment stands for that head — the delivery of the saved commits never landed | `committed-not-pushed: …` |
 
 **The fourth is DRE-3130,** and it exists because the third-party failure it
 covers leaves nothing to retry. On portico PR #407 (DRE-3004) GitHub cancelled
@@ -141,12 +142,26 @@ than the verdict, so the same verdict is never dispatched twice. The fix budget
 is read through `scripts/fix_budget.py` — the same reading the fix job's own
 gate makes — so the sweep can never start a run that will refuse to work.
 
+**The fifth is DRE-6352.** A fix run that commits and cannot push hands its
+commits to the `deliver-rescue` follow-up and says so on the pull request.
+That comment is newer than the verdict, so the four routes above read it as
+the loop's last word — and when the delivery never lands, nothing comes. On
+DRE-4883 a person restarted the loop by hand after twenty-five minutes. The
+sweep now waits 30 minutes (the delivery's own ceiling is ten), checks the
+branch has not moved, and restarts the fix loop once with a `🔁` receipt that
+disarms it. It is bounded by the comment count rather than the fix budget,
+because a lost push spends no fix attempt: if the restarted run's push is refused too, its
+report parks the card with the reason, and the sweep never restarts that head
+again. Every sweep prints one line —
+`committed-not-pushed: <n> candidate(s), <m> waiting on delivery, <c> at the restart cap, <k> dispatched` —
+even when it finds nothing.
+
 ## …and the repo that has no fix agent at all (DRE-4378)
 
-All four routes above, plus the conflict sweep, end in `gh workflow run` on
+All five routes above, plus the conflict sweep, end in `gh workflow run` on
 this repo's fix stub. Some repos do not have one — `bureau-harness` is the
 sandbox, and a fix agent loose on its pull requests is exactly what it must not
-have. Before any of the five dispatches, the sweep asks one question once per
+have. Before any of the six dispatches, the sweep asks one question once per
 pass: **does this repo's `.github/workflows` listing, read and parsed, contain
 the fix stub?**
 
@@ -183,6 +198,7 @@ verdict on an OLDER commit, which is a different fault.
 | 🔓 restart receipt | Nothing. The fix loop is running again. |
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
+| `fix-run-committed-not-pushed` comment | Nothing. The saved fix is being delivered; if the branch has not moved in 30 minutes the sweep restarts the fix loop once. |
 | 🔄 `head-desync` notice | GitHub left the pull request on an older commit than its branch holds (DRE-6217, bp #780), so every check, the review and the merge gate were reading a commit the branch had already left. The sweep closed and reopened it once for that branch commit, which makes GitHub move the head. Nothing to do. If it is still behind on the next sweep, the sweep posts `head-desync-unresolved` once and stops: close and reopen it by hand, or push a new commit. |
 
 Related: `scripts/fix_budget.py` (the decision), `scripts/fix_convergence.py`

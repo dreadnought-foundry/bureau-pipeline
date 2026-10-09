@@ -1270,7 +1270,7 @@ def workflow_on_default_branch(workflow: str) -> bool | None:
     used to pay none. One per sweep, not one per pull request and not one per
     site — the listing is memoised for the pass (`_workflows_listing`) and
     every caller answers out of it, so a repo with no fix stub, which 404s the
-    Actions read at all five dispatch sites, still reads the listing once.
+    Actions read at all six dispatch sites, still reads the listing once.
 
     Silent gh() by design — this helper HAS its own fallback (None), and it
     reads the contents API, not the Actions API the AST guard in
@@ -1304,7 +1304,7 @@ def _actions_runs_busy(workflow: str) -> bool:
     hide a real permission failure, which is the same mistake pointing the
     other way.
 
-    The five dispatch sites now draw the same distinction (DRE-4378). This
+    The six dispatch sites now draw the same distinction (DRE-4378). This
     docstring used to say they deliberately did not, because "a repo with no
     fix agent and a stuck pull request is a real problem and must not be
     swallowed by this quieting". Right about the problem, wrong about the
@@ -1419,7 +1419,7 @@ def fix_agent_absent() -> bool:
     does not contain `fix_workflow()`. An unreadable, empty or unparseable
     listing proves nothing and answers False, so the caller dispatches and
     fails loudly exactly as it does today — the DRE-2525 line, in the one place
-    the five dispatch sites now share.
+    the six dispatch sites now share.
 
     The listing itself is memoised for the pass (`_workflows_listing`), so a
     sweep over a repo with no stub pays one contents read for all five sites
@@ -1431,11 +1431,12 @@ def fix_agent_absent() -> bool:
 def fix_agent_absent_hold(pr: dict) -> bool:
     """True when `pr` must NOT be dispatched because this repo has no fix agent.
 
-    The one guard the five dispatch sites — the conflict sweep,
+    The one guard the six dispatch sites — the conflict sweep,
     `fix_approved_but_red`, `retry_dead_fix_runs`,
-    `redispatch_standing_verdicts` and the answered-blocker restart — ask
-    immediately before `gh workflow run`. Two lines at each site, one reading
-    here: the sixth site somebody adds inherits it by asking the same question.
+    `redispatch_standing_verdicts`, the answered-blocker restart and
+    `redispatch_committed_not_pushed` (DRE-6352) — ask immediately before
+    `gh workflow run`. Two lines at each site, one reading here: the seventh
+    site somebody adds inherits it by asking the same question.
 
     On a provable absence: nothing is dispatched, nothing is recorded as a
     write failure, and the pull request gets the `fix-agent-absent` hold ONCE
@@ -9275,6 +9276,139 @@ def redispatch_standing_verdicts() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+#: The head a committed-not-pushed marker names on its first line, in
+#: DRE-6351's grammar (`fix_budget.committed_not_pushed_body`).
+COMMITTED_HEAD_RE = re.compile(r"head still at ([0-9a-f]{8})\b")
+
+
+def redispatch_committed_not_pushed() -> None:
+    """DRE-6352: restart the fix loop, once, for a PR whose last fix run
+    finished its fix, committed it, could not push it — and whose delivery
+    never landed.
+
+    The fifth fix-loop recovery route, beside fix_approved_but_red,
+    retry_dead_fix_runs, redispatch_standing_verdicts and
+    restart_answered_blockers, and it follows the standing-verdict route to
+    the letter. All four of those read the newest worker-bot comment as the
+    loop's last word. That is right for a push, a blocker or a hold, and wrong
+    for DRE-6351's committed-not-pushed marker: the Report handed
+    the commits to the `deliver-rescue` follow-up, and if that never lands
+    (its dispatch 403s, the job fails, the patch does not apply) the PR sits
+    with a blocking verdict, a newer worker-bot comment and no run coming.
+    DRE-4883 waited twenty-five minutes on exactly that for a person.
+
+    All of these must hold:
+
+      * the newest worker-bot comment carries
+        fix_dead_run.COMMITTED_NOT_PUSHED_TAG on its FIRST line — a quoted
+        marker is not one, and only the worker bot's count (DRE-1995);
+      * the PR's head still starts with the `head still at <sha8>` that line
+        names. A moved head means the delivery landed (or someone pushed),
+        and the push-triggered review owns the next word;
+      * the marker is older than COMMITTED_NOT_PUSHED_WAIT_MINUTES. The
+        delivery job's ceiling is ten minutes, so thirty is a finished
+        attempt, not a slow one. An unreadable timestamp waits (DRE-2034);
+      * no more than COMMITTED_NOT_PUSHED_RESTARTS worker-bot markers stand
+        for that head, counted over the REST thread by
+        fix_dead_run.committed_not_pushed_markers — the bound. A lost push
+        spends no `🔧 Fix attempt` and leaves no critic verdict, so neither
+        fix_budget nor fix_convergence can stop a push refused every time.
+        The Report posts a marker only under the cap and parks the card with
+        the real reason at it; this route reads the same constant and never
+        dispatches past it. A thread at the cap is counted, never parked here;
+      * fix_budget.decide says `run`, the card is not human-parked, the fix
+        lane is not busy and the repo has a fix agent.
+
+    Self-disarming, like its sibling: the `fix-loop-restarted` receipt is a
+    newer worker-bot comment, so the same marker is never dispatched twice.
+    One dispatch per sweep, and one summary line per sweep — including a
+    sweep that finds nothing — so the log shows the route ran.
+    """
+    tag = fix_dead_run.COMMITTED_NOT_PUSHED_TAG
+    wait = fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES
+    restarts = fix_dead_run.COMMITTED_NOT_PUSHED_RESTARTS
+    candidates = waiting = capped = dispatched = 0
+    # The sweep's one open-PR listing (the same thirty, a superset of the
+    # fields): read once for every PR-side backstop, and None — recorded
+    # loudly by the listing itself — when it could not be read.
+    prs = _open_pr_listing()
+    if prs is None:
+        print("committed-not-pushed: the open pull requests could not be read")
+    busy = None  # asked once, and only when a pull request is due a dispatch
+    for pr in prs or []:
+        if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        worker = [c for c in pr.get("comments") or [] if is_worker_bot_comment(c)]
+        if not worker:
+            continue
+        newest = worker[-1]
+        line = merge_gate.first_line(newest.get("body") or "")
+        if tag not in line:
+            continue  # the loop's last word is something else
+        candidates += 1
+        named = COMMITTED_HEAD_RE.search(line)
+        head = pr.get("headRefOid") or ""
+        if not named:
+            print(f"committed-not-pushed: PR #{pr['number']} marker names no "
+                  "head — not dispatching on a marker it cannot bind")
+            continue
+        sha8 = named.group(1)
+        if not head.startswith(sha8):
+            print(f"committed-not-pushed: PR #{pr['number']} moved past {sha8} "
+                  f"to {head[:8]} — the delivery landed; the review owns it")
+            continue
+        when = newest.get("createdAt")
+        if not when or age_minutes(when) < wait:
+            waiting += 1
+            continue
+        # The cap and the budget off the REST thread, in the fix job's own
+        # shape. The listing above already proved this thread has comments,
+        # so an EMPTY REST read is unreadable rather than empty.
+        thread = _pr_thread(pr["number"])
+        if not thread:
+            print(f"committed-not-pushed: PR #{pr['number']} thread unreadable "
+                  "— not dispatching on an uncounted cap")
+            continue
+        if fix_dead_run.committed_not_pushed_markers(thread, sha8) > restarts:
+            capped += 1
+            continue  # the Report's park owns it, never this route
+        if fix_budget.decide(thread, WORKER_REST_LOGIN, mode="fix").action != "run":
+            continue  # no attempt left to spend; the hold path owns it
+        if fix_dispatch_blocked(pr):
+            continue  # human-parked card (DRE-2024) — the loop is over
+        if busy is None:
+            # Unreadable answers BUSY (gh_actions_read).
+            busy = _actions_runs_busy(fix_workflow())
+        if busy:
+            break
+        if fix_agent_absent_hold(pr):
+            break  # no fix agent in this repo — a person is told once (DRE-4378)
+        age = int(age_minutes(when))
+        print(
+            f"committed-not-pushed: PR #{pr['number']} last fix run committed "
+            f"and could not push {age}m ago, head still at {sha8} — "
+            "restarting the fix loop"
+        )
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        dispatched += 1
+        _post_pr_note(pr["number"], pipeline_act.receipt("fix-loop-restarted", (
+            "🔁 The reconcile sweep re-dispatched the fix agent (DRE-6352). "
+            "The last fix run finished its work, but its push never reached "
+            f"the branch, and the delivery did not land within {wait} minutes "
+            f"— this pull request is still at {sha8}. So the fix loop is being "
+            "restarted once, and the next run will redo the fix. Nothing is "
+            "needed from you. If that run's push is refused too, its report "
+            "parks the card with the reason rather than this sweep restarting "
+            "it again."
+        )))
+        break  # one dispatch per sweep; the busy-guard handles the rest
+    print(
+        f"committed-not-pushed: {candidates} candidate(s), {waiting} waiting "
+        f"on delivery, {capped} at the restart cap, {dispatched} dispatched"
+    )
+
+
 # Answered-blocker restart (DRE-2409). The escalate-by-exception exit door
 # only opened halfway: a recognised operator decision reached the NEXT fix
 # dispatch, but nothing ever fired one. The REQUEST_CHANGES comment that
@@ -13118,6 +13252,17 @@ def main(
                         f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                     )
             nudges += 1
+    # The fifth fix-loop recovery route (DRE-6352), a backstop like the four
+    # in the tuple above and run the same way — but here, after the nudge
+    # loop, because it must come after redeliver_rescued_work's branch and
+    # never before it: a fix run's work that is still on its way to the
+    # branch is delivered before the loop that would redo it is restarted.
+    with _phase("redispatch_committed_not_pushed"):
+        try:
+            redispatch_committed_not_pushed()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: redispatch_committed_not_pushed: {e}", file=sys.stderr)
     # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
     # count is a finding about the front door, not about the people using it.
     with _phase("report_break_glass"):

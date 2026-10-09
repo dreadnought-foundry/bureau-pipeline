@@ -319,28 +319,31 @@ class TheWordingTest(unittest.TestCase):
 
     def test_the_mechanisms_are_the_three_that_exist(self):
         # GitHub's own words are quoted data, not a mechanism the body names.
-        # No sweep reads the marker until DRE-6352 lands, so none is named.
+        # The one restart is the reconcile sweep's (DRE-6352), said below.
         body = self.body(error="")
         for named in ("`Push rescue`", ARTIFACT, "`deliver-rescue`"):
             self.assertIn(named, body)
         for claimed in ("re-mint", "delivers a committed branch", "medic",
                         "token", "Report", "hook", "push_rescue", "agent-fix",
-                        "sweep", "re-dispatches"):
+                        "re-dispatches"):
             self.assertNotIn(claimed, body)
 
-    def test_no_wording_promises_a_restart(self):
-        """Whatever became of the delivery, nothing restarts the loop on its own."""
+    def test_the_restart_is_the_sweeps_and_happens_once(self):
+        """Whatever became of the delivery, the sweep restarts the loop once
+        (DRE-6352) — and nobody is told to do it by hand, which would put a
+        second fix run on the same branch."""
         for delivery in fix_budget.DELIVERIES:
             body = self.body(delivery=delivery, delivery_reason="HTTP 403")
-            self.assertIn("Nothing restarts the fix loop on its own yet", body)
-            self.assertIn("by hand", body)
-            self.assertNotIn("sweep", body)
+            self.assertIn("the reconcile sweep restarts the fix loop once", body)
+            self.assertNotIn("by hand", body)
+            self.assertNotIn("Nothing restarts", body)
 
     def test_the_restart_sentence_needs_an_open_pull_request(self):
         self.assertIn("30 minutes", self.body(pr_open=True))
         closed = self.body(pr_open=False)
         self.assertNotIn("by hand", closed)
         self.assertNotIn("30 minutes", closed)
+        self.assertNotIn("sweep", closed)
 
     def test_the_delivery_is_said_as_it_went(self):
         self.assertIn("was dispatched", self.body())
@@ -405,9 +408,9 @@ class CommittedNotPushedTest(unittest.TestCase):
         self.assertIn(TAG, line)
         self.assertIn(f"head still at {r.pre[:8]}", line)
         self.assertIn(r.local[:8], r.comments[0])
-        # No sweep restarts the loop until DRE-6352 lands, and the comment says so.
-        self.assertIn("re-dispatch the fix loop by hand", r.comments[0])
-        self.assertNotIn("sweep", r.comments[0])
+        # The reconcile sweep restarts the loop once (DRE-6352), and says so.
+        self.assertIn("the reconcile sweep restarts the fix loop once", r.comments[0])
+        self.assertNotIn("by hand", r.comments[0])
         self.assertTrue(r.comments[0].endswith(r.trailer + "\n"))
         self.assertEqual(1, len(r.dispatches), r.dispatches)
         self.assertEqual(["workflow", "run", "self-deliver-rescue.yml"],
