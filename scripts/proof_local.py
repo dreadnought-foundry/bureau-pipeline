@@ -110,9 +110,18 @@ def _unknown(data: dict, known, where: str) -> None:
                       f"the keys are {', '.join(known)}")
 
 
+def _declared(release) -> dict:
+    """`release_train.surfaces` over `release`, with a malformed file named
+    as `Invalid` — `surfaces` only reads, and assumes the shapes it reads."""
+    try:
+        return release_train.surfaces(release)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise Invalid(f"{RELEASE_JSON} is malformed: {exc}") from None
+
+
 def _surface(data: dict, release: dict) -> str:
     name = _text(data, "surface")
-    declared = release_train.surfaces(release)
+    declared = _declared(release)
     if name not in declared:
         named = ", ".join(declared) or "none"
         raise Invalid(f"surface {name} is not a surface of {RELEASE_JSON} "
@@ -236,7 +245,7 @@ def released(repo_root, declaration) -> Released | None:
     if not isinstance(declaration, Declaration):
         declaration = load(declaration)
     root = Path(repo_root)
-    declared = release_train.surfaces(release_train.load(root / RELEASE_JSON))
+    declared = _declared(release_train.load(root / RELEASE_JSON))
     surface = declared.get(declaration.surface)
     if surface is None:
         raise Invalid(f"surface {declaration.surface} is not a surface of "

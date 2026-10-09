@@ -163,6 +163,31 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("surface portals", done.stdout)
 
+    def release_reason(self, release) -> str:
+        """`check`'s refusal for a valid declaration beside `release`."""
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp, _valid(), release=release)
+            done = _run("check", "--declaration", str(repo.declaration))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        line = done.stdout.strip()
+        self.assertTrue(line.startswith("proof-local: invalid — "), line)
+        self.assertIn("release.json", line)
+        return line
+
+    def test_a_release_json_that_is_not_an_object_is_named(self):
+        self.release_reason([])
+
+    def test_a_surface_that_is_not_an_object_is_named(self):
+        self.release_reason({"surfaces": {"portals": "x"}})
+
+    def test_a_surfaces_value_that_is_not_an_object_is_named(self):
+        self.release_reason({"surfaces": ["portals"]})
+
+    def test_a_surface_with_a_non_numeric_spacing_is_named(self):
+        self.release_reason({"surfaces": {"portals": {
+            "tag_series": ["portals-v*"], "spacing_minutes": "abc"}}})
+
     def test_a_non_loopback_ready_url_is_named(self):
         for url in ("http://localhost:5173/", "https://127.0.0.1:5173/",
                     "http://portico.example.com:5173/", "http://127.0.0.1/",
