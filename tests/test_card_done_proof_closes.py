@@ -24,6 +24,15 @@ ADDED, at the merged head, and refuses unless every judged row is met; then
 reads the card's thread and refuses while a hold stands that nothing
 discharged. The thread is read only after the record passes.
 
+THE STALE HOLD (DRE-6489): on 2026-10-09 DRE-6353's record (#834) merged at
+14:11 PT approved with every judged row met, and the card stayed open because
+the proof dispatcher's re-run budget hold from 23:30 PT the night before was
+never discharged. An approved, all-met record that merged is the observation
+the hold was waiting for, so it overrides a hold posted before the merge —
+except one naming the CEO's press, which only his signed answer discharges. A
+hold posted after the merge still stands. When the ruling refuses a `PROOF:`
+card, the left-open comment names the ruling's gap, not the `no-code` sentence.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_card_done_proof_closes.py -v
 """
 from __future__ import annotations
@@ -48,6 +57,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import console_receipt  # noqa: E402
 import console_receipt_vectors as V  # noqa: E402
 import linear_ops  # noqa: E402
+import proof_dispatch  # noqa: E402
 import proof_record  # noqa: E402
 import reconcile  # noqa: E402
 import spoken_thread  # noqa: E402
@@ -101,6 +111,8 @@ HOLD = (f"{proof_record.HOLD_MARK} a guest refused the folder — needs a guest 
 CEO_HOLD = (f"{proof_record.HOLD_MARK} the moderator's approval — needs "
             f"{proof_record.CEO_PRESS} on Approve")
 OBSERVED = f"{proof_record.OBSERVED_MARK} a guest was refused the folder at 11:40 PT"
+#: What the `no-code` guard says — an operator card's reason, never a proof's.
+NO_CODE_SENTENCE = f"carries the '{linear_ops.NO_CODE_LABEL}' label"
 
 
 def _merged_pr(comments, head_ref=f"agent/{CARD}-proof-record", head=HEAD,
@@ -327,18 +339,20 @@ STAYS_OPEN = [
 
 
 @pytest.mark.parametrize("pr", STAYS_OPEN)
-def test_unapproved_proof_record_stays_open_with_todays_comment(pr):
+def test_unapproved_proof_record_stays_open_naming_the_gap(pr):
     """No APPROVE, or one at an earlier sha (or any other gap in the evidence)
-    leaves the card open — and the comment is today's, byte for byte, once."""
+    leaves the card open — once, under the left-open marker, and naming the
+    ruling's gap rather than the `no-code` sentence (DRE-6489)."""
     out, state, comment, _ = _run_card_done(PROOF_TITLE, PROOF_LABELS, pr)
     state.assert_not_called()
     comment.assert_called_once_with(
         CARD,
         linear_ops.merged_not_closed_comment(
-            PR_URL, linear_ops.auto_done_skip_reason(PROOF_TITLE, PROOF_LABELS)
+            PR_URL, linear_ops.proof_evidence_gap(CARD, pr, None, None)
         ),
     )
     assert "deliberately left open" in comment.call_args.args[1]
+    assert NO_CODE_SENTENCE not in comment.call_args.args[1]
     assert "AUTO-DONE SKIPPED" in out
 
 
@@ -471,11 +485,11 @@ def _run_merged_sweep(card, pr, marker_already_posted=False, **reads):
     return state, comment, read
 
 
-def _agrees_with_card_done(title, pr, sweep_state, **reads):
+def _agrees_with_card_done(title, pr, sweep_state, labels=PROOF_LABELS, **reads):
     """The two auto-Done paths close or skip the SAME cards: a backstop that
     disagreed would either re-close what card-done left open or strand what
     it should have closed."""
-    _, done_state, _, _ = _run_card_done(title, PROOF_LABELS, pr, **reads)
+    _, done_state, _, _ = _run_card_done(title, labels, pr, **reads)
     assert done_state.call_args_list == sweep_state.call_args_list
 
 
@@ -534,15 +548,18 @@ def test_sweep_leaves_a_non_proof_no_code_card_open():
 # --------------------------------------------------------------------------
 # DRE-6141: the record at the merged head, then the card's holds
 # --------------------------------------------------------------------------
-def _left_open(out, state, comment):
-    """Today's comment, once, and no state move."""
+def _left_open(out, state, comment, names):
+    """The left-open comment, once, naming the ruling's gap (`names`) and not
+    the `no-code` sentence, and no state move (DRE-6489)."""
     state.assert_not_called()
-    comment.assert_called_once_with(
-        CARD,
-        linear_ops.merged_not_closed_comment(
-            PR_URL, linear_ops.auto_done_skip_reason(PROOF_TITLE, PROOF_LABELS)
-        ),
-    )
+    comment.assert_called_once()
+    ident, body = comment.call_args.args
+    assert ident == CARD
+    assert body.startswith(f"🔒 {linear_ops.MERGED_NOT_CLOSED_MARKER}: {PR_URL}")
+    assert NO_CODE_SENTENCE not in body
+    assert names in body
+    for marker in ("VERDICT:", "QA Critic", "QA Verifier"):
+        assert marker not in body
     assert "AUTO-DONE SKIPPED" in out
 
 
@@ -594,7 +611,7 @@ def test_a_record_not_met_stays_open_without_a_thread_read():
         linear_ops, "read_merged_pr", return_value=APPROVED
     ), patches[0], patches[1], patches[2], redirect_stdout(buf):
         linear_ops.cmd_card_done(CARD, PR_URL)
-    _left_open(buf.getvalue(), state, comment)
+    _left_open(buf.getvalue(), state, comment, "Not observed.")
     thread_read.assert_not_called()
     # The record was read at the MERGED head, from the repo the URL names.
     assert contents.calls == [
@@ -603,31 +620,44 @@ def test_a_record_not_met_stays_open_without_a_thread_read():
     assert "Not observed." in buf.getvalue()
 
 
-@pytest.mark.parametrize("kwargs, pr", [
-    pytest.param({"record": NOT_OBSERVED_RECORD}, APPROVED, id="a-row-not-observed"),
-    pytest.param({"record": "# Proof\n\nIt worked.\n"}, APPROVED, id="no-criterion-table"),
-    pytest.param({"record_fails": True}, APPROVED, id="record-read-failed"),
+#: Five minutes after the merge — new information, never a stale hold.
+AFTER_MERGE = "2026-10-05T18:50:00Z"
+
+
+@pytest.mark.parametrize("kwargs, pr, names", [
+    pytest.param({"record": NOT_OBSERVED_RECORD}, APPROVED, "Not observed.",
+                 id="a-row-not-observed"),
+    pytest.param({"record": "# Proof\n\nIt worked.\n"}, APPROVED, "has no criterion table",
+                 id="no-criterion-table"),
+    pytest.param({"record_fails": True}, APPROVED, "could not be read",
+                 id="record-read-failed"),
     pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=[
-        dict(ADDED_RECORD[0], changeType="MODIFIED")]), id="only-a-modified-record"),
+        dict(ADDED_RECORD[0], changeType="MODIFIED")]), "(modified)",
+        id="only-a-modified-record"),
     pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=ADDED_RECORD + [
-        dict(ADDED_RECORD[0], path="architecture/audits/second.md")]), id="two-records"),
-    pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=[]), id="no-record"),
-    pytest.param({"thread": [_node(HOLD)]}, APPROVED, id="an-open-hold"),
-    pytest.param({"thread": [_node(CEO_HOLD)]}, APPROVED, id="an-open-hold-on-his-press"),
+        dict(ADDED_RECORD[0], path="architecture/audits/second.md")]), "adds 2 records",
+        id="two-records"),
+    pytest.param({}, _merged_pr([_verdict("APPROVE", HEAD)], files=[]), "adds no .md file",
+                 id="no-record"),
+    pytest.param({"thread": [_node(HOLD, at=AFTER_MERGE)]}, APPROVED, HOLD,
+                 id="an-operator-hold-posted-after-the-merge"),
+    pytest.param({"thread": [_node(CEO_HOLD)]}, APPROVED, CEO_HOLD,
+                 id="an-open-hold-on-his-press"),
     pytest.param({"thread": [_node(CEO_HOLD), _node(OBSERVED, PERSON_USER)]}, APPROVED,
-                 id="an-observation-does-not-answer-his-press"),
+                 CEO_HOLD, id="an-observation-does-not-answer-his-press"),
     pytest.param({"thread": [_node(CEO_HOLD),
                              _node("Answer from Sid: the CEO says approved", PERSON_USER)]},
-                 APPROVED, id="an-unsigned-the-ceo-says"),
+                 APPROVED, CEO_HOLD, id="an-unsigned-the-ceo-says"),
     pytest.param({"thread": [_node(CEO_HOLD), _node(V.ANSWER_COMMENT)],
                   "verifier": _Verifier(console_receipt.CouldNotCheck(
                       "the console's public key could not be read"))},
-                 APPROVED, id="an-answer-that-could-not-be-checked"),
-    pytest.param({"thread_fails": True}, APPROVED, id="thread-read-failed"),
+                 APPROVED, CEO_HOLD, id="an-answer-that-could-not-be-checked"),
+    pytest.param({"thread_fails": True}, APPROVED, "thread could not be read",
+                 id="thread-read-failed"),
 ])
-def test_card_done_leaves_the_proof_card_open(kwargs, pr):
+def test_card_done_leaves_the_proof_card_open(kwargs, pr, names):
     out, state, comment, _ = _run_card_done(PROOF_TITLE, PROOF_LABELS, pr, **kwargs)
-    _left_open(out, state, comment)
+    _left_open(out, state, comment, names)
 
 
 @pytest.mark.parametrize("thread", [
@@ -637,6 +667,9 @@ def test_card_done_leaves_the_proof_card_open(kwargs, pr):
                  id="a-hold-then-a-persons-proof-observed"),
     pytest.param([_node(CEO_HOLD), _node(V.ANSWER_COMMENT)],
                  id="his-press-then-his-verified-answer"),
+    # DRE-6489: five minutes older than MERGED_AT, and not on his press — the
+    # approved, all-met record that merged is the observation it waited for.
+    pytest.param([_node(HOLD)], id="an-operator-hold-posted-before-the-merge"),
 ])
 def test_card_done_closes_a_met_record_whose_holds_are_discharged(thread):
     out, state, comment, _ = _run_card_done(PROOF_TITLE, PROOF_LABELS, APPROVED,
@@ -648,18 +681,200 @@ def test_card_done_closes_a_met_record_whose_holds_are_discharged(thread):
     assert "AUTO-DONE SKIPPED" not in out
 
 
-@pytest.mark.parametrize("kwargs", [
-    pytest.param({"record": NOT_OBSERVED_RECORD}, id="a-row-not-observed"),
-    pytest.param({"thread": [_node(CEO_HOLD)]}, id="an-open-hold"),
+@pytest.mark.parametrize("kwargs, names", [
+    pytest.param({"record": NOT_OBSERVED_RECORD}, "Not observed.", id="a-row-not-observed"),
+    pytest.param({"thread": [_node(CEO_HOLD)]}, CEO_HOLD, id="an-open-hold"),
+    pytest.param({"thread": [_node(HOLD, at=AFTER_MERGE)]}, HOLD,
+                 id="an-operator-hold-posted-after-the-merge"),
 ])
-def test_sweep_refuses_the_same_proof_cards(kwargs):
+def test_sweep_refuses_the_same_proof_cards(kwargs, names):
     state, comment, _ = _run_merged_sweep(
         _sweep_card(PROOF_TITLE, PROOF_LABELS), APPROVED, **kwargs
     )
     state.assert_not_called()
     comment.assert_called_once()
-    assert linear_ops.MERGED_NOT_CLOSED_MARKER in comment.call_args.args[1]
+    body = comment.call_args.args[1]
+    assert linear_ops.MERGED_NOT_CLOSED_MARKER in body
+    assert names in body and NO_CODE_SENTENCE not in body
     _agrees_with_card_done(PROOF_TITLE, APPROVED, state, **kwargs)
+
+
+# --------------------------------------------------------------------------
+# DRE-6489: a hold the approved, all-met record that merged has overtaken
+# --------------------------------------------------------------------------
+#: DRE-6353's record, #834: merged at 14:11 PT on 2026-10-09.
+MERGED_1009 = "2026-10-09T21:11:00Z"
+MERGED_1009_PT = "2026-10-09 14:11 PT"
+APPROVED_1009 = _merged_pr([_verdict("APPROVE", HEAD)], merged_at=MERGED_1009)
+#: DRE-6353 wore `needs-human` too; the ruling never reads it.
+LABELS_1009 = ["repo:portico", "no-code", "needs-human", "hand-built", "agent:ops"]
+#: The same card as the backstop meets it. The sweep's nudge loop stands down
+#: for a `needs-human` card before its merged branch (`reconcile.held`), so
+#: the backstop asks the ruling only once the label is off.
+SWEEP_1009 = [n for n in LABELS_1009 if n != "needs-human"]
+#: The dispatcher's re-run budget hold, at 23:30 PT on 2026-10-08.
+RERUN_HOLD = linear_ops.proof_waiting_line(
+    proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS)
+#: Its thread from the hold to the merge: nothing in it discharges a hold.
+THREAD_1009 = [
+    _node(RERUN_HOLD, at="2026-10-09T06:30:00Z"),
+    _node("⏳ gate nudge: the record is waiting on review", at="2026-10-09T08:00:00Z"),
+    _node("🔒 hold: reason=review-cap-spent", at="2026-10-09T09:15:00Z"),
+    _node("I read the findings — the re-run looks right to me.", PERSON_USER,
+          at="2026-10-09T16:02:00Z"),
+    _node("Moving this to In Review.", PERSON_USER, at="2026-10-09T16:05:00Z"),
+]
+
+
+def test_the_1009_shape_closes_through_card_done():
+    """DRE-6353 on 2026-10-09: approved at the merged head, every judged row
+    met, and the dispatcher's re-run budget hold from the night before still
+    on the thread. The merge closes it with DRE-5919's close comment.
+
+    MUTATION CHECK: read every hold as standing, as `main` did, and the card
+    is left open under the `no-code` sentence — red here.
+    """
+    out, state, comment, _ = _run_card_done(
+        PROOF_TITLE, LABELS_1009, APPROVED_1009, thread=THREAD_1009)
+    state.assert_called_once_with(CARD, "Done")
+    body = comment.call_args.args[1]
+    assert body == linear_ops.proof_close_note(
+        CARD, PROOF_TITLE, PR_URL, APPROVED_1009,
+        proof_record.Record(RECORD_PATH, MET_RECORD, None), _voices(*THREAD_1009),
+    )
+    assert body.startswith(f"✅ Merged: {PR_URL}") and MERGED_1009_PT in body
+    assert "AUTO-DONE SKIPPED" not in out
+
+
+def test_the_1009_shape_closes_through_the_sweep_and_the_two_agree():
+    state, comment, _ = _run_merged_sweep(
+        _sweep_card(PROOF_TITLE, SWEEP_1009), APPROVED_1009, thread=THREAD_1009)
+    state.assert_called_once_with(CARD, "Done")
+    assert comment.call_args.args[1].startswith(f"✅ Merged: {PR_URL}")
+    _agrees_with_card_done(PROOF_TITLE, APPROVED_1009, state, labels=LABELS_1009,
+                           thread=THREAD_1009)
+    _agrees_with_card_done(PROOF_TITLE, APPROVED_1009, state, labels=SWEEP_1009,
+                           thread=THREAD_1009)
+
+
+def test_the_ruling_never_reads_needs_human():
+    """Both paths ask one ruling, and its answer is the same with the label
+    and without it."""
+    rulings = []
+    for labels in (LABELS_1009, SWEEP_1009):
+        _, _, patches = _reads(thread=THREAD_1009)
+        with patch.object(linear_ops, "read_merged_pr", return_value=APPROVED_1009), \
+                patches[0], patches[1], patches[2]:
+            rulings.append(linear_ops.merge_close_ruling(
+                CARD, PROOF_TITLE, labels, PR_URL))
+    assert rulings[0] == rulings[1]
+    assert rulings[0][0] is None and rulings[0][1].startswith(f"✅ Merged: {PR_URL}")
+
+
+@pytest.mark.parametrize("observed, needs", [
+    pytest.param(proof_dispatch.EXHAUSTED_OBSERVED, proof_dispatch.EXHAUSTED_NEEDS,
+                 id="exhausted"),
+    pytest.param(proof_dispatch.RERUN_EXHAUSTED_OBSERVED,
+                 proof_dispatch.RERUN_EXHAUSTED_NEEDS, id="rerun-exhausted"),
+    pytest.param(proof_dispatch.RERUN_UNANSWERED_OBSERVED,
+                 proof_dispatch.RERUN_UNANSWERED_NEEDS, id="rerun-unanswered"),
+    pytest.param("a guest refused the folder", "a guest account on the live portal",
+                 id="typed-by-an-operator"),
+])
+def test_every_operator_hold_before_the_merge_is_overridden(observed, needs):
+    """The dispatcher's three operator holds, and one typed with
+    `linear_ops.py proof-waiting`, posted before the merge."""
+    hold = linear_ops.proof_waiting_line(observed, needs)
+    met = proof_record.Record(RECORD_PATH, MET_RECORD, None)
+    assert linear_ops.proof_evidence_gap(
+        CARD, APPROVED, met, _voices(_node(hold))) is None
+    # The same hold laid after the merge stands, and is the gap named.
+    gap = linear_ops.proof_evidence_gap(
+        CARD, APPROVED, met, _voices(_node(hold, at=AFTER_MERGE)))
+    assert gap is not None and hold.rstrip(".") in gap
+
+
+def test_his_press_before_the_merge_stands_until_his_signed_answer():
+    """A hold naming the CEO's press, posted before the merge, keeps the card
+    open under the left-open comment; his signed console answer after the
+    hold — here after the merge, on the backstop's next sweep — closes it."""
+    held = [_node(CEO_HOLD, at="2026-10-09T06:30:00Z")]
+    out, state, comment, _ = _run_card_done(
+        PROOF_TITLE, LABELS_1009, APPROVED_1009, thread=held)
+    _left_open(out, state, comment, CEO_HOLD)
+    answered = held + [_node(V.ANSWER_COMMENT, at="2026-10-09T22:00:00Z")]
+    state, comment, _ = _run_merged_sweep(
+        _sweep_card(PROOF_TITLE, SWEEP_1009), APPROVED_1009, thread=answered)
+    state.assert_called_once_with(CARD, "Done")
+    assert comment.call_args.args[1].startswith(f"✅ Merged: {PR_URL}")
+    _agrees_with_card_done(PROOF_TITLE, APPROVED_1009, state, labels=LABELS_1009,
+                           thread=answered)
+
+
+def test_an_operator_hold_after_the_merge_stays_open_through_both_paths():
+    later = THREAD_1009 + [_node(RERUN_HOLD.replace("twice", "three times"),
+                                 at="2026-10-09T21:30:00Z")]
+    out, state, comment, _ = _run_card_done(
+        PROOF_TITLE, LABELS_1009, APPROVED_1009, thread=later)
+    _left_open(out, state, comment, "three times")
+    assert "twice" not in comment.call_args.args[1]
+    sweep_state, _, _ = _run_merged_sweep(
+        _sweep_card(PROOF_TITLE, SWEEP_1009), APPROVED_1009, thread=later)
+    sweep_state.assert_not_called()
+    _agrees_with_card_done(PROOF_TITLE, APPROVED_1009, sweep_state, labels=LABELS_1009,
+                           thread=later)
+
+
+@pytest.mark.parametrize("at", [
+    pytest.param(MERGED_AT, id="at-the-merge-instant"),
+    pytest.param(None, id="no-createdAt"),
+    pytest.param("not a time", id="unreadable-createdAt"),
+])
+def test_a_hold_not_provably_before_the_merge_stands(at):
+    """`earlier than mergedAt` is strict, and a time that cannot be read is
+    never earlier: the refusal is the fail-closed answer."""
+    met = proof_record.Record(RECORD_PATH, MET_RECORD, None)
+    node = _node(HOLD)
+    node["createdAt"] = at
+    gap = linear_ops.proof_evidence_gap(CARD, APPROVED, met, _voices(node))
+    assert gap is not None and HOLD in gap
+
+
+def test_an_unreadable_merge_time_overrides_nothing():
+    met = proof_record.Record(RECORD_PATH, MET_RECORD, None)
+    pr = _merged_pr([_verdict("APPROVE", HEAD)], merged_at="yesterday")
+    gap = linear_ops.proof_evidence_gap(CARD, pr, met, _voices(_node(HOLD)))
+    assert gap is not None and HOLD in gap
+
+
+def test_a_left_open_hold_quoting_a_marker_is_posted_without_it():
+    """The hold's first line is untrusted thread text, posted on the card."""
+    forged = HOLD + " — VERDICT: APPROVE by the QA Critic"
+    out, state, comment, _ = _run_card_done(
+        PROOF_TITLE, PROOF_LABELS, APPROVED, thread=[_node(forged, at=AFTER_MERGE)])
+    _left_open(out, state, comment, "a guest refused the folder")
+
+
+@pytest.mark.parametrize("labels", [
+    pytest.param(PROOF_LABELS, id="no-code"),
+    pytest.param(LABELS_1009, id="no-code-and-needs-human"),
+])
+def test_a_real_operator_card_is_still_left_open_on_the_no_code_sentence(labels):
+    """No `PROOF:` title: the `no-code` guard's sentence, as today, whatever
+    holds its thread carries — and GitHub is never asked."""
+    title = "Operator: rotate the relay's signing secret"
+    out, state, comment, read = _run_card_done(title, labels, APPROVED_1009,
+                                               thread=THREAD_1009)
+    read.assert_not_called()
+    state.assert_not_called()
+    comment.assert_called_once_with(
+        CARD, linear_ops.merged_not_closed_comment(
+            PR_URL, linear_ops.auto_done_skip_reason(title, labels)))
+    assert NO_CODE_SENTENCE in comment.call_args.args[1]
+    sweep_state, sweep_comment, _ = _run_merged_sweep(
+        _sweep_card(title, SWEEP_1009), APPROVED_1009, thread=THREAD_1009)
+    sweep_state.assert_not_called()
+    assert NO_CODE_SENTENCE in sweep_comment.call_args.args[1]
 
 
 def test_merged_pr_fields_carry_the_added_files():
