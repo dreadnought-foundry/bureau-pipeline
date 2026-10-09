@@ -95,6 +95,7 @@ SHORT_JOBS = {
         "backoff",
         "upstream_outage",
         "linear_rate_limited",
+        "standing_defect",
         "environment_hold",
     },
     "release-train.yml": {"wait", "plan"},
