@@ -359,9 +359,11 @@ the plan afterwards needs to know.
   the secret", "raise the org Actions budget") must be labeled `needs-human` +
   `no-code` + `agent:devops` — NOT `agent:engineer`. An engineer agent has no
   AWS creds and cannot verify or execute it, so it would loop and end in a
-  blocker; the `needs-human` label tells the reconcile sweep and promotion gate
-  to leave it for the operator, and `no-code` is what says there is no diff in
-  it — the create seam refuses `needs-human` without `no-code` (DRE-3512). Use
+  blocker. The create seam adds `operator-step` to such a card and stamps the
+  hold `operator-step` — the sweep lifts it once every blocker is terminal and
+  carries the card to Hand-work, the operator's queue (DRE-6408). `no-code` is
+  what says there is no diff in it — the create seam refuses `needs-human`
+  without `no-code` (DRE-3512). Use
   judgment: if the card's deliverable is a diff in a product repo, it's
   `agent:engineer`; if it's an action only a human/operator can take and
   verify, it's `needs-human` + `no-code` + `agent:devops`.

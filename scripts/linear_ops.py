@@ -3022,6 +3022,45 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     return issue
 
 
+def _file_operator_hold(issue: dict, labels) -> None:
+    """File a card the planner created as an operator step HELD, under a
+    reason the sweep lifts (DRE-6428).
+
+    The planner files an operator step as `needs-human` + `no-code`
+    (`briefs/planner.md`). The labels alone are a hold with no stamp, which
+    reads `manual`, and nothing lifts a `manual` hold — the card sat in Backlog
+    forever (DRE-6408). So a card carrying the pair is marked `operator-step`
+    and its hold stamped `operator-step`: the sweep lifts it once every blocker
+    is terminal and carries the card to Hand-work (DRE-6426, DRE-6427).
+
+    `cmd_subissue` and `cmd_oneoff` only. Never `create_card`: the model
+    adoption question card is created through it already held, under its own
+    `manual` row in `config/holds.json`, and is a decision, not a step.
+
+    Never raises. The card exists by now, so a failure here must not read as
+    the create failing — a retry would file it twice. It says so on stderr
+    instead, and the card reads `manual` until somebody stamps it."""
+    import hold
+    import routing_verdict
+
+    low = {str(label).strip().lower() for label in labels or ()}
+    if hold.HOLD_LABEL not in low or NO_CODE_LABEL not in low:
+        return
+    card = issue["identifier"]
+    stamp = hold.stamp_line(hold.OPERATOR_STEP_REASON, None, "linear_ops.py")
+    try:
+        if routing_verdict.OPERATOR_STEP_LABEL not in low:
+            add_label(card, routing_verdict.OPERATOR_STEP_LABEL)
+        hold.apply(card, hold.OPERATOR_STEP_REASON, None, "linear_ops.py")
+    except Exception as exc:  # noqa: BLE001 — the card is filed; say what is missing
+        print(f"{card}: filed, but NOT held as an operator step ({exc}) — its "
+              f"hold reads manual until stamped: python3 scripts/hold.py apply "
+              f"{card} --reason {hold.OPERATOR_STEP_REASON} --by linear_ops.py",
+              file=sys.stderr)
+        return
+    print(f"{card}: filed as an operator step — {stamp}")
+
+
 def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> dict:
     # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M, and
     # --epic (DRE-4698) — the child is itself an epic, owned by the planner.
@@ -3105,8 +3144,12 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
-    return _create_card(parent["team"]["id"], title, description, child_labels,
-                        blockers, parent_id=parent["id"], lane="Backlog")
+    issue = _create_card(parent["team"]["id"], title, description, child_labels,
+                         blockers, parent_id=parent["id"], lane="Backlog")
+    # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
+    # (DRE-6428).
+    _file_operator_hold(issue, child_labels)
+    return issue
 
 
 def cmd_oneoff(title: str, description_file: str, *flags) -> None:
@@ -3147,8 +3190,9 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
     )
 
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
-    _create_card(teams["teams"]["nodes"][0]["id"], title, description, labels,
-                 blockers)
+    issue = _create_card(teams["teams"]["nodes"][0]["id"], title, description,
+                         labels, blockers)
+    _file_operator_hold(issue, labels)
 
 
 def _parse_flags(flags) -> tuple[list[str], list[str]]:
