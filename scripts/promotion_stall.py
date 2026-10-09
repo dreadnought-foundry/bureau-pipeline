@@ -63,8 +63,11 @@ CLOCKED_TAGS = ("routing-no-verdict", "mid-epic-no-verdict",
                 "plan-critic-post-unread", "plan-critic-post-sent-back",
                 "plan-critic-post-died")
 
-#: Holds counted for the idle-board alarm and never clocked per card.
-HELD_TAGS = ("needs-human", "agent-blocker", "stale-verdict", "live-recheck")
+#: Holds counted for the idle-board alarm and never clocked per card. The first
+#: is the hold label itself, named through its one definition: this tuple reads
+#: the label and applies nothing, and a literal here would read to
+#: `hold.py check` as a card created already held.
+HELD_TAGS = (dead_run.HOLD_LABEL, "agent-blocker", "stale-verdict", "live-recheck")
 
 STALL_TAG = "promotion-stalled"
 STALL_MARK = "🚨 promotion-stalled:"
