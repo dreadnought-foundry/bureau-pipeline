@@ -304,7 +304,9 @@ these refuses or reports on any hold, whatever its reason — the same
 fail-closed answer an unknown reason gets: the plan-gate
 `dedupe_dispatch.parked_for_a_person`, the medic's run-log line
 `limit_death_record.needs_a_person`, the proof dispatcher's
-`proof_dispatch.first_run`, the Triage lane's `hygiene_triage.left_for_a_person`,
+`proof_dispatch.first_run` and `proof_dispatch.held_on_the_lane` (which names
+the label off the lane read at no request, DRE-6464), the Triage lane's
+`hygiene_triage.left_for_a_person`,
 and `linear_ops.cmd_state`'s building-card guard. An exception for one of
 them is a `readers` entry and a card of its own.
 
