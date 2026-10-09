@@ -534,8 +534,9 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
 
     Every paragraph that promises a re-entry ends on the clock (DRE-4208):
     LIMIT_DEATH_CLOCK_MINUTES, rendered in hours, after which the sweep says
-    so on the card and a person must act. The one that already hands the card
-    to a person gains nothing."""
+    so on the card and a person must act — never ahead of a stated reset that
+    comes later. The one that already hands the card to a person gains
+    nothing."""
     assumed = bool(reset_assumed and reset and kind == "claude")
     reset_field = reset.astimezone(UTC).strftime(_ISO_Z) if reset else "unknown"
     first = f"{LIMIT_MARK} kind={kind} stage={stage} reset={reset_field} run={run_id or 'unknown'}"
@@ -577,9 +578,14 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
             f"account brings the card back sooner."
         )
     if reset or kind == "linear" or account:
+        # A stated reset can be a day out (a weekly cap): the clock never
+        # runs out ahead of it. An assumed one is always inside the clock.
+        later = (" — or, when the reset comes later than that, once the reset "
+                 "has passed —" if reset and not assumed else ",")
         back += (
             f" If nothing has brought the card back within {_clock_hours()} hours "
-            f"of this marker, the sweep says so on the card and a person must act."
+            f"of this marker{later} the sweep says so on the card and a person "
+            f"must act."
         )
     paragraph = (
         f"This run hit {wall} during the {stage} stage and stopped there. That "

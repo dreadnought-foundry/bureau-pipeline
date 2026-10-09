@@ -103,8 +103,11 @@ being noticed) and a Planning review death the watcher never answered. A card
 whose trigger has fired is re-entered as before — the re-entry answers the
 clock — or, with no WIP room, keeps its `ready` line and gains an `ERROR:`
 line but no receipt, because a hand-off would close the marker and stop the
-recovery. An unknown age is never stale. The marker's own paragraph names
-the clock.
+recovery. An unknown age is never stale, and neither is a marker whose
+stated reset is still ahead (a day out, on a weekly cap): the re-entry is
+coming, and a hand-off would close the marker before it did. Only a held
+card is handed off before its reset. The marker's own paragraph names the
+clock.
 
 ## The writes are injected, and why
 
@@ -504,9 +507,15 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             continue
         watchers = marker.get("stage") == "review" and _lane(card) == PLANNING_LANE
         reason = handoff_reason(card, marker, assumed_deaths=count_assumed_deaths(card, now))
+        # A stated reset still to come is a real wait however long the marker
+        # has stood: this sweep (or the watcher) answers it when it arrives,
+        # and a hand-off now would close the marker before it does. Only a
+        # held card, which nothing here re-enters, is handed off before it.
+        ahead = marker.get("reset") is not None and now < marker["reset"]
         alarm = None
         if (reason is None and stood
-                and (held or watchers or trigger(marker, now, active_account) is None)):
+                and (held or (not ahead and (
+                    watchers or trigger(marker, now, active_account) is None)))):
             # Past the clock with no re-entry this pass can make: the hand-off
             # is the clock's, and the run goes red on a standing defect.
             reason = stood_reason(card, marker, age, held=held)

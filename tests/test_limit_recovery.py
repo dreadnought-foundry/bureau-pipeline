@@ -1273,6 +1273,65 @@ def test_the_clock_hand_off_is_posted_at_most_once():
     assert again.comments == [] and lines == []
 
 
+# ---- a stated reset still to come is a real wait ----------------------------
+# A Claude run can name a reset up to a day out (a weekly cap). Past the clock
+# but before that reset, the card is still waiting on a trigger the sweep WILL
+# answer: handing it off would close the marker, and nothing would bring it
+# back when the reset arrives.
+LATER = NOW + timedelta(hours=9)     # the reset, still ahead at NOW
+
+
+def _waiting_on_a_later_reset(**kw):
+    return _clock_card(marker(reset=LATER), STOOD, **kw)
+
+
+def test_a_stated_reset_still_ahead_past_the_window_keeps_waiting():
+    s = Seams()
+    lines = s.recover([_waiting_on_a_later_reset()], now=NOW)
+    assert s.comments == [] and s.moves == []
+    assert _errors(lines) == []
+    assert lines == [f"limit-recovery: DRE-4208 is waiting until "
+                     f"{dead_run.pacific(LATER)} (claude limit, build stage)"]
+
+
+def test_a_stated_reset_still_ahead_is_reentered_when_it_arrives():
+    card = _waiting_on_a_later_reset()
+    s = Seams()
+    s.recover([card], now=NOW)
+    assert limit_recovery.waiting(limit_recovery._bodies(card)) is not None
+    s.recover([card], now=LATER + timedelta(minutes=5))
+    assert s.moves == [("DRE-4208", "Todo")]
+    assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_a_watcher_s_review_death_with_its_reset_still_ahead_is_not_handed_off():
+    """The watcher waits out the marker's reset, so before it the watcher has
+    not failed to come."""
+    s = Seams()
+    late = (f"🪦 limit-death: kind=claude stage=review "
+            f"reset={LATER.strftime('%Y-%m-%dT%H:%M:%SZ')} run=777")
+    lines = s.recover([_clock_card(late, STOOD, lane="Planning")], now=NOW)
+    assert s.comments == [] and _errors(lines) == []
+    assert "is the re-review watcher's" in lines[0]
+
+
+def test_a_held_card_waiting_on_a_later_reset_is_still_noticed():
+    """Nothing here re-enters a held card, whenever its reset comes."""
+    s = Seams()
+    lines = s.recover([_waiting_on_a_later_reset(labels=(dead_run.HOLD_LABEL,))], now=NOW)
+    assert len(s.comments) == 1 and limit_recovery.STOOD_PHRASE in s.comments[0][1]
+    assert len(_errors(lines)) == 1
+
+
+def test_the_stated_reset_marker_does_not_promise_a_hand_off_before_its_reset():
+    body = dead_run.limit_marker("claude", "build", RESET, RUN)
+    assert "once the reset has passed" in body
+    assumed = dead_run.limit_marker("claude", "build", RESET, RUN, reset_assumed=True)
+    assert "once the reset has passed" not in assumed
+    linear = dead_run.limit_marker("linear", "classify", None, RUN)
+    assert "once the reset has passed" not in linear
+
+
 @pytest.mark.parametrize("row", ["held", "watcher", "no-room", "no-trigger"])
 def test_a_marker_of_unknown_age_is_never_stale(row):
     s, lines = _run(row, None, now=NOW + timedelta(days=1000))
