@@ -82,14 +82,11 @@ BUILD = "build"
 UNCLASSIFIED = "unclassified"
 CLASSES = (EPIC, FINISHED, PERSON, BUILD)
 
-#: The marks that say a person builds this card — the marks the two verdicts
-#: whose actor is a person declare, read off the vocabulary.
-PERSON_MARKS = tuple(sorted({
-    mark.lower()
-    for name in routing_verdict.verdicts()
-    if not routing_verdict.is_promotable(name)
-    for mark in routing_verdict.marks(name)
-}))
+#: The marks that say a person builds this card, read off the vocabulary —
+#: `routing_verdict.person_marks()`, the one place that answer is spelled
+#: (DRE-6225): the person verdicts' own marks plus the CEO's `hand-built`,
+#: which no verdict has applied since DRE-6227.
+PERSON_MARKS = tuple(sorted({mark.lower() for mark in routing_verdict.person_marks()}))
 
 #: linear-sync's merge receipt (`linear_ops.cmd_card_done`), and the marker it
 #: posts on a card it deliberately leaves open.

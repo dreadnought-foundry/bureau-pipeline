@@ -112,8 +112,8 @@ HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
 def unbuilt_labels() -> tuple:
     """The marks that hold no slot: `routing_verdict.person_marks()`, read
     off the vocabulary each time (DRE-6226). A child carrying one is built by
-    a person or is not code, so no agent builds it — today `hand-built` and
-    `no-code`, and `operator-step` once OPERATOR is marked with it. Read as
+    a person or is not code, so no agent builds it — `operator-step`,
+    `no-code` and `hand-built` since DRE-6227 marked OPERATOR. Read as
     `UNBUILT_LABELS`, the name callers have always used."""
     return routing_verdict.person_marks()
 

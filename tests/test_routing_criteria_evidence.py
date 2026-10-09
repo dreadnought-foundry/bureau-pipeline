@@ -22,9 +22,11 @@ WHAT THIS PINS, one section per acceptance criterion of DRE-2831:
      DRE-1829 — the card DRE-2831 was written about — routes FLEET on the
      mechanical rule with no model asked, which is the observation DRE-2724's
      acceptance asks for and nobody could make.
-  3. The widening does not cost the WORKBENCH half: DRE-2695 still routes
-     WORKBENCH, and DRE-2308 — a real card that states a rendered outcome AND
-     live-product verification — routes WORKBENCH rather than to the fleet.
+  3. The two real cards the retired `interactive` signal decided — DRE-2695,
+     and DRE-2308, which states a rendered outcome AND live-product
+     verification — now route to the fleet or to a judgement call (DRE-6227),
+     and the ten phrases that signal carried stay in the fixture, marked
+     retired, as the record of why they were read.
   4. The phrases nobody writes are GONE, and the file records why each was
      rejected with the count that rejected it.
 
@@ -183,20 +185,29 @@ class TestRealCardsRouteMechanically:
         assert decision.source == "criteria"
         assert decision.needs_model is False
 
-    def test_the_workbench_half_still_fires_on_the_card_it_fired_on(self):
-        """DRE-2724's other live observation, unchanged by the widening."""
-        card = next(c for c in REAL_CARDS if c["identifier"] == "DRE-2695")
-        assert routing_verdict.route(card["title"], card["description"], []).verdict == "WORKBENCH"
-
-    def test_a_rendered_outcome_verified_in_the_live_product_is_not_fleet(self):
-        """THE ADVERSARIAL CASE for the widening. DRE-2308's criteria state a
-        rendered outcome — cream on green — and state that it is verified in
-        the running product. Interactive is read first for exactly this: a card
-        that needs a person must not be handed to the fleet because it also
-        names a colour."""
-        card = next(c for c in REAL_CARDS if c["identifier"] == "DRE-2308")
+    @pytest.mark.parametrize("identifier", ["DRE-2695", "DRE-2308"])
+    def test_the_cards_the_retired_signal_decided_route_fleet_or_judgement(self, identifier):
+        """DRE-2724's other live observation (DRE-2695), and the card that
+        states a rendered outcome and live-product verification (DRE-2308).
+        Both routed WORKBENCH on a phrase until DRE-6227 retired the
+        `interactive` signal: a criterion met only by watching the change run
+        after it ships is a proof observation or a follow-up card, never a
+        reason to hold the build. What each expected until then is kept."""
+        card = next(c for c in REAL_CARDS if c["identifier"] == identifier)
         decision = routing_verdict.route(card["title"], card["description"], [])
-        assert decision.verdict == "WORKBENCH"
+        assert decision.verdict in ("FLEET", None), decision.reason
+        assert decision.verdict != "WORKBENCH"
+        assert card["expect_until_dre_6227"]["verdict"] == "WORKBENCH"
+
+    def test_the_retired_phrases_stay_attested_and_out_of_the_vocabulary(self):
+        """The record of why each was read survives the signal it belonged to."""
+        retired = [p for p, entry in EVIDENCE["attestations"].items() if entry.get("retired")]
+        assert len(retired) == 10
+        live = {p for _, signal in routing_verdict._signals() for p in signal["phrases"]}
+        for phrase in retired:
+            assert phrase not in live, phrase
+            assert "DRE-6227" in EVIDENCE["attestations"][phrase]["retired"]
+            assert EVIDENCE["attestations"][phrase]["examples"], phrase
 
     def test_the_fallthrough_to_a_judgement_call_is_still_real(self):
         """The honest half of DRE-2831: widening is not routing everything. A

@@ -20,6 +20,13 @@ The rule "exactly one verdict" stays. What changes is which verdicts COUNT:
   * a `hand-built` the OLD verdict put on comes off when the new verdict does
     not put it on, and is left alone when the retired verdict never applied it.
 
+DRE-4724 was routed under the vocabulary as it shipped before DRE-6227: the
+`interactive` signal read its "against the live YAML" as live state, and
+WORKBENCH marked `hand-built`. DRE-6227 retired both, so every test here
+replays the card under that vocabulary (`vocabulary_before_dre_6227`) — the
+retirement mechanism is what is under test, not today's routing of the phrase.
+What a retirement lifts under today's file is `tests/test_person_marks.py`'s.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_verdict_retirement.py -v
 """
 from __future__ import annotations
@@ -47,6 +54,7 @@ import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
 from test_parentless_promotion import _Board, _card  # noqa: E402
+from test_routing_hand_work_instances import vocabulary_before_dre_6227  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "dre-4724-replan-2026-10-07.json"
 DRE_4724 = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -62,6 +70,12 @@ HAND_WORK_AT = "2026-09-24T15:19:00.000Z"    # 08:19 PT — the sweep moved it
 REPLANNED_AT = "2026-09-25T16:34:00.000Z"    # 09:34 PT — sent back to Planning
 EXIT_AT = "2026-09-25T16:37:00.000Z"         # 09:37 PT — the critic passed it
 SWEEP_AT = "2026-09-25T16:45:00.000Z"        # 09:45 PT — the next reconcile
+
+
+@pytest.fixture(autouse=True)
+def _the_vocabulary_dre_4724_was_routed_under(monkeypatch):
+    doc = vocabulary_before_dre_6227()
+    monkeypatch.setattr(routing_verdict, "load", lambda path=None: doc)
 
 
 def _move(at, frm, to):

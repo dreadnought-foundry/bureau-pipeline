@@ -121,11 +121,14 @@ class TestTheBallotBoxCardRoutesLikeTheCheckboxCard:
         assert ballot.destination == checkbox.destination
         assert (ballot.escalation is None) == (checkbox.escalation is None)
 
-    def test_a_ballot_box_criterion_naming_a_flow_still_routes_to_a_person(self):
+    def test_a_ballot_box_criterion_naming_a_rendered_outcome_still_routes_fleet(self):
         """The glyph changes what the reader can SEE, never what the rule
-        decides — an interactive criterion is WORKBENCH in either spelling."""
-        body = "## Acceptance\n\n* ☐ sign in and walk the wizard by hand\n"
-        assert routing_verdict.route("Wizard", body, []).verdict == "WORKBENCH"
+        decides — a rendered-outcome criterion is FLEET in either spelling.
+        (It was an interactive one until DRE-6227 retired that signal.)"""
+        ballot = "## Acceptance\n\n* ☐ the wizard renders one step per page\n"
+        checkbox = "## Acceptance\n\n- [ ] the wizard renders one step per page\n"
+        assert routing_verdict.route("Wizard", ballot, []).verdict == "FLEET"
+        assert routing_verdict.route("Wizard", checkbox, []).verdict == "FLEET"
 
     def test_a_ballot_box_criterion_inside_a_fence_is_still_an_example(self):
         """A criterion inside a fence is an example of a criterion — this

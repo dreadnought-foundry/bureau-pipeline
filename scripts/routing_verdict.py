@@ -193,14 +193,14 @@ RETIRED_MARK = "🪦"
 # alias it rather than spelling it again.
 HAND_BUILT_LABEL = "hand-built"
 
-# The operator marker the vocabulary will carry on OPERATOR's `marks` once the
-# sibling card flips `config/routing-verdicts.json`. Declared before the file
-# carries it, so a reader can name it before the flip and the flip is data.
+# The operator marker OPERATOR's `marks` carry in `config/routing-verdicts.json`
+# since DRE-6227, in place of the CEO's mark. Declared before the file carried
+# it, so the flip was data; a test holds the file's mark equal to this.
 OPERATOR_STEP_LABEL = "operator-step"
 
 # The labels a retirement takes off with the verdict that put them on, when
-# the new verdict does not put them on too — the shipped file's answer, kept for
-# existing readers. The rule is `retirement_lifts()`, which reads the
+# the new verdict does not put them on too — the file's answer before DRE-6227
+# flipped OPERATOR's marks, kept for existing readers. The rule is `retirement_lifts()`, which reads the
 # vocabulary: a person's marker is the mark that silences the sweeps, so a
 # stale one is a card nothing builds and nothing reports. `no-code` stays,
 # because a person may mean it on its own.
@@ -437,8 +437,8 @@ def person_marks(doc: dict | None = None) -> tuple:
     order, each once, plus `HAND_BUILT_LABEL`, which the CEO applies by hand
     whatever the vocabulary marks.
 
-    The one place that answer is spelled. Today `("hand-built", "no-code")`;
-    after the flip `("operator-step", "no-code", "hand-built")`. A card
+    The one place that answer is spelled: `("operator-step", "no-code",
+    "hand-built")` since DRE-6227 flipped OPERATOR's marks. A card
     carrying `no-code` and nothing else is not thereby a person's — that is
     `hand_marks`.
     """
@@ -453,8 +453,8 @@ def person_marks(doc: dict | None = None) -> tuple:
 
 def hand_marks(doc: dict | None = None) -> tuple:
     """The person marks that say on their own that a person builds the card
-    (DRE-6225): `person_marks(doc)` without `no-code`. `("hand-built",)`
-    today, `("operator-step", "hand-built")` after the flip.
+    (DRE-6225): `person_marks(doc)` without `no-code`. `("operator-step",
+    "hand-built")` since DRE-6227.
 
     `no-code` alone is not one. It says the deliverable is live operator work,
     and a run may still author the runbook for it
@@ -470,8 +470,9 @@ def hand_marks(doc: dict | None = None) -> tuple:
 def retirement_lifts(doc: dict | None = None) -> tuple:
     """What a retirement takes off when the new verdict does not put it on
     too: `hand_marks(doc)` — `no-code` stays, because a person may mean it on
-    its own. `("hand-built",)` today, `("operator-step", "hand-built")` after
-    the flip."""
+    its own. `("operator-step", "hand-built")` since DRE-6227 — though no
+    verdict applies `hand-built` any more, so only `operator-step` is ever
+    lifted by `lifted_marks`."""
     return hand_marks(doc)
 
 
@@ -1243,9 +1244,10 @@ def hand_built_promotion(name: str, doc: dict | None = None, *,
     whoever's turn it actually is has no way to tell.
 
     The marks are named because they are applied in the same breath: the reader
-    can see that the labels which keep the fleet off this card are on it —
-    the card's own, `card_marks(name, title)`, so a proof card's receipt names
-    `no-code` alone (DRE-6225).
+    can see exactly which labels the sweep put on — the card's own,
+    `card_marks(name, title)`, so a proof card's receipt names `no-code` alone
+    (DRE-6225), and a WORKBENCH card's says no mark was applied, because since
+    DRE-6227 its verdict declares none.
 
     So is the lane it lands in, read off the vocabulary — `Hand-work` today,
     never a lane restated here. Since DRE-5322 the promoter writes that same
@@ -1261,7 +1263,7 @@ def hand_built_promotion(name: str, doc: dict | None = None, *,
     return (
         f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn in "
         f"{destination(name, doc)} — a person builds this; nothing was dispatched."
-        + (f" Marked {marked}." if marked else "")
+        + (f" Marked {marked}." if marked else " No mark was applied.")
     )
 
 
@@ -1486,9 +1488,9 @@ def criteria_verdict(description: str, doc: dict | None = None) -> tuple:
                 )
     return (
         None,
-        "the acceptance criteria name neither an interactive flow nor a static "
-        "visual comparison, so whether an unattended agent can satisfy them is "
-        "a judgement call.",
+        "the acceptance criteria name no rendered outcome a screenshot can "
+        "check, so whether an unattended agent can satisfy them is a "
+        "judgement call.",
     )
 
 
@@ -1691,9 +1693,10 @@ def render_markdown(doc: dict | None = None) -> str:
     w("")
     w(
         "Checkbox criteria only, never free prose, matched on whole words. "
-        "Signals are tried in the order below, and the order is load-bearing: "
-        "**screenshotting a screen is not driving a flow**, but driving a flow "
-        "that ends at a screen is still driving a flow."
+        "Signals are tried in the order below. A criterion that can only be "
+        "met by watching the change run after it ships is a **proof "
+        "observation or a follow-up card, never a reason to hold the build** — "
+        "so no criterion routes a card to a person (DRE-6227)."
     )
     w("")
     w(

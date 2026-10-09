@@ -86,13 +86,17 @@ WORK_BODY = (
     "- [ ] the sweep promotes the first unblocked child with no hand stamp\n"
 )
 
-# Criteria that name an interactive flow — precedence 3 routes this WORKBENCH,
-# and the batch must honour that rather than sending the fleet at it.
+# Criteria that name a live flow. Precedence 3 routed this WORKBENCH until
+# DRE-6227 retired the `interactive` signal; it is a judgement call now, and the
+# batch routes it like any other build card.
 LIVE_BODY = (
     "Turn it on.\n\n"
     "## Acceptance criteria\n\n"
     "- [ ] the mode is switched in production and the first moves are read\n"
 )
+
+# The anchored OPERATOR title convention (`config/routing-verdicts.json`).
+SIGN_OFF_TITLE = "SIGN-OFF (OPERATOR): turn the mode on"
 
 PROOF_BODY = (
     "Record what was observed, where it was read, and when.\n\n"
@@ -188,10 +192,14 @@ class ABuildChildGetsItsVerdictTest(unittest.TestCase):
                          {"DRE-901": "FLEET", "DRE-902": "FLEET"})
 
     def test_the_verdict_is_the_card_s_own_routing_decision(self):
-        """Not a constant. Criteria that name a live flow route WORKBENCH, and
-        the batch honours that — FLEET is what dispatches an agent."""
-        self.assertEqual(_stamped(_plan(work_bodies=(WORK_BODY, LIVE_BODY))),
-                         {"DRE-901": "FLEET", "DRE-902": "WORKBENCH"})
+        """Not a constant. A child whose title declares an operator's sign-off
+        routes OPERATOR, and the batch honours that — FLEET is what dispatches
+        an agent. A child whose criteria name a live flow is FLEET since
+        DRE-6227: watching it run after it ships is a proof observation."""
+        plan = _plan(work_bodies=(WORK_BODY, LIVE_BODY))
+        self.assertEqual(_stamped(plan), {"DRE-901": "FLEET", "DRE-902": "FLEET"})
+        plan[1]["title"] = SIGN_OFF_TITLE
+        self.assertEqual(_stamped(plan), {"DRE-901": "FLEET", "DRE-902": "OPERATOR"})
 
     def test_a_role_label_still_wins_first(self):
         """Precedence 1, unchanged: an explicit role label decides before any
@@ -276,10 +284,13 @@ class ABuildChildGetsItsVerdictTest(unittest.TestCase):
                              identifier)
 
     def test_it_applies_the_marks_the_verdict_declares(self):
-        """FLEET declares none; WORKBENCH declares `hand-built`, and the sweep
-        already reads that to keep a competing run off the card."""
-        _, _, labelled = _written(_plan(work_bodies=(WORK_BODY, LIVE_BODY)))
-        self.assertEqual(labelled, [("DRE-902", "hand-built")])
+        """FLEET declares none; OPERATOR declares `operator-step` and `no-code`
+        since DRE-6227, and the sweep reads `operator-step` to keep a competing
+        run off the card. Never the CEO's `hand-built`."""
+        plan = _plan()
+        plan[1]["title"] = SIGN_OFF_TITLE
+        _, _, labelled = _written(plan)
+        self.assertEqual(labelled, [("DRE-902", "operator-step"), ("DRE-902", "no-code")])
 
 
 # ===========================================================================

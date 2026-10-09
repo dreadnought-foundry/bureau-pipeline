@@ -18,10 +18,10 @@ WHAT IS UNDER TEST, and every one of these fails before the fix:
   * a Backlog child whose epic is active and whose blockers are Done promotes
     to `Todo` when its verdict is WORKBENCH or OPERATOR, not only when it is
     FLEET;
-  * the marks the verdict declares (`hand-built`, plus `no-code` for OPERATOR)
-    are applied BEFORE the state move, so the card never sits in Todo unmarked
-    — unmarked is exactly the state in which the nudge loop dispatches an agent
-    at it;
+  * the marks the verdict declares (`operator-step` and `no-code` for
+    OPERATOR since DRE-6227, none for WORKBENCH — `hand-built` was both until
+    then) are applied BEFORE the state move, so the card never sits in its
+    lane missing a mark its verdict declares;
   * the receipt names the person whose turn it is and says nothing was
     dispatched;
   * PARKED and NEEDS WORK stay refused, and a card carrying NO verdict at all
@@ -187,23 +187,28 @@ class TestTheSweepPerformsTheMove:
         assert board.promote() == 1
         assert board.lane_of("DRE-3385") == routing_verdict.destination("OPERATOR") == "Hand-work"
 
-    def test_a_workbench_card_arrives_carrying_hand_built(self):
+    def test_a_workbench_card_arrives_carrying_no_mark(self):
+        """DRE-6227: `hand-built` is the CEO's mark, applied only when he asks
+        for it, and nothing automatic applies it. WORKBENCH declares no marks,
+        so the sweep stamps none."""
         board = _Board(_card(comments=[WORKBENCH]))
         board.promote()
-        assert board.labels_on("DRE-3385") == list(routing_verdict.marks("WORKBENCH"))
-        assert reconcile.HAND_BUILT_LABEL in board.labels_on("DRE-3385")
+        assert board.labels_on("DRE-3385") == list(routing_verdict.marks("WORKBENCH")) == []
+        assert reconcile.HAND_BUILT_LABEL not in board.labels_on("DRE-3385")
 
-    def test_an_operator_card_arrives_carrying_no_code_as_well(self):
+    def test_an_operator_card_arrives_carrying_operator_step_and_no_code(self):
         board = _Board(_card(comments=[OPERATOR]))
         board.promote()
         assert board.labels_on("DRE-3385") == list(routing_verdict.marks("OPERATOR"))
-        assert linear_ops.NO_CODE_LABEL in board.labels_on("DRE-3385")
+        assert board.labels_on("DRE-3385") == [routing_verdict.OPERATOR_STEP_LABEL,
+                                               linear_ops.NO_CODE_LABEL]
+        assert reconcile.HAND_BUILT_LABEL not in board.labels_on("DRE-3385")
 
     def test_the_marks_are_applied_before_the_state_move(self):
-        """Order is the whole protection. A `hand-built` card is left alone by
-        the nudge loop BECAUSE of the label; land it in Todo unmarked and the
-        next sweep — fifteen minutes later — dispatches an agent at work a
-        person is meant to do."""
+        """Order is the whole protection. A card carrying a person's mark
+        (`operator-step` on OPERATOR since DRE-6227) is left alone by the
+        sweep's alarms BECAUSE of the label; land it unmarked and the next
+        sweep reads it as fleet work nothing is coming for."""
         board = _Board(_card(comments=[OPERATOR]))
         board.promote()
         kinds = [kind for kind, ident, _ in board.writes if ident == "DRE-3385"]
@@ -213,12 +218,13 @@ class TestTheSweepPerformsTheMove:
         """`add_label` is idempotent and costs a Linear request to find out.
         The card's own labels came free with the candidates query."""
         board = _Board(_card(
-            comments=[WORKBENCH],
-            labels=("repo:bureau-pipeline", "agent:ops", reconcile.HAND_BUILT_LABEL),
+            comments=[OPERATOR],
+            labels=("repo:bureau-pipeline", "agent:ops",
+                    routing_verdict.OPERATOR_STEP_LABEL, linear_ops.NO_CODE_LABEL),
         ))
         assert board.promote() == 1
         assert board.labels_on("DRE-3385") == []
-        assert board.lane_of("DRE-3385") == routing_verdict.destination("WORKBENCH")
+        assert board.lane_of("DRE-3385") == routing_verdict.destination("OPERATOR")
 
     def test_nothing_is_dispatched_for_it(self):
         """The promoter never dispatches — the relay does, off the Todo
@@ -360,6 +366,13 @@ class TestTheWipCount:
     def test_a_hand_built_card_does_not_count_in_any_lane_it_spans(self, lane):
         assert not reconcile.counts_against_wip(
             self._in_lane(lane, reconcile.HAND_BUILT_LABEL)
+        )
+
+    @pytest.mark.parametrize("lane", reconcile.SWEEP_STATES)
+    def test_an_operator_step_card_does_not_count_in_any_lane_it_spans(self, lane):
+        """The mark the OPERATOR stamp applies since DRE-6227."""
+        assert not reconcile.counts_against_wip(
+            self._in_lane(lane, routing_verdict.OPERATOR_STEP_LABEL)
         )
 
     @pytest.mark.parametrize("lane", reconcile.SWEEP_STATES)
@@ -628,7 +641,7 @@ class TestTheContractSaysSo:
         # that is the lane whose writers clause says so; Todo's says FLEET
         # arrives unmarked and the person's card goes to Hand-work instead.
         writers = lane_contract.lane("Hand-work")["clauses"]["writers"]["text"]
-        assert reconcile.HAND_BUILT_LABEL in writers
+        assert routing_verdict.OPERATOR_STEP_LABEL in writers
         assert linear_ops.NO_CODE_LABEL in writers
         todo = lane_contract.lane("Todo")["clauses"]["writers"]["text"]
         assert "Hand-work" in todo and "unmarked" in todo

@@ -231,7 +231,8 @@ def test_the_marks_are_the_pipelines_own_strings():
     import reconcile
     assert epic_cap.HAND_BUILT_LABEL == reconcile.HAND_BUILT_LABEL
     assert set(epic_cap.UNBUILT_LABELS) == {reconcile.HAND_BUILT_LABEL,
-                                            linear_ops.NO_CODE_LABEL}
+                                            linear_ops.NO_CODE_LABEL,
+                                            "operator-step"}
     assert epic_cap.CLOSED_STATES == ("Done", "Canceled", "Duplicate")
 
 
@@ -302,11 +303,11 @@ def test_no_reader_spells_the_ceos_mark_itself(module):
     assert not [s for s in _code_strings(path) if "hand-built" in s]
 
 
-def test_an_operator_step_child_is_a_build_under_the_shipped_vocabulary():
-    # Today the file does not mark OPERATOR `operator-step`, so the label is
-    # nobody's mark yet — the reader follows the data, not the string.
+def test_an_operator_step_child_holds_no_slot_under_the_shipped_vocabulary():
+    # The file marks OPERATOR `operator-step` since DRE-6227, so the shipped
+    # vocabulary answers what `_flipped` used to stage in memory.
     child = _child("DRE-3", "bureau-pipeline: a deploy", labels=("operator-step",))
-    assert epic_cap.buildable(child)
+    assert not epic_cap.buildable(child)
 
 
 # --------------------------------------------------------------------------

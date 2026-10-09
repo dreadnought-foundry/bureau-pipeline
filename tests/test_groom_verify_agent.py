@@ -1173,8 +1173,8 @@ def test_a_card_with_no_hand_mark_is_not_excluded_on_labels(monkeypatch, labels)
 
 
 def test_the_exclusion_shape_follows_the_vocabulary(monkeypatch):
-    assert gva.is_exclusion("hand-built")
-    assert not gva.is_exclusion("operator-step")
+    # The shipped file marks OPERATOR `operator-step` since DRE-6227.
+    assert gva.is_exclusion("hand-built") and gva.is_exclusion("operator-step")
     _flip_operator_marker(monkeypatch)
     assert gva.is_exclusion("hand-built") and gva.is_exclusion("operator-step")
     assert gva._EXCLUSION_RE.fullmatch("operator-step")

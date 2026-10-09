@@ -8,6 +8,11 @@ applies it, so the OPERATOR verdict's marker is about to change to
 `operator-step` — a data change in `config/routing-verdicts.json`, made by a
 sibling card.
 
+DRE-6227 made that flip, so the shipped file and the flipped copy below are
+now the same vocabulary; the controls that read "today" run against
+`_before_the_flip()`, the file as it was, to keep proving the readers follow
+the vocabulary rather than a literal.
+
 If the readers still asked for the string, the flip would break three things at
 once: every OPERATOR card the sweep promotes afterwards is alarmed as stranded
 in Hand-work, `critic_score.reference_problems` refuses its own contaminated
@@ -72,6 +77,25 @@ def _flipped() -> dict:
     return doc
 
 
+def _before_the_flip() -> dict:
+    """The vocabulary as it shipped before DRE-6227: OPERATOR marked
+    `hand-built` + `no-code`, WORKBENCH `hand-built`."""
+    doc = copy.deepcopy(routing_verdict.load())
+    for record in doc["verdicts"]:
+        if record["name"] == "OPERATOR":
+            record["marks"] = [HAND_BUILT, NO_CODE]
+        if record["name"] == "WORKBENCH":
+            record["marks"] = [HAND_BUILT]
+    return doc
+
+
+@pytest.fixture
+def unflipped(monkeypatch):
+    doc = _before_the_flip()
+    monkeypatch.setattr(routing_verdict, "load", lambda path=None: doc)
+    return doc
+
+
 @pytest.fixture(params=[SHIPPED, FLIPPED])
 def vocabulary(request, monkeypatch):
     """Every reader that calls `routing_verdict.load()` reads `request.param`'s
@@ -116,6 +140,10 @@ class TestTheLabels:
 
 class TestPersonMarks:
     def test_the_shipped_vocabulary(self):
+        # DRE-6227 shipped the flip.
+        assert routing_verdict.person_marks() == (OPERATOR_STEP, NO_CODE, HAND_BUILT)
+
+    def test_the_vocabulary_before_the_flip(self, unflipped):
         assert routing_verdict.person_marks() == (HAND_BUILT, NO_CODE)
 
     def test_the_flipped_vocabulary(self, flipped):
@@ -147,6 +175,9 @@ class TestHandMarks:
     before this card."""
 
     def test_the_shipped_file(self):
+        assert routing_verdict.hand_marks() == (OPERATOR_STEP, HAND_BUILT)
+
+    def test_the_file_before_the_flip(self, unflipped):
         assert routing_verdict.hand_marks() == (HAND_BUILT,)
 
     def test_the_flipped_file(self, flipped):
@@ -159,8 +190,12 @@ class TestHandMarks:
 
 class TestRetirementLifts:
     def test_the_shipped_file(self):
-        assert routing_verdict.retirement_lifts() == (HAND_BUILT,)
+        assert routing_verdict.retirement_lifts() == (OPERATOR_STEP, HAND_BUILT)
+        # The constant is the pre-flip answer, kept for existing readers.
         assert routing_verdict.RETIREMENT_LIFTS == (HAND_BUILT,)
+
+    def test_the_file_before_the_flip(self, unflipped):
+        assert routing_verdict.retirement_lifts() == (HAND_BUILT,)
 
     def test_the_flipped_file(self, flipped):
         assert routing_verdict.retirement_lifts() == (OPERATOR_STEP, HAND_BUILT)
@@ -172,8 +207,14 @@ class TestRetirementLifts:
         assert routing_verdict.lifted_marks(["OPERATOR"], "FLEET") == (OPERATOR_STEP,)
         assert routing_verdict.lifted_marks(["OPERATOR"], "OPERATOR") == ()
 
-    def test_a_retirement_today_still_lifts_hand_built(self):
+    def test_a_retirement_before_the_flip_lifted_hand_built(self, unflipped):
         assert routing_verdict.lifted_marks(["OPERATOR"], "FLEET") == (HAND_BUILT,)
+
+    def test_a_retirement_now_never_lifts_hand_built(self):
+        """No verdict applies the CEO's mark since DRE-6227, so a retirement
+        never takes it off: a `hand-built` on a card is his own."""
+        assert routing_verdict.lifted_marks(["OPERATOR"], "FLEET") == (OPERATOR_STEP,)
+        assert routing_verdict.lifted_marks(["WORKBENCH"], "FLEET") == ()
 
     def test_the_retirement_note_names_what_it_lifts(self, flipped):
         note = routing_verdict.retirement_comment(
@@ -209,9 +250,10 @@ class TestCardMarks:
         proof = routing_verdict.hand_built_promotion("OPERATOR", title="PROOF: x")
         assert f"`{NO_CODE}`" in proof and f"`{HAND_BUILT}`" not in proof
         other = routing_verdict.hand_built_promotion("OPERATOR", title="OPERATOR: x")
-        assert f"`{HAND_BUILT}`" in other and f"`{NO_CODE}`" in other
+        assert f"`{OPERATOR_STEP}`" in other and f"`{NO_CODE}`" in other
+        assert f"`{HAND_BUILT}`" not in other
         assert routing_verdict.hand_built_promotion(
-            "WORKBENCH", title="PROOF: x").endswith("nothing was dispatched.")
+            "WORKBENCH", title="PROOF: x").endswith("No mark was applied.")
 
 
 # --------------------------------------------------------------------------
@@ -348,7 +390,7 @@ class TestHandBuilt:
         assert reconcile.hand_built(_card(["repo:portico", OPERATOR_STEP]))
         assert reconcile.hand_built(_card(["repo:portico", "Operator-Step"]))
 
-    def test_operator_step_is_nobodys_mark_today(self):
+    def test_operator_step_was_nobodys_mark_before_the_flip(self, unflipped):
         assert not reconcile.hand_built(_card(["repo:portico", OPERATOR_STEP]))
 
     def test_the_ceos_mark_reads_under_both(self, vocabulary):
@@ -362,7 +404,7 @@ class TestHandBuilt:
         assert flagged == set()
         comment.assert_not_called()
 
-    def test_operator_step_without_the_flip_is_still_flagged(self):
+    def test_operator_step_without_the_flip_is_still_flagged(self, unflipped):
         """Control: the guard reads the vocabulary, not a new literal."""
         flagged, _ = _watchdog([_card(["repo:portico", OPERATOR_STEP])])
         assert flagged == {"DRE-6301"}

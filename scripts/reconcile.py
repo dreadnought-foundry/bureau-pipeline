@@ -754,6 +754,14 @@ def hand_built(card: dict) -> bool:
     may not route FLEET (`proof_and_demo` rule 3). So the sweep leaves it as
     it did when every proof card wore `hand-built`.
 
+    And a card sitting in the lane a person's verdict sends it to
+    (`routing_verdict.is_person_verdict`), read off the verdict comment the
+    board read already carries, at no request. WORKBENCH declares no marks
+    since DRE-6227, so the label alone would leave a WORKBENCH card in
+    Hand-work unmarked, and the watchdog would hold it as a build that never
+    started. Only in that lane: a card a person moved on to Todo has been
+    handed to the fleet, and its old verdict must not hold the dispatch back.
+
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
     are all the normal state, not evidence of a stall. Read by the callers that
@@ -775,9 +783,22 @@ def hand_built(card: dict) -> bool:
     if proof_and_demo.is_proof(card.get("title")):
         return True
     marked = {m.lower() for m in routing_verdict.hand_marks()}
-    return any(
+    if any(
         lbl["name"].lower() in marked
         for lbl in (card.get("labels") or {}).get("nodes", [])
+    ):
+        return True
+    lane = (card.get("state") or {}).get("name")
+    persons = {
+        name for name in routing_verdict.verdicts()
+        if routing_verdict.is_person_verdict(name)
+        and routing_verdict.destination(name) == lane
+    }
+    # The lane first, so a card in any other lane is never read twice
+    # (tests/test_sweep_request_budget.py counts the reads).
+    return bool(persons) and any(
+        name in persons
+        for name in routing_verdict.verdicts_on(card_comment_bodies(card))
     )
 
 

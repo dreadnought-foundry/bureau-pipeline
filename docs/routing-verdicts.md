@@ -14,14 +14,14 @@ The actor is who is **accountable for the card at the destination** — usually 
 | Verdict | Means | Destination | Who handles it there | Dispatched? |
 | --- | --- | --- | --- | --- |
 | **FLEET** | Buildable unattended in one pull request. | Todo | `agent-task.yml` | yes |
-| **WORKBENCH** | Needs an interactive flow or live system state — driving an auth flow, forcing a token past expiry, confirming something in production. | Hand-work | `operator` | no |
+| **WORKBENCH** | A person works it at an interactive session, against live system state. The acceptance criteria no longer produce it (DRE-6227). | Hand-work | `operator` | no |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret. | Hand-work | `operator` | no |
 | **PARKED** | Well-formed and deliberately not to be built. | Backlog | `plan.yml` | no |
 | **NEEDS WORK** | Not buildable as written. | Planning | `plan.yml` | no |
 
 - **FLEET** — The sweep promotes it out of Backlog and the relay dispatches a build run. This is the only verdict that may be dispatched.
-- **WORKBENCH** — It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes and stamping the mark before the card lands, because the destination written here was true for a year and nothing ever carried a card to it. It lands in Hand-work, the person-work lane, not Todo (DRE-5240): Todo is the build button, and a person's card waiting there for days read as a stuck build queue.  Marked `hand-built`.
-- **OPERATOR** — Same destination as WORKBENCH and the same actor, because the same person does it; the difference is that no code is produced. `no-code` is the existing marker for that, and it already stops a merged runbook auto-closing the card (linear_ops.auto_done_skip_reason — six false portico closes).  Marked `hand-built`, `no-code`.
+- **WORKBENCH** — It stays in the vocabulary for the historical `DEMO:` title convention and for the pipeline's own record stampers, `repair_card` and `model_adoption_actions`, which write it onto cards they file. The acceptance criteria no longer produce it: a criterion that can only be met by watching the change run after it ships is a proof observation or a follow-up card, never a reason to hold the build, and reading one off a phrase sent six code cards in a week to a lane where nobody builds them (DRE-6227). It carries no mark: the person's mark it used to put on is the CEO's own, applied only when he asks for it. Backlog was the old answer and Backlog is a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes, because the destination written here was true for a year and nothing ever carried a card to it. It lands in Hand-work, the person-work lane, not Todo (DRE-5240): Todo is the build button, and a person's card waiting there for days read as a stuck build queue.
+- **OPERATOR** — Same destination as WORKBENCH and the same actor, because the same person does it; the difference is that no code is produced. `operator-step` says a person performs the step, and the sweep reads it as a person's card (routing_verdict.hand_marks), so it neither dispatches a competing run nor reports the card as stranded (DRE-2524, DRE-6225). It replaced the CEO's own mark here, which nothing automatic applies (DRE-6227). `no-code` is the existing marker for the rest, and it already stops a merged runbook auto-closing the card (linear_ops.auto_done_skip_reason — six false portico closes).  Marked `operator-step`, `no-code`.
 - **PARKED** — Backlog IS the right lane for a card that is deliberately inert — the dead end is the point. It is never promoted and never reported as stalled by any sweep. The actor is the planning-exit writer that stamps this verdict and lands the card there, because Backlog is a lane only the process writes; it is not somebody waiting to pick the card up, because for PARKED nobody is.
   - **Who takes it back out:** Only a human revives a PARKED card. Nothing in the pipeline takes it back out of Backlog — no sweep, no run, no label — so a person deciding the card is worth building again is a separate, later act, and never the actor of this routing decision.
 - **NEEDS WORK** — It returns to Planning with the specific missing thing named — the verdict comment carries it, so the planner is told what to add rather than asked to guess.
@@ -60,30 +60,9 @@ Exact match, lower-cased. `no-codegen` is not `no-code`, and reading it as one i
 
 ## What the acceptance criteria are read for
 
-Checkbox criteria only, never free prose, matched on whole words. Signals are tried in the order below, and the order is load-bearing: **screenshotting a screen is not driving a flow**, but driving a flow that ends at a screen is still driving a flow.
+Checkbox criteria only, never free prose, matched on whole words. Signals are tried in the order below. A criterion that can only be met by watching the change run after it ships is a **proof observation or a follow-up card, never a reason to hold the build** — so no criterion routes a card to a person (DRE-6227).
 
 **Every phrase names the real cards that write it (DRE-2831).** The first version of this rule was written from phrases a card author imagined, and six of the nine visual ones appear in zero of this workspace's 1,561 carded issues — so the FLEET half almost never fired and real UI cards were routed by a model instead. A phrase with no card behind it now fails `python3 scripts/routing_verdict.py check`.
-
-### interactive → WORKBENCH
-
-The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.
-
-| Phrase | Cards that write it | Read from |
-| --- | --- | --- |
-| `sign in` | 14 | DRE-1621, DRE-1561 |
-| `sign out` | 3 | DRE-605, DRE-603 |
-| `log in` | 2 | DRE-604 |
-| `in production` | 26 | DRE-2553, DRE-2532 |
-| `against the live` | 7 | DRE-1274, DRE-2598 |
-| `on the live` | 8 | DRE-2715, DRE-2753 |
-| `in the live product` | 1 | DRE-2308 |
-| `verified live` | 8 | DRE-2310, DRE-2414, DRE-1839 |
-| `by hand` | 24 | DRE-2771, DRE-2792 |
-| `manually` | 10 | DRE-419, DRE-1176 |
-
-Read on 2026-08-31 across every issue in the Linear DRE workspace — 2,773 cards, 1,561 of them carrying `- [ ]` acceptance criteria.
-
-Attested the same way as the visual half, and seven phrases went the same way as its guesses: 'log out', 'force the token', 'past expiry', 'walk through', 'step through', 'in the browser' and 'interactively' matched no card at all and were dropped, and two more — 'past `exp`' and 'confirm the session' — matched only cards 'sign in' already catches, or a pytest session ('confirm the session fails with the expected error') — this workspace writes 'by hand' (24 cards) and 'manually' (10). 'in the live product' and 'verified live' were ADDED, and only because the visual half was widened: a criterion that states a rendered outcome and then says it is verified in the running product must reach a person, and interactive is read first.
 
 ### static_visual → FLEET
 
