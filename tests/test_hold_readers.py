@@ -394,8 +394,14 @@ LABEL_ALONE = {
 #: the sweep's `review-cap-spent` park to find a Green Light candidate — a
 #: reading of which card is its, not a stand-down; its `first_run` still
 #: reads the label alone, and the test above holds it to that. The other
-#: three import nothing of it.
+#: three import nothing of it to read.
 IMPORTS_HOLD_FOR_ITS_OWN_LANE = {"scripts/hygiene_triage.py", "scripts/proof_dispatch.py"}
+
+#: `linear_ops` imports `hold` to WRITE one (DRE-6428): `_file_operator_hold`
+#: stamps the operator step the planner just filed. A writer, not a reader —
+#: `cmd_state` and `_held_state_move` still read the label alone, and the file
+#: still reads no stamp anywhere; the tests below hold it to both.
+IMPORTS_HOLD_TO_WRITE = {"scripts/linear_ops.py"}
 
 
 def _tree(rel):
@@ -421,6 +427,8 @@ class TestTheLabelAloneReadsStay:
     def test_no_hold_import(self, rel):
         if rel in IMPORTS_HOLD_FOR_ITS_OWN_LANE:
             pytest.skip("imports hold for its own lane's reading (DRE-6190, DRE-6406)")
+        if rel in IMPORTS_HOLD_TO_WRITE:
+            pytest.skip("imports hold to write one, never to read one (DRE-6428)")
         assert not _imports_hold(_tree(rel)), f"{rel} imports hold"
 
     @pytest.mark.parametrize("rel,name", [(rel, name) for rel, names in
