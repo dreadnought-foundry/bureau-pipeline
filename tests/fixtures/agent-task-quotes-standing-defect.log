@@ -1,0 +1,7 @@
+build	Build	2026-10-09T17:10:11.1234567Z Reading the card body...
+build	Build	2026-10-09T17:10:11.2234567Z Card: DRE-6467 — the medic reads a sweep that is red on a standing card defect as the alarm it is
+build	Build	2026-10-09T17:10:11.3234567Z Both exit sites end a red run with one line of the shape:
+build	Build	2026-10-09T17:10:11.4234567Z reconcile: 0 write / 0 read failure(s), 2 unfixed card defect(s) — see ERROR lines above
+build	Build	2026-10-09T17:10:11.5234567Z Card URL: https://linear.app/dreadnoughtfoundry/issue/DRE-6467/bureau-pipeline-the-medic-reads-a-sweep-that-is-red-on-a-standing-card
+build	Build	2026-10-09T17:24:40.6234567Z FAILED tests/test_medic_standing_defect.py::StandingDefectClassifierTest::test_reconcile_log - AssertionError
+build	Build	2026-10-09T17:24:41.7234567Z ##[error]Process completed with exit code 1.

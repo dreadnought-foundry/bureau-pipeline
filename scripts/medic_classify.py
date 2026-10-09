@@ -125,10 +125,30 @@ rate-limit … deliberately NOT retrying". The kill keeps `infra_crash=false`,
 which is deliberate — a first kill on a LIGHT runner is entitled to the medic's
 one automatic retry. Every other case is refused by `medic_retry`, not here.
 
+SEVENTH CLASS — A STANDING CARD DEFECT (DRE-6467). The sweep goes red on
+purpose: `reconcile.py` keeps a third ledger, `_stale_defects`, for "nothing
+failed, a card is wrong" — an epic's prose-blocker defect standing two hours
+(DRE-2676) — and the red run IS that ledger's escalation. Under `normal` the
+medic answered it with a second full sweep on attempt 1 and a paid diagnosis
+on attempt 2, every fifteen minutes, for an alarm working as designed. So it
+gets the back-off shape of the three classes above: no retry (the rerun
+reports the same defect), no diagnosis agent (there is no crash to
+diagnose), one `::notice::`, and the medic's own run stays green. The sweep's
+run stays red — a board that is stuck must still say so.
+
+Detection reads the line `reconcile.main` already prints at both exits —
+`reconcile: <w> write [/ <r> read ]failure(s), <d> unfixed card defect(s)` —
+and is the class only when it reads zero failures and one or more defects: one
+write or read failure beside them is a real failure and keeps the ordinary
+path. Line-anchored, and only on a Reconcile run, so an agent-task log that
+quotes the line (DRE-6467's own card body does) never classifies. It is
+checked LAST: every class ahead of it is a crash, and a sweep that crashed
+never prints the closing line.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
 prints `infra_crash=true|false` (the DRE-1921 gate, unchanged),
-`class=environment_crash|stalled_no_stream|out_of_memory|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
+`class=environment_crash|stalled_no_stream|out_of_memory|critic_infra_crash|upstream_5xx|linear_ratelimited|standing_defect|normal`,
 then `signature=`, `check=` and `meaning=` (empty unless the class is
 `environment_crash`) and `stall_step=`, `stall_last_event=` and
 `stall_silence=` (empty unless the class is `stalled_no_stream`), plus a human
@@ -236,6 +256,34 @@ def is_linear_rate_limited(log_text: str) -> bool:
     return False
 
 
+# ── a standing card defect (DRE-6467) ────────────────────────────────────────
+# The closing line both exits of `reconcile.main` print, read only where it
+# says NOTHING the sweep tried failed and at least one card defect stands. The
+# promote-only exit has no read clause, hence the optional group.
+_STANDING_DEFECT_LINE = re.compile(
+    r"reconcile: 0 write (?:/ 0 read )?failure\(s\), ([1-9]\d*) unfixed card defect\(s\)"
+)
+
+
+def _is_reconcile(workflow_name: str) -> bool:
+    """Only a Reconcile run prints the sweep's closing line. Matched the way
+    `_is_qa_review` matches its workflow, so a renamed stub still counts."""
+    return "reconcile" in (workflow_name or "").lower()
+
+
+def is_standing_defect(workflow_name: str, log_text: str) -> bool:
+    """True iff this is a Reconcile run that went red ONLY because a card
+    defect it reported is still standing — an alarm, not a failure, which the
+    medic must neither rerun nor diagnose. Line-anchored on purpose: see the
+    module docstring.
+    """
+    if not _is_reconcile(workflow_name):
+        return False
+    return any(
+        _STANDING_DEFECT_LINE.search(line) for line in (log_text or "").splitlines()
+    )
+
+
 def classify(workflow_name: str, log_text: str) -> str:
     """The failed run's class: `environment_crash` (DRE-3428 — this runner
     cannot run Claude at all), `stalled_no_stream` (DRE-3991 — the run went
@@ -243,7 +291,9 @@ def classify(workflow_name: str, log_text: str) -> str:
     hit its memory limit and the kernel killed the job), `critic_infra_crash`
     (DRE-1921 — back off, the reviewer was down), `upstream_5xx` (DRE-2488 —
     GitHub is down, back off), `linear_ratelimited` (DRE-2923 — the workspace
-    quota is exhausted, back off), or `normal` (retry once, then diagnose).
+    quota is exhausted, back off), `standing_defect` (DRE-6467 — the sweep is
+    red on a card defect it reported, the alarm working), or `normal` (retry
+    once, then diagnose).
 
     The environment crash is checked FIRST and that ordering is the whole
     point of DRE-3428: the crashed review posts the neutral marker into the
@@ -261,6 +311,10 @@ def classify(workflow_name: str, log_text: str) -> str:
     the neutral branch and the marker is in that log too. It sits after the
     stall because the watchdog's own line says which of the two happened
     (`out_of_memory.from_log` reads the stall and stands down).
+
+    THE STANDING DEFECT IS CHECKED LAST, after every crash class: a sweep
+    that crashed never prints its closing line, so the order cannot swallow
+    one — and were both in one log, the crash is the cause to name.
     """
     if reviewer_environment.detect(log_text) is not None:
         return "environment_crash"
@@ -274,6 +328,8 @@ def classify(workflow_name: str, log_text: str) -> str:
         return "upstream_5xx"
     if is_linear_rate_limited(log_text):
         return "linear_ratelimited"
+    if is_standing_defect(workflow_name, log_text):
+        return "standing_defect"
     return "normal"
 
 
@@ -388,6 +444,15 @@ def main(argv: list[str]) -> int:
             "exhausted. Backing off: no retry (it would deepen the limit), no "
             "diagnosis (there is no defect to find). The quota refills on its "
             "own and the next scheduled sweep reconciles the board.",
+            file=sys.stderr,
+        )
+    elif kind == "standing_defect":
+        print(
+            "medic classify: STANDING CARD DEFECT — the sweep is red because a "
+            "card defect it reported is still standing, and nothing it tried "
+            "failed. Not retrying (the rerun reports the same defect), not "
+            "diagnosing (there is no crash to diagnose). The ERROR lines in "
+            "the failed run name the cards; a person must act.",
             file=sys.stderr,
         )
     else:
