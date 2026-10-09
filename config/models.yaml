@@ -137,7 +137,8 @@
 #                  would resolve those deaths to None instead of reporting them.
 #   excluded       ids that are available but excluded from EVERY ladder by
 #                  POLICY (cost/quota). Same read-not-select treatment as
-#                  `retired`.
+#                  `retired`. It also holds a model the CEO has said we do
+#                  not use (`claude-haiku-5-5`, DRE-6288).
 
 kinds:
   # THE HOT PATH. Hundreds of turns per card, every card, every repo — this is
@@ -473,5 +474,7 @@ retired:
 # excluded may appear on ANY ladder, and validation enforces that on its own
 # terms rather than trusting the next edit.
 excluded:
+  - model: claude-haiku-5-5
+    reason: "on no ladder by the CEO's signed answer of 2026-10-08 (DRE-6288): added to the record, used by no agent or reviewer until he says otherwise"
   - model: claude-fable-5
     reason: "off every ladder on cost policy (2026-08-12)"

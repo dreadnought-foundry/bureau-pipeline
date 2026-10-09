@@ -83,6 +83,18 @@ prices:
     output: 10.00
     source: "https://www.anthropic.com/pricing"
     declared: 2026-09-14
+  # Added under DRE-6288 on the CEO's signed answer of 2026-10-08: "go ahead
+  # and add it but we are not using it currently". Haiku is a new family no
+  # ladder runs, and `excluded:` in `config/models.yaml` holds it off every
+  # ladder. Anthropic prices it in two tiers by prompt length: $0.10/$0.50 for
+  # prompts up to 100,000 tokens, and $0.50/$2.50 for prompts over 100,000.
+  # This file holds one figure per side, so the entry records the base tier,
+  # as every other entry here does.
+  claude-haiku-5-5:
+    input: 0.10
+    output: 0.50
+    source: "https://claude.com/pricing"
+    declared: 2026-10-09
   # LOAD-BEARING since DRE-3880 merged (2026-09-16). Sonnet 4.6 left the
   # workhorse ladder and kept the judgement ladder's last rung, which puts it
   # BELOW the rung that ladder degrades onto — so this entry is what shows it

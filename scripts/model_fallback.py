@@ -230,7 +230,7 @@ _FALLBACK_MODEL_CONFIG = {
         },
     },
     "retired": ["claude-opus-4-8"],
-    "excluded": ["claude-fable-5"],
+    "excluded": ["claude-haiku-5-5", "claude-fable-5"],
 }
 # --- END generated model config ---
 

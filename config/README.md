@@ -324,7 +324,8 @@ of it is ever a runtime lookup.
 `models.yaml` is **the only file a human edits to change which model an agent
 uses**. It declares named, ordered fallback **ladders** (best → worst), classes
 every agent as one of three **role kinds**, and lists the ids that stay *readable
-but not selectable* (retired ids, and ids excluded by cost policy).
+but not selectable* (retired ids, and ids excluded by cost policy or because
+the CEO has said we do not use them).
 
 ## The role kinds — workhorse, advisory, judgement
 
