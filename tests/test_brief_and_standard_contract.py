@@ -268,11 +268,13 @@ class TestTheCEOsRuleOnHandBuilt:
         )
 
     def test_the_groomer_exclusion_names_the_operator_step(self):
-        body = self._flat(_read(BRIEFS / "groom-verify.md"))
-        assert re.search(r"`hand-built`[^.]*`operator-step`|`operator-step`[^.]*`hand-built`", body), (
-            "groom-verify.md's exclusion names `hand-built` without "
-            "`operator-step` beside it"
-        )
+        # The brief the verify agent reads, and the doc a person reads.
+        for doc in (BRIEFS / "groom-verify.md", ROOT / "docs" / "groomer.md"):
+            body = self._flat(_read(doc))
+            assert re.search(r"`hand-built`[^.]*`operator-step`|`operator-step`[^.]*`hand-built`", body), (
+                f"{doc.name}'s exclusion names `hand-built` without "
+                "`operator-step` beside it"
+            )
 
 
 class TestCardQualityDerivesTheSlugList:

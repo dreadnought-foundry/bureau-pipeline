@@ -461,7 +461,8 @@ children, the last move and every comment with who said it — in one Linear
 request per card, and excludes five kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
-`hand-built`, `moved into Intake on YYYY-MM-DD` (a move from another lane in
+`hand-built` or `operator-step` (whichever hand mark the card carries, read
+off `routing_verdict.hand_marks` — a person builds it), `moved into Intake on YYYY-MM-DD` (a move from another lane in
 the last seven days; it reads the move, not its author, since a move carries
 no signature and the console's move for the CEO looks like any workflow's),
 `board context unread: <why>` (the card's read failed, or the pipeline's
