@@ -9256,7 +9256,17 @@ def _release_card(pr: dict, note: str) -> None:
     """Take the PR's card out of the human queue: the operator HAS acted, so
     leaving needs-human + Triage on it would keep every other repair
     sweep standing down (DRE-2024) and keep the card in the CEO's queue
-    claiming it still needs them."""
+    claiming it still needs them.
+
+    Except a live review-cap park (DRE-6247). The sweep parked that card in
+    Green Light under a `review-cap-spent` stamp, and the way back is the new
+    head the fix pushes — the hygiene lane lifts it there, and it pages only
+    the cards carrying the label. Taking the label off here would leave the
+    stamp live with nothing to lift it, and the card in Green Light for good.
+    So the hold's reason is read first, labels and comment window in ONE
+    read, and on `review-cap-spent` only the note is posted. Every other
+    answer — no label, a bare label, `fix-dispute`, a spent stamp — releases
+    exactly as before."""
     card = branch_card(pr.get("headRefName") or "")
     if not card:
         return
@@ -9264,8 +9274,26 @@ def _release_card(pr: dict, note: str) -> None:
     # be recorded (the run goes red, medic sees it) and must NOT abort the
     # remaining backstops in this sweep.
     try:
-        linear_ops.remove_label(card, HOLD_LABEL)
-        linear_ops.cmd_advance(card, REVIEW_LANE, PARKED_STATE)
+        issue = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 labels { nodes { name } } %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
+            {"id": card},
+        )["issue"] or {}
+        reason = hold.reason_of(
+            (issue.get("labels") or {}).get("nodes", []),
+            card_comment_bodies(issue),
+        )
+        if reason == "review-cap-spent":
+            note = (
+                f"🔓 Your answer on PR #{pr.get('number')} was picked up — the "
+                "fix agent is running on your decision. This card stays in "
+                "Green Light under its hold and comes back to In Review on its "
+                "own when the fix lands as a new head. Nothing more needed "
+                "from you."
+            )
+        else:
+            linear_ops.remove_label(card, HOLD_LABEL)
+            linear_ops.cmd_advance(card, REVIEW_LANE, PARKED_STATE)
         linear_ops.cmd_comment(card, note)
     except Exception as e:  # noqa: BLE001 — any Linear/transport error
         err = f"releasing {card} after an operator decision failed: {e}"

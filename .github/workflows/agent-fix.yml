@@ -870,8 +870,22 @@ jobs:
           # idempotent (a documented no-op when the label is absent) and, like
           # the announce comment below, `|| true` — Linear bookkeeping must
           # never cost the fix run.
-          [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
-            remove-label "${{ steps.pr.outputs.card }}" needs-human || true
+          #
+          # DRE-6247: except a live review-cap park. That hold is not stale —
+          # the sweep parked the card in Green Light under a `review-cap-spent`
+          # stamp, and the new head this run pushes is what lifts it; the
+          # hygiene lane pages only the cards carrying the label, so taking it
+          # off here would strand the card there for good. `hold.py reason`
+          # prints the hold's reason (nothing when the label is off) and exits
+          # 0 in every case; a read that fails anyway prints nothing and the
+          # label comes off exactly as before.
+          if [ -n "${{ steps.pr.outputs.card }}" ]; then
+            HOLD_REASON="$(python3 .bureau-pipeline/scripts/hold.py reason "${{ steps.pr.outputs.card }}" || true)"
+            if [ "$HOLD_REASON" != "review-cap-spent" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py \
+                remove-label "${{ steps.pr.outputs.card }}" needs-human || true
+            fi
+          fi
           # DRE-2826: the conflict-mode announcement is a declared act
           # (`conflict-agent-dispatched`) and composes its receipt through the
           # one writer; the other two branches are dispatch notices with no
@@ -916,7 +930,8 @@ jobs:
       # (DRE-2813's lesson, from the other direction).
       #
       # The card side is deliberately absent: the Announce step above already
-      # cleared `needs-human`, and the release out of the parked lane belongs
+      # cleared `needs-human` (bar a live review-cap park, which it leaves for
+      # the new head to lift — DRE-6247), and the release out of the parked lane belongs
       # to whichever restart the operator actually gets, which is why the next
       # step does it rather than this one.
       - name: Receipt the operator-decision restart
