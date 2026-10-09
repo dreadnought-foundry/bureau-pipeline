@@ -399,6 +399,24 @@
         "medic",
         "limit-recovery"
       ]
+    },
+    {
+      "file": "scripts/linear_ops.py",
+      "scope": "_file_operator_hold",
+      "anchor": "filed as an operator step",
+      "note": "The create seam (`subissue`, `oneoff`): a card the planner files `needs-human` + `no-code` is marked `operator-step` and stamped, so the sweep lifts it once its blockers are terminal (DRE-6428).",
+      "reasons": [
+        {
+          "reason": "operator-step",
+          "lifts": "blockers-terminal",
+          "tried_first": "none — the card is filed held by design; the sweep lifts it when every blocker is terminal"
+        }
+      ],
+      "readers": [
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
     }
   ]
 }
