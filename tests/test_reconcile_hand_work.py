@@ -200,6 +200,58 @@ class TestSilence:
         add_label.assert_not_called()
 
 
+def _unmarked_workbench_card(state=HAND_WORK, verdict=None):
+    """A card the sweep carried to Hand-work on a WORKBENCH verdict since
+    DRE-6227: the verdict comment on it and no person's label, because
+    WORKBENCH declares no marks."""
+    card = stranded._card(state=state, labels=("repo:portico",))
+    card["comments"] = {"nodes": [{"body": verdict or promo.WORKBENCH}]}
+    return card
+
+
+class TestAnUnmarkedPersonsCard:
+    """WORKBENCH marks nothing since DRE-6227, so the label can no longer be
+    the only thing that says a card in Hand-work is a person's. Its verdict
+    says so: a card sitting in the lane its person verdict sends it to is
+    no run's, and a missing run receipt there is not a strand (the critic on
+    #836 reproduced the stranded-watchdog hold on exactly this card)."""
+
+    def test_it_reads_as_a_persons_card(self):
+        assert reconcile.hand_built(_unmarked_workbench_card())
+
+    def test_flag_stranded_reports_nothing_for_it(self):
+        flagged, comment, add_label = stranded._run_watchdog(
+            [_unmarked_workbench_card()], bodies=[])
+        assert flagged == set()
+        comment.assert_not_called()
+        add_label.assert_not_called()
+
+    def test_the_nudge_loop_leaves_it_alone(self):
+        s = stranded._run_sweep([_unmarked_workbench_card()])
+        s.redispatch.assert_not_called()
+        s.cmd_state.assert_not_called()
+        s.cmd_advance.assert_not_called()
+        s.add_label.assert_not_called()
+
+    def test_it_takes_no_wip_slot(self):
+        assert not reconcile.counts_against_wip(_unmarked_workbench_card())
+
+    def test_a_fleet_card_in_hand_work_is_still_flagged(self):
+        """Narrow: only a person's verdict reads this way, never any verdict."""
+        flagged, _, _ = stranded._run_watchdog(
+            [_unmarked_workbench_card(verdict=promo.FLEET)], bodies=[])
+        assert flagged == {"DRE-2499"}
+
+    def test_a_workbench_card_moved_to_todo_is_still_dispatched(self):
+        """Narrow on the lane too: a person who moved the card to Todo has
+        handed it to the fleet, so the old verdict does not hold it back
+        (DRE-6143 and DRE-5952 were moved, not reworded)."""
+        card = _unmarked_workbench_card(state="Todo")
+        assert not reconcile.hand_built(card)
+        s = stranded._run_sweep([card])
+        s.redispatch.assert_called_once()
+
+
 # --------------------------------------------------------------------------
 # 3: what the lane is still owed
 # --------------------------------------------------------------------------
