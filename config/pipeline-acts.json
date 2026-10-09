@@ -1748,6 +1748,38 @@
       "why": "A stand-down, not something the pipeline did. It creates no obligation, hands the work to nobody and has nothing to discharge — the review that approved the head, or the one still running on it, is already the next step, and the three questions a trailer answers all read 'not applicable'. The line is written by scripts/fix_exit.py and carries the head and 'pushed no new commit', which is all the convergence halt reads."
     },
     {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "was not delivered: the branch moved to",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix run committed its fix, but the branch moved to a head that differs from its commit while it worked, so the commit was not delivered (DRE-6351).",
+      "why": "A stand-down, not something the pipeline did. It creates no obligation and hands the work to nobody: the review of the new head is already the next step, and the three questions a trailer answers all read 'not applicable'. The line names the run's commit, the new head and the artifact the commit is preserved in, and nothing reads it back."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 Two fix runs finished this fix and GitHub refused both pushes",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The cap on a committed fix GitHub would not take: the loop was restarted once for this head, the push was refused again, and the card goes to a person (DRE-6351).",
+      "why": "The CARD-SIDE half of `fix-attempt-disputed`, which this branch composes on the PR side — the registry pins ONE `emits` site per act and that act's card half is already named here for the ordinary dispute. Two card wordings for one act is a wording question, not a registry one; admitting either as a second `emits` surface is the registry change this row defers."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "--body-file \"$CNP_BODY\"",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "A fix run finished its fix and GitHub refused the push: the work went to the `deliver-rescue` follow-up, nobody is parked, and no fix attempt is spent (DRE-6351).",
+      "why": "Act-shaped, and deliberately given no row: a new act name needs the console in agent-bureau to carry it first (`scripts/check_act_consumers.py`), so DRE-6351 posts it the way the `pushed no new commit` body is posted. Its first line opens with `fix_dead_run.COMMITTED_NOT_PUSHED_TAG` and carries `head still at <sha8>`, which the Report counts for the cap and the reconcile sweep is to read once DRE-6352 lands — until then the body tells a person to restart the loop by hand. The body is written by scripts/fix_budget.py, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🤖 The fix for PR #$PR is finished",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The card-side half of a committed fix GitHub refused to take: the work is finished and preserved, the pipeline is delivering it, and the card stays where it is (DRE-6351).",
+      "why": "The CARD-SIDE half of the committed-not-pushed marker, which has no act row for the reason that row gives. The card's machine-readable marker is `deliver_rescue.py handoff`'s own `rescue-push-failed` line, which the console already knows; this note is the plain-English sentence beside it."
+    },
+    {
       "file": ".github/workflows/agent-task.yml",
       "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}, $RESUME_CLAUSE).",
       "step": "Card → In Progress",

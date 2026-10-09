@@ -81,6 +81,16 @@ Contract with agent-fix.yml:
     --reason-file F --run-url U --out F (DRE-4849).
   --out        the "pushed no new commit" escalation body, composed by
                no_push_body. An absent or blank reason file is no reason.
+
+  argv: committed-not-pushed --attempt N --head PRE_SHA --commit SHA
+    [--status S] --error-file F [--artifact A] --run-url U
+    [--delivery dispatched|failed|skipped] [--delivery-reason-file F]
+    [--note-file F] [--pr-state STATE] [--hold] --out F (DRE-6351).
+  --out        the tagged marker a run posts when it committed and GitHub
+               refused the push, composed by committed_not_pushed_body; with
+               --hold, the cap's hold, composed by committed_not_pushed_hold.
+               GitHub's words, the handoff's reason and the agent's note all
+               travel by file. An empty --artifact means no patch was written.
 """
 
 from __future__ import annotations
@@ -92,6 +102,8 @@ from typing import Optional
 
 import fix_context
 import fix_convergence
+import fix_dead_run
+import secret_shapes
 
 # The two budgets, kept separate on purpose (the PR #13 lesson): conflict
 # churn from main moving must not consume the review budget. The markers are
@@ -315,6 +327,115 @@ def no_push_body(mode: str, attempt, head: str, reason: str, run_url: str) -> st
             f"reason — its run log is {run_url}")
 
 
+#: What became of the `deliver-rescue` handoff, as the Report tells it (DRE-6351).
+DELIVERY_DISPATCHED = "dispatched"
+DELIVERY_FAILED = "failed"
+DELIVERY_SKIPPED = "skipped"
+DELIVERIES = (DELIVERY_DISPATCHED, DELIVERY_FAILED, DELIVERY_SKIPPED)
+
+#: How much of GitHub's refusal is quoted — push_rescue's own one-line limit.
+_REFUSAL_LIMIT = 300
+
+
+def _refusal(status: str, error: str) -> str:
+    """GitHub's status and words on the refused push, one clause, redacted."""
+    named = f"status {status}" if str(status or "").strip() else "no HTTP status"
+    words = " ".join((error or "").split())
+    words = secret_shapes.SHAPES["github-token"].sub("<redacted>", words)
+    words = words.replace("`", "'")[:_REFUSAL_LIMIT]
+    return f"{named}: `{words}`" if words else f"{named}, and gave no words for it"
+
+
+def _kept(artifact: str, run_url: str) -> str:
+    if artifact:
+        return f"The commits are saved in artifact `{artifact}` on this run: {run_url}"
+    return ("The `Push rescue` step wrote no patch, so this run kept no copy of "
+            f"the commit: {run_url}")
+
+
+def committed_not_pushed_body(attempt, head: str, commit: str, *, status: str = "",
+                              error: str = "", artifact: str = "", run_url: str = "",
+                              delivery: str = DELIVERY_SKIPPED,
+                              delivery_reason: str = "", note: str = "",
+                              pr_open: bool = False) -> str:
+    """The one comment a fix run posts when it committed and GitHub refused the push.
+
+    THE FAULT (DRE-6351): the DRE-4883 run ended on a blocker written after its
+    push answered 401 and was parked as `🛑 Fix attempt N blocked`, and the
+    DRE-3898 run left no file and was parked as `pushed no new commit`. Both
+    had a commit. Both were final, because the sweep reads a park as the end.
+
+    The first line opens with the tag and carries `head still at <sha8>`: the
+    Report counts the cap off it, and DRE-6352's reconcile sweep is to compare
+    it against the pull request's head. It names only the three mechanisms
+    that exist — the `Push rescue` step, the artifact and the `deliver-rescue`
+    follow-up — and the agent's own words as its note, never as an
+    escalation. It is no `🔧 Fix attempt` marker, so no attempt is spent.
+
+    No sweep restarts the loop off this marker until DRE-6352 lands, so on an
+    open pull request the closing says a person restarts it if the branch
+    does not move, rather than promising a restart nothing performs
+    (standards/console-honesty.md rule 1). DRE-6352 replaces that sentence.
+    """
+    parts = [
+        f"{fix_dead_run.COMMITTED_NOT_PUSHED_TAG}: fix attempt {attempt} finished "
+        f"its fix and GitHub refused the push — head still at {head[:8]}",
+        f"The run holds commit `{commit[:8]}`, and this pull request's branch "
+        f"does not. The `Push rescue` step pushed it and GitHub refused with "
+        f"{_refusal(status, error)}.",
+        _kept(artifact, run_url),
+    ]
+    if delivery == DELIVERY_DISPATCHED:
+        parts.append("The `deliver-rescue` follow-up was dispatched: it applies "
+                     "that artifact onto this pull request's own branch if the "
+                     "branch has not moved.")
+    elif delivery == DELIVERY_FAILED:
+        reason = " ".join((delivery_reason or "").split())[:_REFUSAL_LIMIT]
+        parts.append("The `deliver-rescue` follow-up could not be dispatched: "
+                     f"{reason or 'no reason given'}.")
+    else:
+        parts.append("The `deliver-rescue` follow-up was not dispatched: there "
+                     "is nothing to hand over.")
+    if note.strip():
+        parts.append(f"The fix agent's own note, as it wrote it:\n\n> {note.strip()}")
+    closing = "No fix attempt is spent and nothing is parked."
+    if pr_open:
+        closing += (
+            " Nothing restarts the fix loop on its own yet: if this pull "
+            "request's branch has not moved in "
+            f"{fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES} minutes, "
+            "re-dispatch the fix loop by hand.")
+    parts.append(closing)
+    return "\n\n".join(parts)
+
+
+def committed_not_pushed_hold(attempt, head: str, commit: str, *, status: str = "",
+                              error: str = "", artifact: str = "",
+                              run_url: str = "") -> str:
+    """The hold at the cap: a marker for this head already stands (DRE-6351).
+
+    The loop was restarted once for this head and the push was refused again,
+    so a third delivery into the same refusal buys nothing. The Report appends
+    the answer format and posts it as `fix-attempt-disputed`.
+    """
+    return "\n\n".join([
+        f"🛑 Fix attempt {attempt} finished its fix and GitHub refused the push "
+        "again.",
+        f"The run holds commit `{commit[:8]}`, and the branch is still at "
+        f"`{head[:8]}` — the head the fix loop was already restarted once for. "
+        f"The `Push rescue` step pushed it and GitHub refused with "
+        f"{_refusal(status, error)}.",
+        _kept(artifact, run_url),
+        "Two runs have now finished this fix and had the push refused, so the "
+        "pipeline stops here rather than delivering into the same refusal a "
+        "third time. A person decides.",
+    ])
+
+
+def _first_line(text: str) -> str:
+    return next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
+
+
 def _write(path: Optional[str], text: str) -> None:
     if path:
         with open(path, "w", encoding="utf-8") as fh:
@@ -358,7 +479,39 @@ def main(argv=None) -> int:
     no_push.add_argument("--run-url", required=True)
     no_push.add_argument("--out", required=True)
 
+    committed = sub.add_parser(
+        "committed-not-pushed",
+        help="the run committed and GitHub refused the push (DRE-6351)")
+    committed.add_argument("--attempt", required=True)
+    committed.add_argument("--head", required=True)
+    committed.add_argument("--commit", required=True)
+    committed.add_argument("--status", default="")
+    committed.add_argument("--error-file", required=True)
+    committed.add_argument("--artifact", default="")
+    committed.add_argument("--run-url", required=True)
+    committed.add_argument("--delivery", choices=DELIVERIES, default=DELIVERY_SKIPPED)
+    committed.add_argument("--delivery-reason-file", default="")
+    committed.add_argument("--note-file", default="")
+    committed.add_argument("--pr-state", default="")
+    committed.add_argument("--hold", action="store_true")
+    committed.add_argument("--out", required=True)
+
     args = parser.parse_args(argv)
+
+    if args.command == "committed-not-pushed":
+        common = dict(status=args.status, error=_read_reason(args.error_file),
+                      artifact=args.artifact, run_url=args.run_url)
+        if args.hold:
+            _write(args.out, committed_not_pushed_hold(
+                args.attempt, args.head, args.commit, **common))
+            return 0
+        _write(args.out, committed_not_pushed_body(
+            args.attempt, args.head, args.commit, **common,
+            delivery=args.delivery,
+            delivery_reason=_read_reason(args.delivery_reason_file),
+            note=_first_line(_read_reason(args.note_file)),
+            pr_open=args.pr_state == "OPEN"))
+        return 0
 
     if args.command == "no-push":
         _write(args.out, no_push_body(args.mode, args.attempt, args.head,

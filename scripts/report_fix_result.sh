@@ -26,6 +26,25 @@ set -e
 #    refuses.
 # 4. It reads the answer format from `fix_context.py --answer-format`.
 #    Every comment that holds the pull request quotes it.
+# 4a. It reads what the run left behind before any handoff file is read as
+#    an exit: the runner's own head (`git rev-parse HEAD` in the checkout)
+#    beside the pull request's live head. When the runner holds a commit
+#    beyond PRE_SHA, one of three routes takes the round and exits 0:
+#    - Delivered: the pull request's head is the runner's. It posts
+#      `fix-attempt-landed` as in 5, plus one line after the trailer when
+#      RESCUE_PUSHED says the `Push rescue` step made the push, quoting the
+#      first line of the agent's blocker when it left one.
+#    - Committed, not pushed: the head is still PRE_SHA. `fix_dead_run.py
+#      committed-not-pushed` counts the worker-bot markers for this head.
+#      Under the cap it hands RESCUE_PATCH's artifact to the follow-up with
+#      `deliver_rescue.py handoff` (on DISPATCH_TOKEN, as GH_DISPATCH_TOKEN),
+#      unless there is no patch, posts ONE marker composed by `fix_budget.py
+#      committed-not-pushed` and opening `fix-run-committed-not-pushed`, and
+#      a plain card note. It parks nobody and spends no fix attempt. At the
+#      cap it posts `fix-attempt-disputed` opening "finished its fix and
+#      GitHub refused the push again", notes the card and parks it.
+#    - Overtaken: the head is neither. One quiet line, nothing else.
+#    No checkout to read, or no commit, takes the routes below unchanged.
 # 4b. In fix mode, a round that wrote a refutation or a blocker, or left
 #    the head where it started, is classified first by `fix_exit.py
 #    classify`, over the thread as it stands now. A critic APPROVE at the
@@ -80,6 +99,17 @@ set -e
 #                    claude-execution-output.json)
 #   RUN_URL          this run's URL, named in the dead-run and no-push
 #                    bodies
+#   RUN_ID           this run's id, the run the delivery follow-up downloads
+#                    the artifact from
+#   RESCUE_LOCAL_WORK  the Push rescue step's `local_work`: commits GitHub
+#                    does not have
+#   RESCUE_PUSHED    `true` when the Push rescue step made the push
+#   RESCUE_PATCH     the patch it wrote when GitHub refused, empty when none
+#   RESCUE_ARTIFACT  the artifact that patch is uploaded as,
+#                    rescue-<CARD>.patch
+#   RESCUE_PUSH_STATUS  GitHub's HTTP status on the refused push
+#   RESCUE_ERROR     GitHub's words on it, one line
+#   RESCUE_TARGET_BRANCH  the pull request's branch the patch belongs on
 # RUNNER_TEMP, which the runner sets, holds the handoff.
 #
 # Incident history
@@ -203,6 +233,18 @@ set -e
 #   real reason. `fix_exit.py cause` gives
 #   the sentence; the PR carries it after the act's trailer, so the body
 #   the registry froze is untouched, and the card receipt opens with it.
+# 2026-10-08, DRE-6351, DRE-4883, DRE-3898, DRE-6350, DRE-6352. A
+#   committed fix is never an escalation and never lost. The DRE-4883 run
+#   ended on a blocker written after its push answered 401 and was parked as
+#   blocked. The DRE-3898 run left no file and was parked as pushing no new
+#   commit. Both had a commit, and both parks were final, because the sweep
+#   reads a park as the end of the loop. So the runner's head is read before
+#   the files. The marker is not a `RETRY_MARKERS` tag, because the sweep
+#   would re-dispatch a fresh agent while the delivery replays the patch.
+#   DRE-6352's sweep is to read it after 30 minutes instead, once per head;
+#   until that lands the marker tells a person to restart the loop by hand.
+#   The overtaken line says only that the branch differs from the run's
+#   commit, never who moved it: the run's own earlier push looks the same.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -273,8 +315,148 @@ park_for_human() {
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }
 
-# A fix round that pushed nothing is classified before any escalation is written (DRE-6018).
+# The head moved: one fix-attempt-landed receipt for both wordings (DRE-2826).
+report_landed() {
+  if [ "$MODE" = "conflict" ]; then
+    BODY="🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running."
+  else
+    BODY="🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running."
+    # The classification rides this marker (DRE-2817, DRE-2813).
+    [ -n "$CLASSIFICATION" ] && BODY="$BODY
+
+$CLASSIFICATION"
+  fi
+  # Both wordings are one act, fix-attempt-landed (DRE-2826).
+  python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
+    --body "$BODY" --out /tmp/act-fix-pushed.md \
+    || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
+  # Who made the push, after the trailer like the cause (DRE-6351).
+  [ -n "${RESCUE_LINE:-}" ] && printf '\n\n%s' "$RESCUE_LINE" >> /tmp/act-fix-pushed.md
+  printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-pushed.md
+  gh pr comment "$PR" --repo $REPO --body-file /tmp/act-fix-pushed.md
+}
+
 HEAD_NOW=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+
+# What the run left behind is read before any handoff file is read as an exit (DRE-6351).
+# No checkout to read, or no commit beyond PRE_SHA, takes the routes below unchanged.
+LOCAL=$(git rev-parse HEAD 2>/dev/null || true)
+POST_SHA=$HEAD_NOW
+ROUTE=""
+if [ -n "$LOCAL" ] && [ -n "$PRE_SHA" ] && [ -n "$POST_SHA" ] && [ "$LOCAL" != "$PRE_SHA" ]; then
+  if [ "$POST_SHA" = "$LOCAL" ]; then ROUTE=delivered
+  elif [ "$POST_SHA" = "$PRE_SHA" ]; then ROUTE=committed
+  else ROUTE=overtaken; fi
+fi
+echo "fix route: ${ROUTE:-by the handoff files} (runner ${LOCAL:0:8}, pull request ${POST_SHA:0:8}, started ${PRE_SHA:0:8})"
+# The first line of the agent's blocker, its note and never its exit here; an absent one reads empty.
+NOTE_FILE=$(mktemp)
+printf '%s' "$BLOCKER" > "$NOTE_FILE"
+NOTE_LINE=$(sed '/^[[:space:]]*$/d' "$NOTE_FILE" | head -1)
+KEPT="This run kept no copy of the work — its log is $RUN_URL."
+[ -n "$RESCUE_PATCH" ] && KEPT="The work is saved in artifact $RESCUE_ARTIFACT on $RUN_URL."
+
+if [ "$ROUTE" = "delivered" ]; then
+  # The branch holds this run's commit, whoever pushed it.
+  if [ "$RESCUE_PUSHED" = "true" ]; then
+    RESCUE_LINE="The push was made by the \`Push rescue\` step after the agent's own push was refused."
+    [ -n "$NOTE_LINE" ] && RESCUE_LINE="$RESCUE_LINE The agent's note on it: $NOTE_LINE"
+  fi
+  report_landed
+  exit 0
+fi
+
+if [ "$ROUTE" = "overtaken" ]; then
+  # The branch moved, to a head that is not the run's; the review of that head owns the next word.
+  OVERTAKEN="🔕 Fix attempt $ATTEMPT's commit \`${LOCAL:0:8}\` was not delivered: the branch moved to \`${POST_SHA:0:8}\` while this run worked, and that head differs from this run's commit, so the review of that head has the next word."
+  [ -n "$RESCUE_PATCH" ] && OVERTAKEN="$OVERTAKEN The commit is preserved in artifact \`$RESCUE_ARTIFACT\` on $RUN_URL."
+  gh pr comment "$PR" --repo "$REPO" --body "$OVERTAKEN
+
+$ANSWERS"
+  exit 0
+fi
+
+if [ "$ROUTE" = "committed" ]; then
+  # The fix is on the runner and GitHub does not have it, whatever file the agent wrote.
+  CNP_THREAD=$(mktemp)
+  gh api --paginate --slurp "repos/$REPO/issues/$PR/comments?per_page=100" \
+    > "$CNP_THREAD" 2>/dev/null || echo '[]' > "$CNP_THREAD"
+  CAP=$(python3 .bureau-pipeline/scripts/fix_dead_run.py committed-not-pushed \
+    --comments-json "$CNP_THREAD" --head "$PRE_SHA" || echo restart)
+  ERROR_FILE=$(mktemp)
+  printf '%s' "$RESCUE_ERROR" > "$ERROR_FILE"
+  ARTIFACT=""
+  [ -n "$RESCUE_PATCH" ] && ARTIFACT=$RESCUE_ARTIFACT
+  CNP_BODY=$(mktemp)
+  if [ "$CAP" = "hold" ]; then
+    # Restarted once for this head and refused again: a person decides, and no
+    # third delivery into the same refusal is handed over.
+    python3 .bureau-pipeline/scripts/fix_budget.py committed-not-pushed --hold \
+      --attempt "$ATTEMPT" --head "$PRE_SHA" --commit "$LOCAL" \
+      --status "$RESCUE_PUSH_STATUS" --error-file "$ERROR_FILE" \
+      --artifact "$ARTIFACT" --run-url "$RUN_URL" --out "$CNP_BODY" \
+      || printf '%s' "🛑 Fix attempt $ATTEMPT finished its fix and GitHub refused the push again. $KEPT" > "$CNP_BODY"
+    HOLD_BODY="$(cat "$CNP_BODY")
+
+$FORMAT"
+    # The fixer pushed nothing the reviewer can see: the dispute act, which
+    # the sweep discharges on an operator's answer as it does every one.
+    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+      --body "$HOLD_BODY" --out /tmp/act-fix-refused-again.md \
+      || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refused-again.md
+    printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refused-again.md
+    gh pr comment "$PR" --repo "$REPO" --body-file /tmp/act-fix-refused-again.md
+    if [ -n "$CARD" ]; then
+      python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+        "🙋 Two fix runs finished this fix and GitHub refused both pushes, so the pipeline has stopped trying. $KEPT This needs your call. Details on PR #$PR. Answer on the PR with a first line starting Operator decision, or move this card to **Todo** to try again or to **Backlog** to drop it." || true
+    fi
+    park_for_human
+    exit 0
+  fi
+  # Under the cap: the artifact goes to the delivery follow-up, on the
+  # workflow's own token — the App token holds no Actions permission (DRE-1254).
+  DELIVERY=skipped
+  REASON_FILE=$(mktemp)
+  if [ -n "$RESCUE_PATCH" ] && [ -z "$CARD" ]; then
+    DELIVERY=failed
+    printf '%s' "this pull request names no card to deliver it under" > "$REASON_FILE"
+  elif [ -n "$RESCUE_PATCH" ]; then
+    HANDOFF_LOG=$(mktemp)
+    GH_DISPATCH_TOKEN="$DISPATCH_TOKEN" python3 .bureau-pipeline/scripts/deliver_rescue.py handoff \
+      --card "$CARD" --repo "$REPO" --run-id "$RUN_ID" --artifact "$RESCUE_ARTIFACT" \
+      --status "$RESCUE_PUSH_STATUS" --stderr "$RESCUE_ERROR" --branch "$RESCUE_TARGET_BRANCH" \
+      2> "$HANDOFF_LOG" || true
+    cat "$HANDOFF_LOG" >&2
+    if grep -q '^rescue delivery: dispatched ' "$HANDOFF_LOG"; then
+      DELIVERY=dispatched
+    elif grep -q '^rescue delivery: COULD NOT dispatch ' "$HANDOFF_LOG"; then
+      DELIVERY=failed
+      printf '%s' "GitHub refused to start it, and the rescue-push-failed comment on the card quotes GitHub's answer and the remedy" > "$REASON_FILE"
+    else
+      DELIVERY=failed
+      sed '/^[[:space:]]*$/d' "$HANDOFF_LOG" | tail -1 > "$REASON_FILE"
+    fi
+  fi
+  python3 .bureau-pipeline/scripts/fix_budget.py committed-not-pushed \
+    --attempt "$ATTEMPT" --head "$PRE_SHA" --commit "$LOCAL" \
+    --status "$RESCUE_PUSH_STATUS" --error-file "$ERROR_FILE" \
+    --artifact "$ARTIFACT" --run-url "$RUN_URL" --delivery "$DELIVERY" \
+    --delivery-reason-file "$REASON_FILE" --note-file "$NOTE_FILE" \
+    --pr-state "$PRSTATE" --out "$CNP_BODY" \
+    || printf '%s' "fix-run-committed-not-pushed: fix attempt $ATTEMPT finished its fix and GitHub refused the push — head still at ${PRE_SHA:0:8}" > "$CNP_BODY"
+  printf '\n\n%s\n' "$ANSWERS" >> "$CNP_BODY"
+  gh pr comment "$PR" --repo "$REPO" --body-file "$CNP_BODY"
+  # Park nobody: no needs-human, no lane move, and no fix attempt spent.
+  if [ -n "$CARD" ]; then
+    CARD_NOTE="🤖 The fix for PR #$PR is finished, but GitHub refused the push and the run kept no saved copy of it. This card stays where it is — details on PR #$PR."
+    [ "$DELIVERY" = "dispatched" ] && CARD_NOTE="🤖 The fix for PR #$PR is finished and preserved. GitHub refused the push, so the pipeline saved the work and is delivering it onto the pull request. Nothing is needed from you, and this card stays where it is."
+    [ "$DELIVERY" = "failed" ] && CARD_NOTE="🤖 The fix for PR #$PR is finished and preserved in a saved copy on the run, but GitHub refused the push and the pipeline could not start the delivery by itself — details on PR #$PR. This card stays where it is."
+    python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$CARD_NOTE" || true
+  fi
+  exit 0
+fi
+
+# A fix round that pushed nothing is classified before any escalation is written (DRE-6018).
 if [ "$MODE" = "fix" ] && { [ "$REFUTED_RC" -eq 0 ] || [ "$BLOCKED_RC" -eq 0 ] \
      || { [ -n "$PRE_SHA" ] && [ "$HEAD_NOW" = "$PRE_SHA" ]; }; }; then
   EXIT_THREAD=$(mktemp)
@@ -472,20 +654,6 @@ $ANSWERS"
       park_for_human
     fi
   else
-    if [ "$MODE" = "conflict" ]; then
-      BODY="🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running."
-    else
-      BODY="🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running."
-      # The classification rides this marker (DRE-2817, DRE-2813).
-      [ -n "$CLASSIFICATION" ] && BODY="$BODY
-
-$CLASSIFICATION"
-    fi
-    # Both wordings are one act, fix-attempt-landed (DRE-2826).
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
-      --body "$BODY" --out /tmp/act-fix-pushed.md \
-      || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
-    printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-pushed.md
-    gh pr comment "$PR" --repo $REPO --body-file /tmp/act-fix-pushed.md
+    report_landed
   fi
 fi

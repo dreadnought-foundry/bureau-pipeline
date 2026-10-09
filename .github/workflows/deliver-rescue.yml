@@ -13,7 +13,9 @@
 # NEW run: it downloads the artifact with its own job's GITHUB_TOKEN (an Actions
 # API read the App token cannot make — DRE-1254), mints its own installation
 # token, replays the commits on a fresh branch and opens the pull request with
-# it. Nothing here reads a credential the failed run held — that is the whole
+# it. That is the build case; in the fix case a fix run's artifact is replayed
+# onto the pull request's own branch, below, and the fix run's Report step is
+# what dispatches it (DRE-6351). Nothing here reads a credential the failed run held — that is the whole
 # point, and `tests/test_push_rescue_delivery.py` pins it.
 #
 # Dispatched by the failing run itself (the Report step's `deliver_rescue.py
