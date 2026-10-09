@@ -363,6 +363,85 @@ def test_condition_3_relations_not_read_to_the_end_refuse(monkeypatch, capsys):
     assert any("condition 3" in line for line in _about(_lines(capsys), "DRE-5930"))
 
 
+# A proof is blocked by every other card in its epic, so a big epic's proof
+# fills the first relation page (DRE-6416: DRE-6274 held 21, all terminal, and
+# was refused on every pass). `LinearReads.card` reads such a page to the end.
+
+def _relation(ident: str, state_name: str) -> dict:
+    return {"type": "blocks", "issue": {"identifier": ident, "state": {"name": state_name}}}
+
+
+class PagedLinear:
+    """`linear_ops.gql` for the real `LinearReads.card`: the card's read
+    returns a full first page of Done blockers, and the top-up read returns
+    `rest` — or raises `fail`."""
+
+    def __init__(self, rest=(), fail=None):
+        self.rest, self.fail = list(rest), fail
+        self.topups: list = []
+
+    def __call__(self, query, variables=None):
+        if query == proof_dispatch.CARD_QUERY:
+            first = [_relation(f"DRE-60{i:02d}", "Done")
+                     for i in range(proof_dispatch.reconcile.INVERSE_PAGE)]
+            issue = detail()  # the query asks for no identifier
+            issue["inverseRelations"] = {
+                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-20"},
+                "nodes": first}
+            return {"issue": issue}
+        self.topups.append(dict(variables or {}))
+        if self.fail:
+            raise self.fail
+        return {"issue": {"inverseRelations": {
+            "pageInfo": {"hasNextPage": False, "endCursor": "cursor-end"},
+            "nodes": self.rest}}}
+
+
+class LiveCardBoard(Board):
+    """The fixture board, with each card's relations read by the production
+    `LinearReads.card` over the stubbed `linear_ops.gql`."""
+
+    def card(self, ident):
+        self.reads.append(("card", ident))
+        return proof_dispatch.LinearReads().card(ident)
+
+
+def _paged(monkeypatch, gql) -> Harness:
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    monkeypatch.setattr(proof_dispatch.reconcile, "_inverse_topup_refused", [])
+    return Harness(monkeypatch, LiveCardBoard(hand=[lane_card("DRE-5930")]))
+
+
+def test_condition_3_a_full_first_page_is_read_to_the_end_and_passes(monkeypatch, capsys):
+    gql = PagedLinear(rest=[_relation("DRE-6020", "Done")])
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert gql.topups == [{"id": "DRE-5930", "after": "cursor-20"}]
+    assert not any("condition 3" in line for line in _about(_lines(capsys), "DRE-5930"))
+    assert h.fired == [("DRE-5930", REPO, "first proof run", "proof-execute")]
+
+
+def test_condition_3_an_open_blocker_on_the_second_page_is_named(monkeypatch, capsys):
+    gql = PagedLinear(rest=[_relation("DRE-6020", "In Review")])
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert h.fired == []
+    refusal = [line for line in _about(_lines(capsys), "DRE-5930") if "condition 3" in line]
+    assert refusal and "not every blocker is terminal" in refusal[0]
+    assert "DRE-6020 is In Review" in refusal[0]
+    assert "could not be read to the end" not in refusal[0]
+
+
+def test_condition_3_a_failed_top_up_read_stays_unknown_never_eligible(monkeypatch, capsys):
+    gql = PagedLinear(fail=RuntimeError("HTTP 502"))
+    h = _paged(monkeypatch, gql)
+    h.sweep()
+    assert gql.topups, "the rest of the full page was never asked for"
+    assert h.fired == []
+    refusal = [line for line in _about(_lines(capsys), "DRE-5930") if "condition 3" in line]
+    assert refusal and "could not be read to the end" in refusal[0]
+
+
 def test_condition_4_needs_human_holds(monkeypatch, capsys):
     board = Board(hand=[lane_card("DRE-5930", labels=("needs-human",))])
     h = Harness(monkeypatch, board)

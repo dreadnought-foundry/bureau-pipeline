@@ -83,7 +83,9 @@ first, then re-runs — and at most `PROOF_CANDIDATES_PER_PASS` candidates read:
 two Linear reads for the three lanes (the sweep's board read serves
 `Hand-work` and `In Review` together), then at most two per candidate (the
 card's epic and relations, and its thread; a re-run reads only its thread).
-Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait. Its
+Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait — plus,
+for a card whose first relation page is full, up to
+`reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). Its
 `linear-budget:` trailer is its own, lifted into the step summary.
 
 ## The dry run
@@ -244,6 +246,11 @@ class LinearReads:
         issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
         if not issue:
             raise LookupError(f"Linear answered no card for {identifier}")
+        # A proof is blocked by every other card in its epic, so a big epic's
+        # fills the first page: read it to the end, as the sweep does
+        # (DRE-6416). A failed read leaves it UNKNOWN, and condition 3 refuses.
+        issue.setdefault("identifier", identifier)
+        reconcile.complete_inverse_relations([issue])
         return issue
 
     def thread(self, identifier: str):
