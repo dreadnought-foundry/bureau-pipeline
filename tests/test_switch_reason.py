@@ -19,12 +19,19 @@ WHAT THESE TESTS PIN.
   * Only the exact word `true` is on, in the shape of proof_dispatch's
     `test_only_the_exact_word_true_is_live`.
   * An unread card is never terminal, so it never clears a reason.
+  * The SWEEP'S READ (DRE-6436): `main()` prints one `switches:` line per
+    catalog row on every full pass, reads each switch's cards in ONE request
+    and none when the switch is on or gives no card, and a failed read leaves
+    every card `unread`. The `Read the switches` step is the sweep job's last,
+    plumbs every row's variable and companion, and lifts its lines and spend
+    into the step summary. `docs/switches.md` is the page a person reads.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_switch_reason.py -v
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -33,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -44,6 +52,7 @@ NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
 SWITCH = "PROOF_DISPATCH_LIVE"
 COMPANION = "PROOF_DISPATCH_LIVE_OFF_UNTIL"
 THREE = "DRE-6141, DRE-6142, DRE-6143"
+READ_STEP = "Read the switches"
 
 #: The switches on `main` today, each with the file and step that reads it.
 ON_MAIN = {
@@ -95,12 +104,15 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "3 switch read(s), 3 row(s), 0 problem(s)" in done.stdout
+        assert "6 switch read(s), 3 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
+        # Each switch is read where it acts, and once more by the sweep's
+        # `Read the switches` step, which reports it (DRE-6436).
         reads = switch_reason.discover(str(ROOT))
         assert {(r.name, r.file, r.step) for r in reads} == {
-            (name, reader, step) for name, (reader, step) in ON_MAIN.items()}
+            (name, reader, step) for name, (reader, step) in ON_MAIN.items()} | {
+            (name, ".github/workflows/reconcile.yml", READ_STEP) for name in ON_MAIN}
 
     def test_a_fourth_read_with_no_row_fails_naming_it(self, tmp_path):
         root = _copy_tree(tmp_path)
@@ -125,8 +137,11 @@ class TestCatalog:
         root = _copy_tree(tmp_path)
         workflow = root / ".github" / "workflows" / "reconcile.yml"
         lines = workflow.read_text().splitlines(keepends=True)
-        kept = [l for l in lines if "vars.GREEN_LIGHT_REPLY_LIVE" not in l]
-        assert len(kept) == len(lines) - 1
+        # The first read is the reader's own; `Read the switches`, the job's
+        # last step, reads it again and is not the row's step.
+        read = "GREEN_LIGHT_REPLY_LIVE: ${{ vars.GREEN_LIGHT_REPLY_LIVE }}"
+        first = next(i for i, l in enumerate(lines) if read in l)
+        kept = lines[:first] + lines[first + 1:]
         workflow.write_text("".join(kept))
         found = switch_reason.problems(root=str(root))
         assert len(found) == 1
@@ -319,3 +334,289 @@ class TestContract:
         states = {"DRE-6141": "Done"}
         assert switch_reason.reading(SWITCH, env, states, NOW) == \
             switch_reason.reading(SWITCH, env, dict(states), NOW)
+
+
+# --------------------------------------------------------------------------- #
+# the sweep's read of every switch (DRE-6436)                                  #
+# --------------------------------------------------------------------------- #
+
+WORKFLOW = ROOT / ".github" / "workflows" / "reconcile.yml"
+SWEEP_KEYS = ("LINEAR_API_KEY", "GH_TOKEN", "GH_READ_TOKEN", "REPO",
+              "BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE",
+              "BUREAU_PIPELINE_REF")
+NOT_YET = (f"switches: {SWITCH} is off — until DRE-6141, DRE-6142, DRE-6143 land: "
+           "DRE-6141 Done, DRE-6142 Done, DRE-6143 In Review")
+
+
+class FakeGql:
+    """A `linear_ops.gql` stand-in: answers from `states`, records every call."""
+
+    def __init__(self, states=None, error=None):
+        self.states = states or {}
+        self.error = error
+        self.calls = []
+
+    def __call__(self, query, variables=None):
+        self.calls.append((query, variables or {}))
+        if self.error is not None:
+            raise self.error
+        numbers = set((variables or {}).get("numbers") or ())
+        return {"issues": {"nodes": [
+            {"identifier": ident, "state": {"name": state}}
+            for ident, state in self.states.items()
+            if int(ident.split("-")[1]) in numbers]}}
+
+
+def _main(capsys, env, gql=None):
+    gql = gql if gql is not None else FakeGql()
+    code = switch_reason.main([], env=env, gql=gql, now=NOW)
+    out = capsys.readouterr().out
+    return code, out.splitlines(), gql
+
+
+def _switch_lines(lines):
+    return [line for line in lines if line.startswith("switches: ")]
+
+
+class TestReadStates:
+    def test_one_request_for_every_card_filtered_on_their_numbers(self):
+        gql = FakeGql({"DRE-6141": "Done", "DRE-6142": "In Review"})
+        got = switch_reason.read_states(("DRE-6141", "DRE-6142", "DRE-6143"), gql=gql)
+        assert got == {"DRE-6141": "Done", "DRE-6142": "In Review"}
+        assert len(gql.calls) == 1
+        query, variables = gql.calls[0]
+        assert sorted(variables["numbers"]) == [6141, 6142, 6143]
+        assert "number: {in: $numbers}" in query
+        assert 'team: {key: {eq: "DRE"}}' in query
+
+    def test_no_cards_is_no_request(self):
+        gql = FakeGql()
+        assert switch_reason.read_states((), gql=gql) == {}
+        assert gql.calls == []
+
+    def test_a_card_from_another_answer_is_not_kept(self):
+        def gql(query, variables=None):
+            return {"issues": {"nodes": [
+                {"identifier": "DRE-1", "state": {"name": "Done"}},
+                {"identifier": "DRE-2", "state": {"name": "Done"}}]}}
+        assert switch_reason.read_states(("DRE-1",), gql=gql) == {"DRE-1": "Done"}
+
+    def test_a_refusal_raises(self):
+        gql = FakeGql(error=RuntimeError("Linear refused"))
+        with pytest.raises(RuntimeError, match="Linear refused"):
+            switch_reason.read_states(("DRE-1",), gql=gql)
+
+
+class TestMain:
+    def test_three_cards_not_yet_landed_is_one_request(self, capsys):
+        gql = FakeGql({"DRE-6141": "Done", "DRE-6142": "Done", "DRE-6143": "In Review"})
+        code, lines, gql = _main(capsys, {COMPANION: THREE}, gql)
+        assert code == 0
+        assert NOT_YET in lines
+        assert len(gql.calls) == 1
+
+    def test_three_done_cards_print_the_cleared_line(self, capsys):
+        gql = FakeGql({"DRE-6141": "Done", "DRE-6142": "Done", "DRE-6143": "Done"})
+        _, lines, _ = _main(capsys, {COMPANION: THREE}, gql)
+        assert (f"switches: {SWITCH} is off — its reason cleared: DRE-6141 Done, "
+                "DRE-6142 Done, DRE-6143 Done; the switch may be turned on") in lines
+
+    def test_no_companion_is_no_reason_given_and_no_request(self, capsys):
+        code, lines, gql = _main(capsys, {})
+        assert code == 0
+        assert f"switches: {SWITCH} is off — no reason given" in lines
+        assert gql.calls == []
+
+    def test_an_empty_companion_is_no_reason_given(self, capsys):
+        _, lines, gql = _main(capsys, {SWITCH: "", COMPANION: ""})
+        assert f"switches: {SWITCH} is off — no reason given" in lines
+        assert gql.calls == []
+
+    def test_an_on_switch_is_on_and_no_request(self, capsys):
+        _, lines, gql = _main(capsys, {SWITCH: "true"})
+        assert f"switches: {SWITCH} is on" in lines
+        assert gql.calls == []
+
+    def test_an_on_switch_with_a_stale_reason_reads_nothing(self, capsys):
+        _, lines, gql = _main(capsys, {SWITCH: "true", COMPANION: THREE})
+        assert (f"switches: {SWITCH} is on — its off-reason is stale, "
+                f"delete {COMPANION}") in lines
+        assert gql.calls == []
+
+    def test_a_reason_naming_no_card_reads_nothing(self, capsys):
+        _, lines, gql = _main(capsys, {COMPANION: "until the CEO says so"})
+        assert (f"switches: {SWITCH} is off — its reason names no card: "
+                "until the CEO says so") in lines
+        assert gql.calls == []
+
+    def test_a_failed_read_leaves_every_card_unread_and_never_clears(self, capsys):
+        gql = FakeGql(error=RuntimeError("Linear refused the read: RATELIMITED"))
+        code, lines, gql = _main(capsys, {COMPANION: THREE}, gql)
+        assert code == 0
+        line = next(l for l in lines if l.startswith(f"switches: {SWITCH} "))
+        assert line.startswith(
+            f"switches: {SWITCH} is off — until DRE-6141, DRE-6142, DRE-6143 land: "
+            "DRE-6141 unread, DRE-6142 unread, DRE-6143 unread")
+        assert "Linear refused the read: RATELIMITED" in line
+        assert not any("cleared" in l for l in lines)
+        assert lines[-1].startswith("linear-budget:")
+
+    def test_a_failed_read_spanning_lines_stays_on_one_line(self, capsys):
+        gql = FakeGql(error=RuntimeError("first\nsecond"))
+        _, lines, _ = _main(capsys, {COMPANION: THREE}, gql)
+        line = next(l for l in lines if l.startswith(f"switches: {SWITCH} "))
+        assert "first second" in line
+
+    def test_every_catalog_switch_is_printed_once_in_order(self, capsys):
+        _, lines, _ = _main(capsys, {})
+        names = [row["name"] for row in switch_reason.load()["switches"]]
+        assert _switch_lines(lines) == [
+            f"switches: {name} is off — no reason given" for name in names]
+
+    def test_one_request_per_switch_however_many_cards(self, capsys):
+        env = {COMPANION: THREE, "HYGIENE_LIVE_OFF_UNTIL": "DRE-1, DRE-2"}
+        gql = FakeGql({"DRE-6141": "Done", "DRE-1": "Todo"})
+        _, lines, gql = _main(capsys, env, gql)
+        assert len(gql.calls) == 2
+        assert ("switches: HYGIENE_LIVE is off — until DRE-1, DRE-2 land: "
+                "DRE-1 Todo, DRE-2 unread") in lines
+        assert len(_switch_lines(lines)) == 3
+
+    def test_the_budget_trailer_is_last(self, capsys):
+        _, lines, _ = _main(capsys, {COMPANION: THREE},
+                            FakeGql({"DRE-6141": "Done"}))
+        assert lines[-1].startswith("linear-budget:")
+        assert sum(l.startswith("linear-budget:") for l in lines) == 1
+
+    def test_the_cli_with_no_command_reads_the_switches(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.endswith(("_LIVE", "_OFF_UNTIL"))}
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "switch_reason.py")],
+            capture_output=True, text=True, cwd=ROOT, env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+        lines = done.stdout.splitlines()
+        assert len(_switch_lines(lines)) == 3
+        assert lines[-1].startswith("linear-budget:")
+
+
+# --------------------------------------------------------------------------- #
+# the step in reconcile.yml                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _steps() -> list:
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    return doc["jobs"]["sweep"]["steps"]
+
+
+def _read_step() -> dict:
+    found = [s for s in _steps() if s.get("name") == READ_STEP]
+    assert len(found) == 1, f"{READ_STEP!r} is not one step of reconcile.yml"
+    return found[0]
+
+
+def _unplumbed(step: dict, rows: list) -> list:
+    """Every variable a catalog row owes the step and the step does not carry."""
+    env = step.get("env") or {}
+    missing = []
+    for row in rows:
+        for name in (row["name"], switch_reason.companion(row["name"])):
+            if env.get(name) != f"${{{{ vars.{name} }}}}":
+                missing.append(name)
+    return missing
+
+
+class TestStep:
+    def test_it_is_the_last_step_of_the_sweep_job_on_a_full_pass(self):
+        step = _read_step()
+        assert _steps()[-1] is step
+        assert step["if"] == "inputs.sweep_reason == ''"
+
+    def test_it_carries_the_sweeps_env(self):
+        sweep = next(s for s in _steps() if s.get("name") == "Sweep")
+        env = _read_step()["env"]
+        for name in SWEEP_KEYS:
+            assert env[name] == sweep["env"][name], name
+
+    def test_every_switch_and_its_companion_is_plumbed(self):
+        assert _unplumbed(_read_step(), switch_reason.load()["switches"]) == []
+        env = _read_step()["env"]
+        for name in ("PROOF_DISPATCH_LIVE", "GREEN_LIGHT_REPLY_LIVE", "HYGIENE_LIVE"):
+            assert env[name] == f"${{{{ vars.{name} }}}}"
+            assert env[f"{name}_OFF_UNTIL"] == f"${{{{ vars.{name}_OFF_UNTIL }}}}"
+
+    def test_a_row_with_no_plumbing_fails_by_name(self, tmp_path):
+        path = tmp_path / "switches.json"
+        doc = switch_reason.load()
+        doc["switches"].append({"name": "FOO_LIVE", "reader": "x", "step": "y",
+                                "means": "z."})
+        path.write_text(json.dumps(doc))
+        rows = switch_reason.load(str(path))["switches"]
+        assert _unplumbed(_read_step(), rows) == ["FOO_LIVE", "FOO_LIVE_OFF_UNTIL"]
+
+    def test_it_exports_the_slug_and_runs_the_reader(self):
+        run = _read_step()["run"]
+        assert "export REPO_SLUG" in run
+        assert "python3 .bureau-pipeline/scripts/switch_reason.py" in run
+        assert "tee switches.log" in run
+
+    def _run(self, tmp_path, body, status=0):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "python3"
+        fake.write_text(f"#!/bin/sh\n{body}\nexit {status}\n")
+        fake.chmod(0o755)
+        summary = tmp_path / "summary.md"
+        env = {**os.environ,
+               "PATH": f"{bin_dir}:{os.environ['PATH']}",
+               "GITHUB_REPOSITORY": "dreadnought-foundry/Portico",
+               "GITHUB_STEP_SUMMARY": str(summary)}
+        work = tmp_path / "work"
+        work.mkdir()
+        done = subprocess.run(["bash", "-e", "-c", _read_step()["run"]], cwd=work,
+                              env=env, capture_output=True, text=True)
+        return done, summary.read_text(encoding="utf-8")
+
+    def test_the_lines_and_the_spend_are_lifted_into_the_summary(self, tmp_path):
+        done, text = self._run(tmp_path, (
+            "echo 'switches: PROOF_DISPATCH_LIVE is on'\n"
+            "echo 'switches: HYGIENE_LIVE is off — no reason given'\n"
+            "echo 'noise'\n"
+            "echo 'linear-budget: fixture'"))
+        assert done.returncode == 0, done.stderr
+        assert "### Switches — spend" in text
+        assert "switches: PROOF_DISPATCH_LIVE is on" in text
+        assert "switches: HYGIENE_LIVE is off — no reason given" in text
+        assert "linear-budget: fixture" in text
+        assert "noise" not in text
+        assert "switches: PROOF_DISPATCH_LIVE is on" in done.stdout
+
+    def test_the_phases_status_is_carried_past_the_summary(self, tmp_path):
+        done, text = self._run(tmp_path, "echo 'switches: X is on'", status=3)
+        assert done.returncode == 3
+        assert "### Switches — spend" in text
+        assert "no linear-budget: line" in text
+
+
+# --------------------------------------------------------------------------- #
+# the page a person reads                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class TestDoc:
+    def test_the_doc_names_the_step_the_companion_and_the_lines(self):
+        text = (ROOT / "docs" / "switches.md").read_text(encoding="utf-8")
+        for expected in ("_OFF_UNTIL", READ_STEP, "no reason given",
+                         "### Switches — spend", "config/switches.json",
+                         'gh variable set PROOF_DISPATCH_LIVE_OFF_UNTIL --body '
+                         '"DRE-6141, DRE-6142, DRE-6143" -R <owner/repo>',
+                         "is on — its off-reason is stale, delete",
+                         "its reason names no card:", "its reason cleared:",
+                         "the switch may be turned on", "unread"):
+            assert expected in text, expected
+
+    def test_the_doc_names_every_catalog_switch(self):
+        text = (ROOT / "docs" / "switches.md").read_text(encoding="utf-8")
+        for row in switch_reason.load()["switches"]:
+            assert f"`{row['name']}`" in text, row["name"]
