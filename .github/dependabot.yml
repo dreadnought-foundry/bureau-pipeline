@@ -9,7 +9,7 @@
 # REJECTING a parked major (DRE-2118 — docs/dependabot-major-rejection.md is
 # the playbook): the ONLY durable rejection is a per-dependency `ignore`
 # stanza in this file (template below), merged BEFORE the PR is closed —
-# a plain close without it just re-files on the weekly schedule. NEVER use
+# a plain close without it just re-files on the monthly schedule. NEVER use
 # the `@dependabot ignore*` comment commands: `ignore this major version`
 # re-files the next major down (the DRE-2064 walk-down, ~19 PRs) and
 # `@dependabot ignore` refuses grouped PRs outright (DRE-2062).
@@ -20,7 +20,7 @@
 # minors and patches included, which is the point, because the bump being
 # refused is one. It goes in the same PR as the pin, or as soon as the first
 # sweep proposes past it, and it leaves in the PR that lifts the pin. Without
-# it the held dependency rides every weekly grouped PR, the pin's guard tests
+# it the held dependency rides every monthly grouped PR, the pin's guard tests
 # go red by design, nothing in the fleet fixes a `dependabot/*` branch, and
 # the safe bumps grouped beside it never land (live: PR #452, 2026-09-19).
 # tests/test_dependabot_config.py::HeldVendorPinTest keeps every such rule to
@@ -48,20 +48,30 @@ updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     # Bounded sweeps (DRE-2049; live origin: agent-bureau's first sweep
-    # opened 27 PRs at once): at most 5 open PRs per ecosystem, so a weekly
+    # opened 27 PRs at once): at most 5 open PRs per ecosystem, so a monthly
     # sweep arrives as a reviewable set — dependabot holds the rest back
     # until a slot frees up.
     open-pull-requests-limit: 5
     groups:
-      # One grouped PR per week for everything minor/patch — majors are
-      # excluded, so they surface as separate human-merge PRs.
+      # One grouped PR per month for everything minor/patch — majors are
+      # excluded from the group, and the ignore below files none at all.
       pip-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    # Rejected majors go here — uncomment and copy the block once per
-    # dependency (same shape under github-actions). Ledger + playbook:
+    # The fleet's house shape (DRE-3829; CEO, 2026-09-13: "Dependabot should
+    # be universal for all projects we are running"): no major is ever filed
+    # automatically — it lands only through a deliberate upgrade card. The
+    # same rule the github-actions entry carries (reasoning there), and the one
+    # agent-bureau's scripts/dependabot_shape.py reads every fleet repo against.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    # A rejected major for ONE dependency (the DRE-2118 template below) is
+    # redundant while the "*" rule stands; it is kept as the shape the
+    # playbook shows, and goes into the live list above, never a second
+    # `ignore:` key (same shape under github-actions). Ledger + playbook:
     # docs/dependabot-major-rejection.md. The test suite splices this
     # template into real config, so keep the "# " prefixes intact.
     # --- begin major-reject template ---
@@ -81,12 +91,12 @@ updates:
   # never as a tag moving underneath us (DRE-3416: `claude-code-action@v1`
   # moved to v1.0.218 and killed every Claude-running job in the fleet for 72
   # minutes). A SHA pin is also what gives this entry anything to bump at all:
-  # on a floating major, a patch release moves the tag silently and the weekly
+  # on a floating major, a patch release moves the tag silently and the monthly
   # sweep sees no change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
     groups:
       actions-minor-patch:
@@ -98,7 +108,7 @@ updates:
     # Majors land only by a deliberate card, because the alternative is what
     # DRE-2064 measured: a rejected major re-files at the next rung down (~19
     # PRs, #1948–#1963), one critic review each. Pinning by sha makes every
-    # vendor release a PR, so without this the walk-down arrives weekly.
+    # vendor release a PR, so without this the walk-down arrives monthly.
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
@@ -110,7 +120,7 @@ updates:
       # `update-types` on purpose: the bumps it refuses are patches. Unlike
       # DRE-4336's hold (placed for DRE-3416, lifted by DRE-3417), no pin move
       # lifts this one: the raise moves the sha and leaves the rule. Without it
-      # every weekly sweep proposes the next vendor release past the pinned
+      # every monthly sweep proposes the next vendor release past the pinned
       # sha, the pin guards go red by design, and the grouped PR wedges exactly
       # as #452 did. Declared in HELD_PINS in tests/test_dependabot_config.py.
       - dependency-name: "anthropics/claude-code-action"

@@ -6,7 +6,7 @@ arrives as its own single-dependency PR that the gate parks for a human
 easy — merge it. **Rejecting one has exactly one safe path**, because both
 `@dependabot` comment commands are booby-trapped by vendor behavior we have
 already paid for, and a plain close on its own does not stick: Dependabot
-re-files the same major on its weekly schedule.
+re-files the same major on its monthly schedule.
 
 ## The one safe path
 
@@ -41,10 +41,10 @@ Ship the stanza as a normal PR through the normal rail;
 After the config PR merges, close the parked major PR with a **plain GitHub
 close — no comment command**. The merged ignore rule is what makes the close
 durable: Dependabot will not re-file that dependency's majors on the next
-weekly run.
+monthly run.
 
 Do the steps in this order. Closing first is harmless but pointless — without
-the config rule the PR just comes back weekly.
+the config rule the PR just comes back monthly.
 
 ## Do NOT use the `@dependabot ignore*` comment commands
 
@@ -64,17 +64,17 @@ where the next operator can see and reverse it.
 ## Reversing a rejection
 
 Delete the dependency's ignore block in a normal PR. Dependabot proposes the
-current major again on the next weekly run.
+current major again on the next monthly run.
 
 ## Holding a dependency at a deliberate pin (DRE-4336)
 
 A different problem with the same cure. Sometimes a dependency is pinned
 **below its newest release on purpose** — a vendor release broke us, and the
 upgrade is its own card with its own proof. Dependabot does not know that. It
-proposes the newer release inside the weekly grouped minor/patch PR, the pin's
+proposes the newer release inside the monthly grouped minor/patch PR, the pin's
 guard tests go red by design, the critic answers REQUEST_CHANGES, and nothing
 in the fleet fixes a `dependabot/*` branch. The PR can neither merge nor go
-away; a plain close re-files it next week; and every safe bump grouped beside
+away; a plain close re-files it next month; and every safe bump grouped beside
 the held one is stuck with it.
 
 Live incident: bureau-pipeline #452, 2026-09-19. The sweep proposed
@@ -102,7 +102,7 @@ The hold is an ignore rule naming the dependency with **no `update-types`**:
   outlive its reason.
 - **It leaves in the PR that lifts the pin.** The upgrade card moves the pin by
   hand, deletes the rule and its `HELD_PINS` row, and Dependabot resumes
-  proposing that dependency on the next weekly run.
+  proposing that dependency on the next monthly run.
 
 **A standing hold is the one exception (DRE-5121).** Where a pin moves only
 through a trial-gated PR of our own, the hold is never lifted: that PR moves the
@@ -113,7 +113,7 @@ the pin moves.
 The order is the same as for a major: the rule merges **first**, then the
 stuck Dependabot PR gets a plain GitHub close. Where the grouped PR carried a
 safe bump as well, land that bump by hand in the same PR as the rule, so it
-does not wait a week to be proposed again.
+does not wait a month to be proposed again.
 
 ## Currently held pins
 
@@ -139,7 +139,9 @@ The ledger's earlier hold, lifted:
 ## Currently rejected majors
 
 No per-dependency rejection yet — the config carries the commented template,
-and the `github-actions` entry ignores majors for every dependency (`"*"`, the
-DRE-2064 house shape), so a major there lands only by a deliberate card. This
+and both entries (`pip` and `github-actions`) ignore majors for every
+dependency (`"*"`, the DRE-2064 house shape, made the fleet's one shape by
+DRE-3829), so a major lands only by a deliberate card. Dependabot files no
+major here today; the steps above are for one that arrives anyway. This
 section is the ledger: when a per-dependency stanza lands, list the dependency
 and the one-line reason here in the same PR.
