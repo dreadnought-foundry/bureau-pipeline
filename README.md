@@ -821,13 +821,17 @@ The sweep's review-lane nudges are capped per head (DRE-5231). A card in
 merge gate re-triggered when a critic verdict is bound to its head, and the
 review re-triggered when none is — at most `REVIEW_NUDGE_CAP` times each (3 by
 default) for the same head sha, each receipt naming the head, the count and
-what stands on it. At the cap the sweep dispatches nothing more: it labels the
-card `needs-human`, leaves it in `In Review` because its pull request is open,
-and posts one `🚨 review-nudge-cap` notice naming the standing verdicts and how
-many re-triggers were spent over how long. The way back is a person: someone
-acts on the pull request and removes the `needs-human` label, and a new commit
-re-arms the budget. `REVIEW_NUDGE_CAP=0` hands the card off on the first stale
-sweep.
+what stands on it. At the cap the sweep dispatches nothing more (DRE-6181): it
+labels the card `needs-human` under a `review-cap-spent` hold stamp bound to the
+head, posts one `🚨 review-nudge-cap` question — Finding, Question and
+Recommendation, built from the standing verdicts, how many re-triggers were
+spent over how long and the gate's hold note — posts the same question on the
+pull request as a fix-loop blocker, and parks the card `In Review` →
+`Green Light`. The way back is a new head: a person pushes a fix, or writes an
+**Operator decision** on the pull request, which starts the fix agent once on
+their words and the fix it pushes is that head; the holds lane then lifts the
+hold and returns the card to `In Review`, and the new commit re-arms the
+budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
 
 ## The plan artifact (DRE-2720)
 
