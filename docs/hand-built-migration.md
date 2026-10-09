@@ -79,8 +79,13 @@ operator session reads those summaries.
 
 - **In Hand-work or Backlog, with a critic pass on record.** It is not
   re-planned. The script retires every live routing verdict on the card with
-  the same `🪦 verdict-retired` note the planning exit writes
-  (`routing_verdict.retirement_comment`). Then it stamps `FLEET` through
+  a `🪦 verdict-retired` note. The note opens the way the planning exit's does
+  and names each verdict by its fingerprint, so every reader treats those
+  verdicts as retired. Its words say the migration retired them and the card
+  did not go back to Planning. Before the note, the script takes off any
+  `operator-step` a retired verdict put on, by the planning exit's own rule
+  (`routing_verdict.lifted_marks`), so the sweep does not read the card as a
+  person's. Then it stamps `FLEET` through
   `routing_verdict.stamp_card`, with a reason that opens `hand-built migration:`
   and names the pass it read. A Hand-work card then moves to Backlog through the
   guarded write layer, only if it is still in Hand-work at that moment. A

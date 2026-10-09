@@ -1221,7 +1221,7 @@
       "file": "scripts/hand_work_migration.py",
       "anchor": "ops.cmd_comment(ident, retirement)",
       "kind": "not-an-act",
-      "means": "The note that retires a migrated code card's live routing verdicts before the hand-built migration restamps it FLEET — the planning exit's own `🪦 verdict-retired` note, composed by `routing_verdict.retirement_comment` (DRE-6230).",
+      "means": "The note that retires a migrated code card's live routing verdicts before the hand-built migration restamps it FLEET (DRE-6230). It opens `🪦 verdict-retired:` and names each verdict by `retired:<fingerprint>`, as the planning exit's note does, but says the migration retired it and the card never went back to Planning — composed by `hand_work_migration.retirement_note`, not by the planning exit's `routing_verdict.retirement_comment`.",
       "why": "Part of the routing verdict's own record, not an act: `routing_verdict.verdicts_on` reads it to know which verdict comments no longer count, the same as the planning exit's row for the note it composes. A trailer from a second registry on the same comment would let two vocabularies answer for it."
     },
     {

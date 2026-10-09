@@ -42,7 +42,9 @@ in it, could still hold one, so it is not read as "set at creation".
      `hand-built`, gains `operator-step`.
   4. **code** — loses `hand-built`, then by lane. In Hand-work or Backlog with
      a critic pass on record it is not re-planned: every live verdict is retired
-     with the planning exit's own note, it is stamped FLEET, and a Hand-work
+     with a `🪦 verdict-retired` note naming this migration as the retirer, the
+     `operator-step` a retired verdict put on comes off first (the planning
+     exit's `lifted_marks` rule), it is stamped FLEET, and a Hand-work
      card moves to Backlog, where the sweep's promotion carries it to Todo. In
      Hand-work or Backlog with no pass it moves to Planning, whose exit writes it
      a fresh verdict. Anywhere else it only loses the label.
@@ -483,6 +485,45 @@ def fleet_why(row: dict) -> str:
             "pipeline applied came off, and the fleet builds it.")
 
 
+def _pacific(iso: str | None, unknown: str) -> str:
+    """`iso` as a Pacific time a person reads, or `unknown`."""
+    at = _when(iso)
+    return unknown if at == datetime.min.replace(tzinfo=UTC) else dead_run.pacific(at)
+
+
+def retirement_note(retired: tuple, lifted: tuple, row: dict, now: datetime) -> str:
+    """The note that retires `retired` before the FLEET restamp. It opens the
+    way the planning exit's note does and names each verdict by fingerprint,
+    so `routing_verdict.verdicts_on` reads it the same — but the words are this
+    migration's: the card never went back to Planning, and the verdict written
+    next is the migration's `FLEET`, not Planning's."""
+    pairs = routing_verdict.retired_pairs(retired)
+    names = list(dict.fromkeys(name for name, _ in pairs))
+    lines = [
+        f"{routing_verdict.RETIRED_MARK} {routing_verdict.RETIRED_TAG}: "
+        + " and ".join(f"**{name}**" for name in names)
+        + " — retired by the one-time hand-built migration, so "
+        + ("that verdict no longer routes" if len(pairs) == 1 else
+           "those verdicts no longer route")
+        + " the card.",
+        "",
+    ]
+    for (name, print_), node in zip(pairs, retired):
+        written = _pacific(node.get("createdAt"), "at a time Linear did not report")
+        lines.append(f"- **{name}**, written {written} — `retired:{print_}`")
+    took_off = (" " + ", ".join(f"`{m}`" for m in lifted) + " the old verdict put on "
+                "came off before this note.") if lifted else ""
+    lines += [
+        "",
+        f"Retired on {dead_run.pacific(now)} by the hand-built migration, not by "
+        f"Planning: this card did not go back to {PLANNING}. It is a code card with "
+        f"a critic pass on record — {row['passed']} — so the migration stamps "
+        f"{FLEET} next, and that is the card's one live verdict. The old decision "
+        f"stays on the card as the record.{took_off}",
+    ]
+    return "\n".join(lines)
+
+
 def migration_note(row: dict, done: list[str]) -> str:
     """The comment a changed card carries, opening with `OPENER`."""
     return (
@@ -497,10 +538,21 @@ def migration_note(row: dict, done: list[str]) -> str:
     )
 
 
-def _apply_one(ops, row: dict, now: datetime) -> tuple[list[str], bool]:
-    """Every write for one card, in order. `(what changed, refused)`."""
+def lifted(row: dict, retired: tuple) -> tuple:
+    """The marks a retired verdict put on that the `FLEET` stamp does not —
+    `routing_verdict.lifted_marks`, the planning exit's own rule — and that the
+    card carries. `hand-built` is not among them: it already came off."""
+    names = tuple(dict.fromkeys(n for n, _ in routing_verdict.retired_pairs(retired)))
+    carried = {label.casefold() for label in row["labels"]}
+    return tuple(m for m in routing_verdict.lifted_marks(names, FLEET)
+                 if m != HAND_BUILT and m.casefold() in carried)
+
+
+def _apply_one(ops, row: dict, now: datetime, done: list[str]) -> bool:
+    """Every write for one card, in order, each recorded in `done` as it
+    lands — so a write that raises still leaves what came before it said.
+    True when a write was refused."""
     ident = row["identifier"]
-    done = []
     ops.remove_label(ident, HAND_BUILT)
     done.append(f"label removed (`{HAND_BUILT}`)")
     if row["action"] == SWAP:
@@ -509,22 +561,30 @@ def _apply_one(ops, row: dict, now: datetime) -> tuple[list[str], bool]:
     if row["action"] == RESTAMP:
         retired = routing_verdict.retiring(row["nodes"], None)
         if retired:
-            retirement = routing_verdict.retirement_comment(retired, None, now=now)
+            # Labels FIRST, then the note, as the planning exit does: a run
+            # that died between them would leave the note standing and the old
+            # verdict's `operator-step` on a card the sweep then reads as a
+            # person's — one nothing builds.
+            took_off = lifted(row, retired)
+            for label in took_off:
+                ops.remove_label(ident, label)
+                done.append(f"label removed (`{label}`)")
+            retirement = retirement_note(retired, took_off, row, now)
             ops.cmd_comment(ident, retirement)
         if routing_verdict.stamp_card(ident, FLEET, fleet_why(row), title=row["title"]) != 0:
-            return done, True
+            return True
         names = ", ".join(dict.fromkeys(n for n, _ in routing_verdict.retired_pairs(retired)))
         done.append(f"verdict restamped ({FLEET}"
                     + (f", after retiring {names}" if names else "") + ")")
     if row["move_to"] == BACKLOG:
         if ops.cmd_state(ident, BACKLOG, expect=(HAND_WORK,)) is False:
-            return done, True
+            return True
         done.append(f"moved to {BACKLOG}")
     elif row["move_to"] == PLANNING:
         if ops.cmd_state(ident, PLANNING, expect=(row["lane"],)) is False:
-            return done, True
+            return True
         done.append(f"moved to {PLANNING}")
-    return done, False
+    return False
 
 
 def run(ops, rows: list[dict], *, apply: bool = False,
@@ -534,13 +594,18 @@ def run(ops, rows: list[dict], *, apply: bool = False,
     Each card's lane is re-read first, and a card that moved since the census
     is refused untouched. The move itself is also conditional (`expect`), so a
     card that moves between the re-read and the write is refused by the write
-    layer, not dragged back. The comment follows the writes that happened."""
+    layer, not dragged back. The comment follows the writes that happened.
+
+    A card whose write raised is listed under `failed`, and printed with the
+    writes that had already landed: it no longer carries `hand-built` once the first one
+    has, so a re-run would not find it again."""
     now = now or datetime.now(UTC)
     changed, refused, failed = [], [], []
     for row in rows:
         if row["action"] not in WRITING or not apply:
             continue
         ident = row["identifier"]
+        done: list[str] = []
         try:
             lane = current_lane(ops, ident)
             if lane != row["lane"]:
@@ -548,10 +613,12 @@ def run(ops, rows: list[dict], *, apply: bool = False,
                       f"{lane or 'an unreadable lane'} now — left untouched")
                 refused.append(ident)
                 continue
-            done, was_refused = _apply_one(ops, row, now)
+            was_refused = _apply_one(ops, row, now, done)
             ops.cmd_comment(ident, migration_note(row, done))
         except LinearError as e:
-            print(f"FAILED {ident}: {e}", file=sys.stderr)
+            written = (f" — already written: {'; '.join(done)}; it no longer carries "
+                       f"`{HAND_BUILT}`, so a re-run will not find it" if done else "")
+            print(f"FAILED {ident}: {e}{written}", file=sys.stderr)
             failed.append(ident)
             continue
         changed.append(ident)

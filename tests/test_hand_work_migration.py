@@ -113,7 +113,9 @@ class FakeOps:
         self.comments: list[tuple] = []
         self.removed: list[tuple] = []
         self.added: list[tuple] = []
+        self.log: list[tuple] = []  # every write, in the order it was made
         self.state_result = True
+        self.state_error: Exception | None = None
 
     def writes(self):
         return self.states + self.comments + self.removed + self.added
@@ -139,20 +141,26 @@ class FakeOps:
         return {"issue": {"state": {"name": lane}}}
 
     def cmd_state(self, identifier, state, *flags, **kw):
+        if self.state_error is not None:
+            raise self.state_error
         self.states.append((identifier, state, kw))
+        self.log.append(("state", identifier, state))
         return self.state_result
 
     def cmd_comment(self, identifier, body, *flags):
         self.comments.append((identifier, body))
+        self.log.append(("comment", identifier, body))
         return None
 
     def remove_label(self, identifier, label):
         self.removed.append((identifier, label))
+        self.log.append(("remove", identifier, label))
 
     def add_label(self, identifier, label):
         # The real seam refuses the CEO's mark (DRE-6225); so does this one.
         assert label != HAND_BUILT, "the migration may never apply hand-built"
         self.added.append((identifier, label))
+        self.log.append(("add", identifier, label))
 
 
 class Stamps:
@@ -427,6 +435,60 @@ class TestTheRun:
             bodies = [n["body"] for n in linear_ops.window_nodes(old["comments"])]
             # The old verdict no longer routes the card once the note stands.
             assert routing_verdict.verdicts_on(bodies + notes) == ()
+
+    def test_the_retirement_note_says_the_migration_retired_it_not_planning(self):
+        # The planning exit's note says the card re-entered Planning and that
+        # Planning's exit retired the verdict; neither happened here.
+        ops, _, _ = _apply([ONE_OFF_PASSED])
+        note = next(b for _, b in ops.comments if b.startswith("🪦 verdict-retired:"))
+        assert "hand-built migration" in note
+        assert "re-entered Planning" not in note
+        assert "Planning's exit" not in note
+        assert "the verdict Planning writes next" not in note
+        assert "the one-off critic passed it" in note
+        old = linear_ops.window_nodes(ONE_OFF_PASSED["comments"])[-1]["body"]
+        assert f"`retired:{routing_verdict.fingerprint(old)}`" in note
+        # Nothing comes off a card whose retired verdict put nothing on, so the
+        # note says nothing came off.
+        assert OPERATOR_STEP not in note
+
+    def test_a_retired_operator_verdicts_operator_step_comes_off_before_the_note(self):
+        # A code card the sweep once marked OPERATOR: left with `operator-step`
+        # after the FLEET stamp, the sweep would read it as a person's and
+        # nothing would build it.
+        card = _card("DRE-13", title="wire the new flag", labels=(HAND_BUILT, OPERATOR_STEP),
+                     comments=[_marker(plan_critic.STAGE_ONE_OFF, plan_critic.PASS),
+                               _verdict("OPERATOR")])
+        rows, _ = _rows([card])
+        assert rows[0]["class"] == "code" and rows[0]["action"] == "restamp"
+        ops, stamps, _ = _apply([card])
+        assert ops.removed == [("DRE-13", HAND_BUILT), ("DRE-13", OPERATOR_STEP)]
+        kinds = [(kind, body if kind != "comment" else body.split(":")[0])
+                 for kind, _, body in ops.log]
+        assert kinds.index(("remove", OPERATOR_STEP)) < kinds.index(
+            ("comment", "🪦 verdict-retired"))
+        note = next(b for _, b in ops.comments if b.startswith("🪦 verdict-retired:"))
+        assert f"`{OPERATOR_STEP}` the old verdict put on came off" in note
+        migration = ops.comments[-1][1]
+        assert f"label removed (`{OPERATOR_STEP}`)" in migration
+        assert stamps.calls[0][:2] == ("DRE-13", "FLEET")
+
+    def test_a_label_the_card_does_not_carry_is_not_removed(self):
+        card = _card("DRE-14", title="wire the other flag",
+                     comments=[_marker(plan_critic.STAGE_ONE_OFF, plan_critic.PASS),
+                               _verdict("OPERATOR")])
+        ops, _, _ = _apply([card])
+        assert ops.removed == [("DRE-14", HAND_BUILT)]
+
+    def test_a_failed_write_says_what_was_already_written(self, capsys):
+        rows, ops = _rows([CODE_UNPASSED])
+        ops.state_error = linear_ops.LinearError("linear error: 502")
+        result = hwm.run(ops, rows, apply=True)
+        assert result["failed"] == ["DRE-7"]
+        err = capsys.readouterr().err
+        assert "FAILED DRE-7" in err
+        assert f"already written: label removed (`{HAND_BUILT}`)" in err
+        assert "a re-run will not find it" in err
 
     def test_the_fleet_why_names_the_migration_and_the_pass(self):
         _, stamps, _ = _apply()
