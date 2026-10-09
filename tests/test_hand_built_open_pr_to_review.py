@@ -180,6 +180,57 @@ def test_a_repair_branch_moves_its_card_too():
     s.cmd_advance.assert_called_once()
 
 
+# The labels `repair_card.FIXED_LABELS` files a repair card with since DRE-6228:
+# `automation`, never `hand-built`, which is the CEO's alone.
+REPAIR_LABELS = ("repo:portico", "initiative:bureau", "Bug", "automation",
+                 "agent:engineer")
+
+
+def test_an_automation_repair_card_with_an_open_repair_pr_is_moved_to_review():
+    """DRE-6228. A Red-Main Repair card is filed In Progress, and its repair
+    run never moves it: qa-review.yml's "Card → In Review" step reads `agent/`
+    heads only. While it wore `hand-built` this pass moved it; it wears
+    `automation` now, and must still reach In Review when its pull request
+    opens — or the board says In Progress while the fix is being checked."""
+    import repair_card
+
+    assert "automation" in repair_card.FIXED_LABELS
+    s = _run(
+        [_pr(branch=f"repair/{CARD}-a1b2c3d4e5f6")],
+        [_card(state="In Progress", labels=REPAIR_LABELS)],
+    )
+    s.cmd_advance.assert_called_once()
+    assert s.cmd_advance.call_args.args[:2] == (CARD, reconcile.REVIEW_LANE)
+    s.cmd_comment.assert_called_once()
+    body = s.cmd_comment.call_args.args[1]
+    assert reconcile._REPAIR_REVIEW_NOTE in body
+    assert HAND_BUILT not in body, "a repair card is not hand-built work"
+    assert "'automation'" in body
+
+
+def test_a_second_pass_over_a_repair_card_moves_nothing_and_posts_nothing():
+    """Its own idempotency key, read back off its own thread."""
+    branch = f"repair/{CARD}-a1b2c3d4e5f6"
+    card = dict(state="In Progress", labels=REPAIR_LABELS)
+    first = _run([_pr(branch=branch)], [_card(**card)])
+    said = first.cmd_comment.call_args.args[1]
+    again = _run([_pr(branch=branch)], [_card(**card)], bodies=[said])
+    again.cmd_advance.assert_not_called()
+    again.cmd_comment.assert_not_called()
+
+
+def test_an_automation_card_on_an_agent_branch_is_not_moved_by_this_pass():
+    """A model-adoption record card wears `automation` too, on an `agent/`
+    head — qa-review.yml moves that one, so this pass leaves it alone."""
+    s = _run(
+        [_pr()],
+        [_card(state="In Progress",
+               labels=("repo:portico", "agent:devops", "automation"))],
+    )
+    s.cmd_advance.assert_not_called()
+    s.cmd_comment.assert_not_called()
+
+
 # --------------------------------------------------------------------------
 # 2: idempotent — one move, one comment, per card
 # --------------------------------------------------------------------------

@@ -1629,6 +1629,13 @@ HAND_BUILT_REVIEW_LANES = tuple(
 _HAND_BUILT_REVIEW_NOTE = (
     f"hand-built work with an open pull request — moved to {REVIEW_LANE}"
 )
+# The same receipt for a Red-Main Repair card (DRE-6228). It wears `automation`
+# now, never `hand-built`, and its own key, so the line never calls a repair
+# "hand-built work".
+_REPAIR_REVIEW_NOTE = (
+    f"repair work with an open pull request — moved to {REVIEW_LANE}"
+)
+REPAIR_BRANCH_PREFIX = "repair/"
 
 
 def drain_retiring_lanes() -> None:
@@ -8968,7 +8975,9 @@ def move_hand_built_to_review() -> None:
     The evidence is the pull request, which is exactly what the lane contract
     asks of In Review. Open, not a draft (a draft is not being checked by
     anybody, so marking it ready is what moves the card), on a branch that
-    names a card, on a card that carries `hand-built` and is not an epic.
+    names a card, on a card that carries `hand-built` and is not an epic. A
+    Red-Main Repair card on its own `repair/` branch moves too: it carries
+    `automation` since DRE-6228, and no run moves it either.
 
     Every failure is fail-closed and says UNKNOWN (DRE-2034): an unreadable
     listing, an unreadable board and an unreadable comment thread each move
@@ -9010,10 +9019,20 @@ def move_hand_built_to_review() -> None:
         card = board.get(identifier)
         if card is None:
             continue  # already in review or past it, or in a lane this pass leaves alone
-        if not hand_built(card):
+        # A Red-Main Repair card wears `automation`, not `hand-built`
+        # (DRE-6228), and no run moves it either: qa-review.yml's "Card → In
+        # Review" step reads `agent/` heads only. Its own `repair/` pull
+        # request is the same evidence. An `automation` card on an `agent/`
+        # head is a record card, and that step moves it.
+        repair = automation_card(card) and ref.startswith(REPAIR_BRANCH_PREFIX)
+        if not (hand_built(card) or repair):
             continue  # the fleet's own run owns that move
         if card_is_epic(card) or _planner_owned(card):
             continue  # an epic's lane is its plan's, whatever its branch is named
+        if hand_built(card):
+            note, mark = _HAND_BUILT_REVIEW_NOTE, HAND_BUILT_LABEL
+        else:
+            note, mark = _REPAIR_REVIEW_NOTE, dependabot_card.LABEL
         try:
             said = linear_ops.comment_bodies(identifier)
         except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
@@ -9026,7 +9045,7 @@ def move_hand_built_to_review() -> None:
                 file=sys.stderr,
             )
             continue
-        if any(_HAND_BUILT_REVIEW_NOTE in body for body in said):
+        if any(note in body for body in said):
             continue  # said once, and once is the point
         lane = card["state"]["name"]
         try:
@@ -9047,11 +9066,11 @@ def move_hand_built_to_review() -> None:
             continue
         url = f"https://github.com/{REPO}/pull/{pr['number']}"
         linear_ops.cmd_comment(identifier, (
-            f"🧹 {_HAND_BUILT_REVIEW_NOTE}. Pull request #{pr['number']} is open "
+            f"🧹 {note}. Pull request #{pr['number']} is open "
             f"on `{ref}` ({url}), so this card has moved from {lane} to "
             f"{REVIEW_LANE}.\n\n"
             f"Why it had not moved by itself: this card is labelled "
-            f"'{HAND_BUILT_LABEL}', so no pipeline run was ever coming to move "
+            f"'{mark}', so no pipeline run was ever coming to move "
             f"it, and the board only changed when somebody remembered to change "
             f"it. An open pull request is the evidence {REVIEW_LANE} asks for — "
             f"the same evidence the lane contract already demands of every other "
