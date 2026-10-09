@@ -833,6 +833,13 @@ their words and the fix it pushes is that head; the holds lane then lifts the
 hold and returns the card to `In Review`, and the new commit re-arms the
 budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
 
+A draft pull request spends neither budget (DRE-6423): the critic skips drafts
+by design (DRE-5801) and the merge gate never merges one, so the sweep
+re-triggers nothing, holds nothing — not even a draft already at the cap — and
+says so once per head with a `review-nudge-draft` comment on the card. Only the
+receipts after that comment count, so once the pull request is marked ready the
+budget for the same head starts again from zero.
+
 ## The plan artifact (DRE-2720)
 
 An epic's CEO-facing output is a published document, not a Linear comment.

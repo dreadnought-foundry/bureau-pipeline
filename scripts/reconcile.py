@@ -457,6 +457,13 @@ REVIEW_NUDGE_CAP = int(os.environ.get("REVIEW_NUDGE_CAP", "3"))
 GATE_NUDGE_KEY = "gate-nudge"
 REVIEW_NUDGE_KEY = "review-nudge"
 REVIEW_NUDGE_CAP_KEY = "review-nudge-cap"
+# A draft is nudged by neither budget (DRE-6423): the critic skips drafts by
+# design (DRE-5801) and the merge gate never merges one, so a re-trigger there
+# is spent on nothing. The sweep says so once per head under this key, and
+# review_nudges_spent counts only the receipts after it, so marking the pull
+# request ready restarts the budget at the same head. Spelled with no `(`
+# after the head, so `_review_nudge_key` never reads it as a spend.
+REVIEW_NUDGE_DRAFT_KEY = "review-nudge-draft"
 
 # Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
 # reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
@@ -4648,7 +4655,8 @@ def pr_for(identifier: str) -> dict | None:
     # baseRefName: the content binding (DRE-2340) compares base...head —
     # without it verdict_bound has nothing to compare and the carry never
     # fires, so the In Review sweep would re-review every carried head.
-    fields = "number,url,headRefName,state,comments,headRefOid,baseRefName"
+    # isDraft: the review lane nudges no draft (DRE-6423).
+    fields = "number,url,headRefName,state,comments,headRefOid,baseRefName,isDraft"
 
     def newest_match(out: str) -> dict | None:
         return card_pr.newest([
@@ -5153,9 +5161,39 @@ def review_nudges_spent(card: dict, tag: str, head: str) -> int:
     the tag AND the head sha, off the comments the sweep already holds — no
     request (DRE-5231). A new commit is a new key, so it re-arms the budget,
     the CRASHED_REVIEW_RETRY_CAP shape. The window is the card's fifty newest
-    comments, so the count can only read low, never high."""
+    comments, so the count can only read low, never high.
+
+    Only the receipts after the newest draft notice for this head count
+    (DRE-6423): a pull request marked ready restarts its budget at the same
+    head, and one never seen as a draft counts every receipt."""
     key = _review_nudge_key(tag, head)
-    return sum(1 for body in card_comment_bodies(card) if key in body)
+    bodies = card_comment_bodies(card)
+    noticed = _review_nudge_draft_index(bodies, head)
+    return sum(1 for body in bodies[noticed + 1:] if key in body)
+
+
+def _review_nudge_draft_index(bodies: list[str], head: str) -> int:
+    """The index of the newest draft notice for `head` in `bodies` (oldest →
+    newest), or -1 when there is none (DRE-6423)."""
+    key = f"{REVIEW_NUDGE_DRAFT_KEY} @{head}"
+    for index in range(len(bodies) - 1, -1, -1):
+        if key in bodies[index]:
+            return index
+    return -1
+
+
+def review_nudge_draft_standing(card: dict, head: str) -> bool:
+    """A draft notice for `head` stands on the card newer than its newest
+    review or gate receipt for that head, so the draft is already said
+    (DRE-6423). One with a receipt after it no longer stands: the pull
+    request was ready since, and a second trip to draft is said again."""
+    bodies = card_comment_bodies(card)
+    noticed = _review_nudge_draft_index(bodies, head)
+    if noticed < 0:
+        return False
+    keys = (_review_nudge_key(REVIEW_NUDGE_KEY, head),
+            _review_nudge_key(GATE_NUDGE_KEY, head))
+    return not any(key in body for body in bodies[noticed + 1:] for key in keys)
 
 
 #: What the merge gate's hold note opens with, after its ⏸️ badge
@@ -13285,6 +13323,26 @@ def main(
                 # what it holds on (DRE-5228); the sweep reports only what it
                 # can read off the thread and that no merge followed.
                 head = pr.get("headRefOid") or ""
+                if pr.get("isDraft"):
+                    # DRE-6423: the critic skips a draft by design (DRE-5801)
+                    # and the gate never merges one, so neither budget is
+                    # spent here and a draft at the cap is not handed to a
+                    # person. Said once per head; review_nudges_spent counts
+                    # only the receipts after it, so ready restarts the count.
+                    if review_nudge_draft_standing(card, head):
+                        print(f"review-nudge: {ident} PR #{pr['number']} is a "
+                              "draft — already said, nothing spent")
+                    else:
+                        linear_ops.cmd_comment(
+                            ident,
+                            f"🧹 Reconcile: {REVIEW_NUDGE_DRAFT_KEY} @{head} — "
+                            f"PR #{pr['number']} is a draft, and "
+                            "the critic skips a draft by design, so no review "
+                            "or merge-gate re-trigger is spent on it. Nothing "
+                            "is counted here until it is marked ready; this "
+                            f"head's budget then starts again at 0/{REVIEW_NUDGE_CAP}.",
+                        )
+                    continue
                 tag, critic, verifier = review_standing(pr)
                 bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)
