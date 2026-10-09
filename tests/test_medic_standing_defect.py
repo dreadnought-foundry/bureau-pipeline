@@ -96,15 +96,19 @@ def _closing_lines_reconcile_prints(write: int, read: int, defects: int) -> list
             and isinstance(node.args[0], ast.JoinedStr)
         ):
             continue
+        pieces = node.args[0].values
+        if not any(
+            isinstance(p, ast.Constant) and "unfixed card defect" in p.value
+            for p in pieces
+        ):
+            continue
         parts = []
-        for piece in node.args[0].values:
+        for piece in pieces:
             if isinstance(piece, ast.Constant):
                 parts.append(piece.value)
             else:
                 parts.append(values[ast.unparse(piece.value)])
-        line = "".join(parts)
-        if "unfixed card defect" in line:
-            lines.append(line)
+        lines.append("".join(parts))
     return lines
 
 
