@@ -212,7 +212,13 @@ and never hedged into `Met` — "met, as far as I could tell" is `Not observed.`
 reads the table at your pull request's head and holds it open while any judged
 row reads `Not observed.` or `Not met.` — the closing row is not judged. The
 card cannot close either: its close reads the same table, and it also refuses
-while a `🔬 proof-waiting` hold stands that nothing discharged. Write the
+while a `🔬 proof-waiting` hold stands that nothing discharged.
+An approved, all-met record that merged overrides an operator's
+`🔬 proof-waiting` hold posted before the merge — the proof dispatcher's own
+holds and one typed with `linear_ops.py proof-waiting` — because the merged
+record is the observation the hold was waiting for (DRE-6489). Two holds
+still stand: one naming the CEO's press, until his signed console answer,
+and one posted after the merge. Write the
 record exactly as you saw it anyway, open its pull request, and let the gate
 hold it. The hold is the right outcome for a proof that saw nothing. A held
 record is amended in place by the next run (resume, below), and the gate reads
