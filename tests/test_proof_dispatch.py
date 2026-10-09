@@ -1049,6 +1049,10 @@ def _main_over(monkeypatch, *, switch=None, until=None):
 
 
 def test_the_dry_run_names_the_switch_and_the_cards_it_waits_on(monkeypatch, capsys):
+    # The same pass run straight, for its read log: `main()` adds no read.
+    straight = Board(hand=[lane_card("DRE-5930")])
+    Harness(monkeypatch, straight).sweep(live=False)
+    capsys.readouterr()
     h, board = _main_over(monkeypatch, until="DRE-6141, DRE-6142, DRE-6143")
     lines = _lines(capsys)
     line = ("proof-dispatch: PROOF_DISPATCH_LIVE is off — until DRE-6141, "
@@ -1060,9 +1064,6 @@ def test_the_dry_run_names_the_switch_and_the_cards_it_waits_on(monkeypatch, cap
     tally = next(l for l in lines if l.startswith("proof-dispatch: eligible"))
     assert tally.endswith("(dry run)")
     assert h.fired == [] and h.posted == [] and h.holds == []
-    # No Linear read is added: the same pass, run straight, reads the same.
-    straight = Board(hand=[lane_card("DRE-5930")])
-    Harness(monkeypatch, straight).sweep(live=False)
     assert board.reads == straight.reads
 
 
