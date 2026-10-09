@@ -241,8 +241,8 @@ set -e
 #   reads a park as the end of the loop. So the runner's head is read before
 #   the files. The marker is not a `RETRY_MARKERS` tag, because the sweep
 #   would re-dispatch a fresh agent while the delivery replays the patch.
-#   DRE-6352's sweep is to read it after 30 minutes instead, once per head;
-#   until that lands the marker tells a person to restart the loop by hand.
+#   DRE-6352's sweep reads it after 30 minutes instead and restarts the loop
+#   once per head; the marker says so rather than asking for a hand restart.
 #   The overtaken line says only that the branch differs from the run's
 #   commit, never who moved it: the run's own earlier push looks the same.
 

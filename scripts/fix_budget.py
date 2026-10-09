@@ -366,16 +366,17 @@ def committed_not_pushed_body(attempt, head: str, commit: str, *, status: str = 
     had a commit. Both were final, because the sweep reads a park as the end.
 
     The first line opens with the tag and carries `head still at <sha8>`: the
-    Report counts the cap off it, and DRE-6352's reconcile sweep is to compare
-    it against the pull request's head. It names only the three mechanisms
-    that exist — the `Push rescue` step, the artifact and the `deliver-rescue`
+    Report counts the cap off it, and the reconcile sweep compares it against
+    the pull request's head (DRE-6352). It names the three mechanisms that
+    exist — the `Push rescue` step, the artifact and the `deliver-rescue`
     follow-up — and the agent's own words as its note, never as an
     escalation. It is no `🔧 Fix attempt` marker, so no attempt is spent.
 
-    No sweep restarts the loop off this marker until DRE-6352 lands, so on an
-    open pull request the closing says a person restarts it if the branch
-    does not move, rather than promising a restart nothing performs
-    (standards/console-honesty.md rule 1). DRE-6352 replaces that sentence.
+    On an open pull request the closing says what happens if the delivery
+    does not land: the reconcile sweep's `redispatch_committed_not_pushed`
+    restarts the fix loop once after COMMITTED_NOT_PUSHED_WAIT_MINUTES
+    (DRE-6352). It no longer asks a person to restart it by hand — a hand
+    dispatch beside the sweep's would put two fix runs on one branch.
     """
     parts = [
         f"{fix_dead_run.COMMITTED_NOT_PUSHED_TAG}: fix attempt {attempt} finished "
@@ -401,10 +402,9 @@ def committed_not_pushed_body(attempt, head: str, commit: str, *, status: str = 
     closing = "No fix attempt is spent and nothing is parked."
     if pr_open:
         closing += (
-            " Nothing restarts the fix loop on its own yet: if this pull "
-            "request's branch has not moved in "
-            f"{fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES} minutes, "
-            "re-dispatch the fix loop by hand.")
+            " If this pull request's branch has not moved in "
+            f"{fix_dead_run.COMMITTED_NOT_PUSHED_WAIT_MINUTES} minutes, the "
+            "reconcile sweep restarts the fix loop once.")
     parts.append(closing)
     return "\n\n".join(parts)
 

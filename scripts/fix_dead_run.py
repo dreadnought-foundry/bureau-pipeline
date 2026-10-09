@@ -93,9 +93,10 @@ TURN_CAP_TAG = "fix-run-turn-exhaustion"
 # Report posts it with `head still at <sha8>` on its first line and counts it
 # per head; a second refusal on the same head is the cap
 # (COMMITTED_NOT_PUSHED_RESTARTS) — a hold for a person. The reconcile sweep
-# is to read the same marker once DRE-6352 lands, re-dispatching the fix loop
-# once when the branch has not moved for COMMITTED_NOT_PUSHED_WAIT_MINUTES;
-# until then nothing restarts it, and the marker says so.
+# reads the same marker and the same three constants (DRE-6352,
+# `redispatch_committed_not_pushed`): it re-dispatches the fix loop once when
+# the branch has not moved for COMMITTED_NOT_PUSHED_WAIT_MINUTES, and never
+# for a head past the cap.
 COMMITTED_NOT_PUSHED_TAG = "fix-run-committed-not-pushed"
 COMMITTED_NOT_PUSHED_WAIT_MINUTES = 30
 COMMITTED_NOT_PUSHED_RESTARTS = 1
