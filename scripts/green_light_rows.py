@@ -64,7 +64,9 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      or `proof-task.yml#Report proof result to Linear`, the proof run's park on
      a press only the CEO can make (DRE-5925), whose shell posts its own 🙋
      question the same way AND runs `linear_ops.py proof-waiting` first, the
-     hold that keeps the dispatcher off the card — or `code_owner_hold.py#park`.
+     hold that keeps the dispatcher off the card — or `code_owner_hold.py#park`,
+     or the sweep's park on a spent review budget,
+     `reconcile.py#hand_review_nudge_to_person` (DRE-6181).
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -161,8 +163,13 @@ def _unit_of_function(fn) -> str:
 #: The planner's question site — the only unit a `question` row comes from.
 QUESTION_SITE = _unit_of_function(planning_escalation.escalate)
 
-#: The merge gate's code-owner park — the python `agent-escalation` site.
+#: The merge gate's code-owner park — a python `agent-escalation` site.
 CODE_OWNER_SITE = _unit_of_function(code_owner_hold.park)
+
+#: The sweep's park on a spent review budget (DRE-6181) — the other python
+#: `agent-escalation` site. A literal: importing the sweep here would read its
+#: environment at import, and a renamed function fails rule 2 by name.
+REVIEW_CAP_SITE = "reconcile.py#hand_review_nudge_to_person"
 
 
 # --------------------------------------------------------------------------- #
@@ -501,11 +508,12 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
                         "parked proof card with no hold on it is one the "
                         "dispatcher could chase"
                     )
-        elif where != CODE_OWNER_SITE:
+        elif where not in (CODE_OWNER_SITE, REVIEW_CAP_SITE):
             out.append(
                 f"{where} is declared an 'agent-escalation' arrival, and the "
                 f"only agent-escalation sites are "
-                f"{', '.join(AGENT_ESCALATION_STEPS)} and {CODE_OWNER_SITE}"
+                f"{', '.join(AGENT_ESCALATION_STEPS)}, {CODE_OWNER_SITE} and "
+                f"{REVIEW_CAP_SITE}"
             )
     return out
 

@@ -57,6 +57,7 @@ import console_escalation  # noqa: E402
 import green_light_rows  # noqa: E402
 import lane_contract  # noqa: E402
 import planning_escalation  # noqa: E402
+import review_cap_question  # noqa: E402
 import step_shell  # noqa: E402
 from test_no_unplanned_ready_lane_writer import _Staged  # noqa: E402
 
@@ -226,6 +227,25 @@ def _code_owner_note() -> None:
     assert esc.recommendation is not None
 
 
+def _review_cap_question() -> None:
+    """`reconcile.py#hand_review_nudge_to_person` (DRE-6181): the sweep's park
+    on a spent review budget posts `review_cap_question.compose` over the
+    evidence it holds — here a merge-gate budget, the gate's hold note
+    quoted, and a review budget with no verdict on the head."""
+    head = "4f1c0de9a2b7e6d5c4b3a2918070605040302010"
+    base = dict(card="DRE-6181", pr_number=812, head=head, spent=3, hours=6.25,
+                cap=3)
+    for evidence in (
+        dict(tag=review_cap_question.GATE_NUDGE_KEY, critic="APPROVE",
+             verifier="FAIL", gate_note_line=f"⏸️ Merge gate: declined @{head} "
+             "— required check tests concluded failure"),
+        dict(tag=review_cap_question.REVIEW_NUDGE_KEY, critic="none",
+             verifier="none", gate_note_line=None),
+    ):
+        esc = assert_declares_the_lines(review_cap_question.compose(**base, **evidence))
+        assert esc.recommendation is not None
+
+
 def _step_lines(write) -> list:
     """The write's own step, from its first line up to the write line, read
     through `step_shell.workflow_source` and then as the shell reads it."""
@@ -283,6 +303,7 @@ def _workflow_case(unit: str):
 CASES = {
     "planning_escalation.py#escalate": _question_notes,
     "code_owner_hold.py#park": _code_owner_note,
+    "reconcile.py#hand_review_nudge_to_person": _review_cap_question,
     "agent-task.yml#Report result to Linear":
         _workflow_case("agent-task.yml#Report result to Linear"),
     "proof-task.yml#Report proof result to Linear":

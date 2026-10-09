@@ -204,6 +204,9 @@ import epic_cap  # noqa: E402
 # DRE-5152: the lane the activate route is asked for in, when the sweep
 # re-dispatches a start the relay never activated.
 import review_rerun  # noqa: E402
+# DRE-6181: the question a spent review budget asks, built from the evidence
+# the sweep holds and never from a model call (DRE-6189).
+import review_cap_question  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -5085,22 +5088,69 @@ def review_nudges_spent(card: dict, tag: str, head: str) -> int:
     return sum(1 for body in card_comment_bodies(card) if key in body)
 
 
+#: What the merge gate's hold note opens with, after its ⏸️ badge
+#: (scripts/evaluate_and_merge.sh: `Merge gate: declined @<sha> — <reason>`).
+#: Its first line is what the review-cap question quotes (DRE-6181).
+GATE_HOLD_NOTE_MARKER = "Merge gate: declined"
+
+
+def gate_hold_note_line(pr: dict) -> str | None:
+    """The first line of the gate's newest hold note on the pull request, or
+    None. Read off the comments the sweep already holds, qa-bot only and
+    anchored on the first line, so a person quoting the note is not it."""
+    for comment in reversed(pr.get("comments") or []):
+        body = comment.get("body") or ""
+        if is_qa_bot_comment(comment) and merge_gate.opens_with_marker(
+            body, GATE_HOLD_NOTE_MARKER
+        ):
+            return merge_gate.first_line(body)
+    return None
+
+
 def hand_review_nudge_to_person(
     card: dict, pr: dict, tag: str, critic: str, verifier: str
 ) -> None:
-    """REVIEW_NUDGE_CAP is spent on this head: dispatch nothing, label the card
-    HOLD_LABEL and say so once per head (DRE-5231).
+    """REVIEW_NUDGE_CAP is spent on this head: dispatch nothing, hold the card,
+    ask a person, and park it In Review → Green Light (DRE-5231, DRE-6181).
 
-    The label is what stands the loops down — held() skips the card on every
-    later sweep and fix_dispatch_blocked() keeps the fix agent off its pull
-    request. The card stays in the review lane: its pull request is open, and
-    parking it in Backlog the way the no-PR dead-run cap does would put a card
-    with live work in a lane that says there is none. Re-applied if a person
-    lifts the label with the head unmoved; the notice is not repeated.
+    The writes, in order, each once:
+
+      1. the hold — HOLD_LABEL and its `🔒 hold: reason=review-cap-spent`
+         stamp bound to the head (`hold.apply`). held() skips the card on
+         every later sweep and fix_dispatch_blocked() keeps the fix agent's
+         dispatches off its pull request;
+      2. the question on the card — `review_cap_question.compose` over the
+         evidence in hand, in the one Green Light format (DRE-3893);
+      3. the same question on the pull request as a fix-loop blocker
+         (`review_cap_question.pr_blocker`, through `_post_pr_note`), so a
+         person's Operator decision has a blocker to answer — without one,
+         `fix_context.operator_decision` reads nothing;
+      4. the park, the move the merge gate makes for a code-owner hold.
+
+    The way back is a new head: the holds lane lifts the stamp and returns
+    the card to the review lane (DRE-6180, DRE-6273). Once per head: the key
+    on a worker-bot comment of the pull request, with the label on the card,
+    means nothing is written again. A person who lifts the label and moves
+    the card back with the head unmoved is re-held and re-parked; the
+    question and the blocker are not repeated.
+
+    A park that stopped after the hold — the run died, a Linear write
+    raised, or the blocker did not post — leaves the card held In Review,
+    where the nudge loop skips it. main() comes back here for exactly that
+    card (`review_cap_park_unfinished`), and this writes only what is
+    missing. So a blocker that did not post parks nothing: the card waits
+    held In Review for the next sweep to post it, rather than leaving the
+    review lane with a question no Operator decision could answer.
     """
     ident = card["identifier"]
     number = pr["number"]
     head = pr.get("headRefOid") or ""
+    if not head:
+        # The stamp is bound to the head: with none, the hold cannot be said
+        # once. Say nothing rather than every fifteen minutes.
+        print(f"review-nudge: {ident} PR #{number} came back with no head sha — "
+              "leaving the park to the next sweep")
+        return
     if REVIEW_NUDGE_CAP <= 0:
         print(
             "review-nudge: REVIEW_NUDGE_CAP is 0 — the cap is off; "
@@ -5111,46 +5161,87 @@ def hand_review_nudge_to_person(
             f"review-nudge: {ident} PR #{number} spent {REVIEW_NUDGE_CAP} "
             f"{tag} re-triggers on {head} — handing to a person"
         )
-    linear_ops.add_label(ident, HOLD_LABEL)
-    notice = f"🚨 {REVIEW_NUDGE_CAP_KEY} PR #{number} @{head}:"
-    if any(notice in body for body in card_comment_bodies(card)):
-        print(f"review-nudge: {ident} already told for {head} — not repeating")
-        return
-    key = _review_nudge_key(tag, head)
-    receipts = [
-        node for node in linear_ops.window_nodes(card.get("comments"))
-        if key in (node.get("body") or "")
-    ]
-    first = receipts[0].get("createdAt") if receipts else None
-    hours = age_minutes(first) / 60 if first else 0.0
-    plural = "" if len(receipts) == 1 else "s"
-    spent = f"{len(receipts)} re-trigger{plural} over {hours:.1f}h"
-    if not receipts:
-        what = (
-            "REVIEW_NUDGE_CAP is 0, so the sweep re-triggers nothing, and "
-            + ("the gate has not merged it." if tag == GATE_NUDGE_KEY
-               else "no critic verdict is bound to this head.")
-        )
-    elif tag == GATE_NUDGE_KEY:
-        what = (
-            f"the sweep spent {spent} on the merge gate, and the gate declined "
-            "to merge on those re-triggers."
-        )
-    else:
-        what = (
-            f"the sweep spent {spent} on the review, and no critic verdict "
-            "bound to this head came back."
-        )
-    linear_ops.cmd_comment(
-        ident,
-        f"{notice} critic {critic}, verifier {verifier} — "
-        f"{what} Re-triggering again would not change that, so the sweep has "
-        f"stopped and labeled this card '{HOLD_LABEL}'. It stays in "
-        f"{REVIEW_LANE} because its pull request is open. The way back: a "
-        "person acts on the pull request — pushes a fix, or settles what "
-        f"stands on it — and removes the '{HOLD_LABEL}' label. A new commit "
-        f"gives the sweep a fresh {REVIEW_NUDGE_CAP} re-triggers.",
+    asked = any(
+        is_worker_bot_comment(c)
+        and f"{REVIEW_NUDGE_CAP_KEY} @{head}" in (c.get("body") or "")
+        for c in pr.get("comments") or []
     )
+    labeled = any(
+        (lbl.get("name") or "").lower() == HOLD_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes") or []
+    )
+    lane = (card.get("state") or {}).get("name") or ""
+    if asked and labeled and lane != REVIEW_LANE:
+        print(f"review-nudge: {ident} already held and asked for {head} — not repeating")
+        return
+    # On the door's reading, the lane is confirmed live BEFORE the first write
+    # (item 33), as hand_dead_run_to_planner does: a hold must never land on a
+    # card that has already left the review lane.
+    if not _door_lane_still(card, labels_absent=() if labeled else (HOLD_LABEL,)):
+        return
+    if not labeled:
+        hold.apply(ident, "review-cap-spent", head, "reconcile.py")
+    notice = f"🚨 {REVIEW_NUDGE_CAP_KEY} PR #{number} @{head}:"
+    told = any(notice in body for body in card_comment_bodies(card))
+    if not (told and asked):
+        key = _review_nudge_key(tag, head)
+        receipts = [
+            node for node in linear_ops.window_nodes(card.get("comments"))
+            if key in (node.get("body") or "")
+        ]
+        first = receipts[0].get("createdAt") if receipts else None
+        evidence = dict(
+            card=ident, pr_number=number, head=head, tag=tag, critic=critic,
+            verifier=verifier, spent=len(receipts),
+            hours=age_minutes(first) / 60 if first else 0.0,
+            gate_note_line=(gate_hold_note_line(pr)
+                            if tag == GATE_NUDGE_KEY else None),
+            cap=REVIEW_NUDGE_CAP,
+        )
+        if told:
+            print(f"review-nudge: {ident} already asked on the card for {head}")
+        else:
+            review_question = review_cap_question.compose(**evidence)
+            linear_ops.cmd_comment(ident, review_question)
+        if not asked:
+            review_blocker = review_cap_question.pr_blocker(**evidence)
+            if not _post_pr_note(number, review_blocker):
+                print(f"review-nudge: {ident} PR #{number} blocker did not post — "
+                      "held In Review, not parked; the next sweep posts it")
+                return
+    # From In Review only: a card already in Green Light gets nothing twice.
+    linear_ops.cmd_advance(ident, "Green Light", REVIEW_LANE)
+
+
+def review_cap_park_unfinished(card: dict) -> str | None:
+    """The head a `review-cap-spent` hold is stamped on, when the card is still
+    in the review lane under it; else None (DRE-6181).
+
+    `hand_review_nudge_to_person` writes the hold first and the park last, so
+    a card here is a park that stopped part-way — or one a person moved back
+    with the label left on, which the park puts back. The nudge loop skips a
+    held card, so this is how main() finds it to finish. Asked only of a card
+    held() already answered, so its comments are read no earlier than before.
+    """
+    if (card.get("state") or {}).get("name") != REVIEW_LANE:
+        return None
+    labels = (card.get("labels") or {}).get("nodes") or []
+    bodies = card_comment_bodies(card)
+    if hold.reason_of(labels, bodies) != "review-cap-spent":
+        return None
+    return hold.read_stamp(bodies)["at"]
+
+
+def review_standing(pr: dict) -> tuple[str, str, str]:
+    """`(tag, critic, verifier)` on the pull request's head: which budget the
+    review lane spends — the merge gate's when a critic verdict is bound to
+    the head, the review's when none is — and the verdicts standing on it."""
+    head = pr.get("headRefOid") or ""
+    tag = GATE_NUDGE_KEY if verdict_bound(pr) else REVIEW_NUDGE_KEY
+    critic = standing_verdict(critic_comments(pr), merge_gate.CRITIC_MARKER, head)
+    verifier = standing_verdict(
+        verifier_comments(pr), merge_gate.VERIFIER_MARKER, head)
+    return tag, critic, verifier
 
 
 def hand_dead_run_to_planner(card: dict, dead: int, bodies: list[str]) -> bool:
@@ -12764,6 +12855,22 @@ def main(
         for card in mine:
             ident, state = card["identifier"], card["state"]["name"]
             if held(card) or ident in flagged:
+                # DRE-6181: the one held card the loop comes back to — a
+                # review-cap park that stopped after its hold, still In Review
+                # on the head the hold is bound to. The park writes only what
+                # is missing; a new head is the holds lane's to lift.
+                at = None if ident in flagged else review_cap_park_unfinished(card)
+                if at:
+                    try:
+                        pr = pr_for(ident)
+                    except ReconcileReadError as e:
+                        _read_failures.append(str(e))
+                        print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
+                        continue
+                    if (card_pr.has_work_pr(pr)
+                            and card_pr.pr_state(pr) == card_pr.OPEN
+                            and pr.get("headRefOid") == at):
+                        hand_review_nudge_to_person(card, pr, *review_standing(pr))
                 continue  # human-hold: untouched until a human removes the label
             if limit_recovery.waiting(card_comment_bodies(card)):
                 continue  # DRE-3171: a limit death is a wait, and the wall is not down yet
@@ -12962,14 +13069,10 @@ def main(
                 # receipt's job — the gate's own note on the pull request says
                 # what it holds on (DRE-5228); the sweep reports only what it
                 # can read off the thread and that no merge followed.
-                bound = verdict_bound(pr)
                 head = pr.get("headRefOid") or ""
-                tag = GATE_NUDGE_KEY if bound else REVIEW_NUDGE_KEY
+                tag, critic, verifier = review_standing(pr)
+                bound = tag == GATE_NUDGE_KEY
                 spent = review_nudges_spent(card, tag, head)
-                critic = standing_verdict(
-                    critic_comments(pr), merge_gate.CRITIC_MARKER, head)
-                verifier = standing_verdict(
-                    verifier_comments(pr), merge_gate.VERIFIER_MARKER, head)
                 if spent >= REVIEW_NUDGE_CAP:
                     hand_review_nudge_to_person(card, pr, tag, critic, verifier)
                 elif bound:

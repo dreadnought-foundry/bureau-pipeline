@@ -1597,10 +1597,17 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "Re-triggering again would not change that",
-      "kind": "undeclared-act",
-      "means": "A review-lane nudge that has spent REVIEW_NUDGE_CAP on one head stops, labels the card needs-human and tells a person once per head what stands and the way back.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. DRE-5231 shipped it unconverted on purpose: an act ships console-first, and an Urgent stop on an uncapped loop must not wait on the console. Its key, `review-nudge-cap`, with the PR number and the head sha, is already the once-per-head key the sweep reads before posting it again."
+      "anchor": "cmd_comment(ident, review_question)",
+      "kind": "not-an-act",
+      "means": "A review-lane nudge that has spent REVIEW_NUDGE_CAP on one head asks a person, on the card and once per head, the question `review_cap_question.compose` builds from the evidence in hand — what stands on the head, how many re-triggers were spent over how long, the gate's hold note — in the one Green Light format, before the card is parked In Review → Green Light (DRE-6181).",
+      "why": "A question is not an act: it asks a person to decide rather than announcing something the pipeline did, the same reason the planner's escalation note asks rather than announces. The act this park is — the hold — is said by the `🔒 hold:` stamp `hold.apply` posts just before it. Its key, `review-nudge-cap` with the PR number and the head sha, is the once-per-head key the sweep reads before posting it again."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "_post_pr_note(number, review_blocker)",
+      "kind": "not-an-act",
+      "means": "The same question on the pull request, posted once per head as a fix-loop blocker (`review_cap_question.pr_blocker`): its first line opens the 🛑 blocker prefix, so a person's Operator decision after it is read by the sweep's answered-blocker restart and by agent-fix.yml's comment-started run (DRE-6181).",
+      "why": "A question is not an act, for the reason the card-side question above gives: the hold is said by the stamp, and this comment only makes the decision that answers it reachable — without a blocker on the thread `fix_context.operator_decision` reads nothing. Its last line, `review-nudge-cap @<head>`, on a worker-bot comment, is the once-per-head key the sweep reads off the pull request before posting it again."
     },
     {
       "file": "scripts/reconcile.py",

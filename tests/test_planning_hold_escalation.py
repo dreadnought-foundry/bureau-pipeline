@@ -512,8 +512,9 @@ class TestTheRepairPass:
 _LABEL_WRITERS = (
     # Three since DRE-6177: `flag_stranded` writes through `hold.apply`. One
     # since DRE-6186: main()'s two dead-run caps write through it too, in
-    # `hand_dead_run_to_planner`.
-    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 1),
+    # `hand_dead_run_to_planner`. None since DRE-6181: the review-cap park
+    # writes through it too, in `hand_review_nudge_to_person`.
+    ("scripts/reconcile.py", r"linear_ops\.add_label\(ident, HOLD_LABEL\)", 0),
     ("scripts/dead_run.py", r"label: str = HOLD_LABEL", 1),
     # DRE-6179 moved the agent-fix.yml and plan.yml sites onto the hold
     # registry's writer, which writes the same label with its reason.

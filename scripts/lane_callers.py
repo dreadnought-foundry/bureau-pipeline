@@ -75,6 +75,15 @@ is unread the same way. When the module is unread, none of its steps are reporte
 step reaches the function is exactly what could not be read). Its script
 callers do not go through the map and are still reported.
 
+A module with no map at all is a PROGRAM, not a dispatcher (DRE-6181): no
+`add_parser`, no dict map, no chain branch that hands off to a handler, and
+no workflow step running it with a literal subcommand — `reconcile.py`, whose
+`main` is the whole sweep, run on flags. There is no subcommand to name, so
+the third tell does not apply: a call its `main` makes to the function is
+reported as `<module>#main`, the way another module's `main` is. Discovery
+stays direct — `main` calling an in-module caller of the function names that
+caller, not `main`.
+
 `unread` also carries any file discovery had to read and could not: a script
 that does not parse, whose calls are then unknown, or a workflow that is not
 valid YAML. A step whose subcommand is not a literal (`linear_ops.py "$CMD"`)
@@ -471,22 +480,31 @@ def callers_of(module_path: str, function: str, root: str = ".") -> CallerReport
     # handler: a chain branch doing its work inline reaches it for the
     # subcommands whose branches hold the call. One in no branch reaches it
     # for a subcommand the reader cannot name.
-    unplaced = False
+    unresolved = False
+    unbranched: set = set()
     for entry in _entry_points(tree):
         for name, branches in _dispatch_calls(entry):
             if name is None:
-                unplaced = True  # a branch whose callee cannot be named
+                unresolved = True  # a branch whose callee cannot be named
                 continue
             if name not in reach:
                 continue
             reaching |= branches
-            unplaced = unplaced or not branches
+            if not branches:
+                unbranched.add(name)
     invocations = _workflow_invocations(root, module, unread)
     literal = {t for _, t in invocations if t and _LITERAL_SUBCOMMAND.match(t)}
-    if (declared - cli.keys()) or (literal - cli.keys()) or unplaced:
+    # A program, not a dispatcher (DRE-6181): nothing maps a subcommand to a
+    # handler and no step names one, so there is no subcommand to place a
+    # call under — its `main` is the unit, as another module's `main` is.
+    program = not declared and not literal and not any(cli.values())
+    if ((declared - cli.keys()) or (literal - cli.keys()) or unresolved
+            or (unbranched and not program)):
         unread.add(rel_module)
     else:
         callers |= {unit for unit, token in invocations if token in reaching}
+        if function in unbranched:
+            callers.add(f"{rel_module}#main")
     return CallerReport(callers=frozenset(callers), unread=frozenset(unread))
 
 

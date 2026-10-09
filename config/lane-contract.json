@@ -384,6 +384,16 @@
               ]
             },
             {
+              "kind": "agent-escalation",
+              "writer": "reconcile.py",
+              "where": "reconcile.py#hand_review_nudge_to_person",
+              "evidence": "the three lines console_escalation.render writes beside the review-nudge-cap key — the review_cap_question.compose comment, after the 🔒 hold: reason=review-cap-spent stamp — posted before the move",
+              "card": "DRE-6172",
+              "callers": [
+                "reconcile.py#main"
+              ]
+            },
+            {
               "kind": "queued-epic",
               "writer": "plan.yml",
               "where": "plan.yml#Route — plan or activate",
@@ -403,7 +413,7 @@
         },
         "writers": {
           "text": "The planner, the two agent runs that escalate, the proof run parking a card on a press only the CEO can make (DRE-5925), the merge gate parking a card whose pull request waits on a required code-owner review (DRE-4341), a human, and the console filing the week's agent-failure report (DRE-4271).",
-          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "proof-task.yml", "operator", "console"],
+          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "merge-gate.yml", "proof-task.yml", "reconcile.py", "operator", "console"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
