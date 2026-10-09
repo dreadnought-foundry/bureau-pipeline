@@ -38,7 +38,8 @@ from through `hygiene.TAGS` (`hygiene-card-close` → `hyg-card-closed`):
 3. **A superseded proof.** A `PROOF:` card whose parent epic is `Canceled` or
    `Duplicate`: Canceled, under a `hyg-card-canceled` receipt. Cause:
    `parent <DRE-N> is <state>`.
-4. **A Todo build card with no run.** No `hand-built`, no `⏳`/`🧠` heartbeat in
+4. **A Todo build card with no run.** No person mark (`hand-built`, or any
+   `routing_verdict.hand_marks`, DRE-6226), no `⏳`/`🧠` heartbeat in
    the comment window, at least two sweep re-dispatch receipts, the newest
    older than the Todo stale window. A run of the repo's build stub created
    within ten minutes after that receipt is the card's — a minute before it
@@ -78,6 +79,7 @@ import lane_contract
 import linear_ops
 import proof_and_demo
 import reconcile
+import routing_verdict
 # The criterion-table reader lives once, in the leaf the merge gate and the
 # PROOF close read too (DRE-6141) — moved, not copied.
 from proof_record import (  # noqa: F401 — the names this lane's callers and tests read
@@ -106,7 +108,6 @@ READ_LANES = ("Todo", "In Progress", "In Review", hygiene.HAND_WORK)
 OWN_PROOF = "DRE-5412"
 
 SUPERSEDED = ("Canceled", "Duplicate")
-HAND_BUILT = reconcile.HAND_BUILT_LABEL
 NO_CODE = linear_ops.NO_CODE_LABEL
 
 CEO_RULE = "if the cards are proven with evidence then just approve them"
@@ -301,7 +302,10 @@ def _named_today(nodes: list, ctx: hygiene.Context) -> bool:
 
 def no_run(card: dict, repo: str, labels: list, ctx: hygiene.Context, cache: dict) -> list:
     """(4) a Todo build card re-dispatched with nothing to show for it."""
-    if HAND_BUILT in [name.lower() for name in labels]:
+    # A person's card is the vocabulary's hand marks (DRE-6226): `hand-built`,
+    # and `operator-step` once OPERATOR is marked with it. `no-code` alone is
+    # not one — the sweep still re-dispatches it (`reconcile.hand_built`).
+    if {name.lower() for name in labels} & {m.lower() for m in routing_verdict.hand_marks()}:
         return []
     nodes = linear_ops.window_nodes(card.get("comments"))  # oldest → newest
     if any((n.get("body") or "").lstrip().startswith(reconcile._LIFE_PREFIXES) for n in nodes):
