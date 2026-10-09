@@ -222,7 +222,7 @@ own, and stays. Two live verdicts on one card are still refused.
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
-| **WORKBENCH** | A person works it at an interactive session, against live system state | `Hand-work`, with no mark — kept for the historical `DEMO:` title and the pipeline's own record cards (`repair_card`, `model_adoption_actions`); the acceptance criteria never produce it (DRE-6227). Nothing is dispatched. |
+| **WORKBENCH** | A person works it at an interactive session, against live system state | `Hand-work`, with no mark — kept for historical demo cards and the pipeline's own record cards (`repair_card`, `model_adoption_actions`); the acceptance criteria never produce it (DRE-6227). Nothing is dispatched. |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` — the sweep promotes it and stamps the marks; the operator does the step there, and no code is produced. Nothing is dispatched. |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
 | **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |

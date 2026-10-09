@@ -429,7 +429,7 @@ it. Read the file, not this table, when the two ever disagree.
 | Verdict | Means | Destination | Who acts there |
 | -- | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
-| **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical `DEMO:` cards and the pipeline's own record cards; you never route a card here |
+| **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical demo cards and the pipeline's own record cards; you never route a card here |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` | the operator |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
 | **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
