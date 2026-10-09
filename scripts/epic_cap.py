@@ -13,7 +13,9 @@ Three things live here and nowhere else:
     at least one BUILDABLE child: open (not Done, Canceled or Duplicate), not
     itself an epic (`mid_epic.is_epic`), not titled `PROOF:`
     (`proof_and_demo.is_proof`), and not labeled `hand-built` or `no-code`
-    (DRE-5918, the CEO's "yes, I agree. Build it" of 2026-10-05). An epic
+    (DRE-5918, the CEO's "yes, I agree. Build it" of 2026-10-05) — or any
+    other person mark the routing vocabulary declares, read off
+    `routing_verdict.person_marks` (DRE-6226). An epic
     takes a slot only while it has a card left to build. Once only proof,
     check or hand-done cards remain, it stops taking a slot. A parent whose
     only open children are epics takes none either: each child epic counts
@@ -69,6 +71,7 @@ if _HERE not in sys.path:
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402 — ONE rule for "a child is an epic"
 import proof_and_demo  # noqa: E402 — ONE rule for "a child is a proof"
+import routing_verdict  # noqa: E402 — ONE answer to "a person's mark" (DRE-6226)
 
 ROOT = os.path.dirname(_HERE)
 #: Resolved off this script's own directory, so a product-repo checkout finds
@@ -99,13 +102,20 @@ PLANNING = "Planning"
 
 #: A child in one of these lanes has nothing left to build (DRE-5918).
 CLOSED_STATES = ("Done", "Canceled", "Duplicate")
-#: The same string as `reconcile.HAND_BUILT_LABEL`, restated because
-#: `reconcile` imports this module; `tests/test_epic_cap_buildable.py` holds
-#: the two equal.
-HAND_BUILT_LABEL = "hand-built"
-#: A child carrying either mark is built by a person or is not code: no agent
-#: builds it, so it holds no slot.
-UNBUILT_LABELS = (HAND_BUILT_LABEL, linear_ops.NO_CODE_LABEL)
+#: The routing vocabulary's own constant, aliased (DRE-6226). `reconcile`
+#: imports this module, so this used to restate the string; `routing_verdict`
+#: imports neither, so the alias is import-safe, and
+#: `tests/test_epic_cap_buildable.py` holds the two the same object.
+HAND_BUILT_LABEL = routing_verdict.HAND_BUILT_LABEL
+
+
+def unbuilt_labels() -> tuple:
+    """The marks that hold no slot: `routing_verdict.person_marks()`, read
+    off the vocabulary each time (DRE-6226). A child carrying one is built by
+    a person or is not code, so no agent builds it — today `hand-built` and
+    `no-code`, and `operator-step` once OPERATOR is marked with it. Read as
+    `UNBUILT_LABELS`, the name callers have always used."""
+    return routing_verdict.person_marks()
 
 #: Linear numbers priority 0 none, 1 Urgent, 2 High, 3 Medium, 4 Low
 #: (`scripts/groomer.py` reads the same field). None ranks after Low.
@@ -268,7 +278,7 @@ def buildable(child: dict) -> bool:
         return False
     labels = {(n.get("name") or "").lower()
               for n in (((child.get("labels") or {}).get("nodes")) or [])}
-    return not labels.intersection(UNBUILT_LABELS)
+    return not labels.intersection(unbuilt_labels())
 
 
 def _rollup_flag(count_rollup_parents: bool | None) -> bool:
@@ -688,6 +698,15 @@ def main(argv=None) -> int:
             raise
         print(f"epic-cap: Linear could not be read: {reason}", file=sys.stderr)
         return 3
+
+
+def __getattr__(name: str):
+    """`epic_cap.UNBUILT_LABELS` — the name callers have always read (PEP
+    562), built from `unbuilt_labels` on each read so the vocabulary decides
+    it (DRE-6226). Anything else is the AttributeError it would have been."""
+    if name == "UNBUILT_LABELS":
+        return unbuilt_labels()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
