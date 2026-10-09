@@ -47,6 +47,15 @@ of it is ever a runtime lookup.
   `counts_against_cap`. Read on the pipeline side only through
   `scripts/epic_cap.py`, and by the console over the GitHub contents API —
   no second copy of the number lives anywhere else.
+- **`epic-growth.json`** — when an epic has grown far enough past the size
+  the CEO approved that the sweep asks him about it again (DRE-6414):
+  `ratio` and `minimum_added`. An epic has crossed when it runs more than
+  `ratio` times the approved size AND at least `minimum_added` more cards —
+  more than double, and at least ten more. The approved size is the
+  green-lit count, or the count on his newest re-approval or withdrawn
+  question. The numbers are the card's own example, not a CEO decision
+  (`decided_by` says so), so changing them is an ordinary edit. Read only
+  through `scripts/epic_growth.py`.
 - **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
   "file the planner cap at 4"; two from DRE-5326, three from DRE-5634): how many planner runs may hold a slot at once,
   how long a claim lives, how long a dispatch reserves a slot, and how long a

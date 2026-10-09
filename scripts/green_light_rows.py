@@ -3,8 +3,9 @@
 
 Green Light is the CEO's "needs you" queue, and the epic this belongs to fixes
 what may sit in it: a plan BOTH critics passed, the planner's business question
-with a recommendation, a build's escalation to a person, or (while the CEO's
-acceptance of kind (c) stands) an approved epic queued under the cap. A row
+with a recommendation, a build's escalation to a person, (while the CEO's
+acceptance of kind (c) stands) an approved epic queued under the cap, or the
+sweep's question about an epic grown past the size he approved (DRE-6414). A row
 asking him to look again, re-run something, settle a critic loop or move a
 card nobody has read is the failure. Until DRE-5281 three `plan.yml` sites
 wrote Green Light for a critic outcome, and until DRE-5286 the sweep wrote it
@@ -67,6 +68,10 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      hold that keeps the dispatcher off the card — or `code_owner_hold.py#park`,
      or the sweep's park on a spent review budget,
      `reconcile.py#hand_review_nudge_to_person` (DRE-6181).
+   * `epic-growth`: the unit is `reconcile.py#ask_epic_growth_question` and
+     no other (DRE-6414) — the sweep's question about an epic grown past the
+     size the CEO approved, created in the lane on a card of its own. Its
+     caller, `reconcile.py#report_epic_growth`, is reconciled by rule 6.
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -170,6 +175,11 @@ CODE_OWNER_SITE = _unit_of_function(code_owner_hold.park)
 #: `agent-escalation` site. A literal: importing the sweep here would read its
 #: environment at import, and a renamed function fails rule 2 by name.
 REVIEW_CAP_SITE = "reconcile.py#hand_review_nudge_to_person"
+
+#: The sweep's question about an epic grown past the size the CEO approved
+#: (DRE-6414) — the only unit an `epic-growth` row comes from. A literal, for
+#: the reason REVIEW_CAP_SITE is one.
+EPIC_GROWTH_SITE = "reconcile.py#ask_epic_growth_question"
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +495,14 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
             f"site is {QUESTION_SITE} — a business question reaches {lane} "
             "through the planner's escalation and nowhere else; a caller of it "
             "belongs on that record's `callers`"
+        )
+    elif kind == "epic-growth" and where != EPIC_GROWTH_SITE:
+        out.append(
+            f"{where} is declared an 'epic-growth' arrival, and the only "
+            f"epic-growth site is {EPIC_GROWTH_SITE} — the question about an "
+            f"epic grown past its green light reaches {lane} through the sweep's "
+            "one asking function and nowhere else; a caller of it belongs on "
+            "that record's `callers`"
         )
     elif kind == "agent-escalation":
         if where in AGENT_ESCALATION_STEPS:

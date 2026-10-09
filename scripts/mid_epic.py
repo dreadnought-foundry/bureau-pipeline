@@ -62,6 +62,13 @@ with no single decision being wrong. That is the epic-growth KPI, and it lives
 in a managed region of the epic's own description (`ARTIFACT_BEGIN`/`_END`) so
 the CEO reads it where the plan is, not in a log.
 
+Far past the approval he is ASKED (DRE-6414) — still not policed: nothing is
+paused. The region names every card that joined, the discovery route's
+additions and, as `unrecorded:`, every other one; it carries one line per
+growth question the sweep put to him under `Growth question:`, the marker that
+keeps it from asking twice; and `approved_size` reads the size he last
+approved off those lines. The question itself is `scripts/epic_growth.py`.
+
 ## A card has no children
 
 `validate_card.infer_agent_label` decides what a card IS from whether it has
@@ -197,6 +204,26 @@ ARTIFACT_END = "<!-- END epic-growth -->"
 ADDITIONS_HEADING = "Added since green light:"
 AMENDMENTS_HEADING = "Amendments:"
 AWAITING_REAPPROVAL = "awaiting re-approval"
+
+# A card that joined the epic any way but the discovery route (DRE-6414): by
+# hand in Linear, or by a run that skipped `discovery`. Written into the record
+# under ADDITIONS_HEADING with its because field opening this word, which is
+# how `parse_artifact` — and the growth question's Finding line — tell it
+# apart from an addition the discovery route filed.
+UNRECORDED = "unrecorded"
+
+# The growth question's marker (DRE-6414): one line per question the sweep put
+# to the CEO about this epic growing past the size he approved, in the
+# amendments' grammar. At most one is `open`, and while it stands nothing is
+# asked again. `re-approved` and `withdrawn` set the size the next question is
+# measured from (`approved_size`); `split` filed an amendment, whose
+# re-approval is the epic's next green light.
+QUESTION_HEADING = "Growth question:"
+QUESTION_OPEN = "open"
+QUESTION_RE_APPROVED = "re-approved"
+QUESTION_WITHDRAWN = "withdrawn"
+QUESTION_SPLIT = "split"
+QUESTION_SETTLED = (QUESTION_RE_APPROVED, QUESTION_WITHDRAWN, QUESTION_SPLIT)
 UNKNOWN_GREEN_LIGHT = "unknown — Linear has no readable green light for this epic"
 
 # ANY markdown bullet, not only the `-` this module writes (DRE-3643). Linear
@@ -213,6 +240,11 @@ _AMENDMENT_LINE = re.compile(
     r"^" + _BULLET + r"\s+(\S+)\s+—\s+(.*)\s+—\s+("
     + re.escape(AWAITING_REAPPROVAL)
     + r"|re-green-lit\s+.*)$"
+)
+_QUESTION_LINE = re.compile(
+    r"^" + _BULLET + r"\s+(DRE-\d+)\s+—\s+asked\s+(\S+)\s+at\s+(\d+)\s+cards\s+—\s+("
+    + re.escape(QUESTION_OPEN) + "|(?:"
+    + "|".join(re.escape(s) for s in QUESTION_SETTLED) + r")\s+(\S+))$"
 )
 _REGION = re.compile(
     re.escape(ARTIFACT_BEGIN) + r".*?" + re.escape(ARTIFACT_END), re.DOTALL
@@ -517,7 +549,25 @@ def growth_line(epic: str, green_lit, current) -> str:
     return f"epic-growth: {epic} green-lit at {at}, now running {current} cards"
 
 
-def render_artifact(green_lit, current, additions, amendments) -> str:
+def question_line(question: dict) -> str:
+    """One growth question as the record writes it."""
+    status = question["status"]
+    if status != QUESTION_OPEN:
+        status = f"{status} {question['settled']}"
+    return f"- {question['id']} — asked {question['asked']} at {question['at']} cards — {status}"
+
+
+def parse_question_line(line: str) -> dict | None:
+    """One growth question line read back, or None when it is not one."""
+    m = _QUESTION_LINE.match((line or "").strip())
+    if not m:
+        return None
+    status = m.group(4).split()[0]
+    return {"id": m.group(1), "asked": m.group(2), "at": int(m.group(3)),
+            "status": status, "settled": m.group(5)}
+
+
+def render_artifact(green_lit, current, additions, amendments, questions=()) -> str:
     """The managed region, rendered from what was observed."""
     at = f"{green_lit} cards" if green_lit is not None else UNKNOWN_GREEN_LIGHT
     lines = [
@@ -545,6 +595,8 @@ def render_artifact(green_lit, current, additions, amendments) -> str:
             lines.append(f"- {am['at']} — {am['because']} — {settled}")
     else:
         lines.append("- (none)")
+    lines += ["", QUESTION_HEADING]
+    lines += [question_line(q) for q in questions] if questions else ["- (none)"]
     lines += ["", ARTIFACT_END]
     return "\n".join(lines)
 
@@ -552,7 +604,8 @@ def render_artifact(green_lit, current, additions, amendments) -> str:
 def parse_artifact(description: str) -> dict:
     """Read the managed region back. Empty/absent region parses to empty lists
     and unknown counts, so a first motion and a re-read take the same path."""
-    out = {"green_lit": None, "current": None, "additions": [], "amendments": []}
+    out = {"green_lit": None, "current": None, "additions": [], "amendments": [],
+           "questions": []}
     match = _REGION.search(description or "")
     if not match:
         return out
@@ -570,6 +623,9 @@ def parse_artifact(description: str) -> dict:
             continue
         if line == AMENDMENTS_HEADING:
             section = "amendments"
+            continue
+        if line == QUESTION_HEADING:
+            section = "questions"
             continue
         # `**Green-lit at:**` also starts with `*`, and is consumed above; any
         # other bold line is not a bullet because no whitespace follows the `*`.
@@ -591,7 +647,34 @@ def parse_artifact(description: str) -> dict:
                         else settled.replace("re-green-lit", "").strip()
                     ),
                 })
+        elif section == "questions":
+            question = parse_question_line(line)
+            if question:
+                out["questions"].append(question)
     return out
+
+
+def approved_size(record: dict, green_lit, green_lit_at) -> int | None:
+    """The size the CEO last approved this epic at (DRE-6414): the count on
+    the newest `re-approved` or `withdrawn` growth question asked since the
+    epic's green light, else the green-lit count. None when the green light
+    cannot be read — nothing is measured against an approval nobody can read.
+
+    A withdrawn question counts as well as a re-approved one, so a question
+    nobody answered is not asked again every pass: the next is measured from
+    the count it was asked at. A `split` is not an approval — its amendment's
+    re-approval is the epic's next green light, which retires the line."""
+    if green_lit is None or not green_lit_at:
+        return None
+    settled = [
+        q for q in (record or {}).get("questions") or []
+        if q.get("status") in (QUESTION_RE_APPROVED, QUESTION_WITHDRAWN)
+        and _after(q.get("asked"), green_lit_at)
+    ]
+    if not settled:
+        return green_lit
+    newest = max(settled, key=lambda q: _ts_or_min(q.get("settled") or q.get("asked")))
+    return newest["at"]
 
 
 def merge_artifact(description: str, block: str) -> str:
@@ -833,7 +916,7 @@ def _comment_total(linear_ops, issue: dict) -> int | None:
     return linear_ops.comment_count(uuid) if uuid else None
 
 
-def _build_growth(epic: str, issue: dict, add, amend) -> dict:
+def _build_growth(epic: str, issue: dict, add, amend, question=None) -> dict:
     """The growth record one read of the epic implies — what to write, and the
     notices it owes. Pure: no request is made here, so the guarded write in
     `refresh_epic_growth` can rebuild from a fresh read as often as it must."""
@@ -851,6 +934,16 @@ def _build_growth(epic: str, issue: dict, add, amend) -> dict:
         # A copy: a rebuild must start from the motion as the caller gave it,
         # not as an earlier attempt's re-approval left it.
         amendments.append(dict(amend))
+    # A growth question line older than the newest green light is retired
+    # (DRE-6414): a fresh green light — an amendment re-approved — is a new
+    # approval, and the question was about the old one.
+    questions = [
+        q for q in artifact["questions"]
+        if not (green_lit_at and _after(green_lit_at, q["asked"]))
+    ]
+    if question:
+        questions = [q for q in questions if q["id"] != question["id"]]
+        questions.append(dict(question))
 
     # Re-approval, OBSERVED: the epic is in an active lane again. The timestamp
     # recorded is the green light Linear reports; when the history is unreadable
@@ -873,8 +966,29 @@ def _build_growth(epic: str, issue: dict, add, amend) -> dict:
     unrecorded = unrecorded_additions(
         children, green_lit_at, [a["id"] for a in additions]
     )
+    # Every joined card is named (DRE-6414). Before this a card that joined
+    # any way but the discovery route was announced on the epic and never
+    # written down, so DRE-5577's record read green-lit at 17, running 41,
+    # with "(none)" under the heading — 24 cards it could not name.
+    created = {c["identifier"]: c.get("createdAt") for c in children}
+    for ident in unrecorded:
+        additions.append({
+            "id": ident,
+            "because": f"{UNRECORDED}: joined {_pacific(created[ident])} "
+                       "with no discovery record",
+        })
+    recorded = {a["id"]: a["because"] for a in additions}
+    joined = [
+        {"id": c["identifier"],
+         "route": (UNRECORDED if recorded[c["identifier"]].startswith(f"{UNRECORDED}:")
+                   else ADDITION),
+         "because": recorded[c["identifier"]]}
+        for c in sorted(children, key=lambda c: _ts_or_min(c.get("createdAt")))
+        if c["identifier"] in recorded
+        and added_after_green_light(c.get("createdAt"), green_lit_at) is True
+    ]
 
-    block = render_artifact(green_lit, len(children), additions, amendments)
+    block = render_artifact(green_lit, len(children), additions, amendments, questions)
     merged = merge_artifact(description, block)
     # CONVERGENCE (DRE-3643): compare what the record MEANS, never its bytes.
     # Linear stores the region in its own markdown — `* ` for every `- `, a
@@ -894,6 +1008,9 @@ def _build_growth(epic: str, issue: dict, add, amend) -> dict:
         "current": len(children),
         "unrecorded": unrecorded,
         "re_approved": re_approved,
+        "joined": joined,
+        "questions": questions,
+        "approved": approved_size({"questions": questions}, green_lit, green_lit_at),
     }
 
 
@@ -914,7 +1031,7 @@ def _write_unless_moved(linear_ops, epic: str, built: dict) -> dict | None:
 
 
 def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
-                        issue: dict | None = None) -> dict:
+                        question=None, issue: dict | None = None) -> dict:
     """Re-derive the epic's growth artifact from what is live, and report it.
 
     Does four things, all from truth rather than memory:
@@ -925,8 +1042,16 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
         seen in an active lane again, never assumed from the return to Planning;
       * surfaces every mid-epic child the artifact does not account for.
 
+    `question` is a growth question line to record (DRE-6414) — the one the
+    sweep just asked, or the same question settled — written in place of any
+    line with its card number.
+
     Returns {"green_lit", "current", "unrecorded", "re_approved", "capped",
-    "comments", "contended"}. `capped` is the named condition when the epic
+    "comments", "contended", "joined", "questions", "approved"}: `joined` is
+    every card that joined since the green light, each with its route
+    (`addition` or `unrecorded`) and reason; `questions` the record's growth
+    question lines; `approved` the size the CEO last approved
+    (`approved_size`). `capped` is the named condition when the epic
     refused a comment this call tried to write (DRE-3343) and None otherwise;
     `comments` is how many the epic holds, or None when Linear did not say;
     `contended` says why the record was NOT written when the guarded write gave
@@ -957,7 +1082,7 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
     # between this read and the mutation — not most of a sweep.
     contended: str | None = None
     for _attempt in range(GROWTH_WRITE_ATTEMPTS):
-        built = _build_growth(epic, issue, add, amend)
+        built = _build_growth(epic, issue, add, amend, question)
         if built["merged"] is None:
             break
         fresh = _write_unless_moved(linear_ops, epic, built)
@@ -1000,6 +1125,9 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
             "capped": capped,
             "comments": comment_count,
             "contended": contended,
+            "joined": [],
+            "questions": [],
+            "approved": None,
         }
 
     if re_approved and not linear_ops.count_comments(epic, REAPPROVAL_TAG):
@@ -1037,6 +1165,9 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
         "capped": capped,
         "comments": comment_count,
         "contended": None,
+        "joined": built["joined"],
+        "questions": built["questions"],
+        "approved": built["approved"],
     }
 
 
@@ -1045,6 +1176,33 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
 
 def _ts(iso: str) -> datetime:
     return datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+
+
+def _ts_or_min(iso) -> datetime:
+    """`_ts`, with an unreadable time sorting first rather than raising."""
+    try:
+        return _ts(iso)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=UTC)
+
+
+def _after(a, b) -> bool:
+    """Is `a` strictly later than `b`? False when either cannot be read."""
+    try:
+        return _ts(a) > _ts(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _pacific(iso) -> str:
+    """A child's creation time as a person reads it. Imported late: `dead_run`
+    reaches the agent-result tooling, which a record parse does not need."""
+    import dead_run
+
+    try:
+        return dead_run.pacific(_ts(iso))
+    except (TypeError, ValueError):
+        return "at an unknown time"
 
 
 def _one_line(text) -> str:

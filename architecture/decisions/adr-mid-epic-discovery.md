@@ -113,7 +113,23 @@ motion and by every full reconcile sweep, so the CEO reads them where the plan
 is. Nobody polices the number; it just has to be visible, because silent
 accretion turns an approved scope into an unapproved one with no single decision
 being wrong. A card added without the artifact changing is named on the epic,
-once.
+once, and since DRE-6414 it is also written into the record, as `unrecorded:`
+with the time it joined — DRE-5577's record read green-lit at 17, running 41,
+with "(none)" under the additions, 24 cards it could not name.
+
+**Far past the approval, the CEO is asked (DRE-6414).** Visible was not enough:
+the sweep printed `green-lit at 10 cards, now running 50` for DRE-4721 every
+pass and nothing compared the two. Past the threshold in
+`config/epic-growth.json` — more than double the approved size and at least ten
+more cards — the sweep creates ONE `no-code` question card in Green Light
+asking whether the bigger plan is still the one he approved, and records an
+`open` line under `Growth question:` in the region; while it stands nothing is
+asked again. The epic is not paused, labeled or capped, and keeps running. His
+signed `re-approve` closes the question and moves the approved size to the
+count he answered at; `split` files an amendment, the route below; a question
+moved out of Green Light unanswered is withdrawn, and the next one is measured
+from its count. That is still not policing: nothing stops, and the answer is
+his.
 
 **Two writers refresh that region, so the write is guarded (DRE-6162).** A
 discovery and the sweep both rewrite the whole description, and the sweep works
@@ -168,4 +184,5 @@ with its own number. Not a `2716a`/`2716b` suffix, not a child.
 - **Require a fresh green light per addition.** Re-asking the CEO on every second
   call site rebuilds the queue the wave exists to drain.
 - **Cap epic growth.** Nobody polices the number; a cap would turn a visible fact
-  into an argument, and the failure mode is invisibility, not size.
+  into an argument, and the failure mode is invisibility, not size. DRE-6414
+  asks the CEO past a threshold instead, and stops nothing while he decides.

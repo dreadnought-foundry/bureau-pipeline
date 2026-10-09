@@ -1618,6 +1618,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(ident, epic_growth.closing_comment(",
+      "kind": "undeclared-act",
+      "means": "The sweep closes a growth question the CEO answered (DRE-6414): on his signed `re-approve` or `split`, the question card about an epic grown past the size he approved is moved to Done under one comment, `✅ epic-growth-question: re-approved at <M> cards on <PT time>`, or `split asked at <M> cards on <PT time> — amendment filed on <epic>`. Read back off the card's own thread before it is posted, so a pass that stopped part-way posts no second one.",
+      "why": "Act-shaped, and the registry has no row for it. Giving it one — `epic-growth-question`, a hold, state `escalated` — is a REGISTRY change in two repositories: the console is the registry's consumer, and `scripts/check_act_consumers.py` fails on an act agent-bureau's `console/backend/receipts.py` does not know, so the row goes there first, as a sibling card, and then here. The question itself is the card's description, not a comment, so this closing comment is the only comment write the question adds. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "{REVIEW_LANE} with no PR after {dead}",
       "kind": "undeclared-act",
       "means": "A review-lane card whose PR keeps reading as gone parks for a human once the requeue cap is spent.",
