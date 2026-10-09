@@ -162,6 +162,119 @@ class TestThePlannerBriefDescribesTheRoutingVerdict:
         )
 
 
+class TestTheCEOsRuleOnHandBuilt:
+    """DRE-6229: the documents follow the vocabulary flip (DRE-6227).
+
+    The CEO, 2026-10-07: `hand-built` is his mark, applied only when he asks.
+    OPERATOR marks `operator-step` + `no-code`, WORKBENCH marks nothing, and
+    the acceptance criteria no longer route a card WORKBENCH on a phrase. A
+    planner reads the brief and the standard, not the JSON, so a sentence left
+    describing the old pipeline writes cards to the old rule.
+    """
+
+    CEO_WORDS = (
+        "Hand-built cards are typically when I tell them, 'Hey do that by "
+        "hand.' It shouldn't come from anybody else."
+    )
+
+    # The files the card names, read the way its grep reads them.
+    MARK_READERS = (
+        sorted(STANDARDS.glob("*.md"))
+        + sorted(BRIEFS.glob("*.md"))
+        + [ROOT / "config" / "README.md", ROOT / "scripts" / "proof_dispatch.py"]
+    )
+
+    @staticmethod
+    def _flat(text: str) -> str:
+        return re.sub(r"\s+", " ", text)
+
+    def test_the_standard_states_the_rule_with_its_date_and_words(self):
+        body = self._flat(_read(STANDARDS / "card-quality.md"))
+        assert self.CEO_WORDS in body, (
+            "card-quality.md does not quote the CEO's rule on hand-built"
+        )
+        quote = body.index(self.CEO_WORDS)
+        assert "2026-10-07" in body[max(0, quote - 400) : quote + 400], (
+            "the CEO's words are quoted without the date he said them"
+        )
+
+    def test_the_standard_no_longer_calls_the_marks_the_protection(self):
+        body = self._flat(_read(STANDARDS / "card-quality.md"))
+        assert "marks are the protection" not in body, (
+            "card-quality.md still says the hand-built mark protects a proof; "
+            "the protection is its `no-code` and the proof dispatch"
+        )
+
+    def test_no_document_routes_a_proof_workbench_or_operator(self):
+        pattern = re.compile(r"routes?(?: to)? `?WORKBENCH`? or `?OPERATOR`?")
+        for doc in (STANDARDS / "card-quality.md", BRIEFS / "planner.md"):
+            body = self._flat(_read(doc))
+            assert not pattern.search(body), (
+                f"{doc.name} still says a proof routes WORKBENCH or OPERATOR; "
+                "its `agent:ops` label routes it OPERATOR"
+            )
+
+    def test_nothing_says_a_card_is_marked_hand_built(self):
+        pattern = re.compile(r"marked .hand-built.")
+        offenders = [
+            f"{doc.relative_to(ROOT)}: {m.group(0)}"
+            for doc in self.MARK_READERS
+            for m in pattern.finditer(self._flat(_read(doc)))
+        ]
+        assert not offenders, (
+            "a document still says the pipeline marks a card hand-built: "
+            + "; ".join(offenders)
+        )
+
+    def test_the_verdict_tables_carry_the_vocabularys_marks(self):
+        verdicts = _verdicts()
+        labels = {m for v in verdicts for m in v["marks"]} | {"hand-built"}
+        for doc in (STANDARDS / "card-quality.md", BRIEFS / "planner.md"):
+            body = _read(doc)
+            for verdict in verdicts:
+                rows = [
+                    ln for ln in body.splitlines()
+                    if ln.startswith(f"| **{verdict['name']}** |")
+                ]
+                assert len(rows) == 1, (
+                    f"{doc.name} has {len(rows)} table rows for {verdict['name']}"
+                )
+                shown = {l for l in labels if f"`{l}`" in rows[0]}
+                assert shown == set(verdict["marks"]), (
+                    f"{doc.name}'s {verdict['name']} row shows marks "
+                    f"{sorted(shown)}; config/routing-verdicts.json says "
+                    f"{sorted(verdict['marks'])}"
+                )
+
+    def test_the_planner_rule_routes_no_card_workbench_on_a_phrase(self):
+        body = _read(BRIEFS / "planner.md")
+        start = body.index("### The rule is mechanical")
+        rule = self._flat(body[start : body.index("**An epic never gets", start)])
+        for phrase in ('"sign in"', '"past expiry"', '"in production"', '"by hand"'):
+            assert phrase not in rule, (
+                f"planner.md's criteria rule still names {phrase} as WORKBENCH"
+            )
+        assert "interactive flow" not in rule
+        assert "proof observation" in rule and "follow-up card" in rule, (
+            "planner.md does not say where a criterion met only after the "
+            "change ships goes"
+        )
+
+    def test_design_parity_routes_no_live_criterion_workbench(self):
+        body = self._flat(_read(STANDARDS / "design-parity.md"))
+        assert not re.search(r"routes\s+WORKBENCH", body), (
+            "design-parity.md still routes a 'sign in' / 'verified live' card "
+            "WORKBENCH"
+        )
+
+    def test_the_groomer_exclusion_names_the_operator_step(self):
+        body = self._flat(_read(BRIEFS / "groom-verify.md"))
+        assert re.search(r"`hand-built`[^.]*`operator-step`|`operator-step`[^.]*`hand-built`", body), (
+            "groom-verify.md's exclusion names `hand-built` without "
+            "`operator-step` beside it"
+        )
+
+
 class TestCardQualityDerivesTheSlugList:
     def test_it_points_at_the_canonical_map(self):
         body = _read(STANDARDS / "card-quality.md")
