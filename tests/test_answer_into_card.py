@@ -202,6 +202,32 @@ def test_no_verified_answer_removes_a_hand_typed_block():
     assert out == "Intro.\n\n## Acceptance criteria\n\n- [ ] One.\n"
 
 
+#: Two hand-typed blocks under the same heading, one on each side of another
+#: `## ` section — the text between and after them must survive byte for byte.
+BETWEEN = "## Acceptance criteria\n\n- [ ] One.\n- [ ] Two.\n\n"
+AFTER = "## Notes\n\nTrailing prose.\n"
+TWO_BLOCKS = (f"Intro.\n\n{A.HEADING}\n\nfirst hand-typed copy\n\n" + BETWEEN
+              + f"{A.HEADING}\n\nsecond hand-typed copy\n\n" + AFTER)
+
+
+def test_a_second_block_under_the_heading_is_removed_so_exactly_one_remains():
+    out = A.transcribe(TWO_BLOCKS, DRE_3879)
+    assert block_lines(out) == [A.HEADING]
+    assert "hand-typed copy" not in out
+    assert out.startswith(f"Intro.\n\n{A.HEADING}\n")
+    assert out.endswith("\n\n" + BETWEEN + AFTER)
+    assert out.index(A.HEADING) < out.index("## Acceptance criteria")
+    assert A.transcribe(out, DRE_3879) == out
+
+
+def test_no_verified_answer_removes_both_hand_typed_blocks():
+    out = A.transcribe(TWO_BLOCKS, [])
+    assert block_lines(out) == []
+    assert "hand-typed copy" not in out
+    assert out == "Intro.\n\n" + BETWEEN + AFTER
+    assert A.transcribe(out, []) == out
+
+
 def test_no_answer_and_no_block_is_the_description_unchanged():
     assert A.transcribe(CARD_BODY, []) == CARD_BODY
     assert A.transcribe(None, []) == ""

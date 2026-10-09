@@ -21,14 +21,18 @@ checked are not his, and none of them is copied. For each answer the words are
 ## Where it goes
 
 The block runs from the `HEADING` line to the next line starting `## `, or to
-the end of the text. It replaces a previous block in place, or is appended to
-the end when there is none. Every line inside it is the heading, the
-provenance sentence, a bold time line or a quoted line, so nothing inside can
-read as the block's end, as a heading, or as an acceptance criterion. With the
-key readable and no verified answer, a block is REMOVED: a hand-typed one has
-no signed answer behind it, and the planner's brief tells the classifier the
-words under that heading were signed. Everything outside the block is left
-byte for byte, and a second run over the same thread changes nothing.
+the end of the text — the card's rule, read line by line, so a `# ` heading
+is not an end and a `## ` line inside a code fence is: a hand-typed block
+holding such a fence is cut there and leaves the fence's closing half behind.
+The generated block holds neither. It replaces a previous block in place, or
+is appended to the end when there is none. Every line inside it is the
+heading, the provenance sentence, a bold time line or a quoted line, so
+nothing inside can read as the block's end, as a heading, or as an acceptance
+criterion. With the key readable and no verified answer, a block is REMOVED:
+a hand-typed one has no signed answer behind it, and the planner's brief tells
+the classifier the words under that heading were signed. Everything outside
+the block is left byte for byte, and a second run over the same thread
+changes nothing.
 
 ## What it never carries
 
