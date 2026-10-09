@@ -1625,6 +1625,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "the critic skips a draft",
+      "kind": "not-an-act",
+      "means": "A review-lane card whose open pull request is a draft is nudged by neither budget, because the critic skips drafts by design (DRE-5801) and the gate never merges one; the sweep says so once per head under `review-nudge-draft @<head>`, and the review budget for that head restarts from zero once the pull request is marked ready (DRE-6423).",
+      "why": "Nothing was done, so nothing is announced as done: the comment records that the sweep deliberately did not act, and why. Its key carries no `(` after the head, so it is never read as a `review-nudge` or `gate-nudge` spend; the sweep posts it again only once a receipt for the head stands after it, which means the pull request was ready since."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "{REVIEW_LANE} with no PR after {dead}",
       "kind": "undeclared-act",
       "means": "A review-lane card whose PR keeps reading as gone parks for a human once the requeue cap is spent.",

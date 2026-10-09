@@ -342,6 +342,11 @@ _HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {
     "counts_against_wip", "move_hand_built_to_review",
 }
 
+#: The readers that need the REASON, not just the answer (DRE-6424): the two
+#: watchdog lines, which name the mark the card really carries, and
+#: `hand_built` itself, which is that reason's boolean.
+_HAND_BUILT_REASON_OWNERS = {"hand_built", "flag_stranded", "flag_stalled_planning"}
+
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
@@ -363,8 +368,16 @@ def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     work invisible on a pushed branch for nineteen hours.
 
     The fifth is `counts_against_wip` — see the note above the set.
+
+    The two watchdogs read the answer through `hand_built_reason` (DRE-6424),
+    which `hand_built` is the boolean of, so their line can name the reason;
+    a reader of either is a reader of the label.
     """
-    assert _call_owners("hand_built") == _HAND_BUILT_OWNERS
+    assert _call_owners("hand_built_reason") == _HAND_BUILT_REASON_OWNERS
+    assert (
+        _call_owners("hand_built")
+        | (_call_owners("hand_built_reason") - {"hand_built"})
+    ) == _HAND_BUILT_OWNERS
 
 
 def _attribute_call_owners(module: str, name: str) -> set[str]:
@@ -398,11 +411,11 @@ def _attribute_call_owners(module: str, name: str) -> set[str]:
 #: dispatched" is read off the routing vocabulary's hand marks —
 #: `routing_verdict.hand_marks()`, its person marks but `no-code` — and never
 #: off a string spelled here, so the flip of OPERATOR's marker to
-#: `operator-step` is a data change. Three readers: `hand_built` (every owner
-#: above reads it through that one function), and the door guards in
+#: `operator-step` is a data change. Three readers: `hand_built_reason` (every
+#: owner above reads it through that one function), and the door guards in
 #: `flag_stranded` and `main()`'s nudge loop, which refuse a move into Todo
 #: once a person's mark is on the card.
-_HAND_MARKS_OWNERS = {"hand_built", "flag_stranded", "main"}
+_HAND_MARKS_OWNERS = {"hand_built_reason", "flag_stranded", "main"}
 
 #: Every person mark, `no-code` included, is read nowhere here: `no-code`
 #: alone is not a person's card, and a `PROOF:` card is read by its title.
