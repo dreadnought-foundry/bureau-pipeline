@@ -423,6 +423,23 @@ def test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check(
     assert out.startswith(f"{A.PREFIX} could not check: ")
 
 
+def test_a_person_a_refused_and_an_unchecked_receipt_in_one_thread_write_nothing(
+        monkeypatch, no_key):
+    """The words-changed check runs before the key is fetched, so with the key
+    unreadable the edited receipt is still REFUSED and the genuine one is
+    UNCHECKED — all three kinds in one thread, and none of them copied."""
+    edited = V.ANSWER_COMMENT.replace("option B", "option C", 1)
+    nodes = [node("Answer from Sid: go with option A.", by=PERSON),
+             node(edited), node(V.ANSWER_COMMENT)]
+    kinds = [v.kind for v in spoken_thread.voices(nodes, FLEET, card=CARD)]
+    assert kinds == [spoken_thread.PERSON, spoken_thread.REFUSED,
+                     spoken_thread.UNCHECKED]
+    fake = FakeLinear(monkeypatch, nodes=nodes)
+    code, out = run("write", CARD)
+    assert (code, fake.writes) == (0, [])
+    assert out.startswith(f"{A.PREFIX} could not check: ")
+
+
 def test_no_verified_answer_removes_a_hand_typed_block_with_one_write(
         monkeypatch, console_key):
     hand_typed = CARD_BODY + f"\n{A.HEADING}\n\nhand typed\n"
