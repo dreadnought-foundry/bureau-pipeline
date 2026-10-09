@@ -39,9 +39,13 @@ deferred line with a reason — prose mentions do not count.
 `qa-review.yml` runs a visual-QA stage: it installs chromium via Playwright,
 screenshots the changed screens, and hands the critic both the design PNG and
 the render with the instruction to compare them. That is why a card whose
-acceptance criteria say the screen "renders" its content routes FLEET, while
-one whose criteria say "sign in", "verified live" or "in production" routes
-WORKBENCH — screenshotting a screen is not driving a flow.
+acceptance criteria say the screen "renders" its content routes FLEET.
+Screenshotting a screen is not driving a flow, and a flow the fleet cannot
+drive is not a reason to hold the build (DRE-6227): a criterion that says "sign
+in", "verified live" or "in production" can only be met by watching the change
+run after it ships, so it is written as a proof observation on the epic's
+`PROOF:` card, or as a follow-up card under DRE-3075's two-cards shape
+(`standards/card-quality.md`). The build card stays FLEET.
 
 **State the rule; do not promise it always decides.** DRE-2831 found the
 mechanical FLEET signal firing on almost nothing: it matched phrases nobody

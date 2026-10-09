@@ -429,8 +429,8 @@ it. Read the file, not this table, when the two ever disagree.
 | Verdict | Means | Destination | Who acts there |
 | -- | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
-| **WORKBENCH** | Needs an interactive flow or live system state | `Hand-work`, marked `hand-built` | the operator, at an interactive session |
-| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `hand-built` + `no-code` | the operator |
+| **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical `DEMO:` cards and the pipeline's own record cards; you never route a card here |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` | the operator |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
 | **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
 
@@ -454,16 +454,23 @@ Read in strict precedence, and stop at the first that answers:
    substring: `SIGN-OFF (OPERATOR): …` → OPERATOR. The vocabulary carries the
    full list (`docs/routing-verdicts.md`), including prefixes that only appear
    on cards planned before 2026-09-12.
-3. **The acceptance-criteria rule** — a criterion naming an interactive flow or
-   live system state ("sign in", "past expiry", "in production", "by hand") is
-   WORKBENCH; a criterion naming static visual fidelity ("matches the design",
-   "screenshot") is FLEET.
+3. **The acceptance-criteria rule** — a criterion naming static visual fidelity
+   ("renders", "screenshot", "design tokens") is FLEET. That is the only signal
+   it reads (DRE-6227): no criterion phrase routes a card to a person. Buildable
+   code is FLEET. A criterion that can only be met by watching the change run
+   after it ships is not a criterion of the build card — write it as a proof
+   observation on the epic's `PROOF:` card, or as a follow-up card under the
+   two-cards shape in `standards/card-quality.md` (DRE-3075), never as a hold
+   on the build.
 
-Only what survives all three is a judgement call worth thinking about. Order is
-load-bearing where the two criteria signals overlap: interactive wins over
-visual. Screenshotting a screen is not driving a flow — but driving a flow that
-ends at a screen is still driving a flow. See `standards/design-parity.md` for
-what the visual check does and does not actually decide today.
+Only what survives all three is a judgement call worth thinking about. See
+`standards/design-parity.md` for what the visual check does and does not
+actually decide today.
+
+**Never ask for `hand-built`.** The CEO's rule of 2026-10-07: `hand-built` goes
+on a card only when he asks for it, and nothing in the pipeline writes it — you
+included. An operator step routes OPERATOR and carries `operator-step` +
+`no-code`; everything else an agent can build is FLEET.
 
 **An epic never gets a buildability verdict.** "Could an agent build this
 unattended" is meaningless for a card you own. An epic gets a plan test instead:
@@ -569,12 +576,11 @@ Five conditions, all checked on the cards you create:
    write `**Blocked by:** DRE-A, DRE-B, …` naming every sibling and let
    `subissue` turn it into relations. Ordering is not a relation, and the
    check reads the relation.
-3. **Never `FLEET`.** It must route to `WORKBENCH` or `OPERATOR` — a proof
-   the fleet can close by merging its own code is not a proof. **The whole
-   value is that something other than the builder confirms it.** Write
-   acceptance criteria that name the live observation ("observed in
-   production", "against the live …", "by hand"), or label it `no-code` when a
-   person runs it.
+3. **Never `FLEET`.** Its `agent:ops` label (condition 4) routes it
+   `OPERATOR` — a proof the fleet can close by merging its own code is not a
+   proof. **The whole value is that something other than the builder confirms
+   it.** The label routes it, not a phrase in its criteria: write the criteria
+   as the live observations the proof run records.
 4. **It wears no build role** (DRE-3039). `subissue` inherits
    `agent:engineer` — or `agent:devops` on a pipeline epic — onto every child,
    which is right for work and wrong for the card that CONFIRMS the work: a

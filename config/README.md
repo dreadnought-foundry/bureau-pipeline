@@ -41,7 +41,9 @@ of it is ever a runtime lookup.
   14 of them real builds, so the cap fits those plus one slot, and a roll-up
   parent holds no cards of its own. An epic takes a slot only while it has a
   card left to build (DRE-5918): an open child that is not an epic, not a
-  `PROOF:` and not marked `hand-built` or `no-code`; the rule is
+  `PROOF:` and carrying none of the person marks — `operator-step`,
+  `no-code`, or the CEO's own `hand-built` (`routing_verdict.person_marks`,
+  DRE-6226); the rule is
   `counts_against_cap`. Read on the pipeline side only through
   `scripts/epic_cap.py`, and by the console over the GitHub contents API —
   no second copy of the number lives anywhere else.
